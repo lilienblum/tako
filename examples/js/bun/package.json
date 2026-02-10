@@ -1,0 +1,8 @@
+{
+  "name": "bun-example",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "tako.sh": "workspace:*"
+  }
+}
