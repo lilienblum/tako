@@ -1,0 +1,1086 @@
+// This crate contains runtime components that are exercised indirectly in integration tests.
+#![allow(dead_code)]
+
+mod app_command;
+mod app_socket_cleanup;
+mod defaults;
+mod instances;
+mod lb;
+mod paths;
+mod protocol;
+mod proxy;
+mod routing;
+mod scaling;
+mod socket;
+mod tls;
+
+use crate::app_command::command_for_release_dir;
+use crate::instances::{
+    AppConfig, AppManager, HealthChecker, HealthConfig, InstanceEvent, RollingUpdateConfig,
+    RollingUpdater,
+};
+use crate::lb::LoadBalancer;
+use crate::routing::RouteTable;
+use crate::scaling::{ColdStartConfig, ColdStartManager, IdleConfig, IdleEvent, IdleMonitor};
+use crate::socket::{AppState, AppStatus, Command, Response, SocketServer};
+use crate::tls::{AcmeClient, AcmeConfig, CertManager, CertManagerConfig};
+use clap::Parser;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::time::Duration;
+use tako_core::{HelloResponse, PROTOCOL_VERSION};
+use tokio::sync::RwLock;
+use tokio::sync::mpsc;
+use tracing_subscriber::EnvFilter;
+
+/// Tako Server - Application runtime and proxy
+#[derive(Parser)]
+#[command(name = "tako-server")]
+#[command(version)]
+#[command(about = "Tako Server - Application runtime and proxy")]
+pub struct Args {
+    /// Unix socket path for management commands
+    #[arg(long)]
+    pub socket: Option<String>,
+
+    /// HTTP port
+    #[arg(long, default_value_t = 80)]
+    pub port: u16,
+
+    /// HTTPS port
+    #[arg(long, default_value_t = 443)]
+    pub tls_port: u16,
+
+    /// Use Let's Encrypt staging environment
+    #[arg(long)]
+    pub acme_staging: bool,
+
+    /// ACME contact email for Let's Encrypt
+    #[arg(long)]
+    pub acme_email: Option<String>,
+
+    /// Data directory for apps and certificates
+    #[arg(long)]
+    pub data_dir: Option<String>,
+
+    /// Disable ACME (use self-signed or manual certificates only)
+    #[arg(long)]
+    pub no_acme: bool,
+
+    /// Certificate renewal check interval in hours (default: 12)
+    #[arg(long, default_value_t = 12)]
+    pub renewal_interval_hours: u64,
+}
+
+/// Server state shared across components
+pub struct ServerState {
+    /// App manager
+    app_manager: Arc<AppManager>,
+    /// Load balancer
+    load_balancer: Arc<LoadBalancer>,
+    /// Certificate manager
+    cert_manager: Arc<CertManager>,
+    /// ACME client (optional)
+    acme_client: Option<Arc<AcmeClient>>,
+    /// Data directory
+    data_dir: PathBuf,
+    /// App secrets (app_name -> env vars)
+    secrets: RwLock<HashMap<String, HashMap<String, String>>>,
+
+    /// Route table (app_name -> route patterns)
+    routes: Arc<RwLock<RouteTable>>,
+
+    /// Per-app deploy locks to prevent concurrent deploys
+    deploy_locks: RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+
+    /// Cold start coordinator for on-demand apps
+    cold_start: Arc<ColdStartManager>,
+}
+
+impl ServerState {
+    pub fn new(
+        data_dir: PathBuf,
+        cert_manager: Arc<CertManager>,
+        acme_client: Option<Arc<AcmeClient>>,
+    ) -> Self {
+        let app_manager = Arc::new(AppManager::new());
+        let load_balancer = Arc::new(LoadBalancer::new(app_manager.clone()));
+
+        Self {
+            app_manager,
+            load_balancer,
+            cert_manager,
+            acme_client,
+            data_dir,
+            secrets: RwLock::new(HashMap::new()),
+            routes: Arc::new(RwLock::new(RouteTable::default())),
+            deploy_locks: RwLock::new(HashMap::new()),
+            cold_start: Arc::new(ColdStartManager::new(ColdStartConfig::default())),
+        }
+    }
+
+    pub fn cold_start(&self) -> Arc<ColdStartManager> {
+        self.cold_start.clone()
+    }
+
+    /// Get or create a deploy lock for an app
+    async fn get_deploy_lock(&self, app_name: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let locks = self.deploy_locks.read().await;
+        if let Some(lock) = locks.get(app_name) {
+            return lock.clone();
+        }
+        drop(locks);
+
+        let mut locks = self.deploy_locks.write().await;
+        locks
+            .entry(app_name.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    pub fn routes(&self) -> Arc<RwLock<RouteTable>> {
+        self.routes.clone()
+    }
+
+    /// Handle a command from the management socket
+    pub async fn handle_command(&self, cmd: Command) -> Response {
+        match cmd {
+            Command::Hello { protocol_version } => {
+                let data = HelloResponse {
+                    protocol_version: PROTOCOL_VERSION,
+                    server_version: env!("CARGO_PKG_VERSION").to_string(),
+                    capabilities: vec![
+                        "deploy_instances_idle_timeout".to_string(),
+                        "on_demand_cold_start".to_string(),
+                        "idle_scale_to_zero".to_string(),
+                    ],
+                };
+
+                if protocol_version != PROTOCOL_VERSION {
+                    return Response::error(format!(
+                        "Protocol version mismatch: client={} server={}",
+                        protocol_version, PROTOCOL_VERSION
+                    ));
+                }
+
+                Response::ok(data)
+            }
+            Command::Deploy {
+                app,
+                version,
+                path,
+                routes,
+                instances,
+                idle_timeout,
+            } => {
+                self.deploy_app(&app, &version, &path, routes, instances, idle_timeout)
+                    .await
+            }
+            Command::Stop { app } => self.stop_app(&app).await,
+            Command::Status { app } => self.get_status(&app).await,
+            Command::List => self.list_apps().await,
+            Command::Routes => self.list_routes().await,
+            Command::Reload { app } => self.reload_app(&app).await,
+            Command::UpdateSecrets { app, secrets } => self.update_secrets(&app, secrets).await,
+        }
+    }
+
+    async fn deploy_app(
+        &self,
+        app_name: &str,
+        version: &str,
+        path: &str,
+        routes: Vec<String>,
+        instances: u8,
+        idle_timeout: u32,
+    ) -> Response {
+        tracing::info!(app = app_name, version = version, "Deploying app");
+
+        // Acquire deploy lock for this app (non-blocking check)
+        let lock = self.get_deploy_lock(app_name).await;
+        let _guard = match lock.try_lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                tracing::warn!(
+                    app = app_name,
+                    "Deploy rejected: another deploy in progress"
+                );
+                return Response::error(format!(
+                    "Deploy already in progress for app '{}'. Please wait and try again.",
+                    app_name
+                ));
+            }
+        };
+
+        // Get or create app
+        let (app, deploy_config, is_new_app) =
+            if let Some(existing) = self.app_manager.get_app(app_name) {
+                // Update existing app config. We'll perform a rolling update if instances are running.
+                let mut config = existing.config.read().clone();
+                config.version = version.to_string();
+                config.path = PathBuf::from(path);
+                config.cwd = PathBuf::from(path);
+                config.min_instances = instances as u32;
+                config.idle_timeout = Duration::from_secs(idle_timeout as u64);
+                config.command = match command_for_release_dir(&config.cwd) {
+                    Ok(cmd) => cmd,
+                    Err(e) => {
+                        return Response::error(format!("Invalid app release: {}", e));
+                    }
+                };
+                existing.update_config(config.clone());
+                (existing, config, false)
+            } else {
+                // Create new app
+                let secrets = self.secrets.read().await;
+                let app_secrets = secrets.get(app_name).cloned().unwrap_or_default();
+
+                let config = AppConfig {
+                    name: app_name.to_string(),
+                    version: version.to_string(),
+                    path: PathBuf::from(path),
+                    cwd: PathBuf::from(path),
+                    command: match command_for_release_dir(Path::new(path)) {
+                        Ok(cmd) => cmd,
+                        Err(e) => {
+                            return Response::error(format!("Invalid app release: {}", e));
+                        }
+                    },
+                    env: app_secrets,
+                    min_instances: instances as u32,
+                    max_instances: 4,
+                    base_port: self.allocate_port_range(),
+                    idle_timeout: Duration::from_secs(idle_timeout as u64),
+                    ..Default::default()
+                };
+
+                let deploy_config = config.clone();
+                let app = self.app_manager.register_app(config);
+                self.load_balancer.register_app(app.clone());
+                (app, deploy_config, true)
+            };
+
+        // Update route table for this app
+        {
+            let mut route_table = self.routes.write().await;
+            route_table.set_app_routes(app_name.to_string(), routes.clone());
+        }
+
+        app.clear_last_error();
+
+        // Request certificates for route domains (if ACME is enabled)
+        if let Some(acme) = &self.acme_client {
+            for route in &routes {
+                // Extract domain from route (e.g., "api.example.com/api/*" -> "api.example.com")
+                let domain = route.split('/').next().unwrap_or(route);
+
+                // Skip if certificate already exists
+                if self.cert_manager.get_cert_for_host(domain).is_some() {
+                    tracing::debug!(domain = %domain, "Certificate already exists");
+                    continue;
+                }
+
+                // Request certificate (non-blocking, log errors but don't fail deploy)
+                tracing::info!(domain = %domain, app = app_name, "Requesting certificate for route");
+                match acme.request_certificate(domain).await {
+                    Ok(cert) => {
+                        tracing::info!(
+                            domain = %domain,
+                            expires_in_days = cert.days_until_expiry(),
+                            "Certificate issued successfully"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            domain = %domain,
+                            error = %e,
+                            "Failed to request certificate (HTTPS may not work for this domain)"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Start the app
+        if app.get_instances().is_empty() {
+            // First deploy / currently stopped.
+            if deploy_config.min_instances == 0 {
+                app.set_state(AppState::Idle);
+                self.cold_start.reset(app_name);
+                Response::ok(serde_json::json!({
+                    "status": "deployed",
+                    "app": app_name,
+                    "version": version,
+                    "new_app": is_new_app,
+                    "on_demand": true
+                }))
+            } else {
+                match self.app_manager.start_app(app_name).await {
+                    Ok(()) => {
+                        app.set_state(AppState::Running);
+                        Response::ok(serde_json::json!({
+                            "status": "deployed",
+                            "app": app_name,
+                            "version": version,
+                            "new_app": is_new_app,
+                            "on_demand": false
+                        }))
+                    }
+                    Err(e) => {
+                        app.set_state(AppState::Error);
+                        Response::error(format!("Deploy failed: {}", e))
+                    }
+                }
+            }
+        } else {
+            // Existing app: do a rolling update to apply new version/path.
+            let previous_state = app.state();
+            app.set_state(AppState::Deploying);
+
+            let rolling_config = RollingUpdateConfig::default();
+            let updater = RollingUpdater::new(self.app_manager.spawner().clone(), rolling_config);
+
+            match updater.update(&app, deploy_config).await {
+                Ok(result) => {
+                    if result.success {
+                        app.set_state(AppState::Running);
+                        Response::ok(serde_json::json!({
+                            "status": "deployed",
+                            "app": app_name,
+                            "version": version,
+                            "new_instances": result.new_instances,
+                            "old_instances": result.old_instances,
+                            "rolled_back": false
+                        }))
+                    } else {
+                        app.set_state(previous_state);
+                        Response::error(
+                            serde_json::json!({
+                                "status": "rollback",
+                                "app": app_name,
+                                "error": result.error,
+                                "rolled_back": true
+                            })
+                            .to_string(),
+                        )
+                    }
+                }
+                Err(e) => {
+                    app.set_state(AppState::Error);
+                    Response::error(format!("Rolling update failed: {}", e))
+                }
+            }
+        }
+    }
+
+    async fn stop_app(&self, app_name: &str) -> Response {
+        tracing::info!(app = app_name, "Stopping app");
+
+        match self.app_manager.stop_app(app_name).await {
+            Ok(()) => Response::ok(serde_json::json!({
+                "status": "stopped",
+                "app": app_name
+            })),
+            Err(e) => Response::error(format!("Stop failed: {}", e)),
+        }
+    }
+
+    async fn get_status(&self, app_name: &str) -> Response {
+        let app = match self.app_manager.get_app(app_name) {
+            Some(app) => app,
+            None => return Response::error(format!("App not found: {}", app_name)),
+        };
+
+        let instances = app.get_instances().iter().map(|i| i.status()).collect();
+
+        let status = AppStatus {
+            name: app.name(),
+            version: app.version(),
+            instances,
+            state: app.state(),
+            last_error: app.last_error(),
+        };
+
+        Response::ok(status)
+    }
+
+    async fn list_apps(&self) -> Response {
+        let apps: Vec<serde_json::Value> = self
+            .app_manager
+            .list_apps()
+            .iter()
+            .filter_map(|name| {
+                self.app_manager.get_app(name).map(|app| {
+                    serde_json::json!({
+                        "name": app.name(),
+                        "version": app.version(),
+                        "state": app.state(),
+                        "instances": app.get_instances().len()
+                    })
+                })
+            })
+            .collect();
+
+        Response::ok(serde_json::json!({ "apps": apps }))
+    }
+
+    async fn list_routes(&self) -> Response {
+        let route_table = self.routes.read().await;
+        let routes: Vec<serde_json::Value> = self
+            .app_manager
+            .list_apps()
+            .iter()
+            .map(|app| {
+                let patterns = route_table.routes_for_app(app);
+                serde_json::json!({ "app": app, "routes": patterns })
+            })
+            .collect();
+        Response::ok(serde_json::json!({ "routes": routes }))
+    }
+
+    async fn reload_app(&self, app_name: &str) -> Response {
+        tracing::info!(app = app_name, "Reloading app with rolling restart");
+
+        let app = match self.app_manager.get_app(app_name) {
+            Some(app) => app,
+            None => return Response::error(format!("App not found: {}", app_name)),
+        };
+
+        // Check if app is running - if not, just start it
+        if app.get_instances().is_empty() {
+            tracing::info!(app = app_name, "App has no instances, starting fresh");
+            match self.app_manager.start_app(app_name).await {
+                Ok(()) => {
+                    app.set_state(AppState::Running);
+                    return Response::ok(serde_json::json!({
+                        "status": "started",
+                        "app": app_name,
+                        "note": "App was not running, started fresh"
+                    }));
+                }
+                Err(e) => {
+                    app.set_state(AppState::Error);
+                    return Response::error(format!("Start failed: {}", e));
+                }
+            }
+        }
+
+        // Mark app as deploying during rolling update
+        let previous_state = app.state();
+        app.set_state(AppState::Deploying);
+
+        // Get current config for rolling update
+        let config = app.config.read().clone();
+
+        // Create rolling updater with default config
+        let rolling_config = RollingUpdateConfig::default();
+        let updater = RollingUpdater::new(self.app_manager.spawner().clone(), rolling_config);
+
+        // Perform rolling update
+        match updater.update(&app, config).await {
+            Ok(result) => {
+                if result.success {
+                    app.set_state(AppState::Running);
+                    Response::ok(serde_json::json!({
+                        "status": "reloaded",
+                        "app": app_name,
+                        "new_instances": result.new_instances,
+                        "old_instances": result.old_instances,
+                        "rolled_back": false
+                    }))
+                } else {
+                    // Rollback occurred
+                    app.set_state(previous_state);
+                    Response::error(
+                        serde_json::json!({
+                            "status": "rollback",
+                            "app": app_name,
+                            "error": result.error,
+                            "rolled_back": true
+                        })
+                        .to_string(),
+                    )
+                }
+            }
+            Err(e) => {
+                app.set_state(AppState::Error);
+                Response::error(format!("Rolling update failed: {}", e))
+            }
+        }
+    }
+
+    async fn update_secrets(
+        &self,
+        app_name: &str,
+        new_secrets: HashMap<String, String>,
+    ) -> Response {
+        tracing::info!(app = app_name, "Updating secrets");
+
+        // Store secrets
+        {
+            let mut secrets = self.secrets.write().await;
+            secrets.insert(app_name.to_string(), new_secrets.clone());
+        }
+
+        // If app exists, update its config
+        if let Some(app) = self.app_manager.get_app(app_name) {
+            let mut config = app.config.read().clone();
+            config.env.extend(new_secrets);
+            app.update_config(config);
+
+            // Note: Running instances still have old secrets
+            // User should call reload to apply new secrets
+        }
+
+        Response::ok(serde_json::json!({
+            "status": "updated",
+            "app": app_name,
+            "note": "Call reload to apply secrets to running instances"
+        }))
+    }
+
+    /// Request a certificate for a domain via ACME
+    pub async fn request_certificate(&self, domain: &str) -> Response {
+        let acme = match &self.acme_client {
+            Some(acme) => acme,
+            None => return Response::error("ACME is disabled".to_string()),
+        };
+
+        match acme.request_certificate(domain).await {
+            Ok(cert) => Response::ok(serde_json::json!({
+                "status": "issued",
+                "domain": domain,
+                "expires_in_days": cert.days_until_expiry(),
+                "cert_path": cert.cert_path.to_string_lossy(),
+            })),
+            Err(e) => Response::error(format!("Certificate request failed: {}", e)),
+        }
+    }
+
+    /// Allocate a base port for a new app
+    fn allocate_port_range(&self) -> u16 {
+        // Pick an unused local port as the base.
+        // This avoids hard-coding ports like 3000, which often collide in dev/test.
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .ok()
+            .and_then(|l| l.local_addr().ok().map(|a| a.port()))
+            .unwrap_or(3000)
+    }
+}
+
+/// Background task for automatic certificate renewal
+async fn certificate_renewal_task(acme_client: Arc<AcmeClient>, interval: Duration) {
+    tracing::info!(
+        interval_hours = interval.as_secs() / 3600,
+        "Starting certificate renewal task"
+    );
+
+    loop {
+        tokio::time::sleep(interval).await;
+
+        tracing::info!("Checking for certificates needing renewal...");
+
+        let results = acme_client.check_renewals().await;
+
+        for result in results {
+            match result {
+                Ok(cert) => {
+                    tracing::info!(
+                        domain = %cert.domain,
+                        expires_in_days = cert.days_until_expiry(),
+                        "Certificate renewed successfully"
+                    );
+                }
+                Err(e) => {
+                    tracing::error!("Certificate renewal failed: {}", e);
+                }
+            }
+        }
+    }
+}
+
+fn install_rustls_crypto_provider() {
+    if rustls::crypto::CryptoProvider::get_default().is_some() {
+        return;
+    }
+
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    install_rustls_crypto_provider();
+
+    // Initialize tracing
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .with_target(false)
+        .init();
+
+    let args = Args::parse();
+
+    // Tokio runtime for all non-proxy async tasks (socket, health checks, ACME, etc).
+    // Pingora manages its own runtime(s) internally.
+    let rt = tokio::runtime::Runtime::new()?;
+
+    let exe = std::env::current_exe().ok();
+
+    let socket = args.socket.clone().unwrap_or_else(|| {
+        if cfg!(debug_assertions)
+            && let Some(exe) = &exe
+            && let Some(p) = crate::paths::debug_default_socket_from_exe(exe)
+        {
+            return p.to_string_lossy().to_string();
+        }
+        "/var/run/tako/tako.sock".to_string()
+    });
+
+    let data_dir_str = args.data_dir.clone().unwrap_or_else(|| {
+        if cfg!(debug_assertions)
+            && let Some(exe) = &exe
+            && let Some(p) = crate::paths::debug_default_data_dir_from_exe(exe)
+        {
+            return p.to_string_lossy().to_string();
+        }
+        "/var/lib/tako".to_string()
+    });
+
+    tracing::info!("Tako Server v{}", env!("CARGO_PKG_VERSION"));
+    tracing::info!("Socket: {}", socket);
+    tracing::info!("HTTP port: {}", args.port);
+    tracing::info!("HTTPS port: {}", args.tls_port);
+    tracing::info!("Data directory: {}", data_dir_str);
+
+    // Create data directory
+    let data_dir = PathBuf::from(&data_dir_str);
+    std::fs::create_dir_all(&data_dir)?;
+
+    // Create socket parent directory (for debug/local usage)
+    if let Some(parent) = PathBuf::from(&socket).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    // Setup certificate directories
+    let cert_dir = data_dir.join("certs");
+    let acme_dir = data_dir.join("acme");
+    std::fs::create_dir_all(&cert_dir)?;
+    std::fs::create_dir_all(&acme_dir)?;
+
+    // Create certificate manager
+    let cert_manager_config = CertManagerConfig {
+        cert_dir: cert_dir.clone(),
+        ..Default::default()
+    };
+    let cert_manager = Arc::new(CertManager::new(cert_manager_config));
+
+    // Initialize cert manager (loads existing certs)
+    if let Err(e) = cert_manager.init() {
+        tracing::warn!("Failed to initialize certificate manager: {}", e);
+    }
+
+    // Create ACME client if enabled
+    let acme_client = if args.no_acme {
+        tracing::info!("ACME disabled, using manual certificate management");
+        None
+    } else {
+        let acme_config = AcmeConfig {
+            staging: args.acme_staging,
+            email: args.acme_email.clone(),
+            account_dir: acme_dir,
+            ..Default::default()
+        };
+
+        let client = Arc::new(AcmeClient::new(acme_config, cert_manager.clone()));
+
+        // Initialize ACME account
+        if let Err(e) = rt.block_on(client.init()) {
+            tracing::error!("Failed to initialize ACME client: {}", e);
+            tracing::warn!("Continuing without ACME - certificates must be managed manually");
+            None
+        } else {
+            if args.acme_staging {
+                tracing::warn!(
+                    "Using Let's Encrypt STAGING environment - certificates will NOT be trusted!"
+                );
+            } else {
+                tracing::info!("ACME client initialized with Let's Encrypt production");
+            }
+            Some(client)
+        }
+    };
+
+    // Get ACME challenge tokens for proxy
+    let acme_tokens = acme_client.as_ref().map(|c| c.challenge_tokens());
+
+    // Create server state
+    let state = Arc::new(ServerState::new(
+        data_dir.clone(),
+        cert_manager.clone(),
+        acme_client.clone(),
+    ));
+
+    // Take event receiver for monitoring
+    let (health_event_tx, mut health_event_rx) = mpsc::channel(256);
+    if let Some(mut event_rx) = state.app_manager.take_event_receiver() {
+        let state_clone = state.clone();
+        rt.spawn(async move {
+            while let Some(event) = event_rx.recv().await {
+                handle_instance_event(&state_clone, event).await;
+            }
+        });
+    }
+
+    // Start health checker for all apps
+    let health_config = HealthConfig::default();
+    let health_checker = Arc::new(HealthChecker::new(health_config, health_event_tx));
+    let app_manager_clone = state.app_manager.clone();
+    let health_checker_clone = health_checker.clone();
+    rt.spawn(async move {
+        // Track tasks for each app
+        let mut app_tasks: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
+            std::collections::HashMap::new();
+
+        loop {
+            // Get current app list
+            let app_names = app_manager_clone.list_apps();
+            let app_set: std::collections::HashSet<_> = app_names.into_iter().collect();
+
+            // Start monitoring for new apps
+            for app_name in &app_set {
+                if !app_tasks.contains_key(app_name)
+                    && let Some(app) = app_manager_clone.get_app(app_name)
+                {
+                    let checker = health_checker_clone.clone();
+                    let task = tokio::spawn(async move {
+                        checker.monitor_app(app).await;
+                    });
+                    app_tasks.insert(app_name.clone(), task);
+                }
+            }
+
+            // Remove tasks for apps that no longer exist
+            app_tasks.retain(|app_name, task| {
+                if !app_set.contains(app_name) {
+                    task.abort();
+                    false
+                } else {
+                    true
+                }
+            });
+
+            // Check every second
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    // Handle health events
+    let health_state = state.clone();
+    rt.spawn(async move {
+        while let Some(event) = health_event_rx.recv().await {
+            handle_health_event(&health_state, event).await;
+        }
+    });
+
+    // Start idle monitor for all apps
+    let (idle_event_tx, mut idle_event_rx) = mpsc::channel(256);
+    let idle_monitor = Arc::new(IdleMonitor::new(IdleConfig::default(), idle_event_tx));
+    let app_manager_clone = state.app_manager.clone();
+    let idle_monitor_clone = idle_monitor.clone();
+    rt.spawn(async move {
+        let mut app_tasks: std::collections::HashMap<String, tokio::task::JoinHandle<()>> =
+            std::collections::HashMap::new();
+
+        loop {
+            let app_names = app_manager_clone.list_apps();
+            let app_set: std::collections::HashSet<_> = app_names.into_iter().collect();
+
+            for app_name in &app_set {
+                if !app_tasks.contains_key(app_name)
+                    && let Some(app) = app_manager_clone.get_app(app_name)
+                {
+                    let monitor = idle_monitor_clone.clone();
+                    let task = tokio::spawn(async move {
+                        monitor.monitor_app(app).await;
+                    });
+                    app_tasks.insert(app_name.clone(), task);
+                }
+            }
+
+            app_tasks.retain(|app_name, task| {
+                if !app_set.contains(app_name) {
+                    task.abort();
+                    false
+                } else {
+                    true
+                }
+            });
+
+            tokio::time::sleep(Duration::from_secs(1)).await;
+        }
+    });
+
+    let idle_state = state.clone();
+    rt.spawn(async move {
+        while let Some(event) = idle_event_rx.recv().await {
+            handle_idle_event(&idle_state, event).await;
+        }
+    });
+
+    // Start certificate renewal background task
+    if let Some(ref acme) = acme_client {
+        let acme_clone = acme.clone();
+        let interval = Duration::from_secs(args.renewal_interval_hours * 3600);
+        rt.spawn(certificate_renewal_task(acme_clone, interval));
+    }
+
+    // Start management socket
+    let socket_state = state.clone();
+    let socket_path = socket.clone();
+    rt.spawn(async move {
+        let server = SocketServer::new(&socket_path);
+        if let Err(e) = server
+            .run(move |cmd| {
+                let state = socket_state.clone();
+                async move { state.handle_command(cmd).await }
+            })
+            .await
+        {
+            tracing::error!("Socket server error: {}", e);
+        }
+    });
+
+    // Best-effort cleanup for stale app unix socket files.
+    // This matters if an app crashes and leaves behind a stale socket path.
+    // During rolling updates multiple instances can be alive concurrently; we only remove sockets
+    // whose PID no longer exists.
+    {
+        use std::path::Path;
+        let dirs = [Path::new("/var/run"), Path::new("/var/run/tako")];
+        for d in &dirs {
+            app_socket_cleanup::cleanup_stale_app_sockets(d);
+        }
+
+        rt.spawn(async move {
+            let dirs = [Path::new("/var/run"), Path::new("/var/run/tako")];
+            let mut ticker = tokio::time::interval(Duration::from_secs(30));
+            loop {
+                ticker.tick().await;
+                for d in &dirs {
+                    app_socket_cleanup::cleanup_stale_app_sockets(d);
+                }
+            }
+        });
+    }
+
+    // Configure proxy
+    let dev_mode = cfg!(debug_assertions);
+    let proxy_config = proxy::ProxyConfig {
+        http_port: args.port,
+        https_port: args.tls_port,
+        enable_https: true,
+        dev_mode,
+        cert_dir,
+        redirect_http_to_https: true,
+    };
+
+    // Start Pingora proxy
+    tracing::info!("Starting HTTP proxy on port {}", args.port);
+    if proxy_config.enable_https {
+        tracing::info!("HTTPS enabled on port {}", args.tls_port);
+    }
+
+    let server = proxy::build_server_with_acme(
+        state.load_balancer.clone(),
+        state.routes(),
+        proxy_config,
+        acme_tokens,
+        Some(cert_manager),
+        state.cold_start(),
+    )?;
+
+    // Run the server (this blocks)
+    server.run_forever();
+
+    #[allow(unreachable_code)]
+    Ok(())
+}
+
+async fn handle_instance_event(state: &ServerState, event: InstanceEvent) {
+    match event {
+        InstanceEvent::Started { app, instance_id } => {
+            tracing::debug!(app = %app, instance = instance_id, "Instance started");
+        }
+        InstanceEvent::Ready { app, instance_id } => {
+            tracing::info!(app = %app, instance = instance_id, "Instance ready");
+            state.cold_start.mark_ready(&app);
+
+            if let Some(app_ref) = state.app_manager.get_app(&app) {
+                app_ref.clear_last_error();
+            }
+        }
+        InstanceEvent::Unhealthy { app, instance_id } => {
+            tracing::warn!(app = %app, instance = instance_id, "Instance unhealthy");
+            // Replace unhealthy instance after a grace period
+            replace_instance_if_needed(state, &app, instance_id, "unhealthy").await;
+        }
+        InstanceEvent::Stopped { app, instance_id } => {
+            tracing::info!(app = %app, instance = instance_id, "Instance stopped");
+        }
+    }
+}
+
+async fn handle_health_event(state: &ServerState, event: crate::instances::HealthEvent) {
+    use crate::instances::HealthEvent;
+
+    match event {
+        HealthEvent::Healthy { app, instance_id } => {
+            tracing::info!(app = %app, instance = instance_id, "Instance is healthy");
+            state.cold_start.mark_ready(&app);
+
+            if let Some(app_ref) = state.app_manager.get_app(&app) {
+                app_ref.clear_last_error();
+            }
+        }
+        HealthEvent::Unhealthy { app, instance_id } => {
+            tracing::warn!(app = %app, instance = instance_id, "Instance became unhealthy");
+            // Don't immediately replace - wait for Dead event or recovery
+        }
+        HealthEvent::Dead { app, instance_id } => {
+            tracing::error!(app = %app, instance = instance_id, "Instance is dead (no heartbeat)");
+            state.cold_start.mark_failed(&app);
+            if let Some(app_ref) = state.app_manager.get_app(&app) {
+                app_ref.set_last_error("Instance marked dead");
+            }
+            // Replace dead instance immediately
+            replace_instance_if_needed(state, &app, instance_id, "dead").await;
+        }
+        HealthEvent::Recovered { app, instance_id } => {
+            tracing::info!(app = %app, instance = instance_id, "Instance recovered from unhealthy");
+        }
+    }
+}
+
+async fn handle_idle_event(state: &ServerState, event: IdleEvent) {
+    match event {
+        IdleEvent::InstanceIdle { app, instance_id } => {
+            if let Some(app_ref) = state.app_manager.get_app(&app)
+                && let Some(instance) = app_ref.get_instance(instance_id)
+            {
+                if let Err(e) = instance.kill().await {
+                    tracing::warn!(app = %app, instance = instance_id, "Failed to kill idle instance: {}", e);
+                }
+                app_ref.remove_instance(instance_id);
+            }
+        }
+        IdleEvent::AppIdle { app } => {
+            if let Some(app_ref) = state.app_manager.get_app(&app) {
+                app_ref.set_state(AppState::Idle);
+            }
+            state.cold_start.reset(&app);
+        }
+    }
+}
+
+/// Replace an unhealthy or dead instance with a new one
+async fn replace_instance_if_needed(
+    state: &ServerState,
+    app_name: &str,
+    instance_id: u32,
+    reason: &str,
+) {
+    let app = match state.app_manager.get_app(app_name) {
+        Some(app) => app,
+        None => {
+            tracing::warn!(app = %app_name, "Cannot replace instance: app not found");
+            return;
+        }
+    };
+
+    // Find the instance
+    let instance = match app.get_instance(instance_id) {
+        Some(inst) => inst,
+        None => {
+            tracing::debug!(app = %app_name, instance = instance_id, "Instance already removed");
+            return;
+        }
+    };
+
+    // Check if we should replace this instance
+    let current_count = app.get_instances().len() as u32;
+    let min_instances = app.config.read().min_instances;
+
+    // Only replace if we're at or below min_instances
+    // (don't want to scale up just because one instance is unhealthy)
+    if current_count > min_instances {
+        tracing::info!(
+            app = %app_name,
+            instance = instance_id,
+            reason = reason,
+            current = current_count,
+            min = min_instances,
+            "Not replacing {} instance: have more than minimum instances",
+            reason
+        );
+        // Just remove the bad instance
+        if let Err(e) = instance.kill().await {
+            tracing::error!(app = %app_name, instance = instance_id, "Failed to kill instance: {}", e);
+        }
+        app.remove_instance(instance_id);
+        return;
+    }
+
+    tracing::info!(
+        app = %app_name,
+        instance = instance_id,
+        reason = reason,
+        "Replacing {} instance with a new one",
+        reason
+    );
+
+    // Kill the old instance
+    if let Err(e) = instance.kill().await {
+        tracing::error!(app = %app_name, instance = instance_id, "Failed to kill old instance: {}", e);
+    }
+    app.remove_instance(instance_id);
+
+    // Allocate and spawn a new instance
+    let new_instance = app.allocate_instance();
+    let spawner = state.app_manager.spawner();
+
+    match spawner.spawn(&app, new_instance.clone()).await {
+        Ok(()) => {
+            tracing::info!(
+                app = %app_name,
+                old_instance = instance_id,
+                new_instance = new_instance.id,
+                "Successfully spawned replacement instance"
+            );
+        }
+        Err(e) => {
+            tracing::error!(
+                app = %app_name,
+                instance = new_instance.id,
+                "Failed to spawn replacement instance: {}",
+                e
+            );
+            // Clean up the failed instance
+            app.remove_instance(new_instance.id);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::install_rustls_crypto_provider;
+
+    #[test]
+    fn install_rustls_crypto_provider_is_idempotent() {
+        install_rustls_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+
+        install_rustls_crypto_provider();
+        assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
+}

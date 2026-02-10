@@ -1,0 +1,43 @@
+# tako-server
+
+Rust crate for the remote Tako runtime and proxy.
+
+## Responsibilities
+
+- Start/stop/manage app instances.
+- Maintain route table and app load balancers.
+- Terminate HTTP/HTTPS traffic and proxy upstream.
+- Perform active health probing.
+- Serve management commands over Unix socket.
+
+## Key Runtime Paths
+
+- Socket: `/var/run/tako/tako.sock`
+- Data root: `/opt/tako`
+- App releases: `/opt/tako/apps/<app>/releases/<version>/`
+
+## Run and Test
+
+From repository root:
+
+```bash
+cargo run -p tako-server -- --help
+cargo test -p tako-server
+```
+
+Example local run:
+
+```bash
+cargo run -p tako-server -- \
+  --socket /tmp/tako.sock \
+  --port 8080 \
+  --tls-port 8443 \
+  --data-dir /tmp/tako-data \
+  --no-acme
+```
+
+## Related Docs
+
+- `SPEC.md` (protocol + routing contract)
+- `docs/guides/deployment.md` (deploy flow and runtime expectations)
+- `docs/architecture/overview.md` (runtime component/data-flow context)
