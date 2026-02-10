@@ -8,13 +8,13 @@ describe("redirects config", () => {
     const redirects = await readFile(redirectsPath, "utf8");
 
     expect(redirects).toContain(
-      "/install https://raw.githubusercontent.com/lilienblum/tako/main/scripts/install-tako-cli.sh 302",
+      "/install https://raw.githubusercontent.com/lilienblum/tako/refs/heads/master/scripts/install-tako-cli.sh 302",
     );
     expect(redirects).toContain(
-      "/install-server https://raw.githubusercontent.com/lilienblum/tako/main/scripts/install-tako-server.sh 302",
+      "/install-server https://raw.githubusercontent.com/lilienblum/tako/refs/heads/master/scripts/install-tako-server.sh 302",
     );
     expect(redirects).toContain(
-      "/server-install https://raw.githubusercontent.com/lilienblum/tako/main/scripts/install-tako-server.sh 302",
+      "/server-install https://raw.githubusercontent.com/lilienblum/tako/refs/heads/master/scripts/install-tako-server.sh 302",
     );
   });
 });
