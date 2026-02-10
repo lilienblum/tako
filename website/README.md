@@ -1,6 +1,6 @@
 # Tako Website
 
-Astro static site served by a Cloudflare Worker.
+Astro static site deployed with Cloudflare Workers static assets.
 
 ## Routes
 
@@ -12,9 +12,11 @@ Astro static site served by a Cloudflare Worker.
 - `/docs/deployment`: deployment guide
 - `/docs/operations`: operations runbook
 - `/docs/architecture`: architecture overview
-- `/install`: POSIX `sh` installer script for `tako` CLI (`text/plain`)
-- `/install-server`: POSIX `sh` installer script for `tako-server` (`text/plain`)
-- `/server-install`: alias for `/install-server`
+- `/install`: `302` redirect to GitHub-hosted POSIX `sh` installer script for `tako`
+- `/install-server`: `302` redirect to GitHub-hosted POSIX `sh` installer script for `tako-server`
+- `/server-install`: alias for `/install-server` (same redirect target)
+
+Installer redirects are configured in `public/_redirects` (Cloudflare static assets redirects).
 
 ## Run Locally
 

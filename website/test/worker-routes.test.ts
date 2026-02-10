@@ -1,14 +1,11 @@
 import { describe, expect, it } from "bun:test";
-import { readFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
+import { constants } from "node:fs";
 import { join } from "node:path";
 
-describe("worker install routes", () => {
-  it("treats install script routes as curl-friendly text/plain", async () => {
-    const source = await readFile(join(import.meta.dir, "..", "src", "worker.ts"), "utf8");
-
-    expect(source).toContain('"/install"');
-    expect(source).toContain('"/install-server"');
-    expect(source).toContain('"/server-install"');
-    expect(source).toContain("text/plain; charset=utf-8");
+describe("worker config", () => {
+  it("does not include a custom worker entrypoint", async () => {
+    const workerPath = join(import.meta.dir, "..", "src", "worker.ts");
+    await expect(access(workerPath, constants.F_OK)).rejects.toThrow();
   });
 });

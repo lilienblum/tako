@@ -114,5 +114,5 @@ install-server:
             -p {{ DOCKER_SSH_PORT }} \
             root@localhost \
             '\''TAKO_DOWNLOAD_BASE_URL=http://host.docker.internal:{{ ARTIFACTS_PORT }} TAKO_SSH_PUBKEY="$(cat /root/.ssh/authorized_keys)" sh -s'\'' \
-            < ./scripts/setup-tako-server.sh \
+            < ./scripts/install-tako-server.sh \
     '

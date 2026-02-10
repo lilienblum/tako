@@ -613,7 +613,7 @@ Installer SSH key behavior:
 - Installer attempts to grant `CAP_NET_BIND_SERVICE` to `/usr/local/bin/tako-server` via `setcap` so non-systemd/manual runs can still bind `:80/:443` as a non-root user (warns when `setcap` is unavailable or fails).
 - When systemd is available, installer verifies `tako-server` is active after `enable --now`; if startup fails, installer exits non-zero and prints recent service logs.
 
-Reference script in this repo: `scripts/setup-tako-server.sh` (source for `/install-server`, alias `/server-install`).
+Reference script in this repo: `scripts/install-tako-server.sh` (source for `/install-server`, alias `/server-install`).
 
 **Default behavior (no configuration file needed):**
 

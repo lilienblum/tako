@@ -700,7 +700,7 @@ fn format_tako_not_running_error(server_names: &[String]) -> String {
 
 fn format_tako_missing_error(server_names: &[String]) -> String {
     format!(
-        "tako-server is not installed on: {} (install it as root; see scripts/setup-tako-server.sh)",
+        "tako-server is not installed on: {} (install it as root; see scripts/install-tako-server.sh)",
         server_names.join(", ")
     )
 }
@@ -956,7 +956,7 @@ async fn deploy_to_server(
                 .await?;
         if !installed {
             return Err(
-                "tako-server is not installed on this server. Install it as root (see scripts/setup-tako-server.sh)."
+                "tako-server is not installed on this server. Install it as root (see scripts/install-tako-server.sh)."
                     .into(),
             );
         }

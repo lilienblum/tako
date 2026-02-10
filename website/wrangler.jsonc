@@ -1,7 +1,6 @@
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
   "name": "tako-website",
-  "main": "src/worker.ts",
   "compatibility_date": "2026-01-29",
   "workers_dev": false,
   "routes": [
@@ -11,7 +10,6 @@
     }
   ],
   "assets": {
-    "directory": "./dist",
-    "binding": "ASSETS"
+    "directory": "./dist"
   }
 }

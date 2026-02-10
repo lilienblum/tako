@@ -393,7 +393,7 @@ pub async fn add_server(
                     Ok(false) => {
                         output::warning("tako-server not installed");
                         output::muted(
-                            "Install it on the server as root (see scripts/setup-tako-server.sh), then re-run deploy.",
+                            "Install it on the server as root (see scripts/install-tako-server.sh), then re-run deploy.",
                         );
                     }
                     Err(e) => output::warning(&format!("Could not check tako-server: {}", e)),

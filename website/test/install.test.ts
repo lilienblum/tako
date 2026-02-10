@@ -3,8 +3,14 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 describe("installer scripts", () => {
-  it("/install exists and looks like a POSIX sh CLI installer", async () => {
-    const scriptPath = join(import.meta.dir, "..", "public", "install");
+  it("CLI installer script exists in scripts/ and is POSIX sh compatible", async () => {
+    const scriptPath = join(
+      import.meta.dir,
+      "..",
+      "..",
+      "scripts",
+      "install-tako-cli.sh",
+    );
     const s = await readFile(scriptPath, "utf8");
 
     expect(s.startsWith("#!/bin/sh")).toBe(true);
@@ -15,8 +21,14 @@ describe("installer scripts", () => {
     expect(s).not.toContain("pipefail");
   });
 
-  it("/install-server exists and looks like a POSIX sh server installer", async () => {
-    const scriptPath = join(import.meta.dir, "..", "public", "install-server");
+  it("server installer script exists in scripts/ and is POSIX sh compatible", async () => {
+    const scriptPath = join(
+      import.meta.dir,
+      "..",
+      "..",
+      "scripts",
+      "install-tako-server.sh",
+    );
     const s = await readFile(scriptPath, "utf8");
 
     expect(s.startsWith("#!/bin/sh")).toBe(true);
