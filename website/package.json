@@ -1,0 +1,21 @@
+{
+  "name": "website",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "deploy": "astro build && wrangler deploy",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "astro": "catalog:dev"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "catalog:dev",
+    "@types/bun": "catalog:dev",
+    "typescript": "catalog:dev",
+    "wrangler": "catalog:dev"
+  }
+}

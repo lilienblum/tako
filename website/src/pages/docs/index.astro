@@ -1,0 +1,241 @@
+---
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tako Docs</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg: #101416;
+        --fg: #F2ECEA;
+        --primary: #E88783;
+        --secondary: #9BC4B6;
+        --muted: rgba(155, 196, 182, 0.78);
+        --line: rgba(155, 196, 182, 0.22);
+        --accent: var(--primary);
+        --accent-dim: rgba(232, 135, 131, 0.16);
+      }
+
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      html {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      body {
+        min-height: 100vh;
+        color: var(--fg);
+        background: var(--bg);
+      }
+
+      /* Header */
+      .header {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 32px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(16, 20, 22, 0.9);
+        backdrop-filter: blur(12px);
+      }
+
+      .logo {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 16px;
+        font-weight: 500;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--fg);
+        text-decoration: none;
+      }
+
+      .logo:hover {
+        color: var(--accent);
+      }
+
+      .nav {
+        display: flex;
+        gap: 24px;
+      }
+
+      .nav a {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        color: var(--muted);
+        text-decoration: none;
+        letter-spacing: 0.05em;
+        transition: color 0.2s;
+      }
+
+      .nav a:hover {
+        color: var(--accent);
+      }
+
+      /* Main content */
+      main {
+        max-width: 800px;
+        margin: 0 auto;
+        padding: 80px 24px 120px;
+      }
+
+      .page-title {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 32px;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+        margin-bottom: 16px;
+        color: var(--fg);
+      }
+
+      .page-subtitle {
+        font-size: 16px;
+        color: var(--muted);
+        margin-bottom: 48px;
+        line-height: 1.6;
+      }
+
+      /* Doc links grid */
+      .docs-grid {
+        display: grid;
+        gap: 16px;
+      }
+
+      .doc-card {
+        display: block;
+        padding: 24px;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.02);
+        text-decoration: none;
+        transition: all 0.2s;
+      }
+
+      .doc-card:hover {
+        border-color: var(--accent);
+        background: var(--accent-dim);
+      }
+
+      .doc-card-title {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 16px;
+        font-weight: 500;
+        color: var(--fg);
+        margin-bottom: 8px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .doc-card-title::before {
+        content: '~';
+        color: var(--accent);
+        opacity: 0;
+        transform: translateX(-8px);
+        transition: all 0.2s;
+      }
+
+      .doc-card:hover .doc-card-title::before {
+        opacity: 1;
+        transform: translateX(0);
+      }
+
+      .doc-card-desc {
+        font-size: 14px;
+        color: var(--muted);
+        line-height: 1.5;
+        padding-left: 22px;
+      }
+
+      /* Scanlines */
+      .scanlines {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 1000;
+        background: repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 2px,
+          rgba(0, 0, 0, 0.1) 2px,
+          rgba(0, 0, 0, 0.1) 4px
+        );
+        opacity: 0.1;
+      }
+
+      /* Responsive */
+      @media (max-width: 640px) {
+        .header {
+          padding: 12px 16px;
+        }
+        .nav {
+          gap: 16px;
+        }
+        main {
+          padding: 48px 16px 80px;
+        }
+        .page-title {
+          font-size: 24px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <header class="header">
+      <a href="/" class="logo">tako</a>
+      <nav class="nav">
+        <a href="/docs">docs</a>
+        <a href="https://github.com/anthropics/tako">github</a>
+      </nav>
+    </header>
+
+    <main>
+      <h1 class="page-title">Documentation</h1>
+      <p class="page-subtitle">
+        Everything you need to deploy applications to your own servers with Tako.
+      </p>
+
+      <div class="docs-grid">
+        <a href="/docs/install" class="doc-card">
+          <div class="doc-card-title">Install</div>
+          <div class="doc-card-desc">Install the CLI locally and set up tako-server on your hosts.</div>
+        </a>
+
+        <a href="/docs/spec" class="doc-card">
+          <div class="doc-card-title">Specification</div>
+          <div class="doc-card-desc">User-facing behavior, configuration options, and API reference.</div>
+        </a>
+
+        <a href="/docs/development" class="doc-card">
+          <div class="doc-card-title">Development</div>
+          <div class="doc-card-desc">Local development workflow, trusted HTTPS, DNS, and troubleshooting.</div>
+        </a>
+
+        <a href="/docs/deployment" class="doc-card">
+          <div class="doc-card-title">Deployment</div>
+          <div class="doc-card-desc">Remote deploy flow, server prerequisites, and release layout.</div>
+        </a>
+
+        <a href="/docs/operations" class="doc-card">
+          <div class="doc-card-title">Operations</div>
+          <div class="doc-card-desc">Day-2 runbook for deploy triage, runtime checks, and incident response.</div>
+        </a>
+
+        <a href="/docs/architecture" class="doc-card">
+          <div class="doc-card-title">Architecture</div>
+          <div class="doc-card-desc">System component map and control-plane/data-plane flows.</div>
+        </a>
+      </div>
+    </main>
+  </body>
+</html>

@@ -1,0 +1,18 @@
+---
+import DocsLayout from "../../layouts/DocsLayout.astro";
+import cliScript from "../../../public/install?raw";
+import serverScript from "../../../public/install-server?raw";
+---
+<DocsLayout title="Tako Docs - Install" heading="install">
+  <p>Install Tako CLI on your local machine:</p>
+  <pre>curl -fsSL https://tako.sh/install | sh</pre>
+  <p>Upgrade the local CLI later:</p>
+  <pre>tako upgrade</pre>
+  <p>CLI script source (<a href="/install">/install</a>):</p>
+  <pre>{cliScript}</pre>
+  <p>Install <code>tako-server</code> on each deployment server as root:</p>
+  <pre>curl -fsSL https://tako.sh/install-server | sh</pre>
+  <p>Server script source (<a href="/install-server">/install-server</a>, alias <a href="/server-install">/server-install</a>):</p>
+  <p><a href="/docs">← docs</a></p>
+  <pre>{serverScript}</pre>
+</DocsLayout>
