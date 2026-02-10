@@ -1,10 +1,17 @@
 {
+	"$schema": "node_modules/wrangler/config-schema.json",
   "name": "tako-website",
   "main": "src/worker.ts",
   "compatibility_date": "2026-01-29",
+  "workers_dev": false,
+  "routes": [
+    {
+      "pattern": "tako.sh",
+      "custom_domain": true
+    }
+  ],
   "assets": {
     "directory": "./dist",
     "binding": "ASSETS"
   }
 }
-
