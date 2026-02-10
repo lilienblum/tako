@@ -1,0 +1,37 @@
+[workspace]
+resolver = "3"
+members = [
+    "tako-core",
+    "tako-socket",
+    "tako",
+    "tako-server",
+    "tako-dev-server",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+authors = ["Dan Lilienblum <dlilienblum@gmail.com>"]
+description = "Tako is a modern application platform"
+license = "MIT"
+repository = "https://github.com/lilienblum/tako"
+keywords = ["server", "application-server", "platform", "runtime", "framework"]
+categories = ["network-programming", "web-programming", "development-tools"]
+
+[workspace.dependencies]
+async-trait = "0.1"
+pingora-core = "0.6"
+pingora-proxy = "0.6"
+pingora-http = "0.6"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ctrlc = "3.4"
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.40", features = ["full"] }
+reqwest = { version = "0.12", features = ["json"] }
+tower-http = { version = "0.5", features = ["fs", "trace"] }
+tower = "0.5"
+thiserror = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
