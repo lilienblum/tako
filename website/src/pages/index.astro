@@ -1,0 +1,460 @@
+---
+const installCmd = "curl -fsSL https://tako.sh/install | sh";
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tako – Deploy apps to your own servers</title>
+    <meta name="description" content="Tako is a minimal deployment tool. Routes, logs, secrets, rolling deploys. Self-hosted on your own infrastructure." />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg: #101416;
+        --fg: #F2ECEA;
+        --primary: #E88783;
+        --secondary: #9BC4B6;
+        --muted: rgba(155, 196, 182, 0.78);
+        --line: rgba(155, 196, 182, 0.22);
+        --accent: var(--primary);
+        --accent-dim: rgba(232, 135, 131, 0.16);
+        --secondary-dim: rgba(155, 196, 182, 0.14);
+        --glow: rgba(232, 135, 131, 0.45);
+      }
+
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      html {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      body {
+        min-height: 100vh;
+        color: var(--fg);
+        background: var(--bg);
+        overflow-x: hidden;
+      }
+
+      /* Dot Grid Background */
+      .grid-bg {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 0;
+        background-image: radial-gradient(circle at 1px 1px, rgba(155, 196, 182, 0.18) 1px, transparent 0);
+        background-size: 32px 32px;
+        mask-image: radial-gradient(ellipse 80% 60% at 50% 40%, black 20%, transparent 70%);
+      }
+
+      /* Gradient overlays */
+      .gradient-overlay {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 1;
+        background:
+          radial-gradient(ellipse 80% 50% at 50% -20%, var(--accent-dim), transparent),
+          radial-gradient(ellipse 60% 40% at 100% 0%, var(--secondary-dim), transparent),
+          radial-gradient(ellipse 50% 30% at 0% 100%, rgba(232, 135, 131, 0.08), transparent);
+      }
+
+      /* Scanlines */
+      .scanlines {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 2;
+        background: repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 2px,
+          rgba(0, 0, 0, 0.15) 2px,
+          rgba(0, 0, 0, 0.15) 4px
+        );
+        opacity: 0.15;
+      }
+
+      /* Main content */
+      main {
+        position: relative;
+        z-index: 10;
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        padding: 40px 24px;
+      }
+
+      /* Header */
+      .header {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 20px 32px;
+        background: linear-gradient(to bottom, var(--bg), transparent);
+      }
+
+      .logo {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 18px;
+        font-weight: 500;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--fg);
+        text-decoration: none;
+      }
+
+      .logo:hover {
+        color: var(--accent);
+      }
+
+      .nav {
+        display: flex;
+        gap: 32px;
+      }
+
+      .nav a {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        color: var(--muted);
+        text-decoration: none;
+        letter-spacing: 0.05em;
+        transition: color 0.2s;
+      }
+
+      .nav a:hover {
+        color: var(--accent);
+      }
+
+      /* Hero section */
+      .hero {
+        text-align: center;
+        max-width: 640px;
+      }
+
+      .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 14px;
+        margin-bottom: 32px;
+        font-family: 'Inter', sans-serif;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--accent);
+        background: var(--accent-dim);
+        border: 1px solid rgba(232, 135, 131, 0.32);
+        border-radius: 999px;
+        letter-spacing: 0.02em;
+      }
+
+      .badge::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        background: var(--accent);
+        border-radius: 50%;
+        animation: pulse 2s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+      }
+
+      .title {
+        font-family: 'Inter', sans-serif;
+        font-size: clamp(32px, 8vw, 56px);
+        font-weight: 500;
+        letter-spacing: -0.03em;
+        line-height: 1.1;
+        margin-bottom: 20px;
+      }
+
+      .title span {
+        color: var(--accent);
+        text-shadow: 0 0 40px var(--glow);
+      }
+
+      .subtitle {
+        font-size: 17px;
+        color: var(--muted);
+        line-height: 1.6;
+        margin-bottom: 48px;
+      }
+
+      /* Terminal card */
+      .terminal {
+        width: 100%;
+        max-width: 560px;
+        margin: 0 auto;
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: rgba(0, 0, 0, 0.6);
+        backdrop-filter: blur(12px);
+        overflow: hidden;
+        text-align: left;
+      }
+
+      .terminal-header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 14px 16px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .terminal-dots {
+        display: flex;
+        gap: 6px;
+      }
+
+      .terminal-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.1);
+      }
+
+      .terminal-dot:nth-child(1):hover { background: #ff5f57; }
+      .terminal-dot:nth-child(2):hover { background: #febc2e; }
+      .terminal-dot:nth-child(3):hover { background: #28c840; }
+
+      .terminal-title {
+        flex: 1;
+        text-align: center;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing: 0.05em;
+      }
+
+      .terminal-body {
+        padding: 20px;
+      }
+
+      .terminal-line {
+        display: flex;
+        align-items: center;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 14px;
+        line-height: 1.6;
+      }
+
+      .terminal-prompt {
+        color: var(--accent);
+        margin-right: 10px;
+        user-select: none;
+      }
+
+      .terminal-cmd {
+        color: var(--fg);
+      }
+
+      .terminal-cursor {
+        display: inline-block;
+        width: 8px;
+        height: 18px;
+        background: var(--accent);
+        margin-left: 2px;
+        animation: blink 1s steps(1) infinite;
+      }
+
+      @keyframes blink {
+        0%, 50% { opacity: 1; }
+        51%, 100% { opacity: 0; }
+      }
+
+      /* Copy button */
+      .copy-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 12px 16px;
+        border-top: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .copy-hint {
+        font-size: 12px;
+        color: var(--muted);
+      }
+
+      .copy-btn {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        padding: 8px 16px;
+        background: transparent;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        color: var(--fg);
+        cursor: pointer;
+        transition: all 0.2s;
+      }
+
+      .copy-btn:hover {
+        background: var(--accent-dim);
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      /* Features */
+      .features {
+        display: flex;
+        justify-content: center;
+        gap: 32px;
+        margin-top: 48px;
+        flex-wrap: wrap;
+      }
+
+      .feature {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        color: var(--muted);
+      }
+
+      .feature::before {
+        content: '~';
+        color: var(--accent);
+      }
+
+      /* Footer links */
+      .footer-links {
+        margin-top: 64px;
+        display: flex;
+        gap: 24px;
+      }
+
+      .footer-links a {
+        font-size: 13px;
+        color: var(--muted);
+        text-decoration: none;
+        transition: color 0.2s;
+      }
+
+      .footer-links a:hover {
+        color: var(--accent);
+      }
+
+      /* Responsive */
+      @media (max-width: 640px) {
+        .header {
+          padding: 16px 20px;
+        }
+        .nav {
+          gap: 20px;
+        }
+        .features {
+          flex-direction: column;
+          align-items: center;
+          gap: 16px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="grid-bg" aria-hidden="true"></div>
+    <div class="gradient-overlay"></div>
+    <div class="scanlines"></div>
+
+    <header class="header">
+      <a href="/" class="logo">tako</a>
+      <nav class="nav">
+        <a href="/docs">docs</a>
+        <a href="https://github.com/anthropics/tako">github</a>
+      </nav>
+    </header>
+
+    <main>
+      <div class="hero">
+        <div class="badge">self-hosted deployment</div>
+
+        <h1 class="title">Deploy to <span>your</span> servers</h1>
+
+        <p class="subtitle">
+          A minimal deployment tool for developers who want control.
+          Routes, logs, secrets, rolling deploys. No cloud vendor lock-in.
+        </p>
+
+        <div class="terminal">
+          <div class="terminal-header">
+            <div class="terminal-dots">
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+              <div class="terminal-dot"></div>
+            </div>
+            <div class="terminal-title">terminal</div>
+            <div style="width: 30px;"></div>
+          </div>
+          <div class="terminal-body">
+            <div class="terminal-line">
+              <span class="terminal-prompt">$</span>
+              <span class="terminal-cmd" id="typed-cmd"></span>
+              <span class="terminal-cursor"></span>
+            </div>
+          </div>
+          <div class="copy-row">
+            <span class="copy-hint">Install Tako CLI locally</span>
+            <button class="copy-btn" id="copy">Copy</button>
+          </div>
+        </div>
+
+        <div class="features">
+          <div class="feature">routes</div>
+          <div class="feature">logs</div>
+          <div class="feature">secrets</div>
+          <div class="feature">rolling deploys</div>
+        </div>
+
+        <div class="footer-links">
+          <a href="/docs">Read the docs</a>
+          <a href="/install">View CLI install script</a>
+          <a href="/install-server">View server install script</a>
+        </div>
+      </div>
+    </main>
+
+    <script type="module">
+      const installCmd = "curl -fsSL https://tako.sh/install | sh";
+
+      // Typing animation
+      const typedCmd = document.getElementById('typed-cmd');
+      let i = 0;
+      function typeWriter() {
+        if (i < installCmd.length) {
+          typedCmd.textContent += installCmd.charAt(i);
+          i++;
+          setTimeout(typeWriter, 40 + Math.random() * 30);
+        }
+      }
+      setTimeout(typeWriter, 800);
+
+      // Copy functionality
+      const copyBtn = document.getElementById('copy');
+      copyBtn?.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(installCmd);
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => copyBtn.textContent = 'Copy', 1500);
+        } catch {
+          copyBtn.textContent = 'Failed';
+          setTimeout(() => copyBtn.textContent = 'Copy', 1500);
+        }
+      });
+    </script>
+  </body>
+</html>

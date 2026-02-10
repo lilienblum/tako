@@ -1,0 +1,309 @@
+---
+export interface Props {
+  title: string;
+  heading: string;
+}
+
+const { title, heading } = Astro.props;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <style>
+      :root {
+        --bg: #101416;
+        --fg: #F2ECEA;
+        --primary: #E88783;
+        --secondary: #9BC4B6;
+        --muted: rgba(155, 196, 182, 0.78);
+        --line: rgba(155, 196, 182, 0.22);
+        --accent: var(--primary);
+        --accent-dim: rgba(232, 135, 131, 0.16);
+      }
+
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+
+      html {
+        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      body {
+        min-height: 100vh;
+        color: var(--fg);
+        background: var(--bg);
+      }
+
+      /* Header */
+      .header {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 16px 32px;
+        border-bottom: 1px solid var(--line);
+        background: rgba(16, 20, 22, 0.9);
+        backdrop-filter: blur(12px);
+      }
+
+      .logo {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 16px;
+        font-weight: 500;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--fg);
+        text-decoration: none;
+      }
+
+      .logo:hover {
+        color: var(--accent);
+      }
+
+      .nav {
+        display: flex;
+        gap: 24px;
+      }
+
+      .nav a {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        color: var(--muted);
+        text-decoration: none;
+        letter-spacing: 0.05em;
+        transition: color 0.2s;
+      }
+
+      .nav a:hover {
+        color: var(--accent);
+      }
+
+      /* Main content */
+      main {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 48px 24px 96px;
+      }
+
+      .page-title {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 28px;
+        font-weight: 500;
+        letter-spacing: -0.02em;
+        margin-bottom: 8px;
+        color: var(--fg);
+      }
+
+      .breadcrumb {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 40px;
+        letter-spacing: 0.05em;
+      }
+
+      .breadcrumb a {
+        color: var(--muted);
+        text-decoration: none;
+      }
+
+      .breadcrumb a:hover {
+        color: var(--accent);
+      }
+
+      .breadcrumb span {
+        color: var(--accent);
+      }
+
+      /* Content styles */
+      .content {
+        line-height: 1.7;
+      }
+
+      .content h1, .content h2, .content h3, .content h4 {
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 500;
+        margin-top: 48px;
+        margin-bottom: 16px;
+        color: var(--fg);
+      }
+
+      .content h1 {
+        font-size: 24px;
+        padding-bottom: 12px;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .content h2 {
+        font-size: 20px;
+      }
+
+      .content h3 {
+        font-size: 16px;
+      }
+
+      .content p {
+        margin: 16px 0;
+        color: var(--muted);
+      }
+
+      .content a {
+        color: var(--accent);
+        text-decoration: none;
+        border-bottom: 1px solid transparent;
+        transition: border-color 0.2s;
+      }
+
+      .content a:hover {
+        border-bottom-color: var(--accent);
+      }
+
+      .content ul, .content ol {
+        margin: 16px 0;
+        padding-left: 24px;
+        color: var(--muted);
+      }
+
+      .content li {
+        margin: 8px 0;
+      }
+
+      .content code {
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 0.9em;
+        background: rgba(232, 135, 131, 0.12);
+        padding: 2px 6px;
+        border-radius: 4px;
+        color: var(--accent);
+      }
+
+      .content pre {
+        margin: 24px 0;
+        padding: 20px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: rgba(0, 0, 0, 0.4);
+        overflow-x: auto;
+        font-family: 'JetBrains Mono', monospace;
+        font-size: 13px;
+        line-height: 1.6;
+        color: var(--fg);
+      }
+
+      .content pre code {
+        background: none;
+        padding: 0;
+        color: inherit;
+      }
+
+      .content blockquote {
+        margin: 24px 0;
+        padding: 16px 20px;
+        border-left: 2px solid var(--accent);
+        background: var(--accent-dim);
+        border-radius: 0 8px 8px 0;
+      }
+
+      .content blockquote p {
+        margin: 0;
+        color: var(--fg);
+      }
+
+      .content table {
+        width: 100%;
+        margin: 24px 0;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+
+      .content th, .content td {
+        padding: 12px 16px;
+        text-align: left;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .content th {
+        font-family: 'JetBrains Mono', monospace;
+        font-weight: 500;
+        color: var(--fg);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .content td {
+        color: var(--muted);
+      }
+
+      .content hr {
+        margin: 48px 0;
+        border: none;
+        border-top: 1px solid var(--line);
+      }
+
+      .content strong {
+        color: var(--fg);
+        font-weight: 500;
+      }
+
+      /* Scanlines */
+      .scanlines {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 1000;
+        background: repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 2px,
+          rgba(0, 0, 0, 0.1) 2px,
+          rgba(0, 0, 0, 0.1) 4px
+        );
+        opacity: 0.1;
+      }
+
+      /* Responsive */
+      @media (max-width: 640px) {
+        .header {
+          padding: 12px 16px;
+        }
+        .nav {
+          gap: 16px;
+        }
+        main {
+          padding: 32px 16px 64px;
+        }
+        .page-title {
+          font-size: 22px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <header class="header">
+      <a href="/" class="logo">tako</a>
+      <nav class="nav">
+        <a href="/docs">docs</a>
+        <a href="https://github.com/anthropics/tako">github</a>
+      </nav>
+    </header>
+
+    <main>
+      <div class="breadcrumb">
+        <a href="/">home</a> / <a href="/docs">docs</a> / <span>{heading}</span>
+      </div>
+      <h1 class="page-title">{heading}</h1>
+      <div class="content">
+        <slot />
+      </div>
+    </main>
+  </body>
+</html>
