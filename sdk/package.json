@@ -49,7 +49,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/lilienblum/tako.git",
+    "url": "git+https://github.com/lilienblum/tako.git",
     "directory": "sdk"
   },
   "devDependencies": {
