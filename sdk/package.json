@@ -1,0 +1,60 @@
+{
+  "name": "tako.sh",
+  "version": "0.1.0",
+  "description": "Official SDK for the Tako application platform",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./bun": {
+      "import": "./dist/bun.mjs",
+      "require": "./dist/bun.js",
+      "types": "./dist/bun.d.ts"
+    },
+    "./node": {
+      "import": "./dist/node.mjs",
+      "require": "./dist/node.js",
+      "types": "./dist/node.d.ts"
+    },
+    "./deno": {
+      "import": "./dist/deno.mjs",
+      "types": "./dist/deno.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "bun run build:index && bun run build:adapters",
+    "build:index": "bun build ./src/index.ts --outdir ./dist --target bun",
+    "build:adapters": "bun build ./src/adapters/bun.ts ./src/adapters/node.ts ./src/adapters/deno.ts --outdir ./dist --target bun",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "keywords": [
+    "tako",
+    "tako.sh",
+    "deployment",
+    "serverless",
+    "bun",
+    "node",
+    "deno"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lilienblum/tako.git",
+    "directory": "sdk"
+  },
+  "devDependencies": {
+    "@types/bun": "catalog:dev",
+    "@types/node": "catalog:dev",
+    "typescript": "catalog:dev"
+  }
+}
