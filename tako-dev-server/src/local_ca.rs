@@ -1,7 +1,7 @@
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
-    KeyPair, KeyUsagePurpose, SanType,
+    Issuer, KeyPair, KeyUsagePurpose, SanType,
 };
 use std::fs;
 use std::path::PathBuf;
@@ -123,9 +123,7 @@ impl LocalCA {
         ca_params.not_before = now - Duration::days(1);
         ca_params.not_after = now + Duration::days(CA_VALIDITY_DAYS);
 
-        let ca_cert = ca_params.self_signed(&ca_key).map_err(|e| {
-            CaError::CertificateGeneration(format!("Failed to reconstruct CA certificate: {}", e))
-        })?;
+        let issuer = Issuer::new(ca_params, ca_key);
 
         let mut params = CertificateParams::default();
         let mut dn = DistinguishedName::new();
@@ -156,11 +154,9 @@ impl LocalCA {
 
         let leaf_key =
             KeyPair::generate().map_err(|e| CaError::KeypairGeneration(e.to_string()))?;
-        let leaf_cert = params
-            .signed_by(&leaf_key, &ca_cert, &ca_key)
-            .map_err(|e| {
-                CaError::CertificateGeneration(format!("Failed to sign leaf certificate: {}", e))
-            })?;
+        let leaf_cert = params.signed_by(&leaf_key, &issuer).map_err(|e| {
+            CaError::CertificateGeneration(format!("Failed to sign leaf certificate: {}", e))
+        })?;
 
         Ok(Certificate {
             cert_pem: leaf_cert.pem(),

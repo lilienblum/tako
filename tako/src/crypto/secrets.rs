@@ -3,7 +3,6 @@ use aes_gcm::{
     aead::{Aead, KeyInit},
 };
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use rand::RngCore;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -25,7 +24,7 @@ impl EncryptionKey {
     /// Create a new random encryption key
     pub fn generate() -> Self {
         let mut key = [0u8; KEY_SIZE];
-        rand::thread_rng().fill_bytes(&mut key);
+        getrandom::fill(&mut key).expect("operating system RNG unavailable");
         Self { key }
     }
 
@@ -71,7 +70,8 @@ pub fn encrypt(plaintext: &str, key: &EncryptionKey) -> Result<String> {
 
     // Generate random nonce
     let mut nonce_bytes = [0u8; NONCE_SIZE];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    getrandom::fill(&mut nonce_bytes)
+        .map_err(|e| ConfigError::Encryption(format!("Failed to generate nonce: {}", e)))?;
     let nonce = Nonce::from_slice(&nonce_bytes);
 
     // Encrypt

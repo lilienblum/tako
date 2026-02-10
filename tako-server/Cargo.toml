@@ -17,27 +17,27 @@ path = "src/main.rs"
 tako-core = { path = "../tako-core" }
 tako-socket = { path = "../tako-socket" }
 clap = { version = "4.5", features = ["derive", "env"] }
-tokio = { version = "1.40", features = ["full", "signal"] }
+tokio = { version = "1.49", features = ["full", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 async-trait = "0.1"
-pingora-core = { version = "0.6", default-features = false, features = ["openssl"] }
-pingora-proxy = { version = "0.6", default-features = false, features = ["openssl"] }
-pingora-http = "0.6"
+pingora-core = { version = "0.7", default-features = false, features = ["openssl"] }
+pingora-proxy = { version = "0.7", default-features = false, features = ["openssl"] }
+pingora-http = "0.7"
 openssl = "0.10"
-thiserror = "1.0"
-dashmap = "6.0"
+thiserror = "2.0"
+dashmap = "6.1"
 parking_lot = "0.12"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
-rcgen = "0.13"
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+rcgen = "0.14"
 instant-acme = "0.8"
-x509-parser = "0.17"
+x509-parser = "0.18"
 base64 = "0.22"
 rustls = "0.23"
 rustls-pemfile = "2.2"
 libc = "0.2"
 
 [dev-dependencies]
-tempfile = "3.8"
+tempfile = "3.25"

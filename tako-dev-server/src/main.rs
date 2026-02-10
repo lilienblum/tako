@@ -13,7 +13,6 @@ use std::time::Duration;
 use base64::Engine;
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::prelude::Server;
-use rand::RngCore;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
 use tokio::sync::mpsc;
@@ -229,7 +228,7 @@ impl State {
         advertised_ip: String,
     ) -> Self {
         let mut tok_bytes = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut tok_bytes);
+        getrandom::fill(&mut tok_bytes).expect("operating system RNG unavailable");
         let server_token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tok_bytes);
 
         Self {
@@ -319,7 +318,7 @@ fn remove_routes_for_hosts(s: &mut State, hosts: &[String]) {
 
 fn new_lease_id() -> String {
     let mut bytes = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    getrandom::fill(&mut bytes).expect("operating system RNG unavailable");
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 

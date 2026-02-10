@@ -1,11 +1,10 @@
 //! SSH client implementation using russh
 
 use super::error::{SshError, SshResult};
-use async_trait::async_trait;
 use russh::client::{self, Config, Handle, Handler};
-use russh::keys::load_secret_key;
+use russh::keys::{Algorithm, PrivateKeyWithHashAlg, PublicKey, load_secret_key};
 use russh::{ChannelMsg, Disconnect};
-use ssh_key::public::PublicKey;
+use std::future::Future;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -81,17 +80,17 @@ pub struct SshHandler {
     accept_any_host_key: bool,
 }
 
-#[async_trait]
 impl Handler for SshHandler {
     type Error = SshError;
 
-    async fn check_server_key(
+    fn check_server_key(
         &mut self,
         _server_public_key: &PublicKey,
-    ) -> std::result::Result<bool, Self::Error> {
+    ) -> impl Future<Output = std::result::Result<bool, Self::Error>> + Send {
         // In production, we should verify against known_hosts
         // For now, accept all keys (like ssh -o StrictHostKeyChecking=no)
-        Ok(self.accept_any_host_key)
+        let accept = self.accept_any_host_key;
+        async move { Ok(accept) }
     }
 }
 
@@ -227,7 +226,7 @@ impl SshClient {
     async fn try_agent_auth(&self, handle: &mut Handle<SshHandler>) -> SshResult<bool> {
         #[cfg(unix)]
         {
-            use russh_keys::agent::client::AgentClient;
+            use russh::keys::agent::client::AgentClient;
 
             let mut agent = match AgentClient::connect_env().await {
                 Ok(agent) => agent,
@@ -240,11 +239,11 @@ impl SshClient {
 
             for key in keys {
                 match handle
-                    .authenticate_publickey_with(Self::ssh_user(), key.clone(), &mut agent)
+                    .authenticate_publickey_with(Self::ssh_user(), key.clone(), None, &mut agent)
                     .await
                 {
-                    Ok(true) => return Ok(true),
-                    Ok(false) => continue,
+                    Ok(result) if result.success() => return Ok(true),
+                    Ok(_) => continue,
                     Err(e) => {
                         return Err(SshError::Authentication(format!(
                             "ssh-agent authentication failed: {e}"
@@ -303,12 +302,25 @@ impl SshClient {
             }
         };
 
+        let hash_alg = if matches!(key.algorithm(), Algorithm::Rsa { .. }) {
+            handle
+                .best_supported_rsa_hash()
+                .await
+                .map_err(|e| SshError::Authentication(e.to_string()))?
+                .flatten()
+        } else {
+            None
+        };
+
         let auth_result = handle
-            .authenticate_publickey(Self::ssh_user(), Arc::new(key))
+            .authenticate_publickey(
+                Self::ssh_user(),
+                PrivateKeyWithHashAlg::new(Arc::new(key), hash_alg),
+            )
             .await
             .map_err(|e| SshError::Authentication(e.to_string()))?;
 
-        Ok(auth_result)
+        Ok(auth_result.success())
     }
 
     fn ssh_user() -> &'static str {
@@ -840,10 +852,9 @@ l4QMs5cmnWfrM0GQ==\n\
     #[tokio::test]
     #[cfg(unix)]
     async fn encrypted_keyfile_authenticates_with_passphrase_env_var() {
-        use async_trait::async_trait;
         use russh::Channel;
+        use russh::keys::{Algorithm, PrivateKey};
         use russh::server::{Server as _, Session};
-        use ssh_key::{Algorithm, PrivateKey};
         use std::sync::Arc;
         use tempfile::TempDir;
 
@@ -867,7 +878,7 @@ l4QMs5cmnWfrM0GQ==\n\
 
         #[derive(Clone)]
         struct TestServer {
-            allowed_key: ssh_key::PublicKey,
+            allowed_key: russh::keys::PublicKey,
         }
 
         impl russh::server::Server for TestServer {
@@ -878,35 +889,35 @@ l4QMs5cmnWfrM0GQ==\n\
             }
         }
 
-        #[async_trait]
         impl russh::server::Handler for TestServer {
             type Error = russh::Error;
 
-            async fn auth_publickey(
+            fn auth_publickey(
                 &mut self,
                 _user: &str,
-                key: &ssh_key::PublicKey,
-            ) -> Result<russh::server::Auth, Self::Error> {
-                if key.key_data() == self.allowed_key.key_data() {
-                    Ok(russh::server::Auth::Accept)
-                } else {
-                    Ok(russh::server::Auth::Reject {
-                        proceed_with_methods: None,
-                    })
+                key: &russh::keys::PublicKey,
+            ) -> impl Future<Output = Result<russh::server::Auth, Self::Error>> + Send {
+                let accepted = key.key_data() == self.allowed_key.key_data();
+                async move {
+                    if accepted {
+                        Ok(russh::server::Auth::Accept)
+                    } else {
+                        Ok(russh::server::Auth::reject())
+                    }
                 }
             }
 
-            async fn channel_open_session(
+            fn channel_open_session(
                 &mut self,
                 channel: Channel<russh::server::Msg>,
                 _session: &mut Session,
-            ) -> Result<bool, Self::Error> {
+            ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
                 let _ = channel.id();
-                Ok(true)
+                async { Ok(true) }
             }
         }
 
-        let mut rng = ssh_key::rand_core::OsRng;
+        let mut rng = russh::keys::ssh_key::rand_core::OsRng;
         let host_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("host key");
 
         let server_config = russh::server::Config {
@@ -964,11 +975,10 @@ l4QMs5cmnWfrM0GQ==\n\
     #[tokio::test]
     #[cfg(unix)]
     async fn ssh_agent_authenticates_when_no_key_files_exist() {
-        use async_trait::async_trait;
         use russh::Channel;
+        use russh::keys::agent::client::AgentClient;
+        use russh::keys::{Algorithm, PrivateKey};
         use russh::server::{Server as _, Session};
-        use russh_keys::agent::client::AgentClient;
-        use ssh_key::{Algorithm, PrivateKey};
         use std::process::Stdio;
         use std::sync::Arc;
         use tempfile::TempDir;
@@ -979,7 +989,7 @@ l4QMs5cmnWfrM0GQ==\n\
 
         #[derive(Clone)]
         struct TestServer {
-            allowed_key: ssh_key::PublicKey,
+            allowed_key: russh::keys::PublicKey,
         }
 
         impl russh::server::Server for TestServer {
@@ -990,32 +1000,32 @@ l4QMs5cmnWfrM0GQ==\n\
             }
         }
 
-        #[async_trait]
         impl russh::server::Handler for TestServer {
             type Error = russh::Error;
 
-            async fn auth_publickey(
+            fn auth_publickey(
                 &mut self,
                 _user: &str,
-                key: &ssh_key::PublicKey,
-            ) -> Result<russh::server::Auth, Self::Error> {
-                if key.key_data() == self.allowed_key.key_data() {
-                    Ok(russh::server::Auth::Accept)
-                } else {
-                    Ok(russh::server::Auth::Reject {
-                        proceed_with_methods: None,
-                    })
+                key: &russh::keys::PublicKey,
+            ) -> impl Future<Output = Result<russh::server::Auth, Self::Error>> + Send {
+                let accepted = key.key_data() == self.allowed_key.key_data();
+                async move {
+                    if accepted {
+                        Ok(russh::server::Auth::Accept)
+                    } else {
+                        Ok(russh::server::Auth::reject())
+                    }
                 }
             }
 
-            async fn channel_open_session(
+            fn channel_open_session(
                 &mut self,
                 channel: Channel<russh::server::Msg>,
                 _session: &mut Session,
-            ) -> Result<bool, Self::Error> {
+            ) -> impl Future<Output = Result<bool, Self::Error>> + Send {
                 // We don't need to run any commands for this test; just allow opening.
                 let _ = channel.id();
-                Ok(true)
+                async { Ok(true) }
             }
         }
 
@@ -1044,7 +1054,7 @@ l4QMs5cmnWfrM0GQ==\n\
         };
 
         // Generate a client key and load it into the agent.
-        let mut rng = ssh_key::rand_core::OsRng;
+        let mut rng = russh::keys::ssh_key::rand_core::OsRng;
         let client_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("client key");
         let client_pub = client_key.public_key().clone();
 
@@ -1063,7 +1073,7 @@ l4QMs5cmnWfrM0GQ==\n\
         unsafe { std::env::set_var("SSH_AUTH_SOCK", &agent_path) };
 
         // Start an SSH server that accepts only the agent-loaded public key.
-        let mut rng = ssh_key::rand_core::OsRng;
+        let mut rng = russh::keys::ssh_key::rand_core::OsRng;
         let host_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("host key");
 
         let server_config = russh::server::Config {
