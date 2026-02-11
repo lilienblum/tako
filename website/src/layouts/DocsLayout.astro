@@ -12,102 +12,208 @@ const { title, heading } = Astro.props;
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
+    <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Sora:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
     <style>
       :root {
-        --bg: #101416;
-        --fg: #F2ECEA;
+        --bg: #fff9f4;
+        --paper: #fffefc;
+        --ink: #2f2a44;
         --primary: #E88783;
         --secondary: #9BC4B6;
-        --muted: rgba(155, 196, 182, 0.78);
-        --line: rgba(155, 196, 182, 0.22);
+        --line: rgba(47, 42, 68, 0.16);
+        --muted: rgba(47, 42, 68, 0.74);
         --accent: var(--primary);
-        --accent-dim: rgba(232, 135, 131, 0.16);
+        --accent-soft: rgba(232, 135, 131, 0.2);
+        --mint-soft: rgba(155, 196, 182, 0.3);
+        --panel-radius: 30px;
       }
 
-      * { box-sizing: border-box; margin: 0; padding: 0; }
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
 
       html {
-        font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-        -webkit-font-smoothing: antialiased;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
       }
 
       body {
-        min-height: 100vh;
-        color: var(--fg);
-        background: var(--bg);
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 15% 10%, rgba(232, 135, 131, 0.26), transparent 34%),
+          radial-gradient(circle at 88% 8%, rgba(155, 196, 182, 0.25), transparent 36%),
+          radial-gradient(circle at 50% 92%, rgba(158, 201, 255, 0.17), transparent 42%),
+          var(--bg);
       }
 
-      /* Header */
+      .paint {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 1;
+      }
+
+      .paint::before,
+      .paint::after {
+        content: "";
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(18px);
+        animation: floatBlob 10s ease-in-out infinite;
+      }
+
+      .paint::before {
+        width: 340px;
+        height: 340px;
+        top: -120px;
+        left: -130px;
+        background: rgba(232, 135, 131, 0.32);
+      }
+
+      .paint::after {
+        width: 420px;
+        height: 420px;
+        bottom: -170px;
+        right: -160px;
+        background: rgba(155, 196, 182, 0.3);
+        animation-delay: -4s;
+      }
+
+      .site {
+        position: relative;
+        z-index: 2;
+      }
+
       .header {
         position: sticky;
         top: 0;
         z-index: 100;
+        padding: 14px 18px;
+      }
+
+      .header-inner {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 11px 14px;
+        border: 2px solid var(--line);
+        border-radius: var(--panel-radius);
+        background: rgba(255, 255, 255, 0.76);
+        backdrop-filter: blur(8px);
         display: flex;
         align-items: center;
         justify-content: space-between;
-        padding: 16px 32px;
-        border-bottom: 1px solid var(--line);
-        background: rgba(16, 20, 22, 0.9);
-        backdrop-filter: blur(12px);
+        gap: 16px;
       }
 
       .logo {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 16px;
-        font-weight: 500;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-        color: var(--fg);
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--ink);
         text-decoration: none;
+        font-family: "Sora", sans-serif;
+        font-size: 22px;
+        font-weight: 600;
+        line-height: 1;
       }
 
-      .logo:hover {
-        color: var(--accent);
+      .logo img {
+        width: 30px;
+        height: 30px;
       }
 
       .nav {
         display: flex;
-        gap: 24px;
+        gap: 8px;
+        flex-wrap: wrap;
+        justify-content: flex-end;
       }
 
       .nav a {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 13px;
-        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.8);
+        color: var(--ink);
         text-decoration: none;
-        letter-spacing: 0.05em;
-        transition: color 0.2s;
+        padding: 7px 14px;
+        font-family: "Sora", sans-serif;
+        font-size: 16px;
+        font-weight: 600;
+        line-height: 1;
       }
 
       .nav a:hover {
-        color: var(--accent);
+        transform: translateY(-1px) rotate(-1deg);
+        background: var(--accent-soft);
       }
 
-      /* Main content */
+      .github-star {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border-color: rgba(214, 166, 62, 0.88);
+        background: rgba(255, 224, 149, 0.24);
+        color: #6f4d16;
+        box-shadow: inset 0 0 0 1px rgba(255, 245, 210, 0.45);
+      }
+
+      .github-star .star-icon {
+        width: 0.9em;
+        height: 0.9em;
+      }
+
+      .github-star .star-icon path {
+        fill: rgba(255, 214, 120, 0.22);
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .nav a.github-star:hover,
+      .footer-links a.github-star:hover {
+        transform: translateY(-1px);
+        border-color: rgba(214, 166, 62, 1);
+        background: rgba(255, 214, 120, 0.36);
+        color: #5d3f0c;
+        box-shadow: 0 2px 12px rgba(232, 185, 74, 0.34);
+      }
+
+      .nav a.github-star:hover .star-icon path,
+      .footer-links a.github-star:hover .star-icon path {
+        fill: rgba(255, 214, 120, 0.48);
+      }
+
       main {
-        max-width: 900px;
-        margin: 0 auto;
-        padding: 48px 24px 96px;
+        width: min(1080px, 92vw);
+        margin: 10px auto 68px;
       }
 
-      .page-title {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 28px;
-        font-weight: 500;
-        letter-spacing: -0.02em;
-        margin-bottom: 8px;
-        color: var(--fg);
+      .sheet {
+        border: 2px solid var(--line);
+        border-radius: var(--panel-radius);
+        background: rgba(255, 255, 255, 0.8);
+        box-shadow: 0 18px 45px rgba(47, 42, 68, 0.1);
+        padding: clamp(18px, 4vw, 36px);
       }
 
       .breadcrumb {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 12px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 14px;
         color: var(--muted);
-        margin-bottom: 40px;
-        letter-spacing: 0.05em;
+        margin-bottom: 10px;
       }
 
       .breadcrumb a {
@@ -123,187 +229,281 @@ const { title, heading } = Astro.props;
         color: var(--accent);
       }
 
-      /* Content styles */
-      .content {
-        line-height: 1.7;
+      .page-title {
+        font-family: "Sora", sans-serif;
+        font-size: clamp(30px, 5vw, 42px);
+        line-height: 1.05;
+        margin-bottom: 18px;
       }
 
-      .content h1, .content h2, .content h3, .content h4 {
-        font-family: 'JetBrains Mono', monospace;
-        font-weight: 500;
-        margin-top: 48px;
-        margin-bottom: 16px;
-        color: var(--fg);
+      .content {
+        line-height: 1.55;
+        font-size: clamp(16px, 1.5vw, 19px);
+        color: var(--muted);
+      }
+
+      .content h1,
+      .content h2,
+      .content h3,
+      .content h4 {
+        font-family: "Sora", sans-serif;
+        color: var(--ink);
+        margin-top: 28px;
+        margin-bottom: 12px;
+        line-height: 1.2;
       }
 
       .content h1 {
-        font-size: 24px;
-        padding-bottom: 12px;
-        border-bottom: 1px solid var(--line);
+        font-size: clamp(28px, 4.2vw, 36px);
+        border-bottom: 2px solid var(--line);
+        padding-bottom: 8px;
       }
 
       .content h2 {
-        font-size: 20px;
+        font-size: clamp(24px, 3.6vw, 30px);
       }
 
       .content h3 {
-        font-size: 16px;
+        font-size: clamp(20px, 3vw, 24px);
       }
 
-      .content p {
-        margin: 16px 0;
-        color: var(--muted);
+      .content p,
+      .content ul,
+      .content ol,
+      .content table,
+      .content blockquote,
+      .content pre {
+        margin: 14px 0;
+      }
+
+      .content ul,
+      .content ol {
+        padding-left: 24px;
+      }
+
+      .content li {
+        margin: 7px 0;
       }
 
       .content a {
         color: var(--accent);
         text-decoration: none;
-        border-bottom: 1px solid transparent;
-        transition: border-color 0.2s;
+        border-bottom: 2px solid transparent;
       }
 
       .content a:hover {
         border-bottom-color: var(--accent);
       }
 
-      .content ul, .content ol {
-        margin: 16px 0;
-        padding-left: 24px;
-        color: var(--muted);
-      }
-
-      .content li {
-        margin: 8px 0;
-      }
-
       .content code {
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 0.9em;
-        background: rgba(232, 135, 131, 0.12);
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+        font-size: 0.85em;
         padding: 2px 6px;
-        border-radius: 4px;
-        color: var(--accent);
+        border-radius: 8px;
+        background: rgba(232, 135, 131, 0.12);
+        color: #3f3557;
       }
 
       .content pre {
-        margin: 24px 0;
-        padding: 20px;
-        border: 1px solid var(--line);
-        border-radius: 8px;
-        background: rgba(0, 0, 0, 0.4);
+        padding: 18px 20px;
+        border: 2px solid var(--line);
+        border-radius: 16px;
+        background: var(--paper);
         overflow-x: auto;
-        font-family: 'JetBrains Mono', monospace;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
         font-size: 13px;
-        line-height: 1.6;
-        color: var(--fg);
+        line-height: 1.5;
+        color: #2b2640;
       }
 
       .content pre code {
-        background: none;
         padding: 0;
-        color: inherit;
+        background: none;
       }
 
       .content blockquote {
-        margin: 24px 0;
-        padding: 16px 20px;
-        border-left: 2px solid var(--accent);
-        background: var(--accent-dim);
-        border-radius: 0 8px 8px 0;
-      }
-
-      .content blockquote p {
-        margin: 0;
-        color: var(--fg);
+        border-left: 4px solid var(--secondary);
+        background: var(--mint-soft);
+        border-radius: 0 12px 12px 0;
+        padding: 12px 14px;
+        color: #2c2b3d;
       }
 
       .content table {
         width: 100%;
-        margin: 24px 0;
         border-collapse: collapse;
-        font-size: 14px;
+        font-size: 15px;
+        border: 2px solid var(--line);
       }
 
-      .content th, .content td {
-        padding: 12px 16px;
-        text-align: left;
-        border-bottom: 1px solid var(--line);
+      .content th,
+      .content td {
+        border: 1px solid var(--line);
+        padding: 8px 10px;
       }
 
       .content th {
-        font-family: 'JetBrains Mono', monospace;
-        font-weight: 500;
-        color: var(--fg);
-        background: rgba(255, 255, 255, 0.02);
-      }
-
-      .content td {
-        color: var(--muted);
+        font-family: "Sora", sans-serif;
+        color: #2f2a44;
+        background: rgba(155, 196, 182, 0.18);
       }
 
       .content hr {
-        margin: 48px 0;
         border: none;
-        border-top: 1px solid var(--line);
+        border-top: 2px solid var(--line);
+        margin: 26px 0;
       }
 
       .content strong {
-        color: var(--fg);
-        font-weight: 500;
+        color: #2f2a44;
       }
 
-      /* Scanlines */
-      .scanlines {
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        z-index: 1000;
-        background: repeating-linear-gradient(
-          0deg,
-          transparent,
-          transparent 2px,
-          rgba(0, 0, 0, 0.1) 2px,
-          rgba(0, 0, 0, 0.1) 4px
-        );
-        opacity: 0.1;
+      .site-footer {
+        width: min(1080px, 92vw);
+        margin: 0 auto 30px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
       }
 
-      /* Responsive */
+      .footer-inner {
+        border: 2px solid var(--line);
+        border-radius: var(--panel-radius);
+        background: rgba(255, 255, 255, 0.76);
+        backdrop-filter: blur(8px);
+        padding: 12px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .footer-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .footer-brand {
+        font-family: "Sora", sans-serif;
+        font-size: 18px;
+        font-weight: 600;
+        color: rgba(47, 42, 68, 0.9);
+      }
+
+      .footer-links {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+
+      .footer-links a {
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.82);
+        color: var(--ink);
+        text-decoration: none;
+        padding: 7px 12px;
+        font-family: "Sora", sans-serif;
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1;
+      }
+
+      @keyframes floatBlob {
+        0%,
+        100% { transform: translateY(0); }
+        50% { transform: translateY(-10px); }
+      }
+
       @media (max-width: 640px) {
-        .header {
-          padding: 12px 16px;
+        .header-inner {
+          border-radius: var(--panel-radius);
+          align-items: flex-start;
+          flex-direction: column;
+          padding: 10px;
         }
+
         .nav {
-          gap: 16px;
+          width: 100%;
+          flex-wrap: wrap;
         }
-        main {
-          padding: 32px 16px 64px;
+
+        .nav a {
+          text-align: center;
+          min-width: 90px;
         }
-        .page-title {
-          font-size: 22px;
+
+        .content pre {
+          padding: 14px 16px;
         }
+
+        .footer-inner {
+          align-items: stretch;
+        }
+
+        .footer-row {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .footer-links {
+          justify-content: flex-start;
+        }
+
       }
     </style>
   </head>
   <body>
-    <div class="scanlines" aria-hidden="true"></div>
+    <div class="paint" aria-hidden="true"></div>
+    <div class="site">
+      <header class="header">
+        <div class="header-inner">
+          <a href="/" class="logo">
+            <img src="/assets/logo.svg" alt="Tako logo" />
+            tako
+          </a>
+          <nav class="nav">
+            <a href="/docs">docs</a>
+            <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer" class="github-star">
+              <svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M12 2.8l2.7 5.47 6.03.88-4.36 4.25 1.03 6.01L12 16.64l-5.4 2.84 1.03-6.01L3.27 9.15l6.03-.88L12 2.8z" />
+              </svg>
+              <span>github</span>
+            </a>
+          </nav>
+        </div>
+      </header>
 
-    <header class="header">
-      <a href="/" class="logo">tako</a>
-      <nav class="nav">
-        <a href="/docs">docs</a>
-        <a href="https://github.com/anthropics/tako">github</a>
-      </nav>
-    </header>
+      <main>
+        <section class="sheet">
+          <div class="breadcrumb">
+            <a href="/">home</a> / <a href="/docs">docs</a> / <span>{heading}</span>
+          </div>
+          <h1 class="page-title">{heading}</h1>
+          <div class="content">
+            <slot />
+          </div>
+        </section>
+      </main>
 
-    <main>
-      <div class="breadcrumb">
-        <a href="/">home</a> / <a href="/docs">docs</a> / <span>{heading}</span>
-      </div>
-      <h1 class="page-title">{heading}</h1>
-      <div class="content">
-        <slot />
-      </div>
-    </main>
+      <footer class="site-footer">
+        <div class="footer-inner">
+          <div class="footer-row">
+            <p class="footer-brand">tako</p>
+            <div class="footer-links">
+              <a href="/docs">docs</a>
+              <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer" class="github-star">
+                <svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <path d="M12 2.8l2.7 5.47 6.03.88-4.36 4.25 1.03 6.01L12 16.64l-5.4 2.84 1.03-6.01L3.27 9.15l6.03-.88L12 2.8z" />
+                </svg>
+                <span>github</span>
+              </a>
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
   </body>
 </html>

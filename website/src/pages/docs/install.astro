@@ -1,18 +1,32 @@
 ---
 import DocsLayout from "../../layouts/DocsLayout.astro";
-import cliScript from "../../../../scripts/install-tako-cli.sh?raw";
-import serverScript from "../../../../scripts/install-tako-server.sh?raw";
 ---
 <DocsLayout title="Tako Docs - Install" heading="install">
-  <p>Install Tako CLI on your local machine:</p>
-  <pre>curl -fsSL https://tako.sh/install | sh</pre>
-  <p>Upgrade the local CLI later:</p>
-  <pre>tako upgrade</pre>
-  <p>CLI script source (<a href="/install">/install</a>):</p>
-  <pre>{cliScript}</pre>
-  <p>Install <code>tako-server</code> on each deployment server as root:</p>
-  <pre>curl -fsSL https://tako.sh/install-server | sh</pre>
-  <p>Server script source (<a href="/install-server">/install-server</a>, alias <a href="/server-install">/server-install</a>):</p>
+  <p>Use these commands to install Tako locally and on your deployment servers.</p>
+
+  <h2>Install CLI (local machine)</h2>
+  <pre><code>curl -fsSL https://tako.sh/install | sh</code></pre>
+
+  <p>Verify installation:</p>
+  <pre><code>tako --version</code></pre>
+
+  <p>Upgrade later:</p>
+  <pre><code>tako upgrade</code></pre>
+
+  <h2>Install Server Runtime (remote host)</h2>
+  <p>Run this as <code>root</code> (or with <code>sudo</code>) on each deployment server:</p>
+  <pre><code>curl -fsSL https://tako.sh/install-server | sh</code></pre>
+
+  <p>Verify installation:</p>
+  <pre><code>tako-server --version</code></pre>
+
+  <h2>Script Sources</h2>
+  <p>Installer endpoints and script sources:</p>
+  <ul>
+    <li><a href="/install">/install</a> (CLI installer)</li>
+    <li><a href="/install-server">/install-server</a> (server installer)</li>
+    <li><a href="/server-install">/server-install</a> (alias)</li>
+  </ul>
+
   <p><a href="/docs">← docs</a></p>
-  <pre>{serverScript}</pre>
 </DocsLayout>

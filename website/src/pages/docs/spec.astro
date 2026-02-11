@@ -1,9 +1,9 @@
 ---
 import DocsLayout from "../../layouts/DocsLayout.astro";
-import spec from "../../../../SPEC.md?raw";
+import SpecDoc from "../../../../SPEC.md";
 ---
 <DocsLayout title="Tako Docs - Spec" heading="spec">
   <p>Rendered from repo root: <code>SPEC.md</code>.</p>
   <p><a href="/docs">← docs</a></p>
-  <pre>{spec}</pre>
+  <SpecDoc />
 </DocsLayout>

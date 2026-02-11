@@ -1,8 +1,17 @@
 # Tako
 
-Tako is an application platform with:
+<img src="assets/logo.svg" alt="Tako logo" width="180" />
 
-- a CLI (`tako`) for local development and deployment workflows
+[![crate: tako](https://img.shields.io/crates/v/tako?label=tako&color=E88783)](https://crates.io/crates/tako)
+[![crate: tako-server](https://img.shields.io/crates/v/tako-server?label=tako-server&color=E88783)](https://crates.io/crates/tako-server)
+[![npm: tako.sh](https://img.shields.io/npm/v/tako.sh?label=tako.sh&color=9BC4B6)](https://www.npmjs.com/package/tako.sh)
+
+Tako helps you ship apps to your own servers without turning deployment
+into a part-time job.
+
+You get:
+
+- a CLI (`tako`) for local dev + deployment
 - a remote runtime/proxy (`tako-server`)
 - a local development daemon (`tako-dev-server`)
 - a JavaScript/TypeScript SDK (`tako.sh`)
@@ -11,11 +20,11 @@ Tako is an application platform with:
 
 - Rust toolchain (stable)
 - Bun (for SDK/examples/website tooling)
-- `just` (optional, but convenient for repo tasks)
+- `just` (optional, but useful for repo tasks)
 
-## Quickstart (from source)
+## Quickstart
 
-From repository root:
+From the repo root:
 
 ```bash
 bun install
@@ -35,7 +44,7 @@ Run the Bun example with Tako local dev flow:
 just tako examples/js/bun dev
 ```
 
-## Repository Layout
+## Repo Layout
 
 - `tako/`: CLI crate (`tako`) and local dev daemon binary (`tako-dev-server`)
 - `tako-server/`: remote runtime/proxy crate (`tako-server`)
@@ -47,7 +56,7 @@ just tako examples/js/bun dev
 - `website/`: Tako website + installer endpoints
 - `docker/`: internal Docker tooling for build/debug workflows
 
-## Documentation Map
+## Docs
 
 - `docs/README.md`: documentation hub and reading paths
 - `SPEC.md`: finalized behavior and architecture contract
@@ -64,3 +73,7 @@ Component-focused docs:
 - `tako-core/README.md`
 - `tako-socket/README.md`
 - `sdk/README.md`
+
+## License
+
+MIT

@@ -59,7 +59,7 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
 fn generate_template(app_name: &str, _runtime: &str) -> String {
     format!(
         r#"# Tako Configuration
-# https://github.com/anthropics/tako
+# https://github.com/lilienblum/tako
 
 [tako]
 # Application name (auto-detected: {app_name})

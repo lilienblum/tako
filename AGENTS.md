@@ -8,7 +8,7 @@ Instructions for AI agents working on the Tako codebase.
 
 2. **Move finalized behavior to SPEC.md** - Keep SPEC.md as the source of truth for implemented behavior; keep planning out of in-repo TODO files
 
-3. **TDD is mandatory** - Write tests before implementation. No feature is complete without passing tests
+3. **TDD is mandatory for Rust crates and SDK code** - Write tests before implementation. No backend/SDK feature is complete without passing tests. Website (`website/`) changes are explicitly exempt.
 
 4. **Don't over-engineer** - Simple is better than complex. Avoid premature abstractions, extra configurability, or handling scenarios that can't happen
 
@@ -25,6 +25,9 @@ Instructions for AI agents working on the Tako codebase.
 
 **SDK (current implementation):**
 - `sdk/` - `tako.sh` JavaScript/TypeScript SDK package (npm)
+
+**Website:**
+- `website/` - Marketing/docs site (do not add automated tests for this component)
 
 ## Current Priorities
 
@@ -57,6 +60,14 @@ cd sdk && bun install
 bun run build && bun run typecheck
 bun test
 ```
+
+## Commit Messages
+
+Use Conventional Commits for all commits:
+
+- Format: `type(scope): short summary`
+- Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `ci`
+- If scope is broad/mixed across the repo, use `chore(repo): ...`
 
 ## Code References
 
@@ -102,11 +113,11 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
 1. Read existing implementation if it exists
 2. Check SPEC.md for expected behavior
 3. Confirm scope from the current issue/release context
-4. Write tests first (TDD)
+4. Write tests first (TDD) for Rust crates and SDK changes. Skip test creation for `website/` changes.
 
 ### After Writing Code
 
-1. Ensure all tests pass
+1. Ensure all applicable tests pass (Rust crates and SDK; website has no test requirement)
 2. Update SPEC.md if user-facing behavior changed
 3. Update affected README.md files if setup/usage/run commands changed
 4. Close or update the related issue/task entry
@@ -114,9 +125,13 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
 
 ### Example Changes
 
-**If fixing a bug:** Add test that reproduces the bug, then fix code. Update SPEC.md only if it reveals a spec gap.
+**If fixing a bug (Rust/SDK):** Add test that reproduces the bug, then fix code. Update SPEC.md only if it reveals a spec gap.
 
-**If adding a feature:** Confirm scope first, write tests first, implement code, update SPEC.md, then close/update the related issue/task.
+**If fixing a website bug:** Implement the fix directly without adding tests.
+
+**If adding a feature (Rust/SDK):** Confirm scope first, write tests first, implement code, update SPEC.md, then close/update the related issue/task.
+
+**If adding a website feature:** Confirm scope first, implement code without adding tests, update docs/spec as needed, then close/update the related issue/task.
 
 **If changing architecture:** Confirm and record scope first, implement with TDD, then document the result in SPEC.md and close/update the related issue/task.
 
@@ -148,7 +163,7 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
 
 ## Testing Patterns
 
-All code should be tested following TDD:
+Rust crates and SDK code should be tested following TDD. Do not add tests for `website/` changes.
 
 ```rust
 #[cfg(test)]
@@ -208,7 +223,7 @@ Scope agreement → Code (TDD) → SPEC.md + README.md updates → Cleanup
 ```
 
 1. **Scope agreement** - Confirm issue/task and acceptance criteria
-2. **Code changes** - Implement with tests (TDD required)
+2. **Code changes** - Implement with tests for Rust/SDK changes (TDD required there). Do not create tests for `website/` changes.
 3. **SPEC.md** - Document finalized behavior after implementation
 4. **README.md** - Update affected component readmes for basic usage/run instructions
 5. **Cleanup** - Close/update related issue or release task

@@ -896,7 +896,7 @@ import { Tako } from "tako.sh/deno"; // Deno
 import { Tako } from "tako.sh"; // Auto-detect
 ```
 
-### Automatic Features
+### Feature Overview
 
 - Unix socket creation and management
 - Ready signal on startup
