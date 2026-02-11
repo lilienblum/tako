@@ -1,6 +1,6 @@
 [package]
 name = "tako"
-version.workspace = true
+version = "0.0.1-alpha.0"
 edition.workspace = true
 authors.workspace = true
 description = "CLI for the Tako application platform"
@@ -14,7 +14,7 @@ name = "tako"
 path = "src/main.rs"
 
 [dependencies]
-tako-core = { path = "../tako-core" }
+tako-core = { path = "../tako-core", version = "0.0.1-alpha.0" }
 clap = { version = "4.5", features = ["derive", "env"] }
 tokio = { version = "1.49", features = ["full"] }
 tracing = "0.1"

@@ -1,8 +1,9 @@
 [package]
 name = "tako-socket"
-version.workspace = true
+version = "0.0.1-alpha.0"
 edition.workspace = true
 authors.workspace = true
+description = "Unix socket protocol and client utilities for the Tako platform"
 license.workspace = true
 repository.workspace = true
 
