@@ -74,7 +74,7 @@ export function serve(
   options?: {
     port?: number;
     tako?: TakoOptions;
-  }
+  },
 ): void {
   const port = options?.port ?? parseInt(getEnv("PORT", "3000"), 10);
 
@@ -102,13 +102,10 @@ export function serve(
       return await handler.fetch(request, env);
     } catch (err) {
       console.error("[tako.sh] Error in fetch handler:", err);
-      return new Response(
-        JSON.stringify({ error: "Internal Server Error" }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      return new Response(JSON.stringify({ error: "Internal Server Error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
     }
   };
 

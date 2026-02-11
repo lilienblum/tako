@@ -6,4 +6,3 @@ test("resolveUserAppImportUrl resolves relative paths against cwd", () => {
   expect(url.startsWith("file:")).toBe(true);
   expect(decodeURIComponent(url)).toContain(cwd);
 });
-

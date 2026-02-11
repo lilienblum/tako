@@ -73,12 +73,7 @@ describe("Types", () => {
     });
 
     test("accepts all status values", () => {
-      const statuses: TakoStatus["status"][] = [
-        "healthy",
-        "starting",
-        "draining",
-        "unhealthy",
-      ];
+      const statuses: TakoStatus["status"][] = ["healthy", "starting", "draining", "unhealthy"];
       for (const s of statuses) {
         const status: TakoStatus = {
           status: s,
@@ -172,12 +167,7 @@ describe("Types", () => {
     });
 
     test("accepts all shutdown reasons", () => {
-      const reasons: ShutdownMessage["reason"][] = [
-        "deploy",
-        "restart",
-        "scale_down",
-        "stop",
-      ];
+      const reasons: ShutdownMessage["reason"][] = ["deploy", "restart", "scale_down", "stop"];
       for (const reason of reasons) {
         const msg: ShutdownMessage = {
           type: "shutdown",

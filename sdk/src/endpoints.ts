@@ -9,10 +9,7 @@ import type { TakoStatus } from "./types";
 /**
  * Handle Tako internal endpoints (/_tako/*)
  */
-export function handleTakoEndpoint(
-  request: Request,
-  status: TakoStatus
-): Response | null {
+export function handleTakoEndpoint(request: Request, status: TakoStatus): Response | null {
   const url = new URL(request.url);
   const path = url.pathname;
 
@@ -58,6 +55,6 @@ function handleHealth(status: TakoStatus): Response {
     {
       status: isHealthy ? 200 : 503,
       headers: { "Content-Type": "application/json" },
-    }
+    },
   );
 }

@@ -19,14 +19,17 @@ Instructions for AI agents working on the Tako codebase.
 ## Project Structure
 
 **Rust Crates:**
+
 - `tako-core/` - Shared protocol types (Command, Response enums)
 - `tako-server/` - Remote server runtime (proxy, instances, TLS, sockets)
 - `tako/` - CLI tool (all commands)
 
 **SDK (current implementation):**
+
 - `sdk/` - `tako.sh` JavaScript/TypeScript SDK package (npm)
 
 **Website:**
+
 - `website/` - Marketing/docs site (do not add automated tests for this component)
 
 ## Current Priorities
@@ -89,6 +92,7 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
 **tako-core:** Minimal, protocol-only. Don't add features here.
 
 **tako-server:**
+
 - `proxy/` - Pingora HTTP/HTTPS proxy
 - `instances/` - App lifecycle management
 - `lb/` - Per-app load balancer
@@ -96,12 +100,14 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
 - `socket.rs` - Unix socket API
 
 **tako CLI:**
+
 - `commands/` - All CLI commands (init, dev, deploy, server, secret, status, logs)
 - `config/` - Configuration parsing and merging
 - `ssh/` - Remote server communication
 - `runtime/` - Runtime detection (Bun, Node, Deno)
 
 **SDK:**
+
 - Runtime-agnostic fetch handler interface
 - Built-in `/_tako/status` and `/_tako/health` endpoints
 - Optional config reload support

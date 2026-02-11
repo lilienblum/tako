@@ -43,7 +43,7 @@ export function serve(
   options?: {
     port?: number;
     tako?: TakoOptions;
-  }
+  },
 ): void {
   const port = options?.port ?? parseInt(process.env.PORT || "3000", 10);
   const takoOptions = options?.tako ?? {};
@@ -90,13 +90,10 @@ export function serve(
       return await handler.fetch(request, env);
     } catch (err) {
       console.error("[tako.sh] Error in fetch handler:", err);
-      return new Response(
-        JSON.stringify({ error: "Internal Server Error" }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      return new Response(JSON.stringify({ error: "Internal Server Error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
     }
   };
 
@@ -127,14 +124,17 @@ export function serve(
       TAKO_VERSION,
       TAKO_INSTANCE,
       TAKO_APP_SOCKET,
-      takoOptions
+      takoOptions,
     );
 
-    connection.connect().then(() => {
-      connection.startHeartbeat();
-    }).catch((err) => {
-      console.error("[tako.sh] Failed to connect to tako-server:", err);
-    });
+    connection
+      .connect()
+      .then(() => {
+        connection.startHeartbeat();
+      })
+      .catch((err) => {
+        console.error("[tako.sh] Failed to connect to tako-server:", err);
+      });
 
     // Handle shutdown
     process.on("SIGTERM", () => {

@@ -36,10 +36,7 @@ export interface TakoStatus {
 /**
  * Messages sent from app to tako-server
  */
-export type AppToServerMessage =
-  | ReadyMessage
-  | HeartbeatMessage
-  | ShutdownAckMessage;
+export type AppToServerMessage = ReadyMessage | HeartbeatMessage | ShutdownAckMessage;
 
 export interface ReadyMessage {
   type: "ready";

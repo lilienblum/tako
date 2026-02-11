@@ -1,11 +1,6 @@
 [workspace]
 resolver = "3"
-members = [
-    "tako-core",
-    "tako-socket",
-    "tako",
-    "tako-server",
-]
+members = ["tako-core", "tako-socket", "tako", "tako-server"]
 
 [workspace.package]
 edition = "2024"

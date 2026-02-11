@@ -66,8 +66,11 @@ export function setStatus(newStatus: TakoStatus["status"]): void {
  */
 export function createMiddleware(): (
   req: { url?: string; method?: string },
-  res: { writeHead: (status: number, headers: Record<string, string>) => void; end: (body: string) => void },
-  next: () => void
+  res: {
+    writeHead: (status: number, headers: Record<string, string>) => void;
+    end: (body: string) => void;
+  },
+  next: () => void,
 ) => void {
   return (req, res, next) => {
     const url = req.url || "";

@@ -694,18 +694,18 @@ email = "admin@example.com"
 
 ### Environment Variables for Apps
 
-| Name | Used by | Meaning | Typical source |
-| --- | --- | --- | --- |
-| `PORT` | app | Listen port for HTTP server | Set by `tako-server` when running app instances; set by `tako dev` for the local app process. |
-| `ENV` | app | Environment name | Usually `development` in `tako dev`; `production` under `tako-server`. |
-| `NODE_ENV` | app | Node.js convention env | Set by runtime adapter / server (`development` or `production`). |
-| `BUN_ENV` | app | Bun convention env | Set by runtime adapter (`development` or `production`). |
-| `TAKO_BUILD` | app | Deployed build/version identifier | Written into the release `.env` file during `tako deploy`. |
-| `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on (if using socket-based proxying) | path string or unset |
-| `TAKO_SOCKET` | app / `tako.sh` | Unix socket path for connecting to `tako-server` | default `/var/run/tako/tako.sock` |
-| `TAKO_VERSION` | app / `tako.sh` | App version string (if you choose to set one) | string |
-| `TAKO_INSTANCE` | app / `tako.sh` | Instance identifier | integer string |
-| _user-defined_ | app | User config vars/secrets | From `[vars]` and `[envs.*].vars` plus secrets in release `.env`. |
+| Name              | Used by         | Meaning                                                                    | Typical source                                                                                |
+| ----------------- | --------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `PORT`            | app             | Listen port for HTTP server                                                | Set by `tako-server` when running app instances; set by `tako dev` for the local app process. |
+| `ENV`             | app             | Environment name                                                           | Usually `development` in `tako dev`; `production` under `tako-server`.                        |
+| `NODE_ENV`        | app             | Node.js convention env                                                     | Set by runtime adapter / server (`development` or `production`).                              |
+| `BUN_ENV`         | app             | Bun convention env                                                         | Set by runtime adapter (`development` or `production`).                                       |
+| `TAKO_BUILD`      | app             | Deployed build/version identifier                                          | Written into the release `.env` file during `tako deploy`.                                    |
+| `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on (if using socket-based proxying) | path string or unset                                                                          |
+| `TAKO_SOCKET`     | app / `tako.sh` | Unix socket path for connecting to `tako-server`                           | default `/var/run/tako/tako.sock`                                                             |
+| `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one)                              | string                                                                                        |
+| `TAKO_INSTANCE`   | app / `tako.sh` | Instance identifier                                                        | integer string                                                                                |
+| _user-defined_    | app             | User config vars/secrets                                                   | From `[vars]` and `[envs.*].vars` plus secrets in release `.env`.                             |
 
 ### Messages (JSON over Unix Socket)
 
@@ -792,6 +792,7 @@ GET /_tako/status
 ```
 
 Response (200 if healthy, 503 if unhealthy):
+
 ```json
 {
   "healthy": true,
@@ -932,19 +933,19 @@ Used for health checks during rolling updates and monitoring.
 
 ## Edge Cases & Error Handling
 
-| Scenario                           | Behavior                                             |
-| ---------------------------------- | ---------------------------------------------------- |
-| `~/.tako/` deleted                 | Auto-recreate on next command                        |
-| `~/.tako/config.toml` corrupted    | Show parse error with line number, offer to recreate |
-| `tako.toml` deleted                | Use defaults, no error                               |
-| `.tako/` deleted                   | Auto-recreate on next deploy                         |
-| `.tako/secrets` deleted            | Warn user, prompt to restore secrets                 |
-| Low free space under `/opt/tako`   | Deploy fails before upload with required vs available disk sizes |
+| Scenario                           | Behavior                                                          |
+| ---------------------------------- | ----------------------------------------------------------------- |
+| `~/.tako/` deleted                 | Auto-recreate on next command                                     |
+| `~/.tako/config.toml` corrupted    | Show parse error with line number, offer to recreate              |
+| `tako.toml` deleted                | Use defaults, no error                                            |
+| `.tako/` deleted                   | Auto-recreate on next deploy                                      |
+| `.tako/secrets` deleted            | Warn user, prompt to restore secrets                              |
+| Low free space under `/opt/tako`   | Deploy fails before upload with required vs available disk sizes  |
 | Deploy lock left behind            | Deploy fails until `/opt/tako/apps/{app}/.deploy_lock` is removed |
-| Deploy fails mid-transfer/setup    | Auto-clean newly-created partial release directory   |
-| Health check fails                 | Automatic rollback to previous version               |
-| Network interruption during deploy | Partial failure handling, can retry                  |
-| Process crash                      | Auto-restart, health checks detect and handle        |
+| Deploy fails mid-transfer/setup    | Auto-clean newly-created partial release directory                |
+| Health check fails                 | Automatic rollback to previous version                            |
+| Network interruption during deploy | Partial failure handling, can retry                               |
+| Process crash                      | Auto-restart, health checks detect and handle                     |
 
 ## Testing Requirements
 

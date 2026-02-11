@@ -55,9 +55,7 @@ export class Tako {
   /**
    * Register a config reload handler
    */
-  onConfigReload(
-    handler: (secrets: Record<string, string>) => void | Promise<void>
-  ): this {
+  onConfigReload(handler: (secrets: Record<string, string>) => void | Promise<void>): this {
     this.options.onConfigReload = handler;
     return this;
   }

@@ -1,20 +1,27 @@
 {
-	"private": true,
-	"workspaces": {
-		"packages": [
-			"sdk",
-			"website",
-			"examples/js/*"
-		],
-		"catalogs": {
-			"dev": {
-				"@types/bun": "^1.3.8",
-				"@cloudflare/workers-types": "^4.20260210.0",
-				"@types/node": "^25.2.2",
-				"astro": "^5.17.1",
-				"wrangler": "^4.63.0",
-				"typescript": "^5"
-			}
-		}
-	}
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "sdk",
+      "website",
+      "examples/js/*"
+    ],
+    "catalogs": {
+      "dev": {
+        "@types/bun": "^1.3.8",
+        "@cloudflare/workers-types": "^4.20260210.0",
+        "@types/node": "^25.2.2",
+        "astro": "^5.17.1",
+        "wrangler": "^4.63.0",
+        "typescript": "^5"
+      }
+    }
+  },
+  "scripts": {
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check"
+  },
+  "devDependencies": {
+    "oxfmt": "^0.31.0"
+  }
 }

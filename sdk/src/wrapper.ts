@@ -51,10 +51,7 @@ function getStatus(): TakoStatus {
 /**
  * Create the app server
  */
-async function createAppServer(
-  userApp: FetchHandler,
-  options: TakoOptions
-): Promise<void> {
+async function createAppServer(userApp: FetchHandler, options: TakoOptions): Promise<void> {
   // Build environment object from process.env
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -76,13 +73,10 @@ async function createAppServer(
       return await userApp.fetch(request, env);
     } catch (err) {
       console.error("Error in user fetch handler:", err);
-      return new Response(
-        JSON.stringify({ error: "Internal Server Error" }),
-        {
-          status: 500,
-          headers: { "Content-Type": "application/json" },
-        }
-      );
+      return new Response(JSON.stringify({ error: "Internal Server Error" }), {
+        status: 500,
+        headers: { "Content-Type": "application/json" },
+      });
     }
   };
 
@@ -130,7 +124,7 @@ async function connectToServer(options: TakoOptions): Promise<void> {
     TAKO_VERSION,
     TAKO_INSTANCE,
     TAKO_APP_SOCKET,
-    options
+    options,
   );
 
   try {
@@ -164,14 +158,12 @@ async function connectToServer(options: TakoOptions): Promise<void> {
  * @param userAppPath - Path to the user's app module
  */
 export function resolveUserAppImportUrl(userAppPath: string): string {
-  const absPath = isAbsolute(userAppPath)
-    ? userAppPath
-    : resolve(process.cwd(), userAppPath);
+  const absPath = isAbsolute(userAppPath) ? userAppPath : resolve(process.cwd(), userAppPath);
   return pathToFileURL(absPath).href;
 }
 
 export async function run(userAppPath: string): Promise<void> {
-	console.log("Starting application");
+  console.log("Starting application");
 
   // Import user's app
   let userApp: FetchHandler;
@@ -180,9 +172,7 @@ export async function run(userAppPath: string): Promise<void> {
     userApp = module.default;
 
     if (!userApp || typeof userApp.fetch !== "function") {
-      throw new Error(
-        "App must export a default object with a fetch() method"
-      );
+      throw new Error("App must export a default object with a fetch() method");
     }
   } catch (err) {
     console.error(`Failed to import app from ${userAppPath}:`, err);

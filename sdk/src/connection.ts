@@ -4,12 +4,7 @@
  * Manages the connection to tako-server for status reporting and control messages.
  */
 
-import type {
-  AppToServerMessage,
-  ServerToAppMessage,
-  ServerAck,
-  TakoOptions,
-} from "./types";
+import type { AppToServerMessage, ServerToAppMessage, ServerAck, TakoOptions } from "./types";
 
 /**
  * Connection to tako-server management socket
@@ -31,7 +26,7 @@ export class ServerConnection {
     private readonly version: string,
     private readonly instanceId: number,
     private readonly appSocketPath: string,
-    private readonly options: TakoOptions = {}
+    private readonly options: TakoOptions = {},
   ) {}
 
   /**
@@ -183,9 +178,7 @@ export class ServerConnection {
 
     // Give time for in-flight requests to complete
     // In a real implementation, we'd track active requests
-    await new Promise((resolve) =>
-      setTimeout(resolve, Math.min(drainTimeoutSeconds * 1000, 5000))
-    );
+    await new Promise((resolve) => setTimeout(resolve, Math.min(drainTimeoutSeconds * 1000, 5000)));
 
     // Send shutdown ack
     const ackMessage: AppToServerMessage = {
@@ -206,9 +199,7 @@ export class ServerConnection {
   /**
    * Handle config reload
    */
-  private async handleConfigReload(
-    secrets: Record<string, string>
-  ): Promise<void> {
+  private async handleConfigReload(secrets: Record<string, string>): Promise<void> {
     // Update environment variables
     for (const [key, value] of Object.entries(secrets)) {
       process.env[key] = value;

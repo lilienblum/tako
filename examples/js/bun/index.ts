@@ -3,12 +3,15 @@ export default {
     const url = new URL(req.url);
 
     if (url.pathname === "/") {
-			return Response.json({
-				success: "ok",
-				respondedAt: new Date().toISOString()
-			}, { headers: { "content-type": "application/json; charset=utf-8" } });
+      return Response.json(
+        {
+          success: "ok",
+          respondedAt: new Date().toISOString(),
+        },
+        { headers: { "content-type": "application/json; charset=utf-8" } },
+      );
     }
 
-    return new Response("Not Found", { status: 404 })
+    return new Response("Not Found", { status: 404 });
   },
 };
