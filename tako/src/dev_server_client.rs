@@ -183,7 +183,7 @@ fn spawn_dev_server(
     {
         Ok(child) => Ok(child),
         Err(e) => Err(format!(
-            "failed to spawn 'tako-dev-server' ({}). If you're running from a source checkout, build it with: cargo build -p tako-dev-server",
+            "failed to spawn 'tako-dev-server' ({}). If you're running from a source checkout, build it with: cargo build -p tako --bin tako-dev-server",
             e
         )
         .into()),
@@ -214,13 +214,17 @@ fn repo_local_dev_server_build_needed(
 
 fn maybe_build_repo_local_dev_server(root: &std::path::Path) -> std::io::Result<()> {
     std::process::Command::new("cargo")
-        .args(["build", "-p", "tako-dev-server"])
+        .args(repo_local_dev_server_build_args())
         .current_dir(root)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
         .map(|_| ())
+}
+
+fn repo_local_dev_server_build_args() -> [&'static str; 5] {
+    ["build", "-p", "tako", "--bin", "tako-dev-server"]
 }
 
 async fn ping(c: &mut LineClient) -> Result<(), Box<dyn std::error::Error>> {
@@ -540,6 +544,14 @@ mod tests {
             Some(older),
             Some(newer)
         ));
+    }
+
+    #[test]
+    fn repo_local_dev_server_build_uses_tako_package_binary() {
+        assert_eq!(
+            repo_local_dev_server_build_args(),
+            ["build", "-p", "tako", "--bin", "tako-dev-server"]
+        );
     }
 
     #[test]

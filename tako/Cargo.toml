@@ -1,6 +1,6 @@
 [package]
 name = "tako"
-version = "0.0.1-alpha.0"
+version = "0.0.1-alpha.1"
 edition.workspace = true
 authors.workspace = true
 description = "CLI for the Tako application platform"
@@ -13,8 +13,13 @@ categories.workspace = true
 name = "tako"
 path = "src/main.rs"
 
+[[bin]]
+name = "tako-dev-server"
+path = "src/bin/tako-dev-server/main.rs"
+
 [dependencies]
 tako-core = { path = "../tako-core", version = "0.0.1-alpha.0" }
+tako-socket = { path = "../tako-socket", version = "0.0.1-alpha.0" }
 clap = { version = "4.5", features = ["derive", "env"] }
 tokio = { version = "1.49", features = ["full"] }
 tracing = "0.1"
@@ -41,6 +46,10 @@ notify-debouncer-mini = "0.7"
 hyper = { version = "1.8", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
+pingora-core = { version = "0.7", default-features = false, features = ["openssl"] }
+pingora-proxy = { version = "0.7", default-features = false, features = ["openssl"] }
+pingora-http = "0.7"
+hickory-proto = "0.25"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.2"
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }

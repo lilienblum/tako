@@ -150,6 +150,14 @@ Install the CLI on your local machine:
 curl -fsSL https://tako.sh/install | sh
 ```
 
+Install from crates.io:
+
+```bash
+cargo install tako
+```
+
+`cargo install tako` installs both `tako` and `tako-dev-server` binaries from the same package/version.
+
 Upgrade the local CLI to the latest version:
 
 ```bash
@@ -202,7 +210,7 @@ Start (or attach to) a local development session for the current app, backed by 
 
 - `tako dev` is a **client**: it ensures `tako-dev-server` is running, then registers the current app directory with the daemon.
   - When running from a source checkout, `tako dev` prefers the repo-local `target/debug|release/tako-dev-server` binary.
-  - If no local daemon binary exists, `tako dev` falls back to `tako-dev-server` on `PATH` and reports an explicit build hint when missing.
+  - If no local daemon binary exists, `tako dev` falls back to `tako-dev-server` on `PATH` and reports an explicit build hint (`cargo build -p tako --bin tako-dev-server`) when missing.
   - If daemon startup fails, `tako dev` reports the last lines from `{TAKO_HOME}/dev-server.log`.
   - `tako dev` waits up to ~15 seconds for the daemon socket after spawn before reporting startup failure.
   - The daemon performs an upfront bind-availability check for its HTTPS listen address and exits immediately with an explicit error when that address is unavailable.

@@ -12,6 +12,7 @@ This document describes how to use Tako for local development, including trusted
 ## Overview
 
 - `tako dev` is a **client** that talks to a background daemon: `tako-dev-server`.
+- When running from source, the daemon binary is built from the `tako` package (`cargo build -p tako --bin tako-dev-server`).
 - `tako dev` owns the app process lifecycle: it spawns your app locally on an ephemeral port.
 - `tako-dev-server` is a local dev daemon: it terminates HTTPS and routes by `Host` to the app port.
 - The client registers a **lease** with the daemon (TTL + heartbeat). When the client stops renewing, the route expires.

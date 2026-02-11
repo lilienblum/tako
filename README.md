@@ -37,9 +37,8 @@ just tako examples/js/bun dev
 
 ## Repository Layout
 
-- `tako/`: CLI crate (`tako`)
+- `tako/`: CLI crate (`tako`) and local dev daemon binary (`tako-dev-server`)
 - `tako-server/`: remote runtime/proxy crate (`tako-server`)
-- `tako-dev-server/`: local dev daemon crate (`tako-dev-server`)
 - `tako-core/`: shared protocol types
 - `tako-socket/`: shared Unix socket JSONL transport helpers
 - `sdk/`: `tako.sh` SDK package
@@ -62,7 +61,6 @@ Component-focused docs:
 
 - `tako/README.md`
 - `tako-server/README.md`
-- `tako-dev-server/README.md`
 - `tako-core/README.md`
 - `tako-socket/README.md`
 - `sdk/README.md`

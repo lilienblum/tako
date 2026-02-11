@@ -108,7 +108,6 @@ For user-facing command contracts and behavior details, see `../../SPEC.md`.
 
 ## Ownership By Directory
 
-- `tako/`: CLI command implementation, config, SSH, runtime detection.
+- `tako/`: CLI command implementation, config, SSH, runtime detection, and local dev daemon binary (`src/bin/tako-dev-server`).
 - `tako-server/`: production runtime, routing, health checks, TLS, deploy orchestration.
-- `tako-dev-server/`: local daemon for trusted HTTPS + host routing.
 - `tako-core/` and `tako-socket/`: shared protocol and transport boundaries.

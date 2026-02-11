@@ -23,13 +23,11 @@ COPY tako-core/Cargo.toml tako-core/Cargo.toml
 COPY tako-socket/Cargo.toml tako-socket/Cargo.toml
 COPY tako/Cargo.toml tako/Cargo.toml
 COPY tako-server/Cargo.toml tako-server/Cargo.toml
-COPY tako-dev-server/Cargo.toml tako-dev-server/Cargo.toml
 
 COPY tako-core/src tako-core/src
 COPY tako-socket/src tako-socket/src
 COPY tako/src tako/src
 COPY tako-server/src tako-server/src
-COPY tako-dev-server/src tako-dev-server/src
 
 RUN cargo build -p tako-server --release
 

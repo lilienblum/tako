@@ -4961,7 +4961,7 @@ dependencies = [
 
 [[package]]
 name = "tako"
-version = "0.0.1-alpha.0"
+version = "0.0.1-alpha.1"
 dependencies = [
  "aes-gcm",
  "async-trait",
@@ -4974,12 +4974,16 @@ dependencies = [
  "flate2",
  "getrandom 0.4.1",
  "hex",
+ "hickory-proto",
  "http-body-util",
  "hyper",
  "hyper-util",
  "notify",
  "notify-debouncer-mini",
  "pem",
+ "pingora-core",
+ "pingora-http",
+ "pingora-proxy",
  "ratatui",
  "rcgen",
  "reqwest",
@@ -4994,6 +4998,7 @@ dependencies = [
  "ssh-key",
  "sysinfo",
  "tako-core",
+ "tako-socket",
  "tar",
  "tempfile",
  "termcolor",
@@ -5014,31 +5019,6 @@ version = "0.0.1-alpha.0"
 dependencies = [
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "tako-dev-server"
-version = "0.0.1-alpha.0"
-dependencies = [
- "async-trait",
- "base64",
- "dirs",
- "getrandom 0.4.1",
- "hickory-proto",
- "pingora-core",
- "pingora-http",
- "pingora-proxy",
- "rcgen",
- "serde",
- "serde_json",
- "tako-socket",
- "tempfile",
- "thiserror 2.0.18",
- "time",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]
