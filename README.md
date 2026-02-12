@@ -1,6 +1,6 @@
 # Tako
 
-<img src="assets/logo.svg" alt="Tako logo" width="180" />
+<img src="website/public/assets/og.svg" alt="Tako logo" />
 
 [![crate: tako](https://img.shields.io/crates/v/tako?label=tako&color=E88783)](https://crates.io/crates/tako)
 [![crate: tako-server](https://img.shields.io/crates/v/tako-server?label=tako-server&color=E88783)](https://crates.io/crates/tako-server)
