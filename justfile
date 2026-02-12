@@ -22,8 +22,9 @@ DOCKER_SSH_KEY_FILE := "debug/tmp/docker_ssh_key"
 # If this doesn't resolve for you, try `host.docker.internal`.
 
 tako *arguments:
-    # Build/run the current CLI source without installing.
-    TAKO_HOME="$(pwd)/{{ TAKO_HOME }}" cargo run -p tako -- {{ arguments }}
+    # Build both binaries, then run the current CLI source without installing.
+    cargo build -p tako --bins
+    TAKO_HOME="$(pwd)/{{ TAKO_HOME }}" cargo run -p tako --bin tako -- {{ arguments }}
 
 clean:
     cargo clean

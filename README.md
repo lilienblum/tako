@@ -36,7 +36,7 @@ cargo test --workspace
 Run CLI help from source:
 
 ```bash
-cargo run -p tako -- --help
+cargo run -p tako --bin tako -- --help
 ```
 
 Run the Bun example with Tako local dev flow:

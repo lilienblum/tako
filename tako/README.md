@@ -25,14 +25,14 @@ Primary subcommands:
 - `upgrade`
 - `deploy`
 
-Use `cargo run -p tako -- --help` for current flags and subcommand help.
+Use `cargo run -p tako --bin tako -- --help` for current flags and subcommand help.
 
 ## Run and Test
 
 From repository root:
 
 ```bash
-cargo run -p tako -- --help
+cargo run -p tako --bin tako -- --help
 cargo run -p tako --bin tako-dev-server -- --help
 cargo test -p tako
 ```
@@ -40,7 +40,7 @@ cargo test -p tako
 Run a focused command from source:
 
 ```bash
-cargo run -p tako -- deploy --help
+cargo run -p tako --bin tako -- deploy --help
 ```
 
 ## Related Docs
