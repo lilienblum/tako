@@ -38,30 +38,17 @@ impl RouteTable {
 
     fn rebuild(&mut self) {
         let mut entries = Vec::new();
-        let implicit_catchall = if self.app_routes.len() == 1 {
-            self.app_routes
-                .iter()
-                .next()
-                .and_then(|(app, patterns)| patterns.is_empty().then(|| app.clone()))
-        } else {
-            None
-        };
 
         for (app, patterns) in &self.app_routes {
             for pattern in patterns {
+                if pattern.is_empty() {
+                    continue;
+                }
                 entries.push(RouteEntry {
                     app: app.clone(),
                     pattern: pattern.clone(),
                 });
             }
-        }
-
-        if let Some(app) = implicit_catchall {
-            // Single-app deployments without explicit routes act as catch-all.
-            entries.push(RouteEntry {
-                app,
-                pattern: String::new(),
-            });
         }
 
         self.compiled = compile_routes(&entries);
@@ -72,12 +59,6 @@ pub fn compile_routes(routes: &[RouteEntry]) -> Vec<CompiledRouteEntry> {
     let mut compiled = Vec::with_capacity(routes.len());
     for entry in routes {
         if entry.pattern.is_empty() {
-            compiled.push(CompiledRouteEntry {
-                app: entry.app.clone(),
-                host: "".to_string(),
-                path: None,
-                specificity: (0, 0, 0),
-            });
             continue;
         }
 
@@ -101,9 +82,6 @@ pub fn select_app_for_request_compiled(
     path: &str,
 ) -> Option<String> {
     for entry in routes {
-        if entry.host.is_empty() {
-            return Some(entry.app.clone());
-        }
         if !hostname_matches(&entry.host, host) {
             continue;
         }
@@ -144,7 +122,7 @@ pub fn select_app_for_request(routes: &[RouteEntry], host: &str, path: &str) -> 
 
 fn route_matches(pattern: &str, host: &str, path: &str) -> bool {
     if pattern.is_empty() {
-        return true;
+        return false;
     }
     let (pattern_host, pattern_path) = split_route(pattern);
     if !hostname_matches(pattern_host, host) {
@@ -274,30 +252,26 @@ mod tests {
     }
 
     // ===========================================
-    // Empty pattern (catch-all) tests
+    // Empty pattern tests
     // ===========================================
 
     #[test]
-    fn test_empty_pattern_matches_everything() {
+    fn test_empty_pattern_matches_nothing() {
         let routes = vec![route("catchall", "")];
         assert_eq!(
             select_app_for_request(&routes, "any.domain.com", "/any/path"),
-            Some("catchall".to_string())
+            None
         );
     }
 
     #[test]
-    fn test_specific_pattern_beats_empty() {
+    fn test_specific_pattern_ignores_empty_pattern() {
         let routes = vec![route("catchall", ""), route("specific", "api.example.com")];
         assert_eq!(
             select_app_for_request(&routes, "api.example.com", "/"),
             Some("specific".to_string())
         );
-        // But catchall should match other hosts
-        assert_eq!(
-            select_app_for_request(&routes, "other.com", "/"),
-            Some("catchall".to_string())
-        );
+        assert_eq!(select_app_for_request(&routes, "other.com", "/"), None);
 
         assert_eq!(
             select_app_for_request_compiled(&compiled(&routes), "api.example.com", "/"),
@@ -312,20 +286,31 @@ mod tests {
     }
 
     #[test]
-    fn test_route_table_single_app_without_routes_matches_any_request() {
+    fn test_route_table_single_app_without_routes_matches_nothing() {
         let mut table = RouteTable::default();
         table.set_app_routes("app".to_string(), vec![]);
 
+        assert_eq!(table.select("unknown.example.com", "/any/path"), None);
+    }
+
+    #[test]
+    fn test_route_table_does_not_use_no_route_app_as_catchall_fallback() {
+        let mut table = RouteTable::default();
+        table.set_app_routes("fallback".to_string(), vec![]);
+        table.set_app_routes("api".to_string(), vec!["api.example.com".to_string()]);
+
+        assert_eq!(table.select("other.example.com", "/"), None);
         assert_eq!(
-            table.select("unknown.example.com", "/any/path"),
-            Some("app".to_string())
+            table.select("api.example.com", "/"),
+            Some("api".to_string())
         );
     }
 
     #[test]
-    fn test_route_table_does_not_treat_empty_routes_as_catchall_with_multiple_apps() {
+    fn test_route_table_ignores_multiple_no_route_apps() {
         let mut table = RouteTable::default();
-        table.set_app_routes("no-routes".to_string(), vec![]);
+        table.set_app_routes("fallback-a".to_string(), vec![]);
+        table.set_app_routes("fallback-b".to_string(), vec![]);
         table.set_app_routes("api".to_string(), vec!["api.example.com".to_string()]);
 
         assert_eq!(table.select("other.example.com", "/"), None);
@@ -424,7 +409,10 @@ mod tests {
             );
         }
 
-        assert_eq!(route_specificity("example.com"), route_specificity("example.com/*"));
+        assert_eq!(
+            route_specificity("example.com"),
+            route_specificity("example.com/*")
+        );
     }
 
     // ===========================================
@@ -569,7 +557,6 @@ mod tests {
             route("api-fallback", "api.example.com/*"),
             route("web", "www.example.com/*"),
             route("wildcard", "*.example.com"),
-            route("catchall", ""),
         ];
 
         // Most specific matches
@@ -596,11 +583,8 @@ mod tests {
             select_app_for_request(&routes, "blog.example.com", "/post/123"),
             Some("wildcard".to_string())
         );
-        // Completely different domain hits catchall
-        assert_eq!(
-            select_app_for_request(&routes, "other.com", "/"),
-            Some("catchall".to_string())
-        );
+        // Completely different domain has no route
+        assert_eq!(select_app_for_request(&routes, "other.com", "/"), None);
     }
 
     // ===========================================

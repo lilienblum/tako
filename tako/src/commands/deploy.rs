@@ -84,11 +84,6 @@ async fn run_async(
 
             let env = resolve_deploy_environment(requested_env, &tako_config)?;
 
-            if !tako_config.envs.contains_key(env.as_str()) && env != "production" {
-                let available: Vec<String> = tako_config.envs.keys().cloned().collect();
-                return Err(format_environment_not_found_error(&env, &available));
-            }
-
             let config_result = validate_full_config(&tako_config, &servers);
             if config_result.has_errors() {
                 return Err(format!(
@@ -159,7 +154,8 @@ async fn run_async(
     output::section(&format_prepare_deploy_section(&env));
 
     let app_name = resolve_app_name(&project_dir).unwrap_or_else(|_| "app".to_string());
-    let routes = tako_config.get_routes(&env).unwrap_or_default();
+    let routes = required_env_routes(&tako_config, &env)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     output::success("Configuration valid");
     output::success(&format_runtime_summary(
@@ -334,12 +330,14 @@ async fn run_async(
         output::section("Summary");
         output::success(&format!("Deployed {} v{} to {}", app_name, version, env));
 
-        let routes = tako_config.get_routes(&env).unwrap_or_default();
-        if !routes.is_empty() {
-            output::step("Available at:");
-            for route in routes {
-                println!("  {}", console::style(format!("https://{}", route)).cyan());
-            }
+        let routes = required_env_routes(&tako_config, &env)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        output::step("Available at:");
+        for route in routes {
+            println!(
+                "  {}",
+                output::brand_secondary(format!("https://{}", route))
+            );
         }
 
         Ok(())
@@ -360,19 +358,39 @@ async fn run_async(
 
 fn resolve_deploy_environment(
     requested_env: Option<&str>,
-    _tako_config: &TakoToml,
+    tako_config: &TakoToml,
 ) -> Result<String, String> {
-    if let Some(env) = requested_env {
+    let env = if let Some(env) = requested_env {
         if env == "development" {
             return Err(
                 "Environment 'development' is reserved for local development and cannot be deployed."
                     .to_string(),
             );
         }
-        return Ok(env.to_string());
+        env.to_string()
+    } else {
+        "production".to_string()
+    };
+
+    if !tako_config.envs.contains_key(env.as_str()) {
+        let available: Vec<String> = tako_config.envs.keys().cloned().collect();
+        return Err(format_environment_not_found_error(&env, &available));
     }
 
-    Ok("production".to_string())
+    Ok(env)
+}
+
+fn required_env_routes(tako_config: &TakoToml, env: &str) -> Result<Vec<String>, String> {
+    let routes = tako_config
+        .get_routes(env)
+        .ok_or_else(|| format!("Environment '{env}' has no routes configured"))?;
+    if routes.is_empty() {
+        return Err(format!(
+            "Environment '{}' must define at least one route",
+            env
+        ));
+    }
+    Ok(routes)
 }
 
 fn should_confirm_production_deploy(env: &str, assume_yes: bool, interactive: bool) -> bool {
@@ -1198,12 +1216,20 @@ mod tests {
     #[test]
     fn resolve_deploy_environment_prefers_explicit_env() {
         let mut config = TakoToml::default();
-        config
-            .envs
-            .insert("production".to_string(), EnvConfig::default());
-        config
-            .envs
-            .insert("staging".to_string(), EnvConfig::default());
+        config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                route: Some("prod.example.com".to_string()),
+                ..Default::default()
+            },
+        );
+        config.envs.insert(
+            "staging".to_string(),
+            EnvConfig {
+                route: Some("staging.example.com".to_string()),
+                ..Default::default()
+            },
+        );
 
         let resolved = resolve_deploy_environment(Some("staging"), &config).unwrap();
         assert_eq!(resolved, "staging");
@@ -1228,9 +1254,13 @@ mod tests {
     #[test]
     fn resolve_deploy_environment_defaults_to_production_with_single_server() {
         let mut config = TakoToml::default();
-        config
-            .envs
-            .insert("production".to_string(), EnvConfig::default());
+        config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                route: Some("prod.example.com".to_string()),
+                ..Default::default()
+            },
+        );
 
         let resolved = resolve_deploy_environment(None, &config).unwrap();
         assert_eq!(resolved, "production");
@@ -1239,12 +1269,46 @@ mod tests {
     #[test]
     fn resolve_deploy_environment_defaults_to_production() {
         let mut config = TakoToml::default();
-        config
-            .envs
-            .insert("production".to_string(), EnvConfig::default());
+        config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                route: Some("prod.example.com".to_string()),
+                ..Default::default()
+            },
+        );
 
         let resolved = resolve_deploy_environment(None, &config).unwrap();
         assert_eq!(resolved, "production");
+    }
+
+    #[test]
+    fn resolve_deploy_environment_rejects_missing_requested_environment() {
+        let mut config = TakoToml::default();
+        config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                route: Some("prod.example.com".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let err = resolve_deploy_environment(Some("staging"), &config).unwrap_err();
+        assert!(err.contains("Environment 'staging' not found"));
+    }
+
+    #[test]
+    fn resolve_deploy_environment_rejects_missing_default_production_environment() {
+        let mut config = TakoToml::default();
+        config.envs.insert(
+            "staging".to_string(),
+            EnvConfig {
+                route: Some("staging.example.com".to_string()),
+                ..Default::default()
+            },
+        );
+
+        let err = resolve_deploy_environment(None, &config).unwrap_err();
+        assert!(err.contains("Environment 'production' not found"));
     }
 
     #[test]

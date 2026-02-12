@@ -56,7 +56,7 @@ Environment route declarations and optional env-local variables.
 ```toml
 [envs.production]
 route = "api.example.com"
-# routes = ["api.example.com", "*.api.example.com"]
+# routes = ["api.example.com", "www.api.example.com"]
 # route = "example.com/api/*"
 # routes = ["example.com/api/*", "example.com/admin/*"]
 LOG_FORMAT = "json"
@@ -64,6 +64,9 @@ LOG_FORMAT = "json"
 
 - `route`: single hostname/path pattern.
 - `routes`: multiple route patterns. Use this instead of `route`.
+- Every non-development environment must define `route` or `routes`.
+- `[envs.development]` may omit routes and defaults to `{app}.tako.local` for `tako dev`.
+- Empty route sets are rejected for non-development environments. There is no implicit catch-all routing mode.
 - Additional keys in an environment section are treated as environment variables.
 - `example.com` and `example.com/*` are equivalent and both match all paths on `example.com`.
 - Path route examples:
@@ -124,7 +127,7 @@ LOG_LEVEL = "info"
 LOG_LEVEL = "warn"
 
 [envs.production]
-routes = ["api.example.com", "*.api.example.com"]
+routes = ["api.example.com", "www.api.example.com"]
 LOG_FORMAT = "json"
 
 [envs.staging]

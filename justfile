@@ -2,13 +2,13 @@ mod run-debug 'just/run-debug.just'
 mod release 'just/release.just'
 mod test 'just/test.just'
 
-# Backward-compatible aliases for existing top-level commands.
+# Top-level aliases.
 tako *arguments: (run-debug::tako arguments)
 
 clean: run-debug::clean
 
 build-tako-server: run-debug::build-tako-server
 
-create-debug-server: run-debug::create-debug-server
+create-bun-server: run-debug::create-bun-server
 
-install-server: run-debug::install-server
+install-bun-server: run-debug::install-bun-server

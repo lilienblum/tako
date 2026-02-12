@@ -110,9 +110,8 @@ async function createAppServer(userApp: FetchHandler, options: TakoOptions): Pro
 /**
  * Connect to tako-server (production mode only)
  */
-async function connectToServer(options: TakoOptions): Promise<void> {
+export async function connectToServer(options: TakoOptions): Promise<void> {
   if (!TAKO_APP_SOCKET) {
-    console.log("No TAKO_APP_SOCKET set - skipping server connection");
     return;
   }
 

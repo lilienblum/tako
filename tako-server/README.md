@@ -7,8 +7,14 @@ Rust crate for the remote Tako runtime and proxy.
 - Start/stop/manage app instances.
 - Maintain route table and app load balancers.
 - Terminate HTTP/HTTPS traffic and proxy upstream.
+- Redirect HTTP traffic to HTTPS (except ACME challenge and `/_tako/status`).
 - Perform active health probing.
 - Serve management commands over Unix socket.
+
+Routing policy notes:
+
+- Deploy commands must include at least one non-empty route.
+- No implicit catch-all/no-routes mode is supported.
 
 ## Key Runtime Paths
 

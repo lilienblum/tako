@@ -545,8 +545,19 @@ impl SshClient {
 
     /// Get tako-server status
     pub async fn tako_status(&self) -> SshResult<String> {
+        // Prefer probing the management unix socket directly. This works on
+        // non-systemd hosts (e.g. minimal containers) and avoids sudo for
+        // read-only status checks.
+        let list_probe = r#"{"command":"list"}"#;
+        if self.tako_command_raw(list_probe).await.is_ok() {
+            return Ok("active".to_string());
+        }
+
+        // Fall back to service-manager status if socket probe fails.
         let output = self
-            .exec("sudo systemctl is-active tako-server 2>/dev/null || echo unknown")
+            .exec(
+                "(command -v systemctl >/dev/null 2>&1 && systemctl is-active tako-server 2>/dev/null) || echo unknown",
+            )
             .await?;
         Ok(output.stdout.trim().to_string())
     }

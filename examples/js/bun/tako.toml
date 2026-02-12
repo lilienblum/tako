@@ -1,2 +1,5 @@
+[envs.production]
+route = "tako-bun-server.orb.local"
+
 [servers.tako-server]
 env = "production"

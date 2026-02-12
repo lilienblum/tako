@@ -46,7 +46,10 @@ Each target server should have:
 
 ### Project config (`tako.toml`)
 
+- `tako.toml` is required in the project root.
 - Defines environments and routes.
+- Every non-development environment must define `route` or `routes`.
+- Empty route sets are rejected for non-development environments (no implicit catch-all mode).
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
 - Defines per-server scaling settings (`instances`, `idle_timeout`) via global and per-server overrides.
 
@@ -99,12 +102,13 @@ Each target server should have:
 - Use `tako status` to inspect deployed app state by environment.
 - Use `tako logs --env <environment>` to stream remote logs.
 - Use `tako servers status <name>` to inspect remote `tako-server` install/service state.
+- HTTP requests are redirected to HTTPS by default (ACME challenge and `/_tako/status` remain on HTTP).
 
 ## Post-Deploy Verification
 
 Immediately after deploy:
 
-1. Run `tako status --env <environment>` and confirm routes/instances are healthy.
+1. Run `tako status` and confirm routes/instances are healthy for the target environment/app.
 2. Open one or more public routes and validate response headers/body.
 3. Tail logs with `tako logs --env <environment>` for startup/runtime errors.
 4. If only a subset of servers succeeded, re-run deploy after correcting failed hosts.

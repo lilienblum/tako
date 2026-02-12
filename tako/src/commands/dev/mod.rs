@@ -238,10 +238,10 @@ fn compute_dev_hosts(
     cfg: &TakoToml,
     default_host: &str,
 ) -> Result<Vec<String>, String> {
-    let routes = cfg.get_routes("development").unwrap_or_default();
-    if routes.is_empty() {
-        return Ok(vec![default_host.to_string()]);
-    }
+    let routes = match cfg.get_routes("development") {
+        Some(routes) if !routes.is_empty() => routes,
+        _ => return Ok(vec![default_host.to_string()]),
+    };
 
     let mut out = Vec::new();
     for r in routes {
@@ -1820,8 +1820,15 @@ mod tests {
     }
 
     #[test]
-    fn default_dev_routes_do_not_add_localhost_alias() {
+    fn falls_back_to_default_host_when_development_routes_are_missing() {
         let cfg = TakoToml::default();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.local").unwrap();
+        assert_eq!(hosts, vec!["app.tako.local".to_string()]);
+    }
+
+    #[test]
+    fn falls_back_to_default_host_when_development_routes_are_empty() {
+        let cfg = TakoToml::parse("[envs.development]\nroutes = []\n").unwrap();
         let hosts = compute_dev_hosts("app", &cfg, "app.tako.local").unwrap();
         assert_eq!(hosts, vec!["app.tako.local".to_string()]);
     }

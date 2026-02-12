@@ -2,6 +2,9 @@
   "name": "bun-example",
   "private": true,
   "type": "module",
+  "scripts": {
+    "dev": "bun run index.ts"
+  },
   "dependencies": {
     "tako.sh": "workspace:*"
   }

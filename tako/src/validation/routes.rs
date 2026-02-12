@@ -6,8 +6,8 @@
 //! - Optional path suffix allowed: `api.example.com/admin/*`
 //!
 //! Development-Specific Rules (`[envs.development]`):
-//! - Routes are optional - if not specified, defaults to `"{app-name}.tako.local"`
-//! - If routes ARE specified, they must be `{app-name}.tako.local` or a subdomain of it
+//! - Routes are optional in config; if omitted, `tako dev` defaults to `{app-name}.tako.local`
+//! - Routes must be `{app-name}.tako.local` or a subdomain of it
 //! - Examples valid: `"my-app.tako.local"`, `"*.my-app.tako.local"`, `"api.my-app.tako.local"`
 //! - Examples invalid: `"other.tako.local"` (wrong app domain), `"/api/*"` (path-only)
 
@@ -235,22 +235,25 @@ pub fn routes_overlap(_a: &str, _b: &str) -> bool {
 /// Validate that a new app's routes don't conflict with existing deployed apps.
 ///
 /// `existing` is a list of (app_name, routes). An empty routes list means "no routes configured"
-/// (i.e. catch-all), which conflicts with any other app.
+/// and is considered invalid.
 pub fn validate_no_route_conflicts(
     _existing: &[(String, Vec<String>)],
     _new_app: &str,
     _new_routes: &[String],
 ) -> Result<(), String> {
+    if _new_routes.is_empty() {
+        return Err("route conflict: app must define at least one route".to_string());
+    }
+
     for (existing_app, existing_routes) in _existing {
         if existing_app == _new_app {
             continue;
         }
 
-        // Empty routes means catch-all, which conflicts with any other app.
-        if existing_routes.is_empty() || _new_routes.is_empty() {
+        if existing_routes.is_empty() {
             return Err(format!(
-                "route conflict: '{}' has catch-all routing which conflicts with '{}'",
-                existing_app, _new_app
+                "route conflict: '{}' has no routes configured; catch-all deployments are not supported",
+                existing_app
             ));
         }
 
@@ -437,11 +440,18 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_no_route_conflicts_catch_all_conflicts() {
+    fn test_validate_no_route_conflicts_rejects_existing_catch_all_app() {
         let existing = vec![("other".to_string(), vec![])];
         let err = validate_no_route_conflicts(&existing, "new", &["api.example.com".to_string()])
             .unwrap_err();
-        assert!(err.contains("conflict"));
+        assert!(err.contains("no routes"));
+    }
+
+    #[test]
+    fn test_validate_no_route_conflicts_rejects_new_app_without_routes() {
+        let existing = vec![("other".to_string(), vec![])];
+        let err = validate_no_route_conflicts(&existing, "new", &[]).unwrap_err();
+        assert!(err.contains("must define at least one route"));
     }
 
     #[test]

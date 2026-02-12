@@ -49,23 +49,66 @@ impl SelfSignedGenerator {
 
     /// Get or create a self-signed certificate for localhost
     pub fn get_or_create_localhost(&self) -> Result<SelfSignedCert, SelfSignedError> {
-        let cert = SelfSignedCert {
-            cert_path: self.cert_dir.join("localhost.crt"),
-            key_path: self.cert_dir.join("localhost.key"),
-            domain: "localhost".to_string(),
-        };
+        self.get_or_create_for_domain("localhost")
+    }
 
+    /// Get or create a self-signed certificate for an arbitrary hostname.
+    pub fn get_or_create_for_domain(
+        &self,
+        domain: &str,
+    ) -> Result<SelfSignedCert, SelfSignedError> {
+        if domain.trim().is_empty() {
+            return Err(SelfSignedError::GenerationError(
+                "domain must not be empty".to_string(),
+            ));
+        }
+
+        let cert = self.cert_paths_for_domain(domain);
         if cert.exists() {
             return Ok(cert);
         }
 
-        self.generate_localhost(&cert)?;
+        self.generate_for_domain(&cert, domain)?;
         Ok(cert)
     }
 
+    fn cert_paths_for_domain(&self, domain: &str) -> SelfSignedCert {
+        if domain == "localhost" {
+            return SelfSignedCert {
+                cert_path: self.cert_dir.join("localhost.crt"),
+                key_path: self.cert_dir.join("localhost.key"),
+                domain: domain.to_string(),
+            };
+        }
+
+        let file_stem: String = domain
+            .chars()
+            .map(|c| match c {
+                'a'..='z' | 'A'..='Z' | '0'..='9' | '.' | '-' => c,
+                _ => '_',
+            })
+            .collect();
+
+        let domain_dir = self.cert_dir.join("domains");
+        SelfSignedCert {
+            cert_path: domain_dir.join(format!("{}.crt", file_stem)),
+            key_path: domain_dir.join(format!("{}.key", file_stem)),
+            domain: domain.to_string(),
+        }
+    }
+
     /// Generate a self-signed certificate for localhost
-    fn generate_localhost(&self, cert: &SelfSignedCert) -> Result<(), SelfSignedError> {
-        std::fs::create_dir_all(&self.cert_dir)?;
+    fn generate_for_domain(
+        &self,
+        cert: &SelfSignedCert,
+        domain: &str,
+    ) -> Result<(), SelfSignedError> {
+        if let Some(parent) = cert.cert_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        if let Some(parent) = cert.key_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
 
         // Use rcgen to generate certificate
         use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
@@ -74,17 +117,30 @@ impl SelfSignedGenerator {
 
         // Set subject
         let mut dn = DistinguishedName::new();
-        dn.push(DnType::CommonName, "Tako Development");
+        dn.push(DnType::CommonName, domain);
         dn.push(DnType::OrganizationName, "Tako");
         params.distinguished_name = dn;
 
-        // Add SANs for localhost
-        params.subject_alt_names = vec![
-            SanType::DnsName("localhost".try_into().unwrap()),
-            SanType::DnsName("*.localhost".try_into().unwrap()),
-            SanType::IpAddress(std::net::IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))),
-            SanType::IpAddress(std::net::IpAddr::V6(std::net::Ipv6Addr::LOCALHOST)),
-        ];
+        let dns_name = domain.try_into().map_err(|e| {
+            SelfSignedError::GenerationError(format!("Invalid DNS name '{}': {}", domain, e))
+        })?;
+        params.subject_alt_names = vec![SanType::DnsName(dns_name)];
+
+        if domain == "localhost" {
+            params
+                .subject_alt_names
+                .push(SanType::DnsName("*.localhost".try_into().unwrap()));
+            params
+                .subject_alt_names
+                .push(SanType::IpAddress(std::net::IpAddr::V4(
+                    std::net::Ipv4Addr::new(127, 0, 0, 1),
+                )));
+            params
+                .subject_alt_names
+                .push(SanType::IpAddress(std::net::IpAddr::V6(
+                    std::net::Ipv6Addr::LOCALHOST,
+                )));
+        }
 
         // Generate key pair
         let key_pair = KeyPair::generate().map_err(|e| {
@@ -112,7 +168,8 @@ impl SelfSignedGenerator {
         tracing::info!(
             cert_path = %cert.cert_path.display(),
             key_path = %cert.key_path.display(),
-            "Generated self-signed certificate for localhost"
+            domain = %domain,
+            "Generated self-signed certificate"
         );
 
         Ok(())
@@ -178,5 +235,18 @@ mod tests {
 
         // Should be the same certificate
         assert_eq!(content1, content2);
+    }
+
+    #[test]
+    fn test_generate_custom_domain_cert() {
+        let temp = TempDir::new().unwrap();
+        let generator = SelfSignedGenerator::new(temp.path());
+
+        let cert = generator.get_or_create_for_domain("example.test").unwrap();
+        assert!(cert.exists());
+        assert_eq!(cert.domain, "example.test");
+
+        let cert_content = std::fs::read_to_string(&cert.cert_path).unwrap();
+        assert!(cert_content.contains("BEGIN CERTIFICATE"));
     }
 }

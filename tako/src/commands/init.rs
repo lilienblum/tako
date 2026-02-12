@@ -81,12 +81,16 @@ fn generate_template(app_name: &str, _runtime: &str) -> String {
 # LOG_LEVEL = "debug"
 # API_BASE_URL = "https://staging-api.example.com"
 
-# Environment declarations. Start with one production route.
+# Environment declarations. Deploy environments must define `route` or `routes`.
 [envs.production]
 route = "{app_name}.example.com"
 
+# Development routes are optional; default is `{app_name}.tako.local`.
+# [envs.development]
+# route = "{app_name}.tako.local"
+
 # Optional: use multiple routes instead of `route`.
-# routes = ["{app_name}.example.com", "*.{app_name}.example.com"]
+# routes = ["{app_name}.example.com", "www.{app_name}.example.com"]
 
 # Optional: env-local variables can be set directly in this section.
 # LOG_FORMAT = "json"
@@ -94,7 +98,7 @@ route = "{app_name}.example.com"
 
 # [envs.staging]
 # route = "staging.{app_name}.example.com"
-# routes = ["staging.{app_name}.example.com", "*.staging.{app_name}.example.com"]
+# routes = ["staging.{app_name}.example.com", "www.staging.{app_name}.example.com"]
 # LOG_LEVEL = "debug"
 
 # Default runtime settings for every mapped server.
@@ -143,6 +147,14 @@ mod tests {
             rendered.contains("[envs.production]\nroute = \"demo-app.example.com\""),
             "expected production route to remain uncommented"
         );
+        assert!(
+            rendered.contains("# [envs.development]"),
+            "expected development environment section to be optional/commented by default"
+        );
+        assert!(
+            !rendered.contains("[envs.development]\nroute = \"demo-app.tako.local\""),
+            "expected development route not to be uncommented in minimal template"
+        );
 
         assert!(
             rendered.contains("# build = \"bun run build\""),
@@ -171,7 +183,8 @@ mod tests {
             "expected link to tako.toml reference docs"
         );
         assert!(
-            rendered.contains("# routes = [\"demo-app.example.com\", \"*.demo-app.example.com\"]"),
+            rendered
+                .contains("# routes = [\"demo-app.example.com\", \"www.demo-app.example.com\"]"),
             "expected routes example in commented options"
         );
         assert!(

@@ -2,9 +2,9 @@ set working-directory := ".."
 
 export TAKO_HOME := "debug/.tako"
 
-# Docker-based deploy debugging (systemd-based VPS simulation).
-CONTAINER_NAME := "tako-debug-server"
-IMAGE_NAME := "tako-debug-server:local"
+# Docker-based deploy debugging (Alpine + sshd VPS simulation).
+CONTAINER_NAME := "tako-bun-server"
+IMAGE_NAME := "tako-bun-server:local"
 DOCKER_SSH_PORT := "2222"
 
 # Docker platform for the local debug container.
@@ -58,10 +58,10 @@ build-tako-server:
     echo "Built binaries:"
     ls -la {{ ARTIFACTS_DIR }}/tako-server-linux-*
 
-create-debug-server:
-    # Create a named debug container with systemd + sshd for VPS-like installer behavior.
+create-bun-server:
+    # Create a named debug container with sshd for VPS-like installer behavior.
     docker rm -f {{ CONTAINER_NAME }} 2>/dev/null || true
-    docker build --platform {{ DOCKER_PLATFORM }} -f docker/debug-server.Dockerfile -t {{ IMAGE_NAME }} .
+    docker build --platform {{ DOCKER_PLATFORM }} -f docker/bun-server.Dockerfile -t {{ IMAGE_NAME }} .
     mkdir -p {{ DEBUG_TMP_DIR }}
     PUBKEY_FILE="${SSH_PUBKEY_FILE:-}"; \
         if [ -z "$PUBKEY_FILE" ]; then \
@@ -83,25 +83,23 @@ create-debug-server:
             --name {{ CONTAINER_NAME }} \
             -p {{ DOCKER_SSH_PORT }}:22 \
             -v "$PUBKEY_FILE:/run/authorized_keys:ro" \
-            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
-            --cgroupns=host \
-            --privileged \
             --platform {{ DOCKER_PLATFORM }} \
             {{ IMAGE_NAME }} sh -lc '\
                 /usr/local/bin/install-authorized-key && \
-                exec /lib/systemd/systemd \
+                exec /usr/sbin/sshd -D -e \
             '
 
-install-server:
+install-bun-server:
     # Install tako-server in the temporary Docker debug server container.
     # Starts a temporary local artifacts server for this install run.
-    test -f {{ DOCKER_SSH_KEY_FILE }} || (echo "Missing {{ DOCKER_SSH_KEY_FILE }}. Run 'just create-debug-server' first." >&2; exit 1)
+    test -f {{ DOCKER_SSH_KEY_FILE }} || (echo "Missing {{ DOCKER_SSH_KEY_FILE }}. Run 'just create-bun-server' first." >&2; exit 1)
     mkdir -p {{ ARTIFACTS_DIR }}
     mkdir -p {{ DEBUG_TMP_DIR }}
     sh -eu -c '\
         python3 -m http.server {{ ARTIFACTS_PORT }} --directory {{ ARTIFACTS_DIR }} >/dev/null 2>&1 & \
         artifacts_pid=$!; \
         trap "kill $artifacts_pid >/dev/null 2>&1 || true" EXIT INT TERM; \
+        sleep 1; \
         ssh -F /dev/null \
             -o StrictHostKeyChecking=no \
             -o UserKnownHostsFile=/dev/null \
@@ -111,5 +109,31 @@ install-server:
             -p {{ DOCKER_SSH_PORT }} \
             root@localhost \
             '\''TAKO_DOWNLOAD_BASE_URL=http://host.docker.internal:{{ ARTIFACTS_PORT }} TAKO_SSH_PUBKEY="$(cat /root/.ssh/authorized_keys)" sh -s'\'' \
-            < ./scripts/install-tako-server.sh \
+            < ./scripts/install-tako-server.sh; \
+        ssh -F /dev/null \
+            -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o GlobalKnownHostsFile=/dev/null \
+            -o IdentitiesOnly=yes \
+            -i "$(cat {{ DOCKER_SSH_KEY_FILE }})" \
+            -p {{ DOCKER_SSH_PORT }} \
+            root@localhost \
+            '\''if ! command -v systemctl >/dev/null 2>&1; then \
+                if command -v pkill >/dev/null 2>&1; then \
+                    pkill -x tako-server >/dev/null 2>&1 || true; \
+                elif command -v killall >/dev/null 2>&1; then \
+                    killall tako-server >/dev/null 2>&1 || true; \
+                elif command -v pidof >/dev/null 2>&1; then \
+                    for pid in $(pidof tako-server 2>/dev/null || true); do kill "$pid" >/dev/null 2>&1 || true; done; \
+                fi; \
+                if id -u tako >/dev/null 2>&1; then \
+                    if command -v usermod >/dev/null 2>&1; then usermod -U tako >/dev/null 2>&1 || true; fi; \
+                    if command -v passwd >/dev/null 2>&1; then passwd -u tako >/dev/null 2>&1 || true; passwd -d tako >/dev/null 2>&1 || true; fi; \
+                fi; \
+                if id -u tako >/dev/null 2>&1; then \
+                    su -s /bin/sh -c "nohup /usr/local/bin/tako-server --socket /var/run/tako/tako.sock --data-dir /opt/tako >/opt/tako/tako-server.log 2>&1 &" tako; \
+                else \
+                    nohup /usr/local/bin/tako-server --socket /var/run/tako/tako.sock --data-dir /opt/tako >/opt/tako/tako-server.log 2>&1 & \
+                fi; \
+            fi'\'' \
     '

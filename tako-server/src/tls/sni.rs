@@ -3,7 +3,7 @@
 //! Implements dynamic certificate selection during TLS handshake
 //! based on the SNI (Server Name Indication) hostname.
 
-use super::CertManager;
+use super::{CertInfo, CertManager};
 use async_trait::async_trait;
 use openssl::pkey::PKey;
 use openssl::ssl::SslRef;
@@ -41,6 +41,30 @@ impl SniCertResolver {
 
         Ok((cert, key))
     }
+
+    fn default_cert_info(&self) -> Option<CertInfo> {
+        self.cert_manager
+            .get_cert("default")
+            .or_else(|| self.cert_manager.list_certs().into_iter().next())
+    }
+
+    fn set_default_cert(&self, ssl: &mut SslRef, reason: &str) {
+        if let Some(cert_info) = self.default_cert_info() {
+            match Self::load_cert_and_key(&cert_info.cert_path, &cert_info.key_path) {
+                Ok((cert, key)) => {
+                    if let Err(e) = ssl.set_certificate(&cert) {
+                        tracing::error!("Failed to set default certificate ({reason}): {}", e);
+                    }
+                    if let Err(e) = ssl.set_private_key(&key) {
+                        tracing::error!("Failed to set default private key ({reason}): {}", e);
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to load default certificate ({reason}): {}", e);
+                }
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for SniCertResolver {
@@ -56,22 +80,9 @@ impl TlsAccept for SniCertResolver {
         let sni_hostname = match ssl.servername(openssl::ssl::NameType::HOST_NAME) {
             Some(name) => name.to_string(),
             None => {
-                tracing::warn!("No SNI hostname in TLS handshake, using default cert");
-                // Try to get any available certificate
-                if let Some(cert_info) = self.cert_manager.list_certs().into_iter().next() {
-                    match Self::load_cert_and_key(&cert_info.cert_path, &cert_info.key_path) {
-                        Ok((cert, key)) => {
-                            if let Err(e) = ssl.set_certificate(&cert) {
-                                tracing::error!("Failed to set default certificate: {}", e);
-                            }
-                            if let Err(e) = ssl.set_private_key(&key) {
-                                tracing::error!("Failed to set default private key: {}", e);
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!("Failed to load default certificate: {}", e);
-                        }
-                    }
+                tracing::warn!("No SNI hostname in TLS handshake");
+                if should_allow_default_cert_fallback_for_missing_sni() {
+                    self.set_default_cert(ssl, "no-sni");
                 }
                 return;
             }
@@ -113,12 +124,18 @@ impl TlsAccept for SniCertResolver {
                 }
             }
             None => {
-                tracing::warn!(
-                    hostname = %sni_hostname,
-                    "No certificate found for hostname, TLS handshake may fail"
-                );
-                // The handshake will fail if no certificate is set
-                // This is intentional - we don't want to serve the wrong cert
+                if should_allow_default_cert_fallback_for_unknown_sni() {
+                    tracing::warn!(
+                        hostname = %sni_hostname,
+                        "No certificate found for hostname, using default certificate fallback"
+                    );
+                    self.set_default_cert(ssl, "unknown-sni");
+                } else {
+                    tracing::warn!(
+                        hostname = %sni_hostname,
+                        "No certificate found for hostname, TLS handshake may fail"
+                    );
+                }
             }
         }
     }
@@ -127,4 +144,27 @@ impl TlsAccept for SniCertResolver {
 /// Create TLS callbacks for SNI-based certificate selection
 pub fn create_sni_callbacks(cert_manager: Arc<CertManager>) -> Box<dyn TlsAccept + Send + Sync> {
     Box::new(SniCertResolver::new(cert_manager))
+}
+
+fn should_allow_default_cert_fallback_for_unknown_sni() -> bool {
+    false
+}
+
+fn should_allow_default_cert_fallback_for_missing_sni() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_cert_fallback_for_unknown_sni_is_disabled() {
+        assert!(!should_allow_default_cert_fallback_for_unknown_sni());
+    }
+
+    #[test]
+    fn default_cert_fallback_for_missing_sni_is_enabled() {
+        assert!(should_allow_default_cert_fallback_for_missing_sni());
+    }
 }

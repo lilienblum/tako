@@ -249,39 +249,6 @@ impl ProxyHttp for TakoProxy {
         }
 
         // Handle HTTP to HTTPS redirect
-        if self.config.redirect_http_to_https {
-            let is_https = session
-                .digest()
-                .map(|d| d.ssl_digest.is_some())
-                .unwrap_or(false);
-
-            if !is_https {
-                // Allow ACME challenges and status endpoint on HTTP
-                if !path.starts_with("/.well-known/acme-challenge/") && path != "/_tako/status" {
-                    let host = session
-                        .req_header()
-                        .headers
-                        .get("host")
-                        .and_then(|h| h.to_str().ok())
-                        .unwrap_or("localhost");
-
-                    let redirect_url = format!("https://{}{}", host, path);
-
-                    let mut header = ResponseHeader::build(301, None)?;
-                    header.insert_header("Location", &redirect_url)?;
-                    header.insert_header("Content-Type", "text/plain")?;
-                    session
-                        .write_response_header(Box::new(header), false)
-                        .await?;
-                    session
-                        .write_response_body(Some("Redirecting to HTTPS".into()), true)
-                        .await?;
-                    return Ok(true);
-                }
-            }
-        }
-
-        // Route request to app based on host/path
         let host = session
             .req_header()
             .headers
@@ -290,12 +257,32 @@ impl ProxyHttp for TakoProxy {
             .unwrap_or("");
         let hostname = host.split(':').next().unwrap_or(host);
 
-        let app_name = {
-            let routes = self.routes.read().await;
-            routes.select(hostname, path)
-        };
+        // Handle HTTP to HTTPS redirect.
+        // Allow ACME challenges and status endpoint on HTTP.
+        if !path.starts_with("/.well-known/acme-challenge/") && path != "/_tako/status" {
+            let is_https = session
+                .digest()
+                .map(|d| d.ssl_digest.is_some())
+                .unwrap_or(false);
 
-        let app_name = match app_name {
+            if should_redirect_http_request(is_https, self.config.redirect_http_to_https) {
+                let redirect_url = format!("https://{}{}", host, path);
+
+                let mut header = ResponseHeader::build(301, None)?;
+                header.insert_header("Location", &redirect_url)?;
+                header.insert_header("Content-Type", "text/plain")?;
+                session
+                    .write_response_header(Box::new(header), false)
+                    .await?;
+                session
+                    .write_response_body(Some("Redirecting to HTTPS".into()), true)
+                    .await?;
+                return Ok(true);
+            }
+        }
+
+        // Route request to app based on host/path
+        let app_name = match self.routes.read().await.select(hostname, path) {
             Some(app) => app,
             None => {
                 let mut header = ResponseHeader::build(404, None)?;
@@ -470,6 +457,10 @@ impl ProxyHttp for TakoProxy {
     }
 }
 
+fn should_redirect_http_request(is_https: bool, redirect_http_to_https: bool) -> bool {
+    redirect_http_to_https && !is_https
+}
+
 /// TLS configuration for the proxy
 pub struct TlsConfig {
     /// Certificate manager
@@ -564,9 +555,9 @@ pub fn build_server_with_acme(
     server.bootstrap();
 
     let proxy = if let Some(tokens) = acme_tokens {
-        TakoProxy::with_acme(lb, routes, config.clone(), tokens, cold_start)
+        TakoProxy::with_acme(lb, routes.clone(), config.clone(), tokens, cold_start)
     } else {
-        TakoProxy::new(lb, routes, config.clone(), cold_start)
+        TakoProxy::new(lb, routes.clone(), config.clone(), cold_start)
     };
 
     let mut proxy_service = pingora_proxy::http_proxy_service(&server.configuration, proxy);
@@ -883,6 +874,21 @@ mod tests {
 
         let settings = create_tls_settings(&config, None).unwrap();
         assert!(settings.is_none()); // No default cert exists
+    }
+
+    #[test]
+    fn test_should_redirect_http_request_when_http_and_enabled() {
+        assert!(should_redirect_http_request(false, true));
+    }
+
+    #[test]
+    fn test_should_not_redirect_http_request_when_already_https() {
+        assert!(!should_redirect_http_request(true, true));
+    }
+
+    #[test]
+    fn test_should_not_redirect_http_request_when_disabled() {
+        assert!(!should_redirect_http_request(false, false));
     }
 
     #[test]

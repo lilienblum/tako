@@ -43,6 +43,11 @@ Run a focused command from source:
 cargo run -p tako --bin tako -- deploy --help
 ```
 
+## Config Requirements
+
+- `tako.toml` is required for `dev`, `deploy`, `logs`, and `secrets` workflows.
+- Non-development environments must define `route` or `routes`; development defaults to `{app}.tako.local`.
+
 ## Related Docs
 
 - `docs/guides/quickstart.md` (first-run local + remote setup)

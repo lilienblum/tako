@@ -34,9 +34,9 @@ App names must be URL-friendly (DNS hostname compatible):
 
 This ensures names work in DNS (`{app-name}.tako.local` by default), URLs, and environment variables.
 
-### tako.toml (Project Root - Optional)
+### tako.toml (Project Root - Required)
 
-Application configuration for build, variables, and deployment. All sections optional.
+Application configuration for build, variables, routes, and deployment.
 
 ```toml
 [tako]
@@ -63,7 +63,7 @@ route = "api.example.com"  # Single route, or use 'routes' for multiple
 [envs.staging]
 routes = [
   "staging.example.com",
-  "*.staging.example.com",
+  "www.staging.example.com",
   "example.com/api/*"
 ]
 
@@ -303,10 +303,10 @@ Start (or attach to) a local development session for the current app, backed by 
   - After applying or repairing local forwarding, Tako retries loopback 80/443 reachability and fails startup if those endpoints remain unreachable.
   - On macOS, Tako probes HTTPS for the app host via loopback and fails startup if that probe does not succeed.
   - If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.tako.local/` still fails, Tako reports a targeted hint that local `:443` traffic is being intercepted/bypassed before reaching Tako.
-  - If explicit development routes are configured in `tako.toml`, they replace the default `{app}.tako.local` host.
+  - `tako dev` uses routes from `[envs.development]` when configured; otherwise it defaults to `{app}.tako.local`.
     - Dev routes must be `{app}.tako.local` or a subdomain of it.
     - Dev routing matches exact hostnames only; wildcard host entries are ignored.
-    - If explicit dev routes are configured but none are exact hostnames, `tako dev` fails with an invalid route error.
+    - If configured dev routes contain no exact hostnames, `tako dev` fails with an invalid route error.
   - The HTTPS daemon listen port for `tako dev` is fixed at `47831`.
 
 **Local CA architecture:**
@@ -326,30 +326,36 @@ Start (or attach to) a local development session for the current app, backed by 
 
 ### tako status [DIR]
 
-Show project deployment status grouped by environment:
+Show global deployment status from configured servers, with one server block per configured host and app lines nested under each server:
 
 ```
-production
+Servers
 ✓ la (v0.1.0) up
-  instances: 2/2 (running)
-  build: abc1234
-  deployed: 2026-02-08 11:48:19
-✓ nyc (v0.1.0) up
-  instances: 2/2 (running)
-  build: abc1234
-  deployed: 2026-02-08 11:48:19
+  │ dashboard (production) running
+  │ instances: 2/2
+  │ build: abc1234
+  │ deployed: 2026-02-08 11:48:19
+────────────────────────────────────────
+! nyc (v0.1.0) up
+  │ worker (unknown) unknown
+  │ instances: -/-
+  │ build: -
+  │ deployed: -
 ```
 
-Shows: one section per non-development environment. Each server appears as a 3-line block:
-server status/version, instance summary, and build with deployed timestamp (formatted in the user's current locale and local time, without timezone suffix).
-In interactive terminals, each server check runs with a spinner before rendering the final server status line.
+Shows: a `Servers` section, server connectivity/service lines, and per-app lines in `app-name (environment) state` form.
+App heading/detail rows are shown with a left `│` guide border for readability.
+Environment is inferred from deployed release metadata when available; otherwise app status uses `unknown`.
+App state text is color-coded (`running` success, `idle` muted, `deploying`/`stopped` warning, `error` error).
+Each app line includes instance summary (`healthy/total`), build, and deployed timestamp (formatted in the user's current locale and local time, without timezone suffix).
+In interactive terminals, each server check runs with a spinner before rendering final status lines.
 
 Status flow helpers:
 
+- `tako status` does not require `tako.toml` and can run from any directory.
+- Uses global server inventory from `~/.tako/config.toml`.
 - If no servers are configured and the terminal is interactive, status offers to run the add-server wizard.
-- `development` is excluded from status sections (status focuses on deploy environments).
-- `production` is treated as an implicit status environment when no `[envs.*]` are defined, and when `[servers.*]` maps a server to `production` even if `[envs.production]` is omitted.
-- For `production`, if no `[servers.*]` env mapping exists but exactly one global server exists, status uses that server as an implicit fallback.
+- If no deployed apps are found, status reports that explicitly.
 
 ### tako logs [--env {environment}]
 
@@ -485,7 +491,7 @@ Build and deploy application to environment's servers.
 
 When `--env` is omitted, deploy targets `production`.
 
-`production` is treated as an implicit deploy target even if `[envs.production]` is not present.
+Deploy target environment must be declared in `tako.toml` (`[envs.<name>]`) and must define `route` or `routes`.
 
 `development` is reserved for `tako dev` and cannot be used with `tako deploy`.
 
@@ -578,20 +584,18 @@ Apps specify routes at environment level (not per-server). Routes support:
 
 - Routes must include hostname (path-only routes invalid: `"/api/*"` ❌)
 - Each `[envs.{env}]` can have either `route` or `routes`, not both
+- Each non-development environment must define `route` or `routes`
+- Empty route lists are invalid for non-development environments
 - Development routes must be `{app-name}.tako.local` or a subdomain of it
 
 ### Multi-App Scenarios
 
-**Single app (no routes):**
-
-- Accepts all traffic (any hostname, any path)
-- Error during deploy if another app exists on server
-
-**Multiple apps with routes:**
+**Apps with routes:**
 
 - Each app specifies its routes
 - Requests matched to most specific route (exact > wildcard, longer path > shorter)
 - Conflict detection during deploy prevents overlapping routes
+- Requests without a matching route return `404`
 
 **Wildcard subdomains:**
 
@@ -643,11 +647,8 @@ Reference script in this repo: `scripts/install-tako-server.sh` (source for `/in
 - Socket: `/var/run/tako/tako.sock`
 - ACME: Production Let's Encrypt
 - Renewal: Every 12 hours
-- HTTP requests redirect to HTTPS (`301`) when HTTPS is viable for the request host:
-  - the matched app has explicit `route`/`routes`, or
-  - the request host has a matching TLS certificate
-  - Exceptions: `/.well-known/acme-challenge/*` and `/_tako/status` stay on HTTP
-- For single-app deployments with no configured routes (implicit catch-all), HTTP remains available without forced redirect unless a matching TLS certificate exists
+- HTTP requests redirect to HTTPS (`301`) by default.
+- Exceptions: `/.well-known/acme-challenge/*` and `/_tako/status` stay on HTTP.
 
 **Optional `/opt/tako/server-config.toml`:**
 
@@ -844,7 +845,7 @@ Tako-server uses SNI (Server Name Indication) to select the appropriate certific
 2. Server looks up certificate for that hostname in CertManager
 3. If exact match found, use that certificate
 4. If no exact match, try wildcard fallback (e.g., `api.example.com` → `*.example.com`)
-5. If no match found, TLS handshake fails (prevents serving wrong certificate)
+5. If still no match, TLS handshake fails (prevents serving wrong certificate)
 
 This requires OpenSSL (not rustls) for callback support.
 
@@ -855,16 +856,14 @@ This requires OpenSSL (not rustls) for callback support.
 - Automatic renewal 30 days before expiry
 - HTTP-01 challenge (port 80)
 - Zero-downtime renewal
-- Support for wildcards (`*.example.com`)
+- DNS-01 is not implemented (automatic wildcard certificate issuance is not available yet)
 
 ### Wildcard Certificate Handling
 
-When app has wildcard route `*.example.com`:
+Routing supports wildcard hosts (e.g. `*.example.com`). For TLS:
 
-- Request single wildcard cert covering all subdomains
-- Certificate issued to `*.example.com`
-- All subdomains under that pattern use same cert
-- Reduces certificate count and renewal requests
+- wildcard certificates are used when present in cert storage
+- automated ACME issuance currently uses HTTP-01, so wildcard certs must be provisioned manually
 
 ### Certificate Storage
 
@@ -948,19 +947,19 @@ Used for health checks during rolling updates and monitoring.
 
 ## Edge Cases & Error Handling
 
-| Scenario                           | Behavior                                                          |
-| ---------------------------------- | ----------------------------------------------------------------- |
-| `~/.tako/` deleted                 | Auto-recreate on next command                                     |
-| `~/.tako/config.toml` corrupted    | Show parse error with line number, offer to recreate              |
-| `tako.toml` deleted                | Use defaults, no error                                            |
-| `.tako/` deleted                   | Auto-recreate on next deploy                                      |
-| `.tako/secrets` deleted            | Warn user, prompt to restore secrets                              |
-| Low free space under `/opt/tako`   | Deploy fails before upload with required vs available disk sizes  |
-| Deploy lock left behind            | Deploy fails until `/opt/tako/apps/{app}/.deploy_lock` is removed |
-| Deploy fails mid-transfer/setup    | Auto-clean newly-created partial release directory                |
-| Health check fails                 | Automatic rollback to previous version                            |
-| Network interruption during deploy | Partial failure handling, can retry                               |
-| Process crash                      | Auto-restart, health checks detect and handle                     |
+| Scenario                           | Behavior                                                                   |
+| ---------------------------------- | -------------------------------------------------------------------------- |
+| `~/.tako/` deleted                 | Auto-recreate on next command                                              |
+| `~/.tako/config.toml` corrupted    | Show parse error with line number, offer to recreate                       |
+| `tako.toml` deleted                | Commands that require project config fail with guidance to run `tako init` |
+| `.tako/` deleted                   | Auto-recreate on next deploy                                               |
+| `.tako/secrets` deleted            | Warn user, prompt to restore secrets                                       |
+| Low free space under `/opt/tako`   | Deploy fails before upload with required vs available disk sizes           |
+| Deploy lock left behind            | Deploy fails until `/opt/tako/apps/{app}/.deploy_lock` is removed          |
+| Deploy fails mid-transfer/setup    | Auto-clean newly-created partial release directory                         |
+| Health check fails                 | Automatic rollback to previous version                                     |
+| Network interruption during deploy | Partial failure handling, can retry                                        |
+| Process crash                      | Auto-restart, health checks detect and handle                              |
 
 ## Testing Requirements
 

@@ -36,7 +36,7 @@ When `tako deploy` reports mixed success:
 
 After deploy (or during incident response):
 
-1. `tako status --env <environment>`
+1. `tako status`
 2. `tako logs --env <environment>`
 3. Verify request path/host routing using the public endpoint.
 

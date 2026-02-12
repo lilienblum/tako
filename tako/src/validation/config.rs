@@ -57,9 +57,20 @@ pub fn validate_tako_toml(config: &TakoToml) -> ValidationResult {
 
     // Check for environments without routes
     for (env_name, env_config) in &config.envs {
-        if env_config.route.is_none() && env_config.routes.is_none() {
-            result.warn(format!(
-                "Environment '{}' has no routes configured",
+        let is_development = env_name == "development";
+
+        if !is_development && env_config.route.is_none() && env_config.routes.is_none() {
+            result.error(format!(
+                "Environment '{}' must define either 'route' or 'routes'",
+                env_name
+            ));
+        }
+        if let Some(routes) = &env_config.routes
+            && routes.is_empty()
+            && !is_development
+        {
+            result.error(format!(
+                "Environment '{}' has empty 'routes'; define at least one route",
                 env_name
             ));
         }
@@ -165,9 +176,11 @@ mod tests {
     #[test]
     fn validate_tako_toml_allows_implicit_production_server_env() {
         let mut config = TakoToml::default();
-        config
-            .envs
-            .insert("staging".to_string(), EnvConfig::default());
+        let staging = EnvConfig {
+            route: Some("staging.example.com".to_string()),
+            ..Default::default()
+        };
+        config.envs.insert("staging".to_string(), staging);
         config.servers.insert(
             "prod-1".to_string(),
             ServerConfig {
@@ -190,9 +203,11 @@ mod tests {
     #[test]
     fn validate_tako_toml_rejects_unknown_non_production_server_env() {
         let mut config = TakoToml::default();
-        config
-            .envs
-            .insert("staging".to_string(), EnvConfig::default());
+        let staging = EnvConfig {
+            route: Some("staging.example.com".to_string()),
+            ..Default::default()
+        };
+        config.envs.insert("staging".to_string(), staging);
         config.servers.insert(
             "bad-1".to_string(),
             ServerConfig {
@@ -209,6 +224,38 @@ mod tests {
                 .errors
                 .iter()
                 .any(|e| e.contains("unknown environment 'qa'"))
+        );
+    }
+
+    #[test]
+    fn validate_tako_toml_rejects_environment_without_routes() {
+        let mut config = TakoToml::default();
+        config
+            .envs
+            .insert("production".to_string(), EnvConfig::default());
+
+        let result = validate_tako_toml(&config);
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("must define either 'route' or 'routes'"))
+        );
+    }
+
+    #[test]
+    fn validate_tako_toml_allows_development_environment_without_routes() {
+        let mut config = TakoToml::default();
+        config
+            .envs
+            .insert("development".to_string(), EnvConfig::default());
+
+        let result = validate_tako_toml(&config);
+        assert!(
+            result
+                .errors
+                .iter()
+                .all(|e| !e.contains("must define either 'route' or 'routes'"))
         );
     }
 }

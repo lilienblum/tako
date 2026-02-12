@@ -197,6 +197,10 @@ impl ServerState {
     ) -> Response {
         tracing::info!(app = app_name, version = version, "Deploying app");
 
+        if let Err(msg) = validate_deploy_routes(&routes) {
+            return Response::error(msg);
+        }
+
         // Acquire deploy lock for this app (non-blocking check)
         let lock = self.get_deploy_lock(app_name).await;
         let _guard = match lock.try_lock() {
@@ -567,6 +571,16 @@ impl ServerState {
             .and_then(|l| l.local_addr().ok().map(|a| a.port()))
             .unwrap_or(3000)
     }
+}
+
+fn validate_deploy_routes(routes: &[String]) -> Result<(), String> {
+    if routes.is_empty() {
+        return Err("Deploy rejected: app must define at least one route".to_string());
+    }
+    if routes.iter().any(|r| r.trim().is_empty()) {
+        return Err("Deploy rejected: routes must be non-empty values".to_string());
+    }
+    Ok(())
 }
 
 /// Background task for automatic certificate renewal
@@ -1073,7 +1087,7 @@ async fn replace_instance_if_needed(
 
 #[cfg(test)]
 mod tests {
-    use super::install_rustls_crypto_provider;
+    use super::{install_rustls_crypto_provider, validate_deploy_routes};
 
     #[test]
     fn install_rustls_crypto_provider_is_idempotent() {
@@ -1082,5 +1096,17 @@ mod tests {
 
         install_rustls_crypto_provider();
         assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
+
+    #[test]
+    fn validate_deploy_routes_rejects_empty_routes() {
+        let err = validate_deploy_routes(&[]).unwrap_err();
+        assert!(err.contains("at least one route"));
+    }
+
+    #[test]
+    fn validate_deploy_routes_rejects_empty_route_entry() {
+        let err = validate_deploy_routes(&["".to_string()]).unwrap_err();
+        assert!(err.contains("non-empty"));
     }
 }

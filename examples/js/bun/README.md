@@ -22,5 +22,7 @@ This runs the example through `tako dev` (HTTPS local ingress + routing).
 
 ## Notes
 
-- The app exports a default `{ fetch() }` handler.
-- Tako SDK provides built-in `/_tako/status` and `/_tako/health` endpoints.
+- `tako.toml` defines an explicit production route; local dev defaults to `bun-example.tako.local`.
+- The app starts Bun on `0.0.0.0:$PORT` (default `3000`) and serves HTTP directly.
+- `/_tako/status` and `/_tako/health` return `200` for Tako health checks.
+- `/` response includes the request `host` value for routing verification.

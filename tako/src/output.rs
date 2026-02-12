@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::future::Future;
 use std::io::IsTerminal;
 use std::sync::Arc;
@@ -14,6 +15,34 @@ use termcolor::{Color, ColorSpec};
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 static DEMAND_THEME: LazyLock<DemandTheme> = LazyLock::new(tako_brand_demand_theme);
 
+pub fn brand_accent<D: Display>(value: D) -> console::StyledObject<D> {
+    style(value).cyan()
+}
+
+pub fn brand_secondary<D: Display>(value: D) -> console::StyledObject<D> {
+    style(value).cyan()
+}
+
+pub fn brand_fg<D: Display>(value: D) -> console::StyledObject<D> {
+    style(value)
+}
+
+pub fn brand_muted<D: Display>(value: D) -> console::StyledObject<D> {
+    style(value).dim()
+}
+
+pub fn brand_success<D: Display>(value: D) -> console::StyledObject<D> {
+    style(value).green()
+}
+
+pub fn brand_warning<D: Display>(value: D) -> console::StyledObject<D> {
+    style(value).yellow()
+}
+
+pub fn brand_error<D: Display>(value: D) -> console::StyledObject<D> {
+    style(value).red()
+}
+
 fn fg(color: Color) -> ColorSpec {
     let mut spec = ColorSpec::new();
     spec.set_fg(Some(color));
@@ -21,27 +50,25 @@ fn fg(color: Color) -> ColorSpec {
 }
 
 fn tako_brand_demand_theme() -> DemandTheme {
-    let panel_bg = Color::Rgb(0x22, 0x24, 0x29);
-    let fg_color = Color::Rgb(0xF2, 0xEC, 0xEA);
-    let muted = Color::Rgb(0x9B, 0xC4, 0xB6);
-    let accent = Color::Rgb(0xE8, 0x87, 0x83);
-    let error = Color::Rgb(0xD6, 0x5A, 0x5A);
+    let fg_color = Color::White;
+    let secondary = Color::Cyan;
+    let muted = Color::White;
+    let label_muted = Color::Blue;
+    let accent = Color::Cyan;
+    let error = Color::Red;
 
     let mut title = fg(accent);
     title.set_bold(true);
 
-    let mut focused_button = fg(fg_color);
-    focused_button.set_bg(Some(accent));
-
-    let mut blurred_button = fg(fg_color);
-    blurred_button.set_bg(Some(panel_bg));
+    let focused_button = fg(accent);
+    let blurred_button = fg(fg_color);
 
     let mut cursor_style = ColorSpec::new();
-    cursor_style.set_fg(Some(fg_color)).set_bg(Some(panel_bg));
+    cursor_style.set_fg(Some(fg_color));
 
     let mut theme = DemandTheme::new();
     theme.title = title;
-    theme.description = fg(muted);
+    theme.description = fg(secondary);
     theme.cursor = fg(accent);
     theme.cursor_str = String::from("❯");
     theme.selected_prefix = String::from(" •");
@@ -53,9 +80,9 @@ fn tako_brand_demand_theme() -> DemandTheme {
     theme.input_cursor = fg(accent);
     theme.input_placeholder = fg(muted);
     theme.input_prompt = fg(accent);
-    theme.help_key = fg(muted);
-    theme.help_desc = fg(muted);
-    theme.help_sep = fg(muted);
+    theme.help_key = fg(label_muted);
+    theme.help_desc = fg(label_muted);
+    theme.help_sep = fg(label_muted);
     theme.focused_button = focused_button;
     theme.blurred_button = blurred_button;
     theme.error_indicator = fg(error);
@@ -78,31 +105,31 @@ pub fn is_verbose() -> bool {
 
 pub fn section(title: &str) {
     println!();
-    println!("{}", style(title).bold().cyan());
+    println!("{}", brand_accent(title).bold());
 }
 
 pub fn step(message: &str) {
-    println!("{} {}", style("•").cyan().bold(), message);
+    println!("{} {}", brand_secondary("•").bold(), brand_fg(message));
 }
 
 pub fn success(message: &str) {
-    println!("{} {}", style("✓").green().bold(), message);
+    println!("{} {}", brand_success("✓").bold(), brand_fg(message));
 }
 
 pub fn warning(message: &str) {
-    println!("{} {}", style("!").yellow().bold(), message);
+    println!("{} {}", brand_warning("!").bold(), brand_fg(message));
 }
 
 pub fn error(message: &str) {
-    println!("{} {}", style("✗").red().bold(), message);
+    println!("{} {}", brand_error("✗").bold(), brand_fg(message));
 }
 
 pub fn error_stderr(message: &str) {
-    eprintln!("{} {}", style("✗").red().bold(), message);
+    eprintln!("{} {}", brand_error("✗").bold(), brand_fg(message));
 }
 
 pub fn muted(message: &str) {
-    println!("{}", style(message).dim());
+    println!("{}", brand_muted(message));
 }
 
 pub fn emphasized(value: &str) -> String {
@@ -380,20 +407,12 @@ mod tests {
     }
 
     #[test]
-    fn demand_theme_uses_tako_brand_palette() {
-        assert_eq!(DEMAND_THEME.title.fg(), Some(&Color::Rgb(0xE8, 0x87, 0x83)));
-        assert_eq!(
-            DEMAND_THEME.description.fg(),
-            Some(&Color::Rgb(0x9B, 0xC4, 0xB6))
-        );
-        assert_eq!(
-            DEMAND_THEME.input_prompt.fg(),
-            Some(&Color::Rgb(0xE8, 0x87, 0x83))
-        );
-        assert_eq!(
-            DEMAND_THEME.blurred_button.bg(),
-            Some(&Color::Rgb(0x22, 0x24, 0x29))
-        );
+    fn demand_theme_uses_terminal_color_semantics() {
+        assert_eq!(DEMAND_THEME.title.fg(), Some(&Color::Cyan));
+        assert_eq!(DEMAND_THEME.description.fg(), Some(&Color::Cyan));
+        assert_eq!(DEMAND_THEME.input_prompt.fg(), Some(&Color::Cyan));
+        assert_eq!(DEMAND_THEME.blurred_button.bg(), None);
+        assert_eq!(DEMAND_THEME.error_indicator.fg(), Some(&Color::Red));
     }
 
     #[test]

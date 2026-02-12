@@ -39,6 +39,8 @@ From an app directory:
 tako dev
 ```
 
+If `[envs.development]` omits routes, `tako dev` defaults to `{app}.tako.local`.
+
 Useful commands:
 
 - `tako doctor`
@@ -57,7 +59,7 @@ Use this as the fastest happy-path loop:
 
 1. `tako doctor` to confirm local prerequisites and DNS/forwarding state.
 2. `tako dev` from your app directory.
-3. Open `https://{app}.tako.local/` and verify app responses.
+3. Open the development URL and verify app responses.
 4. Make code/config edits; keep `tako dev` running to apply file/watch updates.
 5. Use `tako dev --no-tui` when debugging logs in a non-interactive terminal.
 

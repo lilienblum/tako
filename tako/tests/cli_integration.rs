@@ -819,6 +819,7 @@ runtime = "bun"
 entry = "index.ts"
 
 [envs.production]
+route = "prod.example.com"
 server = "prod-server"
 "#,
         )
@@ -936,6 +937,7 @@ runtime = "bun"
 entry = "index.ts"
 
 [envs.production]
+route = "prod.example.com"
 server = "prod-server"
 
 [servers.prod-server]
@@ -1017,6 +1019,7 @@ port = 3000
 instances = 2
 
 [envs.production]
+route = "prod.example.com"
 server = "prod-server"
 "#,
         )
@@ -1024,14 +1027,14 @@ server = "prod-server"
 
         let output = run_tako(&["status"], &project_dir);
 
-        // Status should show app info or indicate no running deployments
+        // Status should show discovered app info or global server/app summary.
         let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
         assert!(
             combined.contains("my-test-app")
                 || combined.contains("production")
-                || combined.contains("not running")
-                || combined.contains("No environments")
-                || combined.contains("App:"),
+                || combined.contains("App:")
+                || combined.contains("No deployed apps found on configured servers.")
+                || combined.contains("Servers"),
             "Should show app info or status: {}",
             combined
         );
@@ -1048,14 +1051,19 @@ server = "prod-server"
 
         let output = run_tako_with_env(&["status"], &project_dir, &home, &tako_home);
 
-        // Should handle missing tako.toml gracefully
+        // Status should work without project config and use global server inventory.
         let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
         assert!(
-            !output.status.success()
-                || combined.contains("tako.toml")
-                || combined.contains("not found")
-                || combined.contains("No servers mapped"),
-            "Should indicate missing config"
+            output.status.success(),
+            "status should not require tako.toml: {}",
+            combined
+        );
+        assert!(
+            combined.contains("No servers")
+                || combined.contains("Add one now")
+                || combined.contains("No deployed apps"),
+            "should report global status context when no servers/apps: {}",
+            combined
         );
     }
 }
@@ -1088,7 +1096,7 @@ entry = "index.ts"
 
         let output = run_tako_with_env(&["deploy"], &project_dir, &home, &tako_home);
 
-        // Should fail on missing server mapping, not missing environment.
+        // Should fail because production must be explicitly configured.
         assert!(
             !output.status.success(),
             "Deploy should fail when no servers are configured"
@@ -1096,8 +1104,8 @@ entry = "index.ts"
 
         let err = stderr_str(&output);
         assert!(
-            err.contains("No servers have been added") || err.contains("tako servers add <host>"),
-            "Should use implicit production env and provide add-server hint: {}",
+            err.contains("Environment 'production' not found"),
+            "Should require explicit production environment mapping: {}",
             err
         );
     }
@@ -1155,6 +1163,7 @@ runtime = "bun"
 entry = "index.ts"
 
 [envs.production]
+route = "prod.example.com"
 server = "prod-server"
 "#,
         )
@@ -1190,6 +1199,7 @@ server = "prod-server"
 name = "test-app"
 
 [envs.production]
+route = "prod.example.com"
 server = "prod-server"
 "#,
         )
@@ -1226,6 +1236,7 @@ name = "test-app"
 entry = "nonexistent.ts"
 
 [envs.production]
+route = "prod.example.com"
 server = "prod-server"
 "#,
         )
@@ -1277,6 +1288,7 @@ server = "prod-server"
 name = "test-app"
 
 [envs.production]
+route = "prod.example.com"
 # Reference server by name in servers section
 
 [servers.nonexistent-server]
@@ -1330,6 +1342,7 @@ env = "production"
 name = "test-app"
 
 [envs.production]
+route = "prod.example.com"
 # No server specified
 "#,
         )

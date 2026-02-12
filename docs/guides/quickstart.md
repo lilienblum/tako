@@ -46,12 +46,17 @@ From your developer machine, add that host to Tako:
 tako servers add --name production <host-or-ip>
 ```
 
-Map the server to an environment in `tako.toml`:
+Configure explicit routes and map the server in `tako.toml`:
 
 ```toml
+[envs.production]
+route = "my-app.example.com"
+
 [servers.production]
 env = "production"
 ```
+
+`tako dev` uses `{app}.tako.local` by default. Add `[envs.development]` only when you need custom local routes.
 
 Deploy:
 

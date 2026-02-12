@@ -111,11 +111,14 @@ impl TakoToml {
     /// Load tako.toml from a directory
     pub fn load_from_dir<P: AsRef<Path>>(dir: P) -> Result<Self> {
         let path = dir.as_ref().join("tako.toml");
-        if path.exists() {
-            Self::load_from_file(&path)
-        } else {
-            Ok(Self::default())
+        if !path.exists() {
+            return Err(ConfigError::Validation(format!(
+                "Missing tako.toml at {}. Run 'tako init' first.",
+                path.display()
+            )));
         }
+
+        Self::load_from_file(&path)
     }
 
     /// Load tako.toml from a specific file
@@ -221,10 +224,29 @@ impl TakoToml {
 
         // Validate each environment
         for (env_name, env_config) in &self.envs {
+            let is_development = env_name == "development";
+
             // Cannot have both route and routes
             if env_config.route.is_some() && env_config.routes.is_some() {
                 return Err(ConfigError::Validation(format!(
                     "Environment '{}' cannot have both 'route' and 'routes'",
+                    env_name
+                )));
+            }
+
+            if !is_development && env_config.route.is_none() && env_config.routes.is_none() {
+                return Err(ConfigError::Validation(format!(
+                    "Environment '{}' must define either 'route' or 'routes'",
+                    env_name
+                )));
+            }
+
+            if let Some(routes) = &env_config.routes
+                && routes.is_empty()
+                && !is_development
+            {
+                return Err(ConfigError::Validation(format!(
+                    "Environment '{}' has empty 'routes'; define at least one route",
                     env_name
                 )));
             }
@@ -604,6 +626,53 @@ route = "api.example.com"
     }
 
     #[test]
+    fn test_parse_env_without_routes_is_rejected() {
+        let toml = r#"
+[envs.production]
+LOG_LEVEL = "info"
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("must define either 'route' or 'routes'")
+        );
+    }
+
+    #[test]
+    fn test_parse_development_env_without_routes_is_allowed() {
+        let toml = r#"
+[envs.development]
+LOG_LEVEL = "debug"
+"#;
+        let config = TakoToml::parse(toml).unwrap();
+        let env = config.envs.get("development").unwrap();
+        assert_eq!(env.route, None);
+        assert_eq!(env.routes, None);
+    }
+
+    #[test]
+    fn test_parse_env_with_empty_routes_is_rejected() {
+        let toml = r#"
+[envs.production]
+routes = []
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("routes"));
+    }
+
+    #[test]
+    fn test_parse_development_env_with_empty_routes_is_allowed() {
+        let toml = r#"
+[envs.development]
+routes = []
+"#;
+        let config = TakoToml::parse(toml).unwrap();
+        let env = config.envs.get("development").unwrap();
+        assert_eq!(env.route, None);
+        assert_eq!(env.routes, Some(Vec::new()));
+    }
+
+    #[test]
     fn test_parse_multiple_routes() {
         let toml = r#"
 [envs.production]
@@ -792,6 +861,13 @@ routes = ["api.example.com", "www.example.com"]
     fn test_get_routes_nonexistent_env() {
         let config = TakoToml::default();
         assert!(config.get_routes("production").is_none());
+    }
+
+    #[test]
+    fn test_load_from_dir_requires_tako_toml() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let err = TakoToml::load_from_dir(temp.path()).unwrap_err();
+        assert!(err.to_string().contains("tako.toml"));
     }
 
     #[test]
