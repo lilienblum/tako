@@ -20,7 +20,11 @@ pub struct ServerPromptHistory {
     pub names: Vec<String>,
     #[serde(default)]
     pub ports: Vec<String>,
-    #[serde(default)]
+    #[serde(
+        default,
+        serialize_with = "serialize_server_prompt_history_entries",
+        deserialize_with = "deserialize_server_prompt_history_entries"
+    )]
     pub entries: Vec<ServerPromptHistoryEntry>,
 }
 
@@ -29,6 +33,39 @@ pub struct ServerPromptHistoryEntry {
     pub host: String,
     pub name: String,
     pub port: String,
+}
+
+fn serialize_server_prompt_history_entries<S>(
+    entries: &[ServerPromptHistoryEntry],
+    serializer: S,
+) -> std::result::Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    let compact_entries: Vec<[&str; 3]> = entries
+        .iter()
+        .map(|entry| {
+            [
+                entry.host.as_str(),
+                entry.name.as_str(),
+                entry.port.as_str(),
+            ]
+        })
+        .collect();
+    compact_entries.serialize(serializer)
+}
+
+fn deserialize_server_prompt_history_entries<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Vec<ServerPromptHistoryEntry>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let entries = Vec::<[String; 3]>::deserialize(deserializer)?;
+    Ok(entries
+        .into_iter()
+        .map(|[host, name, port]| ServerPromptHistoryEntry { host, name, port })
+        .collect())
 }
 
 impl CliHistoryToml {
@@ -258,6 +295,27 @@ mod tests {
     }
 
     #[test]
+    fn parse_rejects_legacy_servers_entries_array_header() {
+        let parsed = CliHistoryToml::parse(
+            r#"[servers]
+hosts = ["203.0.113.10"]
+names = ["prod"]
+ports = ["2222"]
+
+[[servers.entries]]
+host = "203.0.113.10"
+name = "prod"
+port = "2222"
+"#,
+        );
+
+        assert!(
+            parsed.is_err(),
+            "legacy [[servers.entries]] format should not be accepted"
+        );
+    }
+
+    #[test]
     fn save_and_load_round_trip() {
         let temp_dir = TempDir::new().unwrap();
         let file = temp_dir.path().join("history").join("cli.toml");
@@ -367,5 +425,33 @@ ports = ["22"]
 
         let loaded = CliHistoryToml::load_from_paths(&primary, &legacy).unwrap();
         assert_eq!(loaded.servers.hosts, vec!["primary-host".to_string()]);
+    }
+
+    #[test]
+    fn save_uses_servers_table_without_servers_entries_array_header() {
+        let temp_dir = TempDir::new().unwrap();
+        let file = temp_dir.path().join("history.toml");
+
+        let mut history = CliHistoryToml::default();
+        history.record_server_prompt_values("203.0.113.10", "prod", 2222);
+        history.record_server_prompt_values("203.0.113.11", "staging", 2200);
+        history.save_to_file(&file).unwrap();
+
+        let raw = fs::read_to_string(&file).unwrap();
+        assert!(
+            raw.contains("[servers]"),
+            "history should include [servers]: {}",
+            raw
+        );
+        assert!(
+            !raw.contains("[[servers.entries]]"),
+            "history should not include nested servers.entries header: {}",
+            raw
+        );
+        assert!(
+            raw.contains("entries = ["),
+            "history should keep entries data in [servers]: {}",
+            raw
+        );
     }
 }
