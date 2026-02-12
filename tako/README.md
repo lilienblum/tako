@@ -45,6 +45,6 @@ cargo run -p tako --bin tako -- deploy --help
 
 ## Related Docs
 
-- `SPEC.md` (authoritative command behavior)
+- `docs/guides/quickstart.md` (first-run local + remote setup)
 - `docs/guides/development.md` (local dev workflow)
 - `docs/guides/deployment.md` (remote deploy workflow)

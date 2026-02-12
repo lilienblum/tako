@@ -38,6 +38,6 @@ cargo run -p tako-server -- \
 
 ## Related Docs
 
-- `SPEC.md` (protocol + routing contract)
+- `docs/guides/quickstart.md` (remote server install + first deploy setup)
 - `docs/guides/deployment.md` (deploy flow and runtime expectations)
 - `docs/architecture/overview.md` (runtime component/data-flow context)

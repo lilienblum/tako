@@ -1,13 +1,12 @@
 # Architecture
 
 This document gives a high-level view of Tako's runtime architecture and data flows.
-For user-facing command contracts and behavior details, see `../../SPEC.md`.
 
 ## Related Docs
 
+- `../guides/quickstart.md`: first-run local and remote setup.
 - `../guides/development.md`: local dev runtime behavior and troubleshooting.
 - `../guides/deployment.md`: deploy flow and remote runtime prerequisites.
-- `../../SPEC.md`: authoritative user-facing contracts.
 
 ## System Components
 

@@ -4,29 +4,143 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
 <DocsLayout title="Tako Docs - Install" heading="install">
   <p>Use these commands to install Tako locally and on your deployment servers.</p>
 
-  <h2>Install CLI (local machine)</h2>
-  <pre><code>curl -fsSL https://tako.sh/install | sh</code></pre>
+  <div class="method-tabs" data-install-tabs>
+    <div class="method-tablist" role="tablist" aria-label="Installation method">
+      <button
+        type="button"
+        id="tab-curl"
+        class="method-tab"
+        role="tab"
+        aria-controls="panel-curl"
+        aria-selected="true"
+        data-method="curl"
+      >
+        curl
+      </button>
+      <button
+        type="button"
+        id="tab-cargo"
+        class="method-tab"
+        role="tab"
+        aria-controls="panel-cargo"
+        aria-selected="false"
+        tabindex="-1"
+        data-method="cargo"
+      >
+        cargo
+      </button>
+    </div>
 
-  <p>Verify installation:</p>
-  <pre><code>tako --version</code></pre>
+    <section id="panel-curl" role="tabpanel" aria-labelledby="tab-curl" class="method-panel" data-panel="curl">
+      <h2>Install CLI (local machine)</h2>
+      <pre><code>curl -fsSL https://tako.sh/install | sh</code></pre>
 
-  <p>Upgrade later:</p>
-  <pre><code>tako upgrade</code></pre>
+      <p>Verify installation:</p>
+      <pre><code>tako --version</code></pre>
 
-  <h2>Install Server Runtime (remote host)</h2>
-  <p>Run this as <code>root</code> (or with <code>sudo</code>) on each deployment server:</p>
-  <pre><code>curl -fsSL https://tako.sh/install-server | sh</code></pre>
+      <p>Upgrade later:</p>
+      <pre><code>tako upgrade</code></pre>
 
-  <p>Verify installation:</p>
-  <pre><code>tako-server --version</code></pre>
+      <h2>Install Server Runtime (remote host)</h2>
+      <p>Run this as <code>root</code> (or with <code>sudo</code>) on each deployment server:</p>
+      <pre><code>curl -fsSL https://tako.sh/install-server | sh</code></pre>
 
-  <h2>Script Sources</h2>
-  <p>Installer endpoints and script sources:</p>
-  <ul>
-    <li><a href="/install">/install</a> (CLI installer)</li>
-    <li><a href="/install-server">/install-server</a> (server installer)</li>
-    <li><a href="/server-install">/server-install</a> (alias)</li>
-  </ul>
+      <p>Verify installation:</p>
+      <pre><code>tako-server --version</code></pre>
+
+      <h2>Script Sources</h2>
+      <p>Installer endpoints and script sources:</p>
+      <ul>
+        <li><a href="/install">/install</a> (CLI installer)</li>
+        <li><a href="/install-server">/install-server</a> (server installer)</li>
+        <li><a href="/server-install">/server-install</a> (alias)</li>
+      </ul>
+    </section>
+
+    <section
+      id="panel-cargo"
+      role="tabpanel"
+      aria-labelledby="tab-cargo"
+      class="method-panel"
+      data-panel="cargo"
+      hidden
+    >
+      <h2>Install CLI (local machine)</h2>
+      <pre><code>cargo install tako</code></pre>
+
+      <p>Verify installation:</p>
+      <pre><code>tako --version</code></pre>
+
+      <p>Upgrade later:</p>
+      <pre><code>cargo install tako --force</code></pre>
+
+      <h2>Install Server Runtime (remote host)</h2>
+      <pre><code>cargo install tako-server</code></pre>
+
+      <p>Verify installation:</p>
+      <pre><code>tako-server --version</code></pre>
+
+      <blockquote>
+        Cargo install provides binaries only. For production hosts, use the curl installer when you want automatic service setup.
+      </blockquote>
+    </section>
+  </div>
 
   <p><a href="/docs">← docs</a></p>
+
+  <script is:inline>
+    const tabsRoot = document.querySelector("[data-install-tabs]");
+    if (tabsRoot) {
+      const tabs = Array.from(tabsRoot.querySelectorAll("[role='tab']"));
+      const panels = Array.from(tabsRoot.querySelectorAll("[role='tabpanel']"));
+
+      const setActiveMethod = (method) => {
+        for (const tab of tabs) {
+          const selected = tab.dataset.method === method;
+          tab.setAttribute("aria-selected", selected ? "true" : "false");
+          tab.setAttribute("tabindex", selected ? "0" : "-1");
+        }
+
+        for (const panel of panels) {
+          panel.hidden = panel.dataset.panel !== method;
+        }
+      };
+
+      for (const tab of tabs) {
+        tab.addEventListener("click", () => {
+          setActiveMethod(tab.dataset.method || "curl");
+        });
+      }
+    }
+  </script>
+
+  <style>
+    .method-tablist {
+      display: flex;
+      gap: 8px;
+      margin: 12px 0 16px;
+      flex-wrap: wrap;
+    }
+
+    .method-tab {
+      font: inherit;
+      font-size: 0.95rem;
+      padding: 8px 12px;
+      border: 2px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255, 255, 255, 0.9);
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .method-tab[aria-selected="true"] {
+      color: var(--ink);
+      background: rgba(155, 196, 182, 0.18);
+      border-color: rgba(155, 196, 182, 0.55);
+    }
+
+    .method-panel {
+      margin-top: 8px;
+    }
+  </style>
 </DocsLayout>

@@ -38,6 +38,15 @@ impl RouteTable {
 
     fn rebuild(&mut self) {
         let mut entries = Vec::new();
+        let implicit_catchall = if self.app_routes.len() == 1 {
+            self.app_routes
+                .iter()
+                .next()
+                .and_then(|(app, patterns)| patterns.is_empty().then(|| app.clone()))
+        } else {
+            None
+        };
+
         for (app, patterns) in &self.app_routes {
             for pattern in patterns {
                 entries.push(RouteEntry {
@@ -46,6 +55,15 @@ impl RouteTable {
                 });
             }
         }
+
+        if let Some(app) = implicit_catchall {
+            // Single-app deployments without explicit routes act as catch-all.
+            entries.push(RouteEntry {
+                app,
+                pattern: String::new(),
+            });
+        }
+
         self.compiled = compile_routes(&entries);
     }
 }
@@ -293,6 +311,30 @@ mod tests {
         assert_eq!(select_app_for_request(&routes, "example.com", "/"), None);
     }
 
+    #[test]
+    fn test_route_table_single_app_without_routes_matches_any_request() {
+        let mut table = RouteTable::default();
+        table.set_app_routes("app".to_string(), vec![]);
+
+        assert_eq!(
+            table.select("unknown.example.com", "/any/path"),
+            Some("app".to_string())
+        );
+    }
+
+    #[test]
+    fn test_route_table_does_not_treat_empty_routes_as_catchall_with_multiple_apps() {
+        let mut table = RouteTable::default();
+        table.set_app_routes("no-routes".to_string(), vec![]);
+        table.set_app_routes("api".to_string(), vec!["api.example.com".to_string()]);
+
+        assert_eq!(table.select("other.example.com", "/"), None);
+        assert_eq!(
+            table.select("api.example.com", "/"),
+            Some("api".to_string())
+        );
+    }
+
     // ===========================================
     // Hostname matching tests
     // ===========================================
@@ -367,6 +409,22 @@ mod tests {
             select_app_for_request(&routes, "example.com", "/"),
             Some("app".to_string())
         );
+    }
+
+    #[test]
+    fn test_host_only_and_host_slash_star_match_equivalently() {
+        for candidate_path in ["/", "/api", "/api/v1/users"] {
+            assert!(
+                route_matches("example.com", "example.com", candidate_path),
+                "host-only route should match path {candidate_path}"
+            );
+            assert!(
+                route_matches("example.com/*", "example.com", candidate_path),
+                "host/* route should match path {candidate_path}"
+            );
+        }
+
+        assert_eq!(route_specificity("example.com"), route_specificity("example.com/*"));
     }
 
     // ===========================================

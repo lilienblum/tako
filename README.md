@@ -59,9 +59,10 @@ just tako examples/js/bun dev
 
 ## Docs
 
-- `docs/README.md`: documentation hub and reading paths
-- `SPEC.md`: finalized behavior and architecture contract
+- `docs/README.md`: user documentation hub
 - Planning/scope: tracked in issues and release planning (no in-repo `TODO.md`)
+- `docs/guides/quickstart.md`: quickstart (developer machine + remote server)
+- `docs/reference/tako-toml.md`: `tako.toml` configuration reference
 - `docs/architecture/overview.md`: high-level component/data-flow overview
 - `docs/guides/development.md`: local dev setup and troubleshooting
 - `docs/guides/deployment.md`: remote deploy model and server requirements

@@ -186,7 +186,18 @@ Create `tako.toml` template with helpful comments.
 tako init
 ```
 
-Creates commented-out sections for users to customize.
+Template behavior:
+
+- Leaves only minimal starter options uncommented:
+  - `[envs.production].route`
+- Includes commented examples/explanations for all supported `tako.toml` options:
+  - `[tako].name` and `[tako].build`
+  - `[vars]`
+  - `[vars.<env>]`
+  - `[envs.<env>].routes` and inline env vars
+  - `[servers]`
+  - `[servers.<name>]` overrides
+- Includes a docs link to `https://tako.sh/docs/tako-toml`.
 
 If `tako.toml` already exists:
 
@@ -631,8 +642,11 @@ Reference script in this repo: `scripts/install-tako-server.sh` (source for `/in
 - Socket: `/var/run/tako/tako.sock`
 - ACME: Production Let's Encrypt
 - Renewal: Every 12 hours
-- HTTP requests redirect to HTTPS (`301`) in both debug/dev and release/production builds
+- HTTP requests redirect to HTTPS (`301`) when HTTPS is viable for the request host:
+  - the matched app has explicit `route`/`routes`, or
+  - the request host has a matching TLS certificate
   - Exceptions: `/.well-known/acme-challenge/*` and `/_tako/status` stay on HTTP
+- For single-app deployments with no configured routes (implicit catch-all), HTTP remains available without forced redirect unless a matching TLS certificate exists
 
 **Optional `/opt/tako/server-config.toml`:**
 

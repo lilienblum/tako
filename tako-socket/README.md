@@ -20,4 +20,4 @@ cargo test -p tako-socket
 
 ## Related Docs
 
-- `SPEC.md` communication protocol section
+- `docs/architecture/overview.md` (control-channel boundaries)

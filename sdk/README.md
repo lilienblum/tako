@@ -50,5 +50,5 @@ bun test
 
 ## Related Docs
 
-- `SPEC.md` (`tako.sh SDK` section)
+- `../docs/guides/quickstart.md`
 - `examples/js/bun/README.md`

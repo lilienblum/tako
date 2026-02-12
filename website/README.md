@@ -6,8 +6,9 @@ Astro static site deployed with Cloudflare Workers static assets.
 
 - `/`: static landing page
 - `/docs`: docs hub
-- `/docs/install`: installation and installer script docs
-- `/docs/spec`: rendered specification
+- `/docs/quickstart`: user quickstart (developer machine + remote server)
+- `/docs/install`: installer script reference
+- `/docs/tako-toml`: `tako.toml` configuration reference
 - `/docs/development`: local development guide
 - `/docs/deployment`: deployment guide
 - `/docs/operations`: operations runbook

@@ -1,38 +1,36 @@
 # Tako Documentation
 
-This folder is the canonical home for practical project documentation.
+User-facing guides for running apps with Tako.
 
-## Quick Navigation
+## Quickstart
 
-- `guides/development.md`: local development workflow, HTTPS/DNS setup, environment variables.
-- `guides/deployment.md`: remote deploy model, server prerequisites, release layout.
-- `guides/operations.md`: operational runbook for diagnostics and incident triage.
-- `architecture/overview.md`: component map and data/control plane flows.
-- `reference/spec.md`: entrypoint to the authoritative specification.
+- `guides/quickstart.md`: fastest path from install to first deploy.
+  - Developer machine setup
+  - Remote server setup
 
-## Suggested Reading Paths
+## How Tako Works
 
-### New contributor
+- `architecture/overview.md`: control plane + data plane overview.
+- `guides/development.md`: what `tako dev` does locally (HTTPS, DNS, leases, process lifecycle).
+- `guides/deployment.md`: what `tako deploy` does remotely (build, upload, rolling update).
 
-1. `../README.md`
-2. `architecture/overview.md`
-3. `guides/development.md`
-4. `../SPEC.md`
+## What Tako Can Do
 
-### Deploying an app
+- Rolling deploys with health-based traffic shifts.
+- Local HTTPS development on `*.tako.local`.
+- Route management and conflict checks during deploy.
+- Secrets management for environment-specific configuration.
+- Runtime status and log inspection via CLI.
 
-1. `guides/deployment.md`
-2. `guides/operations.md`
-3. `../SPEC.md`
+## Built-In Adapters
 
-### Debugging production behavior
+- Bun adapter quickstart in `guides/quickstart.md` (`Built-in adapters` section).
+- SDK package docs in `../sdk/README.md`.
 
-1. `guides/operations.md`
-2. `guides/deployment.md`
-3. `../SPEC.md`
+## Reference
 
-## Documentation Rules
+- `reference/tako-toml.md`: complete `tako.toml` option reference and examples.
 
-- `../SPEC.md` remains the source of truth for finalized user-facing behavior.
-- Guides in this folder should stay practical: setup, run, diagnose, and operate.
-- Keep README files in each component concise and link here for deeper workflows.
+## Operations
+
+- `guides/operations.md`: day-2 runbook for diagnostics and incident response.

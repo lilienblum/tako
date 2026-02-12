@@ -4,10 +4,10 @@ This document describes how to use Tako for local development, including trusted
 
 ## Related Docs
 
+- `quickstart.md`: first-run setup for local + remote environments.
 - `operations.md`: day-2 runbook for diagnostics and incident response.
 - `deployment.md`: remote deployment workflow.
 - `../architecture/overview.md`: system component/data-flow overview.
-- `../../SPEC.md`: authoritative behavior contract.
 
 ## Overview
 

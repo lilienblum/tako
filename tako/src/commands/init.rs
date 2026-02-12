@@ -58,61 +58,129 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
 
 fn generate_template(app_name: &str, _runtime: &str) -> String {
     format!(
-        r#"# Tako Configuration
-# https://github.com/lilienblum/tako
+        r#"# Tako configuration
+# tako.toml reference: https://tako.sh/docs/tako-toml
 
-[tako]
-# Application name (auto-detected: {app_name})
-name = "{app_name}"
-
-# Build command (optional, run before deployment)
+# [tako]
+# Optional: set an explicit app name if you do not want adapter/runtime auto-detection.
+# name = "{app_name}"
+# Optional: command to run before each deploy.
 # build = "bun run build"
 
-# ============================================================================
-# Environment Variables
-# ============================================================================
-# Global variables (applied to all environments)
-[vars]
+# Global environment variables applied to every environment.
+# [vars]
 # LOG_LEVEL = "info"
+# API_BASE_URL = "https://api.example.com"
 
-# Per-environment variable overrides
+# Environment-specific variable overrides merged on top of [vars].
 # [vars.production]
 # LOG_LEVEL = "warn"
+# API_BASE_URL = "https://api.example.com"
 
 # [vars.staging]
 # LOG_LEVEL = "debug"
+# API_BASE_URL = "https://staging-api.example.com"
 
-# ============================================================================
-# Environments
-# ============================================================================
-# Each environment defines routes and can be deployed to different servers
-
+# Environment declarations. Start with one production route.
 [envs.production]
-# Single route
-route = "api.example.com"
-# Or multiple routes:
-# routes = ["api.example.com", "*.api.example.com"]
+route = "{app_name}.example.com"
 
-[envs.staging]
-route = "staging.example.com"
+# Optional: use multiple routes instead of `route`.
+# routes = ["{app_name}.example.com", "*.{app_name}.example.com"]
 
-# ============================================================================
-# Server Configuration
-# ============================================================================
-# Default settings for all servers
-[servers]
-instances = 0      # 0 = on-demand scaling (cold start when needed)
-port = 80          # Application port
-idle_timeout = 300 # Seconds before idle shutdown (5 minutes)
+# Optional: env-local variables can be set directly in this section.
+# LOG_FORMAT = "json"
+# FEATURE_FLAG_NEW_CHECKOUT = "true"
 
-# Per-server overrides (server must exist in ~/.tako/config.toml [[servers]])
-# [servers.prod-1]
+# [envs.staging]
+# route = "staging.{app_name}.example.com"
+# routes = ["staging.{app_name}.example.com", "*.staging.{app_name}.example.com"]
+# LOG_LEVEL = "debug"
+
+# Default runtime settings for every mapped server.
+# [servers]
+# instances = 0
+# port = 80
+# idle_timeout = 300
+
+# Per-server overrides. Section name must match `tako servers ls`.
+# [servers.production]
 # env = "production"
-# instances = 2      # Always keep 2 instances running
+# instances = 2
+# port = 8080
+# idle_timeout = 300
 
-# [servers.staging-1]
+# [servers.staging]
 # env = "staging"
+# instances = 1
+# idle_timeout = 120
 "#,
         app_name = app_name
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::generate_template;
+
+    #[test]
+    fn init_template_keeps_only_minimal_options_uncommented() {
+        let rendered = generate_template("demo-app", "bun");
+
+        assert!(
+            rendered.contains("# [tako]"),
+            "expected tako section to be optional/commented by default"
+        );
+        assert!(
+            rendered.contains("# name = \"demo-app\""),
+            "expected app name to be commented so adapter-derived name remains default"
+        );
+        assert!(
+            !rendered.contains("[tako]\nname = \"demo-app\""),
+            "expected app name not to be uncommented in minimal template"
+        );
+        assert!(
+            rendered.contains("[envs.production]\nroute = \"demo-app.example.com\""),
+            "expected production route to remain uncommented"
+        );
+
+        assert!(
+            rendered.contains("# build = \"bun run build\""),
+            "expected optional build command to be commented"
+        );
+        assert!(
+            rendered.contains("# [vars]"),
+            "expected vars section to be commented"
+        );
+        assert!(
+            rendered.contains("# [servers]"),
+            "expected server defaults section to be commented"
+        );
+        assert!(
+            rendered.contains("# [servers.production]"),
+            "expected per-server section to be commented"
+        );
+    }
+
+    #[test]
+    fn init_template_includes_reference_link_and_option_examples() {
+        let rendered = generate_template("demo-app", "bun");
+
+        assert!(
+            rendered.contains("https://tako.sh/docs/tako-toml"),
+            "expected link to tako.toml reference docs"
+        );
+        assert!(
+            rendered.contains("# routes = [\"demo-app.example.com\", \"*.demo-app.example.com\"]"),
+            "expected routes example in commented options"
+        );
+        assert!(
+            rendered.contains("# API_BASE_URL = \"https://api.example.com\""),
+            "expected example for environment variables"
+        );
+        assert!(
+            rendered.contains("# idle_timeout = 300"),
+            "expected server idle timeout example"
+        );
+    }
 }

@@ -20,4 +20,4 @@ cargo test -p tako-core
 
 ## Related Docs
 
-- `SPEC.md` (communication protocol section)
+- `docs/architecture/overview.md` (component boundaries and data flow)

@@ -1,13 +1,12 @@
 # Deployment
 
 This document describes how `tako deploy` works in practice and what remote servers must provide.
-For full command semantics and edge-case behavior, see `../../SPEC.md`.
 
 ## Related Docs
 
+- `quickstart.md`: install and first deployment setup.
 - `operations.md`: day-2 deploy verification and incident triage commands.
 - `../architecture/overview.md`: runtime data/control plane context.
-- `../../SPEC.md`: authoritative command behavior.
 
 ## Overview
 
