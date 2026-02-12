@@ -3,6 +3,7 @@
   "name": "tako-website",
   "compatibility_date": "2026-01-29",
   "workers_dev": false,
+  "preview_urls": true,
   "routes": [
     {
       "pattern": "tako.sh",
