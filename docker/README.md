@@ -15,6 +15,14 @@ Internal Docker tooling for building and debugging Tako server artifacts.
 From repository root:
 
 ```bash
+just run-debug::build-tako-server
+just run-debug::create-debug-server
+just run-debug::install-server
+```
+
+Legacy top-level aliases still work:
+
+```bash
 just build-tako-server
 just create-debug-server
 just install-server
