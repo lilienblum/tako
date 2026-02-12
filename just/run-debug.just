@@ -1,3 +1,5 @@
+set working-directory := ".."
+
 export TAKO_HOME := "debug/.tako"
 
 # Docker-based deploy debugging (systemd-based VPS simulation).

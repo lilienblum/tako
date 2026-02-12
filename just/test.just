@@ -1,3 +1,5 @@
+set working-directory := ".."
+
 default: workspace
 
 workspace:

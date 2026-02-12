@@ -1,3 +1,5 @@
+set working-directory := ".."
+
 # Publish all Rust crates in dependency order.
 cargo:
     cargo publish -p tako-core
