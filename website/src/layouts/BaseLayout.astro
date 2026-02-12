@@ -1,0 +1,312 @@
+---
+import NavLinks from "../components/NavLinks.astro";
+
+export interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = "Tako - Deploy apps to your own servers",
+  description = "Tako is a minimal deployment tool. Routes, logs, secrets, rolling deploys. Self-hosted on your own infrastructure.",
+} = Astro.props;
+---
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    <meta name="description" content={description} />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content={title} />
+    <meta property="og:description" content={description} />
+    <meta property="og:image" content="https://tako.sh/assets/og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content={title} />
+    <meta name="twitter:description" content={description} />
+    <meta name="twitter:image" content="https://tako.sh/assets/og.png" />
+    <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Nunito:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <style is:inline>
+      :root {
+        --bg: #fff9f4;
+        --paper: #fffefc;
+        --ink: #2f2a44;
+        --primary: #E88783;
+        --secondary: #9BC4B6;
+        --line: rgba(47, 42, 68, 0.16);
+        --muted: rgba(47, 42, 68, 0.74);
+        --accent: var(--primary);
+        --accent-soft: rgba(232, 135, 131, 0.2);
+        --mint-soft: rgba(155, 196, 182, 0.3);
+        --panel-radius: 30px;
+        --font-sans: "Nunito", "Segoe UI", sans-serif;
+        --font-heading: "Poppins", "Nunito", sans-serif;
+      }
+
+      ::selection {
+        background: rgba(232, 135, 131, 0.3);
+        color: var(--ink);
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+        padding: 0;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      html {
+        font-family: var(--font-sans);
+      }
+
+      h1,
+      h2,
+      h3,
+      h4,
+      h5,
+      h6 {
+        font-family: var(--font-heading);
+      }
+
+      body {
+        color: var(--ink);
+        background:
+          radial-gradient(circle at 15% 10%, rgba(232, 135, 131, 0.26), transparent 34%),
+          radial-gradient(circle at 88% 8%, rgba(155, 196, 182, 0.25), transparent 36%),
+          radial-gradient(circle at 50% 92%, rgba(158, 201, 255, 0.17), transparent 42%),
+          var(--bg);
+        overflow-x: hidden;
+      }
+
+      .paint {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 1;
+      }
+
+      .site {
+        position: relative;
+        z-index: 3;
+      }
+
+      .header {
+        position: sticky;
+        top: 0;
+        z-index: 100;
+        padding: 14px 18px;
+      }
+
+      .header-inner {
+        max-width: 1080px;
+        margin: 0 auto;
+        padding: 11px 14px;
+        border: 2px solid var(--line);
+        border-radius: var(--panel-radius);
+        background: rgba(255, 255, 255, 0.76);
+        backdrop-filter: blur(8px);
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+      }
+
+      .logo {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--ink);
+        text-decoration: none;
+        font-family: "Nunito", sans-serif;
+        font-size: 22px;
+        font-weight: 600;
+        line-height: 1;
+      }
+
+      .logo img {
+        width: 30px;
+        height: 30px;
+      }
+
+      .nav-links {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+        justify-content: flex-end;
+      }
+
+      .nav-links a {
+        text-decoration: none;
+        color: var(--ink);
+        padding: 7px 14px;
+        border-radius: 999px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.8);
+        font-family: "Nunito", sans-serif;
+        font-size: 16px;
+        font-weight: 600;
+        line-height: 1;
+      }
+
+      .nav-links a:hover {
+        transform: translateY(-1px) rotate(-1deg);
+        background: rgba(232, 135, 131, 0.18);
+      }
+
+      .github-star {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border-color: rgba(214, 166, 62, 0.88);
+        background: rgba(255, 224, 149, 0.24);
+        color: #6f4d16;
+        box-shadow: inset 0 0 0 1px rgba(255, 245, 210, 0.45);
+      }
+
+      .github-star .star-icon {
+        width: 0.9em;
+        height: 0.9em;
+      }
+
+      .github-star .star-icon path {
+        fill: rgba(255, 214, 120, 0.22);
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+
+      .nav-links a.github-star:hover {
+        transform: translateY(-1px);
+        border-color: rgba(214, 166, 62, 1);
+        background: rgba(255, 214, 120, 0.36);
+        color: #5d3f0c;
+        box-shadow: 0 2px 12px rgba(232, 185, 74, 0.34);
+      }
+
+      .nav-links a.github-star:hover .star-icon path {
+        fill: rgba(255, 214, 120, 0.48);
+      }
+
+      main {
+        width: min(1080px, 92vw);
+        margin: 10px auto 68px;
+      }
+
+      .site-footer {
+        width: min(1080px, 92vw);
+        margin: 0 auto 30px;
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+
+      .footer-inner {
+        border: 2px solid var(--line);
+        border-radius: var(--panel-radius);
+        background: rgba(255, 255, 255, 0.76);
+        backdrop-filter: blur(8px);
+        padding: 12px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .footer-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+      }
+
+      .footer-brand {
+        font-family: "Nunito", sans-serif;
+        font-size: 18px;
+        font-weight: 600;
+        color: rgba(47, 42, 68, 0.9);
+      }
+
+      .footer-links {
+        justify-content: flex-end;
+      }
+
+      @media (max-width: 640px) {
+        .header-inner {
+          border-radius: var(--panel-radius);
+          padding: 10px;
+          align-items: center;
+          flex-direction: row;
+        }
+
+        .nav-links {
+          flex-wrap: nowrap;
+        }
+
+        .nav {
+          width: auto;
+        }
+
+        .nav-links a {
+          min-width: 0;
+          text-align: center;
+        }
+
+        .footer-inner {
+          align-items: stretch;
+        }
+
+        .footer-row {
+          align-items: center;
+          flex-direction: row;
+          flex-wrap: nowrap;
+        }
+
+        .footer-links { justify-content: flex-end; }
+      }
+    </style>
+    <slot name="head" />
+  </head>
+  <body>
+    <div class="paint" aria-hidden="true"><slot name="paint" /></div>
+    <slot name="after-paint" />
+
+    <div class="site">
+      <header class="header">
+        <div class="header-inner">
+          <a href="/" class="logo">
+            <img src="/assets/logo.svg" alt="Tako logo" />
+            tako
+          </a>
+          <nav class="nav nav-links">
+            <NavLinks />
+          </nav>
+        </div>
+      </header>
+
+      <main><slot /></main>
+
+      <footer class="site-footer">
+        <div class="footer-inner">
+          <div class="footer-row">
+            <p class="footer-brand">tako</p>
+            <div class="footer-links nav-links">
+              <NavLinks />
+            </div>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

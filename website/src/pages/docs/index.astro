@@ -1,431 +1,145 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Tako Docs</title>
-    <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=Sora:wght@500;600;700&display=swap"
-      rel="stylesheet"
-    />
-    <style>
-      :root {
-        --bg: #fff9f4;
-        --paper: #fffefc;
-        --ink: #2f2a44;
-        --primary: #E88783;
-        --secondary: #9BC4B6;
-        --line: rgba(47, 42, 68, 0.16);
-        --muted: rgba(47, 42, 68, 0.74);
-        --panel-radius: 30px;
-      }
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+---
+<BaseLayout title="Tako Docs" description="Tako documentation - a minimal deployment tool for self-hosted infrastructure.">
+  <section class="sheet">
+    <h1 class="page-title">documentation</h1>
+    <p class="page-subtitle">
+      Everything you need to deploy applications to your own servers with Tako.
+    </p>
 
-      * {
-        box-sizing: border-box;
-        margin: 0;
-        padding: 0;
-      }
+    <div class="docs-grid">
+      <a href="/docs/install" class="doc-card">
+        <div class="doc-card-title">Install</div>
+        <div class="doc-card-desc">Install the CLI locally and set up tako-server on your hosts.</div>
+      </a>
 
-      html,
-      body {
-        min-height: 100%;
-      }
+      <a href="/docs/spec" class="doc-card">
+        <div class="doc-card-title">Specification</div>
+        <div class="doc-card-desc">User-facing behavior, configuration options, and API reference.</div>
+      </a>
 
-      html {
-        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-      }
+      <a href="/docs/development" class="doc-card">
+        <div class="doc-card-title">Development</div>
+        <div class="doc-card-desc">Local development workflow, trusted HTTPS, DNS, and troubleshooting.</div>
+      </a>
 
-      body {
-        color: var(--ink);
-        background:
-          radial-gradient(circle at 12% 11%, rgba(232, 135, 131, 0.25), transparent 34%),
-          radial-gradient(circle at 88% 12%, rgba(155, 196, 182, 0.26), transparent 38%),
-          radial-gradient(circle at 50% 90%, rgba(158, 201, 255, 0.16), transparent 42%),
-          var(--bg);
-      }
+      <a href="/docs/deployment" class="doc-card">
+        <div class="doc-card-title">Deployment</div>
+        <div class="doc-card-desc">Remote deploy flow, server prerequisites, and release layout.</div>
+      </a>
 
-      .paint {
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        z-index: 1;
-      }
+      <a href="/docs/operations" class="doc-card">
+        <div class="doc-card-title">Operations</div>
+        <div class="doc-card-desc">Day-2 runbook for deploy triage, runtime checks, and incident response.</div>
+      </a>
 
-      .paint::before,
-      .paint::after {
-        content: "";
-        position: absolute;
-        border-radius: 50%;
-        filter: blur(18px);
-        animation: wobble 9s ease-in-out infinite;
-      }
-
-      .paint::before {
-        width: 340px;
-        height: 340px;
-        top: -120px;
-        left: -115px;
-        background: rgba(232, 135, 131, 0.28);
-      }
-
-      .paint::after {
-        width: 420px;
-        height: 420px;
-        right: -160px;
-        bottom: -170px;
-        background: rgba(155, 196, 182, 0.28);
-        animation-delay: -3s;
-      }
-
-      .site {
-        position: relative;
-        z-index: 2;
-      }
-
-      .header {
-        position: sticky;
-        top: 0;
-        z-index: 100;
-        padding: 14px 18px;
-      }
-
-      .header-inner {
-        max-width: 1080px;
-        margin: 0 auto;
-        padding: 11px 14px;
-        border: 2px solid var(--line);
-        border-radius: var(--panel-radius);
-        background: rgba(255, 255, 255, 0.76);
-        backdrop-filter: blur(8px);
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-      }
-
-      .logo {
-        display: inline-flex;
-        align-items: center;
-        gap: 10px;
-        color: var(--ink);
-        text-decoration: none;
-        font-family: "Sora", sans-serif;
-        font-size: 22px;
-        font-weight: 600;
-        line-height: 1;
-      }
-
-      .logo img {
-        width: 30px;
-        height: 30px;
-      }
-
-      .nav {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-      }
-
-      .nav a {
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.8);
-        color: var(--ink);
-        text-decoration: none;
-        padding: 7px 14px;
-        font-family: "Sora", sans-serif;
-        font-size: 16px;
-        font-weight: 600;
-        line-height: 1;
-      }
-
-      .nav a:hover {
-        transform: translateY(-1px) rotate(-1deg);
-        background: rgba(232, 135, 131, 0.16);
-      }
-
-      .github-star {
-        display: inline-flex;
-        align-items: center;
-        gap: 7px;
-        border-color: rgba(214, 166, 62, 0.88);
-        background: rgba(255, 224, 149, 0.24);
-        color: #6f4d16;
-        box-shadow: inset 0 0 0 1px rgba(255, 245, 210, 0.45);
-      }
-
-      .github-star .star-icon {
-        width: 0.9em;
-        height: 0.9em;
-      }
-
-      .github-star .star-icon path {
-        fill: rgba(255, 214, 120, 0.22);
-        stroke: currentColor;
-        stroke-width: 2;
-        stroke-linecap: round;
-        stroke-linejoin: round;
-      }
-
-      .nav a.github-star:hover,
-      .footer-links a.github-star:hover {
-        transform: translateY(-1px);
-        border-color: rgba(214, 166, 62, 1);
-        background: rgba(255, 214, 120, 0.36);
-        color: #5d3f0c;
-        box-shadow: 0 2px 12px rgba(232, 185, 74, 0.34);
-      }
-
-      .nav a.github-star:hover .star-icon path,
-      .footer-links a.github-star:hover .star-icon path {
-        fill: rgba(255, 214, 120, 0.48);
-      }
-
-      main {
-        width: min(1080px, 92vw);
-        margin: 10px auto 70px;
-      }
-
-      .sheet {
-        border: 2px solid var(--line);
-        border-radius: var(--panel-radius);
-        background: rgba(255, 255, 255, 0.8);
-        box-shadow: 0 18px 45px rgba(47, 42, 68, 0.1);
-        padding: clamp(18px, 4vw, 36px);
-      }
-
-      .page-title {
-        font-family: "Sora", sans-serif;
-        font-size: clamp(34px, 6vw, 52px);
-        line-height: 1.05;
-        margin-bottom: 8px;
-      }
-
-      .page-subtitle {
-        max-width: 680px;
-        font-size: clamp(17px, 2.3vw, 22px);
-        color: var(--muted);
-        line-height: 1.35;
-        margin-bottom: 18px;
-      }
-
-      .docs-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 12px;
-      }
-
-      .doc-card {
-        display: block;
-        border-radius: 18px;
-        border: 2px solid rgba(47, 42, 68, 0.17);
-        background: rgba(255, 255, 255, 0.86);
-        padding: 14px;
-        text-decoration: none;
-        color: var(--ink);
-        transition: transform 0.2s ease;
-      }
-
-      .doc-card:hover {
-        transform: translateY(-2px);
-        background: rgba(155, 196, 182, 0.18);
-      }
-
-      .doc-card-title {
-        font-family: "Sora", sans-serif;
-        font-size: 22px;
-        line-height: 1.2;
-        margin-bottom: 6px;
-      }
-
-      .doc-card-desc {
-        font-size: 15px;
-        line-height: 1.45;
-        color: var(--muted);
-      }
-
-      .site-footer {
-        width: min(1080px, 92vw);
-        margin: 0 auto 30px;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-      }
-
-      .footer-inner {
-        border: 2px solid var(--line);
-        border-radius: var(--panel-radius);
-        background: rgba(255, 255, 255, 0.76);
-        backdrop-filter: blur(8px);
-        padding: 12px 14px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-
-      .footer-row {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-      }
-
-      .footer-brand {
-        font-family: "Sora", sans-serif;
-        font-size: 18px;
-        font-weight: 600;
-        color: rgba(47, 42, 68, 0.9);
-      }
-
-      .footer-links {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-        gap: 8px;
-      }
-
-      .footer-links a {
-        border: 1px solid var(--line);
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.82);
-        color: var(--ink);
-        text-decoration: none;
-        padding: 7px 12px;
-        font-family: "Sora", sans-serif;
-        font-size: 14px;
-        font-weight: 600;
-        line-height: 1;
-      }
-
-      @keyframes wobble {
-        0%,
-        100% { transform: translateY(0); }
-        50% { transform: translateY(-9px); }
-      }
-
-      @media (max-width: 860px) {
-        .docs-grid {
-          grid-template-columns: 1fr;
-        }
-      }
-
-      @media (max-width: 640px) {
-        .header-inner {
-          border-radius: var(--panel-radius);
-          align-items: flex-start;
-          flex-direction: column;
-          padding: 10px;
-        }
-
-        .nav {
-          width: 100%;
-          flex-wrap: wrap;
-        }
-
-        .nav a {
-          text-align: center;
-          min-width: 90px;
-        }
-
-        .footer-inner {
-          align-items: stretch;
-        }
-
-        .footer-row {
-          align-items: flex-start;
-          flex-direction: column;
-        }
-
-        .footer-links {
-          justify-content: flex-start;
-        }
-
-      }
-    </style>
-  </head>
-  <body>
-    <div class="paint" aria-hidden="true"></div>
-
-    <div class="site">
-      <header class="header">
-        <div class="header-inner">
-          <a href="/" class="logo">
-            <img src="/assets/logo.svg" alt="Tako logo" />
-            tako
-          </a>
-          <nav class="nav">
-            <a href="/docs">docs</a>
-            <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer" class="github-star">
-              <svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                <path d="M12 2.8l2.7 5.47 6.03.88-4.36 4.25 1.03 6.01L12 16.64l-5.4 2.84 1.03-6.01L3.27 9.15l6.03-.88L12 2.8z" />
-              </svg>
-              <span>github</span>
-            </a>
-          </nav>
-        </div>
-      </header>
-
-      <main>
-        <section class="sheet">
-          <h1 class="page-title">documentation</h1>
-          <p class="page-subtitle">
-            Everything you need to deploy applications to your own servers with Tako.
-          </p>
-
-          <div class="docs-grid">
-            <a href="/docs/install" class="doc-card">
-              <div class="doc-card-title">Install</div>
-              <div class="doc-card-desc">Install the CLI locally and set up tako-server on your hosts.</div>
-            </a>
-
-            <a href="/docs/spec" class="doc-card">
-              <div class="doc-card-title">Specification</div>
-              <div class="doc-card-desc">User-facing behavior, configuration options, and API reference.</div>
-            </a>
-
-            <a href="/docs/development" class="doc-card">
-              <div class="doc-card-title">Development</div>
-              <div class="doc-card-desc">Local development workflow, trusted HTTPS, DNS, and troubleshooting.</div>
-            </a>
-
-            <a href="/docs/deployment" class="doc-card">
-              <div class="doc-card-title">Deployment</div>
-              <div class="doc-card-desc">Remote deploy flow, server prerequisites, and release layout.</div>
-            </a>
-
-            <a href="/docs/operations" class="doc-card">
-              <div class="doc-card-title">Operations</div>
-              <div class="doc-card-desc">Day-2 runbook for deploy triage, runtime checks, and incident response.</div>
-            </a>
-
-            <a href="/docs/architecture" class="doc-card">
-              <div class="doc-card-title">Architecture</div>
-              <div class="doc-card-desc">System component map and control-plane/data-plane flows.</div>
-            </a>
-          </div>
-        </section>
-      </main>
-
-      <footer class="site-footer">
-        <div class="footer-inner">
-          <div class="footer-row">
-            <p class="footer-brand">tako</p>
-            <div class="footer-links">
-              <a href="/docs">docs</a>
-              <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer" class="github-star">
-                <svg class="star-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <path d="M12 2.8l2.7 5.47 6.03.88-4.36 4.25 1.03 6.01L12 16.64l-5.4 2.84 1.03-6.01L3.27 9.15l6.03-.88L12 2.8z" />
-                </svg>
-                <span>github</span>
-              </a>
-            </div>
-          </div>
-        </div>
-      </footer>
+      <a href="/docs/architecture" class="doc-card">
+        <div class="doc-card-title">Architecture</div>
+        <div class="doc-card-desc">System component map and control-plane/data-plane flows.</div>
+      </a>
     </div>
-  </body>
-</html>
+  </section>
+</BaseLayout>
+
+<style is:global>
+  .paint::before,
+  .paint::after {
+    content: "";
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(18px);
+    animation: wobble 9s ease-in-out infinite;
+  }
+
+  .paint::before {
+    width: 340px;
+    height: 340px;
+    top: -120px;
+    left: -115px;
+    background: rgba(232, 135, 131, 0.28);
+  }
+
+  .paint::after {
+    width: 420px;
+    height: 420px;
+    right: -160px;
+    bottom: -170px;
+    background: rgba(155, 196, 182, 0.28);
+    animation-delay: -3s;
+  }
+
+  .site {
+    z-index: 2;
+  }
+
+  .sheet {
+    border: 2px solid var(--line);
+    border-radius: var(--panel-radius);
+    background: rgba(255, 255, 255, 0.8);
+    box-shadow: 0 18px 45px rgba(47, 42, 68, 0.1);
+    padding: clamp(18px, 4vw, 36px);
+  }
+
+  .page-title {
+    font-family: var(--font-heading);
+    font-size: clamp(34px, 6vw, 52px);
+    line-height: 1.05;
+    margin-bottom: 8px;
+  }
+
+  .page-subtitle {
+    max-width: 680px;
+    font-size: clamp(17px, 2.3vw, 22px);
+    color: var(--muted);
+    line-height: 1.35;
+    margin-bottom: 18px;
+  }
+
+  .docs-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  .doc-card {
+    display: block;
+    border-radius: 18px;
+    border: 2px solid rgba(47, 42, 68, 0.17);
+    background: rgba(255, 255, 255, 0.86);
+    padding: 14px;
+    text-decoration: none;
+    color: var(--ink);
+    transition: transform 0.2s ease;
+  }
+
+  .doc-card:hover {
+    transform: translateY(-2px);
+    background: rgba(155, 196, 182, 0.18);
+  }
+
+  .doc-card-title {
+    font-family: var(--font-heading);
+    font-size: 22px;
+    line-height: 1.2;
+    margin-bottom: 6px;
+  }
+
+  .doc-card-desc {
+    font-size: 15px;
+    line-height: 1.45;
+    color: var(--muted);
+  }
+
+  @keyframes wobble {
+    0%,
+    100% { transform: translateY(0); }
+    50% { transform: translateY(-9px); }
+  }
+
+  @media (max-width: 860px) {
+    .docs-grid {
+      grid-template-columns: 1fr;
+    }
+  }
+</style>
