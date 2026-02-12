@@ -174,17 +174,6 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     z-index: 0;
   }
 
-  .float-in {
-    opacity: 0;
-    transform: translateY(16px) rotate(-0.7deg);
-    animation: floatIn 0.65s ease-out forwards;
-  }
-
-  .float-in.delay-1 { animation-delay: 0.08s; }
-  .float-in.delay-2 { animation-delay: 0.16s; }
-  .float-in.delay-3 { animation-delay: 0.24s; }
-  .float-in.delay-4 { animation-delay: 0.32s; }
-  .float-in.delay-5 { animation-delay: 0.42s; }
 
   .badge {
     display: inline-flex;
@@ -477,12 +466,6 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     50% { transform: translateY(-10px) scale(1.04); }
   }
 
-  @keyframes floatIn {
-    to {
-      opacity: 1;
-      transform: translateY(0) rotate(0deg);
-    }
-  }
 
   @keyframes pulseDot {
     0%,
@@ -576,14 +559,14 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
         </div>
       </div>
     </div>
-    <div class="badge float-in"><span class="badge-dot"></span>self-hosted app workflow</div>
-    <h1 class="title float-in delay-1">Your servers<br />were <span class="swirl">fine</span><br />all along.</h1>
-    <p class="subtitle float-in delay-2">
+    <div class="badge"><span class="badge-dot"></span>self-hosted app workflow</div>
+    <h1 class="title">Your servers<br />were <span class="swirl">fine</span><br />all along.</h1>
+    <p class="subtitle">
       Tako keeps the power-user workflow while giving your deploy day some personality.
       Routes, logs, secrets, rolling deploys. All on your own servers.
     </p>
 
-    <div class="command-card float-in delay-3">
+    <div class="command-card">
       <div class="command-head">
         <div class="dots"><span></span><span></span><span></span></div>
         <div class="command-title">install</div>
@@ -603,11 +586,11 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     </div>
 
     <div class="hero-block">
-      <div class="hero-block-head float-in delay-4">
+      <div class="hero-block-head">
         <p class="hero-block-label">Features</p>
         <span class="hero-block-rule" aria-hidden="true"></span>
       </div>
-      <div class="feature-grid float-in delay-4">
+      <div class="feature-grid">
         <article class="feature-item">
           <span class="feature-kicker">deploy</span>
           <h3 class="feature-title">Rolling deploys without drama</h3>
@@ -639,15 +622,15 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
           <p class="feature-desc">Keep control of hosts, domains, and certs with zero platform lock-in.</p>
         </article>
       </div>
-      <p class="feature-more float-in delay-5"><span class="feature-more-prefix">and </span><a class="feature-more-link" href="/docs/spec#feature-overview">more</a></p>
+      <p class="feature-more"><span class="feature-more-prefix">and </span><a class="feature-more-link" href="/docs/spec#feature-overview">more</a></p>
     </div>
 
     <div class="hero-block">
-      <div class="hero-block-head float-in delay-5">
+      <div class="hero-block-head">
         <p class="hero-block-label">Explore</p>
         <span class="hero-block-rule" aria-hidden="true"></span>
       </div>
-      <div class="links-grid float-in delay-5">
+      <div class="links-grid">
         <a href="/docs/development" class="link-card">
           <strong>Quickstart</strong>
           <span>Get from zero to first app run fast</span>
@@ -836,17 +819,6 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     z-index: 0;
   }
 
-  .float-in {
-    opacity: 0;
-    transform: translateY(16px) rotate(-0.7deg);
-    animation: floatIn 0.65s ease-out forwards;
-  }
-
-  .float-in.delay-1 { animation-delay: 0.08s; }
-  .float-in.delay-2 { animation-delay: 0.16s; }
-  .float-in.delay-3 { animation-delay: 0.24s; }
-  .float-in.delay-4 { animation-delay: 0.32s; }
-  .float-in.delay-5 { animation-delay: 0.42s; }
 
   .badge {
     display: inline-flex;
@@ -1139,12 +1111,6 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     50% { transform: translateY(-10px) scale(1.04); }
   }
 
-  @keyframes floatIn {
-    to {
-      opacity: 1;
-      transform: translateY(0) rotate(0deg);
-    }
-  }
 
   @keyframes pulseDot {
     0%,
