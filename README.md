@@ -2,9 +2,9 @@
 
 <img src="website/public/assets/og.svg" alt="Tako logo" />
 
-[![crate: tako](https://img.shields.io/crates/v/tako?label=tako&color=E88783)](https://crates.io/crates/tako)
-[![crate: tako-server](https://img.shields.io/crates/v/tako-server?label=tako-server&color=E88783)](https://crates.io/crates/tako-server)
-[![npm: tako.sh](https://img.shields.io/npm/v/tako.sh?label=tako.sh&color=9BC4B6)](https://www.npmjs.com/package/tako.sh)
+[![npm: tako.sh](https://img.shields.io/npm/v/tako.sh?label=npm%3A%20tako.sh&color=9BC4B6)](https://www.npmjs.com/package/tako.sh)
+[![crate: tako](https://img.shields.io/crates/v/tako?label=crate%3A%20tako&color=E88783)](https://crates.io/crates/tako)
+[![crate: tako-server](https://img.shields.io/crates/v/tako-server?label=crate%3A%20tako-server&color=E88783)](https://crates.io/crates/tako-server)
 
 Tako helps you ship apps to your own servers without turning deployment
 into a part-time job.
