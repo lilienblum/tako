@@ -28,6 +28,7 @@ From the repo root:
 
 ```bash
 bun install
+git config core.hooksPath .githooks
 cargo build
 cargo test --workspace
 ```
