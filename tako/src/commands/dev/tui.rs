@@ -321,10 +321,7 @@ struct DisplayLogLine {
 }
 
 fn format_scoped_log_prefix(l: &ScopedLog) -> String {
-    format!(
-        "{:02}:{:02}:{:02} {:<5} [{}] ",
-        l.h, l.m, l.s, l.level, l.scope
-    )
+    format!("{} {:<5} [{}] ", l.timestamp, l.level, l.scope)
 }
 
 fn format_scoped_log_line(l: &ScopedLog) -> String {
@@ -2031,9 +2028,7 @@ mod key_tests {
     #[test]
     fn format_scoped_log_line_is_mm_ss() {
         let l = ScopedLog {
-            h: 12,
-            m: 3,
-            s: 7,
+            timestamp: "12:03:07".to_string(),
             level: LogLevel::Info,
             scope: "tako".to_string(),
             message: "hello".to_string(),
@@ -2436,25 +2431,19 @@ mod tests {
     #[test]
     fn display_log_lines_collapse_consecutive_duplicates_with_muted_summary() {
         let first = ScopedLog {
-            h: 12,
-            m: 58,
-            s: 33,
+            timestamp: "12:58:33".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "some message".to_string(),
         };
         let second = ScopedLog {
-            h: 12,
-            m: 58,
-            s: 34,
+            timestamp: "12:58:34".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "some message".to_string(),
         };
         let third = ScopedLog {
-            h: 12,
-            m: 58,
-            s: 35,
+            timestamp: "12:58:35".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "some message".to_string(),
@@ -2478,25 +2467,19 @@ mod tests {
     #[test]
     fn display_log_lines_do_not_collapse_nonconsecutive_duplicates() {
         let first = ScopedLog {
-            h: 12,
-            m: 58,
-            s: 33,
+            timestamp: "12:58:33".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "some message".to_string(),
         };
         let middle = ScopedLog {
-            h: 12,
-            m: 58,
-            s: 34,
+            timestamp: "12:58:34".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "other message".to_string(),
         };
         let last = ScopedLog {
-            h: 12,
-            m: 58,
-            s: 35,
+            timestamp: "12:58:35".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "some message".to_string(),
@@ -2512,25 +2495,19 @@ mod tests {
     fn focused_copy_from_summary_row_returns_original_message() {
         let mut state = UiState::new();
         state.push_log(ScopedLog {
-            h: 12,
-            m: 58,
-            s: 33,
+            timestamp: "12:58:33".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "same message".to_string(),
         });
         state.push_log(ScopedLog {
-            h: 12,
-            m: 58,
-            s: 34,
+            timestamp: "12:58:34".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "same message".to_string(),
         });
         state.push_log(ScopedLog {
-            h: 12,
-            m: 58,
-            s: 35,
+            timestamp: "12:58:35".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "same message".to_string(),
@@ -2842,9 +2819,7 @@ mod tests {
     fn focused_log_message_for_copy_returns_only_message() {
         let mut state = UiState::new();
         state.push_log(ScopedLog {
-            h: 1,
-            m: 2,
-            s: 3,
+            timestamp: "01:02:03".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "hello from focused row".to_string(),

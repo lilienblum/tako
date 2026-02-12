@@ -236,6 +236,7 @@ Start (or attach to) a local development session for the current app, backed by 
   - `tako dev` uses a per-project lock file under `{TAKO_HOME}/dev/locks/` to keep a single owning session per app/directory.
   - Running `tako dev` again from the same directory attaches as an additional client instead of starting a second local app process.
   - Dev logs are written to a shared per-app/per-project stream at `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl`.
+  - Each persisted log record stores a single `timestamp` token (`hh:mm:ss`) instead of split hour/minute/second fields; attached sessions continue to accept legacy `h`/`m`/`s` records from older streams.
   - When a new owning session starts, Tako truncates that shared stream before writing fresh logs for the new session.
   - Attached clients replay the existing file contents, then follow new lines from the same stream.
   - App lifecycle state (`starting`, `running`, `stopped`, app PID, and startup errors) is persisted to the same shared stream, so attached sessions reconstruct the same status/CPU/RAM view as the owning session.

@@ -66,14 +66,57 @@ impl std::fmt::Display for LogLevel {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ScopedLog {
-    pub h: u8,
-    pub m: u8,
-    pub s: u8,
+    pub timestamp: String,
     pub level: LogLevel,
     pub scope: String,
     pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct ScopedLogSerde {
+    #[serde(default)]
+    timestamp: Option<String>,
+    #[serde(default)]
+    h: Option<u8>,
+    #[serde(default)]
+    m: Option<u8>,
+    #[serde(default)]
+    s: Option<u8>,
+    level: LogLevel,
+    scope: String,
+    message: String,
+}
+
+fn hms_timestamp(h: u8, m: u8, s: u8) -> String {
+    format!("{:02}:{:02}:{:02}", h, m, s)
+}
+
+impl<'de> Deserialize<'de> for ScopedLog {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let raw = ScopedLogSerde::deserialize(deserializer)?;
+        let timestamp = raw
+            .timestamp
+            .filter(|s| !s.trim().is_empty())
+            .or_else(|| {
+                raw.h
+                    .zip(raw.m)
+                    .zip(raw.s)
+                    .map(|((h, m), s)| hms_timestamp(h, m, s))
+            })
+            .unwrap_or_else(|| "00:00:00".to_string());
+
+        Ok(Self {
+            timestamp,
+            level: raw.level,
+            scope: raw.scope,
+            message: raw.message,
+        })
+    }
 }
 
 static LOCAL_OFFSET: OnceLock<UtcOffset> = OnceLock::new();
@@ -86,9 +129,7 @@ impl ScopedLog {
     pub fn at(level: LogLevel, scope: impl Into<String>, message: impl Into<String>) -> Self {
         let now = OffsetDateTime::now_utc().to_offset(local_offset());
         Self {
-            h: now.hour() as u8,
-            m: now.minute() as u8,
-            s: now.second() as u8,
+            timestamp: hms_timestamp(now.hour() as u8, now.minute() as u8, now.second() as u8),
             level,
             scope: scope.into(),
             message: message.into(),
@@ -1231,23 +1272,23 @@ mod tests {
     #[test]
     fn stored_log_line_round_trips_json() {
         let line = ScopedLog {
-            h: 12,
-            m: 3,
-            s: 7,
+            timestamp: "12:03:07".to_string(),
             level: LogLevel::Info,
             scope: "app".to_string(),
             message: "hello".to_string(),
         };
         let encoded = serde_json::to_string(&line).unwrap();
+        assert!(encoded.contains(r#""timestamp":"12:03:07""#));
+        assert!(!encoded.contains(r#""h":"#));
+        assert!(!encoded.contains(r#""m":"#));
+        assert!(!encoded.contains(r#""s":"#));
         let decoded = parse_stored_log_line(&encoded).unwrap();
 
         let StoredLogEvent::Log(decoded) = decoded else {
             panic!("expected log event");
         };
 
-        assert_eq!(decoded.h, 12);
-        assert_eq!(decoded.m, 3);
-        assert_eq!(decoded.s, 7);
+        assert_eq!(decoded.timestamp, "12:03:07");
         assert_eq!(decoded.scope, "app");
         assert_eq!(decoded.message, "hello");
     }
@@ -1255,9 +1296,7 @@ mod tests {
     #[test]
     fn stored_log_line_round_trips_fatal_level() {
         let line = ScopedLog {
-            h: 12,
-            m: 3,
-            s: 7,
+            timestamp: "12:03:07".to_string(),
             level: LogLevel::Fatal,
             scope: "tako".to_string(),
             message: "fatal issue".to_string(),
@@ -1268,6 +1307,22 @@ mod tests {
             panic!("expected log event");
         };
         assert!(matches!(decoded.level, LogLevel::Fatal));
+    }
+
+    #[test]
+    fn stored_log_line_parses_legacy_hms_json() {
+        let decoded = parse_stored_log_line(
+            r#"{"h":12,"m":3,"s":7,"level":"Info","scope":"app","message":"hello"}"#,
+        )
+        .unwrap();
+
+        let StoredLogEvent::Log(decoded) = decoded else {
+            panic!("expected log event");
+        };
+        assert_eq!(decoded.timestamp, "12:03:07");
+        assert!(matches!(decoded.level, LogLevel::Info));
+        assert_eq!(decoded.scope, "app");
+        assert_eq!(decoded.message, "hello");
     }
 
     #[test]
@@ -3076,8 +3131,8 @@ pub async fn run(
                         Some(log) = log_rx.recv() => {
                             append_log_to_store(&log_store_path_for_stdout, &log).await;
                             println!(
-                                "{:02}:{:02}:{:02} {:<5} [{}] {}",
-                                log.h, log.m, log.s, log.level, log.scope, log.message
+                                "{} {:<5} [{}] {}",
+                                log.timestamp, log.level, log.scope, log.message
                             );
                         }
                         Some(event) = event_rx.recv() => {
@@ -3836,8 +3891,8 @@ async fn run_attached_dev_client(
                     tokio::select! {
                         Some(log) = log_rx.recv() => {
                             println!(
-                                "{:02}:{:02}:{:02} {:<5} [{}] {}",
-                                log.h, log.m, log.s, log.level, log.scope, log.message
+                                "{} {:<5} [{}] {}",
+                                log.timestamp, log.level, log.scope, log.message
                             );
                         }
                         Some(event) = event_rx.recv() => {
