@@ -45,6 +45,7 @@ const {
         --accent: var(--primary);
         --accent-soft: rgba(232, 135, 131, 0.2);
         --mint-soft: rgba(155, 196, 182, 0.3);
+        --site-width: min(1080px, 92vw);
         --panel-radius: 30px;
         --font-sans: "Nunito", "Segoe UI", sans-serif;
         --font-heading: "Poppins", "Nunito", sans-serif;
@@ -101,16 +102,19 @@ const {
         z-index: 3;
       }
 
+      .container {
+        width: var(--site-width);
+        margin: 0 auto;
+      }
+
       .header {
         position: sticky;
         top: 0;
         z-index: 100;
-        padding: 14px 18px;
+        padding: 14px 0;
       }
 
       .header-inner {
-        max-width: 1080px;
-        margin: 0 auto;
         padding: 11px 14px;
         border: 2px solid var(--line);
         border-radius: var(--panel-radius);
@@ -201,12 +205,10 @@ const {
       }
 
       main {
-        width: min(1080px, 92vw);
         margin: 10px auto 68px;
       }
 
       .site-footer {
-        width: min(1080px, 92vw);
         margin: 0 auto 30px;
         display: flex;
         flex-direction: column;
@@ -284,25 +286,29 @@ const {
 
     <div class="site">
       <header class="header">
-        <div class="header-inner">
-          <a href="/" class="logo">
-            <img src="/assets/logo.svg" alt="Tako logo" />
-            tako
-          </a>
-          <nav class="nav nav-links">
-            <NavLinks />
-          </nav>
+        <div class="container">
+          <div class="header-inner">
+            <a href="/" class="logo">
+              <img src="/assets/logo.svg" alt="Tako logo" />
+              tako
+            </a>
+            <nav class="nav nav-links">
+              <NavLinks />
+            </nav>
+          </div>
         </div>
       </header>
 
-      <main><slot /></main>
+      <main class="container"><slot /></main>
 
       <footer class="site-footer">
-        <div class="footer-inner">
-          <div class="footer-row">
-            <p class="footer-brand">tako</p>
-            <div class="footer-links nav-links">
-              <NavLinks />
+        <div class="container">
+          <div class="footer-inner">
+            <div class="footer-row">
+              <p class="footer-brand">tako</p>
+              <div class="footer-links nav-links">
+                <NavLinks />
+              </div>
             </div>
           </div>
         </div>
