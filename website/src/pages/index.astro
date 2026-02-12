@@ -313,9 +313,23 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
   }
 
   #copy {
-    min-width: 19ch;
+    position: relative;
     text-align: center;
+  }
+
+  #copy .copy-label-sizer {
+    visibility: hidden;
     white-space: nowrap;
+  }
+
+  #copy [data-copy-label] {
+    position: absolute;
+    inset: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    pointer-events: none;
   }
 
   .hero-block {
@@ -579,6 +593,7 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
       </div>
       <div class="command-actions">
         <button class="btn primary" id="copy" type="button">
+          <span class="copy-label-sizer" aria-hidden="true">copy install command</span>
           <span data-copy-label>copy install command</span>
         </button>
         <a class="btn" href="/docs">read the docs</a>
@@ -958,9 +973,23 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
   }
 
   #copy {
-    min-width: 19ch;
+    position: relative;
     text-align: center;
+  }
+
+  #copy .copy-label-sizer {
+    visibility: hidden;
     white-space: nowrap;
+  }
+
+  #copy [data-copy-label] {
+    position: absolute;
+    inset: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+    pointer-events: none;
   }
 
   .hero-block {
