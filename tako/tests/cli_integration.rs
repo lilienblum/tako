@@ -1457,6 +1457,7 @@ mod help_and_version {
         assert!(out.contains("dev"), "Should list dev command");
         assert!(out.contains("doctor"), "Should list doctor command");
         assert!(out.contains("upgrade"), "Should list upgrade command");
+        assert!(out.contains("delete"), "Should list delete command");
         assert!(out.contains("servers"), "Should list servers command");
         assert!(out.contains("secrets"), "Should list secrets command");
     }

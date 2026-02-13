@@ -178,6 +178,7 @@ impl ServerState {
                     .await
             }
             Command::Stop { app } => self.stop_app(&app).await,
+            Command::Delete { app } => self.delete_app(&app).await,
             Command::Status { app } => self.get_status(&app).await,
             Command::List => self.list_apps().await,
             Command::Routes => self.list_routes().await,
@@ -388,6 +389,43 @@ impl ServerState {
             })),
             Err(e) => Response::error(format!("Stop failed: {}", e)),
         }
+    }
+
+    async fn delete_app(&self, app_name: &str) -> Response {
+        tracing::info!(app = app_name, "Deleting app");
+
+        let mut existed = false;
+        if self.app_manager.get_app(app_name).is_some() {
+            existed = true;
+            if let Err(e) = self.app_manager.stop_app(app_name).await {
+                return Response::error(format!("Delete failed: {}", e));
+            }
+            self.app_manager.remove_app(app_name);
+        }
+
+        self.load_balancer.unregister_app(app_name);
+        self.cold_start.reset(app_name);
+
+        {
+            let mut route_table = self.routes.write().await;
+            route_table.remove_app_routes(app_name);
+        }
+
+        {
+            let mut secrets = self.secrets.write().await;
+            secrets.remove(app_name);
+        }
+
+        {
+            let mut locks = self.deploy_locks.write().await;
+            locks.remove(app_name);
+        }
+
+        Response::ok(serde_json::json!({
+            "status": "deleted",
+            "app": app_name,
+            "existed": existed
+        }))
     }
 
     async fn get_status(&self, app_name: &str) -> Response {
@@ -1087,7 +1125,12 @@ async fn replace_instance_if_needed(
 
 #[cfg(test)]
 mod tests {
-    use super::{install_rustls_crypto_provider, validate_deploy_routes};
+    use super::{ServerState, install_rustls_crypto_provider, validate_deploy_routes};
+    use crate::instances::AppConfig;
+    use crate::socket::{Command, Response};
+    use crate::tls::{CertManager, CertManagerConfig};
+    use std::sync::Arc;
+    use tempfile::TempDir;
 
     #[test]
     fn install_rustls_crypto_provider_is_idempotent() {
@@ -1108,5 +1151,74 @@ mod tests {
     fn validate_deploy_routes_rejects_empty_route_entry() {
         let err = validate_deploy_routes(&["".to_string()]).unwrap_err();
         assert!(err.contains("non-empty"));
+    }
+
+    #[tokio::test]
+    async fn delete_command_removes_runtime_registration_and_routes() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None);
+
+        let release_dir = temp
+            .path()
+            .join("apps")
+            .join("my-app")
+            .join("releases")
+            .join("v1");
+        std::fs::create_dir_all(&release_dir).unwrap();
+
+        let config = AppConfig {
+            name: "my-app".to_string(),
+            version: "v1".to_string(),
+            path: release_dir.clone(),
+            cwd: release_dir.clone(),
+            command: vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "exit 0".to_string(),
+            ],
+            min_instances: 0,
+            ..Default::default()
+        };
+
+        let app = state.app_manager.register_app(config);
+        state.load_balancer.register_app(app);
+        {
+            let mut route_table = state.routes.write().await;
+            route_table.set_app_routes("my-app".to_string(), vec!["api.example.com".to_string()]);
+        }
+
+        let response = state
+            .handle_command(Command::Delete {
+                app: "my-app".to_string(),
+            })
+            .await;
+        assert!(matches!(response, Response::Ok { .. }));
+        assert!(state.app_manager.get_app("my-app").is_none());
+
+        let route_table = state.routes.read().await;
+        assert!(route_table.routes_for_app("my-app").is_empty());
+        assert_eq!(route_table.select("api.example.com", "/"), None);
+    }
+
+    #[tokio::test]
+    async fn delete_command_is_idempotent_for_missing_app() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None);
+
+        let response = state
+            .handle_command(Command::Delete {
+                app: "missing-app".to_string(),
+            })
+            .await;
+        assert!(matches!(response, Response::Ok { .. }));
+        assert!(state.app_manager.get_app("missing-app").is_none());
     }
 }

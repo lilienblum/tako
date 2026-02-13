@@ -33,6 +33,9 @@ pub enum Command {
     /// Stop an app
     Stop { app: String },
 
+    /// Delete an app from runtime state
+    Delete { app: String },
+
     /// Get status of an app
     Status { app: String },
 
@@ -229,6 +232,16 @@ mod tests {
         let cmd = Command::Routes;
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains(r#""command":"routes""#));
+    }
+
+    #[test]
+    fn test_delete_command_serialization() {
+        let cmd = Command::Delete {
+            app: "my-app".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""command":"delete""#));
+        assert!(json.contains(r#""app":"my-app""#));
     }
 
     #[test]

@@ -177,6 +177,7 @@ Directory selection is command-scoped:
 - `tako status [DIR]`
 - `tako dev [DIR]`
 - `tako deploy [DIR]`
+- `tako delete [DIR]`
 
 ### tako init [--force] [DIR]
 
@@ -569,6 +570,50 @@ Deploy flow helpers:
 - If no servers exist in `~/.tako/config.toml` `[[servers]]` → fail with hint to run `tako servers add <host>`
 - Otherwise, require explicit `[servers.*]` mapping in tako.toml
 
+### tako delete [--env {environment}] [--yes|-y] [DIR]
+
+Delete a deployed app from environment servers.
+
+Environment selection behavior:
+
+- If `--env` is provided, that environment is used.
+- If `--env` is omitted in an interactive terminal:
+  - when running in a project (`tako.toml` present), Tako discovers deployed app/env pairs and prompts for an environment selector filtered to the current app.
+  - when running outside a project, Tako discovers deployed app/env pairs across configured servers and prompts for a deployed app/environment target selector.
+- If `--env` is omitted in non-interactive mode, project mode defaults to `production`; outside project mode it fails (no safe target selector).
+
+Environment validation:
+
+- In project mode, target environment must be declared in `tako.toml` (`[envs.<name>]`).
+- Outside project mode, environments are discovered from deployed releases.
+- `development` is reserved for `tako dev` and cannot be used with `tako delete`.
+
+Delete confirmation:
+
+- Interactive terminals: requires explicit confirmation unless `--yes` (or `-y`) is provided.
+- Non-interactive terminals: requires `--yes`.
+
+**Steps (per server):**
+
+1. Connect over SSH.
+2. Send `delete` to `tako-server` to remove runtime registration and routes for the app.
+3. Remove `/opt/tako/apps/{app-name}` from disk.
+
+Delete runs across target servers in parallel. If some servers fail while others succeed, all errors are reported and the command exits with failure.
+
+Delete is idempotent for absent app runtime state (safe to re-run for cleanup).
+
+**Delete target:**
+
+- Project mode:
+  - If `[servers.*]` sections in tako.toml map the target env → delete on those servers.
+  - If deleting from `production` with no `[servers.*]` mapping:
+    - exactly one server in `~/.tako/config.toml` `[[servers]]` → delete on that server.
+  - If no servers exist in `~/.tako/config.toml` `[[servers]]` → fail with hint to run `tako servers add <host>`
+  - Otherwise, require explicit `[servers.*]` mapping in tako.toml.
+- Outside project mode:
+  - Tako targets the subset of configured servers where the selected app/environment is currently deployed.
+
 ## Routing and Multi-App Support
 
 ### Route Configuration
@@ -700,7 +745,7 @@ email = "admin@example.com"
 **tako-server socket:**
 
 - Path: `/var/run/tako/tako.sock` (symlink to versioned socket)
-- Used by: CLI for deploy/reload commands, apps for status/heartbeat
+- Used by: CLI for deploy/reload/delete/status/routes commands, apps for status/heartbeat
 
 **App instance sockets:**
 
@@ -764,6 +809,12 @@ Response:
 
 ```json
 { "command": "routes" }
+```
+
+- `delete` (remove runtime state/routes for an app):
+
+```json
+{ "command": "delete", "app": "my-app" }
 ```
 
 **App → tako-server:**

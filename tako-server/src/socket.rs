@@ -3,6 +3,7 @@
 //! Commands:
 //! - deploy: Rolling update of an app
 //! - stop: Stop an app
+//! - delete: Delete an app from runtime state
 //! - status: Get app status
 //! - list: List all apps
 //! - reload: Reload configuration
@@ -146,6 +147,17 @@ mod tests {
         let cmd: Command = serde_json::from_str(json).unwrap();
 
         assert!(matches!(cmd, Command::List));
+    }
+
+    #[test]
+    fn test_parse_delete_command() {
+        let json = r#"{"command": "delete", "app": "my-app"}"#;
+        let cmd: Command = serde_json::from_str(json).unwrap();
+
+        match cmd {
+            Command::Delete { app } => assert_eq!(app, "my-app"),
+            _ => panic!("Expected Delete command"),
+        }
     }
 
     #[test]

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::commands::{self, secret, server, upgrade};
+use crate::commands::{self, delete, secret, server, upgrade};
 use clap::CommandFactory;
 
 const DEV_PUBLIC_PORT: u16 = 47831;
@@ -222,6 +222,31 @@ mod tests {
     }
 
     #[test]
+    fn delete_without_env_parses_env_as_none() {
+        let cli = Cli::try_parse_from(["tako", "delete"]).unwrap();
+        let Some(Commands::Delete { env, yes, .. }) = cli.command else {
+            panic!("expected Delete");
+        };
+        assert!(env.is_none());
+        assert!(!yes);
+    }
+
+    #[test]
+    fn delete_aliases_parse() {
+        let cli = Cli::try_parse_from(["tako", "rm", "--env", "staging"]).unwrap();
+        let Some(Commands::Delete { env, .. }) = cli.command else {
+            panic!("expected Delete");
+        };
+        assert_eq!(env.as_deref(), Some("staging"));
+
+        let cli = Cli::try_parse_from(["tako", "remove", "--env", "staging"]).unwrap();
+        let Some(Commands::Delete { env, .. }) = cli.command else {
+            panic!("expected Delete");
+        };
+        assert_eq!(env.as_deref(), Some("staging"));
+    }
+
+    #[test]
     fn upgrade_command_parses() {
         let cli = Cli::try_parse_from(["tako", "upgrade"]).unwrap();
         let Some(Commands::Upgrade) = cli.command else {
@@ -312,6 +337,22 @@ pub enum Commands {
         #[arg(value_name = "DIR")]
         dir: Option<std::path::PathBuf>,
     },
+
+    /// Delete a deployed app from an environment
+    #[command(visible_aliases = ["rm", "remove", "undeploy", "destroy"])]
+    Delete {
+        /// Environment to delete from
+        #[arg(long)]
+        env: Option<String>,
+
+        /// Skip confirmation prompts
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+
+        /// Run in this directory (defaults to current directory)
+        #[arg(value_name = "DIR")]
+        dir: Option<std::path::PathBuf>,
+    },
 }
 
 impl Cli {
@@ -365,6 +406,12 @@ impl Cli {
                     std::env::set_current_dir(dir)?;
                 }
                 commands::deploy::run(env.as_deref(), yes)
+            }
+            Commands::Delete { env, yes, dir } => {
+                if let Some(dir) = dir {
+                    std::env::set_current_dir(dir)?;
+                }
+                delete::run(env.as_deref(), yes)
             }
         }
     }

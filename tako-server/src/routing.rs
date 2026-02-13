@@ -28,6 +28,11 @@ impl RouteTable {
         self.rebuild();
     }
 
+    pub fn remove_app_routes(&mut self, app: &str) {
+        self.app_routes.remove(app);
+        self.rebuild();
+    }
+
     pub fn routes_for_app(&self, app: &str) -> Vec<String> {
         self.app_routes.get(app).cloned().unwrap_or_default()
     }
@@ -317,6 +322,27 @@ mod tests {
         assert_eq!(
             table.select("api.example.com", "/"),
             Some("api".to_string())
+        );
+    }
+
+    #[test]
+    fn test_route_table_remove_app_routes() {
+        let mut table = RouteTable::default();
+        table.set_app_routes("api".to_string(), vec!["api.example.com".to_string()]);
+        table.set_app_routes("web".to_string(), vec!["example.com".to_string()]);
+
+        table.remove_app_routes("api");
+
+        assert_eq!(table.routes_for_app("api"), Vec::<String>::new());
+        assert_eq!(
+            table.select("api.example.com", "/"),
+            None,
+            "removed app routes should no longer match"
+        );
+        assert_eq!(
+            table.select("example.com", "/"),
+            Some("web".to_string()),
+            "other apps should remain routable"
         );
     }
 

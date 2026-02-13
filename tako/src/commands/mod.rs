@@ -1,3 +1,4 @@
+pub mod delete;
 pub mod deploy;
 pub mod dev;
 pub mod doctor;

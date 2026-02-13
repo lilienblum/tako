@@ -8,7 +8,7 @@ Rust crate for the `tako` CLI and `tako-dev-server` local daemon binaries.
 - Local development flow (`tako dev`, `tako doctor`).
 - Local development daemon runtime (`tako-dev-server`).
 - Deployment orchestration (`tako deploy`).
-- Remote operational commands (`status`, `logs`, `servers`, `secrets`).
+- Remote operational commands (`status`, `logs`, `delete`, `servers`, `secrets`).
 - Config loading/validation, runtime detection, and SSH interactions.
 
 ## Command Surface
@@ -24,6 +24,7 @@ Primary subcommands:
 - `secrets`
 - `upgrade`
 - `deploy`
+- `delete`
 
 Use `cargo run -p tako --bin tako -- --help` for current flags and subcommand help.
 
