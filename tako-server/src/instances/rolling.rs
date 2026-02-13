@@ -47,6 +47,17 @@ pub struct RollingUpdater {
     spawner: Arc<Spawner>,
 }
 
+/// Determine how many instances the incoming build should start during rollout.
+///
+/// The `instances` value is interpreted per build (not across old+new combined),
+/// and on-demand (`0`) still starts one temporary instance for startup validation.
+pub(crate) fn target_new_instances_for_build(
+    requested_instances: u32,
+    _existing_instances: usize,
+) -> u32 {
+    requested_instances.max(1)
+}
+
 impl RollingUpdater {
     pub fn new(spawner: Arc<Spawner>, config: RollingUpdateConfig) -> Self {
         Self { config, spawner }
@@ -66,9 +77,9 @@ impl RollingUpdater {
         &self,
         app: &App,
         new_config: AppConfig,
+        target_count: u32,
     ) -> Result<RollingUpdateResult, InstanceError> {
         let old_instances: Vec<Arc<Instance>> = app.get_instances();
-        let target_count = new_config.min_instances.max(old_instances.len() as u32);
 
         tracing::info!(
             app = %app.name(),
@@ -291,6 +302,18 @@ mod tests {
         assert_eq!(config.health_timeout, Duration::from_secs(60));
         assert_eq!(config.drain_timeout, Duration::from_secs(10));
         assert_eq!(config.batch_size, 2);
+    }
+
+    #[test]
+    fn target_new_instances_is_per_build_not_total_existing() {
+        assert_eq!(target_new_instances_for_build(1, 4), 1);
+        assert_eq!(target_new_instances_for_build(3, 1), 3);
+    }
+
+    #[test]
+    fn target_new_instances_uses_single_validation_instance_for_zero() {
+        assert_eq!(target_new_instances_for_build(0, 5), 1);
+        assert_eq!(target_new_instances_for_build(0, 0), 1);
     }
 
     #[tokio::test]

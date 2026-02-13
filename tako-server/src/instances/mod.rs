@@ -78,6 +78,8 @@ pub struct Instance {
     pub id: u32,
     /// Port the instance is listening on
     pub port: u16,
+    /// Build version this instance was launched from
+    build_version: String,
     /// Process handle
     process: RwLock<Option<Child>>,
     /// Process ID
@@ -98,10 +100,11 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn new(id: u32, port: u16) -> Self {
+    pub fn new(id: u32, port: u16, build_version: String) -> Self {
         Self {
             id,
             port,
+            build_version,
             process: RwLock::new(None),
             pid: AtomicU32::new(0),
             state: RwLock::new(InstanceState::Starting),
@@ -124,6 +127,10 @@ impl Instance {
     pub fn pid(&self) -> Option<u32> {
         let pid = self.pid.load(Ordering::Relaxed);
         if pid > 0 { Some(pid) } else { None }
+    }
+
+    pub fn build_version(&self) -> &str {
+        &self.build_version
     }
 
     pub fn set_pid(&self, pid: u32) {
@@ -325,7 +332,7 @@ impl App {
         let id = self.next_instance_id.fetch_add(1, Ordering::Relaxed);
         let config = self.config.read();
         let port = config.base_port + (id - 1) as u16;
-        let instance = Arc::new(Instance::new(id, port));
+        let instance = Arc::new(Instance::new(id, port, config.version.clone()));
         self.instances.insert(id, instance.clone());
         instance
     }
@@ -461,7 +468,7 @@ mod tests {
 
     #[test]
     fn test_instance_state_transitions() {
-        let instance = Instance::new(1, 3000);
+        let instance = Instance::new(1, 3000, "v1".to_string());
         assert_eq!(instance.state(), InstanceState::Starting);
 
         instance.set_state(InstanceState::Ready);
@@ -473,7 +480,7 @@ mod tests {
 
     #[test]
     fn test_instance_request_tracking() {
-        let instance = Instance::new(1, 3000);
+        let instance = Instance::new(1, 3000, "v1".to_string());
         assert_eq!(instance.requests_total(), 0);
 
         instance.request_started();
@@ -491,6 +498,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let config = AppConfig {
             name: "test-app".to_string(),
+            version: "v1".to_string(),
             base_port: 3000,
             ..Default::default()
         };
@@ -507,6 +515,28 @@ mod tests {
         let i3 = app.allocate_instance();
         assert_eq!(i3.id, 3);
         assert_eq!(i3.port, 3002);
+    }
+
+    #[test]
+    fn test_allocate_instance_tracks_build_version() {
+        let (tx, _rx) = mpsc::channel(16);
+        let config = AppConfig {
+            name: "test-app".to_string(),
+            version: "v1".to_string(),
+            base_port: 3000,
+            ..Default::default()
+        };
+        let app = App::new(config, tx);
+
+        let v1_instance = app.allocate_instance();
+        assert_eq!(v1_instance.build_version(), "v1");
+
+        let mut next = app.config.read().clone();
+        next.version = "v2".to_string();
+        app.update_config(next);
+
+        let v2_instance = app.allocate_instance();
+        assert_eq!(v2_instance.build_version(), "v2");
     }
 
     #[test]

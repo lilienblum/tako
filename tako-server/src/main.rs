@@ -16,13 +16,16 @@ mod tls;
 
 use crate::app_command::command_for_release_dir;
 use crate::instances::{
-    AppConfig, AppManager, HealthChecker, HealthConfig, InstanceEvent, RollingUpdateConfig,
-    RollingUpdater,
+    App, AppConfig, AppManager, HealthChecker, HealthConfig, InstanceEvent, RollingUpdateConfig,
+    RollingUpdater, target_new_instances_for_build,
 };
 use crate::lb::LoadBalancer;
 use crate::routing::RouteTable;
 use crate::scaling::{ColdStartConfig, ColdStartManager, IdleConfig, IdleEvent, IdleMonitor};
-use crate::socket::{AppState, AppStatus, Command, Response, SocketServer};
+use crate::socket::{
+    AppState, AppStatus, BuildStatus, Command, InstanceState, InstanceStatus, Response,
+    SocketServer,
+};
 use crate::tls::{AcmeClient, AcmeConfig, CertManager, CertManagerConfig};
 use clap::Parser;
 use std::collections::HashMap;
@@ -311,15 +314,24 @@ impl ServerState {
         if app.get_instances().is_empty() {
             // First deploy / currently stopped.
             if deploy_config.min_instances == 0 {
-                app.set_state(AppState::Idle);
-                self.cold_start.reset(app_name);
-                Response::ok(serde_json::json!({
-                    "status": "deployed",
-                    "app": app_name,
-                    "version": version,
-                    "new_app": is_new_app,
-                    "on_demand": true
-                }))
+                match self.validate_on_demand_startup(&app).await {
+                    Ok(()) => {
+                        app.set_state(AppState::Idle);
+                        self.cold_start.reset(app_name);
+                        Response::ok(serde_json::json!({
+                            "status": "deployed",
+                            "app": app_name,
+                            "version": version,
+                            "new_app": is_new_app,
+                            "on_demand": true,
+                            "startup_validated": true
+                        }))
+                    }
+                    Err(e) => {
+                        app.set_state(AppState::Error);
+                        Response::error(format!("Deploy failed: {}", e))
+                    }
+                }
             } else {
                 match self.app_manager.start_app(app_name).await {
                     Ok(()) => {
@@ -345,19 +357,53 @@ impl ServerState {
 
             let rolling_config = RollingUpdateConfig::default();
             let updater = RollingUpdater::new(self.app_manager.spawner().clone(), rolling_config);
+            let target_new_instances = target_new_instances_for_build(
+                deploy_config.min_instances,
+                app.get_instances().len(),
+            );
 
-            match updater.update(&app, deploy_config).await {
+            match updater
+                .update(&app, deploy_config.clone(), target_new_instances)
+                .await
+            {
                 Ok(result) => {
                     if result.success {
-                        app.set_state(AppState::Running);
-                        Response::ok(serde_json::json!({
-                            "status": "deployed",
-                            "app": app_name,
-                            "version": version,
-                            "new_instances": result.new_instances,
-                            "old_instances": result.old_instances,
-                            "rolled_back": false
-                        }))
+                        if deploy_config.min_instances == 0 {
+                            let instances = app.get_instances();
+                            for instance in instances {
+                                if let Err(e) = instance.kill().await {
+                                    tracing::warn!(
+                                        app = app_name,
+                                        instance = instance.id,
+                                        "Failed to stop validation instance after deploy: {}",
+                                        e
+                                    );
+                                }
+                                app.remove_instance(instance.id);
+                            }
+                            app.set_state(AppState::Idle);
+                            self.cold_start.reset(app_name);
+                            Response::ok(serde_json::json!({
+                                "status": "deployed",
+                                "app": app_name,
+                                "version": version,
+                                "new_instances": result.new_instances,
+                                "old_instances": result.old_instances,
+                                "rolled_back": false,
+                                "on_demand": true,
+                                "startup_validated": true
+                            }))
+                        } else {
+                            app.set_state(AppState::Running);
+                            Response::ok(serde_json::json!({
+                                "status": "deployed",
+                                "app": app_name,
+                                "version": version,
+                                "new_instances": result.new_instances,
+                                "old_instances": result.old_instances,
+                                "rolled_back": false
+                            }))
+                        }
                     } else {
                         app.set_state(previous_state);
                         Response::error(
@@ -434,12 +480,15 @@ impl ServerState {
             None => return Response::error(format!("App not found: {}", app_name)),
         };
 
-        let instances = app.get_instances().iter().map(|i| i.status()).collect();
+        let instances: Vec<InstanceStatus> =
+            app.get_instances().iter().map(|i| i.status()).collect();
+        let builds = collect_running_build_statuses(&app);
 
         let status = AppStatus {
             name: app.name(),
             version: app.version(),
             instances,
+            builds,
             state: app.state(),
             last_error: app.last_error(),
         };
@@ -520,7 +569,9 @@ impl ServerState {
         let updater = RollingUpdater::new(self.app_manager.spawner().clone(), rolling_config);
 
         // Perform rolling update
-        match updater.update(&app, config).await {
+        let target_new_instances =
+            target_new_instances_for_build(config.min_instances, app.get_instances().len());
+        match updater.update(&app, config, target_new_instances).await {
             Ok(result) => {
                 if result.success {
                     app.set_state(AppState::Running);
@@ -609,6 +660,80 @@ impl ServerState {
             .and_then(|l| l.local_addr().ok().map(|a| a.port()))
             .unwrap_or(3000)
     }
+
+    async fn validate_on_demand_startup(&self, app: &Arc<App>) -> Result<(), String> {
+        let instance = app.allocate_instance();
+        let spawner = self.app_manager.spawner();
+
+        match spawner.spawn(app, instance.clone()).await {
+            Ok(()) => {
+                if let Err(e) = instance.kill().await {
+                    tracing::warn!(
+                        app = %app.name(),
+                        instance = instance.id,
+                        "Failed to stop startup validation instance: {}",
+                        e
+                    );
+                }
+                app.remove_instance(instance.id);
+                Ok(())
+            }
+            Err(e) => {
+                app.remove_instance(instance.id);
+                Err(format!("Startup validation failed: {}", e))
+            }
+        }
+    }
+}
+
+fn collect_running_build_statuses(app: &App) -> Vec<BuildStatus> {
+    let mut instances_by_build: HashMap<String, Vec<InstanceStatus>> = HashMap::new();
+    for instance in app.get_instances() {
+        instances_by_build
+            .entry(instance.build_version().to_string())
+            .or_default()
+            .push(instance.status());
+    }
+
+    let mut builds: Vec<BuildStatus> = instances_by_build
+        .into_iter()
+        .map(|(version, instances)| BuildStatus {
+            state: derive_build_state(&instances),
+            version,
+            instances,
+        })
+        .collect();
+
+    let current_version = app.version();
+    builds.sort_by(|a, b| a.version.cmp(&b.version));
+    if let Some(index) = builds.iter().position(|b| b.version == current_version) {
+        let current = builds.remove(index);
+        builds.insert(0, current);
+    }
+
+    builds
+}
+
+fn derive_build_state(instances: &[InstanceStatus]) -> AppState {
+    if instances
+        .iter()
+        .any(|i| i.state == InstanceState::Healthy || i.state == InstanceState::Ready)
+    {
+        return AppState::Running;
+    }
+    if instances
+        .iter()
+        .any(|i| i.state == InstanceState::Starting || i.state == InstanceState::Draining)
+    {
+        return AppState::Deploying;
+    }
+    if instances
+        .iter()
+        .any(|i| i.state == InstanceState::Unhealthy)
+    {
+        return AppState::Error;
+    }
+    AppState::Stopped
 }
 
 fn validate_deploy_routes(routes: &[String]) -> Result<(), String> {
@@ -1059,19 +1184,32 @@ async fn replace_instance_if_needed(
         }
     };
 
-    // Check if we should replace this instance
-    let current_count = app.get_instances().len() as u32;
+    // Check if we should replace this instance.
+    // Instance counts are evaluated per build/version, not across all builds.
+    let failed_build = instance.build_version().to_string();
+    let current_version = app.version();
+    let current_count = app
+        .get_instances()
+        .into_iter()
+        .filter(|i| i.build_version() == failed_build.as_str())
+        .count() as u32;
     let min_instances = app.config.read().min_instances;
+    let min_for_build = if failed_build == current_version {
+        min_instances
+    } else {
+        0
+    };
 
-    // Only replace if we're at or below min_instances
+    // Only replace if we're at or below the per-build minimum
     // (don't want to scale up just because one instance is unhealthy)
-    if current_count > min_instances {
+    if current_count > min_for_build {
         tracing::info!(
             app = %app_name,
             instance = instance_id,
             reason = reason,
+            build = %failed_build,
             current = current_count,
-            min = min_instances,
+            min = min_for_build,
             "Not replacing {} instance: have more than minimum instances",
             reason
         );
@@ -1127,8 +1265,9 @@ async fn replace_instance_if_needed(
 mod tests {
     use super::{ServerState, install_rustls_crypto_provider, validate_deploy_routes};
     use crate::instances::AppConfig;
-    use crate::socket::{Command, Response};
+    use crate::socket::{Command, InstanceState, Response};
     use crate::tls::{CertManager, CertManagerConfig};
+    use serde_json::Value;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -1220,5 +1359,100 @@ mod tests {
             .await;
         assert!(matches!(response, Response::Ok { .. }));
         assert!(state.app_manager.get_app("missing-app").is_none());
+    }
+
+    #[tokio::test]
+    async fn deploy_on_demand_validates_startup_and_fails_for_unhealthy_build() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None);
+
+        let release_dir = temp
+            .path()
+            .join("apps")
+            .join("broken-app")
+            .join("releases")
+            .join("v1");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(
+            release_dir.join("package.json"),
+            r#"{"name":"broken-app","scripts":{"dev":"bun run index.ts"}}"#,
+        )
+        .unwrap();
+        // This script exits immediately and never exposes /_tako/status.
+        std::fs::write(
+            release_dir.join("index.ts"),
+            "console.log('boot then exit');",
+        )
+        .unwrap();
+
+        let response = state
+            .handle_command(Command::Deploy {
+                app: "broken-app".to_string(),
+                version: "v1".to_string(),
+                path: release_dir.to_string_lossy().to_string(),
+                routes: vec!["broken.localhost".to_string()],
+                instances: 0,
+                idle_timeout: 300,
+            })
+            .await;
+
+        assert!(
+            matches!(response, Response::Error { .. }),
+            "expected startup validation failure for on-demand deploy: {response:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn status_includes_running_builds_for_each_version() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None);
+
+        let app = state.app_manager.register_app(AppConfig {
+            name: "my-app".to_string(),
+            version: "v1".to_string(),
+            min_instances: 0,
+            ..Default::default()
+        });
+
+        let old = app.allocate_instance();
+        old.set_state(InstanceState::Healthy);
+
+        let mut cfg = app.config.read().clone();
+        cfg.version = "v2".to_string();
+        app.update_config(cfg);
+
+        let new = app.allocate_instance();
+        new.set_state(InstanceState::Healthy);
+
+        let response = state
+            .handle_command(Command::Status {
+                app: "my-app".to_string(),
+            })
+            .await;
+
+        let Response::Ok { data } = response else {
+            panic!("expected ok status response");
+        };
+
+        let builds = data
+            .get("builds")
+            .and_then(Value::as_array)
+            .expect("status should include builds");
+        let versions: Vec<&str> = builds
+            .iter()
+            .filter_map(|b| b.get("version").and_then(Value::as_str))
+            .collect();
+        assert!(
+            versions.contains(&"v1") && versions.contains(&"v2"),
+            "expected status to include both running builds: {data}"
+        );
     }
 }

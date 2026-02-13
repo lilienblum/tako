@@ -15,7 +15,9 @@ use tokio::net::{UnixListener, UnixStream};
 use tako_socket::serve_jsonl_connection;
 
 // Re-export protocol types from tako-core for shared use
-pub use tako_core::{AppState, AppStatus, Command, InstanceState, InstanceStatus, Response};
+pub use tako_core::{
+    AppState, AppStatus, BuildStatus, Command, InstanceState, InstanceStatus, Response,
+};
 
 /// Management socket server
 pub struct SocketServer {

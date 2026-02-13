@@ -114,9 +114,19 @@ pub struct AppStatus {
     pub name: String,
     pub version: String,
     pub instances: Vec<InstanceStatus>,
+    #[serde(default)]
+    pub builds: Vec<BuildStatus>,
     pub state: AppState,
 
     pub last_error: Option<String>,
+}
+
+/// Runtime status for a specific build/version of an app.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BuildStatus {
+    pub version: String,
+    pub state: AppState,
+    pub instances: Vec<InstanceStatus>,
 }
 
 /// Instance status information
@@ -268,5 +278,19 @@ mod tests {
     fn test_instance_state_display() {
         assert_eq!(InstanceState::Healthy.to_string(), "healthy");
         assert_eq!(InstanceState::Draining.to_string(), "draining");
+    }
+
+    #[test]
+    fn test_app_status_deserializes_without_builds_field() {
+        let value = serde_json::json!({
+            "name": "demo",
+            "version": "v1",
+            "instances": [],
+            "state": "running",
+            "last_error": null
+        });
+
+        let status: AppStatus = serde_json::from_value(value).unwrap();
+        assert!(status.builds.is_empty());
     }
 }

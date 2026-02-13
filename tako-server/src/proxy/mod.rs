@@ -13,7 +13,7 @@ pub use static_files::*;
 use crate::lb::{Backend, LoadBalancer};
 use crate::routing::RouteTable;
 use crate::scaling::ColdStartManager;
-use crate::socket::{AppStatus, InstanceStatus};
+use crate::socket::{AppState, AppStatus, BuildStatus, InstanceState, InstanceStatus};
 use crate::tls::{
     CertInfo, CertManager, ChallengeHandler, ChallengeTokens, SelfSignedGenerator,
     create_sni_callbacks,
@@ -164,6 +164,7 @@ impl TakoProxy {
                     version: app.version(),
                     state: app.state(),
                     instances,
+                    builds: collect_build_statuses(&app),
                     last_error: app.last_error(),
                 });
             }
@@ -175,6 +176,57 @@ impl TakoProxy {
             uptime_secs: None, // Could track server start time if needed
         }
     }
+}
+
+fn collect_build_statuses(app: &crate::instances::App) -> Vec<BuildStatus> {
+    let mut instances_by_build: std::collections::HashMap<String, Vec<InstanceStatus>> =
+        std::collections::HashMap::new();
+    for instance in app.get_instances() {
+        instances_by_build
+            .entry(instance.build_version().to_string())
+            .or_default()
+            .push(instance.status());
+    }
+
+    let mut builds: Vec<BuildStatus> = instances_by_build
+        .into_iter()
+        .map(|(version, instances)| BuildStatus {
+            state: derive_build_state(&instances),
+            version,
+            instances,
+        })
+        .collect();
+
+    let current_version = app.version();
+    builds.sort_by(|a, b| a.version.cmp(&b.version));
+    if let Some(index) = builds.iter().position(|b| b.version == current_version) {
+        let current = builds.remove(index);
+        builds.insert(0, current);
+    }
+
+    builds
+}
+
+fn derive_build_state(instances: &[InstanceStatus]) -> AppState {
+    if instances
+        .iter()
+        .any(|i| i.state == InstanceState::Healthy || i.state == InstanceState::Ready)
+    {
+        return AppState::Running;
+    }
+    if instances
+        .iter()
+        .any(|i| i.state == InstanceState::Starting || i.state == InstanceState::Draining)
+    {
+        return AppState::Deploying;
+    }
+    if instances
+        .iter()
+        .any(|i| i.state == InstanceState::Unhealthy)
+    {
+        return AppState::Error;
+    }
+    AppState::Stopped
 }
 
 /// Request context for tracking which backend is serving

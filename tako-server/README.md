@@ -10,6 +10,8 @@ Rust crate for the remote Tako runtime and proxy.
 - Redirect HTTP traffic to HTTPS (except ACME challenge and `/_tako/status`).
 - Perform active health probing.
 - Serve management commands over Unix socket.
+- Report per-build runtime status (multiple concurrently running builds during rollout).
+- Validate on-demand (`instances = 0`) deploy startup before finalizing idle state.
 
 Routing policy notes:
 
@@ -44,6 +46,6 @@ cargo run -p tako-server -- \
 
 ## Related Docs
 
-- `docs/guides/quickstart.md` (remote server install + first deploy setup)
-- `docs/guides/deployment.md` (deploy flow and runtime expectations)
-- `docs/architecture/overview.md` (runtime component/data-flow context)
+- `website/src/content/docs/guides/quickstart.md` (remote server install + first deploy setup)
+- `website/src/content/docs/guides/deployment.md` (deploy flow and runtime expectations)
+- `website/src/content/docs/architecture/overview.md` (runtime component/data-flow context)
