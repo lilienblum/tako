@@ -160,6 +160,39 @@ mod tests {
     }
 
     #[test]
+    fn servers_status_without_name_parses() {
+        let cli = Cli::try_parse_from(["tako", "servers", "status"]).unwrap();
+        let Commands::Servers(server::ServerCommands::Status) = cli.command.expect("command")
+        else {
+            panic!("expected Servers::Status");
+        };
+    }
+
+    #[test]
+    fn servers_status_with_name_is_rejected() {
+        let res = Cli::try_parse_from(["tako", "servers", "status", "prod"]);
+        match res {
+            Ok(_) => panic!("expected parse failure"),
+            Err(err) => assert!(
+                err.to_string().contains("unexpected argument 'prod'"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+
+    #[test]
+    fn top_level_status_command_is_not_available() {
+        let res = Cli::try_parse_from(["tako", "status"]);
+        match res {
+            Ok(_) => panic!("expected parse failure"),
+            Err(err) => assert!(
+                err.to_string().contains("unrecognized subcommand 'status'"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+
+    #[test]
     fn secrets_remove_aliases_parse() {
         let cli = Cli::try_parse_from(["tako", "secrets", "remove", "API_KEY"]).unwrap();
         let Some(Commands::Secrets(secret::SecretCommands::Rm { name, env })) = cli.command else {
@@ -280,13 +313,6 @@ pub enum Commands {
         dir: Option<std::path::PathBuf>,
     },
 
-    /// Show deployment status across all environments
-    Status {
-        /// Run in this directory (defaults to current directory)
-        #[arg(value_name = "DIR")]
-        dir: Option<std::path::PathBuf>,
-    },
-
     /// View remote logs
     Logs {
         /// Environment to view logs from
@@ -374,14 +400,6 @@ impl Cli {
                     std::env::set_current_dir(dir)?;
                 }
                 commands::init::run(force)
-            }
-            Commands::Status { dir } => {
-                if let Some(dir) = dir {
-                    std::env::set_current_dir(dir)?;
-                }
-                // Status command needs async runtime for SSH queries
-                let rt = tokio::runtime::Runtime::new()?;
-                rt.block_on(commands::status::run())
             }
             Commands::Logs { env } => commands::logs::run(&env),
             Commands::Dev { tui, no_tui, dir } => {

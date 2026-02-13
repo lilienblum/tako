@@ -1,8 +1,17 @@
 # Quickstart
 
-Use this guide to get from zero to first deployment with Tako.
+This is the fastest path from "I just installed Tako" to "my app is live."
 
-## Developer machine
+## Related Docs
+
+- [Install](/docs/install): install and uninstall commands for local CLI and remote runtime.
+- [Development](/docs/development): local HTTPS flow and `tako dev` behavior.
+- [Deployment](/docs/deployment): production deploy flow and server prerequisites.
+- [Architecture](/docs/architecture): control/data plane overview.
+- [tako.toml Reference](/docs/tako-toml): complete project config options.
+- [Operations](/docs/operations): troubleshooting runbook for local and remote issues.
+
+## Local setup
 
 Install the CLI:
 
@@ -19,7 +28,7 @@ From your app directory:
 bun add tako.sh
 ```
 
-- Confirm local prerequisites:
+- Check local prerequisites:
 
 ```bash
 tako doctor
@@ -31,7 +40,7 @@ tako doctor
 tako dev
 ```
 
-## Remote server
+## Remote setup
 
 On each deployment host (as `root` or with `sudo`), install the runtime:
 
@@ -56,7 +65,7 @@ route = "my-app.example.com"
 env = "production"
 ```
 
-`tako dev` uses `{app}.tako.local` by default. Add `[envs.development]` only when you need custom local routes.
+`tako dev` uses `{app}.tako.local` by default. Add `[envs.development]` only when you want custom local routes.
 
 Deploy:
 
@@ -64,14 +73,15 @@ Deploy:
 tako deploy --env production
 ```
 
-Need all config options? See the full reference: `../reference/tako-toml.md`.
+Need every config option? See the full [tako.toml reference](/docs/tako-toml).
+Need uninstall steps? See [Uninstall CLI](/docs/install#uninstall-cli-curl) and [Uninstall Server Runtime](/docs/install#uninstall-server-curl).
 
 ## How Tako works
 
 1. `tako dev` runs your app locally and routes HTTPS traffic through `tako-dev-server`.
 2. `tako deploy` builds your app locally, then uploads releases to remote hosts over SSH.
 3. `tako-server` runs instances, probes health, and shifts traffic to healthy targets.
-4. Runtime status and logs stay accessible through `tako status` and `tako logs`.
+4. Runtime status and logs stay available through `tako servers status` and `tako logs`.
 
 ## What Tako can do
 

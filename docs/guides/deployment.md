@@ -1,12 +1,13 @@
 # Deployment
 
-This document describes how `tako deploy` works in practice and what remote servers must provide.
+This guide explains what `tako deploy` actually does and what your remote servers need in place.
 
 ## Related Docs
 
-- `quickstart.md`: install and first deployment setup.
-- `operations.md`: day-2 deploy verification and incident triage commands.
-- `../architecture/overview.md`: runtime data/control plane context.
+- [Quickstart](/docs/quickstart): install and first deployment setup.
+- [Operations](/docs/operations): day-2 deploy verification and incident triage commands.
+- [Architecture](/docs/architecture): runtime data/control plane context.
+- [tako.toml Reference](/docs/tako-toml): complete config and route reference.
 
 ## Overview
 
@@ -16,21 +17,21 @@ From an app directory, run:
 tako deploy [--env <environment>]
 ```
 
-Deploy behavior:
+What happens during deploy:
 
 - Build happens locally.
 - A versioned tarball is created under `.tako/build/`.
 - Deploys run to all target servers in parallel.
-- Each server is handled independently (partial success across servers is possible).
+- Each server is handled independently, so partial success is possible.
 
 ## Pre-Deploy Checklist
 
-Before running deploy from a project directory:
+Before you ship, do a quick sanity pass:
 
-1. Ensure target hosts exist in `~/.tako/config.toml` (or `tako servers ls`).
-2. Confirm `tako.toml` has route/env/server mappings for intended environment.
+1. Ensure target hosts exist in `~/.tako/config.toml` (or check with `tako servers ls`).
+2. Confirm `tako.toml` has route/env/server mappings for the target environment.
 3. Verify secrets are present for the target env (`tako secrets sync` if needed).
-4. Run local tests/build to avoid pushing a broken artifact.
+4. Run your local tests/build so you do not upload a broken artifact.
 
 ## Server Prerequisites
 
@@ -44,7 +45,7 @@ Each target server should have:
 
 ## Configuration Inputs
 
-### Project config (`tako.toml`)
+### Project config ([`tako.toml`](/docs/tako-toml))
 
 - `tako.toml` is required in the project root.
 - Defines environments and routes.
@@ -99,19 +100,18 @@ Each target server should have:
 
 ## Operational Notes
 
-- Use `tako status` to inspect deployed app state by environment.
+- Use `tako servers status` to inspect deployed app state and per-server service/connectivity state.
 - Use `tako logs --env <environment>` to stream remote logs.
-- Use `tako servers status <name>` to inspect remote `tako-server` install/service state.
-- HTTP requests are redirected to HTTPS by default (ACME challenge and `/_tako/status` remain on HTTP).
+- HTTP requests are redirected to HTTPS by default (ACME challenge and `/_tako/status` stay on HTTP).
 
 ## Post-Deploy Verification
 
-Immediately after deploy:
+Right after deploy:
 
-1. Run `tako status` and confirm routes/instances are healthy for the target environment/app.
+1. Run `tako servers status` and confirm routes/instances are healthy for the target environment/app.
 2. Open one or more public routes and validate response headers/body.
 3. Tail logs with `tako logs --env <environment>` for startup/runtime errors.
-4. If only a subset of servers succeeded, re-run deploy after correcting failed hosts.
+4. If only a subset of servers succeeded, re-run deploy after fixing failed hosts.
 
 ## Running Deploy E2E Tests
 

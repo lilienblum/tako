@@ -84,6 +84,7 @@ env = "production"
 **Instance behavior:**
 
 - `instances = 0`: On-demand. First request triggers a cold start; proxy returns `503 App is starting` until an instance becomes healthy. Instances are stopped after idle timeout.
+  - Deploy still performs a startup validation by briefly starting one instance. If startup/health fails, deploy fails. On success, that validation instance is stopped so the app remains on-demand.
 - `instances = N` (N > 0): Always-on. Minimum N instances maintained, scales up on load, scales down after idle timeout.
 - `idle_timeout`: Applies per-instance (default 300s / 5 minutes)
 - Instances are not stopped while serving in-flight requests.
@@ -174,7 +175,6 @@ tako upgrade
 Directory selection is command-scoped:
 
 - `tako init [DIR]`
-- `tako status [DIR]`
 - `tako dev [DIR]`
 - `tako deploy [DIR]`
 - `tako delete [DIR]`
@@ -325,35 +325,38 @@ Start (or attach to) a local development session for the current app, backed by 
 - Loads from `[vars]` + `[vars.development]` in tako.toml
 - `ENV=development`, `BUN_ENV=development`, `NODE_ENV=development`
 
-### tako status [DIR]
+### tako servers status
 
-Show global deployment status from configured servers, with one server block per configured host and app lines nested under each server:
+Show global deployment status from configured servers, with one server block per configured host and one app block per running build nested under each server:
 
 ```
-Servers
 ✓ la (v0.1.0) up
-  │ dashboard (production) running
+  ┌ dashboard (production) running
   │ instances: 2/2
   │ build: abc1234
-  │ deployed: 2026-02-08 11:48:19
+  └ deployed: 2026-02-08 11:48:19
 ────────────────────────────────────────
 ! nyc (v0.1.0) up
-  │ worker (unknown) unknown
+  ┌ worker (unknown) running
+  │ instances: 1/1
+  │ build: old5678
+  └ deployed: 2026-02-08 11:40:10
+  ┌ worker (unknown) deploying
   │ instances: -/-
-  │ build: -
-  │ deployed: -
+  │ build: new9012
+  └ deployed: -
 ```
 
-Shows: a `Servers` section, server connectivity/service lines, and per-app lines in `app-name (environment) state` form.
-App heading/detail rows are shown with a left `│` guide border for readability.
+Shows server connectivity/service lines and per-build app blocks with heading lines in `app-name (environment) state` form.
+Each app block uses a tree connector (`┌` heading, `│` detail continuation, `└` final deployed line).
 Environment is inferred from deployed release metadata when available; otherwise app status uses `unknown`.
 App state text is color-coded (`running` success, `idle` muted, `deploying`/`stopped` warning, `error` error).
-Each app line includes instance summary (`healthy/total`), build, and deployed timestamp (formatted in the user's current locale and local time, without timezone suffix).
-In interactive terminals, each server check runs with a spinner before rendering final status lines.
+Each app block includes instance summary (`healthy/total`), build, and deployed timestamp (formatted in the user's current locale and local time, without timezone suffix).
+`tako servers status` prints a single snapshot and exits.
 
 Status flow helpers:
 
-- `tako status` does not require `tako.toml` and can run from any directory.
+- `tako servers status` does not require `tako.toml` and can run from any directory.
 - Uses global server inventory from `~/.tako/config.toml`.
 - If no servers are configured and the terminal is interactive, status offers to run the add-server wizard.
 - If no deployed apps are found, status reports that explicitly.
@@ -424,14 +427,6 @@ Use for: binary updates, major configuration changes, system recovery.
 Reload configuration (secrets) for all apps without restarting.
 
 Apps must implement `onConfigReload` handler in SDK to handle this.
-
-### tako servers status {server-name}
-
-Show remote server health details:
-
-- whether `tako-server` is installed (and version when available)
-- service status (`active` / `inactive` / `failed` / unknown)
-- deployed app summary returned by the runtime control socket
 
 ### tako secrets set [--env {environment}] {name}
 
@@ -542,6 +537,9 @@ Deploy flow helpers:
 5. Repeat until all instances replaced
 6. Update `current` symlink to the new release directory
 7. Clean up releases older than 30 days
+
+Rolling update target counts use the configured `instances` value for the incoming build itself (not old+new combined counts).
+When deploying with `instances = 0`, rolling deploy still starts one temporary validation instance for the new build before finalizing on-demand idle state.
 
 **On failure:** Automatic rollback - kill new instances, keep old ones running, return error to CLI.
 

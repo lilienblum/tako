@@ -59,7 +59,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     if servers.is_empty()
         && server::prompt_to_add_server(
-            "No servers configured yet. Add one now to see live deployment status.",
+            "No servers configured yet. Add one now to see deployment status.",
         )
         .await?
         .is_some()
@@ -77,17 +77,32 @@ async fn run_global_status(servers: &ServersToml) -> Result<(), Box<dyn std::err
         return Ok(());
     }
 
+    let server_names = sorted_server_names(servers);
+
+    let mut server_results = collect_global_status_results(servers, &server_names).await?;
+    render_global_status(&server_names, &mut server_results);
+
+    Ok(())
+}
+
+fn sorted_server_names(servers: &ServersToml) -> Vec<String> {
     let mut server_names: Vec<String> = servers.names().into_iter().map(str::to_string).collect();
     server_names.sort();
+    server_names
+}
 
-    output::section("Servers");
-
-    let mut tasks = spawn_global_status_tasks(servers, &server_names);
+async fn collect_global_status_results(
+    servers: &ServersToml,
+    server_names: &[String],
+) -> Result<HashMap<String, GlobalServerStatusResult>, Box<dyn std::error::Error>> {
+    let mut tasks = spawn_global_status_tasks(servers, server_names);
     let mut server_results: HashMap<String, GlobalServerStatusResult> = HashMap::new();
-    for server_name in &server_names {
+
+    for server_name in server_names {
         let Some(handle) = tasks.remove(server_name.as_str()) else {
             continue;
         };
+
         let status = output::with_spinner_async(
             format!("Loading {}...", server_name),
             collect_global_status_task(handle),
@@ -96,9 +111,16 @@ async fn run_global_status(servers: &ServersToml) -> Result<(), Box<dyn std::err
         server_results.insert(server_name.clone(), status);
     }
 
+    Ok(server_results)
+}
+
+fn render_global_status(
+    server_names: &[String],
+    server_results: &mut HashMap<String, GlobalServerStatusResult>,
+) {
     let mut first_server = true;
 
-    for server_name in &server_names {
+    for server_name in server_names {
         let Some(global) = server_results.remove(server_name.as_str()) else {
             continue;
         };
@@ -117,7 +139,8 @@ async fn run_global_status(servers: &ServersToml) -> Result<(), Box<dyn std::err
         };
 
         let heading = format_server_status_heading(server_name, Some(&server_status));
-        output_status_heading(server_summary_line_level(Some(&server_status)), &heading);
+        let summary_level = server_summary_line_level(Some(&server_status));
+        output_status_heading(summary_level, &heading);
 
         if let Some(err) = server_status.error.as_deref() {
             output::muted(err);
@@ -137,8 +160,6 @@ async fn run_global_status(servers: &ServersToml) -> Result<(), Box<dyn std::err
             output_app_status_block(&heading, status, &details);
         }
     }
-
-    Ok(())
 }
 
 fn spawn_global_status_tasks(
@@ -178,7 +199,21 @@ async fn collect_global_status_task(
 }
 
 fn sort_global_apps(apps: &mut [GlobalAppStatusResult]) {
-    apps.sort_by(|a, b| (&a.app_name, &a.env_name).cmp(&(&b.app_name, &b.env_name)));
+    apps.sort_by(|a, b| {
+        let a_version = a
+            .status
+            .app_status
+            .as_ref()
+            .map(|s| s.version.as_str())
+            .unwrap_or_default();
+        let b_version = b
+            .status
+            .app_status
+            .as_ref()
+            .map(|s| s.version.as_str())
+            .unwrap_or_default();
+        (&a.app_name, &a.env_name, a_version).cmp(&(&b.app_name, &b.env_name, b_version))
+    });
 }
 
 async fn query_global_server_status(
@@ -240,24 +275,39 @@ async fn query_global_server_status(
                             &app_name,
                         )
                         .await;
-                        let env_name = if let Some(app) = status.app_status.as_ref() {
-                            query_remote_app_env_for_server(
-                                &client,
-                                &app_name,
-                                &app.version,
-                                server_name,
-                            )
-                            .await
-                            .unwrap_or_else(|| "unknown".to_string())
-                        } else {
-                            "unknown".to_string()
-                        };
+                        for mut build_status in expand_status_by_running_builds(status) {
+                            let app_version = build_status
+                                .app_status
+                                .as_ref()
+                                .map(|app| app.version.clone());
 
-                        apps.push(GlobalAppStatusResult {
-                            app_name,
-                            env_name,
-                            status,
-                        });
+                            let env_name = if let Some(app_version) = app_version {
+                                build_status.deployed_at_unix_secs =
+                                    query_app_deployed_at_unix_secs(
+                                        &client,
+                                        &app_name,
+                                        &app_version,
+                                    )
+                                    .await;
+
+                                query_remote_app_env_for_server(
+                                    &client,
+                                    &app_name,
+                                    &app_version,
+                                    server_name,
+                                )
+                                .await
+                                .unwrap_or_else(|| "unknown".to_string())
+                            } else {
+                                "unknown".to_string()
+                            };
+
+                            apps.push(GlobalAppStatusResult {
+                                app_name: app_name.clone(),
+                                env_name,
+                                status: build_status,
+                            });
+                        }
                     }
                 }
                 Err(e) => {
@@ -319,6 +369,44 @@ async fn query_connected_app_status(
         app_status,
         deployed_at_unix_secs,
         error,
+    }
+}
+
+fn expand_status_by_running_builds(status: ServerStatusResult) -> Vec<ServerStatusResult> {
+    let Some(app_status) = status.app_status.as_ref() else {
+        return vec![status];
+    };
+
+    if app_status.builds.is_empty() {
+        return vec![status];
+    }
+
+    let mut per_build = Vec::new();
+    for build in &app_status.builds {
+        if build.instances.is_empty() {
+            continue;
+        }
+
+        per_build.push(ServerStatusResult {
+            service_status: status.service_status.clone(),
+            server_version: status.server_version.clone(),
+            app_status: Some(AppStatus {
+                name: app_status.name.clone(),
+                version: build.version.clone(),
+                instances: build.instances.clone(),
+                builds: Vec::new(),
+                state: build.state,
+                last_error: app_status.last_error.clone(),
+            }),
+            deployed_at_unix_secs: status.deployed_at_unix_secs,
+            error: status.error.clone(),
+        });
+    }
+
+    if per_build.is_empty() {
+        vec![status]
+    } else {
+        per_build
     }
 }
 
@@ -484,12 +572,13 @@ fn display_service_state(service: &str) -> &str {
 
 #[cfg(test)]
 fn app_status_heading_line(heading: &str, state: &str) -> String {
-    format!("  │ {} {}", heading, state)
+    format!("  ┌ {} {}", heading, state)
 }
 
 #[cfg(test)]
-fn app_detail_line(detail: &str) -> String {
-    format!("  │ {}", detail)
+fn app_detail_line(detail: &str, is_last: bool) -> String {
+    let connector = if is_last { "└" } else { "│" };
+    format!("  {} {}", connector, detail)
 }
 
 fn server_separator_line() -> &'static str {
@@ -503,15 +592,17 @@ fn output_server_separator() {
 fn output_app_status_block(heading: &str, status: Option<&ServerStatusResult>, details: &[String]) {
     let (state_label, tone) = app_state_label_and_tone(status);
     output_app_status_heading(heading, &state_label, tone);
-    for detail in details {
-        output_app_detail_line(detail);
+    for (idx, detail) in details.iter().enumerate() {
+        let is_last = idx + 1 == details.len();
+        output_app_detail_line(detail, is_last);
     }
 }
 
-fn output_app_detail_line(detail: &str) {
+fn output_app_detail_line(detail: &str, is_last: bool) {
+    let connector = if is_last { "└" } else { "│" };
     println!(
         "  {} {}",
-        output::brand_accent("│").bold(),
+        output::brand_accent(connector).bold(),
         output::brand_muted(detail)
     );
 }
@@ -525,7 +616,7 @@ fn output_app_status_heading(heading: &str, state_label: &str, tone: AppStateTon
     };
     println!(
         "  {} {} {}",
-        output::brand_accent("│").bold(),
+        output::brand_accent("┌").bold(),
         output::brand_fg(heading).bold(),
         state
     );
@@ -628,7 +719,6 @@ fn run_local_date_command(mut cmd: Command) -> Option<String> {
     }
 }
 
-#[cfg(test)]
 #[cfg(test)]
 fn status_line_level(status: Option<&ServerStatusResult>) -> StatusLineLevel {
     let Some(result) = status else {
@@ -734,7 +824,7 @@ fn truncate_str(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tako_core::InstanceStatus;
+    use tako_core::{BuildStatus, InstanceStatus};
 
     #[test]
     fn status_columns_show_service_build_and_state() {
@@ -759,6 +849,7 @@ mod tests {
                     requests_total: 0,
                 },
             ],
+            builds: vec![],
             state: AppState::Running,
             last_error: None,
         };
@@ -799,6 +890,7 @@ mod tests {
                 name: "demo".to_string(),
                 version: "v123".to_string(),
                 instances: vec![],
+                builds: vec![],
                 state: AppState::Idle,
                 last_error: None,
             }),
@@ -825,6 +917,7 @@ mod tests {
                     name: "demo".to_string(),
                     version: "v123".to_string(),
                     instances: vec![],
+                    builds: vec![],
                     state: AppState::Idle,
                     last_error: None,
                 }),
@@ -848,6 +941,7 @@ mod tests {
                 name: "demo".to_string(),
                 version: "v123".to_string(),
                 instances: vec![],
+                builds: vec![],
                 state: AppState::Idle,
                 last_error: None,
             }),
@@ -903,6 +997,58 @@ mod tests {
     }
 
     #[test]
+    fn expand_status_by_running_builds_returns_one_entry_per_build() {
+        let status = ServerStatusResult {
+            service_status: "active".to_string(),
+            server_version: Some("0.1.0".to_string()),
+            app_status: Some(AppStatus {
+                name: "demo".to_string(),
+                version: "v2".to_string(),
+                instances: vec![],
+                builds: vec![
+                    BuildStatus {
+                        version: "v1".to_string(),
+                        state: AppState::Running,
+                        instances: vec![InstanceStatus {
+                            id: 1,
+                            state: InstanceState::Healthy,
+                            port: 3001,
+                            pid: Some(111),
+                            uptime_secs: 10,
+                            requests_total: 0,
+                        }],
+                    },
+                    BuildStatus {
+                        version: "v2".to_string(),
+                        state: AppState::Running,
+                        instances: vec![InstanceStatus {
+                            id: 2,
+                            state: InstanceState::Healthy,
+                            port: 3002,
+                            pid: Some(222),
+                            uptime_secs: 12,
+                            requests_total: 0,
+                        }],
+                    },
+                ],
+                state: AppState::Deploying,
+                last_error: None,
+            }),
+            deployed_at_unix_secs: None,
+            error: None,
+        };
+
+        let expanded = expand_status_by_running_builds(status);
+        let versions: Vec<&str> = expanded
+            .iter()
+            .filter_map(|entry| entry.app_status.as_ref().map(|app| app.version.as_str()))
+            .collect();
+        assert_eq!(expanded.len(), 2);
+        assert!(versions.contains(&"v1"));
+        assert!(versions.contains(&"v2"));
+    }
+
+    #[test]
     fn status_line_level_marks_active_running_as_success() {
         let result = ServerStatusResult {
             service_status: "active".to_string(),
@@ -911,6 +1057,7 @@ mod tests {
                 name: "demo".to_string(),
                 version: "v123".to_string(),
                 instances: vec![],
+                builds: vec![],
                 state: AppState::Running,
                 last_error: None,
             }),
@@ -1070,23 +1217,27 @@ env = "staging"
     fn app_status_heading_line_has_indent_and_state() {
         assert_eq!(
             app_status_heading_line("bun-example (production)", "running"),
-            "  │ bun-example (production) running"
+            "  ┌ bun-example (production) running"
         );
         assert_eq!(
             app_status_heading_line("bun-example (production)", "deploying"),
-            "  │ bun-example (production) deploying"
+            "  ┌ bun-example (production) deploying"
         );
         assert_eq!(
             app_status_heading_line("bun-example (production)", "error"),
-            "  │ bun-example (production) error"
+            "  ┌ bun-example (production) error"
         );
     }
 
     #[test]
     fn app_detail_line_has_consistent_indent() {
         assert_eq!(
-            app_detail_line("instances: 1/1 (running)"),
+            app_detail_line("instances: 1/1 (running)", false),
             "  │ instances: 1/1 (running)"
+        );
+        assert_eq!(
+            app_detail_line("deployed: Fri Feb 13 10:22:20 2026", true),
+            "  └ deployed: Fri Feb 13 10:22:20 2026"
         );
     }
 
@@ -1107,6 +1258,7 @@ env = "staging"
                 name: "demo".to_string(),
                 version: "v123".to_string(),
                 instances: vec![],
+                builds: vec![],
                 state: AppState::Idle,
                 last_error: None,
             }),
@@ -1128,6 +1280,7 @@ env = "staging"
                 name: "demo".to_string(),
                 version: "v123".to_string(),
                 instances: vec![],
+                builds: vec![],
                 state: AppState::Running,
                 last_error: None,
             }),

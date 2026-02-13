@@ -1,6 +1,16 @@
 # Operations Runbook
 
-Day-2 commands and checks for local and remote Tako environments.
+Day-2 checks for local and remote Tako environments.
+
+Use this when things feel weird and you want a clean, repeatable response path.
+
+## Related Docs
+
+- [Quickstart](/docs/quickstart): first-run setup and first deploy flow.
+- [Development](/docs/development): local HTTPS and DNS behavior.
+- [Deployment](/docs/deployment): deploy prerequisites and per-server rollout flow.
+- [Architecture](/docs/architecture): runtime components and data flow.
+- [tako.toml Reference](/docs/tako-toml): env/routes/server mapping reference.
 
 ## Scope
 
@@ -9,7 +19,7 @@ Use this guide when:
 - local development URLs are not reachable,
 - deploys partially fail,
 - traffic is routed but responses are unhealthy,
-- you need a repeatable first response sequence.
+- you need a predictable first-response sequence.
 
 ## Local Development Checks
 
@@ -21,14 +31,14 @@ If DNS or HTTPS is failing:
 
 - verify `/etc/resolver/tako.local` points to `127.0.0.1:53535`,
 - ensure `tako dev` is currently running,
-- re-run `tako doctor` and resolve any reported preflight failures.
+- re-run `tako doctor` and fix any preflight failures it reports.
 
 ## Deploy Triage
 
 When `tako deploy` reports mixed success:
 
 1. Identify failed hosts from deploy output.
-2. Run `tako servers status <name>` for each failed host.
+2. Run `tako servers status` and inspect the failed hosts' sections.
 3. Confirm remote prerequisites (`tako-server`, writable `/opt/tako`, socket access).
 4. Re-run deploy once host-level issues are fixed.
 
@@ -36,14 +46,14 @@ When `tako deploy` reports mixed success:
 
 After deploy (or during incident response):
 
-1. `tako status`
+1. `tako servers status`
 2. `tako logs --env <environment>`
-3. Verify request path/host routing using the public endpoint.
+3. Verify request path/host routing with the public endpoint.
 
 Symptoms and first checks:
 
 - `503 App is starting`: verify instance health/startup logs and wait for probe success.
-- Route mismatch: confirm `tako.toml` route declarations for the selected environment.
+- Route mismatch: confirm [`tako.toml`](/docs/tako-toml) route declarations for the selected environment.
 - Intermittent failures: inspect logs and compare behavior across target servers.
 
 ## Files and Paths Worth Inspecting
@@ -58,7 +68,7 @@ Symptoms and first checks:
 
 If a host remains unhealthy after prerequisite checks and redeploy:
 
-1. collect `tako servers status <name>` output,
+1. collect `tako servers status` output,
 2. collect `tako logs --env <environment>` output,
-3. capture whether issue is host-specific or environment-wide,
-4. include route/env/server mapping from `tako.toml` in the incident report.
+3. capture whether the issue is host-specific or environment-wide,
+4. include route/env/server mapping from [`tako.toml`](/docs/tako-toml) in the incident report.

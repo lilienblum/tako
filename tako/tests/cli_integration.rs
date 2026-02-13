@@ -1025,7 +1025,7 @@ server = "prod-server"
         )
         .unwrap();
 
-        let output = run_tako(&["status"], &project_dir);
+        let output = run_tako(&["servers", "status"], &project_dir);
 
         // Status should show discovered app info or global server/app summary.
         let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
@@ -1034,7 +1034,8 @@ server = "prod-server"
                 || combined.contains("production")
                 || combined.contains("App:")
                 || combined.contains("No deployed apps found on configured servers.")
-                || combined.contains("Servers"),
+                || combined.contains("No deployed apps.")
+                || combined.contains("tako-server"),
             "Should show app info or status: {}",
             combined
         );
@@ -1049,7 +1050,7 @@ server = "prod-server"
         fs::create_dir_all(&home).unwrap();
         fs::create_dir_all(&tako_home).unwrap();
 
-        let output = run_tako_with_env(&["status"], &project_dir, &home, &tako_home);
+        let output = run_tako_with_env(&["servers", "status"], &project_dir, &home, &tako_home);
 
         // Status should work without project config and use global server inventory.
         let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
@@ -1063,6 +1064,27 @@ server = "prod-server"
                 || combined.contains("Add one now")
                 || combined.contains("No deployed apps"),
             "should report global status context when no servers/apps: {}",
+            combined
+        );
+    }
+
+    #[test]
+    fn test_status_with_server_name_is_rejected() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().to_path_buf();
+
+        let output = run_tako(&["servers", "status", "tako-server"], &project_dir);
+
+        assert!(
+            !output.status.success(),
+            "status with server name should be rejected"
+        );
+
+        let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
+        assert!(
+            combined.contains("unexpected argument 'tako-server'")
+                || combined.contains("Usage: tako servers status"),
+            "should show parse usage error: {}",
             combined
         );
     }

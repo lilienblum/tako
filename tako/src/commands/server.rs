@@ -48,11 +48,8 @@ pub enum ServerCommands {
         name: String,
     },
 
-    /// Show status of tako-server on a server
-    Status {
-        /// Server name
-        name: String,
-    },
+    /// Show global deployment status across configured servers
+    Status,
 }
 
 pub fn run(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>> {
@@ -90,7 +87,7 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
         ServerCommands::Ls => list_servers().await,
         ServerCommands::Restart { name } => restart_server(&name).await,
         ServerCommands::Reload { name } => reload_server(&name).await,
-        ServerCommands::Status { name } => status_server(&name).await,
+        ServerCommands::Status => crate::commands::status::run().await,
     }
 }
 
@@ -636,115 +633,6 @@ async fn reload_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
             output::error(&format!("Reload failed: {}", e));
             ssh.disconnect().await?;
             return Err(format!("Failed to reload configuration: {}", e).into());
-        }
-    }
-
-    ssh.disconnect().await?;
-
-    Ok(())
-}
-
-async fn status_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::config::ServersToml;
-    use crate::ssh::{SshClient, SshConfig};
-
-    let servers = ServersToml::load()?;
-
-    let server = servers
-        .get(name)
-        .ok_or_else(|| format!("Server '{}' not found.", name))?;
-
-    let ssh_config = SshConfig::from_server(&server.host, server.port);
-    let mut ssh = SshClient::new(ssh_config);
-    let connect_result = output::with_spinner_async(
-        format!("Connecting to {}", output::emphasized(name)),
-        ssh.connect(),
-    )
-    .await?;
-    connect_result?;
-
-    output::step(&format!(
-        "Server: {} (tako@{}:{})",
-        name, server.host, server.port
-    ));
-
-    // Check tako-server installation
-    match ssh.is_tako_installed().await {
-        Ok(true) => {
-            if let Ok(Some(version)) = ssh.tako_version().await {
-                output::success(&format!("tako-server: {} (installed)", version));
-            } else {
-                output::success("tako-server: installed");
-            }
-        }
-        Ok(false) => {
-            output::warning("tako-server: not installed");
-            ssh.disconnect().await?;
-            return Ok(());
-        }
-        Err(e) => {
-            output::warning(&format!("tako-server: error checking ({})", e));
-        }
-    }
-
-    // Check service status
-    match ssh.tako_status().await {
-        Ok(status) => {
-            let status_display = match status.as_str() {
-                "active" => "active (running)",
-                "inactive" => "inactive (stopped)",
-                "failed" => "failed",
-                other => other,
-            };
-            output::step(&format!("Service status: {}", status_display));
-        }
-        Err(e) => {
-            output::warning(&format!("Service status: unknown ({})", e));
-        }
-    }
-
-    // Get list of apps
-    let list_cmd = serde_json::json!({"List": {}}).to_string();
-    let apps_result =
-        output::with_spinner_async("Querying apps...", ssh.tako_command(&list_cmd)).await?;
-
-    match apps_result {
-        Ok(response) => {
-            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
-                if let Some(apps) = parsed
-                    .get("Ok")
-                    .and_then(|v| v.get("apps"))
-                    .and_then(|v| v.as_array())
-                {
-                    if apps.is_empty() {
-                        output::muted("No apps deployed");
-                    } else {
-                        output::section("Apps");
-                        println!(
-                            "{:<20} {:<15} {:<10} {:<10}",
-                            "APP", "VERSION", "STATE", "INSTANCES"
-                        );
-                        println!("{}", "-".repeat(55));
-                        for app in apps {
-                            let name = app.get("name").and_then(|v| v.as_str()).unwrap_or("-");
-                            let version =
-                                app.get("version").and_then(|v| v.as_str()).unwrap_or("-");
-                            let state = app.get("state").and_then(|v| v.as_str()).unwrap_or("-");
-                            let instances =
-                                app.get("instances").and_then(|v| v.as_u64()).unwrap_or(0);
-                            println!(
-                                "{:<20} {:<15} {:<10} {:<10}",
-                                name, version, state, instances
-                            );
-                        }
-                    }
-                }
-            } else {
-                output::warning("Could not parse app list response");
-            }
-        }
-        Err(e) => {
-            output::warning(&format!("Could not query apps: {}", e));
         }
     }
 
