@@ -20,4 +20,4 @@ cargo test -p tako-core
 
 ## Related Docs
 
-- `docs/architecture/overview.md` (component boundaries and data flow)
+- `website/src/content/docs/architecture/overview.md` (component boundaries and data flow)

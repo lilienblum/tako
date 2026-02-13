@@ -1,18 +1,21 @@
 # Architecture
 
-This document gives a high-level view of Tako's runtime architecture and data flows.
+This is the bird's-eye view of how Tako works at runtime.
+
+If you like mental models: Tako is mostly "CLI sends orders, runtime moves traffic."
 
 ## Related Docs
 
-- `../guides/quickstart.md`: first-run local and remote setup.
-- `../guides/development.md`: local dev runtime behavior and troubleshooting.
-- `../guides/deployment.md`: deploy flow and remote runtime prerequisites.
+- [Quickstart](/docs/quickstart): first-run local and remote setup.
+- [Development](/docs/development): local dev runtime behavior and troubleshooting.
+- [Deployment](/docs/deployment): deploy flow and remote runtime prerequisites.
+- [tako.toml Reference](/docs/tako-toml): environment, route, and server config reference.
 
 ## System Components
 
 ### `tako` (CLI)
 
-- Entry point for `init`, `dev`, `doctor`, `deploy`, `status`, `logs`, `servers`, and `secrets`.
+- Your command center for `init`, `dev`, `doctor`, `deploy`, `status`, `logs`, `servers`, and `secrets`.
 - Detects runtime/build behavior from project files.
 - Builds and packages app artifacts locally.
 - Connects to remote hosts over SSH for deploy/status/log management.
@@ -63,9 +66,9 @@ This document gives a high-level view of Tako's runtime architecture and data fl
 
 ### 1) Local development (`tako dev`)
 
-1. CLI ensures `tako-dev-server` is running.
+1. CLI makes sure `tako-dev-server` is running.
 2. CLI registers lease(s) for development hostnames.
-3. App process runs locally on an ephemeral upstream port.
+3. Your app process runs locally on an ephemeral upstream port.
 4. `tako-dev-server` receives HTTPS traffic and routes by `Host` header.
 5. Idle lifecycle rules stop/restart the app process as needed.
 
@@ -74,7 +77,7 @@ This document gives a high-level view of Tako's runtime architecture and data fl
 1. CLI validates config/runtime/secrets.
 2. CLI builds and archives app locally.
 3. CLI deploys to all target servers in parallel over SSH.
-4. Each server receives archive under `/opt/tako/apps/<app>/releases/<version>/`.
+4. Each server receives an archive under `/opt/tako/apps/<app>/releases/<version>/`.
 5. CLI notifies `tako-server` with deploy command (app, version, routes, scaling settings).
 6. `tako-server` applies rolling update and route table changes.
 
@@ -82,12 +85,12 @@ This document gives a high-level view of Tako's runtime architecture and data fl
 
 1. Client request arrives at `tako-server` HTTP/HTTPS listener.
 2. Route matching chooses target app based on host/path specificity.
-3. App load balancer selects healthy instance.
-4. Request is proxied to selected app instance.
+3. App load balancer selects a healthy instance.
+4. Request is proxied to the selected app instance.
 
 ## Routing Model
 
-- Routes are declared per environment in `tako.toml`.
+- Routes are declared per environment in [`tako.toml`](/docs/tako-toml).
 - Matching uses host + path with deterministic specificity ordering.
 - Route ownership and conflict checks are enforced during deploy validation.
 
@@ -100,13 +103,13 @@ This document gives a high-level view of Tako's runtime architecture and data fl
 
 ## Protocol/Interface Boundaries
 
-- CLI ↔ server runtime: `tako-core` message types over Unix socket (invoked through SSH commands).
-- CLI ↔ remote host: SSH command execution + SCP artifact upload.
-- Local client ↔ dev daemon: Unix socket control API.
-- Proxy ↔ app: HTTP upstream requests (and health probes).
+- CLI <-> server runtime: `tako-core` message types over Unix socket (invoked through SSH commands).
+- CLI <-> remote host: SSH command execution + SCP artifact upload.
+- Local client <-> dev daemon: Unix socket control API.
+- Proxy <-> app: HTTP upstream requests (and health probes).
 
 ## Ownership By Directory
 
-- `tako/`: CLI command implementation, config, SSH, runtime detection, and local dev daemon binary (`src/bin/tako-dev-server`).
+- `tako/`: CLI commands, config, SSH, runtime detection, and local dev daemon binary (`src/bin/tako-dev-server`).
 - `tako-server/`: production runtime, routing, health checks, TLS, deploy orchestration.
 - `tako-core/` and `tako-socket/`: shared protocol and transport boundaries.

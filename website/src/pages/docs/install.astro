@@ -1,8 +1,20 @@
 ---
 import DocsLayout from "../../layouts/DocsLayout.astro";
 ---
-<DocsLayout title="Tako Docs - Install" heading="install">
+<DocsLayout title="Tako Docs - Install" heading="Install" current="install">
+  <h1>Install</h1>
   <p>Use these commands to install Tako locally and on your deployment servers.</p>
+  <p>Jump links (shareable URLs):</p>
+  <ul class="section-jump-links">
+    <li><a href="#install-cli-curl">Install CLI (curl)</a></li>
+    <li><a href="#install-server-curl">Install Server Runtime (curl)</a></li>
+    <li><a href="#uninstall-cli-curl">Uninstall CLI (curl)</a></li>
+    <li><a href="#uninstall-server-curl">Uninstall Server Runtime (curl)</a></li>
+    <li><a href="#install-cli-cargo">Install CLI (cargo)</a></li>
+    <li><a href="#install-server-cargo">Install Server Runtime (cargo)</a></li>
+    <li><a href="#uninstall-cli-cargo">Uninstall CLI (cargo)</a></li>
+    <li><a href="#uninstall-server-cargo">Uninstall Server Runtime (cargo)</a></li>
+  </ul>
 
   <div class="method-tabs" data-install-tabs>
     <div class="method-tablist" role="tablist" aria-label="Installation method">
@@ -32,7 +44,7 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
     </div>
 
     <section id="panel-curl" role="tabpanel" aria-labelledby="tab-curl" class="method-panel" data-panel="curl">
-      <h2>Install CLI (local machine)</h2>
+      <h2 id="install-cli-curl"><a class="section-link" href="#install-cli-curl">Install CLI (local machine)</a></h2>
       <pre><code>curl -fsSL https://tako.sh/install | sh</code></pre>
 
       <p>Verify installation:</p>
@@ -41,14 +53,32 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
       <p>Upgrade later:</p>
       <pre><code>tako upgrade</code></pre>
 
-      <h2>Install Server Runtime (remote host)</h2>
+      <h2 id="install-server-curl"><a class="section-link" href="#install-server-curl">Install Server Runtime (remote host)</a></h2>
       <p>Run this as <code>root</code> (or with <code>sudo</code>) on each deployment server:</p>
       <pre><code>curl -fsSL https://tako.sh/install-server | sh</code></pre>
 
       <p>Verify installation:</p>
       <pre><code>tako-server --version</code></pre>
 
-      <h2>Script Sources</h2>
+      <h2 id="uninstall-cli-curl"><a class="section-link" href="#uninstall-cli-curl">Uninstall CLI (local machine)</a></h2>
+      <pre><code>rm -f ~/.local/bin/tako</code></pre>
+
+      <p>If you installed to a custom directory, remove that directory's <code>tako</code> binary instead.</p>
+      <p>If your shell still resolves the old binary path, restart your shell (or run <code>hash -r</code>).</p>
+
+      <h2 id="uninstall-server-curl"><a class="section-link" href="#uninstall-server-curl">Uninstall Server Runtime (remote host)</a></h2>
+      <p>Run this as <code>root</code> (or with <code>sudo</code>) on each deployment server:</p>
+      <pre><code>systemctl disable --now tako-server 2>/dev/null || true
+rm -f /etc/systemd/system/tako-server.service
+systemctl daemon-reload 2>/dev/null || true
+rm -f /etc/sudoers.d/tako
+rm -f /usr/local/bin/tako-server</code></pre>
+
+      <p>Optional full cleanup (destructive):</p>
+      <pre><code>rm -rf /opt/tako /var/run/tako
+userdel -r tako 2>/dev/null || deluser --remove-home tako 2>/dev/null || true</code></pre>
+
+      <h2 id="script-sources-curl"><a class="section-link" href="#script-sources-curl">Script Sources</a></h2>
       <p>Installer endpoints and script sources:</p>
       <ul>
         <li><a href="/install">/install</a> (CLI installer)</li>
@@ -65,7 +95,7 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
       data-panel="cargo"
       hidden
     >
-      <h2>Install CLI (local machine)</h2>
+      <h2 id="install-cli-cargo"><a class="section-link" href="#install-cli-cargo">Install CLI (local machine)</a></h2>
       <pre><code>cargo install tako</code></pre>
 
       <p>Verify installation:</p>
@@ -74,7 +104,7 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
       <p>Upgrade later:</p>
       <pre><code>cargo install tako --force</code></pre>
 
-      <h2>Install Server Runtime (remote host)</h2>
+      <h2 id="install-server-cargo"><a class="section-link" href="#install-server-cargo">Install Server Runtime (remote host)</a></h2>
       <pre><code>cargo install tako-server</code></pre>
 
       <p>Verify installation:</p>
@@ -83,10 +113,18 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
       <blockquote>
         Cargo install provides binaries only. For production hosts, use the curl installer when you want automatic service setup.
       </blockquote>
+
+      <h2 id="uninstall-cli-cargo"><a class="section-link" href="#uninstall-cli-cargo">Uninstall CLI (local machine)</a></h2>
+      <pre><code>cargo uninstall tako</code></pre>
+
+      <h2 id="uninstall-server-cargo"><a class="section-link" href="#uninstall-server-cargo">Uninstall Server Runtime (remote host)</a></h2>
+      <pre><code>cargo uninstall tako-server</code></pre>
+
+      <blockquote>
+        If the server was installed with the curl installer, use the curl-tab uninstall steps to remove service files and runtime data.
+      </blockquote>
     </section>
   </div>
-
-  <p><a href="/docs">← docs</a></p>
 
   <script is:inline>
     const tabsRoot = document.querySelector("[data-install-tabs]");
@@ -106,6 +144,32 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
         }
       };
 
+      const methodByHash = {
+        "install-cli-curl": "curl",
+        "install-server-curl": "curl",
+        "uninstall-cli-curl": "curl",
+        "uninstall-server-curl": "curl",
+        "script-sources-curl": "curl",
+        "install-cli-cargo": "cargo",
+        "install-server-cargo": "cargo",
+        "uninstall-cli-cargo": "cargo",
+        "uninstall-server-cargo": "cargo",
+      };
+
+      const setMethodFromHash = () => {
+        const id = window.location.hash.replace(/^#/, "");
+        if (!id) {
+          return;
+        }
+        const method = methodByHash[id];
+        if (method) {
+          setActiveMethod(method);
+        }
+      };
+
+      setMethodFromHash();
+      window.addEventListener("hashchange", setMethodFromHash);
+
       for (const tab of tabs) {
         tab.addEventListener("click", () => {
           setActiveMethod(tab.dataset.method || "curl");
@@ -115,6 +179,25 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
   </script>
 
   <style>
+    .section-jump-links {
+      margin: 0 0 14px;
+      padding-left: 18px;
+    }
+
+    .section-jump-links li {
+      margin: 2px 0;
+    }
+
+    .section-link {
+      color: inherit;
+      text-decoration-color: rgba(47, 42, 68, 0.32);
+      text-underline-offset: 0.12em;
+    }
+
+    .section-link:hover {
+      text-decoration-color: rgba(47, 42, 68, 0.7);
+    }
+
     .method-tablist {
       display: flex;
       gap: 8px;

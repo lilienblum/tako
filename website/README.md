@@ -5,9 +5,10 @@ Astro static site deployed with Cloudflare Workers static assets.
 ## Routes
 
 - `/`: static landing page
-- `/docs`: docs hub
-- `/docs/quickstart`: user quickstart (developer machine + remote server)
+- `/docs`: docs intro page with docs navigation sidebar (mobile hamburger menu)
+- `/docs/quickstart`: user quickstart (local setup + remote setup)
 - `/docs/install`: installer script reference
+- `/docs/cli`: CLI command reference
 - `/docs/tako-toml`: `tako.toml` configuration reference
 - `/docs/development`: local development guide
 - `/docs/deployment`: deployment guide

@@ -10,7 +10,8 @@
     "test": "bun test"
   },
   "dependencies": {
-    "astro": "catalog:dev"
+    "astro": "catalog:dev",
+    "lucide-astro": "^0.556.0"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "catalog:dev",

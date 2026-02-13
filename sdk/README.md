@@ -50,5 +50,5 @@ bun test
 
 ## Related Docs
 
-- `../docs/guides/quickstart.md`
+- `../website/src/content/docs/guides/quickstart.md`
 - `examples/js/bun/README.md`

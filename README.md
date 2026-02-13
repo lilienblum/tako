@@ -9,6 +9,16 @@
 Tako helps you ship apps to your own servers without turning deployment
 into a part-time job.
 
+## Why Tako exists
+
+Deploying used to feel simple: upload files, refresh, done.
+
+Tako is an attempt to bring that feeling back, but with modern guardrails:
+
+- fast local development
+- smooth deploy flow
+- app up and serving traffic quickly, without platform drama
+
 You get:
 
 - a CLI (`tako`) for local dev + deployment
@@ -59,14 +69,15 @@ just tako examples/js/bun dev
 
 ## Docs
 
-- `docs/README.md`: user documentation hub
+- `website/src/content/docs/README.md`: user documentation hub
 - Planning/scope: tracked in issues and release planning (no in-repo `TODO.md`)
-- `docs/guides/quickstart.md`: quickstart (developer machine + remote server)
-- `docs/reference/tako-toml.md`: `tako.toml` configuration reference
-- `docs/architecture/overview.md`: high-level component/data-flow overview
-- `docs/guides/development.md`: local dev setup and troubleshooting
-- `docs/guides/deployment.md`: remote deploy model and server requirements
-- `docs/guides/operations.md`: day-2 operational runbook
+- `website/src/content/docs/guides/quickstart.md`: quickstart (local + remote setup)
+- `website/src/content/docs/reference/cli.md`: CLI command reference
+- `website/src/content/docs/reference/tako-toml.md`: `tako.toml` configuration reference
+- `website/src/content/docs/architecture/overview.md`: high-level component/data-flow overview
+- `website/src/content/docs/guides/development.md`: local dev setup and troubleshooting
+- `website/src/content/docs/guides/deployment.md`: remote deploy model and server requirements
+- `website/src/content/docs/guides/operations.md`: day-2 operational runbook
 
 Component-focused docs:
 

@@ -20,4 +20,4 @@ cargo test -p tako-socket
 
 ## Related Docs
 
-- `docs/architecture/overview.md` (control-channel boundaries)
+- `website/src/content/docs/architecture/overview.md` (control-channel boundaries)

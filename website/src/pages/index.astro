@@ -1,6 +1,6 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
-const installCmd = "curl -fsSL https://tako.sh/install | sh";
+import { Check, Copy } from "lucide-astro";
 ---
 <BaseLayout
   title="Tako | Ship it like FTP"
@@ -234,7 +234,7 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
   .command-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 12px;
     background: rgba(158, 201, 255, 0.22);
     border-bottom: 2px solid rgba(47, 42, 68, 0.14);
@@ -267,6 +267,7 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     flex-wrap: nowrap;
     gap: 10px;
     align-items: center;
+    justify-content: flex-start;
     overflow-x: auto;
   }
 
@@ -278,6 +279,7 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     color: #3c3559;
     min-height: 1.2em;
     white-space: nowrap;
+    flex: 0 0 auto;
   }
 
   .cursor {
@@ -285,13 +287,43 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     height: 18px;
     background: var(--ink);
     animation: blink 1s steps(1, end) infinite;
+    flex: 0 0 auto;
   }
 
   .command-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    align-items: center;
     gap: 10px;
     padding: 0 16px 16px;
+  }
+
+  .command-selector {
+    display: inline-flex;
+    border: 2px solid rgba(47, 42, 68, 0.22);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.78);
+    overflow: hidden;
+    margin-left: auto;
+  }
+
+  .command-mode {
+    border: 0;
+    background: transparent;
+    color: rgba(47, 42, 68, 0.72);
+    padding: 7px 12px;
+    font-family: "Nunito", sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: lowercase;
+    cursor: pointer;
+  }
+
+  .command-mode.is-active {
+    background: rgba(232, 135, 131, 0.28);
+    color: rgba(47, 42, 68, 0.95);
   }
 
   .btn {
@@ -315,24 +347,67 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     background: rgba(232, 135, 131, 0.28);
   }
 
-  #copy {
+  .copy-inline {
     position: relative;
-    text-align: center;
-  }
-
-  #copy .copy-label-sizer {
-    visibility: hidden;
-    white-space: nowrap;
-  }
-
-  #copy [data-copy-label] {
-    position: absolute;
-    inset: 0;
+    width: 36px;
+    height: 36px;
+    margin-left: auto;
+    border: 2px solid rgba(47, 42, 68, 0.26);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.86);
+    color: var(--ink);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    white-space: nowrap;
-    pointer-events: none;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+
+  .copy-inline:hover {
+    transform: translateY(-1px);
+  }
+
+  .copy-inline-icon {
+    width: 17px;
+    height: 17px;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    fill: none;
+    display: block;
+  }
+
+  .copy-inline-copy {
+    stroke: rgba(47, 42, 68, 0.78);
+  }
+
+  .copy-inline-check {
+    stroke: rgba(22, 110, 80, 0.95);
+    display: none;
+  }
+
+  .copy-inline.is-copied {
+    background: rgba(155, 196, 182, 0.24);
+    border-color: rgba(155, 196, 182, 0.58);
+  }
+
+  .copy-inline.is-copied .copy-inline-copy {
+    display: none;
+  }
+
+  .copy-inline.is-copied .copy-inline-check {
+    display: block;
+  }
+
+  .copy-inline-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
   }
 
   .hero-block {
@@ -368,6 +443,62 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
+  }
+
+  .feature-grid.feature-problem-outcome {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .feature-grid.feature-problem-outcome .feature-item {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding: 14px 0;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(72px, 88px) 1fr;
+    align-items: start;
+    gap: 10px;
+    border-top: 1px solid rgba(47, 42, 68, 0.16);
+  }
+
+  .feature-grid.feature-problem-outcome .feature-item:first-child {
+    border-top: 0;
+  }
+
+  .feature-grid.feature-problem-outcome .feature-item:nth-child(odd),
+  .feature-grid.feature-problem-outcome .feature-item:nth-child(even) {
+    background: transparent;
+  }
+
+  .feature-grid.feature-problem-outcome .feature-kicker {
+    border: 0;
+    border-radius: 0;
+    padding: 2px 0 0;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    background: transparent;
+  }
+
+  .feature-flow {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 15px;
+    line-height: 1.35;
+  }
+
+  .feature-problem {
+    font-weight: 700;
+    color: rgba(47, 42, 68, 0.92);
+  }
+
+  .feature-outcome {
+    font-weight: 400;
+    color: rgba(47, 42, 68, 0.76);
   }
 
   .feature-item {
@@ -527,8 +658,8 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     }
 
     .command-actions {
-      flex-direction: column;
-      align-items: flex-start;
+      flex-wrap: wrap;
+      align-items: center;
     }
 
     .feature-grid {
@@ -537,6 +668,15 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
 
     .feature-item {
       min-height: 0;
+    }
+
+    .feature-grid.feature-problem-outcome .feature-item {
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
+
+    .feature-flow {
+      gap: 6px;
     }
 
     .hero-block {
@@ -549,9 +689,9 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     }
 
     .panel-hanger {
-      right: 6px;
-      top: 18px;
-      transform: scale(0.8);
+      right: -8px;
+      top: 10px;
+      transform: scale(0.78);
       transform-origin: top right;
     }
   }
@@ -587,57 +727,73 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
       <div class="command-head">
         <div class="dots"><span></span><span></span><span></span></div>
         <div class="command-title">install</div>
-        <div>shell</div>
       </div>
       <div class="command-body">
         <span class="prompt">$</span>
         <span class="cmd" id="typed-cmd"></span>
         <span class="cursor" aria-hidden="true"></span>
+        <button class="copy-inline" id="copy" type="button" aria-label="copy install command" title="copy install command">
+          <Copy class="copy-inline-icon copy-inline-copy" aria-hidden="true" focusable="false" />
+          <Check class="copy-inline-icon copy-inline-check" aria-hidden="true" focusable="false" />
+          <span class="copy-inline-label" data-copy-label>copy install command</span>
+        </button>
       </div>
       <div class="command-actions">
-        <button class="btn primary" id="copy" type="button">
-          <span class="copy-label-sizer" aria-hidden="true">copy install command</span>
-          <span data-copy-label>copy install command</span>
-        </button>
         <a class="btn" href="/docs">read the docs</a>
+        <div class="command-selector" role="group" aria-label="Install command type">
+          <button class="command-mode is-active" data-install-mode="shell" type="button">shell</button>
+          <button class="command-mode" data-install-mode="cargo" type="button">cargo</button>
+        </div>
       </div>
     </div>
 
     <div class="hero-block">
       <div class="hero-block-head">
-        <p class="hero-block-label">Features</p>
+        <p class="hero-block-label">Things you'll love about tako</p>
         <span class="hero-block-rule" aria-hidden="true"></span>
       </div>
-      <div class="feature-grid">
+      <div class="feature-grid feature-problem-outcome">
         <article class="feature-item">
           <span class="feature-kicker">deploy</span>
-          <h3 class="feature-title">Rolling deploys without drama</h3>
-          <p class="feature-desc">Bring up new instances first, then shift traffic after health checks pass.</p>
+          <p class="feature-flow">
+            <span class="feature-problem">Rolling deploys without drama</span>
+            <span class="feature-outcome">Bring up new instances first, then shift traffic after health checks pass.</span>
+          </p>
         </article>
         <article class="feature-item">
           <span class="feature-kicker">runtime</span>
-          <h3 class="feature-title">Automatic health-based routing</h3>
-          <p class="feature-desc">When an instance degrades, requests route to healthy ones in seconds.</p>
+          <p class="feature-flow">
+            <span class="feature-problem">Automatic health-based routing</span>
+            <span class="feature-outcome">When an instance degrades, requests route to healthy ones in seconds.</span>
+          </p>
         </article>
         <article class="feature-item">
           <span class="feature-kicker">ops</span>
-          <h3 class="feature-title">Logs and status in one place</h3>
-          <p class="feature-desc">Inspect what is running and what failed with direct CLI commands.</p>
+          <p class="feature-flow">
+            <span class="feature-problem">Logs and status in one place</span>
+            <span class="feature-outcome">Inspect what is running and what failed with direct CLI commands.</span>
+          </p>
         </article>
         <article class="feature-item">
           <span class="feature-kicker">security</span>
-          <h3 class="feature-title">Secrets outside your repo</h3>
-          <p class="feature-desc">Keep credentials out of git while still making rotation straightforward.</p>
+          <p class="feature-flow">
+            <span class="feature-problem">Keep secrets safe</span>
+            <span class="feature-outcome">Manage and rotate them centrally across environments.</span>
+          </p>
         </article>
         <article class="feature-item">
           <span class="feature-kicker">rollback</span>
-          <h3 class="feature-title">Fast rollback path</h3>
-          <p class="feature-desc">Recover quickly when a release misbehaves without a full rebuild cycle.</p>
+          <p class="feature-flow">
+            <span class="feature-problem">Fast rollback path</span>
+            <span class="feature-outcome">Recover quickly when a release misbehaves without a full rebuild cycle.</span>
+          </p>
         </article>
         <article class="feature-item">
           <span class="feature-kicker">ownership</span>
-          <h3 class="feature-title">Bring your own servers</h3>
-          <p class="feature-desc">Keep control of hosts, domains, and certs with zero platform lock-in.</p>
+          <p class="feature-flow">
+            <span class="feature-problem">Bring your own servers</span>
+            <span class="feature-outcome">Keep control of hosts, domains, and certs with zero platform lock-in.</span>
+          </p>
         </article>
       </div>
       <p class="feature-more"><span class="feature-more-prefix">and </span><a class="feature-more-link" href="/docs/quickstart#what-tako-can-do">more</a></p>
@@ -659,7 +815,7 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
         </a>
         <a href="/docs/quickstart#remote-server" class="link-card">
           <strong>Install on a Server</strong>
-          <span>Set up hosts and install `tako-server`</span>
+          <span>Set up hosts and install tako-server</span>
         </a>
       </div>
     </div>
@@ -895,7 +1051,7 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
   .command-head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     gap: 12px;
     background: rgba(158, 201, 255, 0.22);
     border-bottom: 2px solid rgba(47, 42, 68, 0.14);
@@ -928,6 +1084,7 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     flex-wrap: nowrap;
     gap: 10px;
     align-items: center;
+    justify-content: flex-start;
     overflow-x: auto;
   }
 
@@ -939,6 +1096,7 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     color: #3c3559;
     min-height: 1.2em;
     white-space: nowrap;
+    flex: 0 0 auto;
   }
 
   .cursor {
@@ -946,13 +1104,43 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     height: 18px;
     background: var(--ink);
     animation: blink 1s steps(1, end) infinite;
+    flex: 0 0 auto;
   }
 
   .command-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    justify-content: space-between;
+    align-items: center;
     gap: 10px;
     padding: 0 16px 16px;
+  }
+
+  .command-selector {
+    display: inline-flex;
+    border: 2px solid rgba(47, 42, 68, 0.22);
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.78);
+    overflow: hidden;
+    margin-left: auto;
+  }
+
+  .command-mode {
+    border: 0;
+    background: transparent;
+    color: rgba(47, 42, 68, 0.72);
+    padding: 7px 12px;
+    font-family: "Nunito", sans-serif;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    text-transform: lowercase;
+    cursor: pointer;
+  }
+
+  .command-mode.is-active {
+    background: rgba(232, 135, 131, 0.28);
+    color: rgba(47, 42, 68, 0.95);
   }
 
   .btn {
@@ -976,24 +1164,67 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     background: rgba(232, 135, 131, 0.28);
   }
 
-  #copy {
+  .copy-inline {
     position: relative;
-    text-align: center;
-  }
-
-  #copy .copy-label-sizer {
-    visibility: hidden;
-    white-space: nowrap;
-  }
-
-  #copy [data-copy-label] {
-    position: absolute;
-    inset: 0;
+    width: 36px;
+    height: 36px;
+    margin-left: auto;
+    border: 2px solid rgba(47, 42, 68, 0.26);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.86);
+    color: var(--ink);
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    white-space: nowrap;
-    pointer-events: none;
+    cursor: pointer;
+    flex: 0 0 auto;
+  }
+
+  .copy-inline:hover {
+    transform: translateY(-1px);
+  }
+
+  .copy-inline-icon {
+    width: 17px;
+    height: 17px;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    fill: none;
+    display: block;
+  }
+
+  .copy-inline-copy {
+    stroke: rgba(47, 42, 68, 0.78);
+  }
+
+  .copy-inline-check {
+    stroke: rgba(22, 110, 80, 0.95);
+    display: none;
+  }
+
+  .copy-inline.is-copied {
+    background: rgba(155, 196, 182, 0.24);
+    border-color: rgba(155, 196, 182, 0.58);
+  }
+
+  .copy-inline.is-copied .copy-inline-copy {
+    display: none;
+  }
+
+  .copy-inline.is-copied .copy-inline-check {
+    display: block;
+  }
+
+  .copy-inline-label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    margin: -1px;
+    padding: 0;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    border: 0;
   }
 
   .hero-block {
@@ -1029,6 +1260,62 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 12px;
+  }
+
+  .feature-grid.feature-problem-outcome {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .feature-grid.feature-problem-outcome .feature-item {
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    padding: 14px 0;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(72px, 88px) 1fr;
+    align-items: start;
+    gap: 10px;
+    border-top: 1px solid rgba(47, 42, 68, 0.16);
+  }
+
+  .feature-grid.feature-problem-outcome .feature-item:first-child {
+    border-top: 0;
+  }
+
+  .feature-grid.feature-problem-outcome .feature-item:nth-child(odd),
+  .feature-grid.feature-problem-outcome .feature-item:nth-child(even) {
+    background: transparent;
+  }
+
+  .feature-grid.feature-problem-outcome .feature-kicker {
+    border: 0;
+    border-radius: 0;
+    padding: 2px 0 0;
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    background: transparent;
+  }
+
+  .feature-flow {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 15px;
+    line-height: 1.35;
+  }
+
+  .feature-problem {
+    font-weight: 700;
+    color: rgba(47, 42, 68, 0.92);
+  }
+
+  .feature-outcome {
+    font-weight: 400;
+    color: rgba(47, 42, 68, 0.76);
   }
 
   .feature-item {
@@ -1188,8 +1475,8 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     }
 
     .command-actions {
-      flex-direction: column;
-      align-items: flex-start;
+      flex-wrap: wrap;
+      align-items: center;
     }
 
     .feature-grid {
@@ -1198,6 +1485,15 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
 
     .feature-item {
       min-height: 0;
+    }
+
+    .feature-grid.feature-problem-outcome .feature-item {
+      grid-template-columns: 1fr;
+      gap: 4px;
+    }
+
+    .feature-flow {
+      gap: 6px;
     }
 
     .hero-block {
@@ -1210,52 +1506,112 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
     }
 
     .panel-hanger {
-      right: 6px;
-      top: 18px;
-      transform: scale(0.8);
+      right: -8px;
+      top: 10px;
+      transform: scale(0.78);
       transform-origin: top right;
     }
   }
 </style>
 
 <script type="module">
-  const installCmd = "curl -fsSL https://tako.sh/install | sh";
+  const installCommands = {
+    shell: "curl -fsSL https://tako.sh/install | sh",
+    cargo: "cargo install tako",
+  };
   const typedCmd = document.getElementById("typed-cmd");
   const copyBtn = document.getElementById("copy");
   const copyBtnLabel = copyBtn?.querySelector("[data-copy-label]");
+  const modeButtons = Array.from(document.querySelectorAll("[data-install-mode]"));
   const hanger = document.getElementById("mit-hanger");
   const pin = document.getElementById("mit-pin");
   const tag = document.getElementById("mit-tag");
 
-  let i = 0;
-  const writeChar = () => {
-    if (!typedCmd || i >= installCmd.length) {
-      return;
-    }
-    typedCmd.textContent += installCmd.charAt(i);
-    i += 1;
-    setTimeout(writeChar, 35 + Math.random() * 28);
-  };
-  setTimeout(writeChar, 620);
+  let activeInstallMode = "shell";
+  let typingTimeout = null;
 
   const setCopyButtonText = (text) => {
     if (copyBtnLabel instanceof HTMLElement) {
       copyBtnLabel.textContent = text;
-      return;
     }
     if (copyBtn instanceof HTMLElement) {
-      copyBtn.textContent = text;
+      copyBtn.setAttribute("aria-label", text);
+      copyBtn.setAttribute("title", text);
     }
   };
 
+  const setCopyButtonCopied = (copied) => {
+    if (copyBtn instanceof HTMLElement) {
+      copyBtn.classList.toggle("is-copied", copied);
+    }
+  };
+
+  const writeCommand = (command, animate) => {
+    if (!(typedCmd instanceof HTMLElement)) {
+      return;
+    }
+
+    if (typeof typingTimeout === "number") {
+      clearTimeout(typingTimeout);
+      typingTimeout = null;
+    }
+
+    if (!animate) {
+      typedCmd.textContent = command;
+      return;
+    }
+
+    typedCmd.textContent = "";
+    let i = 0;
+    const writeChar = () => {
+      if (!(typedCmd instanceof HTMLElement) || i >= command.length) {
+        return;
+      }
+      typedCmd.textContent += command.charAt(i);
+      i += 1;
+      typingTimeout = window.setTimeout(writeChar, 35 + Math.random() * 28);
+    };
+    typingTimeout = window.setTimeout(writeChar, 620);
+  };
+
+  const setInstallMode = (mode, animate) => {
+    if (!(mode in installCommands)) {
+      return;
+    }
+    activeInstallMode = mode;
+    for (const modeButton of modeButtons) {
+      if (!(modeButton instanceof HTMLElement)) {
+        continue;
+      }
+      const selected = modeButton.dataset.installMode === mode;
+      modeButton.classList.toggle("is-active", selected);
+      modeButton.setAttribute("aria-pressed", selected ? "true" : "false");
+    }
+    writeCommand(installCommands[mode], animate);
+    setCopyButtonCopied(false);
+    setCopyButtonText("copy install command");
+  };
+
+  setInstallMode("shell", true);
+
+  for (const modeButton of modeButtons) {
+    modeButton?.addEventListener("click", () => {
+      const mode = modeButton.dataset.installMode ?? "shell";
+      setInstallMode(mode, false);
+    });
+  }
+
   copyBtn?.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(installCmd);
+      await navigator.clipboard.writeText(installCommands[activeInstallMode] ?? installCommands.shell);
+      setCopyButtonCopied(true);
       setCopyButtonText("copied");
       setTimeout(() => {
+        setCopyButtonCopied(false);
         setCopyButtonText("copy install command");
       }, 1400);
     } catch {
+      setCopyButtonCopied(false);
       setCopyButtonText("copy failed");
       setTimeout(() => {
         setCopyButtonText("copy install command");
@@ -1265,7 +1621,8 @@ const installCmd = "curl -fsSL https://tako.sh/install | sh";
 
   if (hanger instanceof HTMLElement && pin instanceof HTMLElement && tag instanceof HTMLElement) {
     const restAngle = 0;
-    const restLength = 62;
+    const isCompactScreen = window.matchMedia("(max-width: 640px)").matches;
+    const restLength = isCompactScreen ? 54 : 62;
     const minLength = 30;
     const maxLength = 220;
     let angle = -0.42;

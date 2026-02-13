@@ -4,20 +4,143 @@ import BaseLayout from "./BaseLayout.astro";
 export interface Props {
   title: string;
   heading: string;
+  current?: string;
+  headingAnchors?: boolean;
 }
 
-const { title, heading } = Astro.props;
+const { title, heading, current = "intro", headingAnchors = true } = Astro.props;
+
+const docsNav = [
+  { id: "intro", label: "The Why", href: "/docs" },
+  { id: "quickstart", label: "Quickstart", href: "/docs/quickstart" },
+  { id: "install", label: "Install", href: "/docs/install" },
+  { id: "cli", label: "CLI Reference", href: "/docs/cli" },
+  { id: "tako-toml", label: "tako.toml", href: "/docs/tako-toml" },
+  { id: "development", label: "Development", href: "/docs/development" },
+  { id: "deployment", label: "Deployment", href: "/docs/deployment" },
+  { id: "operations", label: "Operations", href: "/docs/operations" },
+  { id: "architecture", label: "Architecture", href: "/docs/architecture" },
+];
 ---
 <BaseLayout title={title} description="Tako documentation - a minimal deployment tool for self-hosted infrastructure.">
-  <section class="sheet">
-    <div class="breadcrumb">
-      <a href="/">home</a> / <a href="/docs">docs</a> / <span>{heading}</span>
+  <section class="sheet" data-docs-sheet data-heading-anchors={headingAnchors ? "true" : "false"}>
+    <div class="sheet-top">
+      <div class="breadcrumb">
+        <a href="/">~</a> / <a href="/docs">docs</a> / <span>{heading}</span>
+      </div>
+      <button
+        type="button"
+        class="docs-menu-toggle"
+        data-docs-menu-toggle
+        aria-expanded="false"
+        aria-controls="docs-nav-sidebar"
+      >
+        <span class="docs-menu-icon" aria-hidden="true"></span>
+        <span>Menu</span>
+      </button>
     </div>
-    <h1 class="page-title">{heading}</h1>
-    <div class="content">
-      <slot />
+
+    <div class="docs-shell">
+      <aside class="docs-nav-sidebar" id="docs-nav-sidebar" data-docs-sidebar>
+        <nav class="docs-nav-links" aria-label="Documentation navigation">
+          {
+            docsNav.map((item) => (
+              <a href={item.href} class:list={["docs-nav-link", current === item.id && "is-active"]}>
+                {item.label}
+              </a>
+            ))
+          }
+        </nav>
+      </aside>
+
+      <article class="docs-main">
+        <div class="content">
+          <slot />
+        </div>
+      </article>
     </div>
   </section>
+
+  <script is:inline>
+    const docsSheet = document.querySelector("[data-docs-sheet]");
+    const toggle = docsSheet?.querySelector("[data-docs-menu-toggle]");
+    const sidebar = docsSheet?.querySelector("[data-docs-sidebar]");
+    const links = docsSheet ? Array.from(docsSheet.querySelectorAll(".docs-nav-link")) : [];
+    const contentRoot = docsSheet?.querySelector(".content");
+
+    if (toggle instanceof HTMLButtonElement && sidebar instanceof HTMLElement) {
+      const setOpen = (open) => {
+        toggle.setAttribute("aria-expanded", open ? "true" : "false");
+        sidebar.classList.toggle("is-open", open);
+      };
+
+      setOpen(false);
+
+      toggle.addEventListener("click", () => {
+        const currentlyOpen = toggle.getAttribute("aria-expanded") === "true";
+        setOpen(!currentlyOpen);
+      });
+
+      for (const link of links) {
+        link.addEventListener("click", () => {
+          if (window.matchMedia("(max-width: 900px)").matches) {
+            setOpen(false);
+          }
+        });
+      }
+
+      window.addEventListener("resize", () => {
+        if (window.innerWidth > 900) {
+          setOpen(false);
+        }
+      });
+    }
+
+    if (contentRoot instanceof HTMLElement && docsSheet?.getAttribute("data-heading-anchors") === "true") {
+      const headings = Array.from(
+        contentRoot.querySelectorAll("h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]"),
+      );
+
+      for (const heading of headings) {
+        if (!(heading instanceof HTMLElement)) {
+          continue;
+        }
+        if (heading.querySelector(".docs-heading-anchor")) {
+          continue;
+        }
+
+        const id = heading.getAttribute("id");
+        if (!id) {
+          continue;
+        }
+
+        const anchor = document.createElement("a");
+        anchor.className = "docs-heading-anchor";
+        anchor.href = `#${id}`;
+        anchor.textContent = "#";
+
+        const headingText = heading.textContent?.trim();
+        anchor.setAttribute("aria-label", headingText ? `Link to section: ${headingText}` : `Link to section: ${id}`);
+        anchor.title = "Link to this section";
+
+        heading.append(anchor);
+
+        heading.classList.add("docs-clickable-heading");
+        heading.addEventListener("click", (event) => {
+          if (!(event.target instanceof Element)) {
+            return;
+          }
+          if (event.target.closest("a")) {
+            return;
+          }
+          if (window.getSelection()?.toString()) {
+            return;
+          }
+          window.location.hash = id;
+        });
+      }
+    }
+  </script>
 </BaseLayout>
 
 <style is:global>
@@ -59,11 +182,19 @@ const { title, heading } = Astro.props;
     padding: clamp(18px, 4vw, 36px);
   }
 
+  .sheet-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
   .breadcrumb {
     font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     font-size: 14px;
     color: var(--muted);
-    margin-bottom: 10px;
+    margin-bottom: 0;
   }
 
   .breadcrumb a {
@@ -79,11 +210,53 @@ const { title, heading } = Astro.props;
     color: var(--accent);
   }
 
-  .page-title {
-    font-family: var(--font-heading);
-    font-size: clamp(30px, 5vw, 42px);
-    line-height: 1.05;
-    margin-bottom: 18px;
+  .docs-shell {
+    display: grid;
+    grid-template-columns: minmax(220px, 250px) minmax(0, 1fr);
+    gap: clamp(16px, 2.5vw, 28px);
+    align-items: start;
+  }
+
+  .docs-nav-sidebar {
+    border: 2px solid var(--line);
+    border-radius: 18px;
+    background: rgba(255, 255, 255, 0.9);
+    padding: 12px;
+    position: sticky;
+    top: 92px;
+  }
+
+  .docs-nav-links {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .docs-nav-link {
+    text-decoration: none;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 7px 10px;
+    font-size: 15px;
+    line-height: 1.3;
+  }
+
+  .docs-nav-link:hover {
+    color: var(--ink);
+    background: rgba(155, 196, 182, 0.18);
+    border-color: rgba(155, 196, 182, 0.4);
+  }
+
+  .docs-nav-link.is-active {
+    color: var(--ink);
+    background: rgba(232, 135, 131, 0.2);
+    border-color: rgba(232, 135, 131, 0.45);
+    font-weight: 700;
+  }
+
+  .docs-main {
+    min-width: 0;
   }
 
   .content {
@@ -115,6 +288,40 @@ const { title, heading } = Astro.props;
 
   .content h3 {
     font-size: clamp(20px, 3vw, 24px);
+  }
+
+  .content :is(h1, h2, h3, h4, h5, h6)[id] {
+    scroll-margin-top: 108px;
+    cursor: pointer;
+  }
+
+  .content .docs-clickable-heading {
+    cursor: pointer;
+  }
+
+  .content .docs-clickable-heading:hover {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.16em;
+    text-decoration-color: rgba(232, 135, 131, 0.65);
+  }
+
+  .content .docs-heading-anchor {
+    display: inline-block;
+    margin-left: 8px;
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.75em;
+    line-height: 1;
+    color: var(--primary);
+    border-bottom: none;
+    text-decoration: none;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity 0.14s ease;
+  }
+
+  .content :is(h1, h2, h3, h4, h5, h6)[id]:hover .docs-heading-anchor {
+    opacity: 1;
   }
 
   .content p,
@@ -208,10 +415,94 @@ const { title, heading } = Astro.props;
     color: #2f2a44;
   }
 
+  .content .dynamic-phrase {
+    font-weight: 600;
+    color: var(--primary);
+  }
+
+  .docs-menu-icon,
+  .docs-menu-icon::before,
+  .docs-menu-icon::after {
+    content: "";
+    display: block;
+    width: 16px;
+    height: 2px;
+    border-radius: 2px;
+    background: var(--ink);
+    transition: transform 0.16s ease;
+  }
+
+  .docs-menu-icon {
+    position: relative;
+  }
+
+  .docs-menu-icon::before {
+    position: absolute;
+    top: -5px;
+    left: 0;
+  }
+
+  .docs-menu-icon::after {
+    position: absolute;
+    top: 5px;
+    left: 0;
+  }
+
+  .docs-menu-toggle[aria-expanded="true"] .docs-menu-icon {
+    background: transparent;
+  }
+
+  .docs-menu-toggle[aria-expanded="true"] .docs-menu-icon::before {
+    transform: translateY(5px) rotate(45deg);
+  }
+
+  .docs-menu-toggle[aria-expanded="true"] .docs-menu-icon::after {
+    transform: translateY(-5px) rotate(-45deg);
+  }
+
   @keyframes floatBlob {
     0%,
     100% { transform: translateY(0); }
     50% { transform: translateY(-10px); }
+  }
+
+  .docs-menu-toggle {
+    display: none;
+    align-items: center;
+    gap: 8px;
+    font: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    border: 2px solid var(--line);
+    border-radius: 999px;
+    padding: 7px 12px;
+    background: rgba(255, 255, 255, 0.92);
+    color: var(--ink);
+    cursor: pointer;
+  }
+
+  @media (max-width: 900px) {
+    .sheet-top {
+      margin-bottom: 14px;
+    }
+
+    .docs-menu-toggle {
+      display: inline-flex;
+    }
+
+    .docs-shell {
+      display: block;
+    }
+
+    .docs-nav-sidebar {
+      position: static;
+      display: none;
+      margin-bottom: 14px;
+    }
+
+    .docs-nav-sidebar.is-open {
+      display: block;
+    }
   }
 
   @media (max-width: 640px) {
