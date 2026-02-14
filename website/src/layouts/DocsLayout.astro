@@ -22,12 +22,12 @@ const current = Astro.props.current ?? frontmatter.current ?? "intro";
 const headingAnchors = Astro.props.headingAnchors ?? frontmatter.headingAnchors ?? true;
 
 const docsNav = [
-  { id: "intro", label: "The Why", href: "/docs" },
+  { id: "intro", label: "Intro", href: "/docs/intro" },
   { id: "quickstart", label: "Quickstart", href: "/docs/quickstart" },
-  { id: "install", label: "Install", href: "/docs/install" },
-  { id: "architecture", label: "How Tako Works", href: "/docs/architecture" },
-  { id: "cli", label: "CLI Reference", href: "/docs/cli" },
-  { id: "tako-toml", label: "tako.toml", href: "/docs/tako-toml" },
+  { id: "frameworks", label: "Framework Guides", href: "/docs/framework-guides" },
+  { id: "architecture", label: "How Tako Works", href: "/docs/how-tako-works" },
+  { id: "cli", label: "CLI Reference", href: "/docs/cli-reference" },
+  { id: "tako-toml", label: "tako.toml Reference", href: "/docs/tako-toml-reference" },
   { id: "development", label: "Development", href: "/docs/development" },
   { id: "deployment", label: "Deployment", href: "/docs/deployment" },
   { id: "troubleshooting", label: "Troubleshooting", href: "/docs/troubleshooting" },

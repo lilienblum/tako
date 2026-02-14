@@ -16,7 +16,7 @@ This guide covers local development with Tako: trusted HTTPS, `.tako.local` URLs
 - `tako dev` owns your app process lifecycle and spawns the app locally on an ephemeral port.
 - `tako-dev-server` terminates HTTPS and routes by `Host` to that app port.
 - The client registers a **lease** with the daemon (TTL + heartbeat). If heartbeats stop, the route expires.
-- `tako dev` watches [`tako.toml`](/docs/tako-toml) for changes. If dev env vars change, it restarts the app. If `[envs.development]` routes change, it re-registers routes with the daemon.
+- `tako dev` watches [`tako.toml`](/docs/tako-toml-reference) for changes. If dev env vars change, it restarts the app. If `[envs.development]` routes change, it re-registers routes with the daemon.
 
 ## Files Created
 

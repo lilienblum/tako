@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/DocsLayout.astro
-title: Tako Docs - tako.toml
-heading: tako.toml
+title: Tako Docs - tako.toml Reference
+heading: tako.toml Reference
 current: tako-toml
 ---
 
@@ -19,7 +19,7 @@ route = "my-app.example.com"
 ```
 
 If you set `[tako].name`, treat it as a stable identifier and do not change it after first deploy.
-If omitted, Tako auto-detects the app name from runtime metadata or directory name.
+If omitted, Tako auto-detects the app name.
 
 ## `[tako]`
 
@@ -72,10 +72,13 @@ LOG_FORMAT = "json"
 
 - `route`: single hostname/path pattern.
 - `routes`: multiple route patterns (use this instead of `route` when you have more than one).
+- Each environment can set `route` or `routes`, but not both.
 - Every non-development environment must define `route` or `routes`.
 - `[envs.development]` may omit routes and defaults to `{app}.tako.local` for `tako dev`.
+- Development routes must be `{app}.tako.local` or a subdomain of it.
 - Empty route sets are rejected for non-development environments. There is no implicit catch-all routing mode.
 - Additional keys in an environment section are treated as environment variables.
+- Routes must include a hostname (path-only routes are invalid).
 - `example.com` and `example.com/*` are equivalent and both match all paths on `example.com`.
 - Path route examples:
   - `example.com/api/*` matches `/api`, `/api/`, and `/api/...`
@@ -117,7 +120,7 @@ For a target environment, variables are merged in this order:
 
 1. `[vars]`
 2. `[vars.<environment>]`
-3. Inline variables from `[envs.<environment>]`
+3. Auto-set by Tako (`ENV=<environment>`, `TAKO_BUILD=<version>`)
 
 Later values override earlier ones when keys match.
 

@@ -1,11 +1,15 @@
 ---
 layout: ../../layouts/DocsLayout.astro
-title: Tako Docs - The Why
-heading: The Why
+title: Tako Docs - Intro
+heading: Intro
 current: intro
 ---
 
-# The Why
+# Intro
+
+Tako is an opinionated development and deployment tool for self-hosted apps. It focuses on fast defaults for local HTTPS development and remote deploys, with routes, secrets, and logs, without a giant matrix of knobs.
+
+## The Why
 
 Tako started from one simple question: why did deploying become so dramatic?
 
@@ -44,7 +48,7 @@ Tako is built to make local development smooth and production deploys boring (th
 
 - Built with Rust to be fast, reliable, and memory-safe.
 - Minimal resource footprint is a core principle.
-- Uses [Pingora](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/) under the hood, the same proxy that powers Cloudflare and one of the fastest proxy servers around.
+- Built on [Pingora](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/), Cloudflare's Rust proxy library that powers Cloudflare and is known for high performance.
 
 ## Ok, So Where Do I Sign?
 

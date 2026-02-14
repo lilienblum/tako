@@ -45,7 +45,7 @@ Each target server should have:
 
 ## Configuration Inputs
 
-### Project config ([`tako.toml`](/docs/tako-toml))
+### Project config ([`tako.toml`](/docs/tako-toml-reference))
 
 - `tako.toml` is required in the project root.
 - Defines environments and routes.

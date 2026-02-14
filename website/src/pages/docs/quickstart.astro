@@ -1,0 +1,221 @@
+---
+import Snippet from "../../components/Snippet.astro";
+import DocsLayout from "../../layouts/DocsLayout.astro";
+
+const envMappingToml = `[envs.production]
+route = "my-app.example.com"`;
+---
+<DocsLayout title="Tako Docs - Quickstart" heading="Quickstart" current="quickstart">
+  <h1 id="quickstart">Quickstart</h1>
+  <p>This is the fastest path from "I just installed Tako" to "my app is live."</p>
+
+  <h2 id="local-setup">Local setup</h2>
+  <p>Install the CLI (choose one method):</p>
+
+  <div class="quickstart-install-tabs" data-quickstart-install-tabs>
+    <div class="quickstart-install-tablist" role="tablist" aria-label="CLI install method">
+      <button
+        type="button"
+        id="quickstart-install-tab-curl"
+        class="quickstart-install-tab"
+        role="tab"
+        aria-controls="quickstart-install-panel-curl"
+        aria-selected="true"
+        data-install-method="curl"
+      >
+        curl
+      </button>
+      <button
+        type="button"
+        id="quickstart-install-tab-cargo"
+        class="quickstart-install-tab"
+        role="tab"
+        aria-controls="quickstart-install-panel-cargo"
+        aria-selected="false"
+        tabindex="-1"
+        data-install-method="cargo"
+      >
+        cargo
+      </button>
+    </div>
+
+    <section
+      id="quickstart-install-panel-curl"
+      class="quickstart-install-panel"
+      role="tabpanel"
+      aria-labelledby="quickstart-install-tab-curl"
+      data-install-panel="curl"
+    >
+      <Snippet code="curl -fsSL https://tako.sh/install | sh" lang="bash" />
+    </section>
+
+    <section
+      id="quickstart-install-panel-cargo"
+      class="quickstart-install-panel"
+      role="tabpanel"
+      aria-labelledby="quickstart-install-tab-cargo"
+      data-install-panel="cargo"
+      hidden
+    >
+      <Snippet code="cargo install tako" lang="bash" />
+      <p><code>cargo</code> requires a working Rust toolchain.</p>
+    </section>
+  </div>
+
+  <blockquote>More install options will be added later.</blockquote>
+
+  <p>Verify installation:</p>
+  <Snippet code="tako --version" lang="bash" />
+
+  <p>From your app directory:</p>
+
+  <ul>
+    <li>Install the SDK (Bun example):</li>
+  </ul>
+  <Snippet code="bun add tako.sh" lang="bash" />
+
+  <ul>
+    <li>Start local HTTPS development:</li>
+  </ul>
+  <Snippet code="tako dev" lang="bash" />
+  <p>
+    On your first <code>tako dev</code> run, Tako will ask for your <code>sudo</code> password to set up local no-port HTTPS
+    and custom <code>*.tako.local</code> URLs. This happens once and is reused for other apps.
+  </p>
+  <p>
+    Open the URL shown in the terminal UI (TUI). By default, Tako uses
+    <code>{"{app}.tako.local"}</code>, where <code>{`{app}`}</code> is your app name.
+  </p>
+
+  <h2 id="remote-setup">Remote setup</h2>
+  <p>On each deployment host (as <code>root</code> or with <code>sudo</code>), install the runtime:</p>
+  <Snippet code="curl -fsSL https://tako.sh/install-server | sh" lang="bash" />
+
+  <p>Verify installation:</p>
+  <Snippet code="tako-server --version" lang="bash" />
+
+  <h2 id="first-deployment">First deployment</h2>
+  <p>From your developer machine, add the server you set up in <a href="#remote-setup">Remote setup</a> to Tako:</p>
+  <Snippet code="tako servers add <host-or-ip>" lang="bash" />
+
+  <p>Run the following commands from your app directory.</p>
+  <p>Initialize Tako config:</p>
+  <Snippet code="tako init" lang="bash" />
+
+  <p>Set a production route in <code>tako.toml</code>:</p>
+  <Snippet code={envMappingToml} lang="toml" />
+  <p>Make sure <code>tako.toml</code> includes a production route before deploy.</p>
+
+  <p>
+    <code>tako dev</code> uses <code>{"{app}.tako.local"}</code> by default. Add <code>[envs.development]</code> only when
+    you want custom local routes.
+  </p>
+
+  <p>Deploy:</p>
+  <Snippet code="tako deploy" lang="bash" />
+
+  <p>Need every config option? See the full <a href="/docs/tako-toml-reference">tako.toml reference</a>.</p>
+
+  <p>Need framework adapter examples? See <a href="/docs/framework-guides">Framework Guides</a>.</p>
+</DocsLayout>
+
+<style>
+  .quickstart-install-tabs {
+    margin: 12px 0;
+  }
+
+  .quickstart-install-tablist {
+    display: flex;
+    gap: 8px;
+    margin: 0 0 12px;
+    flex-wrap: wrap;
+  }
+
+  .quickstart-install-tab {
+    font: inherit;
+    font-size: 0.95rem;
+    padding: 8px 12px;
+    border: 2px solid var(--line);
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.9);
+    color: var(--muted);
+    cursor: pointer;
+  }
+
+  .quickstart-install-tab[aria-selected="true"] {
+    color: var(--ink);
+    background: rgba(155, 196, 182, 0.18);
+    border-color: rgba(155, 196, 182, 0.55);
+  }
+
+  .quickstart-install-panel[hidden] {
+    display: none;
+  }
+</style>
+
+<script is:inline>
+  const tabsRoot = document.querySelector("[data-quickstart-install-tabs]");
+  if (tabsRoot instanceof HTMLElement) {
+    const tabs = Array.from(tabsRoot.querySelectorAll("[role='tab']"));
+    const panels = Array.from(tabsRoot.querySelectorAll("[role='tabpanel']"));
+
+    const setActiveMethod = (method) => {
+      for (const tab of tabs) {
+        const selected = tab instanceof HTMLElement && tab.dataset.installMethod === method;
+        tab.setAttribute("aria-selected", selected ? "true" : "false");
+        tab.setAttribute("tabindex", selected ? "0" : "-1");
+      }
+
+      for (const panel of panels) {
+        if (!(panel instanceof HTMLElement)) {
+          continue;
+        }
+        panel.hidden = panel.dataset.installPanel !== method;
+      }
+    };
+
+    const focusTab = (index) => {
+      const tab = tabs[index];
+      if (tab instanceof HTMLElement) {
+        tab.focus();
+      }
+    };
+
+    for (const [index, tab] of tabs.entries()) {
+      tab.addEventListener("click", () => {
+        if (!(tab instanceof HTMLElement)) {
+          return;
+        }
+        setActiveMethod(tab.dataset.installMethod || "curl");
+      });
+
+      tab.addEventListener("keydown", (event) => {
+        if (!(tab instanceof HTMLElement)) {
+          return;
+        }
+
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          const next = (index + 1) % tabs.length;
+          focusTab(next);
+          const nextTab = tabs[next];
+          if (nextTab instanceof HTMLElement) {
+            setActiveMethod(nextTab.dataset.installMethod || "curl");
+          }
+        }
+
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          const prev = (index - 1 + tabs.length) % tabs.length;
+          focusTab(prev);
+          const prevTab = tabs[prev];
+          if (prevTab instanceof HTMLElement) {
+            setActiveMethod(prevTab.dataset.installMethod || "curl");
+          }
+        }
+      });
+    }
+
+    setActiveMethod("curl");
+  }
+</script>

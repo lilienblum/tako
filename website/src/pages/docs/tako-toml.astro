@@ -1,5 +1,5 @@
 ---
-const target = "/docs/intro";
+const target = "/docs/tako-toml-reference";
 ---
 <!doctype html>
 <html lang="en">
@@ -7,13 +7,13 @@ const target = "/docs/intro";
     <meta charset="utf-8" />
     <meta http-equiv="refresh" content={`0;url=${target}`} />
     <link rel="canonical" href={target} />
-    <title>Redirecting to Intro</title>
+    <title>Redirecting to tako.toml Reference</title>
     <script is:inline>
       const hash = window.location.hash || "";
-      window.location.replace(`/docs/intro${hash}`);
+      window.location.replace(`/docs/tako-toml-reference${hash}`);
     </script>
   </head>
   <body>
-    <p>Redirecting to <a href={target}>Intro</a>.</p>
+    <p>Redirecting to <a href={target}>tako.toml Reference</a>.</p>
   </body>
 </html>

@@ -20,25 +20,32 @@ Global flags:
 - `--version`: print version and exit.
 - `-v`, `--verbose`: enable verbose output.
 
+Directory selection is command-scoped:
+
+- `tako init [DIR]`
+- `tako dev [DIR]`
+- `tako deploy [DIR]`
+- `tako delete [DIR]`
+
 ## Top-Level Commands
 
 - `tako init [--force] [DIR]`: initialize `tako.toml` in a project.
+- `tako help`: show all commands with brief descriptions.
+- `tako upgrade`: upgrade local CLI using the hosted installer.
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
 - `tako dev [--tui | --no-tui] [DIR]`: run local development mode.
 - `tako doctor`: print local dev diagnostics (DNS, socket, listener, leases).
 - `tako deploy [--env <ENV>] [-y|--yes] [DIR]`: build and deploy app.
 - `tako delete [--env <ENV>] [-y|--yes] [DIR]`: delete deployed app.
-  - Aliases: `tako rm`, `tako remove`, `tako undeploy`, `tako destroy`
 - `tako servers <subcommand>`: manage server inventory and server runtime actions.
 - `tako secrets <subcommand>`: manage project secrets and keys.
-- `tako upgrade`: upgrade local CLI using the hosted installer.
 
 ## `servers` Subcommands
 
 `tako servers add`:
 
 ```bash
-tako servers add [HOST] [--name <NAME>] [--description <TEXT>] [--port <PORT>] [--no-test]
+tako servers add [HOST] [--name <NAME>] [--description <TEXT>] [--port <PORT>]
 ```
 
 `tako servers rm`:
@@ -65,10 +72,16 @@ tako servers restart <NAME>
 tako servers reload <NAME>
 ```
 
+`tako servers upgrade`:
+
+```bash
+tako servers upgrade <NAME>
+```
+
 `tako servers status`:
 
 ```bash
-tako servers status [NAME]
+tako servers status
 ```
 
 Notes:
@@ -77,11 +90,10 @@ Notes:
   - If `HOST` is omitted, Tako launches an interactive setup wizard.
   - If `HOST` is provided, `--name` is required.
   - `--port` defaults to `22`.
-  - `--no-test` skips SSH connection testing.
+  - Tests SSH connection before adding and connects as user `tako`.
 - `tako servers rm` aliases: `remove`, `delete`.
 - `tako servers ls` alias: `list`.
-- `tako servers status` without `NAME` shows global deployment/runtime status across configured servers.
-- `tako servers status <NAME>` shows install/service/app summary for one server.
+- `tako servers status` prints a single global deployment/runtime snapshot across configured servers.
 
 ## `secrets` Subcommands
 
@@ -126,7 +138,7 @@ Notes:
 - `tako secrets set` defaults to `--env production` if omitted.
 - `tako secrets rm`:
   - with `--env`: removes from one environment.
-  - without `--env`: removes from all environments (with confirmation).
+  - without `--env`: removes from all environments.
 - `tako secrets ls` alias: `list`.
 - `tako secrets rm` aliases: `remove`, `delete`.
 - `tako secrets key import/export` default to `production` when `--env` is omitted.
