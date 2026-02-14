@@ -1,0 +1,58 @@
+---
+import CheckIcon from "lucide-astro/Check";
+import CopyIcon from "lucide-astro/Copy";
+
+export interface Props {
+  class?: string;
+  ariaLabel?: string;
+  title?: string;
+}
+
+const {
+  class: className = "",
+  ariaLabel = "Copy code snippet",
+  title = "Copy",
+} = Astro.props;
+---
+<button class:list={["snippet-copy-button", className]} type="button" aria-label={ariaLabel} title={title}>
+  <CopyIcon class="snippet-copy-icon snippet-copy-icon-copy" aria-hidden="true" focusable="false" />
+  <CheckIcon class="snippet-copy-icon snippet-copy-icon-check" aria-hidden="true" focusable="false" />
+</button>
+
+<style is:global>
+  .snippet-copy-button {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .snippet-copy-icon {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    stroke-width: 2;
+    position: absolute;
+    transition: opacity 0.12s ease, transform 0.12s ease;
+  }
+
+  .snippet-copy-icon-copy {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .snippet-copy-icon-check {
+    opacity: 0;
+    transform: scale(0.84);
+  }
+
+  .snippet-copy-button.is-copied .snippet-copy-icon-copy {
+    opacity: 0;
+    transform: scale(0.84);
+  }
+
+  .snippet-copy-button.is-copied .snippet-copy-icon-check {
+    opacity: 1;
+    transform: scale(1);
+  }
+</style>

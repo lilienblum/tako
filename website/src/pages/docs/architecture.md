@@ -1,3 +1,10 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Tako Docs - How Tako Works
+heading: How Tako Works
+current: architecture
+---
+
 # How Tako Works
 
 Tako keeps the architecture simple: one management flow to change app state, one traffic flow to serve requests.

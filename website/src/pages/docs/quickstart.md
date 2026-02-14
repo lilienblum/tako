@@ -1,3 +1,10 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Tako Docs - Quickstart
+heading: Quickstart
+current: quickstart
+---
+
 # Quickstart
 
 This is the fastest path from "I just installed Tako" to "my app is live."
@@ -8,6 +15,11 @@ Install the CLI:
 
 ```bash
 curl -fsSL https://tako.sh/install | sh
+```
+
+Verify installation:
+
+```bash
 tako --version
 ```
 
@@ -37,6 +49,11 @@ On each deployment host (as `root` or with `sudo`), install the runtime:
 
 ```bash
 curl -fsSL https://tako.sh/install-server | sh
+```
+
+Verify installation:
+
+```bash
 tako-server --version
 ```
 

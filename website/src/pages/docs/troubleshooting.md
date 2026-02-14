@@ -1,4 +1,11 @@
-# Operations Runbook
+---
+layout: ../../layouts/DocsLayout.astro
+title: Tako Docs - Troubleshooting
+heading: Troubleshooting
+current: troubleshooting
+---
+
+# Troubleshooting
 
 Day-2 checks for local and remote Tako environments.
 

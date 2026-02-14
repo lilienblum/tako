@@ -1,3 +1,10 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Tako Docs - Development
+heading: Development
+current: development
+---
+
 # Development (Local)
 
 This guide covers local development with Tako: trusted HTTPS, `.tako.local` URLs, and what `tako dev` is doing behind the scenes.

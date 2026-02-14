@@ -58,6 +58,6 @@ cargo run -p tako --bin tako -- deploy --help
 
 ## Related Docs
 
-- `website/src/content/docs/guides/quickstart.md` (first-run local + remote setup)
-- `website/src/content/docs/guides/development.md` (local dev workflow)
-- `website/src/content/docs/guides/deployment.md` (remote deploy workflow)
+- `website/src/pages/docs/quickstart.md` (first-run local + remote setup)
+- `website/src/pages/docs/development.md` (local dev workflow)
+- `website/src/pages/docs/deployment.md` (remote deploy workflow)

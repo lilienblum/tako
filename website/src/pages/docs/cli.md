@@ -1,3 +1,10 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Tako Docs - CLI Reference
+heading: CLI Reference
+current: cli
+---
+
 # CLI Reference
 
 Your quick map of `tako` commands, flags, and common patterns.
@@ -28,12 +35,39 @@ Global flags:
 
 ## `servers` Subcommands
 
+`tako servers add`:
+
 ```bash
 tako servers add [HOST] [--name <NAME>] [--description <TEXT>] [--port <PORT>] [--no-test]
+```
+
+`tako servers rm`:
+
+```bash
 tako servers rm [NAME]
+```
+
+`tako servers ls`:
+
+```bash
 tako servers ls
+```
+
+`tako servers restart`:
+
+```bash
 tako servers restart <NAME>
+```
+
+`tako servers reload`:
+
+```bash
 tako servers reload <NAME>
+```
+
+`tako servers status`:
+
+```bash
 tako servers status [NAME]
 ```
 
@@ -51,12 +85,39 @@ Notes:
 
 ## `secrets` Subcommands
 
+`tako secrets set`:
+
 ```bash
 tako secrets set <NAME> [--env <ENV>]
+```
+
+`tako secrets rm`:
+
+```bash
 tako secrets rm <NAME> [--env <ENV>]
+```
+
+`tako secrets ls`:
+
+```bash
 tako secrets ls
+```
+
+`tako secrets sync`:
+
+```bash
 tako secrets sync [--env <ENV>]
+```
+
+`tako secrets key import`:
+
+```bash
 tako secrets key import [--env <ENV>]
+```
+
+`tako secrets key export`:
+
+```bash
 tako secrets key export [--env <ENV>]
 ```
 
@@ -72,23 +133,44 @@ Notes:
 
 ## Common Examples
 
+Initialize in current directory:
+
 ```bash
-# initialize in current directory
 tako init
+```
 
-# run local app with non-interactive output
+Run local app with non-interactive output:
+
+```bash
 tako dev --no-tui
+```
 
-# deploy staging and skip confirmation
+Deploy staging and skip confirmation:
+
+```bash
 tako deploy --env staging --yes
+```
 
-# remove production app
+Remove production app:
+
+```bash
 tako delete --env production
+```
 
-# add a server and verify SSH
+Add a server and verify SSH:
+
+```bash
 tako servers add 203.0.113.10 --name production
+```
 
-# set + sync secrets for production
+Set a production secret:
+
+```bash
 tako secrets set DATABASE_URL --env production
+```
+
+Sync production secrets:
+
+```bash
 tako secrets sync --env production
 ```

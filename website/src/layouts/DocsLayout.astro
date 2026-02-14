@@ -1,25 +1,36 @@
 ---
 import BaseLayout from "./BaseLayout.astro";
+import SnippetCopyButton from "../components/SnippetCopyButton.astro";
 
 export interface Props {
   title: string;
   heading: string;
   current?: string;
   headingAnchors?: boolean;
+  frontmatter?: {
+    title?: string;
+    heading?: string;
+    current?: string;
+    headingAnchors?: boolean;
+  };
 }
 
-const { title, heading, current = "intro", headingAnchors = true } = Astro.props;
+const frontmatter = Astro.props.frontmatter ?? {};
+const title = Astro.props.title ?? frontmatter.title ?? "Tako Docs";
+const heading = Astro.props.heading ?? frontmatter.heading ?? "Docs";
+const current = Astro.props.current ?? frontmatter.current ?? "intro";
+const headingAnchors = Astro.props.headingAnchors ?? frontmatter.headingAnchors ?? true;
 
 const docsNav = [
   { id: "intro", label: "The Why", href: "/docs" },
   { id: "quickstart", label: "Quickstart", href: "/docs/quickstart" },
   { id: "install", label: "Install", href: "/docs/install" },
+  { id: "architecture", label: "How Tako Works", href: "/docs/architecture" },
   { id: "cli", label: "CLI Reference", href: "/docs/cli" },
   { id: "tako-toml", label: "tako.toml", href: "/docs/tako-toml" },
   { id: "development", label: "Development", href: "/docs/development" },
   { id: "deployment", label: "Deployment", href: "/docs/deployment" },
-  { id: "operations", label: "Operations", href: "/docs/operations" },
-  { id: "architecture", label: "How Tako Works", href: "/docs/architecture" },
+  { id: "troubleshooting", label: "Troubleshooting", href: "/docs/troubleshooting" },
 ];
 ---
 <BaseLayout title={title} description="Tako documentation - a minimal deployment tool for self-hosted infrastructure.">
@@ -59,14 +70,18 @@ const docsNav = [
         </div>
       </article>
     </div>
+    <template data-docs-copy-template>
+      <SnippetCopyButton class="docs-copy-button" ariaLabel="Copy code snippet" title="Copy" />
+    </template>
   </section>
 
   <script is:inline>
     const docsSheet = document.querySelector("[data-docs-sheet]");
     const toggle = docsSheet?.querySelector("[data-docs-menu-toggle]");
     const sidebar = docsSheet?.querySelector("[data-docs-sidebar]");
-    const links = docsSheet ? Array.from(docsSheet.querySelectorAll(".docs-nav-link")) : [];
     const contentRoot = docsSheet?.querySelector(".content");
+    const copyButtonTemplate = docsSheet?.querySelector("[data-docs-copy-template]");
+    const headingTargets = [];
 
     if (toggle instanceof HTMLButtonElement && sidebar instanceof HTMLElement) {
       const setOpen = (open) => {
@@ -81,13 +96,17 @@ const docsNav = [
         setOpen(!currentlyOpen);
       });
 
-      for (const link of links) {
-        link.addEventListener("click", () => {
-          if (window.matchMedia("(max-width: 900px)").matches) {
-            setOpen(false);
-          }
-        });
-      }
+      sidebar.addEventListener("click", (event) => {
+        if (!(event.target instanceof Element)) {
+          return;
+        }
+        if (!event.target.closest("a")) {
+          return;
+        }
+        if (window.matchMedia("(max-width: 900px)").matches) {
+          setOpen(false);
+        }
+      });
 
       window.addEventListener("resize", () => {
         if (window.innerWidth > 900) {
@@ -98,7 +117,7 @@ const docsNav = [
 
     if (contentRoot instanceof HTMLElement && docsSheet?.getAttribute("data-heading-anchors") === "true") {
       const headings = Array.from(
-        contentRoot.querySelectorAll("h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]"),
+        contentRoot.querySelectorAll("h2[id], h3[id], h4[id], h5[id], h6[id]"),
       );
 
       for (const heading of headings) {
@@ -122,6 +141,11 @@ const docsNav = [
         const headingText = heading.textContent?.trim();
         anchor.setAttribute("aria-label", headingText ? `Link to section: ${headingText}` : `Link to section: ${id}`);
         anchor.title = "Link to this section";
+        headingTargets.push({
+          id,
+          label: headingText || id,
+          level: Number.parseInt(heading.tagName.slice(1), 10),
+        });
 
         heading.append(anchor);
 
@@ -138,6 +162,120 @@ const docsNav = [
           }
           window.location.hash = id;
         });
+      }
+    }
+
+    if (sidebar instanceof HTMLElement && headingTargets.length > 0) {
+      const activeNavLink = sidebar.querySelector(".docs-nav-link.is-active");
+      if (activeNavLink instanceof HTMLAnchorElement) {
+        const subLinks = document.createElement("div");
+        subLinks.className = "docs-nav-sub-links";
+        subLinks.setAttribute("aria-label", "On this page");
+
+        const sectionHeadings = headingTargets.filter((item) => item.level <= 3);
+        for (const item of sectionHeadings) {
+          const subLink = document.createElement("a");
+          subLink.className = "docs-nav-sub-link";
+          if (item.level === 3) {
+            subLink.classList.add("is-level-3");
+          }
+          subLink.href = `#${item.id}`;
+          subLink.textContent = item.label;
+          subLinks.append(subLink);
+        }
+
+        if (sectionHeadings.length > 0) {
+          activeNavLink.insertAdjacentElement("afterend", subLinks);
+
+          const updateActiveSubLink = () => {
+            const activeHash = window.location.hash.replace(/^#/, "");
+            const subLinkItems = Array.from(subLinks.querySelectorAll(".docs-nav-sub-link"));
+            for (const subLink of subLinkItems) {
+              const linkHash = subLink.getAttribute("href")?.replace(/^#/, "") ?? "";
+              subLink.classList.toggle("is-active", activeHash !== "" && linkHash === activeHash);
+            }
+          };
+
+          updateActiveSubLink();
+          window.addEventListener("hashchange", updateActiveSubLink);
+        }
+      }
+    }
+
+    if (contentRoot instanceof HTMLElement) {
+      const preBlocks = Array.from(contentRoot.querySelectorAll("pre"));
+
+      for (const pre of preBlocks) {
+        if (!(pre instanceof HTMLPreElement)) {
+          continue;
+        }
+        if (pre.getAttribute("data-copy-ready") === "true") {
+          continue;
+        }
+
+        const language = (pre.getAttribute("data-language") || "").toLowerCase();
+        if (language === "text") {
+          continue;
+        }
+
+        const code = pre.querySelector("code");
+        if (!(code instanceof HTMLElement)) {
+          continue;
+        }
+
+        const codeText = code.textContent?.replace(/\n$/, "") ?? "";
+        if (!codeText.trim()) {
+          continue;
+        }
+
+        const wrapper = document.createElement("div");
+        wrapper.className = "docs-code-wrap";
+        pre.parentNode?.insertBefore(wrapper, pre);
+        wrapper.append(pre);
+
+        pre.classList.add("docs-copyable-pre");
+        pre.setAttribute("data-copy-ready", "true");
+
+        let copyButton = null;
+        if (copyButtonTemplate instanceof HTMLTemplateElement) {
+          const node = copyButtonTemplate.content.firstElementChild?.cloneNode(true);
+          if (node instanceof HTMLButtonElement) {
+            copyButton = node;
+          }
+        }
+        if (!(copyButton instanceof HTMLButtonElement)) {
+          copyButton = document.createElement("button");
+          copyButton.type = "button";
+          copyButton.className = "docs-copy-button";
+          copyButton.textContent = "Copy";
+          copyButton.setAttribute("aria-label", "Copy code snippet");
+          copyButton.setAttribute("title", "Copy");
+        }
+
+        copyButton.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+
+          const text = code.textContent?.replace(/\n$/, "") ?? "";
+          if (!text) {
+            return;
+          }
+
+          try {
+            await navigator.clipboard.writeText(text);
+            copyButton.classList.add("is-copied");
+            window.setTimeout(() => {
+              copyButton.classList.remove("is-copied");
+            }, 1200);
+          } catch {
+            copyButton.classList.add("is-error");
+            window.setTimeout(() => {
+              copyButton.classList.remove("is-error");
+            }, 1200);
+          }
+        });
+
+        wrapper.append(copyButton);
       }
     }
   </script>
@@ -255,6 +393,43 @@ const docsNav = [
     font-weight: 700;
   }
 
+  .docs-nav-sub-links {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin: 2px 0 8px 12px;
+    padding-left: 10px;
+    border-left: 1px dashed rgba(47, 42, 68, 0.2);
+  }
+
+  .docs-nav-sub-link {
+    text-decoration: none;
+    color: var(--muted);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 4px 8px;
+    font-size: 13px;
+    line-height: 1.25;
+  }
+
+  .docs-nav-sub-link:hover {
+    color: var(--ink);
+    background: rgba(155, 196, 182, 0.14);
+    border-color: rgba(155, 196, 182, 0.35);
+  }
+
+  .docs-nav-sub-link.is-level-3 {
+    margin-left: 8px;
+    font-size: 12px;
+  }
+
+  .docs-nav-sub-link.is-active {
+    color: var(--ink);
+    background: rgba(155, 196, 182, 0.2);
+    border-color: rgba(155, 196, 182, 0.45);
+    font-weight: 600;
+  }
+
   .docs-main {
     min-width: 0;
   }
@@ -290,7 +465,7 @@ const docsNav = [
     font-size: clamp(20px, 3vw, 24px);
   }
 
-  .content :is(h1, h2, h3, h4, h5, h6)[id] {
+  .content :is(h2, h3, h4, h5, h6)[id] {
     scroll-margin-top: 108px;
     cursor: pointer;
   }
@@ -320,7 +495,7 @@ const docsNav = [
     transition: opacity 0.14s ease;
   }
 
-  .content :is(h1, h2, h3, h4, h5, h6)[id]:hover .docs-heading-anchor {
+  .content :is(h2, h3, h4, h5, h6)[id]:hover .docs-heading-anchor {
     opacity: 1;
   }
 
@@ -371,6 +546,71 @@ const docsNav = [
     font-size: 13px;
     line-height: 1.5;
     color: #2b2640;
+  }
+
+  .content .docs-code-wrap {
+    position: relative;
+    margin: 14px 0;
+    --docs-pre-pad-top: 18px;
+    --docs-first-line-height: 19.5px;
+    --docs-copy-size: 32px;
+  }
+
+  .content .docs-code-wrap pre {
+    margin: 0;
+  }
+
+  .content .docs-copyable-pre {
+    padding-right: 84px;
+  }
+
+  .content .docs-copy-button {
+    position: absolute;
+    top: calc(var(--docs-pre-pad-top) + (var(--docs-first-line-height) - var(--docs-copy-size)) / 2);
+    right: 12px;
+    width: var(--docs-copy-size);
+    height: var(--docs-copy-size);
+    border: 1.5px solid rgba(47, 42, 68, 0.34);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.62);
+    box-shadow: 0 2px 10px rgba(47, 42, 68, 0.1);
+    color: rgba(47, 42, 68, 0.82);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-2px) scale(0.97);
+    transition: opacity 0.14s ease, transform 0.14s ease, border-color 0.14s ease, color 0.14s ease, background-color 0.14s ease;
+    cursor: pointer;
+  }
+
+  .content .docs-copy-button .snippet-copy-icon {
+    width: 15px;
+    height: 15px;
+  }
+
+  .content .docs-code-wrap:hover .docs-copy-button,
+  .content .docs-code-wrap:focus-within .docs-copy-button,
+  .content .docs-copy-button:focus-visible {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+  }
+
+  .content .docs-copy-button:hover {
+    border-color: rgba(232, 135, 131, 0.68);
+    color: var(--accent);
+    background: rgba(255, 255, 255, 0.95);
+  }
+
+  .content .docs-copy-button.is-copied {
+    background: rgba(155, 196, 182, 0.42);
+    border-color: rgba(101, 168, 145, 0.78);
+    color: rgba(19, 95, 69, 0.98);
+  }
+
+  .content .docs-copy-button.is-error {
+    background: rgba(232, 135, 131, 0.18);
+    border-color: rgba(232, 135, 131, 0.75);
+    color: #8d2727;
   }
 
   .content pre code {
@@ -506,6 +746,10 @@ const docsNav = [
   }
 
   @media (max-width: 640px) {
+    .content .docs-code-wrap {
+      --docs-pre-pad-top: 14px;
+    }
+
     .content pre {
       padding: 14px 16px;
     }

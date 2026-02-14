@@ -1,3 +1,10 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Tako Docs - tako.toml
+heading: tako.toml
+current: tako-toml
+---
+
 # `tako.toml` Reference
 
 `tako.toml` is your project's control panel for app metadata, env vars, routes, and server behavior.

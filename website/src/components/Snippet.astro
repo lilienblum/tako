@@ -1,0 +1,12 @@
+---
+import { Code } from "astro:components";
+import { SNIPPET_THEME } from "../config/snippet-theme.js";
+
+const {
+  code,
+  lang = "plaintext",
+  theme = SNIPPET_THEME,
+  ...rest
+} = Astro.props;
+---
+<Code code={code} lang={lang} theme={theme} {...rest} />

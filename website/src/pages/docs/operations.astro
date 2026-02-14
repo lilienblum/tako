@@ -1,7 +1,19 @@
 ---
-import DocsLayout from "../../layouts/DocsLayout.astro";
-import OperationsDoc from "../../../../docs/guides/operations.md";
+const target = "/docs/troubleshooting";
 ---
-<DocsLayout title="Tako Docs - Operations" heading="Operations" current="operations">
-  <OperationsDoc />
-</DocsLayout>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="refresh" content={`0;url=${target}`} />
+    <link rel="canonical" href={target} />
+    <title>Redirecting to Troubleshooting</title>
+    <script is:inline>
+      const hash = window.location.hash || "";
+      window.location.replace(`/docs/troubleshooting${hash}`);
+    </script>
+  </head>
+  <body>
+    <p>Redirecting to <a href={target}>Troubleshooting</a>.</p>
+  </body>
+</html>

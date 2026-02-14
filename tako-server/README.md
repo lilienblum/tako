@@ -53,6 +53,6 @@ cargo run -p tako-server -- \
 
 ## Related Docs
 
-- `website/src/content/docs/guides/quickstart.md` (remote server install + first deploy setup)
-- `website/src/content/docs/guides/deployment.md` (deploy flow and runtime expectations)
-- `website/src/content/docs/architecture/overview.md` (runtime component/data-flow context)
+- `website/src/pages/docs/quickstart.md` (remote server install + first deploy setup)
+- `website/src/pages/docs/deployment.md` (deploy flow and runtime expectations)
+- `website/src/pages/docs/architecture.md` (runtime component/data-flow context)

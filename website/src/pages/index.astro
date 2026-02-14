@@ -1,7 +1,6 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
-import Check from "lucide-astro/Check";
-import Copy from "lucide-astro/Copy";
+import CopyButton from "../components/CopyButton.astro";
 ---
 <BaseLayout
   title="Tako | Ship it like FTP"
@@ -235,8 +234,9 @@ import Copy from "lucide-astro/Copy";
   .command-head {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: center;
     gap: 12px;
+    position: relative;
     background: rgba(158, 201, 255, 0.22);
     border-bottom: 2px solid rgba(47, 42, 68, 0.14);
     padding: 10px 14px;
@@ -245,6 +245,10 @@ import Copy from "lucide-astro/Copy";
   .dots {
     display: inline-flex;
     gap: 6px;
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
   }
 
   .dots span {
@@ -349,7 +353,6 @@ import Copy from "lucide-astro/Copy";
   }
 
   .copy-inline {
-    position: relative;
     width: 36px;
     height: 36px;
     margin-left: auto;
@@ -357,9 +360,6 @@ import Copy from "lucide-astro/Copy";
     border-radius: 10px;
     background: rgba(255, 255, 255, 0.86);
     color: var(--ink);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     cursor: pointer;
     flex: 0 0 auto;
   }
@@ -368,47 +368,15 @@ import Copy from "lucide-astro/Copy";
     transform: translateY(-1px);
   }
 
-  .copy-inline-icon {
+  .copy-inline .copy-button-icon {
     width: 17px;
     height: 17px;
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    fill: none;
-    display: block;
-  }
-
-  .copy-inline-copy {
-    stroke: rgba(47, 42, 68, 0.78);
-  }
-
-  .copy-inline-check {
-    stroke: rgba(22, 110, 80, 0.95);
-    display: none;
   }
 
   .copy-inline.is-copied {
     background: rgba(155, 196, 182, 0.24);
     border-color: rgba(155, 196, 182, 0.58);
-  }
-
-  .copy-inline.is-copied .copy-inline-copy {
-    display: none;
-  }
-
-  .copy-inline.is-copied .copy-inline-check {
-    display: block;
-  }
-
-  .copy-inline-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    border: 0;
+    color: rgba(22, 110, 80, 0.95);
   }
 
   .hero-block {
@@ -733,11 +701,7 @@ import Copy from "lucide-astro/Copy";
         <span class="prompt">$</span>
         <span class="cmd" id="typed-cmd"></span>
         <span class="cursor" aria-hidden="true"></span>
-        <button class="copy-inline" id="copy" type="button" aria-label="copy install command" title="copy install command">
-          <Copy class="copy-inline-icon copy-inline-copy" aria-hidden="true" focusable="false" />
-          <Check class="copy-inline-icon copy-inline-check" aria-hidden="true" focusable="false" />
-          <span class="copy-inline-label" data-copy-label>copy install command</span>
-        </button>
+        <CopyButton class="copy-inline" id="copy" ariaLabel="copy install command" title="copy install command" label="copy install command" />
       </div>
       <div class="command-actions">
         <a class="btn" href="/docs">read the docs</a>
@@ -1052,8 +1016,9 @@ import Copy from "lucide-astro/Copy";
   .command-head {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: center;
     gap: 12px;
+    position: relative;
     background: rgba(158, 201, 255, 0.22);
     border-bottom: 2px solid rgba(47, 42, 68, 0.14);
     padding: 10px 14px;
@@ -1062,6 +1027,10 @@ import Copy from "lucide-astro/Copy";
   .dots {
     display: inline-flex;
     gap: 6px;
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
   }
 
   .dots span {
@@ -1166,7 +1135,6 @@ import Copy from "lucide-astro/Copy";
   }
 
   .copy-inline {
-    position: relative;
     width: 36px;
     height: 36px;
     margin-left: auto;
@@ -1174,9 +1142,6 @@ import Copy from "lucide-astro/Copy";
     border-radius: 10px;
     background: rgba(255, 255, 255, 0.86);
     color: var(--ink);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
     cursor: pointer;
     flex: 0 0 auto;
   }
@@ -1185,47 +1150,15 @@ import Copy from "lucide-astro/Copy";
     transform: translateY(-1px);
   }
 
-  .copy-inline-icon {
+  .copy-inline .copy-button-icon {
     width: 17px;
     height: 17px;
-    stroke-width: 2;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    fill: none;
-    display: block;
-  }
-
-  .copy-inline-copy {
-    stroke: rgba(47, 42, 68, 0.78);
-  }
-
-  .copy-inline-check {
-    stroke: rgba(22, 110, 80, 0.95);
-    display: none;
   }
 
   .copy-inline.is-copied {
     background: rgba(155, 196, 182, 0.24);
     border-color: rgba(155, 196, 182, 0.58);
-  }
-
-  .copy-inline.is-copied .copy-inline-copy {
-    display: none;
-  }
-
-  .copy-inline.is-copied .copy-inline-check {
-    display: block;
-  }
-
-  .copy-inline-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    margin: -1px;
-    padding: 0;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    border: 0;
+    color: rgba(22, 110, 80, 0.95);
   }
 
   .hero-block {

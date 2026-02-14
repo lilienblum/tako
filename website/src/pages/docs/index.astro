@@ -1,7 +1,19 @@
 ---
-import DocsLayout from "../../layouts/DocsLayout.astro";
-import OverviewDoc from "../../../../docs/README.md";
+const target = "/docs/the-why";
 ---
-<DocsLayout title="Tako Docs - The Why" heading="The Why" current="intro">
-  <OverviewDoc />
-</DocsLayout>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="refresh" content={`0;url=${target}`} />
+    <link rel="canonical" href={target} />
+    <title>Redirecting to The Why</title>
+    <script is:inline>
+      const hash = window.location.hash || "";
+      window.location.replace(`/docs/the-why${hash}`);
+    </script>
+  </head>
+  <body>
+    <p>Redirecting to <a href={target}>The Why</a>.</p>
+  </body>
+</html>

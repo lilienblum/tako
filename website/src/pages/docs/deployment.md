@@ -1,3 +1,10 @@
+---
+layout: ../../layouts/DocsLayout.astro
+title: Tako Docs - Deployment
+heading: Deployment
+current: deployment
+---
+
 # Deployment
 
 This guide explains what `tako deploy` actually does and what your remote servers need in place.

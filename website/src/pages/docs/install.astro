@@ -1,8 +1,14 @@
 ---
+import Snippet from "../../components/Snippet.astro";
 import DocsLayout from "../../layouts/DocsLayout.astro";
+
+const uninstallServerCurl =
+  "systemctl disable --now tako-server 2>/dev/null || true; rm -f /etc/systemd/system/tako-server.service; systemctl daemon-reload 2>/dev/null || true; rm -f /etc/sudoers.d/tako; rm -f /usr/local/bin/tako-server";
+const fullCleanupCurl =
+  "rm -rf /opt/tako /var/run/tako; userdel -r tako 2>/dev/null || deluser --remove-home tako 2>/dev/null || true";
 ---
 <DocsLayout title="Tako Docs - Install" heading="Install" current="install">
-  <h1>Install</h1>
+  <h1 id="install">Install</h1>
   <p>Use these commands to install Tako locally and on your deployment servers.</p>
   <p>Jump links (shareable URLs):</p>
   <ul class="section-jump-links">
@@ -44,41 +50,36 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
     </div>
 
     <section id="panel-curl" role="tabpanel" aria-labelledby="tab-curl" class="method-panel" data-panel="curl">
-      <h2 id="install-cli-curl"><a class="section-link" href="#install-cli-curl">Install CLI (local machine)</a></h2>
-      <pre><code>curl -fsSL https://tako.sh/install | sh</code></pre>
+      <h2 id="install-cli-curl">Install CLI (local machine)</h2>
+      <Snippet code="curl -fsSL https://tako.sh/install | sh" lang="bash" />
 
       <p>Verify installation:</p>
-      <pre><code>tako --version</code></pre>
+      <Snippet code="tako --version" lang="bash" />
 
       <p>Upgrade later:</p>
-      <pre><code>tako upgrade</code></pre>
+      <Snippet code="tako upgrade" lang="bash" />
 
-      <h2 id="install-server-curl"><a class="section-link" href="#install-server-curl">Install Server Runtime (remote host)</a></h2>
+      <h2 id="install-server-curl">Install Server Runtime (remote host)</h2>
       <p>Run this as <code>root</code> (or with <code>sudo</code>) on each deployment server:</p>
-      <pre><code>curl -fsSL https://tako.sh/install-server | sh</code></pre>
+      <Snippet code="curl -fsSL https://tako.sh/install-server | sh" lang="bash" />
 
       <p>Verify installation:</p>
-      <pre><code>tako-server --version</code></pre>
+      <Snippet code="tako-server --version" lang="bash" />
 
-      <h2 id="uninstall-cli-curl"><a class="section-link" href="#uninstall-cli-curl">Uninstall CLI (local machine)</a></h2>
-      <pre><code>rm -f ~/.local/bin/tako</code></pre>
+      <h2 id="uninstall-cli-curl">Uninstall CLI (local machine)</h2>
+      <Snippet code="rm -f ~/.local/bin/tako" lang="bash" />
 
       <p>If you installed to a custom directory, remove that directory's <code>tako</code> binary instead.</p>
       <p>If your shell still resolves the old binary path, restart your shell (or run <code>hash -r</code>).</p>
 
-      <h2 id="uninstall-server-curl"><a class="section-link" href="#uninstall-server-curl">Uninstall Server Runtime (remote host)</a></h2>
+      <h2 id="uninstall-server-curl">Uninstall Server Runtime (remote host)</h2>
       <p>Run this as <code>root</code> (or with <code>sudo</code>) on each deployment server:</p>
-      <pre><code>systemctl disable --now tako-server 2>/dev/null || true
-rm -f /etc/systemd/system/tako-server.service
-systemctl daemon-reload 2>/dev/null || true
-rm -f /etc/sudoers.d/tako
-rm -f /usr/local/bin/tako-server</code></pre>
+      <Snippet code={uninstallServerCurl} lang="bash" />
 
       <p>Optional full cleanup (destructive):</p>
-      <pre><code>rm -rf /opt/tako /var/run/tako
-userdel -r tako 2>/dev/null || deluser --remove-home tako 2>/dev/null || true</code></pre>
+      <Snippet code={fullCleanupCurl} lang="bash" />
 
-      <h2 id="script-sources-curl"><a class="section-link" href="#script-sources-curl">Script Sources</a></h2>
+      <h2 id="script-sources-curl">Script Sources</h2>
       <p>Installer endpoints and script sources:</p>
       <ul>
         <li><a href="/install">/install</a> (CLI installer)</li>
@@ -95,30 +96,30 @@ userdel -r tako 2>/dev/null || deluser --remove-home tako 2>/dev/null || true</c
       data-panel="cargo"
       hidden
     >
-      <h2 id="install-cli-cargo"><a class="section-link" href="#install-cli-cargo">Install CLI (local machine)</a></h2>
-      <pre><code>cargo install tako</code></pre>
+      <h2 id="install-cli-cargo">Install CLI (local machine)</h2>
+      <Snippet code="cargo install tako" lang="bash" />
 
       <p>Verify installation:</p>
-      <pre><code>tako --version</code></pre>
+      <Snippet code="tako --version" lang="bash" />
 
       <p>Upgrade later:</p>
-      <pre><code>cargo install tako --force</code></pre>
+      <Snippet code="cargo install tako --force" lang="bash" />
 
-      <h2 id="install-server-cargo"><a class="section-link" href="#install-server-cargo">Install Server Runtime (remote host)</a></h2>
-      <pre><code>cargo install tako-server</code></pre>
+      <h2 id="install-server-cargo">Install Server Runtime (remote host)</h2>
+      <Snippet code="cargo install tako-server" lang="bash" />
 
       <p>Verify installation:</p>
-      <pre><code>tako-server --version</code></pre>
+      <Snippet code="tako-server --version" lang="bash" />
 
       <blockquote>
         Cargo install provides binaries only. For production hosts, use the curl installer when you want automatic service setup.
       </blockquote>
 
-      <h2 id="uninstall-cli-cargo"><a class="section-link" href="#uninstall-cli-cargo">Uninstall CLI (local machine)</a></h2>
-      <pre><code>cargo uninstall tako</code></pre>
+      <h2 id="uninstall-cli-cargo">Uninstall CLI (local machine)</h2>
+      <Snippet code="cargo uninstall tako" lang="bash" />
 
-      <h2 id="uninstall-server-cargo"><a class="section-link" href="#uninstall-server-cargo">Uninstall Server Runtime (remote host)</a></h2>
-      <pre><code>cargo uninstall tako-server</code></pre>
+      <h2 id="uninstall-server-cargo">Uninstall Server Runtime (remote host)</h2>
+      <Snippet code="cargo uninstall tako-server" lang="bash" />
 
       <blockquote>
         If the server was installed with the curl installer, use the curl-tab uninstall steps to remove service files and runtime data.
@@ -186,15 +187,6 @@ userdel -r tako 2>/dev/null || deluser --remove-home tako 2>/dev/null || true</c
 
     .section-jump-links li {
       margin: 2px 0;
-    }
-
-    .section-link {
-      color: inherit;
-      text-decoration: none;
-    }
-
-    .section-link:hover {
-      text-decoration: none;
     }
 
     .method-tablist {
