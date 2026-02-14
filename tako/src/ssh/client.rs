@@ -9,7 +9,7 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tako_core::{Command, Response};
+use tako_core::{Command, Response, ServerRuntimeInfo};
 
 /// SSH connection configuration
 #[derive(Debug, Clone)]
@@ -527,7 +527,10 @@ impl SshClient {
     pub async fn tako_reload(&self, app: Option<&str>) -> SshResult<()> {
         let cmd = match app {
             Some(app_name) => {
-                let payload = format!("{{\"Reload\": {{\"app\": \"{}\"}}}}", app_name);
+                let payload = serde_json::to_string(&Command::Reload {
+                    app: app_name.to_string(),
+                })
+                .map_err(|e| SshError::CommandFailed(e.to_string()))?;
                 Self::socket_request_command(&payload)
             }
             None => "sudo systemctl reload tako-server".to_string(),
@@ -578,9 +581,14 @@ impl SshClient {
     fn socket_request_command(json_command: &str) -> String {
         // `nc` implementations can keep the connection open after writing stdin.
         // Read one JSONL line and terminate the pipeline deterministically.
+        Self::socket_request_command_on_path("/var/run/tako/tako.sock", json_command)
+    }
+
+    fn socket_request_command_on_path(socket_path: &str, json_command: &str) -> String {
         format!(
-            "printf '%s\\n' '{}' | nc -U /var/run/tako/tako.sock | head -n 1",
-            json_command.replace("'", "'\\''")
+            "printf '%s\\n' '{}' | nc -U '{}' | head -n 1",
+            json_command.replace("'", "'\\''"),
+            socket_path.replace("'", "'\\''")
         )
     }
 
@@ -679,6 +687,69 @@ impl SshClient {
         Ok(response)
     }
 
+    /// Get runtime information from tako-server.
+    pub async fn tako_server_info(&mut self) -> SshResult<ServerRuntimeInfo> {
+        let cmd = Command::ServerInfo;
+        let json =
+            serde_json::to_string(&cmd).map_err(|e| SshError::CommandFailed(e.to_string()))?;
+        let response_str = self.tako_command(&json).await?;
+        parse_ok_data_response(response_str)
+    }
+
+    /// Enter upgrading mode using a durable owner lock.
+    pub async fn tako_enter_upgrading(&mut self, owner: &str) -> SshResult<()> {
+        let cmd = Command::EnterUpgrading {
+            owner: owner.to_string(),
+        };
+        let json =
+            serde_json::to_string(&cmd).map_err(|e| SshError::CommandFailed(e.to_string()))?;
+        let response_str = self.tako_command(&json).await?;
+        parse_ok_unit_response(response_str)
+    }
+
+    /// Exit upgrading mode using the lock owner.
+    pub async fn tako_exit_upgrading(&mut self, owner: &str) -> SshResult<()> {
+        let cmd = Command::ExitUpgrading {
+            owner: owner.to_string(),
+        };
+        let json =
+            serde_json::to_string(&cmd).map_err(|e| SshError::CommandFailed(e.to_string()))?;
+        let response_str = self.tako_command(&json).await?;
+        parse_ok_unit_response(response_str)
+    }
+
+    /// Send a command to a specific unix socket path.
+    pub async fn tako_command_on_socket(
+        &self,
+        socket_path: &str,
+        json_command: &str,
+    ) -> SshResult<String> {
+        let output = self
+            .exec_checked(&Self::socket_request_command_on_path(
+                socket_path,
+                json_command,
+            ))
+            .await?;
+        Self::extract_socket_stdout(output)
+    }
+
+    /// Run protocol hello against a specific unix socket path.
+    pub async fn tako_hello_on_socket(&self, socket_path: &str) -> SshResult<()> {
+        let cmd = Command::Hello {
+            protocol_version: tako_core::PROTOCOL_VERSION,
+        };
+        let json =
+            serde_json::to_string(&cmd).map_err(|e| SshError::CommandFailed(e.to_string()))?;
+        let response_str = self.tako_command_on_socket(socket_path, &json).await?;
+        let response: Response = serde_json::from_str(&response_str)
+            .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+        Self::interpret_hello_response(&response).map_err(SshError::CommandFailed)
+    }
+
+    pub fn clear_tako_hello_cache(&mut self) {
+        self.tako_hello_checked = false;
+    }
+
     /// Disconnect from the server
     pub async fn disconnect(&mut self) -> SshResult<()> {
         if let Some(handle) = self.handle.take() {
@@ -704,6 +775,26 @@ impl SshClient {
 impl Drop for SshClient {
     fn drop(&mut self) {
         // Connection will be closed when handle is dropped
+    }
+}
+
+fn parse_ok_unit_response(response_str: String) -> SshResult<()> {
+    let response: Response =
+        serde_json::from_str(&response_str).map_err(|e| SshError::CommandFailed(e.to_string()))?;
+    match response {
+        Response::Ok { .. } => Ok(()),
+        Response::Error { message } => Err(SshError::CommandFailed(message)),
+    }
+}
+
+fn parse_ok_data_response<T: serde::de::DeserializeOwned>(response_str: String) -> SshResult<T> {
+    let response: Response =
+        serde_json::from_str(&response_str).map_err(|e| SshError::CommandFailed(e.to_string()))?;
+    match response {
+        Response::Ok { data } => {
+            serde_json::from_value(data).map_err(|e| SshError::CommandFailed(e.to_string()))
+        }
+        Response::Error { message } => Err(SshError::CommandFailed(message)),
     }
 }
 
@@ -797,7 +888,7 @@ l4QMs5cmnWfrM0GQ==\n\
     #[test]
     fn hello_response_interpretation_accepts_ok() {
         let resp = Response::Ok {
-            data: serde_json::json!({"protocol_version": 2}),
+            data: serde_json::json!({"protocol_version": tako_core::PROTOCOL_VERSION}),
         };
         SshClient::interpret_hello_response(&resp).unwrap();
     }
@@ -841,6 +932,16 @@ l4QMs5cmnWfrM0GQ==\n\
         assert!(command.contains("| head -n 1"));
         assert!(command.contains("it'\\''s"));
         assert!(command.starts_with("printf '%s\\n'"));
+    }
+
+    #[test]
+    fn socket_request_command_on_path_uses_custom_socket() {
+        let command = SshClient::socket_request_command_on_path(
+            "/tmp/tako-next.sock",
+            "{\"command\":\"list\"}",
+        );
+        assert!(command.contains("nc -U '/tmp/tako-next.sock'"));
+        assert!(command.contains("| head -n 1"));
     }
 
     #[tokio::test]

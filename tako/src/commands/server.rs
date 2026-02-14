@@ -1,5 +1,12 @@
 use crate::output;
 use clap::Subcommand;
+use std::path::Path;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tako_core::ServerRuntimeInfo;
+
+const UPGRADE_INSTANCE_PORT_OFFSET: u16 = 10_000;
+const UPGRADE_SOCKET_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
+const UPGRADE_POLL_INTERVAL: Duration = Duration::from_millis(500);
 
 #[derive(Subcommand)]
 pub enum ServerCommands {
@@ -38,6 +45,12 @@ pub enum ServerCommands {
 
     /// Restart tako-server on a server
     Restart {
+        /// Server name
+        name: String,
+    },
+
+    /// Upgrade tako-server with a temporary candidate process and promotion handoff
+    Upgrade {
         /// Server name
         name: String,
     },
@@ -86,6 +99,7 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
         ServerCommands::Rm { name } => remove_server(name.as_deref()).await,
         ServerCommands::Ls => list_servers().await,
         ServerCommands::Restart { name } => restart_server(&name).await,
+        ServerCommands::Upgrade { name } => upgrade_server(&name).await,
         ServerCommands::Reload { name } => reload_server(&name).await,
         ServerCommands::Status => crate::commands::status::run().await,
     }
@@ -603,6 +617,272 @@ async fn restart_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn build_upgrade_owner(server_name: &str) -> String {
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let raw = format!("upgrade-{server_name}-{now}-{}", std::process::id());
+    raw.chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '-' })
+        .collect()
+}
+
+fn candidate_socket_path(active_socket: &str, owner: &str) -> String {
+    let parent = Path::new(active_socket)
+        .parent()
+        .unwrap_or_else(|| Path::new("/var/run/tako"));
+    parent
+        .join(format!("tako-{owner}.sock"))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn candidate_log_path(data_dir: &str, owner: &str) -> String {
+    Path::new(data_dir)
+        .join("upgrade-logs")
+        .join(format!("candidate-{owner}.log"))
+        .to_string_lossy()
+        .to_string()
+}
+
+fn build_candidate_start_command(
+    info: &ServerRuntimeInfo,
+    candidate_socket: &str,
+    owner: &str,
+) -> String {
+    let log_file = candidate_log_path(&info.data_dir, owner);
+
+    let mut args: Vec<String> = vec![
+        "/usr/local/bin/tako-server".to_string(),
+        "--socket".to_string(),
+        candidate_socket.to_string(),
+        "--data-dir".to_string(),
+        info.data_dir.clone(),
+        "--port".to_string(),
+        info.http_port.to_string(),
+        "--tls-port".to_string(),
+        info.https_port.to_string(),
+        "--renewal-interval-hours".to_string(),
+        info.renewal_interval_hours.to_string(),
+        "--instance-port-offset".to_string(),
+        UPGRADE_INSTANCE_PORT_OFFSET.to_string(),
+    ];
+
+    if info.no_acme {
+        args.push("--no-acme".to_string());
+    } else {
+        if info.acme_staging {
+            args.push("--acme-staging".to_string());
+        }
+        if let Some(email) = &info.acme_email {
+            args.push("--acme-email".to_string());
+            args.push(email.clone());
+        }
+    }
+
+    let cmd = args
+        .into_iter()
+        .map(|arg| shell_single_quote(&arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    format!(
+        "mkdir -p {} && nohup {} > {} 2>&1 & echo $!",
+        shell_single_quote(
+            Path::new(&log_file)
+                .parent()
+                .unwrap_or_else(|| Path::new("/tmp"))
+                .to_string_lossy()
+                .as_ref()
+        ),
+        cmd,
+        shell_single_quote(&log_file)
+    )
+}
+
+fn parse_candidate_pid(stdout: &str) -> Option<u32> {
+    stdout
+        .lines()
+        .map(str::trim)
+        .find_map(|line| line.parse::<u32>().ok())
+}
+
+async fn wait_for_candidate_socket_ready(
+    ssh: &crate::ssh::SshClient,
+    socket_path: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    let mut last_err = String::new();
+    while start.elapsed() < timeout {
+        match ssh.tako_hello_on_socket(socket_path).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = e.to_string();
+                tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
+            }
+        }
+    }
+    Err(format!(
+        "timed out waiting for candidate socket {}: {}",
+        socket_path, last_err
+    ))
+}
+
+async fn wait_for_primary_ready(
+    ssh: &mut crate::ssh::SshClient,
+    timeout: Duration,
+) -> Result<ServerRuntimeInfo, String> {
+    let start = std::time::Instant::now();
+    let mut last_err = String::new();
+    while start.elapsed() < timeout {
+        ssh.clear_tako_hello_cache();
+        match ssh.tako_server_info().await {
+            Ok(info) => return Ok(info),
+            Err(e) => {
+                last_err = e.to_string();
+                tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
+            }
+        }
+    }
+    Err(format!(
+        "timed out waiting for primary service after restart: {}",
+        last_err
+    ))
+}
+
+async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::config::ServersToml;
+    use crate::ssh::{SshClient, SshConfig};
+
+    let servers = ServersToml::load()?;
+    let server = servers
+        .get(name)
+        .ok_or_else(|| format!("Server '{}' not found.", name))?;
+
+    let ssh_config = SshConfig::from_server(&server.host, server.port);
+    let mut ssh = SshClient::new(ssh_config);
+    let connect_result = output::with_spinner_async(
+        format!("Connecting to {}", output::emphasized(name)),
+        ssh.connect(),
+    )
+    .await?;
+    connect_result?;
+
+    let owner = build_upgrade_owner(name);
+    let mut upgrade_mode_entered = false;
+    let mut candidate_pid: Option<u32> = None;
+
+    let upgrade_result: Result<(), String> = async {
+        let status = ssh
+            .tako_status()
+            .await
+            .map_err(|e| format!("Failed to query tako-server status: {}", e))?;
+        if status != "active" {
+            return Err(format!(
+                "tako-server must be active before upgrade handoff (status: {}).",
+                status
+            ));
+        }
+
+        output::step(&format!("Upgrade owner: {}", owner));
+
+        output::with_spinner_async(
+            "Entering upgrading mode...",
+            ssh.tako_enter_upgrading(&owner),
+        )
+        .await
+        .map_err(|e| format!("Failed to enter upgrading mode: {}", e))?
+        .map_err(|e| format!("Failed to enter upgrading mode: {}", e))?;
+        upgrade_mode_entered = true;
+        output::success("Upgrading mode enabled");
+
+        let active_info =
+            output::with_spinner_async("Reading active runtime config...", ssh.tako_server_info())
+                .await
+                .map_err(|e| format!("Failed to read runtime config: {}", e))?
+                .map_err(|e| format!("Failed to read runtime config: {}", e))?;
+
+        let candidate_socket = candidate_socket_path(&active_info.socket, &owner);
+        let start_cmd = build_candidate_start_command(&active_info, &candidate_socket, &owner);
+
+        let start_output = output::with_spinner_async(
+            "Starting candidate server...",
+            ssh.exec_checked(&start_cmd),
+        )
+        .await
+        .map_err(|e| format!("Failed to start candidate server: {}", e))?
+        .map_err(|e| format!("Failed to start candidate server: {}", e))?;
+        let pid = parse_candidate_pid(&start_output.stdout).ok_or_else(|| {
+            format!(
+                "Could not parse candidate PID from output: {}",
+                start_output.stdout.trim()
+            )
+        })?;
+        candidate_pid = Some(pid);
+        output::step(&format!(
+            "Candidate socket: {} (pid {})",
+            candidate_socket, pid
+        ));
+
+        output::with_spinner_async(
+            "Waiting for candidate readiness...",
+            wait_for_candidate_socket_ready(&ssh, &candidate_socket, UPGRADE_SOCKET_WAIT_TIMEOUT),
+        )
+        .await
+        .map_err(|e| format!("Candidate readiness check failed: {}", e))?
+        .map_err(|e| format!("Candidate readiness check failed: {}", e))?;
+        output::success("Candidate is ready");
+
+        output::with_spinner_async("Restarting primary service...", ssh.tako_restart())
+            .await
+            .map_err(|e| format!("Restart failed: {}", e))?
+            .map_err(|e| format!("Restart failed: {}", e))?;
+
+        let _ = output::with_spinner_async(
+            "Waiting for primary service readiness...",
+            wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT),
+        )
+        .await
+        .map_err(|e| format!("Primary readiness check failed: {}", e))?
+        .map_err(|e| format!("Primary readiness check failed: {}", e))?;
+        output::success("Primary service is ready");
+
+        if let Some(pid) = candidate_pid.take() {
+            let _ = ssh.exec(&format!("kill {} 2>/dev/null || true", pid)).await;
+            output::step(&format!("Stopped candidate pid {}", pid));
+        }
+
+        output::with_spinner_async("Exiting upgrading mode...", ssh.tako_exit_upgrading(&owner))
+            .await
+            .map_err(|e| format!("Failed to exit upgrading mode: {}", e))?
+            .map_err(|e| format!("Failed to exit upgrading mode: {}", e))?;
+        upgrade_mode_entered = false;
+        output::success("Upgrade handoff complete");
+
+        Ok(())
+    }
+    .await;
+
+    if upgrade_result.is_err() {
+        if let Some(pid) = candidate_pid.take() {
+            let _ = ssh.exec(&format!("kill {} 2>/dev/null || true", pid)).await;
+        }
+        if upgrade_mode_entered {
+            let _ = wait_for_primary_ready(&mut ssh, Duration::from_secs(30)).await;
+            let _ = ssh.tako_exit_upgrading(&owner).await;
+        }
+    }
+
+    let _ = ssh.disconnect().await;
+    upgrade_result.map_err(|e| e.into())
+}
+
 async fn reload_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::ServersToml;
     use crate::ssh::{SshClient, SshConfig};
@@ -639,4 +919,49 @@ async fn reload_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     ssh.disconnect().await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn candidate_socket_path_keeps_runtime_directory() {
+        let socket = candidate_socket_path("/var/run/tako/tako.sock", "upgrade-owner");
+        assert_eq!(socket, "/var/run/tako/tako-upgrade-owner.sock");
+    }
+
+    #[test]
+    fn build_upgrade_owner_is_shell_safe() {
+        let owner = build_upgrade_owner("prod-1");
+        assert!(owner.contains("upgrade-prod-1-"));
+        assert!(owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
+    }
+
+    #[test]
+    fn parse_candidate_pid_reads_first_numeric_line() {
+        assert_eq!(parse_candidate_pid("12345\n"), Some(12345));
+        assert_eq!(parse_candidate_pid("not-a-pid\n"), None);
+        assert_eq!(parse_candidate_pid("note\n6789\n"), Some(6789));
+    }
+
+    #[test]
+    fn candidate_start_command_includes_offset_and_socket() {
+        let info = ServerRuntimeInfo {
+            mode: tako_core::UpgradeMode::Normal,
+            socket: "/var/run/tako/tako.sock".to_string(),
+            data_dir: "/opt/tako".to_string(),
+            http_port: 80,
+            https_port: 443,
+            no_acme: true,
+            acme_staging: false,
+            acme_email: None,
+            renewal_interval_hours: 12,
+            instance_port_offset: 0,
+        };
+        let cmd = build_candidate_start_command(&info, "/var/run/tako/tako-next.sock", "owner");
+        assert!(cmd.contains("--instance-port-offset"));
+        assert!(cmd.contains("10000"));
+        assert!(cmd.contains("/var/run/tako/tako-next.sock"));
+    }
 }

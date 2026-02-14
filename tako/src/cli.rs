@@ -181,6 +181,17 @@ mod tests {
     }
 
     #[test]
+    fn servers_upgrade_parses_with_name() {
+        let cli = Cli::try_parse_from(["tako", "servers", "upgrade", "prod"]).unwrap();
+        let Commands::Servers(server::ServerCommands::Upgrade { name }) =
+            cli.command.expect("command")
+        else {
+            panic!("expected Servers::Upgrade");
+        };
+        assert_eq!(name, "prod");
+    }
+
+    #[test]
     fn top_level_status_command_is_not_available() {
         let res = Cli::try_parse_from(["tako", "status"]);
         match res {

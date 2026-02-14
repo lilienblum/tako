@@ -430,6 +430,21 @@ Systemd-managed servers use `KillMode=control-group` and a 30-minute stop timeou
 During single-host upgrade orchestration, `tako-server` may enter an internal `upgrading` server mode that temporarily rejects mutating management commands (`deploy`, `stop`, `delete`, `reload`, `update-secrets`) until the upgrade window ends.
 Upgrade mode transitions are guarded by a durable single-owner upgrade lock in SQLite so only one upgrade controller can hold the upgrade window at a time.
 
+### tako servers upgrade {server-name}
+
+Single-host upgrade handoff with a temporary candidate process:
+
+1. CLI acquires the durable upgrade lock (`enter_upgrading`) and sets server mode to `upgrading`.
+2. CLI reads active runtime settings (`server_info`) from the management socket.
+3. CLI starts a temporary candidate `tako-server` process on a temporary socket path (for example `/var/run/tako/tako-upgrade-<owner>.sock`) with the same HTTP/HTTPS listener ports.
+4. Candidate startup uses an instance port offset (`--instance-port-offset 10000`) so candidate-managed app instances avoid local port collisions with the active server during overlap.
+5. CLI waits until the candidate answers protocol `hello` on the temporary socket.
+6. CLI restarts the primary systemd service (inherits graceful stop behavior: `KillMode=control-group`, `TimeoutStopSec=30min`).
+7. CLI waits for the primary management socket to become healthy again.
+8. CLI stops the temporary candidate process and releases upgrade mode (`exit_upgrading`).
+
+On failure, CLI performs best-effort cleanup: stop candidate (if started) and release upgrade mode once primary is reachable.
+
 ### tako servers reload {server-name}
 
 Reload configuration (secrets) for all apps without restarting.
@@ -716,11 +731,11 @@ email = "admin@example.com"
 
 ### Zero-Downtime Operation
 
-- HTTP listener with `SO_REUSEPORT` allows gradual traffic shifting during upgrades
-- Graceful shutdown drains connections before exit
-- New tako-server version starts alongside old, both accept traffic
-- CLI communicates via versioned unix socket symlink
-- Old version exits after in-flight requests complete
+- HTTP and HTTPS listeners are created with `SO_REUSEPORT` so a temporary candidate process can bind the same external ports during single-host upgrade overlap.
+- During `tako servers upgrade`, CLI uses a temporary management socket (`tako-<owner>.sock`) for candidate readiness checks.
+- Candidate app instances use an instance port offset (`--instance-port-offset`) to avoid local app-port collisions with active instances.
+- Primary service remains systemd-owned; the candidate is temporary and is stopped after primary service promotion.
+- Restart/stop still honor graceful shutdown semantics from systemd (`KillMode=control-group`, `TimeoutStopSec=30min`).
 
 ### Directory Structure
 
@@ -752,7 +767,8 @@ email = "admin@example.com"
 
 **tako-server socket:**
 
-- Path: `/var/run/tako/tako.sock` (symlink to versioned socket)
+- Primary path: `/var/run/tako/tako.sock`
+- Temporary upgrade candidate path pattern: `/var/run/tako/tako-<owner>.sock`
 - Used by: CLI for deploy/reload/delete/status/routes commands, apps for status/heartbeat
 
 **App instance sockets:**
@@ -783,7 +799,7 @@ email = "admin@example.com"
 - `hello` (capabilities / protocol negotiation; CLI sends this before other commands):
 
 ```json
-{ "command": "hello", "protocol_version": 2 }
+{ "command": "hello", "protocol_version": 3 }
 ```
 
 Response:
@@ -792,11 +808,33 @@ Response:
 {
   "status": "ok",
   "data": {
-    "protocol_version": 2,
+    "protocol_version": 3,
     "server_version": "0.1.0",
-    "capabilities": ["deploy_instances_idle_timeout", "on_demand_cold_start", "idle_scale_to_zero"]
+    "capabilities": [
+      "deploy_instances_idle_timeout",
+      "on_demand_cold_start",
+      "idle_scale_to_zero",
+      "upgrade_mode_control",
+      "server_runtime_info"
+    ]
   }
 }
+```
+
+- `server_info` (returns runtime config + upgrade mode):
+
+```json
+{ "command": "server_info" }
+```
+
+- `enter_upgrading` / `exit_upgrading` (durable single-owner lock transitions):
+
+```json
+{ "command": "enter_upgrading", "owner": "upgrade-prod-..." }
+```
+
+```json
+{ "command": "exit_upgrading", "owner": "upgrade-prod-..." }
 ```
 
 - `deploy` (includes route patterns for routing + TLS/ACME):
