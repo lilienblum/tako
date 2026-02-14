@@ -423,6 +423,10 @@ Restart `tako-server` process entirely (causes brief downtime for all apps).
 
 Use for: binary updates, major configuration changes, system recovery.
 
+Systemd-managed servers use `KillMode=control-group` and a 30-minute stop timeout for restart/stop operations, allowing all app processes in the service cgroup time to handle graceful shutdown before systemd force-kills remaining processes.
+
+`tako-server` persists app runtime registration (app config, routes, and server-side env/secrets map) in SQLite under the data directory and restores it on startup so app routing/config survives process restarts and crashes.
+
 ### tako servers reload {server-name}
 
 Reload configuration (secrets) for all apps without restarting.
@@ -679,6 +683,7 @@ Installer SSH key behavior:
 - If unset and non-interactive, installer continues without key setup and prints a warning.
 - Installer ensures `nc` (netcat) is available so CLI management commands can talk to `/var/run/tako/tako.sock`.
 - Installer attempts to grant `CAP_NET_BIND_SERVICE` to `/usr/local/bin/tako-server` via `setcap` so non-systemd/manual runs can still bind `:80/:443` as a non-root user (warns when `setcap` is unavailable or fails).
+- Installer configures systemd with `KillMode=control-group` and `TimeoutStopSec=30min`, so restart/stop waits up to 30 minutes for graceful app shutdown across all service child processes before forced termination.
 - When systemd is available, installer verifies `tako-server` is active after `enable --now`; if startup fails, installer exits non-zero and prints recent service logs.
 
 Reference script in this repo: `scripts/install-tako-server.sh` (source for `/install-server`, alias `/server-install`).
@@ -719,6 +724,7 @@ email = "admin@example.com"
 ```
 /opt/tako/
 ├── server-config.toml
+├── runtime-state.sqlite3
 ├── acme/
 │   └── credentials.json
 ├── certs/

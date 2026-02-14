@@ -249,6 +249,8 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/tako-server --socket $TAKO_SOCKET --data-dir $TAKO_HOME
 Restart=always
 RestartSec=1
+KillMode=control-group
+TimeoutStopSec=30min
 RuntimeDirectory=tako
 RuntimeDirectoryMode=0755
 

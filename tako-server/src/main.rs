@@ -12,6 +12,7 @@ mod proxy;
 mod routing;
 mod scaling;
 mod socket;
+mod state_store;
 mod tls;
 
 use crate::app_command::command_for_release_dir;
@@ -26,6 +27,7 @@ use crate::socket::{
     AppState, AppStatus, BuildStatus, Command, InstanceState, InstanceStatus, Response,
     SocketServer,
 };
+use crate::state_store::{SqliteStateStore, StateStoreError};
 use crate::tls::{AcmeClient, AcmeConfig, CertManager, CertManagerConfig};
 use clap::Parser;
 use std::collections::HashMap;
@@ -99,6 +101,9 @@ pub struct ServerState {
 
     /// Cold start coordinator for on-demand apps
     cold_start: Arc<ColdStartManager>,
+
+    /// Durable runtime state store
+    state_store: Arc<SqliteStateStore>,
 }
 
 impl ServerState {
@@ -106,11 +111,15 @@ impl ServerState {
         data_dir: PathBuf,
         cert_manager: Arc<CertManager>,
         acme_client: Option<Arc<AcmeClient>>,
-    ) -> Self {
+    ) -> Result<Self, StateStoreError> {
         let app_manager = Arc::new(AppManager::new());
         let load_balancer = Arc::new(LoadBalancer::new(app_manager.clone()));
+        let state_store = Arc::new(SqliteStateStore::new(
+            data_dir.join("runtime-state.sqlite3"),
+        ));
+        state_store.init()?;
 
-        Self {
+        Ok(Self {
             app_manager,
             load_balancer,
             cert_manager,
@@ -120,7 +129,8 @@ impl ServerState {
             routes: Arc::new(RwLock::new(RouteTable::default())),
             deploy_locks: RwLock::new(HashMap::new()),
             cold_start: Arc::new(ColdStartManager::new(ColdStartConfig::default())),
-        }
+            state_store,
+        })
     }
 
     pub fn cold_start(&self) -> Arc<ColdStartManager> {
@@ -144,6 +154,67 @@ impl ServerState {
 
     pub fn routes(&self) -> Arc<RwLock<RouteTable>> {
         self.routes.clone()
+    }
+
+    pub async fn restore_from_state_store(&self) -> Result<(), StateStoreError> {
+        let apps = self.state_store.load_apps()?;
+        if apps.is_empty() {
+            return Ok(());
+        }
+
+        tracing::info!(apps = apps.len(), "Restoring apps from durable state");
+
+        for persisted in apps {
+            let app_name = persisted.config.name.clone();
+            let routes = persisted.routes.clone();
+            let should_start = persisted.config.min_instances > 0;
+            let app = self.app_manager.register_app(persisted.config.clone());
+            self.load_balancer.register_app(app.clone());
+
+            {
+                let mut route_table = self.routes.write().await;
+                route_table.set_app_routes(app_name.clone(), routes);
+            }
+
+            {
+                let mut secrets = self.secrets.write().await;
+                secrets.insert(app_name.clone(), persisted.config.env.clone());
+            }
+
+            if should_start {
+                match self.app_manager.start_app(&app_name).await {
+                    Ok(()) => {
+                        app.set_state(AppState::Running);
+                        tracing::info!(app = %app_name, "Restored and started app");
+                    }
+                    Err(e) => {
+                        app.set_state(AppState::Error);
+                        app.set_last_error(format!("Restore startup failed: {}", e));
+                        tracing::error!(app = %app_name, "Failed to start restored app: {}", e);
+                    }
+                }
+            } else {
+                app.set_state(AppState::Idle);
+                self.cold_start.reset(&app_name);
+                tracing::info!(app = %app_name, "Restored on-demand app in idle state");
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn persist_app_state(&self, app_name: &str) {
+        let Some(app) = self.app_manager.get_app(app_name) else {
+            return;
+        };
+        let config = app.config.read().clone();
+        let routes = {
+            let route_table = self.routes.read().await;
+            route_table.routes_for_app(app_name)
+        };
+        if let Err(e) = self.state_store.upsert_app(&config, &routes) {
+            tracing::warn!(app = app_name, "Failed to persist app state: {}", e);
+        }
     }
 
     /// Handle a command from the management socket
@@ -318,6 +389,7 @@ impl ServerState {
                     Ok(()) => {
                         app.set_state(AppState::Idle);
                         self.cold_start.reset(app_name);
+                        self.persist_app_state(app_name).await;
                         Response::ok(serde_json::json!({
                             "status": "deployed",
                             "app": app_name,
@@ -336,6 +408,7 @@ impl ServerState {
                 match self.app_manager.start_app(app_name).await {
                     Ok(()) => {
                         app.set_state(AppState::Running);
+                        self.persist_app_state(app_name).await;
                         Response::ok(serde_json::json!({
                             "status": "deployed",
                             "app": app_name,
@@ -383,6 +456,7 @@ impl ServerState {
                             }
                             app.set_state(AppState::Idle);
                             self.cold_start.reset(app_name);
+                            self.persist_app_state(app_name).await;
                             Response::ok(serde_json::json!({
                                 "status": "deployed",
                                 "app": app_name,
@@ -395,6 +469,7 @@ impl ServerState {
                             }))
                         } else {
                             app.set_state(AppState::Running);
+                            self.persist_app_state(app_name).await;
                             Response::ok(serde_json::json!({
                                 "status": "deployed",
                                 "app": app_name,
@@ -465,6 +540,14 @@ impl ServerState {
         {
             let mut locks = self.deploy_locks.write().await;
             locks.remove(app_name);
+        }
+
+        if let Err(e) = self.state_store.delete_app(app_name) {
+            tracing::warn!(
+                app = app_name,
+                "Failed to delete persisted app state: {}",
+                e
+            );
         }
 
         Response::ok(serde_json::json!({
@@ -621,6 +704,7 @@ impl ServerState {
             let mut config = app.config.read().clone();
             config.env.extend(new_secrets);
             app.update_config(config);
+            self.persist_app_state(app_name).await;
 
             // Note: Running instances still have old secrets
             // User should call reload to apply new secrets
@@ -896,7 +980,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         data_dir.clone(),
         cert_manager.clone(),
         acme_client.clone(),
-    ));
+    )?);
+
+    if let Err(e) = rt.block_on(state.restore_from_state_store()) {
+        tracing::error!("Failed to restore server state from SQLite: {}", e);
+        return Err(e.into());
+    }
 
     // Take event receiver for monitoring
     let (health_event_tx, mut health_event_rx) = mpsc::channel(256);
@@ -1268,7 +1357,9 @@ mod tests {
     use crate::socket::{Command, InstanceState, Response};
     use crate::tls::{CertManager, CertManagerConfig};
     use serde_json::Value;
+    use std::collections::HashMap;
     use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     #[test]
@@ -1299,7 +1390,7 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None);
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
 
         let release_dir = temp
             .path()
@@ -1350,7 +1441,7 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None);
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
 
         let response = state
             .handle_command(Command::Delete {
@@ -1362,13 +1453,139 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn restore_from_state_store_rehydrates_apps_routes_and_secrets() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+
+        let state_a =
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+        let release_dir = temp
+            .path()
+            .join("apps")
+            .join("my-app")
+            .join("releases")
+            .join("v1");
+        std::fs::create_dir_all(&release_dir).unwrap();
+
+        let mut env = HashMap::new();
+        env.insert("DATABASE_URL".to_string(), "postgres://db".to_string());
+        let app = state_a.app_manager.register_app(AppConfig {
+            name: "my-app".to_string(),
+            version: "v1".to_string(),
+            path: release_dir.clone(),
+            cwd: release_dir,
+            command: vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "sleep 600".to_string(),
+            ],
+            env: env.clone(),
+            min_instances: 0,
+            max_instances: 4,
+            base_port: 4200,
+            idle_timeout: Duration::from_secs(300),
+            ..Default::default()
+        });
+        state_a.load_balancer.register_app(app);
+        {
+            let mut route_table = state_a.routes.write().await;
+            route_table.set_app_routes(
+                "my-app".to_string(),
+                vec![
+                    "api.example.com".to_string(),
+                    "example.com/api/*".to_string(),
+                ],
+            );
+        }
+        {
+            let mut secrets = state_a.secrets.write().await;
+            secrets.insert("my-app".to_string(), env);
+        }
+        state_a.persist_app_state("my-app").await;
+        drop(state_a);
+
+        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        state_b.restore_from_state_store().await.unwrap();
+
+        let restored = state_b.app_manager.get_app("my-app").expect("app restored");
+        assert_eq!(restored.version(), "v1");
+        assert_eq!(restored.state(), crate::socket::AppState::Idle);
+        let route_table = state_b.routes.read().await;
+        assert_eq!(
+            route_table.routes_for_app("my-app"),
+            vec![
+                "api.example.com".to_string(),
+                "example.com/api/*".to_string()
+            ]
+        );
+        let secrets = state_b.secrets.read().await;
+        let restored_secrets = secrets.get("my-app").expect("secrets restored");
+        assert_eq!(
+            restored_secrets.get("DATABASE_URL"),
+            Some(&"postgres://db".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_command_removes_persisted_state_for_next_boot() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state_a =
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+
+        let release_dir = temp
+            .path()
+            .join("apps")
+            .join("my-app")
+            .join("releases")
+            .join("v1");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        let app = state_a.app_manager.register_app(AppConfig {
+            name: "my-app".to_string(),
+            version: "v1".to_string(),
+            path: release_dir.clone(),
+            cwd: release_dir,
+            command: vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "sleep 600".to_string(),
+            ],
+            min_instances: 0,
+            ..Default::default()
+        });
+        state_a.load_balancer.register_app(app);
+        {
+            let mut route_table = state_a.routes.write().await;
+            route_table.set_app_routes("my-app".to_string(), vec!["api.example.com".to_string()]);
+        }
+        state_a.persist_app_state("my-app").await;
+
+        let response = state_a
+            .handle_command(Command::Delete {
+                app: "my-app".to_string(),
+            })
+            .await;
+        assert!(matches!(response, Response::Ok { .. }));
+
+        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        state_b.restore_from_state_store().await.unwrap();
+        assert!(state_b.app_manager.get_app("my-app").is_none());
+    }
+
+    #[tokio::test]
     async fn deploy_on_demand_validates_startup_and_fails_for_unhealthy_build() {
         let temp = TempDir::new().unwrap();
         let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None);
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
 
         let release_dir = temp
             .path()
@@ -1413,7 +1630,7 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None);
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
 
         let app = state.app_manager.register_app(AppConfig {
             name: "my-app".to_string(),

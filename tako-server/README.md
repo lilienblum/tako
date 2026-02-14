@@ -12,6 +12,7 @@ Rust crate for the remote Tako runtime and proxy.
 - Serve management commands over Unix socket.
 - Report per-build runtime status (multiple concurrently running builds during rollout).
 - Validate on-demand (`instances = 0`) deploy startup before finalizing idle state.
+- Persist app runtime registration (config/routes/env) to SQLite and restore it on restart.
 
 Routing policy notes:
 
@@ -22,6 +23,7 @@ Routing policy notes:
 
 - Socket: `/var/run/tako/tako.sock`
 - Data root: `/opt/tako`
+- Runtime state DB: `/opt/tako/runtime-state.sqlite3`
 - App releases: `/opt/tako/apps/<app>/releases/<version>/`
 
 ## Run and Test
