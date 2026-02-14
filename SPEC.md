@@ -33,6 +33,7 @@ App names must be URL-friendly (DNS hostname compatible):
 - **Examples:** `my-app`, `api-server`, `web-frontend`
 
 This ensures names work in DNS (`{app-name}.tako.local` by default), URLs, and environment variables.
+When `[tako].name` is set, it acts as the app's stable identity and should not change after first deploy.
 
 ### tako.toml (Project Root - Required)
 
@@ -40,7 +41,7 @@ Application configuration for build, variables, routes, and deployment.
 
 ```toml
 [tako]
-name = "my-app"           # Optional - auto-detected from runtime/directory
+name = "my-app"           # Optional - auto-detected if omitted; once set, treat as stable and do not change
 build = "bun build"       # Optional - uses runtime default if omitted
 
 [vars]

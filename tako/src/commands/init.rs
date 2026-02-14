@@ -62,7 +62,9 @@ fn generate_template(app_name: &str, _runtime: &str) -> String {
 # tako.toml reference: https://tako.sh/docs/tako-toml
 
 # [tako]
-# Optional: set an explicit app name if you do not want adapter/runtime auto-detection.
+# Stable app identifier used for deploy paths and local dev hostnames.
+# Set once and do not change after first deploy.
+# If omitted, Tako auto-detects from runtime metadata or directory name.
 # name = "{app_name}"
 # Optional: command to run before each deploy.
 # build = "bun run build"
@@ -136,8 +138,16 @@ mod tests {
             "expected tako section to be optional/commented by default"
         );
         assert!(
+            rendered.contains("# Stable app identifier used for deploy paths and local dev hostnames."),
+            "expected template to explain app name identity semantics"
+        );
+        assert!(
+            rendered.contains("# Set once and do not change after first deploy."),
+            "expected template to warn that app name should remain stable"
+        );
+        assert!(
             rendered.contains("# name = \"demo-app\""),
-            "expected app name to be commented so adapter-derived name remains default"
+            "expected app name to remain commented by default"
         );
         assert!(
             !rendered.contains("[tako]\nname = \"demo-app\""),

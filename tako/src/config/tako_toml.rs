@@ -36,7 +36,7 @@ pub struct TakoToml {
 /// [tako] section - app metadata
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TakoSection {
-    /// Application name (auto-detected if not specified)
+    /// Application name (auto-detected if not specified; treat as stable once set)
     pub name: Option<String>,
 
     /// Build command to run before deployment
