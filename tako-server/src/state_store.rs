@@ -66,6 +66,12 @@ pub struct PersistedApp {
     pub routes: Vec<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ServerMode {
+    Normal,
+    Upgrading,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StateStoreError {
     #[error("sqlite error: {0}")]
@@ -406,6 +412,80 @@ impl SqliteStateStore {
         Ok(apps)
     }
 
+    pub fn set_server_mode(&self, mode: ServerMode) -> Result<(), StateStoreError> {
+        let conn = self.open_connection()?;
+        let mut stmt = conn.prepare(
+            "UPDATE server_state
+             SET server_mode = ?1
+             WHERE id = 1;",
+        )?;
+        stmt.bind_text(1, server_mode_to_str(mode))?;
+        stmt.execute_done()?;
+        Ok(())
+    }
+
+    pub fn server_mode(&self) -> Result<ServerMode, StateStoreError> {
+        let conn = self.open_connection()?;
+        let mut stmt = conn.prepare("SELECT server_mode FROM server_state WHERE id = 1;")?;
+        match stmt.step()? {
+            Step::Row => server_mode_from_str(&stmt.column_text(0)?),
+            Step::Done => Ok(ServerMode::Normal),
+        }
+    }
+
+    pub fn try_acquire_upgrade_lock(&self, owner: &str) -> Result<bool, StateStoreError> {
+        let conn = self.open_connection()?;
+        conn.exec("BEGIN IMMEDIATE;")?;
+        let result = (|| {
+            match self.upgrade_lock_owner(&conn)? {
+                Some(existing) if existing == owner => Ok(true),
+                Some(_) => Ok(false),
+                None => {
+                    let mut stmt = conn.prepare(
+                        "INSERT INTO upgrade_lock (id, owner, acquired_at_unix_secs)
+                         VALUES (1, ?1, strftime('%s','now'));",
+                    )?;
+                    stmt.bind_text(1, owner)?;
+                    stmt.execute_done()?;
+                    Ok(true)
+                }
+            }
+        })();
+        match result {
+            Ok(acquired) => {
+                conn.exec("COMMIT;")?;
+                Ok(acquired)
+            }
+            Err(err) => {
+                let _ = conn.exec("ROLLBACK;");
+                Err(err)
+            }
+        }
+    }
+
+    pub fn release_upgrade_lock(&self, owner: &str) -> Result<bool, StateStoreError> {
+        let conn = self.open_connection()?;
+        conn.exec("BEGIN IMMEDIATE;")?;
+        let result = (|| match self.upgrade_lock_owner(&conn)? {
+            Some(existing) if existing == owner => {
+                let mut stmt = conn.prepare("DELETE FROM upgrade_lock WHERE id = 1;")?;
+                stmt.execute_done()?;
+                Ok(true)
+            }
+            _ => Ok(false),
+        })();
+        match result {
+            Ok(released) => {
+                conn.exec("COMMIT;")?;
+                Ok(released)
+            }
+            Err(err) => {
+                let _ = conn.exec("ROLLBACK;");
+                Err(err)
+            }
+        }
+    }
+
     fn open_connection(&self) -> Result<RawConnection, StateStoreError> {
         let conn = RawConnection::open(&self.path)?;
         conn.exec("PRAGMA journal_mode = WAL;")?;
@@ -479,6 +559,21 @@ impl SqliteStateStore {
             );",
         )?;
 
+        conn.exec(
+            "CREATE TABLE IF NOT EXISTS server_state (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                server_mode TEXT NOT NULL
+            );",
+        )?;
+
+        conn.exec(
+            "CREATE TABLE IF NOT EXISTS upgrade_lock (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                owner TEXT NOT NULL,
+                acquired_at_unix_secs INTEGER NOT NULL
+            );",
+        )?;
+
         Ok(())
     }
 
@@ -495,7 +590,23 @@ impl SqliteStateStore {
         stmt.bind_text(2, env!("CARGO_PKG_VERSION"))?;
         stmt.bind_text(3, "tako-server")?;
         stmt.execute_done()?;
+
+        let mut mode_stmt = conn.prepare(
+            "INSERT INTO server_state (id, server_mode)
+             VALUES (1, 'normal')
+             ON CONFLICT(id) DO NOTHING;",
+        )?;
+        mode_stmt.execute_done()?;
+
         Ok(())
+    }
+
+    fn upgrade_lock_owner(&self, conn: &RawConnection) -> Result<Option<String>, StateStoreError> {
+        let mut stmt = conn.prepare("SELECT owner FROM upgrade_lock WHERE id = 1;")?;
+        match stmt.step()? {
+            Step::Row => Ok(Some(stmt.column_text(0)?)),
+            Step::Done => Ok(None),
+        }
     }
 }
 
@@ -535,6 +646,24 @@ unsafe fn c_str_from_u8_ptr(ptr: *const u8) -> String {
 
 fn sqlite_transient_destructor() -> SqliteDestructor {
     unsafe { std::mem::transmute::<isize, SqliteDestructor>(-1) }
+}
+
+fn server_mode_to_str(mode: ServerMode) -> &'static str {
+    match mode {
+        ServerMode::Normal => "normal",
+        ServerMode::Upgrading => "upgrading",
+    }
+}
+
+fn server_mode_from_str(value: &str) -> Result<ServerMode, StateStoreError> {
+    match value {
+        "normal" => Ok(ServerMode::Normal),
+        "upgrading" => Ok(ServerMode::Upgrading),
+        other => Err(StateStoreError::InvalidData(format!(
+            "unknown server_mode value: {}",
+            other
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -663,5 +792,50 @@ mod tests {
 
         let apps = store.load_apps().unwrap();
         assert!(apps.is_empty());
+    }
+
+    #[test]
+    fn server_mode_defaults_to_normal() {
+        let (_temp, store) = temp_store();
+        store.init().unwrap();
+        assert_eq!(store.server_mode().unwrap(), ServerMode::Normal);
+    }
+
+    #[test]
+    fn server_mode_round_trip_persists() {
+        let (_temp, store) = temp_store();
+        store.init().unwrap();
+
+        store.set_server_mode(ServerMode::Upgrading).unwrap();
+        assert_eq!(store.server_mode().unwrap(), ServerMode::Upgrading);
+
+        // Verify persistence across new connection/process.
+        let reopened = SqliteStateStore::new(store.path().to_path_buf());
+        reopened.init().unwrap();
+        assert_eq!(reopened.server_mode().unwrap(), ServerMode::Upgrading);
+
+        reopened.set_server_mode(ServerMode::Normal).unwrap();
+        assert_eq!(reopened.server_mode().unwrap(), ServerMode::Normal);
+    }
+
+    #[test]
+    fn upgrade_lock_is_single_owner() {
+        let (_temp, store) = temp_store();
+        store.init().unwrap();
+
+        assert!(store.try_acquire_upgrade_lock("controller-a").unwrap());
+        assert!(!store.try_acquire_upgrade_lock("controller-b").unwrap());
+        assert!(store.try_acquire_upgrade_lock("controller-a").unwrap());
+    }
+
+    #[test]
+    fn upgrade_lock_release_requires_owner() {
+        let (_temp, store) = temp_store();
+        store.init().unwrap();
+        assert!(store.try_acquire_upgrade_lock("controller-a").unwrap());
+
+        assert!(!store.release_upgrade_lock("controller-b").unwrap());
+        assert!(store.release_upgrade_lock("controller-a").unwrap());
+        assert!(store.try_acquire_upgrade_lock("controller-b").unwrap());
     }
 }

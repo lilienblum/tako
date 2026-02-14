@@ -27,7 +27,7 @@ use crate::socket::{
     AppState, AppStatus, BuildStatus, Command, InstanceState, InstanceStatus, Response,
     SocketServer,
 };
-use crate::state_store::{SqliteStateStore, StateStoreError};
+use crate::state_store::{ServerMode, SqliteStateStore, StateStoreError};
 use crate::tls::{AcmeClient, AcmeConfig, CertManager, CertManagerConfig};
 use clap::Parser;
 use std::collections::HashMap;
@@ -104,6 +104,9 @@ pub struct ServerState {
 
     /// Durable runtime state store
     state_store: Arc<SqliteStateStore>,
+
+    /// Current server upgrade mode
+    server_mode: RwLock<ServerMode>,
 }
 
 impl ServerState {
@@ -118,6 +121,7 @@ impl ServerState {
             data_dir.join("runtime-state.sqlite3"),
         ));
         state_store.init()?;
+        let server_mode = state_store.server_mode()?;
 
         Ok(Self {
             app_manager,
@@ -130,6 +134,7 @@ impl ServerState {
             deploy_locks: RwLock::new(HashMap::new()),
             cold_start: Arc::new(ColdStartManager::new(ColdStartConfig::default())),
             state_store,
+            server_mode: RwLock::new(server_mode),
         })
     }
 
@@ -154,6 +159,39 @@ impl ServerState {
 
     pub fn routes(&self) -> Arc<RwLock<RouteTable>> {
         self.routes.clone()
+    }
+
+    pub async fn set_server_mode(&self, mode: ServerMode) -> Result<(), StateStoreError> {
+        self.state_store.set_server_mode(mode)?;
+        *self.server_mode.write().await = mode;
+        Ok(())
+    }
+
+    pub async fn try_enter_upgrading(&self, owner: &str) -> Result<bool, StateStoreError> {
+        if !self.state_store.try_acquire_upgrade_lock(owner)? {
+            return Ok(false);
+        }
+        self.set_server_mode(ServerMode::Upgrading).await?;
+        Ok(true)
+    }
+
+    pub async fn exit_upgrading(&self, owner: &str) -> Result<bool, StateStoreError> {
+        if !self.state_store.release_upgrade_lock(owner)? {
+            return Ok(false);
+        }
+        self.set_server_mode(ServerMode::Normal).await?;
+        Ok(true)
+    }
+
+    async fn reject_mutating_when_upgrading(&self, command: &str) -> Option<Response> {
+        let mode = *self.server_mode.read().await;
+        if mode == ServerMode::Upgrading {
+            return Some(Response::error(format!(
+                "Server is upgrading; '{}' is temporarily blocked. Please retry shortly.",
+                command
+            )));
+        }
+        None
     }
 
     pub async fn restore_from_state_store(&self) -> Result<(), StateStoreError> {
@@ -248,16 +286,39 @@ impl ServerState {
                 instances,
                 idle_timeout,
             } => {
+                if let Some(resp) = self.reject_mutating_when_upgrading("deploy").await {
+                    return resp;
+                }
                 self.deploy_app(&app, &version, &path, routes, instances, idle_timeout)
                     .await
             }
-            Command::Stop { app } => self.stop_app(&app).await,
-            Command::Delete { app } => self.delete_app(&app).await,
+            Command::Stop { app } => {
+                if let Some(resp) = self.reject_mutating_when_upgrading("stop").await {
+                    return resp;
+                }
+                self.stop_app(&app).await
+            }
+            Command::Delete { app } => {
+                if let Some(resp) = self.reject_mutating_when_upgrading("delete").await {
+                    return resp;
+                }
+                self.delete_app(&app).await
+            }
             Command::Status { app } => self.get_status(&app).await,
             Command::List => self.list_apps().await,
             Command::Routes => self.list_routes().await,
-            Command::Reload { app } => self.reload_app(&app).await,
-            Command::UpdateSecrets { app, secrets } => self.update_secrets(&app, secrets).await,
+            Command::Reload { app } => {
+                if let Some(resp) = self.reject_mutating_when_upgrading("reload").await {
+                    return resp;
+                }
+                self.reload_app(&app).await
+            }
+            Command::UpdateSecrets { app, secrets } => {
+                if let Some(resp) = self.reject_mutating_when_upgrading("update-secrets").await {
+                    return resp;
+                }
+                self.update_secrets(&app, secrets).await
+            }
         }
     }
 
@@ -1355,6 +1416,7 @@ mod tests {
     use super::{ServerState, install_rustls_crypto_provider, validate_deploy_routes};
     use crate::instances::AppConfig;
     use crate::socket::{Command, InstanceState, Response};
+    use crate::state_store::ServerMode;
     use crate::tls::{CertManager, CertManagerConfig};
     use serde_json::Value;
     use std::collections::HashMap;
@@ -1450,6 +1512,65 @@ mod tests {
             .await;
         assert!(matches!(response, Response::Ok { .. }));
         assert!(state.app_manager.get_app("missing-app").is_none());
+    }
+
+    #[tokio::test]
+    async fn upgrading_mode_blocks_mutating_commands() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        state.set_server_mode(ServerMode::Upgrading).await.unwrap();
+
+        let response = state
+            .handle_command(Command::Delete {
+                app: "my-app".to_string(),
+            })
+            .await;
+
+        let Response::Error { message } = response else {
+            panic!("expected blocked mutating command while upgrading");
+        };
+        assert!(message.contains("Server is upgrading"));
+        assert!(message.contains("delete"));
+    }
+
+    #[tokio::test]
+    async fn server_mode_restores_from_store_on_boot() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+
+        let state_a =
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+        state_a
+            .set_server_mode(ServerMode::Upgrading)
+            .await
+            .unwrap();
+        drop(state_a);
+
+        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        assert_eq!(*state_b.server_mode.read().await, ServerMode::Upgrading);
+    }
+
+    #[tokio::test]
+    async fn upgrading_lock_allows_single_owner() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state_a = ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+
+        assert!(state_a.try_enter_upgrading("controller-a").await.unwrap());
+        assert!(!state_b.try_enter_upgrading("controller-b").await.unwrap());
+        assert!(state_a.exit_upgrading("controller-a").await.unwrap());
+        assert!(state_b.try_enter_upgrading("controller-b").await.unwrap());
     }
 
     #[tokio::test]

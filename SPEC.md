@@ -427,6 +427,9 @@ Systemd-managed servers use `KillMode=control-group` and a 30-minute stop timeou
 
 `tako-server` persists app runtime registration (app config, routes, and server-side env/secrets map) in SQLite under the data directory and restores it on startup so app routing/config survives process restarts and crashes.
 
+During single-host upgrade orchestration, `tako-server` may enter an internal `upgrading` server mode that temporarily rejects mutating management commands (`deploy`, `stop`, `delete`, `reload`, `update-secrets`) until the upgrade window ends.
+Upgrade mode transitions are guarded by a durable single-owner upgrade lock in SQLite so only one upgrade controller can hold the upgrade window at a time.
+
 ### tako servers reload {server-name}
 
 Reload configuration (secrets) for all apps without restarting.

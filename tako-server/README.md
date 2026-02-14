@@ -13,6 +13,8 @@ Rust crate for the remote Tako runtime and proxy.
 - Report per-build runtime status (multiple concurrently running builds during rollout).
 - Validate on-demand (`instances = 0`) deploy startup before finalizing idle state.
 - Persist app runtime registration (config/routes/env) to SQLite and restore it on restart.
+- Persist server upgrade mode in SQLite and reject mutating commands while upgrading.
+- Use a single-owner durable upgrade lock so only one upgrade controller can enter upgrading mode at a time.
 
 Routing policy notes:
 
