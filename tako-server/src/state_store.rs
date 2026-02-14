@@ -5,6 +5,7 @@ use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::ptr::{self, null_mut};
 use std::time::Duration;
+use tako_core::UpgradeMode;
 
 pub const CURRENT_SCHEMA_VERSION: i32 = 1;
 
@@ -64,12 +65,6 @@ unsafe extern "C" {
 pub struct PersistedApp {
     pub config: AppConfig,
     pub routes: Vec<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ServerMode {
-    Normal,
-    Upgrading,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -412,7 +407,7 @@ impl SqliteStateStore {
         Ok(apps)
     }
 
-    pub fn set_server_mode(&self, mode: ServerMode) -> Result<(), StateStoreError> {
+    pub fn set_server_mode(&self, mode: UpgradeMode) -> Result<(), StateStoreError> {
         let conn = self.open_connection()?;
         let mut stmt = conn.prepare(
             "UPDATE server_state
@@ -424,31 +419,29 @@ impl SqliteStateStore {
         Ok(())
     }
 
-    pub fn server_mode(&self) -> Result<ServerMode, StateStoreError> {
+    pub fn server_mode(&self) -> Result<UpgradeMode, StateStoreError> {
         let conn = self.open_connection()?;
         let mut stmt = conn.prepare("SELECT server_mode FROM server_state WHERE id = 1;")?;
         match stmt.step()? {
             Step::Row => server_mode_from_str(&stmt.column_text(0)?),
-            Step::Done => Ok(ServerMode::Normal),
+            Step::Done => Ok(UpgradeMode::Normal),
         }
     }
 
     pub fn try_acquire_upgrade_lock(&self, owner: &str) -> Result<bool, StateStoreError> {
         let conn = self.open_connection()?;
         conn.exec("BEGIN IMMEDIATE;")?;
-        let result = (|| {
-            match self.upgrade_lock_owner(&conn)? {
-                Some(existing) if existing == owner => Ok(true),
-                Some(_) => Ok(false),
-                None => {
-                    let mut stmt = conn.prepare(
-                        "INSERT INTO upgrade_lock (id, owner, acquired_at_unix_secs)
+        let result = (|| match self.upgrade_lock_owner_on_conn(&conn)? {
+            Some(existing) if existing == owner => Ok(true),
+            Some(_) => Ok(false),
+            None => {
+                let mut stmt = conn.prepare(
+                    "INSERT INTO upgrade_lock (id, owner, acquired_at_unix_secs)
                          VALUES (1, ?1, strftime('%s','now'));",
-                    )?;
-                    stmt.bind_text(1, owner)?;
-                    stmt.execute_done()?;
-                    Ok(true)
-                }
+                )?;
+                stmt.bind_text(1, owner)?;
+                stmt.execute_done()?;
+                Ok(true)
             }
         })();
         match result {
@@ -466,7 +459,7 @@ impl SqliteStateStore {
     pub fn release_upgrade_lock(&self, owner: &str) -> Result<bool, StateStoreError> {
         let conn = self.open_connection()?;
         conn.exec("BEGIN IMMEDIATE;")?;
-        let result = (|| match self.upgrade_lock_owner(&conn)? {
+        let result = (|| match self.upgrade_lock_owner_on_conn(&conn)? {
             Some(existing) if existing == owner => {
                 let mut stmt = conn.prepare("DELETE FROM upgrade_lock WHERE id = 1;")?;
                 stmt.execute_done()?;
@@ -484,6 +477,11 @@ impl SqliteStateStore {
                 Err(err)
             }
         }
+    }
+
+    pub fn upgrade_lock_owner(&self) -> Result<Option<String>, StateStoreError> {
+        let conn = self.open_connection()?;
+        self.upgrade_lock_owner_on_conn(&conn)
     }
 
     fn open_connection(&self) -> Result<RawConnection, StateStoreError> {
@@ -601,7 +599,10 @@ impl SqliteStateStore {
         Ok(())
     }
 
-    fn upgrade_lock_owner(&self, conn: &RawConnection) -> Result<Option<String>, StateStoreError> {
+    fn upgrade_lock_owner_on_conn(
+        &self,
+        conn: &RawConnection,
+    ) -> Result<Option<String>, StateStoreError> {
         let mut stmt = conn.prepare("SELECT owner FROM upgrade_lock WHERE id = 1;")?;
         match stmt.step()? {
             Step::Row => Ok(Some(stmt.column_text(0)?)),
@@ -648,17 +649,17 @@ fn sqlite_transient_destructor() -> SqliteDestructor {
     unsafe { std::mem::transmute::<isize, SqliteDestructor>(-1) }
 }
 
-fn server_mode_to_str(mode: ServerMode) -> &'static str {
+fn server_mode_to_str(mode: UpgradeMode) -> &'static str {
     match mode {
-        ServerMode::Normal => "normal",
-        ServerMode::Upgrading => "upgrading",
+        UpgradeMode::Normal => "normal",
+        UpgradeMode::Upgrading => "upgrading",
     }
 }
 
-fn server_mode_from_str(value: &str) -> Result<ServerMode, StateStoreError> {
+fn server_mode_from_str(value: &str) -> Result<UpgradeMode, StateStoreError> {
     match value {
-        "normal" => Ok(ServerMode::Normal),
-        "upgrading" => Ok(ServerMode::Upgrading),
+        "normal" => Ok(UpgradeMode::Normal),
+        "upgrading" => Ok(UpgradeMode::Upgrading),
         other => Err(StateStoreError::InvalidData(format!(
             "unknown server_mode value: {}",
             other
@@ -798,7 +799,7 @@ mod tests {
     fn server_mode_defaults_to_normal() {
         let (_temp, store) = temp_store();
         store.init().unwrap();
-        assert_eq!(store.server_mode().unwrap(), ServerMode::Normal);
+        assert_eq!(store.server_mode().unwrap(), UpgradeMode::Normal);
     }
 
     #[test]
@@ -806,16 +807,16 @@ mod tests {
         let (_temp, store) = temp_store();
         store.init().unwrap();
 
-        store.set_server_mode(ServerMode::Upgrading).unwrap();
-        assert_eq!(store.server_mode().unwrap(), ServerMode::Upgrading);
+        store.set_server_mode(UpgradeMode::Upgrading).unwrap();
+        assert_eq!(store.server_mode().unwrap(), UpgradeMode::Upgrading);
 
         // Verify persistence across new connection/process.
         let reopened = SqliteStateStore::new(store.path().to_path_buf());
         reopened.init().unwrap();
-        assert_eq!(reopened.server_mode().unwrap(), ServerMode::Upgrading);
+        assert_eq!(reopened.server_mode().unwrap(), UpgradeMode::Upgrading);
 
-        reopened.set_server_mode(ServerMode::Normal).unwrap();
-        assert_eq!(reopened.server_mode().unwrap(), ServerMode::Normal);
+        reopened.set_server_mode(UpgradeMode::Normal).unwrap();
+        assert_eq!(reopened.server_mode().unwrap(), UpgradeMode::Normal);
     }
 
     #[test]

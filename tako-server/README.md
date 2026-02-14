@@ -15,6 +15,9 @@ Rust crate for the remote Tako runtime and proxy.
 - Persist app runtime registration (config/routes/env) to SQLite and restore it on restart.
 - Persist server upgrade mode in SQLite and reject mutating commands while upgrading.
 - Use a single-owner durable upgrade lock so only one upgrade controller can enter upgrading mode at a time.
+- Expose `server_info`, `enter_upgrading`, and `exit_upgrading` management commands for upgrade orchestration.
+- Enable `SO_REUSEPORT` listeners for HTTP/HTTPS so temporary upgrade candidates can bind alongside the active process.
+- Support `--instance-port-offset` for temporary candidate processes to avoid app-port collisions during overlap.
 
 Routing policy notes:
 

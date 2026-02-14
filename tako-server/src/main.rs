@@ -27,14 +27,14 @@ use crate::socket::{
     AppState, AppStatus, BuildStatus, Command, InstanceState, InstanceStatus, Response,
     SocketServer,
 };
-use crate::state_store::{ServerMode, SqliteStateStore, StateStoreError};
+use crate::state_store::{SqliteStateStore, StateStoreError};
 use crate::tls::{AcmeClient, AcmeConfig, CertManager, CertManagerConfig};
 use clap::Parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
-use tako_core::{HelloResponse, PROTOCOL_VERSION};
+use tako_core::{HelloResponse, PROTOCOL_VERSION, ServerRuntimeInfo, UpgradeMode};
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
@@ -76,6 +76,54 @@ pub struct Args {
     /// Certificate renewal check interval in hours (default: 12)
     #[arg(long, default_value_t = 12)]
     pub renewal_interval_hours: u64,
+
+    /// Offset added to persisted app base ports (used for temporary upgrade candidates).
+    #[arg(long, default_value_t = 0)]
+    pub instance_port_offset: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct ServerRuntimeConfig {
+    socket: String,
+    data_dir: PathBuf,
+    http_port: u16,
+    https_port: u16,
+    no_acme: bool,
+    acme_staging: bool,
+    acme_email: Option<String>,
+    renewal_interval_hours: u64,
+    instance_port_offset: u16,
+}
+
+impl ServerRuntimeConfig {
+    fn for_defaults(data_dir: PathBuf) -> Self {
+        Self {
+            socket: "/var/run/tako/tako.sock".to_string(),
+            data_dir,
+            http_port: 80,
+            https_port: 443,
+            no_acme: false,
+            acme_staging: false,
+            acme_email: None,
+            renewal_interval_hours: 12,
+            instance_port_offset: 0,
+        }
+    }
+
+    fn to_runtime_info(&self, mode: UpgradeMode) -> ServerRuntimeInfo {
+        ServerRuntimeInfo {
+            mode,
+            socket: self.socket.clone(),
+            data_dir: self.data_dir.to_string_lossy().to_string(),
+            http_port: self.http_port,
+            https_port: self.https_port,
+            no_acme: self.no_acme,
+            acme_staging: self.acme_staging,
+            acme_email: self.acme_email.clone(),
+            renewal_interval_hours: self.renewal_interval_hours,
+            instance_port_offset: self.instance_port_offset,
+        }
+    }
 }
 
 /// Server state shared across components
@@ -88,8 +136,6 @@ pub struct ServerState {
     cert_manager: Arc<CertManager>,
     /// ACME client (optional)
     acme_client: Option<Arc<AcmeClient>>,
-    /// Data directory
-    data_dir: PathBuf,
     /// App secrets (app_name -> env vars)
     secrets: RwLock<HashMap<String, HashMap<String, String>>>,
 
@@ -106,7 +152,10 @@ pub struct ServerState {
     state_store: Arc<SqliteStateStore>,
 
     /// Current server upgrade mode
-    server_mode: RwLock<ServerMode>,
+    server_mode: RwLock<UpgradeMode>,
+
+    /// Runtime config used for upgrade orchestration/introspection.
+    runtime: ServerRuntimeConfig,
 }
 
 impl ServerState {
@@ -114,6 +163,16 @@ impl ServerState {
         data_dir: PathBuf,
         cert_manager: Arc<CertManager>,
         acme_client: Option<Arc<AcmeClient>>,
+    ) -> Result<Self, StateStoreError> {
+        let runtime = ServerRuntimeConfig::for_defaults(data_dir.clone());
+        Self::new_with_runtime(data_dir, cert_manager, acme_client, runtime)
+    }
+
+    pub fn new_with_runtime(
+        data_dir: PathBuf,
+        cert_manager: Arc<CertManager>,
+        acme_client: Option<Arc<AcmeClient>>,
+        runtime: ServerRuntimeConfig,
     ) -> Result<Self, StateStoreError> {
         let app_manager = Arc::new(AppManager::new());
         let load_balancer = Arc::new(LoadBalancer::new(app_manager.clone()));
@@ -128,13 +187,13 @@ impl ServerState {
             load_balancer,
             cert_manager,
             acme_client,
-            data_dir,
             secrets: RwLock::new(HashMap::new()),
             routes: Arc::new(RwLock::new(RouteTable::default())),
             deploy_locks: RwLock::new(HashMap::new()),
             cold_start: Arc::new(ColdStartManager::new(ColdStartConfig::default())),
             state_store,
             server_mode: RwLock::new(server_mode),
+            runtime,
         })
     }
 
@@ -161,7 +220,7 @@ impl ServerState {
         self.routes.clone()
     }
 
-    pub async fn set_server_mode(&self, mode: ServerMode) -> Result<(), StateStoreError> {
+    pub async fn set_server_mode(&self, mode: UpgradeMode) -> Result<(), StateStoreError> {
         self.state_store.set_server_mode(mode)?;
         *self.server_mode.write().await = mode;
         Ok(())
@@ -171,7 +230,7 @@ impl ServerState {
         if !self.state_store.try_acquire_upgrade_lock(owner)? {
             return Ok(false);
         }
-        self.set_server_mode(ServerMode::Upgrading).await?;
+        self.set_server_mode(UpgradeMode::Upgrading).await?;
         Ok(true)
     }
 
@@ -179,19 +238,24 @@ impl ServerState {
         if !self.state_store.release_upgrade_lock(owner)? {
             return Ok(false);
         }
-        self.set_server_mode(ServerMode::Normal).await?;
+        self.set_server_mode(UpgradeMode::Normal).await?;
         Ok(true)
     }
 
     async fn reject_mutating_when_upgrading(&self, command: &str) -> Option<Response> {
         let mode = *self.server_mode.read().await;
-        if mode == ServerMode::Upgrading {
+        if mode == UpgradeMode::Upgrading {
             return Some(Response::error(format!(
                 "Server is upgrading; '{}' is temporarily blocked. Please retry shortly.",
                 command
             )));
         }
         None
+    }
+
+    async fn runtime_info(&self) -> ServerRuntimeInfo {
+        let mode = *self.server_mode.read().await;
+        self.runtime.to_runtime_info(mode)
     }
 
     pub async fn restore_from_state_store(&self) -> Result<(), StateStoreError> {
@@ -203,10 +267,14 @@ impl ServerState {
         tracing::info!(apps = apps.len(), "Restoring apps from durable state");
 
         for persisted in apps {
-            let app_name = persisted.config.name.clone();
+            let mut config = persisted.config.clone();
+            let app_name = config.name.clone();
             let routes = persisted.routes.clone();
-            let should_start = persisted.config.min_instances > 0;
-            let app = self.app_manager.register_app(persisted.config.clone());
+            let should_start = config.min_instances > 0;
+            config.base_port =
+                self.select_runtime_base_port(config.base_port, config.max_instances);
+
+            let app = self.app_manager.register_app(config.clone());
             self.load_balancer.register_app(app.clone());
 
             {
@@ -216,7 +284,7 @@ impl ServerState {
 
             {
                 let mut secrets = self.secrets.write().await;
-                secrets.insert(app_name.clone(), persisted.config.env.clone());
+                secrets.insert(app_name.clone(), config.env.clone());
             }
 
             if should_start {
@@ -266,6 +334,8 @@ impl ServerState {
                         "deploy_instances_idle_timeout".to_string(),
                         "on_demand_cold_start".to_string(),
                         "idle_scale_to_zero".to_string(),
+                        "upgrade_mode_control".to_string(),
+                        "server_runtime_info".to_string(),
                     ],
                 };
 
@@ -319,6 +389,37 @@ impl ServerState {
                 }
                 self.update_secrets(&app, secrets).await
             }
+            Command::ServerInfo => Response::ok(self.runtime_info().await),
+            Command::EnterUpgrading { owner } => match self.try_enter_upgrading(&owner).await {
+                Ok(true) => Response::ok(serde_json::json!({
+                    "status": "upgrading",
+                    "owner": owner
+                })),
+                Ok(false) => {
+                    let owner_msg = self
+                        .state_store
+                        .upgrade_lock_owner()
+                        .ok()
+                        .flatten()
+                        .unwrap_or_else(|| "unknown".to_string());
+                    Response::error(format!(
+                        "Server is already upgrading (owner: {}).",
+                        owner_msg
+                    ))
+                }
+                Err(e) => Response::error(format!("Failed to enter upgrading mode: {}", e)),
+            },
+            Command::ExitUpgrading { owner } => match self.exit_upgrading(&owner).await {
+                Ok(true) => Response::ok(serde_json::json!({
+                    "status": "normal",
+                    "owner": owner
+                })),
+                Ok(false) => Response::error(
+                    "Failed to exit upgrading mode: owner does not hold the upgrade lock."
+                        .to_string(),
+                ),
+                Err(e) => Response::error(format!("Failed to exit upgrading mode: {}", e)),
+            },
         }
     }
 
@@ -806,6 +907,41 @@ impl ServerState {
             .unwrap_or(3000)
     }
 
+    fn select_runtime_base_port(&self, persisted_base: u16, max_instances: u32) -> u16 {
+        let width = max_instances.max(1).min(64);
+        let preferred = persisted_base.saturating_add(self.runtime.instance_port_offset);
+
+        if Self::port_range_is_available(preferred, width) {
+            return preferred;
+        }
+
+        for _ in 0..128 {
+            let candidate = self.allocate_port_range();
+            if Self::port_range_is_available(candidate, width) {
+                return candidate;
+            }
+        }
+
+        preferred
+    }
+
+    fn port_range_is_available(base: u16, width: u32) -> bool {
+        let Ok(width_u16) = u16::try_from(width) else {
+            return false;
+        };
+        if base.checked_add(width_u16.saturating_sub(1)).is_none() {
+            return false;
+        }
+
+        for offset in 0..width_u16 {
+            let port = base + offset;
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
+                return false;
+            }
+        }
+        true
+    }
+
     async fn validate_on_demand_startup(&self, app: &Arc<App>) -> Result<(), String> {
         let instance = app.allocate_instance();
         let spawner = self.app_manager.spawner();
@@ -1037,10 +1173,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let acme_tokens = acme_client.as_ref().map(|c| c.challenge_tokens());
 
     // Create server state
-    let state = Arc::new(ServerState::new(
+    let runtime = ServerRuntimeConfig {
+        socket: socket.clone(),
+        data_dir: data_dir.clone(),
+        http_port: args.port,
+        https_port: args.tls_port,
+        no_acme: args.no_acme,
+        acme_staging: args.acme_staging,
+        acme_email: args.acme_email.clone(),
+        renewal_interval_hours: args.renewal_interval_hours,
+        instance_port_offset: args.instance_port_offset,
+    };
+    let state = Arc::new(ServerState::new_with_runtime(
         data_dir.clone(),
         cert_manager.clone(),
         acme_client.clone(),
+        runtime,
     )?);
 
     if let Err(e) = rt.block_on(state.restore_from_state_store()) {
@@ -1413,15 +1561,17 @@ async fn replace_instance_if_needed(
 
 #[cfg(test)]
 mod tests {
-    use super::{ServerState, install_rustls_crypto_provider, validate_deploy_routes};
+    use super::{
+        ServerRuntimeConfig, ServerState, install_rustls_crypto_provider, validate_deploy_routes,
+    };
     use crate::instances::AppConfig;
     use crate::socket::{Command, InstanceState, Response};
-    use crate::state_store::ServerMode;
     use crate::tls::{CertManager, CertManagerConfig};
     use serde_json::Value;
     use std::collections::HashMap;
     use std::sync::Arc;
     use std::time::Duration;
+    use tako_core::UpgradeMode;
     use tempfile::TempDir;
 
     #[test]
@@ -1522,7 +1672,7 @@ mod tests {
             ..Default::default()
         }));
         let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
-        state.set_server_mode(ServerMode::Upgrading).await.unwrap();
+        state.set_server_mode(UpgradeMode::Upgrading).await.unwrap();
 
         let response = state
             .handle_command(Command::Delete {
@@ -1548,13 +1698,13 @@ mod tests {
         let state_a =
             ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
         state_a
-            .set_server_mode(ServerMode::Upgrading)
+            .set_server_mode(UpgradeMode::Upgrading)
             .await
             .unwrap();
         drop(state_a);
 
         let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
-        assert_eq!(*state_b.server_mode.read().await, ServerMode::Upgrading);
+        assert_eq!(*state_b.server_mode.read().await, UpgradeMode::Upgrading);
     }
 
     #[tokio::test]
@@ -1564,13 +1714,100 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state_a = ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+        let state_a =
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
         let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
 
         assert!(state_a.try_enter_upgrading("controller-a").await.unwrap());
         assert!(!state_b.try_enter_upgrading("controller-b").await.unwrap());
         assert!(state_a.exit_upgrading("controller-a").await.unwrap());
         assert!(state_b.try_enter_upgrading("controller-b").await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn server_info_command_reports_runtime_config() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let runtime = ServerRuntimeConfig {
+            socket: "/var/run/tako/tako-custom.sock".to_string(),
+            data_dir: temp.path().to_path_buf(),
+            http_port: 8080,
+            https_port: 8443,
+            no_acme: true,
+            acme_staging: false,
+            acme_email: Some("ops@example.com".to_string()),
+            renewal_interval_hours: 24,
+            instance_port_offset: 10000,
+        };
+        let state =
+            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, runtime)
+                .unwrap();
+        state
+            .set_server_mode(UpgradeMode::Upgrading)
+            .await
+            .expect("mode set");
+
+        let response = state.handle_command(Command::ServerInfo).await;
+        let Response::Ok { data } = response else {
+            panic!("expected server info response");
+        };
+        assert_eq!(data.get("mode").and_then(Value::as_str), Some("upgrading"));
+        assert_eq!(
+            data.get("socket").and_then(Value::as_str),
+            Some("/var/run/tako/tako-custom.sock")
+        );
+        assert_eq!(data.get("http_port").and_then(Value::as_u64), Some(8080));
+        assert_eq!(data.get("https_port").and_then(Value::as_u64), Some(8443));
+        assert_eq!(data.get("no_acme").and_then(Value::as_bool), Some(true));
+        assert_eq!(
+            data.get("instance_port_offset").and_then(Value::as_u64),
+            Some(10000)
+        );
+    }
+
+    #[tokio::test]
+    async fn enter_and_exit_upgrading_commands_use_owner_lock() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+
+        let enter = state
+            .handle_command(Command::EnterUpgrading {
+                owner: "controller-a".to_string(),
+            })
+            .await;
+        assert!(matches!(enter, Response::Ok { .. }));
+
+        let reject = state
+            .handle_command(Command::EnterUpgrading {
+                owner: "controller-b".to_string(),
+            })
+            .await;
+        let Response::Error { message } = reject else {
+            panic!("expected lock owner rejection");
+        };
+        assert!(message.contains("already upgrading"));
+        assert!(message.contains("controller-a"));
+
+        let wrong_exit = state
+            .handle_command(Command::ExitUpgrading {
+                owner: "controller-b".to_string(),
+            })
+            .await;
+        assert!(matches!(wrong_exit, Response::Error { .. }));
+
+        let exit = state
+            .handle_command(Command::ExitUpgrading {
+                owner: "controller-a".to_string(),
+            })
+            .await;
+        assert!(matches!(exit, Response::Ok { .. }));
     }
 
     #[tokio::test]
@@ -1648,6 +1885,65 @@ mod tests {
             restored_secrets.get("DATABASE_URL"),
             Some(&"postgres://db".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn restore_rebases_base_port_when_range_is_unavailable() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state_a =
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+        let release_dir = temp
+            .path()
+            .join("apps")
+            .join("my-app")
+            .join("releases")
+            .join("v1");
+        std::fs::create_dir_all(&release_dir).unwrap();
+
+        let app = state_a.app_manager.register_app(AppConfig {
+            name: "my-app".to_string(),
+            version: "v1".to_string(),
+            path: release_dir.clone(),
+            cwd: release_dir,
+            command: vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "sleep 600".to_string(),
+            ],
+            min_instances: 0,
+            max_instances: 4,
+            base_port: 65_000,
+            ..Default::default()
+        });
+        state_a.load_balancer.register_app(app);
+        {
+            let mut route_table = state_a.routes.write().await;
+            route_table.set_app_routes("my-app".to_string(), vec!["api.example.com".to_string()]);
+        }
+        state_a.persist_app_state("my-app").await;
+        drop(state_a);
+
+        let runtime = ServerRuntimeConfig {
+            socket: "/var/run/tako/tako.sock".to_string(),
+            data_dir: temp.path().to_path_buf(),
+            http_port: 80,
+            https_port: 443,
+            no_acme: true,
+            acme_staging: false,
+            acme_email: None,
+            renewal_interval_hours: 12,
+            instance_port_offset: 10_000,
+        };
+        let state_b =
+            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, runtime)
+                .unwrap();
+        state_b.restore_from_state_store().await.unwrap();
+        let restored = state_b.app_manager.get_app("my-app").expect("app restored");
+        assert_ne!(restored.config.read().base_port, 65_000);
     }
 
     #[tokio::test]

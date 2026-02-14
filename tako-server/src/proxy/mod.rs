@@ -19,6 +19,7 @@ use crate::tls::{
     create_sni_callbacks,
 };
 use async_trait::async_trait;
+use pingora_core::listeners::TcpSocketOptions;
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::prelude::*;
 use pingora_core::upstreams::peer::HttpPeer;
@@ -613,16 +614,20 @@ pub fn build_server_with_acme(
     };
 
     let mut proxy_service = pingora_proxy::http_proxy_service(&server.configuration, proxy);
+    let listener_options = listener_socket_options();
 
     // Add HTTP listener
-    proxy_service.add_tcp(&format!("0.0.0.0:{}", config.http_port));
+    proxy_service.add_tcp_with_settings(
+        &format!("0.0.0.0:{}", config.http_port),
+        listener_options.clone(),
+    );
 
     // Add HTTPS listener if enabled
     if config.enable_https {
         if let Some(tls_settings) = create_tls_settings(&config, cert_manager)? {
             proxy_service.add_tls_with_settings(
                 &format!("0.0.0.0:{}", config.https_port),
-                None,
+                Some(listener_options),
                 tls_settings,
             );
             tracing::info!(port = config.https_port, "HTTPS listener enabled");
@@ -633,6 +638,12 @@ pub fn build_server_with_acme(
 
     server.add_service(proxy_service);
     Ok(server)
+}
+
+fn listener_socket_options() -> TcpSocketOptions {
+    let mut options = TcpSocketOptions::default();
+    options.so_reuseport = Some(true);
+    options
 }
 
 /// Create TLS settings from configuration
@@ -875,6 +886,12 @@ mod tests {
         assert!(config.enable_https);
         assert!(config.dev_mode);
         assert!(config.redirect_http_to_https);
+    }
+
+    #[test]
+    fn listener_socket_options_enable_reuseport() {
+        let options = listener_socket_options();
+        assert_eq!(options.so_reuseport, Some(true));
     }
 
     #[test]

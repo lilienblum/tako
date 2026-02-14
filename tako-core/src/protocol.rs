@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// Commands that can be sent to the server
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +53,15 @@ pub enum Command {
         app: String,
         secrets: HashMap<String, String>,
     },
+
+    /// Get server runtime information (ports, data dir, upgrade mode).
+    ServerInfo,
+
+    /// Enter upgrading mode with a durable lock owner.
+    EnterUpgrading { owner: String },
+
+    /// Exit upgrading mode for the lock owner.
+    ExitUpgrading { owner: String },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +69,27 @@ pub struct HelloResponse {
     pub protocol_version: u32,
     pub server_version: String,
     pub capabilities: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UpgradeMode {
+    Normal,
+    Upgrading,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ServerRuntimeInfo {
+    pub mode: UpgradeMode,
+    pub socket: String,
+    pub data_dir: String,
+    pub http_port: u16,
+    pub https_port: u16,
+    pub no_acme: bool,
+    pub acme_staging: bool,
+    pub acme_email: Option<String>,
+    pub renewal_interval_hours: u64,
+    pub instance_port_offset: u16,
 }
 
 /// Response from the server
@@ -245,6 +275,33 @@ mod tests {
     }
 
     #[test]
+    fn test_server_info_command_serialization() {
+        let cmd = Command::ServerInfo;
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""command":"server_info""#));
+    }
+
+    #[test]
+    fn test_enter_upgrading_command_serialization() {
+        let cmd = Command::EnterUpgrading {
+            owner: "controller-a".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""command":"enter_upgrading""#));
+        assert!(json.contains(r#""owner":"controller-a""#));
+    }
+
+    #[test]
+    fn test_exit_upgrading_command_serialization() {
+        let cmd = Command::ExitUpgrading {
+            owner: "controller-a".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""command":"exit_upgrading""#));
+        assert!(json.contains(r#""owner":"controller-a""#));
+    }
+
+    #[test]
     fn test_delete_command_serialization() {
         let cmd = Command::Delete {
             app: "my-app".to_string(),
@@ -292,5 +349,12 @@ mod tests {
 
         let status: AppStatus = serde_json::from_value(value).unwrap();
         assert!(status.builds.is_empty());
+    }
+
+    #[test]
+    fn test_upgrade_mode_serialization() {
+        let mode = UpgradeMode::Upgrading;
+        let json = serde_json::to_string(&mode).unwrap();
+        assert_eq!(json, r#""upgrading""#);
     }
 }

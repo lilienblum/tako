@@ -164,10 +164,15 @@ mod tests {
 
     #[test]
     fn test_parse_hello_command() {
-        let json = r#"{"command": "hello", "protocol_version": 2}"#;
-        let cmd: Command = serde_json::from_str(json).unwrap();
+        let json = format!(
+            r#"{{"command":"hello","protocol_version":{}}}"#,
+            tako_core::PROTOCOL_VERSION
+        );
+        let cmd: Command = serde_json::from_str(&json).unwrap();
         match cmd {
-            Command::Hello { protocol_version } => assert_eq!(protocol_version, 2),
+            Command::Hello { protocol_version } => {
+                assert_eq!(protocol_version, tako_core::PROTOCOL_VERSION)
+            }
             _ => panic!("Expected Hello command"),
         }
     }
@@ -177,6 +182,23 @@ mod tests {
         let json = r#"{"command": "routes"}"#;
         let cmd: Command = serde_json::from_str(json).unwrap();
         assert!(matches!(cmd, Command::Routes));
+    }
+
+    #[test]
+    fn test_parse_server_info_command() {
+        let json = r#"{"command":"server_info"}"#;
+        let cmd: Command = serde_json::from_str(json).unwrap();
+        assert!(matches!(cmd, Command::ServerInfo));
+    }
+
+    #[test]
+    fn test_parse_enter_upgrading_command() {
+        let json = r#"{"command":"enter_upgrading","owner":"controller-a"}"#;
+        let cmd: Command = serde_json::from_str(json).unwrap();
+        match cmd {
+            Command::EnterUpgrading { owner } => assert_eq!(owner, "controller-a"),
+            _ => panic!("Expected EnterUpgrading command"),
+        }
     }
 
     #[test]
