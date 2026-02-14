@@ -2,13 +2,6 @@
 
 Your quick map of `tako` commands, flags, and common patterns.
 
-## Related Docs
-
-- [Install](/docs/install): install, upgrade, and uninstall commands.
-- [Quickstart](/docs/quickstart): first deploy flow.
-- [tako.toml Reference](/docs/tako-toml): config file options and merge rules.
-- [Operations](/docs/operations): diagnostics and incident response runbook.
-
 ## Global Usage
 
 ```bash

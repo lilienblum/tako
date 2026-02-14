@@ -13,7 +13,7 @@ Astro static site deployed with Cloudflare Workers static assets.
 - `/docs/development`: local development guide
 - `/docs/deployment`: deployment guide
 - `/docs/operations`: operations runbook
-- `/docs/architecture`: architecture overview
+- `/docs/architecture`: how Tako works overview
 - `/install`: `302` redirect to GitHub-hosted POSIX `sh` installer script for `tako`
 - `/install-server`: `302` redirect to GitHub-hosted POSIX `sh` installer script for `tako-server`
 - `/server-install`: alias for `/install-server` (same redirect target)

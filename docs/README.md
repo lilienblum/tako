@@ -32,29 +32,15 @@ Tako is built to make local development smooth and production deploys boring (th
 - Yes, even "a ton of apps on a tiny VPS" territory, if most of them are idle most of the time.
 - Anyone tired of bloated tools and config files that feel like a second full-time job.
 
+## Tech
+
+- Built with Rust to be fast, reliable, and memory-safe.
+- Minimal resource footprint is a core principle.
+- Uses [Pingora](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/) under the hood, the same proxy that powers Cloudflare and one of the fastest proxy servers around.
+
 ## Ok, So Where Do I Sign?
 
 Easy. Start here:
 
 - [Local setup](/docs/quickstart#local-setup)
 - [Remote setup](/docs/quickstart#remote-setup)
-
-## How Tako Works
-
-- [Architecture](/docs/architecture): control plane + data plane overview.
-- [Development](/docs/development): what `tako dev` does locally (HTTPS, DNS, leases, process lifecycle).
-- [Deployment](/docs/deployment): what `tako deploy` does remotely (build, upload, rolling update).
-
-## Built-In Adapters
-
-- Bun adapter quickstart in [Quickstart: Built-in adapters](/docs/quickstart#built-in-adapters).
-- SDK package docs in the [SDK README](https://github.com/lilienblum/tako/blob/main/sdk/README.md).
-
-## Reference
-
-- [CLI Reference](/docs/cli): command and subcommand reference with common examples.
-- [tako.toml Reference](/docs/tako-toml): complete `tako.toml` option reference and examples.
-
-## Operations
-
-- [Operations](/docs/operations): day-2 runbook for diagnostics and incident response.

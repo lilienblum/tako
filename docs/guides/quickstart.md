@@ -2,15 +2,6 @@
 
 This is the fastest path from "I just installed Tako" to "my app is live."
 
-## Related Docs
-
-- [Install](/docs/install): install and uninstall commands for local CLI and remote runtime.
-- [Development](/docs/development): local HTTPS flow and `tako dev` behavior.
-- [Deployment](/docs/deployment): production deploy flow and server prerequisites.
-- [Architecture](/docs/architecture): control/data plane overview.
-- [tako.toml Reference](/docs/tako-toml): complete project config options.
-- [Operations](/docs/operations): troubleshooting runbook for local and remote issues.
-
 ## Local setup
 
 Install the CLI:

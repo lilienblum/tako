@@ -4,14 +4,6 @@ Day-2 checks for local and remote Tako environments.
 
 Use this when things feel weird and you want a clean, repeatable response path.
 
-## Related Docs
-
-- [Quickstart](/docs/quickstart): first-run setup and first deploy flow.
-- [Development](/docs/development): local HTTPS and DNS behavior.
-- [Deployment](/docs/deployment): deploy prerequisites and per-server rollout flow.
-- [Architecture](/docs/architecture): runtime components and data flow.
-- [tako.toml Reference](/docs/tako-toml): env/routes/server mapping reference.
-
 ## Scope
 
 Use this guide when:

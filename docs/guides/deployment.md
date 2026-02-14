@@ -2,13 +2,6 @@
 
 This guide explains what `tako deploy` actually does and what your remote servers need in place.
 
-## Related Docs
-
-- [Quickstart](/docs/quickstart): install and first deployment setup.
-- [Operations](/docs/operations): day-2 deploy verification and incident triage commands.
-- [Architecture](/docs/architecture): runtime data/control plane context.
-- [tako.toml Reference](/docs/tako-toml): complete config and route reference.
-
 ## Overview
 
 From an app directory, run:

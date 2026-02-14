@@ -22,6 +22,6 @@
     "fmt:check": "oxfmt --check"
   },
   "devDependencies": {
-    "oxfmt": "^0.31.0"
+    "oxfmt": "^0.32.0"
   }
 }

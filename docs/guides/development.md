@@ -2,14 +2,6 @@
 
 This guide covers local development with Tako: trusted HTTPS, `.tako.local` URLs, and what `tako dev` is doing behind the scenes.
 
-## Related Docs
-
-- [Quickstart](/docs/quickstart): first-run setup for local + remote environments.
-- [Operations](/docs/operations): day-2 runbook for diagnostics and incident response.
-- [Deployment](/docs/deployment): remote deployment workflow.
-- [Architecture](/docs/architecture): system component/data-flow overview.
-- [tako.toml Reference](/docs/tako-toml): full config reference for env/routes/servers.
-
 ## Overview
 
 - `tako dev` is a **client** that talks to a background daemon: `tako-dev-server`.
