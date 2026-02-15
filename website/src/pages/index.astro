@@ -41,16 +41,6 @@ import CopyButton from "../components/CopyButton.astro";
     animation-delay: -8s;
   }
 
-  .grid-sparkle {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 2;
-    background-image: radial-gradient(circle at 1px 1px, rgba(47, 42, 68, 0.15) 1px, transparent 0);
-    background-size: 24px 24px;
-    mask-image: radial-gradient(ellipse 85% 70% at 50% 35%, #000 40%, transparent 100%);
-  }
-
   .hero {
     border-radius: var(--panel-radius);
     border: 2px solid var(--line);
@@ -671,8 +661,6 @@ import CopyButton from "../components/CopyButton.astro";
     <div class="blob two"></div>
     <div class="blob three"></div>
   </Fragment>
-  <div class="grid-sparkle" aria-hidden="true" slot="after-paint"></div>
-
   <section class="hero">
     <div class="hero-bg" aria-hidden="true"></div>
     <div class="panel-hanger" id="mit-hanger" aria-label="License: MIT">
@@ -821,16 +809,6 @@ import CopyButton from "../components/CopyButton.astro";
     left: 18%;
     background: rgba(158, 201, 255, 0.45);
     animation-delay: -8s;
-  }
-
-  .grid-sparkle {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 2;
-    background-image: radial-gradient(circle at 1px 1px, rgba(47, 42, 68, 0.15) 1px, transparent 0);
-    background-size: 24px 24px;
-    mask-image: radial-gradient(ellipse 85% 70% at 50% 35%, #000 40%, transparent 100%);
   }
 
   .hero {
