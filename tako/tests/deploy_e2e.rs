@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::thread;
+use std::time::Duration;
 
 use tempfile::TempDir;
 
@@ -93,39 +95,28 @@ fn build_image(tag: &str) {
     );
 }
 
-fn gen_ssh_keypair(home: &Path) -> String {
+fn local_ssh_public_key() -> Option<String> {
+    let home = dirs::home_dir()?;
     let ssh_dir = home.join(".ssh");
-    fs::create_dir_all(&ssh_dir).unwrap();
+    let candidates = ["id_ed25519.pub", "id_rsa.pub", "id_ecdsa.pub", "id_dsa.pub"];
 
-    let key_path = ssh_dir.join("id_ed25519");
-    let out = Command::new("ssh-keygen")
-        .args([
-            "-t",
-            "ed25519",
-            "-N",
-            "",
-            "-f",
-            key_path.to_string_lossy().as_ref(),
-        ])
-        .output()
-        .expect("ssh-keygen failed");
-    assert!(out.status.success(), "ssh-keygen failed");
-
-    // Tighten perms for OpenSSH.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(&key_path, fs::Permissions::from_mode(0o600)).unwrap();
+    for candidate in candidates {
+        let key_path = ssh_dir.join(candidate);
+        if key_path.exists() {
+            let key = fs::read_to_string(key_path).ok()?;
+            if !key.trim().is_empty() {
+                return Some(key);
+            }
+        }
     }
 
-    fs::read_to_string(key_path.with_extension("pub")).unwrap()
+    None
 }
 
-fn run_tako(args: &[&str], cwd: &Path, home: &Path, tako_home: &Path) -> std::process::Output {
+fn run_tako(args: &[&str], cwd: &Path, tako_home: &Path) -> std::process::Output {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tako"));
     cmd.args(args)
         .current_dir(cwd)
-        .env("HOME", home)
         .env("TAKO_HOME", tako_home)
         // Point auto-install at the container-local artifact server.
         .env(
@@ -136,8 +127,148 @@ fn run_tako(args: &[&str], cwd: &Path, home: &Path, tako_home: &Path) -> std::pr
             "TAKO_SERVER_INSTALL_SHA256",
             "cf6c075a3aa10b2e7f1c4efdf534ad841a86cd5e844a835e46e8e75d45738809",
         );
+    if let Some(home) = dirs::home_dir() {
+        cmd.env("HOME", home);
+    }
     apply_coverage_env(&mut cmd);
     cmd.output().expect("failed to run tako")
+}
+
+fn wait_for_ssh_ready(ssh_port: u16) {
+    let mut last_error = String::new();
+    for _ in 0..120 {
+        let out = Command::new("ssh")
+            .args([
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "UserKnownHostsFile=/dev/null",
+                "-o",
+                "BatchMode=yes",
+                "-p",
+                &ssh_port.to_string(),
+                "tako@127.0.0.1",
+                "echo ok",
+            ])
+            .output()
+            .expect("ssh readiness check failed");
+        if out.status.success() && String::from_utf8_lossy(&out.stdout).contains("ok") {
+            return;
+        }
+        last_error = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        thread::sleep(Duration::from_millis(250));
+    }
+
+    panic!(
+        "ssh server did not become ready on port {}: {}",
+        ssh_port, last_error
+    );
+}
+
+fn write_deploy_artifacts(project: &Path) {
+    let artifact_dir = project.join(".tako").join("artifacts").join("app");
+    fs::create_dir_all(&artifact_dir).unwrap();
+    fs::copy(project.join("tako.toml"), artifact_dir.join("tako.toml")).unwrap();
+    fs::copy(
+        project.join("package.json"),
+        artifact_dir.join("package.json"),
+    )
+    .unwrap();
+    fs::copy(project.join("index.ts"), artifact_dir.join("index.ts")).unwrap();
+}
+
+fn should_skip_fixture_entry(name: &str) -> bool {
+    matches!(name, "node_modules" | ".tako" | ".output" | ".tanstack")
+}
+
+fn copy_directory_recursive(source: &Path, target: &Path) {
+    fs::create_dir_all(target).unwrap();
+
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        if should_skip_fixture_entry(name.to_string_lossy().as_ref()) {
+            continue;
+        }
+        let source_path = entry.path();
+        let target_path = target.join(&name);
+        let file_type = entry.file_type().unwrap();
+
+        if file_type.is_dir() {
+            copy_directory_recursive(&source_path, &target_path);
+            continue;
+        }
+
+        if file_type.is_file() {
+            fs::copy(&source_path, &target_path).unwrap();
+            continue;
+        }
+
+        if file_type.is_symlink() {
+            continue;
+        }
+
+        panic!(
+            "unsupported fixture entry type at {}",
+            source_path.display()
+        );
+    }
+}
+
+fn copy_directory_contents(source: &Path, target: &Path) {
+    fs::create_dir_all(target).unwrap();
+    for entry in fs::read_dir(source).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        if should_skip_fixture_entry(name.to_string_lossy().as_ref()) {
+            continue;
+        }
+        let source_path = entry.path();
+        let target_path = target.join(&name);
+        let file_type = entry.file_type().unwrap();
+
+        if file_type.is_dir() {
+            copy_directory_recursive(&source_path, &target_path);
+        } else if file_type.is_file() {
+            fs::copy(&source_path, &target_path).unwrap();
+        } else if file_type.is_symlink() {
+            continue;
+        } else {
+            panic!(
+                "unsupported fixture entry type at {}",
+                source_path.display()
+            );
+        }
+    }
+}
+
+fn disable_build_script(package_json_path: &Path) {
+    let contents = fs::read_to_string(package_json_path).unwrap();
+    let mut package_json: serde_json::Value = serde_json::from_str(&contents).unwrap();
+    if let Some(scripts) = package_json
+        .get_mut("scripts")
+        .and_then(|v| v.as_object_mut())
+    {
+        scripts.remove("build");
+    }
+    let serialized = serde_json::to_string_pretty(&package_json).unwrap();
+    fs::write(package_json_path, format!("{serialized}\n")).unwrap();
+}
+
+fn stage_fixture_artifacts(project: &Path) {
+    let source = project.join("deploy-artifacts");
+    assert!(
+        source.is_dir(),
+        "fixture must contain deploy-artifacts directory: {}",
+        source.display()
+    );
+
+    let artifact_dir = project.join(".tako").join("artifacts").join("app");
+    if artifact_dir.exists() {
+        fs::remove_dir_all(&artifact_dir).unwrap();
+    }
+    fs::create_dir_all(&artifact_dir).unwrap();
+    copy_directory_contents(&source, &artifact_dir);
 }
 
 #[test]
@@ -153,12 +284,12 @@ fn deploy_e2e_partial_failure_reports_failed_server() {
     build_image(tag);
 
     let temp = TempDir::new().unwrap();
-    let home = temp.path().join("home");
     let tako_home = temp.path().join("tako-home");
-    fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&tako_home).unwrap();
 
-    let pubkey = gen_ssh_keypair(&home);
+    let Some(pubkey) = local_ssh_public_key() else {
+        return;
+    };
 
     let id = docker_stdout(&[
         "run",
@@ -177,6 +308,7 @@ fn deploy_e2e_partial_failure_reports_failed_server() {
         .next()
         .and_then(|p| p.parse().ok())
         .expect("failed to parse docker port");
+    wait_for_ssh_ready(ssh_port);
 
     // Prepare project.
     let project = temp.path().join("app");
@@ -202,24 +334,20 @@ env = "production"
 "#,
     )
     .unwrap();
+    write_deploy_artifacts(&project);
 
     // Global server inventory lives at ${TAKO_HOME}/config.toml
     // Use a second server that fails fast via connection refused.
     fs::write(
         tako_home.join("config.toml"),
         format!(
-            "[[servers]]\nname = \"good\"\nhost = \"127.0.0.1\"\nport = {}\n\n[[servers]]\nname = \"bad\"\nhost = \"localhost\"\nport = 1\n",
+            "[[servers]]\nname = \"good\"\nhost = \"127.0.0.1\"\nport = {}\n\n[[servers]]\nname = \"bad\"\nhost = \"localhost\"\nport = 1\n\n[server_targets.good]\narch = \"x86_64\"\nlibc = \"musl\"\n\n[server_targets.bad]\narch = \"x86_64\"\nlibc = \"musl\"\n",
             ssh_port
         ),
     )
     .unwrap();
 
-    let out = run_tako(
-        &["deploy", "--env", "production"],
-        &project,
-        &home,
-        &tako_home,
-    );
+    let out = run_tako(&["deploy", "--env", "production"], &project, &tako_home);
     let combined = format!(
         "{}{}",
         String::from_utf8_lossy(&out.stdout),
@@ -256,12 +384,12 @@ fn deploy_e2e_docker_alpine() {
     build_image(tag);
 
     let temp = TempDir::new().unwrap();
-    let home = temp.path().join("home");
     let tako_home = temp.path().join("tako-home");
-    fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&tako_home).unwrap();
 
-    let pubkey = gen_ssh_keypair(&home);
+    let Some(pubkey) = local_ssh_public_key() else {
+        return;
+    };
 
     let id = docker_stdout(&[
         "run",
@@ -282,6 +410,7 @@ fn deploy_e2e_docker_alpine() {
         .next()
         .and_then(|p| p.parse().ok())
         .expect("failed to parse docker port");
+    wait_for_ssh_ready(ssh_port);
 
     // Prepare project.
     let project = temp.path().join("app");
@@ -304,24 +433,20 @@ env = "production"
 "#,
     )
     .unwrap();
+    write_deploy_artifacts(&project);
 
     // Global server inventory lives at ${TAKO_HOME}/config.toml
     fs::write(
         tako_home.join("config.toml"),
         format!(
-            "[[servers]]\nname = \"ssh\"\nhost = \"127.0.0.1\"\nport = {}\n",
+            "[[servers]]\nname = \"ssh\"\nhost = \"127.0.0.1\"\nport = {}\n\n[server_targets.ssh]\narch = \"x86_64\"\nlibc = \"musl\"\n",
             ssh_port
         ),
     )
     .unwrap();
 
     // Deploy.
-    let out = run_tako(
-        &["deploy", "--env", "production"],
-        &project,
-        &home,
-        &tako_home,
-    );
+    let out = run_tako(&["deploy", "--env", "production"], &project, &tako_home);
     assert!(
         out.status.success(),
         "deploy failed: {}{}",
@@ -349,7 +474,6 @@ env = "production"
                 "tako@127.0.0.1",
                 cmd,
             ])
-            .env("HOME", &home)
             .output()
             .expect("ssh failed")
     };
@@ -414,12 +538,12 @@ fn deploy_e2e_respects_remote_lock() {
     build_image(tag);
 
     let temp = TempDir::new().unwrap();
-    let home = temp.path().join("home");
     let tako_home = temp.path().join("tako-home");
-    fs::create_dir_all(&home).unwrap();
     fs::create_dir_all(&tako_home).unwrap();
 
-    let pubkey = gen_ssh_keypair(&home);
+    let Some(pubkey) = local_ssh_public_key() else {
+        return;
+    };
 
     let id = docker_stdout(&[
         "run",
@@ -438,6 +562,7 @@ fn deploy_e2e_respects_remote_lock() {
         .next()
         .and_then(|p| p.parse().ok())
         .expect("failed to parse docker port");
+    wait_for_ssh_ready(ssh_port);
 
     let project = temp.path().join("app");
     fs::create_dir_all(&project).unwrap();
@@ -458,11 +583,12 @@ env = "production"
 "#,
     )
     .unwrap();
+    write_deploy_artifacts(&project);
 
     fs::write(
         tako_home.join("config.toml"),
         format!(
-            "[[servers]]\nname = \"ssh\"\nhost = \"127.0.0.1\"\nport = {}\n",
+            "[[servers]]\nname = \"ssh\"\nhost = \"127.0.0.1\"\nport = {}\n\n[server_targets.ssh]\narch = \"x86_64\"\nlibc = \"musl\"\n",
             ssh_port
         ),
     )
@@ -480,7 +606,6 @@ env = "production"
                 "tako@127.0.0.1",
                 cmd,
             ])
-            .env("HOME", &home)
             .output()
             .expect("ssh failed")
     };
@@ -492,12 +617,7 @@ env = "production"
     assert!(out.status.success());
     assert!(String::from_utf8_lossy(&out.stdout).contains("locked"));
 
-    let out = run_tako(
-        &["deploy", "--env", "production"],
-        &project,
-        &home,
-        &tako_home,
-    );
+    let out = run_tako(&["deploy", "--env", "production"], &project, &tako_home);
     assert!(!out.status.success(), "deploy should fail when locked");
     let combined = format!(
         "{}{}",
@@ -505,4 +625,117 @@ env = "production"
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(combined.to_lowercase().contains("lock"));
+}
+
+#[test]
+fn deploy_e2e_workspace_fixture_docker_alpine() {
+    if std::env::var("TAKO_E2E").is_err() {
+        return;
+    }
+    if !docker_ok() {
+        return;
+    }
+
+    let fixture_rel =
+        std::env::var("TAKO_E2E_APP").unwrap_or_else(|_| "e2e/js/tanstack-start".to_string());
+    let fixture_dir = workspace_root().join(&fixture_rel);
+    assert!(
+        fixture_dir.is_dir(),
+        "fixture directory not found: {}",
+        fixture_dir.display()
+    );
+
+    let tag = "tako-deploy-e2e:latest";
+    build_image(tag);
+
+    let temp = TempDir::new().unwrap();
+    let tako_home = temp.path().join("tako-home");
+    fs::create_dir_all(&tako_home).unwrap();
+
+    let Some(pubkey) = local_ssh_public_key() else {
+        return;
+    };
+
+    let id = docker_stdout(&[
+        "run",
+        "-d",
+        "-e",
+        &format!("AUTHORIZED_KEY={}", pubkey.trim()),
+        "-p",
+        "127.0.0.1::22",
+        tag,
+    ]);
+    let _c = DockerContainer { id: id.clone() };
+
+    let port_line = docker_stdout(&["port", &id, "22/tcp"]);
+    let ssh_port: u16 = port_line
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .expect("failed to parse docker port");
+    wait_for_ssh_ready(ssh_port);
+
+    let project = temp.path().join("app");
+    copy_directory_recursive(&fixture_dir, &project);
+    disable_build_script(&project.join("package.json"));
+    stage_fixture_artifacts(&project);
+
+    fs::write(
+        tako_home.join("config.toml"),
+        format!(
+            "[[servers]]\nname = \"ssh\"\nhost = \"127.0.0.1\"\nport = {}\n\n[server_targets.ssh]\narch = \"x86_64\"\nlibc = \"musl\"\n",
+            ssh_port
+        ),
+    )
+    .unwrap();
+
+    let out = run_tako(&["deploy", "--env", "production"], &project, &tako_home);
+    assert!(
+        out.status.success(),
+        "deploy failed: {}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let version = extract_version(&combined).expect("failed to parse deploy version");
+
+    let ssh = |cmd: &str| {
+        Command::new("ssh")
+            .args([
+                "-o",
+                "StrictHostKeyChecking=no",
+                "-o",
+                "BatchMode=yes",
+                "-p",
+                &ssh_port.to_string(),
+                "tako@127.0.0.1",
+                cmd,
+            ])
+            .output()
+            .expect("ssh failed")
+    };
+
+    let release_dir = format!("/opt/tako/apps/tanstack-start-e2e/releases/{}", version);
+    let out = ssh(&format!("test -d {} && echo ok", release_dir));
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("ok"));
+
+    let out = ssh(&format!(
+        "test -f {0}/package.json && test -f {0}/index.ts && test -f {0}/server/index.mjs && test -f {0}/static/index.html && test -f {0}/static/assets/main.js && echo ok",
+        release_dir
+    ));
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("ok"));
+
+    let out = ssh(
+        "test -L /opt/tako/apps/tanstack-start-e2e/current && readlink /opt/tako/apps/tanstack-start-e2e/current",
+    );
+    assert!(out.status.success());
+    let current_target = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    assert_eq!(current_target, release_dir);
 }

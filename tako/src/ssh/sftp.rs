@@ -3,6 +3,7 @@
 use super::client::SshClient;
 use super::error::{SshError, SshResult};
 use russh_sftp::client::SftpSession;
+use std::ffi::OsString;
 use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -273,22 +274,15 @@ pub async fn upload_via_scp(
     remote_host: &str,
     remote_port: u16,
     remote_path: &str,
+    keys_dir: &Path,
 ) -> SshResult<()> {
     use tokio::process::Command;
 
     let remote_target = format!("tako@{}:{}", remote_host, remote_path);
+    let identity_file = find_ssh_identity_file(keys_dir);
+    let args = build_scp_args(local_path, remote_port, &remote_target, identity_file.as_deref());
 
-    let output = Command::new("scp")
-        .arg("-P")
-        .arg(remote_port.to_string())
-        .arg("-o")
-        .arg("StrictHostKeyChecking=no")
-        .arg("-o")
-        .arg("BatchMode=yes")
-        .arg(local_path)
-        .arg(&remote_target)
-        .output()
-        .await?;
+    let output = Command::new("scp").args(args).output().await?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -304,11 +298,101 @@ pub async fn upload_via_scp(
     Ok(())
 }
 
+fn find_ssh_identity_file(keys_dir: &Path) -> Option<std::path::PathBuf> {
+    let key_names = ["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"];
+    key_names
+        .iter()
+        .map(|name| keys_dir.join(name))
+        .find(|path| path.exists())
+}
+
+fn build_scp_args(
+    local_path: &Path,
+    remote_port: u16,
+    remote_target: &str,
+    identity_file: Option<&Path>,
+) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from("-P"),
+        OsString::from(remote_port.to_string()),
+        OsString::from("-o"),
+        OsString::from("StrictHostKeyChecking=no"),
+        OsString::from("-o"),
+        OsString::from("BatchMode=yes"),
+    ];
+
+    if let Some(identity) = identity_file {
+        args.extend([
+            OsString::from("-o"),
+            OsString::from("IdentitiesOnly=yes"),
+            OsString::from("-i"),
+            identity.as_os_str().to_os_string(),
+        ]);
+    }
+
+    args.extend([
+        local_path.as_os_str().to_os_string(),
+        OsString::from(remote_target),
+    ]);
+
+    args
+}
+
 #[cfg(test)]
 mod tests {
+    use super::{build_scp_args, find_ssh_identity_file};
+    use std::path::Path;
+    use tempfile::TempDir;
+
     #[test]
-    fn test_upload_via_scp_command_format() {
-        // Just test that the function signature is correct
-        // Actual SCP testing would require a real server
+    fn finds_identity_file_in_keys_directory() {
+        let temp = TempDir::new().expect("create temp dir");
+        let key_path = temp.path().join("id_ed25519");
+        std::fs::write(&key_path, "test-key").expect("write key");
+
+        let found = find_ssh_identity_file(temp.path()).expect("expected key path");
+        assert_eq!(found, key_path);
+    }
+
+    #[test]
+    fn prefers_ed25519_when_multiple_keys_exist() {
+        let temp = TempDir::new().expect("create temp dir");
+        let rsa_path = temp.path().join("id_rsa");
+        let ed25519_path = temp.path().join("id_ed25519");
+        std::fs::write(&rsa_path, "rsa").expect("write rsa");
+        std::fs::write(&ed25519_path, "ed25519").expect("write ed25519");
+
+        let found = find_ssh_identity_file(temp.path()).expect("expected key path");
+        assert_eq!(found, ed25519_path);
+    }
+
+    #[test]
+    fn includes_identity_args_when_identity_file_is_present() {
+        let local = Path::new("/tmp/archive.tar.gz");
+        let identity = Path::new("/tmp/.ssh/id_ed25519");
+        let args = build_scp_args(local, 22, "tako@server1:/remote/release.tar.gz", Some(identity));
+
+        let args_as_strings: Vec<String> = args
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert!(args_as_strings.contains(&"-i".to_string()));
+        assert!(args_as_strings.contains(&"/tmp/.ssh/id_ed25519".to_string()));
+        assert!(args_as_strings.contains(&"IdentitiesOnly=yes".to_string()));
+    }
+
+    #[test]
+    fn omits_identity_args_when_identity_file_is_absent() {
+        let local = Path::new("/tmp/archive.tar.gz");
+        let args = build_scp_args(local, 22, "tako@server1:/remote/release.tar.gz", None);
+
+        let args_as_strings: Vec<String> = args
+            .iter()
+            .map(|s| s.to_string_lossy().to_string())
+            .collect();
+
+        assert!(!args_as_strings.contains(&"-i".to_string()));
+        assert!(!args_as_strings.contains(&"IdentitiesOnly=yes".to_string()));
     }
 }

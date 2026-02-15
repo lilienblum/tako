@@ -4,6 +4,12 @@ set -eu
 addgroup -S tako 2>/dev/null || true
 adduser -S -D -h /home/tako -s /bin/sh -G tako tako 2>/dev/null || true
 
+# Alpine can create the user in a locked state; unlock to allow pubkey SSH auth.
+if command -v passwd >/dev/null 2>&1; then
+  passwd -u tako >/dev/null 2>&1 || true
+  passwd -d tako >/dev/null 2>&1 || true
+fi
+
 mkdir -p /home/tako/.ssh /var/run/tako /opt/tako /opt/artifacts /usr/local/bin
 chmod 700 /home/tako/.ssh
 

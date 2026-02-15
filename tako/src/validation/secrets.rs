@@ -66,6 +66,87 @@ pub fn validate_secrets_for_deployment(secrets: &SecretsStore, env_name: &str) -
 
     // Check for missing secrets compared to other environments
     result.merge(validate_secrets_for_env(secrets, env_name));
+    // Warn (do not fail) when the target environment has additional secret names.
+    result.merge(validate_target_only_secret_names(secrets, env_name));
 
     result
+}
+
+fn validate_target_only_secret_names(secrets: &SecretsStore, env_name: &str) -> ValidationResult {
+    let mut result = ValidationResult::new();
+    let Some(target_secrets) = secrets.get_env(env_name) else {
+        return result;
+    };
+
+    let env_names = secrets.environment_names();
+    for secret_name in target_secrets.keys() {
+        let mut missing_in = Vec::new();
+        for other_env in &env_names {
+            if other_env == env_name {
+                continue;
+            }
+            if !secrets.contains(other_env, secret_name) {
+                missing_in.push(other_env.clone());
+            }
+        }
+
+        if !missing_in.is_empty() {
+            result.warn(format!(
+                "Secret '{}' exists in environment '{}' but is missing in: {}.",
+                secret_name,
+                env_name,
+                missing_in.join(", ")
+            ));
+        }
+    }
+
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn deploy_validation_warns_when_target_env_has_extra_secret_names() {
+        let mut secrets = SecretsStore::default();
+        secrets
+            .set("production", "API_KEY", "x".to_string())
+            .unwrap();
+        secrets
+            .set("production", "ONLY_PROD", "y".to_string())
+            .unwrap();
+        secrets.set("staging", "API_KEY", "z".to_string()).unwrap();
+
+        let result = validate_secrets_for_deployment(&secrets, "production");
+        assert!(
+            !result.has_errors(),
+            "unexpected errors: {:?}",
+            result.errors
+        );
+        assert!(result.has_warnings());
+        assert!(result.warnings.iter().any(|w| {
+            w.contains("ONLY_PROD") && w.contains("missing in: staging") && w.contains("production")
+        }));
+    }
+
+    #[test]
+    fn deploy_validation_passes_when_secret_names_match_between_envs() {
+        let mut secrets = SecretsStore::default();
+        secrets
+            .set("production", "API_KEY", "x".to_string())
+            .unwrap();
+        secrets
+            .set("production", "DB_URL", "y".to_string())
+            .unwrap();
+        secrets.set("staging", "API_KEY", "z".to_string()).unwrap();
+        secrets.set("staging", "DB_URL", "w".to_string()).unwrap();
+
+        let result = validate_secrets_for_deployment(&secrets, "production");
+        assert!(
+            !result.has_errors(),
+            "unexpected errors: {:?}",
+            result.errors
+        );
+    }
 }

@@ -38,6 +38,31 @@ import { Tako as NodeTako } from "tako.sh/node";
 import { Tako as DenoTako } from "tako.sh/deno";
 ```
 
+## Vite Plugin
+
+Use the Vite plugin to normalize build output into Tako's deploy artifact contract.
+
+```ts
+import { defineConfig } from "vite";
+import { takoVitePlugin } from "tako.sh/vite";
+
+export default defineConfig({
+  plugins: [
+    takoVitePlugin({
+      // Optional when your client output is not named "client"
+      clientDir: "dist/web",
+      // Optional (auto-detected as dist/server when present)
+      serverDir: "dist/ssr",
+    }),
+  ],
+});
+```
+
+Staging output defaults to `.tako/artifacts/app`:
+
+- `.tako/artifacts/app/static` = `public/` merged with client build output (client output wins on conflicts)
+- `.tako/artifacts/app/server` = copied server output (if configured/detected)
+
 ## Build and Test
 
 ```bash

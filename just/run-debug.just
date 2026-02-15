@@ -61,7 +61,7 @@ build-tako-server:
 create-bun-server:
     # Create a named debug container with sshd for VPS-like installer behavior.
     docker rm -f {{ CONTAINER_NAME }} 2>/dev/null || true
-    docker build --platform {{ DOCKER_PLATFORM }} -f docker/bun-server.Dockerfile -t {{ IMAGE_NAME }} .
+    docker build --platform {{ DOCKER_PLATFORM }} -f docker/bun.Dockerfile -t {{ IMAGE_NAME }} .
     mkdir -p {{ DEBUG_TMP_DIR }}
     PUBKEY_FILE="${SSH_PUBKEY_FILE:-}"; \
         if [ -z "$PUBKEY_FILE" ]; then \

@@ -4,7 +4,8 @@
     "packages": [
       "sdk",
       "website",
-      "examples/js/*"
+      "examples/js/*",
+      "e2e/js/*"
     ],
     "catalogs": {
       "dev": {

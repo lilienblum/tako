@@ -288,7 +288,7 @@ pub async fn add_server(
     port: u16,
     no_test: bool,
 ) -> Result<Option<String>, Box<dyn std::error::Error>> {
-    use crate::config::{ServerEntry, ServersToml};
+    use crate::config::{ServerEntry, ServerTarget, ServersToml};
     use crate::ssh::{SshClient, SshConfig};
 
     let mut servers = ServersToml::load()?;
@@ -376,6 +376,8 @@ pub async fn add_server(
         .into());
     }
 
+    let mut detected_target: Option<ServerTarget> = None;
+
     // Test SSH connection unless skipped
     if !no_test {
         let ssh_config = SshConfig::from_server(host, port);
@@ -391,6 +393,16 @@ pub async fn add_server(
         match connect_result {
             Ok(()) => {
                 output::success("SSH connection successful");
+                let target_result = output::with_spinner_async(
+                    "Detecting server target...",
+                    detect_server_target(&ssh),
+                )
+                .await
+                .map_err(|e| format!("Target detection failed: {}", e))?;
+                let target =
+                    target_result.map_err(|e| format!("Target detection failed: {}", e))?;
+                output::success(&format!("Detected target: {}", target.label()));
+                detected_target = Some(target);
 
                 // Check if tako-server is installed
                 match ssh.is_tako_installed().await {
@@ -416,6 +428,10 @@ pub async fn add_server(
                 return Err(format!("SSH connection failed: {}", e).into());
             }
         }
+    } else {
+        output::warning(
+            "Skipped SSH test. Target metadata was not detected; deploy will fail for this server until it is re-added with SSH checks enabled.",
+        );
     }
 
     // Add the server
@@ -426,6 +442,9 @@ pub async fn add_server(
     };
 
     servers.add(server_name.clone(), entry)?;
+    if let Some(target) = detected_target {
+        servers.set_target(&server_name, target)?;
+    }
     servers.save()?;
 
     output::success(&format!(
@@ -442,6 +461,59 @@ pub async fn add_server(
     record_server_history(host, &server_name, port);
 
     Ok(Some(server_name))
+}
+
+const DETECT_LIBC_COMMAND: &str = "if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then echo musl; \
+elif command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -Eqi 'glibc|gnu libc|gnu c library'; then echo glibc; \
+elif command -v getconf >/dev/null 2>&1 && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then echo glibc; \
+elif ls /lib/ld-musl-*.so.1 /usr/lib/ld-musl-*.so.1 >/dev/null 2>&1; then echo musl; \
+else echo unknown; fi";
+
+async fn detect_server_target(
+    ssh: &crate::ssh::SshClient,
+) -> Result<crate::config::ServerTarget, String> {
+    let arch_out = ssh
+        .exec("uname -m 2>/dev/null || true")
+        .await
+        .map_err(|e| format!("Failed to query architecture: {}", e))?;
+    let arch = parse_detected_arch(&arch_out.stdout)?;
+
+    let libc_out = ssh
+        .exec(DETECT_LIBC_COMMAND)
+        .await
+        .map_err(|e| format!("Failed to query libc: {}", e))?;
+    let libc = parse_detected_libc(&libc_out.stdout)?;
+
+    crate::config::ServerTarget::normalized(&arch, &libc)
+        .map_err(|e| format!("Unsupported target metadata: {}", e))
+}
+
+fn parse_detected_arch(stdout: &str) -> Result<String, String> {
+    let raw = stdout.lines().map(str::trim).find(|line| !line.is_empty());
+    let Some(raw_arch) = raw else {
+        return Err("Could not detect server architecture from `uname -m` output".to_string());
+    };
+
+    crate::config::ServerTarget::normalize_arch(raw_arch).ok_or_else(|| {
+        format!(
+            "Unsupported server architecture '{}'. Supported architectures: x86_64, aarch64.",
+            raw_arch
+        )
+    })
+}
+
+fn parse_detected_libc(stdout: &str) -> Result<String, String> {
+    let raw = stdout.lines().map(str::trim).find(|line| !line.is_empty());
+    let Some(raw_libc) = raw else {
+        return Err("Could not detect server libc".to_string());
+    };
+
+    crate::config::ServerTarget::normalize_libc(raw_libc).ok_or_else(|| {
+        format!(
+            "Unsupported server libc '{}'. Supported libc families: glibc, musl.",
+            raw_libc
+        )
+    })
 }
 
 fn record_server_history(host: &str, name: &str, port: u16) {
@@ -963,5 +1035,31 @@ mod tests {
         assert!(cmd.contains("--instance-port-offset"));
         assert!(cmd.contains("10000"));
         assert!(cmd.contains("/var/run/tako/tako-next.sock"));
+    }
+
+    #[test]
+    fn parse_detected_arch_normalizes_supported_aliases() {
+        assert_eq!(parse_detected_arch("x86_64\n").unwrap(), "x86_64");
+        assert_eq!(parse_detected_arch("amd64\n").unwrap(), "x86_64");
+        assert_eq!(parse_detected_arch("arm64\n").unwrap(), "aarch64");
+    }
+
+    #[test]
+    fn parse_detected_arch_rejects_unknown_values() {
+        let err = parse_detected_arch("sparc\n").unwrap_err();
+        assert!(err.contains("Unsupported server architecture"));
+    }
+
+    #[test]
+    fn parse_detected_libc_normalizes_supported_aliases() {
+        assert_eq!(parse_detected_libc("glibc\n").unwrap(), "glibc");
+        assert_eq!(parse_detected_libc("GNU libc\n").unwrap(), "glibc");
+        assert_eq!(parse_detected_libc("musl\n").unwrap(), "musl");
+    }
+
+    #[test]
+    fn parse_detected_libc_rejects_unknown_values() {
+        let err = parse_detected_libc("uclibc\n").unwrap_err();
+        assert!(err.contains("Unsupported server libc"));
     }
 }

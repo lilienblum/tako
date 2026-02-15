@@ -1,5 +1,5 @@
 {
-  "name": "tanstack-start-e2e",
+  "name": "tanstack-start-example-basic",
   "private": true,
   "type": "module",
   "sideEffects": false,

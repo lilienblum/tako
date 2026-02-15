@@ -4,15 +4,15 @@ FROM oven/bun:alpine
 
 # Lightweight SSH-accessible debug server image for installer/deploy testing.
 RUN apk add --no-cache \
-    openssh \
-    bash \
-    curl \
-    sudo \
-    shadow \
-    coreutils \
-    procps \
-    libcap-utils \
-    netcat-openbsd
+    openssh
+
+# Keep server dependency installation aligned with the production installer.
+COPY scripts/install-tako-server.sh /tmp/install-tako-server.sh
+RUN chmod +x /tmp/install-tako-server.sh && \
+    printf '#!/bin/sh\nexit 0\n' > /tmp/tako-server && \
+    chmod +x /tmp/tako-server && \
+    TAKO_SERVER_URL="file:///tmp/tako-server" sh /tmp/install-tako-server.sh && \
+    rm -f /tmp/install-tako-server.sh /tmp/tako-server
 
 RUN ssh-keygen -A && \
     mkdir -p /var/run/sshd /run/sshd /root/.ssh && \

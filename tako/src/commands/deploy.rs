@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, HashMap};
 use std::env::current_dir;
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -6,7 +7,7 @@ use std::sync::Arc;
 use crate::app::resolve_app_name;
 use crate::build::{BuildCache, BuildExecutor};
 use crate::commands::server;
-use crate::config::{SecretsStore, ServerEntry, ServersToml, TakoToml};
+use crate::config::{SecretsStore, ServerEntry, ServerTarget, ServersToml, TakoToml};
 use crate::output;
 use crate::runtime::detect_runtime;
 use crate::ssh::{SshClient, SshConfig, SshError, upload_via_scp};
@@ -38,6 +39,17 @@ struct ServerDeployTarget {
     server: ServerEntry,
     instances: u8,
     idle_timeout: u32,
+}
+
+#[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+struct DeployArchiveManifest {
+    app_name: String,
+    environment: String,
+    version: String,
+    runtime: String,
+    entry_point: String,
+    env_vars: BTreeMap<String, String>,
+    secret_names: Vec<String>,
 }
 
 struct ValidationResult {
@@ -91,12 +103,13 @@ async fn run_async(
                     config_result.errors.join("\n  ")
                 ));
             }
-            let warnings = config_result.warnings.clone();
+            let mut warnings = config_result.warnings.clone();
 
             let secrets_result = validate_secrets_for_deployment(&secrets, &env);
             if secrets_result.has_errors() {
                 return Err(format!("Secret errors:\n  {}", secrets_result.errors.join("\n  ")));
             }
+            warnings.extend(secrets_result.warnings.clone());
 
             let runtime = detect_runtime(&project_dir).ok_or_else(|| {
                 "Could not detect runtime. Make sure you have a bun.lockb, bunfig.toml, or package.json with bun config.".to_string()
@@ -150,6 +163,8 @@ async fn run_async(
             return Err(format_server_not_found_error(server_name).into());
         }
     }
+    let server_targets = resolve_deploy_server_targets(&servers, &server_names)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     output::section(&format_prepare_deploy_section(&env));
 
@@ -164,14 +179,22 @@ async fn run_async(
     ));
     output::success(&format_entry_point_summary(runtime.entry_point()));
     output::success(&format_servers_summary(&server_names));
+    output::success(&format_server_targets_summary(&server_targets));
 
     // ===== Build =====
     output::section("Build");
 
     let executor = BuildExecutor::new(&project_dir);
 
+    // Build artifacts must be produced under .tako/artifacts/app.
+    let cache = BuildCache::new(project_dir.join(".tako/artifacts"));
+    let _ = cache.clear();
+    let artifact_input_dir = deploy_artifact_input_dir(&project_dir);
+
     // Run build command if configured
     if let Some(build_cmd) = runtime.build_command() {
+        prepare_artifact_input_dir(&artifact_input_dir)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
         let cmd_str = build_cmd.join(" ");
         let build_result =
             output::with_spinner(format!("Running build command ({})...", cmd_str), || {
@@ -184,19 +207,50 @@ async fn run_async(
         }
         output::success("Build command succeeded");
     } else {
-        output::muted("No build command configured");
+        output::muted(&format!(
+            "No build command configured; expecting prebuilt artifacts in {}",
+            artifact_input_dir.display()
+        ));
     }
+
+    ensure_artifact_input_ready(&artifact_input_dir)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    output::success(&format!(
+        "Build artifacts: {}",
+        artifact_input_dir.display()
+    ));
 
     // Generate version string
     let version = executor.generate_version(None)?;
     output::success(&format!("Version: {}", version));
 
+    let runtime_mode = deploy_runtime_mode(&env);
+    let runtime_env_vars = runtime.env_vars(runtime_mode);
+
+    let manifest = build_deploy_archive_manifest(
+        &app_name,
+        &env,
+        &version,
+        runtime.name(),
+        runtime.entry_point(),
+        tako_config.get_merged_vars(&env),
+        runtime_env_vars,
+        secrets.get_env(&env),
+    );
+    let package_dir = deploy_archive_package_dir(&project_dir);
+    prepare_archive_package_dir(&package_dir)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    stage_archive_package(&artifact_input_dir, &package_dir, &manifest)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    output::success(&format!(
+        "Archive manifest: {}",
+        package_dir.join(DEPLOY_ARCHIVE_MANIFEST_FILE).display()
+    ));
+
     // Create archive
-    let cache = BuildCache::new(project_dir.join(".tako/build"));
-    let _ = cache.clear();
     let archive_path = cache.cache_dir().join(format!("{}.tar.gz", version));
     let archive_size = output::with_spinner("Creating archive...", || {
-        executor.create_archive(&project_dir, &archive_path, &[])
+        executor.create_archive(&package_dir, &archive_path, &[])
     })?
     .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
@@ -727,6 +781,259 @@ fn format_partial_failure_error(failed_servers: usize) -> String {
     format!("{} server(s) failed", failed_servers)
 }
 
+const DEPLOY_ARTIFACT_INPUT_SUBDIR: &str = ".tako/artifacts/app";
+const DEPLOY_ARCHIVE_PACKAGE_SUBDIR: &str = ".tako/artifacts/package";
+const DEPLOY_ARCHIVE_MANIFEST_FILE: &str = "app.json";
+
+fn deploy_artifact_input_dir(project_dir: &Path) -> PathBuf {
+    project_dir.join(DEPLOY_ARTIFACT_INPUT_SUBDIR)
+}
+
+fn deploy_archive_package_dir(project_dir: &Path) -> PathBuf {
+    project_dir.join(DEPLOY_ARCHIVE_PACKAGE_SUBDIR)
+}
+
+fn prepare_artifact_input_dir(artifact_input_dir: &Path) -> Result<(), String> {
+    if artifact_input_dir.exists() {
+        std::fs::remove_dir_all(artifact_input_dir).map_err(|e| {
+            format!(
+                "Failed to clear artifact directory {}: {}",
+                artifact_input_dir.display(),
+                e
+            )
+        })?;
+    }
+
+    std::fs::create_dir_all(artifact_input_dir).map_err(|e| {
+        format!(
+            "Failed to create artifact directory {}: {}",
+            artifact_input_dir.display(),
+            e
+        )
+    })?;
+
+    Ok(())
+}
+
+fn ensure_artifact_input_ready(artifact_input_dir: &Path) -> Result<(), String> {
+    if !artifact_input_dir.is_dir() {
+        return Err(format!(
+            "Artifact directory {} must contain build artifacts for deploy, but it does not exist.",
+            artifact_input_dir.display()
+        ));
+    }
+
+    if !directory_contains_any_file(artifact_input_dir)? {
+        return Err(format!(
+            "Artifact directory {} is empty and must contain build artifacts for deploy.",
+            artifact_input_dir.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn directory_contains_any_file(dir: &Path) -> Result<bool, String> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| format!("Failed to read artifact directory {}: {}", dir.display(), e))?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            format!(
+                "Failed to read an entry in artifact directory {}: {}",
+                dir.display(),
+                e
+            )
+        })?;
+
+        let file_type = entry.file_type().map_err(|e| {
+            format!(
+                "Failed to inspect artifact entry {}: {}",
+                entry.path().display(),
+                e
+            )
+        })?;
+        if file_type.is_file() || file_type.is_symlink() {
+            return Ok(true);
+        }
+        if file_type.is_dir() && directory_contains_any_file(&entry.path())? {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn build_deploy_archive_manifest(
+    app_name: &str,
+    environment: &str,
+    version: &str,
+    runtime_name: &str,
+    entry_point: &Path,
+    app_env_vars: HashMap<String, String>,
+    runtime_env_vars: HashMap<String, String>,
+    env_secrets: Option<&HashMap<String, String>>,
+) -> DeployArchiveManifest {
+    let mut secret_names = env_secrets
+        .map(|map| map.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    secret_names.sort();
+
+    DeployArchiveManifest {
+        app_name: app_name.to_string(),
+        environment: environment.to_string(),
+        version: version.to_string(),
+        runtime: runtime_name.to_string(),
+        entry_point: entry_point.display().to_string(),
+        env_vars: build_manifest_env_vars(
+            app_env_vars,
+            runtime_env_vars,
+            environment,
+            runtime_name,
+        ),
+        secret_names,
+    }
+}
+
+fn build_manifest_env_vars(
+    app_env_vars: HashMap<String, String>,
+    mut runtime_env_vars: HashMap<String, String>,
+    environment: &str,
+    runtime_name: &str,
+) -> BTreeMap<String, String> {
+    if runtime_name == "bun" {
+        // For Bun deploys, tie Node/Bun env conventions to the selected Tako env.
+        if runtime_env_vars.contains_key("NODE_ENV") {
+            runtime_env_vars.insert("NODE_ENV".to_string(), environment.to_string());
+        }
+        if runtime_env_vars.contains_key("BUN_ENV") {
+            runtime_env_vars.insert("BUN_ENV".to_string(), environment.to_string());
+        }
+    }
+
+    let mut merged = BTreeMap::new();
+    for (key, value) in app_env_vars {
+        merged.insert(key, value);
+    }
+    for (key, value) in runtime_env_vars {
+        merged.insert(key, value);
+    }
+    merged.insert("TAKO_ENV".to_string(), environment.to_string());
+    merged
+}
+
+fn deploy_runtime_mode(environment: &str) -> crate::runtime::RuntimeMode {
+    if environment == "development" {
+        crate::runtime::RuntimeMode::Development
+    } else {
+        crate::runtime::RuntimeMode::Production
+    }
+}
+
+fn prepare_archive_package_dir(package_dir: &Path) -> Result<(), String> {
+    if package_dir.exists() {
+        std::fs::remove_dir_all(package_dir).map_err(|e| {
+            format!(
+                "Failed to clear archive package directory {}: {}",
+                package_dir.display(),
+                e
+            )
+        })?;
+    }
+    std::fs::create_dir_all(package_dir).map_err(|e| {
+        format!(
+            "Failed to create archive package directory {}: {}",
+            package_dir.display(),
+            e
+        )
+    })?;
+    Ok(())
+}
+
+fn stage_archive_package(
+    artifact_input_dir: &Path,
+    package_dir: &Path,
+    manifest: &DeployArchiveManifest,
+) -> Result<(), String> {
+    let packaged_artifacts_dir = package_dir.join("artifacts");
+    std::fs::create_dir_all(&packaged_artifacts_dir).map_err(|e| {
+        format!(
+            "Failed to create packaged artifacts directory {}: {}",
+            packaged_artifacts_dir.display(),
+            e
+        )
+    })?;
+    copy_directory_contents(artifact_input_dir, &packaged_artifacts_dir)?;
+
+    let manifest_path = package_dir.join(DEPLOY_ARCHIVE_MANIFEST_FILE);
+    let manifest_json = serde_json::to_string_pretty(manifest)
+        .map_err(|e| format!("Failed to serialize deploy manifest: {}", e))?;
+    std::fs::write(&manifest_path, manifest_json).map_err(|e| {
+        format!(
+            "Failed to write deploy manifest {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
+    Ok(())
+}
+
+fn copy_directory_contents(source_dir: &Path, dest_dir: &Path) -> Result<(), String> {
+    let entries = std::fs::read_dir(source_dir).map_err(|e| {
+        format!(
+            "Failed to read source artifact directory {}: {}",
+            source_dir.display(),
+            e
+        )
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            format!(
+                "Failed to read entry in source artifact directory {}: {}",
+                source_dir.display(),
+                e
+            )
+        })?;
+        let source_path = entry.path();
+        let dest_path = dest_dir.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|e| {
+            format!(
+                "Failed to inspect source artifact path {}: {}",
+                source_path.display(),
+                e
+            )
+        })?;
+
+        if file_type.is_dir() {
+            std::fs::create_dir_all(&dest_path).map_err(|e| {
+                format!(
+                    "Failed to create destination directory {}: {}",
+                    dest_path.display(),
+                    e
+                )
+            })?;
+            copy_directory_contents(&source_path, &dest_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&source_path, &dest_path).map_err(|e| {
+                format!(
+                    "Failed to copy artifact file {} to {}: {}",
+                    source_path.display(),
+                    dest_path.display(),
+                    e
+                )
+            })?;
+        } else if file_type.is_symlink() {
+            return Err(format!(
+                "Deploy artifacts cannot contain symbolic links: {}",
+                source_path.display()
+            ));
+        }
+    }
+
+    Ok(())
+}
+
 fn format_runtime_summary(runtime_name: &str, version: Option<&str>) -> String {
     match version.map(str::trim) {
         Some(version) if !version.is_empty() => {
@@ -742,6 +1049,61 @@ fn format_entry_point_summary(entry_point: &Path) -> String {
 
 fn format_servers_summary(server_names: &[String]) -> String {
     format!("Servers: {}", server_names.join(", "))
+}
+
+fn resolve_deploy_server_targets(
+    servers: &ServersToml,
+    server_names: &[String],
+) -> Result<Vec<(String, ServerTarget)>, String> {
+    let mut resolved = Vec::with_capacity(server_names.len());
+    let mut missing = Vec::new();
+    let mut invalid = Vec::new();
+
+    for server_name in server_names {
+        let Some(raw_target) = servers.get_target(server_name) else {
+            missing.push(server_name.clone());
+            continue;
+        };
+
+        match ServerTarget::normalized(&raw_target.arch, &raw_target.libc) {
+            Ok(target) => resolved.push((server_name.clone(), target)),
+            Err(err) => invalid.push(format!(
+                "{} (arch='{}', libc='{}': {})",
+                server_name, raw_target.arch, raw_target.libc, err
+            )),
+        }
+    }
+
+    if !missing.is_empty() || !invalid.is_empty() {
+        return Err(format_server_target_metadata_error(&missing, &invalid));
+    }
+
+    Ok(resolved)
+}
+
+fn format_server_target_metadata_error(missing: &[String], invalid: &[String]) -> String {
+    let mut details = Vec::new();
+    if !missing.is_empty() {
+        details.push(format!("missing targets for: {}", missing.join(", ")));
+    }
+    if !invalid.is_empty() {
+        details.push(format!("invalid targets for: {}", invalid.join(", ")));
+    }
+
+    format!(
+        "Deploy target metadata check failed: {}. Remove and add each affected server again (`tako servers rm <name>` then `tako servers add --name <name> <host>`). Deploy does not probe server targets.",
+        details.join("; ")
+    )
+}
+
+fn format_server_targets_summary(server_targets: &[(String, ServerTarget)]) -> String {
+    let mut labels = server_targets
+        .iter()
+        .map(|(_, target)| target.label())
+        .collect::<Vec<_>>();
+    labels.sort();
+    labels.dedup();
+    format!("Server targets: {}", labels.join(", "))
 }
 
 fn parse_existing_routes_response(
@@ -940,6 +1302,7 @@ async fn deploy_to_server(
     use_spinner: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ssh_config = SshConfig::from_server(&server.host, server.port);
+    let ssh_keys_dir = ssh_config.keys_directory();
     let mut ssh = SshClient::new(ssh_config);
     run_deploy_step("Connecting...", use_spinner, ssh.connect()).await?;
     let archive_size_bytes = std::fs::metadata(&config.archive_path)?.len();
@@ -1015,17 +1378,18 @@ async fn deploy_to_server(
                 &server.host,
                 server.port,
                 &remote_archive,
+                &ssh_keys_dir,
             ),
         )
         .await?;
 
-        // Extract archive.
+        // Extract archive and unpack payload/artifacts to release root.
         let extract_cmd = format!(
-            "cd {} && tar -xzf release.tar.gz && rm release.tar.gz",
+            "cd {} && tar -xzf release.tar.gz && rm release.tar.gz && if [ -d artifacts ]; then cp -R artifacts/. . && rm -rf artifacts; fi",
             release_dir
         );
         run_deploy_step(
-            "Extracting archive...",
+            "Extracting archive payload...",
             use_spinner,
             ssh.exec_checked(&extract_cmd),
         )
@@ -1594,6 +1958,80 @@ mod tests {
     }
 
     #[test]
+    fn resolve_deploy_server_targets_requires_metadata_for_each_server() {
+        let mut servers = ServersToml::default();
+        servers.servers.insert(
+            "prod-1".to_string(),
+            ServerEntry {
+                host: "10.0.0.1".to_string(),
+                port: 22,
+                description: None,
+            },
+        );
+
+        let err = resolve_deploy_server_targets(&servers, &["prod-1".to_string()]).unwrap_err();
+        assert!(err.contains("missing targets"));
+        assert!(err.contains("prod-1"));
+        assert!(err.contains("does not probe"));
+    }
+
+    #[test]
+    fn resolve_deploy_server_targets_rejects_invalid_values() {
+        let mut servers = ServersToml::default();
+        servers.servers.insert(
+            "prod-1".to_string(),
+            ServerEntry {
+                host: "10.0.0.1".to_string(),
+                port: 22,
+                description: None,
+            },
+        );
+        servers.server_targets.insert(
+            "prod-1".to_string(),
+            ServerTarget {
+                arch: "sparc".to_string(),
+                libc: "glibc".to_string(),
+            },
+        );
+
+        let err = resolve_deploy_server_targets(&servers, &["prod-1".to_string()]).unwrap_err();
+        assert!(err.contains("invalid targets"));
+        assert!(err.contains("sparc"));
+    }
+
+    #[test]
+    fn format_server_targets_summary_deduplicates_target_labels() {
+        let summary = format_server_targets_summary(&[
+            (
+                "a".to_string(),
+                ServerTarget {
+                    arch: "x86_64".to_string(),
+                    libc: "glibc".to_string(),
+                },
+            ),
+            (
+                "b".to_string(),
+                ServerTarget {
+                    arch: "x86_64".to_string(),
+                    libc: "glibc".to_string(),
+                },
+            ),
+            (
+                "c".to_string(),
+                ServerTarget {
+                    arch: "aarch64".to_string(),
+                    libc: "musl".to_string(),
+                },
+            ),
+        ]);
+
+        assert_eq!(
+            summary,
+            "Server targets: linux-aarch64-musl, linux-x86_64-glibc"
+        );
+    }
+
+    #[test]
     fn deploy_progress_helpers_render_preparing_and_single_line_server_results() {
         let section = format_prepare_deploy_section("production");
         assert!(section.contains("Preparing deployment for"));
@@ -1770,5 +2208,129 @@ mod tests {
         assert!(cmd.contains("rm -rf"));
         assert!(cmd.contains("'\\''"));
         assert!(cmd.contains("/opt/tako/apps/"));
+    }
+
+    #[test]
+    fn deploy_artifact_input_dir_is_under_dot_tako_artifacts_app() {
+        let root = Path::new("/tmp/project");
+        assert_eq!(
+            deploy_artifact_input_dir(root),
+            PathBuf::from("/tmp/project/.tako/artifacts/app")
+        );
+    }
+
+    #[test]
+    fn ensure_artifact_input_ready_requires_existing_directory() {
+        let temp = TempDir::new().unwrap();
+        let missing = temp.path().join(".tako/artifacts/app");
+        let err = ensure_artifact_input_ready(&missing).unwrap_err();
+        assert!(err.contains(".tako/artifacts/app"));
+        assert!(err.contains("must contain build artifacts"));
+    }
+
+    #[test]
+    fn ensure_artifact_input_ready_rejects_empty_directory() {
+        let temp = TempDir::new().unwrap();
+        let artifact_dir = temp.path().join(".tako/artifacts/app");
+        std::fs::create_dir_all(&artifact_dir).unwrap();
+        let err = ensure_artifact_input_ready(&artifact_dir).unwrap_err();
+        assert!(err.contains("is empty"));
+    }
+
+    #[test]
+    fn ensure_artifact_input_ready_accepts_nested_files() {
+        let temp = TempDir::new().unwrap();
+        let artifact_dir = temp.path().join(".tako/artifacts/app");
+        std::fs::create_dir_all(artifact_dir.join("sub")).unwrap();
+        std::fs::write(artifact_dir.join("sub/index.js"), "ok").unwrap();
+        ensure_artifact_input_ready(&artifact_dir).expect("build artifacts should be accepted");
+    }
+
+    #[test]
+    fn build_deploy_archive_manifest_includes_sorted_env_and_secret_names() {
+        let app_env_vars = HashMap::from([
+            ("Z_KEY".to_string(), "z".to_string()),
+            ("A_KEY".to_string(), "a".to_string()),
+        ]);
+        let runtime_env_vars = HashMap::from([
+            ("NODE_ENV".to_string(), "production".to_string()),
+            ("BUN_ENV".to_string(), "production".to_string()),
+        ]);
+        let secrets = HashMap::from([
+            ("API_KEY".to_string(), "x".to_string()),
+            ("DB_URL".to_string(), "y".to_string()),
+        ]);
+
+        let manifest = build_deploy_archive_manifest(
+            "my-app",
+            "staging",
+            "v1",
+            "bun",
+            Path::new("index.ts"),
+            app_env_vars,
+            runtime_env_vars,
+            Some(&secrets),
+        );
+
+        assert_eq!(manifest.app_name, "my-app");
+        assert_eq!(manifest.environment, "staging");
+        assert_eq!(manifest.version, "v1");
+        assert_eq!(manifest.runtime, "bun");
+        assert_eq!(
+            manifest.env_vars.keys().cloned().collect::<Vec<_>>(),
+            vec![
+                "A_KEY".to_string(),
+                "BUN_ENV".to_string(),
+                "NODE_ENV".to_string(),
+                "TAKO_ENV".to_string(),
+                "Z_KEY".to_string()
+            ]
+        );
+        assert_eq!(
+            manifest.env_vars.get("TAKO_ENV"),
+            Some(&"staging".to_string())
+        );
+        assert_eq!(
+            manifest.env_vars.get("NODE_ENV"),
+            Some(&"staging".to_string())
+        );
+        assert_eq!(
+            manifest.env_vars.get("BUN_ENV"),
+            Some(&"staging".to_string())
+        );
+        assert_eq!(
+            manifest.secret_names,
+            vec!["API_KEY".to_string(), "DB_URL".to_string()]
+        );
+    }
+
+    #[test]
+    fn stage_archive_package_writes_manifest_and_artifacts_tree() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let package = temp.path().join("package");
+        std::fs::create_dir_all(source.join("nested")).unwrap();
+        std::fs::write(source.join("nested/app.js"), "console.log('ok')").unwrap();
+
+        let manifest = DeployArchiveManifest {
+            app_name: "my-app".to_string(),
+            environment: "production".to_string(),
+            version: "v1".to_string(),
+            runtime: "bun".to_string(),
+            entry_point: "index.ts".to_string(),
+            env_vars: BTreeMap::from([("NODE_ENV".to_string(), "production".to_string())]),
+            secret_names: vec!["API_KEY".to_string()],
+        };
+
+        prepare_archive_package_dir(&package).unwrap();
+        stage_archive_package(&source, &package, &manifest).unwrap();
+
+        assert!(package.join("artifacts/nested/app.js").exists());
+        let manifest_path = package.join(DEPLOY_ARCHIVE_MANIFEST_FILE);
+        assert!(manifest_path.exists());
+
+        let decoded: DeployArchiveManifest =
+            serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
+        assert_eq!(decoded, manifest);
     }
 }

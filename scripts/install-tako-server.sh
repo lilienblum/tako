@@ -38,6 +38,23 @@ TAKO_DOWNLOAD_BASE_URL="${TAKO_DOWNLOAD_BASE_URL:-https://github.com/lilienblum/
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+systemd_is_usable() {
+  if ! need_cmd systemctl; then
+    return 1
+  fi
+
+  # Containers can have systemctl installed without systemd as PID 1.
+  if [ ! -d /run/systemd/system ]; then
+    return 1
+  fi
+
+  if ! systemctl show-environment >/dev/null 2>&1; then
+    return 1
+  fi
+
+  return 0
+}
+
 ensure_privileged_bind_capability() {
   if need_cmd setcap; then
     if setcap cap_net_bind_service=+ep /usr/local/bin/tako-server; then
@@ -91,6 +108,25 @@ install_pkgs() {
   fi
 }
 
+install_sqlite_runtime() {
+  if need_cmd apt-get; then
+    apt-get update -y
+    apt-get install -y libsqlite3-0
+  elif need_cmd dnf; then
+    dnf install -y sqlite-libs
+  elif need_cmd yum; then
+    yum install -y sqlite-libs
+  elif need_cmd pacman; then
+    pacman -Sy --noconfirm sqlite
+  elif need_cmd apk; then
+    apk add --no-cache sqlite-libs
+  elif need_cmd zypper; then
+    zypper --non-interactive install sqlite3
+  else
+    echo "warning: unsupported package manager; install libsqlite3 runtime manually if needed." >&2
+  fi
+}
+
 ensure_nc() {
   if need_cmd nc; then
     return
@@ -133,6 +169,7 @@ if ! need_cmd sudo; then
   install_pkgs sudo
 fi
 ensure_nc
+install_sqlite_runtime
 
 arch="$(uname -m)"
 case "$arch" in
@@ -151,18 +188,35 @@ tmp="$(mktemp)"
 trap 'rm -f "$tmp"' EXIT
 
 echo "Downloading tako-server: $bin_url"
-if need_cmd curl; then
-  curl -fL "$bin_url" -o "$tmp"
-else
-  wget -O "$tmp" "$bin_url"
-fi
+case "$bin_url" in
+  file://*)
+    cp "${bin_url#file://}" "$tmp"
+    ;;
+  *)
+    if need_cmd curl; then
+      curl -fL "$bin_url" -o "$tmp"
+    else
+      wget -O "$tmp" "$bin_url"
+    fi
+    ;;
+esac
 
 expected_sha=""
-if need_cmd curl; then
-  expected_sha="$(curl -fsSL "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
-else
-  expected_sha="$(wget -qO- "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
-fi
+case "$sha_url" in
+  file://*)
+    sha_file="${sha_url#file://}"
+    if [ -f "$sha_file" ]; then
+      expected_sha="$(awk '{print $1}' "$sha_file" 2>/dev/null || true)"
+    fi
+    ;;
+  *)
+    if need_cmd curl; then
+      expected_sha="$(curl -fsSL "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
+    else
+      expected_sha="$(wget -qO- "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
+    fi
+    ;;
+esac
 
 if [ -n "$expected_sha" ]; then
   if need_cmd sha256sum; then
@@ -224,7 +278,7 @@ else
   echo "warning: configure ~/.ssh/authorized_keys manually or rerun installer with TAKO_SSH_PUBKEY." >&2
 fi
 
-if need_cmd systemctl; then
+if systemd_is_usable; then
   systemctl_path="$(command -v systemctl || true)"
   journalctl_path="$(command -v journalctl || true)"
   if [ -n "$systemctl_path" ] && [ -n "$journalctl_path" ]; then

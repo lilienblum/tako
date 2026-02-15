@@ -1397,6 +1397,68 @@ route = "prod.example.com"
     }
 
     #[test]
+    fn test_deploy_requires_build_artifacts_under_dot_tako_artifacts_app() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().to_path_buf();
+        let home = temp.path().join("home");
+        let tako_home = temp.path().join("tako-home");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&tako_home).unwrap();
+
+        fs::write(
+            project_dir.join("tako.toml"),
+            r#"
+[app]
+name = "test-app"
+
+[envs.production]
+routes = ["api.example.com"]
+
+[servers.test-server]
+env = "production"
+"#,
+        )
+        .unwrap();
+
+        fs::write(project_dir.join("bun.lockb"), "").unwrap();
+        fs::write(project_dir.join("package.json"), r#"{"name":"test-app"}"#).unwrap();
+        fs::write(project_dir.join("index.ts"), "export default {}").unwrap();
+
+        fs::write(
+            tako_home.join("config.toml"),
+            r#"
+[[servers]]
+name = "test-server"
+host = "127.0.0.1"
+port = 22222
+
+[server_targets.test-server]
+arch = "x86_64"
+libc = "glibc"
+"#,
+        )
+        .unwrap();
+
+        let output = run_tako_with_env(
+            &["deploy", "--env", "production"],
+            &project_dir,
+            &home,
+            &tako_home,
+        );
+        assert!(
+            !output.status.success(),
+            "deploy should fail when .tako/artifacts/app has no artifacts"
+        );
+
+        let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
+        assert!(
+            combined.contains(".tako/artifacts/app") && combined.contains("build artifacts"),
+            "should explain required build artifacts dir: {}",
+            combined
+        );
+    }
+
+    #[test]
     fn test_deploy_shows_validation_messages() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().to_path_buf();

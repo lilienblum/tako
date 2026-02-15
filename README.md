@@ -63,9 +63,18 @@ just tako examples/js/bun dev
 - `tako-socket/`: shared Unix socket JSONL transport helpers
 - `sdk/`: `tako.sh` SDK package
 - `examples/`: runnable examples
+- `e2e/`: deploy e2e fixture apps used by Docker integration tests
 - `scripts/`: install/check helper scripts
 - `website/`: Tako website + installer endpoints
 - `docker/`: internal Docker tooling for build/debug workflows
+
+## Deploy E2E Fixture Test
+
+Run Docker-based deploy e2e for the TanStack Start fixture:
+
+```bash
+just e2e e2e/js/tanstack-start
+```
 
 ## Docs
 

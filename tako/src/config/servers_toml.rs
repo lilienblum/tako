@@ -11,6 +11,57 @@ pub struct ServersToml {
     /// Map of server name to server entry
     #[serde(default)]
     pub servers: HashMap<String, ServerEntry>,
+
+    /// Optional detected runtime build targets by server name.
+    #[serde(default)]
+    pub server_targets: HashMap<String, ServerTarget>,
+}
+
+/// Detected server target metadata used for runtime-specific build planning.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ServerTarget {
+    /// CPU architecture (for example: x86_64, aarch64).
+    pub arch: String,
+    /// C library family (for example: glibc, musl).
+    pub libc: String,
+}
+
+impl ServerTarget {
+    /// Canonicalize target metadata values.
+    pub fn normalized(arch: &str, libc: &str) -> std::result::Result<Self, String> {
+        let arch = Self::normalize_arch(arch)
+            .ok_or_else(|| format!("Unsupported server target architecture '{}'", arch.trim()))?;
+        let libc = Self::normalize_libc(libc)
+            .ok_or_else(|| format!("Unsupported server target libc '{}'", libc.trim()))?;
+        Ok(Self { arch, libc })
+    }
+
+    /// Normalize architecture aliases.
+    pub fn normalize_arch(value: &str) -> Option<String> {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "x86_64" | "amd64" => Some("x86_64".to_string()),
+            "aarch64" | "arm64" => Some("aarch64".to_string()),
+            _ => None,
+        }
+    }
+
+    /// Normalize libc aliases.
+    pub fn normalize_libc(value: &str) -> Option<String> {
+        let normalized = value.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "glibc" | "gnu" | "gnu-libc" | "gnu_libc" | "gnu libc" | "gnu c library" => {
+                Some("glibc".to_string())
+            }
+            "musl" => Some("musl".to_string()),
+            _ => None,
+        }
+    }
+
+    /// Stable human-readable target label.
+    pub fn label(&self) -> String {
+        format!("linux-{}-{}", self.arch, self.libc)
+    }
 }
 
 /// Single server entry with SSH connection details
@@ -136,6 +187,33 @@ impl ServersToml {
             }
         }
 
+        if let Some(targets_table) = raw.get("server_targets")
+            && let Some(table) = targets_table.as_table()
+        {
+            for (name, value) in table {
+                let arch = value.get("arch").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ConfigError::Validation(format!(
+                        "server_targets.{} must include string field 'arch'",
+                        name
+                    ))
+                })?;
+                let libc = value.get("libc").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ConfigError::Validation(format!(
+                        "server_targets.{} must include string field 'libc'",
+                        name
+                    ))
+                })?;
+
+                config.server_targets.insert(
+                    name.to_string(),
+                    ServerTarget {
+                        arch: arch.to_string(),
+                        libc: libc.to_string(),
+                    },
+                );
+            }
+        }
+
         config.validate()?;
         Ok(config)
     }
@@ -158,6 +236,15 @@ impl ServersToml {
             if entry.port == 0 {
                 return Err(ConfigError::Validation(format!(
                     "Server '{}' has invalid port 0",
+                    name
+                )));
+            }
+        }
+
+        for name in self.server_targets.keys() {
+            if !self.servers.contains_key(name) {
+                return Err(ConfigError::Validation(format!(
+                    "Target metadata references unknown server '{}'",
                     name
                 )));
             }
@@ -230,6 +317,31 @@ impl ServersToml {
             root.insert("servers".to_string(), toml::Value::Array(servers_array));
         }
 
+        if self.server_targets.is_empty() {
+            root.remove("server_targets");
+        } else {
+            let mut target_names: Vec<&str> =
+                self.server_targets.keys().map(|k| k.as_str()).collect();
+            target_names.sort_unstable();
+
+            let mut targets_table = toml::map::Map::new();
+            for name in target_names {
+                let target = self.server_targets.get(name).ok_or_else(|| {
+                    ConfigError::Validation(format!("Missing target metadata for '{}'", name))
+                })?;
+
+                let mut target_table = toml::map::Map::new();
+                target_table.insert("arch".to_string(), toml::Value::String(target.arch.clone()));
+                target_table.insert("libc".to_string(), toml::Value::String(target.libc.clone()));
+                targets_table.insert(name.to_string(), toml::Value::Table(target_table));
+            }
+
+            root.insert(
+                "server_targets".to_string(),
+                toml::Value::Table(targets_table),
+            );
+        }
+
         let content = toml::to_string_pretty(&doc)?;
         fs::write(path, content).map_err(|e| ConfigError::FileWrite(path.to_path_buf(), e))?;
 
@@ -274,9 +386,12 @@ impl ServersToml {
 
     /// Remove a server by name
     pub fn remove(&mut self, name: &str) -> Result<ServerEntry> {
-        self.servers
+        let removed = self
+            .servers
             .remove(name)
-            .ok_or_else(|| ConfigError::ServerNotFound(name.to_string()))
+            .ok_or_else(|| ConfigError::ServerNotFound(name.to_string()))?;
+        self.server_targets.remove(name);
+        Ok(removed)
     }
 
     /// Update an existing server (by name, allows changing host)
@@ -293,6 +408,26 @@ impl ServersToml {
         }
 
         self.servers.insert(name.to_string(), entry);
+        Ok(())
+    }
+
+    /// Read detected target metadata for a server.
+    pub fn get_target(&self, name: &str) -> Option<&ServerTarget> {
+        self.server_targets.get(name)
+    }
+
+    /// Set detected target metadata for a server.
+    pub fn set_target(&mut self, name: &str, target: ServerTarget) -> Result<()> {
+        if !self.servers.contains_key(name) {
+            return Err(ConfigError::ServerNotFound(name.to_string()));
+        }
+        let normalized = ServerTarget::normalized(&target.arch, &target.libc).map_err(|e| {
+            ConfigError::Validation(format!(
+                "Invalid target metadata for server '{}': {}",
+                name, e
+            ))
+        })?;
+        self.server_targets.insert(name.to_string(), normalized);
         Ok(())
     }
 
@@ -430,6 +565,60 @@ port = 2222
         assert!(config.contains("kyoto"));
 
         assert_eq!(config.get("kyoto").unwrap().port, 2222);
+    }
+
+    #[test]
+    fn test_parse_server_targets_table() {
+        let toml = r#"
+[[servers]]
+name = "la"
+host = "1.2.3.4"
+
+[server_targets.la]
+arch = "x86_64"
+libc = "glibc"
+"#;
+        let config = ServersToml::parse(toml).unwrap();
+        let target = config.get_target("la").unwrap();
+        assert_eq!(target.arch, "x86_64");
+        assert_eq!(target.libc, "glibc");
+    }
+
+    #[test]
+    fn test_target_normalization_accepts_common_aliases() {
+        assert_eq!(
+            ServerTarget::normalize_arch("amd64").as_deref(),
+            Some("x86_64")
+        );
+        assert_eq!(
+            ServerTarget::normalize_arch("arm64").as_deref(),
+            Some("aarch64")
+        );
+        assert_eq!(
+            ServerTarget::normalize_libc("GNU libc").as_deref(),
+            Some("glibc")
+        );
+        assert_eq!(
+            ServerTarget::normalize_libc("musl").as_deref(),
+            Some("musl")
+        );
+    }
+
+    #[test]
+    fn test_target_normalization_rejects_unknown_values() {
+        assert!(ServerTarget::normalize_arch("sparc").is_none());
+        assert!(ServerTarget::normalize_libc("uclibc").is_none());
+    }
+
+    #[test]
+    fn test_parse_rejects_target_for_unknown_server() {
+        let toml = r#"
+[server_targets.ghost]
+arch = "x86_64"
+libc = "glibc"
+"#;
+        let err = ServersToml::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("unknown server"));
     }
 
     #[test]
@@ -622,10 +811,74 @@ name = "la"
                 },
             )
             .unwrap();
+        config
+            .set_target(
+                "la",
+                ServerTarget {
+                    arch: "x86_64".to_string(),
+                    libc: "glibc".to_string(),
+                },
+            )
+            .unwrap();
 
         let removed = config.remove("la").unwrap();
         assert_eq!(removed.host, "1.2.3.4");
         assert!(config.is_empty());
+        assert!(config.get_target("la").is_none());
+    }
+
+    #[test]
+    fn test_set_target_normalizes_arch_and_libc_aliases() {
+        let mut config = ServersToml::default();
+        config
+            .add(
+                "la".to_string(),
+                ServerEntry {
+                    host: "1.2.3.4".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        config
+            .set_target(
+                "la",
+                ServerTarget {
+                    arch: "amd64".to_string(),
+                    libc: "gnu libc".to_string(),
+                },
+            )
+            .unwrap();
+
+        let target = config.get_target("la").unwrap();
+        assert_eq!(target.arch, "x86_64");
+        assert_eq!(target.libc, "glibc");
+        assert_eq!(target.label(), "linux-x86_64-glibc");
+    }
+
+    #[test]
+    fn test_set_target_rejects_unknown_metadata_values() {
+        let mut config = ServersToml::default();
+        config
+            .add(
+                "la".to_string(),
+                ServerEntry {
+                    host: "1.2.3.4".to_string(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+
+        let err = config
+            .set_target(
+                "la",
+                ServerTarget {
+                    arch: "sparc".to_string(),
+                    libc: "glibc".to_string(),
+                },
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("Invalid target metadata"));
     }
 
     #[test]
@@ -711,6 +964,15 @@ name = "la"
                 },
             )
             .unwrap();
+        config
+            .set_target(
+                "la",
+                ServerTarget {
+                    arch: "x86_64".to_string(),
+                    libc: "glibc".to_string(),
+                },
+            )
+            .unwrap();
 
         config.save_to_file(&path).unwrap();
 
@@ -721,10 +983,14 @@ name = "la"
         assert_eq!(la.host, "1.2.3.4");
         assert_eq!(la.port, 2222);
         assert_eq!(la.description.as_deref(), Some("west coast"));
+        let la_target = loaded.get_target("la").unwrap();
+        assert_eq!(la_target.arch, "x86_64");
+        assert_eq!(la_target.libc, "glibc");
 
         let nyc = loaded.get("nyc").unwrap();
         assert_eq!(nyc.host, "5.6.7.8");
         assert_eq!(nyc.port, 22); // default
+        assert!(loaded.get_target("nyc").is_none());
     }
 
     #[test]

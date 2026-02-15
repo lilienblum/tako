@@ -20,7 +20,9 @@ tako deploy [--env <environment>]
 What happens during deploy:
 
 - Build happens locally.
-- A versioned tarball is created under `.tako/build/`.
+- Deploy artifact source is `.tako/artifacts/app`.
+- Deploy stages a payload with `artifacts/` plus `app.json`.
+- A versioned tarball is created under `.tako/artifacts/`.
 - Deploys run to all target servers in parallel.
 - Each server is handled independently, so partial success is possible.
 
@@ -28,10 +30,11 @@ What happens during deploy:
 
 Before you ship, do a quick sanity pass:
 
-1. Ensure target hosts exist in `~/.tako/config.toml` (or check with `tako servers ls`).
+1. Ensure target hosts exist in `~/.tako/config.toml` (or check with `tako servers ls`) and were added with SSH checks enabled so target metadata was detected.
 2. Confirm `tako.toml` has route/env/server mappings for the target environment.
 3. Verify secrets are present for the target env (`tako secrets sync` if needed).
 4. Run your local tests/build so you do not upload a broken artifact.
+5. Ensure deployable files exist in `.tako/artifacts/app` (build output or prebuilt files).
 
 ## Server Prerequisites
 
@@ -54,10 +57,23 @@ Each target server should have:
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
 - Defines per-server scaling settings (`instances`, `idle_timeout`) via global and per-server overrides.
 
+### Build artifacts (`.tako/artifacts/app`)
+
+- `tako deploy` always reads deployable files from `.tako/artifacts/app`.
+- If your runtime build command runs, it must write deployable files into `.tako/artifacts/app`.
+- If no build command runs, pre-populate `.tako/artifacts/app` before deploying.
+- Deploy fails before upload if `.tako/artifacts/app` is missing or empty.
+- Archive payload always includes:
+  - `artifacts/` (copied build output)
+  - `app.json` (metadata: app, env, runtime/entry point, env vars, secret names)
+
 ### Global server inventory (`~/.tako/config.toml`)
 
 - Defines named servers (`host`, `port`, optional `description`).
+- Stores detected per-server build target metadata under `[server_targets.<name>]` (`arch`, `libc`).
 - Managed via `tako servers ...` commands.
+- Deploy requires target metadata for every selected server and fails early if it is missing/invalid.
+- Deploy does not probe target metadata at deploy-time; re-add affected servers to refresh metadata.
 
 ## Deploy Flow (Per Server)
 
@@ -93,6 +109,8 @@ Each target server should have:
 
 - Deploy writes `TAKO_BUILD="<version>"` into release `.env`.
 - Local encrypted secrets are decrypted during deploy and written into release `.env` for the target environment.
+- Deploy pre-validation fails when target environment is missing secret keys used by other environments.
+- Deploy pre-validation warns (does not fail) when target environment has extra secret keys not present in other secret environments.
 - Manage secrets with:
   - `tako secrets set`
   - `tako secrets rm`

@@ -103,9 +103,18 @@ port = 22                 # Optional, defaults to 22
 [[servers]]
 name = "nyc"
 host = "5.6.7.8"
+
+[server_targets.la]
+arch = "x86_64"
+libc = "glibc"
+
+[server_targets.nyc]
+arch = "aarch64"
+libc = "musl"
 ```
 
 `[[servers]]` entries are managed by `tako servers add/rm/ls`. All names and hosts must be globally unique.
+Detected server build target metadata is stored under `[server_targets.<name>]` (`arch`, `libc`).
 
 **SSH authentication:**
 
@@ -391,6 +400,10 @@ Add server to global `~/.tako/config.toml` (`[[servers]]`).
 
 Tests SSH connection before adding. Connects as the `tako` user.
 
+During SSH checks, `tako servers add` also detects and stores target metadata (`arch`, `libc`) in `~/.tako/config.toml` under `[server_targets.<name>]`.
+
+If `--no-test` is used, SSH checks and target detection are skipped; deploy later fails for that server until target metadata is captured by re-adding the server with SSH checks enabled.
+
 If `tako-server` is not installed on the target, `tako` warns and expects the user to install it manually.
 
 ### tako servers rm [name]
@@ -528,10 +541,14 @@ Deploy flow helpers:
 
 **Steps:**
 
-1. Pre-deployment validation (secrets present, runtime detected)
+1. Pre-deployment validation (secrets present, runtime detected, server target metadata present/valid for all selected servers)
 2. Build locally
-3. Create archive (`.tako/build/{version}.tar.gz`) (previous builds are cleared before each deploy)
-4. Deploy to all servers in parallel:
+3. Validate build artifact directory (`.tako/artifacts/app`)
+4. Stage archive payload:
+   - copy artifact directory into archive payload as `artifacts/`
+   - write `app.json` manifest (app name, environment, runtime metadata, entry point, env vars for target env, and target secret names)
+5. Create archive (`.tako/artifacts/{version}.tar.gz`) from the staged payload (previous build archives are cleared before each deploy)
+6. Deploy to all servers in parallel:
    - Require `tako-server` to be pre-installed and running on each server
    - Acquire deploy lock (prevents concurrent deploys)
    - Upload and extract archive
@@ -544,6 +561,20 @@ Deploy flow helpers:
 - Clean git tree: `{commit_hash}` (e.g., `abc1234`)
 - Dirty working tree: `{commit_hash}_{content_hash}` (first 8 chars each)
 - No git commit/repo: `nogit_{timestamp}` (or `nogit_{content_hash}` when provided)
+
+**Build artifact contract:**
+
+- Deploy artifact source is always `.tako/artifacts/app`.
+- If a runtime build command is detected, it must write deployable files into `.tako/artifacts/app`.
+- If no build command is detected, `.tako/artifacts/app` must already contain prebuilt deployable files.
+- Deploy fails before upload when `.tako/artifacts/app` is missing or empty.
+- Archive payload always includes:
+  - `artifacts/` directory (copied build output)
+  - `app.json` metadata manifest
+- Deploy requires valid `[server_targets.<name>]` metadata for each selected server (`arch` and `libc`).
+- Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
+- Deploy pre-validation still fails when target environment is missing secret keys used by other environments.
+- Deploy pre-validation warns (but does not fail) when target environment has extra secret keys not present in other secret environments.
 
 **Deploy lock (server-side):**
 
@@ -1007,6 +1038,19 @@ import { Tako } from "tako.sh/node"; // Node.js
 import { Tako } from "tako.sh/deno"; // Deno
 import { Tako } from "tako.sh"; // Auto-detect
 ```
+
+### Vite Plugin
+
+```typescript
+import { takoVitePlugin } from "tako.sh/vite";
+```
+
+- `tako.sh/vite` provides a build-time plugin that stages Vite output into `.tako/artifacts/app`.
+- Staged layout:
+  - `.tako/artifacts/app/static` = `public/` merged with the detected client output (client files override conflicts)
+  - `.tako/artifacts/app/server` = detected or configured server output
+- When client output cannot be auto-detected, plugin requires `clientDir` configuration.
+- `serverDir` is optional and can be explicitly configured (or disabled).
 
 ### Feature Overview
 
