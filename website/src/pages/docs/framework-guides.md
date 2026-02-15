@@ -2,7 +2,7 @@
 layout: ../../layouts/DocsLayout.astro
 title: Tako Docs - Framework Guides
 heading: Framework Guides
-current: frameworks
+current: framework-guides
 ---
 
 # Framework Guides

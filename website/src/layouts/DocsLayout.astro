@@ -24,10 +24,10 @@ const headingAnchors = Astro.props.headingAnchors ?? frontmatter.headingAnchors 
 const docsNav = [
   { id: "intro", label: "Intro", href: "/docs" },
   { id: "quickstart", label: "Quickstart", href: "/docs/quickstart" },
-  { id: "frameworks", label: "Framework Guides", href: "/docs/framework-guides" },
-  { id: "architecture", label: "How Tako Works", href: "/docs/how-tako-works" },
-  { id: "cli", label: "CLI Reference", href: "/docs/cli-reference" },
-  { id: "tako-toml", label: "tako.toml Reference", href: "/docs/tako-toml-reference" },
+  { id: "framework-guides", label: "Framework Guides", href: "/docs/framework-guides" },
+  { id: "how-tako-flows", label: "How Tako Flows", href: "/docs/how-tako-flows" },
+  { id: "cli-reference", label: "CLI Reference", href: "/docs/cli-reference" },
+  { id: "tako-toml-reference", label: "tako.toml Reference", href: "/docs/tako-toml-reference" },
   { id: "development", label: "Development", href: "/docs/development" },
   { id: "deployment", label: "Deployment", href: "/docs/deployment" },
   { id: "troubleshooting", label: "Troubleshooting", href: "/docs/troubleshooting" },
@@ -656,8 +656,12 @@ const docsNav = [
   }
 
   .content .dynamic-phrase {
-    font-weight: 600;
-    color: var(--primary);
+    display: inline-block;
+    font-weight: 700;
+    color: inherit;
+    background: var(--secondary);
+    padding: 0.08em 0.35em;
+    line-height: 1;
   }
 
   .docs-menu-icon,

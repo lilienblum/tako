@@ -54,6 +54,7 @@ Each target server should have:
 - Defines environments and routes.
 - Every non-development environment must define `route` or `routes`.
 - Empty route sets are rejected for non-development environments (no implicit catch-all mode).
+- Optional `[tako].assets` directories are merged into deploy public assets (`.tako/artifacts/app/static`, or `.tako/artifacts/app/public` when `static/` is absent).
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
 - Defines per-server scaling settings (`instances`, `idle_timeout`) via global and per-server overrides.
 
@@ -62,6 +63,8 @@ Each target server should have:
 - `tako deploy` always reads deployable files from `.tako/artifacts/app`.
 - If your runtime build command runs, it must write deployable files into `.tako/artifacts/app`.
 - If no build command runs, pre-populate `.tako/artifacts/app` before deploying.
+- If `[tako].assets` is configured, those directories are merged into deploy public assets before packaging.
+- On asset merge conflicts, existing files in `.tako/artifacts/app` win.
 - Deploy fails before upload if `.tako/artifacts/app` is missing or empty.
 - Archive payload always includes:
   - `artifacts/` (copied build output)

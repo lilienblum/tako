@@ -84,15 +84,7 @@ just e2e e2e/js/tanstack-start
 
 ## Docs
 
-- `website/src/pages/docs/the-why.md`: user documentation hub
-- Planning/scope: tracked in issues and release planning (no in-repo `TODO.md`)
-- `website/src/pages/docs/quickstart.md`: quickstart (local + remote setup)
-- `website/src/pages/docs/cli.md`: CLI command reference
-- `website/src/pages/docs/tako-toml.md`: `tako.toml` configuration reference
-- `website/src/pages/docs/architecture.md`: high-level component/data-flow overview
-- `website/src/pages/docs/development.md`: local dev setup and troubleshooting
-- `website/src/pages/docs/deployment.md`: remote deploy model and server requirements
-- `website/src/pages/docs/troubleshooting.md`: troubleshooting runbook
+User docs live in `website/` (source pages: `website/src/pages/docs/`).
 
 Component-focused docs:
 

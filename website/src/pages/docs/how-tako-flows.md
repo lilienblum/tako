@@ -1,11 +1,11 @@
 ---
 layout: ../../layouts/DocsLayout.astro
-title: Tako Docs - How Tako Works
-heading: How Tako Works
-current: architecture
+title: Tako Docs - How Tako Flows
+heading: How Tako Flows
+current: how-tako-flows
 ---
 
-# How Tako Works
+# How Tako Flows
 
 Tako has two main paths:
 

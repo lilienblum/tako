@@ -2,12 +2,12 @@
 layout: ../../layouts/DocsLayout.astro
 title: Tako Docs - tako.toml Reference
 heading: tako.toml Reference
-current: tako-toml
+current: tako-toml-reference
 ---
 
 # `tako.toml` Reference
 
-`tako.toml` is your project's control panel for app metadata, env vars, routes, and server behavior.
+`tako.toml` is your project's control panel for app metadata, build/deploy behavior, env vars, routes, and server behavior.
 
 ## Minimal Config
 
@@ -29,10 +29,14 @@ App-level metadata.
 [tako]
 name = "my-app"
 build = "bun run build"
+assets = ["assets/shared", "assets/branding"]
 ```
 
 - `name`: stable app identifier used in deploy paths and local dev hostnames. Set once and do not change after first deploy.
 - `build`: optional build command run before deploy.
+- `assets`: optional list of project-relative directories merged into deploy public assets during `tako deploy`.
+  - Merges into `.tako/artifacts/app/static` when it exists, otherwise `.tako/artifacts/app/public`.
+  - Existing files already present in deploy artifacts win on path conflicts.
 
 ## `[vars]`
 
@@ -130,6 +134,7 @@ Later values override earlier ones when keys match.
 [tako]
 name = "my-app"
 build = "bun run build"
+assets = ["assets/shared"]
 
 [vars]
 LOG_LEVEL = "info"
