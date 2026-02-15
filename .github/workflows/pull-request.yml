@@ -54,3 +54,38 @@ jobs:
 
       - name: SDK tests
         run: bun run --cwd sdk test
+
+  e2e:
+    name: E2E
+    runs-on: ubuntu-latest
+    env:
+      DOCKER_BUILDKIT: "1"
+      COMPOSE_DOCKER_CLI_BUILD: "1"
+      E2E_CARGO_HOME_DIR: ${{ github.workspace }}/.e2e-cache/cargo-home
+      E2E_CARGO_TARGET_DIR: ${{ github.workspace }}/.e2e-cache/target
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache E2E Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.E2E_CARGO_HOME_DIR }}
+          key: ${{ runner.os }}-e2e-cargo-home-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-e2e-cargo-home-
+
+      - name: Cache E2E Cargo target
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.E2E_CARGO_TARGET_DIR }}
+          key: ${{ runner.os }}-e2e-cargo-target-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-e2e-cargo-target-
+
+      - name: Run E2E suites
+        run: |
+          set -euo pipefail
+          for fixture in $(find e2e/js -mindepth 1 -maxdepth 1 -type d | sort); do
+            ./e2e/run.sh "$fixture"
+          done
