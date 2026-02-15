@@ -5,3 +5,4 @@ debug/
 dist/
 .astro/
 .tako/
+.e2e-cache/

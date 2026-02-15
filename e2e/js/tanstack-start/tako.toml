@@ -1,0 +1,8 @@
+[tako]
+name = "tanstack-start-e2e"
+
+[envs.production]
+route = "tanstack-start-e2e.example.com"
+
+[servers.ssh]
+env = "production"

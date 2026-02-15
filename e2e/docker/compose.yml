@@ -1,0 +1,34 @@
+services:
+  server-ubuntu:
+    build:
+      context: ../..
+      dockerfile: e2e/docker/server/ubuntu.Dockerfile
+    volumes:
+      - e2e_ssh_keys:/opt/e2e/keys:ro
+  server-alma:
+    build:
+      context: ../..
+      dockerfile: e2e/docker/server/alma.Dockerfile
+    volumes:
+      - e2e_ssh_keys:/opt/e2e/keys:ro
+  runner:
+    build:
+      context: ../..
+      dockerfile: e2e/docker/runner/Dockerfile
+    depends_on:
+      - server-ubuntu
+      - server-alma
+    environment:
+      CARGO_HOME: /cargo-home
+      CARGO_TARGET_DIR: /workspace/target
+      CARGO_INCREMENTAL: "0"
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    volumes:
+      - ../..:/workspace
+      - e2e_ssh_keys:/opt/e2e/keys
+      - ${E2E_CARGO_HOME_DIR}:/cargo-home
+      - ${E2E_CARGO_TARGET_DIR}:/workspace/target
+    working_dir: /workspace
+
+volumes:
+  e2e_ssh_keys:
