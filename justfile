@@ -7,6 +7,10 @@ tako *arguments: (run-debug::tako arguments)
 
 clean: run-debug::clean
 
+fmt:
+    cargo fmt
+    bun run fmt
+
 build-tako-server: run-debug::build-tako-server
 
 create-bun-server: run-debug::create-bun-server

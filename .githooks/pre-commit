@@ -4,4 +4,4 @@ set -eu
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
-bun fmt
+just fmt

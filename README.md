@@ -55,6 +55,12 @@ Run the Bun example with Tako local dev flow:
 just tako examples/js/bun dev
 ```
 
+Format Rust + repo files:
+
+```bash
+just fmt
+```
+
 ## Repo Layout
 
 - `tako/`: CLI crate (`tako`) and local dev daemon binary (`tako-dev-server`)
