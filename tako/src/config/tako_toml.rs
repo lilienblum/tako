@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Component, Path};
 
 use super::error::{ConfigError, Result};
 
@@ -41,6 +41,10 @@ pub struct TakoSection {
 
     /// Build command to run before deployment
     pub build: Option<String>,
+
+    /// Additional asset directories (relative to project root) to merge into deploy public assets
+    #[serde(default)]
+    pub assets: Vec<String>,
 }
 
 /// Environment configuration from [envs.*]
@@ -220,6 +224,33 @@ impl TakoToml {
         // Validate app name if specified
         if let Some(name) = &self.tako.name {
             validate_app_name(name)?;
+        }
+
+        for asset_path in &self.tako.assets {
+            let trimmed = asset_path.trim();
+            if trimmed.is_empty() {
+                return Err(ConfigError::Validation(
+                    "asset path cannot be empty".to_string(),
+                ));
+            }
+
+            let path = Path::new(trimmed);
+            if path.is_absolute() {
+                return Err(ConfigError::Validation(format!(
+                    "asset path '{}' must be relative to project root",
+                    asset_path
+                )));
+            }
+
+            if path
+                .components()
+                .any(|component| matches!(component, Component::ParentDir))
+            {
+                return Err(ConfigError::Validation(format!(
+                    "asset path '{}' must not contain '..'",
+                    asset_path
+                )));
+            }
         }
 
         // Validate each environment
@@ -599,6 +630,19 @@ build = "bun build"
     }
 
     #[test]
+    fn test_parse_tako_assets_array() {
+        let toml = r#"
+[tako]
+assets = ["public-assets", "shared/images"]
+"#;
+        let config = TakoToml::parse(toml).unwrap();
+        assert_eq!(
+            config.tako.assets,
+            vec!["public-assets".to_string(), "shared/images".to_string()]
+        );
+    }
+
+    #[test]
     fn test_parse_global_vars() {
         let toml = r#"
 [vars]
@@ -831,6 +875,32 @@ routes = ["staging.example.com"]
 port = 0
 "#;
         assert!(TakoToml::parse(toml).is_err());
+    }
+
+    #[test]
+    fn test_validate_tako_assets_rejects_absolute_path() {
+        let toml = r#"
+[tako]
+assets = ["/tmp/assets"]
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("asset path '/tmp/assets' must be relative to project root")
+        );
+    }
+
+    #[test]
+    fn test_validate_tako_assets_rejects_parent_directory_reference() {
+        let toml = r#"
+[tako]
+assets = ["../shared-assets"]
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("asset path '../shared-assets' must not contain '..'")
+        );
     }
 
     // ==================== Helper Method Tests ====================

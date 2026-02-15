@@ -68,6 +68,8 @@ fn generate_template(app_name: &str, _runtime: &str) -> String {
 # name = "{app_name}"
 # Optional: command to run before each deploy.
 # build = "bun run build"
+# Optional: extra asset folders (relative to project root) merged into deploy public assets.
+# assets = ["assets/shared", "assets/branding"]
 
 # Global environment variables applied to every environment.
 # [vars]
@@ -170,6 +172,10 @@ mod tests {
         assert!(
             rendered.contains("# build = \"bun run build\""),
             "expected optional build command to be commented"
+        );
+        assert!(
+            rendered.contains("# assets = [\"assets/shared\", \"assets/branding\"]"),
+            "expected optional assets list to be commented"
         );
         assert!(
             rendered.contains("# [vars]"),

@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::env::current_dir;
 use std::future::Future;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::app::resolve_app_name;
@@ -215,6 +215,11 @@ async fn run_async(
 
     ensure_artifact_input_ready(&artifact_input_dir)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    merge_configured_asset_roots(&project_dir, &artifact_input_dir, &tako_config.tako.assets)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    if !tako_config.tako.assets.is_empty() {
+        output::success("Merged [tako].assets into deploy public assets");
+    }
     output::success(&format!(
         "Build artifacts: {}",
         artifact_input_dir.display()
@@ -828,6 +833,159 @@ fn ensure_artifact_input_ready(artifact_input_dir: &Path) -> Result<(), String> 
             "Artifact directory {} is empty and must contain build artifacts for deploy.",
             artifact_input_dir.display()
         ));
+    }
+
+    Ok(())
+}
+
+fn merge_configured_asset_roots(
+    project_dir: &Path,
+    artifact_input_dir: &Path,
+    asset_roots: &[String],
+) -> Result<(), String> {
+    if asset_roots.is_empty() {
+        return Ok(());
+    }
+
+    let merge_target_dir = resolve_asset_merge_target_dir(artifact_input_dir)?;
+    std::fs::create_dir_all(&merge_target_dir).map_err(|e| {
+        format!(
+            "Failed to create asset merge target directory {}: {}",
+            merge_target_dir.display(),
+            e
+        )
+    })?;
+
+    for asset_root in asset_roots {
+        let source_dir = resolve_project_asset_root(project_dir, asset_root)?;
+        merge_directory_contents_without_overwrite(&source_dir, &merge_target_dir)?;
+    }
+
+    Ok(())
+}
+
+fn resolve_asset_merge_target_dir(artifact_input_dir: &Path) -> Result<PathBuf, String> {
+    let static_dir = artifact_input_dir.join("static");
+    if static_dir.exists() {
+        if !static_dir.is_dir() {
+            return Err(format!(
+                "Deploy artifact path {} exists but is not a directory",
+                static_dir.display()
+            ));
+        }
+        return Ok(static_dir);
+    }
+
+    let public_dir = artifact_input_dir.join("public");
+    if public_dir.exists() && !public_dir.is_dir() {
+        return Err(format!(
+            "Deploy artifact path {} exists but is not a directory",
+            public_dir.display()
+        ));
+    }
+
+    Ok(public_dir)
+}
+
+fn resolve_project_asset_root(project_dir: &Path, asset_root: &str) -> Result<PathBuf, String> {
+    let trimmed = asset_root.trim();
+    if trimmed.is_empty() {
+        return Err("Configured [tako].assets entry cannot be empty".to_string());
+    }
+
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(format!(
+            "Configured [tako].assets entry '{}' must be relative to project root",
+            asset_root
+        ));
+    }
+
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!(
+            "Configured [tako].assets entry '{}' must not contain '..'",
+            asset_root
+        ));
+    }
+
+    let source_dir = project_dir.join(path);
+    if !source_dir.exists() {
+        return Err(format!(
+            "Configured asset directory '{}' does not exist under {}",
+            asset_root,
+            project_dir.display()
+        ));
+    }
+    if !source_dir.is_dir() {
+        return Err(format!(
+            "Configured asset path '{}' is not a directory",
+            asset_root
+        ));
+    }
+
+    Ok(source_dir)
+}
+
+fn merge_directory_contents_without_overwrite(
+    source_dir: &Path,
+    dest_dir: &Path,
+) -> Result<(), String> {
+    let entries = std::fs::read_dir(source_dir).map_err(|e| {
+        format!(
+            "Failed to read source asset directory {}: {}",
+            source_dir.display(),
+            e
+        )
+    })?;
+
+    for entry in entries {
+        let entry = entry.map_err(|e| {
+            format!(
+                "Failed to read entry in source asset directory {}: {}",
+                source_dir.display(),
+                e
+            )
+        })?;
+        let source_path = entry.path();
+        let dest_path = dest_dir.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|e| {
+            format!(
+                "Failed to inspect source asset path {}: {}",
+                source_path.display(),
+                e
+            )
+        })?;
+
+        if file_type.is_dir() {
+            std::fs::create_dir_all(&dest_path).map_err(|e| {
+                format!(
+                    "Failed to create destination asset directory {}: {}",
+                    dest_path.display(),
+                    e
+                )
+            })?;
+            merge_directory_contents_without_overwrite(&source_path, &dest_path)?;
+        } else if file_type.is_file() {
+            if dest_path.exists() {
+                continue;
+            }
+            std::fs::copy(&source_path, &dest_path).map_err(|e| {
+                format!(
+                    "Failed to copy asset file {} to {}: {}",
+                    source_path.display(),
+                    dest_path.display(),
+                    e
+                )
+            })?;
+        } else if file_type.is_symlink() {
+            return Err(format!(
+                "Configured assets cannot contain symbolic links: {}",
+                source_path.display()
+            ));
+        }
     }
 
     Ok(())
@@ -2244,6 +2402,73 @@ mod tests {
         std::fs::create_dir_all(artifact_dir.join("sub")).unwrap();
         std::fs::write(artifact_dir.join("sub/index.js"), "ok").unwrap();
         ensure_artifact_input_ready(&artifact_dir).expect("build artifacts should be accepted");
+    }
+
+    #[test]
+    fn merge_configured_asset_roots_merges_into_static_without_overwriting_existing_files() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("project");
+        let artifact_dir = project_dir.join(".tako/artifacts/app");
+        let static_dir = artifact_dir.join("static");
+
+        std::fs::create_dir_all(project_dir.join("assets/icons")).unwrap();
+        std::fs::create_dir_all(&static_dir).unwrap();
+
+        std::fs::write(project_dir.join("assets/logo.svg"), "from-assets").unwrap();
+        std::fs::write(project_dir.join("assets/icons/app.svg"), "nested-asset").unwrap();
+        std::fs::write(static_dir.join("logo.svg"), "existing-client").unwrap();
+
+        merge_configured_asset_roots(&project_dir, &artifact_dir, &["assets".to_string()]).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(static_dir.join("logo.svg")).unwrap(),
+            "existing-client"
+        );
+        assert_eq!(
+            std::fs::read_to_string(static_dir.join("icons/app.svg")).unwrap(),
+            "nested-asset"
+        );
+    }
+
+    #[test]
+    fn merge_configured_asset_roots_falls_back_to_public_dir_when_static_missing() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("project");
+        let artifact_dir = project_dir.join(".tako/artifacts/app");
+        let public_dir = artifact_dir.join("public");
+
+        std::fs::create_dir_all(project_dir.join("shared-assets")).unwrap();
+        std::fs::create_dir_all(&public_dir).unwrap();
+        std::fs::write(
+            project_dir.join("shared-assets/robots.txt"),
+            "User-agent: *",
+        )
+        .unwrap();
+
+        merge_configured_asset_roots(&project_dir, &artifact_dir, &["shared-assets".to_string()])
+            .unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(public_dir.join("robots.txt")).unwrap(),
+            "User-agent: *"
+        );
+    }
+
+    #[test]
+    fn merge_configured_asset_roots_errors_when_source_directory_is_missing() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("project");
+        let artifact_dir = project_dir.join(".tako/artifacts/app");
+        std::fs::create_dir_all(artifact_dir.join("static")).unwrap();
+
+        let err = merge_configured_asset_roots(
+            &project_dir,
+            &artifact_dir,
+            &["missing-assets".to_string()],
+        )
+        .unwrap_err();
+        assert!(err.contains("does not exist"));
+        assert!(err.contains("missing-assets"));
     }
 
     #[test]

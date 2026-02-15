@@ -43,6 +43,7 @@ Application configuration for build, variables, routes, and deployment.
 [tako]
 name = "my-app"           # Optional - auto-detected if omitted; once set, treat as stable and do not change
 build = "bun build"       # Optional - uses runtime default if omitted
+assets = ["assets/shared", "assets/branding"] # Optional - extra asset directories merged into deploy public assets
 
 [vars]
 LOG_LEVEL = "info"        # Base variables (all environments)
@@ -81,6 +82,14 @@ env = "production"
 1. `[vars]` - base
 2. `[vars.{environment}]` - environment-specific
 3. Auto-set by Tako: `ENV={environment}`, `TAKO_BUILD={version}`
+
+**Asset merge behavior:**
+
+- `[tako].assets` is optional and must be an array of relative directory paths under the project root.
+- During `tako deploy`, these directories are merged into deploy public assets:
+  - `.tako/artifacts/app/static` when that directory exists
+  - otherwise `.tako/artifacts/app/public`
+- Existing artifact files win on path conflicts (configured asset roots do not overwrite existing files).
 
 **Instance behavior:**
 
@@ -202,7 +211,7 @@ Template behavior:
 - Leaves only minimal starter options uncommented:
   - `[envs.production].route`
 - Includes commented examples/explanations for all supported `tako.toml` options:
-  - `[tako].name` and `[tako].build`
+  - `[tako].name`, `[tako].build`, and `[tako].assets`
   - `[vars]`
   - `[vars.<env>]`
   - `[envs.<env>].routes` and inline env vars
@@ -570,6 +579,7 @@ Deploy flow helpers:
 - Deploy artifact source is always `.tako/artifacts/app`.
 - If a runtime build command is detected, it must write deployable files into `.tako/artifacts/app`.
 - If no build command is detected, `.tako/artifacts/app` must already contain prebuilt deployable files.
+- If `[tako].assets` is configured, each listed directory is merged into `.tako/artifacts/app/static` (or `.tako/artifacts/app/public` when `static/` is absent) before packaging.
 - Deploy fails before upload when `.tako/artifacts/app` is missing or empty.
 - Archive payload always includes:
   - `artifacts/` directory (copied build output)
