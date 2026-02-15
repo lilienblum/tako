@@ -280,7 +280,12 @@ pub async fn upload_via_scp(
 
     let remote_target = format!("tako@{}:{}", remote_host, remote_path);
     let identity_file = find_ssh_identity_file(keys_dir);
-    let args = build_scp_args(local_path, remote_port, &remote_target, identity_file.as_deref());
+    let args = build_scp_args(
+        local_path,
+        remote_port,
+        &remote_target,
+        identity_file.as_deref(),
+    );
 
     let output = Command::new("scp").args(args).output().await?;
 
@@ -370,7 +375,12 @@ mod tests {
     fn includes_identity_args_when_identity_file_is_present() {
         let local = Path::new("/tmp/archive.tar.gz");
         let identity = Path::new("/tmp/.ssh/id_ed25519");
-        let args = build_scp_args(local, 22, "tako@server1:/remote/release.tar.gz", Some(identity));
+        let args = build_scp_args(
+            local,
+            22,
+            "tako@server1:/remote/release.tar.gz",
+            Some(identity),
+        );
 
         let args_as_strings: Vec<String> = args
             .iter()

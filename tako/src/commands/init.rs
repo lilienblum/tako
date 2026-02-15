@@ -138,7 +138,8 @@ mod tests {
             "expected tako section to be optional/commented by default"
         );
         assert!(
-            rendered.contains("# Stable app identifier used for deploy paths and local dev hostnames."),
+            rendered
+                .contains("# Stable app identifier used for deploy paths and local dev hostnames."),
             "expected template to explain app name identity semantics"
         );
         assert!(
