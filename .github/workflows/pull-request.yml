@@ -75,6 +75,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-e2e-cargo-home-
 
+      - name: Cache E2E Cargo target
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.E2E_CARGO_TARGET_DIR }}
+          key: ${{ runner.os }}-e2e-cargo-target-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-e2e-cargo-target-
+
       - name: Run E2E suites
         run: |
           set -euo pipefail
