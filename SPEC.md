@@ -488,13 +488,16 @@ Shows which secrets exist in which environments. Warns about missing secrets. Ne
 
 Alias: `tako secrets list`.
 
-### tako secrets sync
+### tako secrets sync [--env {environment}]
 
-Sync all local secrets to all environments.
+Sync local secrets to servers.
 
 Source of truth: local `.tako/secrets`.
 
-For each environment, sync decrypts with `~/.tako/keys/{env}`.
+By default, sync processes all environments declared in `tako.toml`.
+When `--env` is provided, sync processes only that environment.
+
+For each target environment, sync decrypts with `~/.tako/keys/{env}`.
 
 Sync flow helpers:
 

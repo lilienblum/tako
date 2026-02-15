@@ -45,7 +45,7 @@ Directory selection is command-scoped:
 `tako servers add`:
 
 ```bash
-tako servers add [HOST] [--name <NAME>] [--description <TEXT>] [--port <PORT>]
+tako servers add [HOST] [--name <NAME>] [--description <TEXT>] [--port <PORT>] [--no-test]
 ```
 
 `tako servers rm`:
@@ -90,7 +90,8 @@ Notes:
   - If `HOST` is omitted, Tako launches an interactive setup wizard.
   - If `HOST` is provided, `--name` is required.
   - `--port` defaults to `22`.
-  - Tests SSH connection before adding and connects as user `tako`.
+  - By default, tests SSH connection before adding and connects as user `tako`.
+  - `--no-test` skips SSH checks and target detection.
 - `tako servers rm` aliases: `remove`, `delete`.
 - `tako servers ls` alias: `list`.
 - `tako servers status` prints a single global deployment/runtime snapshot across configured servers.
@@ -141,6 +142,9 @@ Notes:
   - without `--env`: removes from all environments.
 - `tako secrets ls` alias: `list`.
 - `tako secrets rm` aliases: `remove`, `delete`.
+- `tako secrets sync`:
+  - with `--env`: syncs only that environment.
+  - without `--env`: syncs all environments declared in `tako.toml`.
 - `tako secrets key import/export` default to `production` when `--env` is omitted.
 
 ## Common Examples

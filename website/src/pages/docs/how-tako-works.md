@@ -71,7 +71,7 @@ High-level deploy flow:
 
 1. Validate config/runtime/secrets.
 2. Build locally.
-3. Create a release archive (`.tako/build/{version}.tar.gz`).
+3. Create a release archive (`.tako/artifacts/{version}.tar.gz`).
 4. Deploy to target servers in parallel over SSH.
 5. On each server: lock, upload/extract, apply env/secrets, rolling update, unlock.
 
