@@ -16,6 +16,14 @@ Instructions for AI agents working on the Tako codebase.
 
 6. **Keep README files in sync for touched components** - When code changes setup, commands, or run/test flow, update the relevant README.md files. README content should stay basic and practical (what it is, how to run), not a specification.
 
+7. **Keep SPEC-derived website docs in sync** - The following docs are agent-maintained outputs derived from `SPEC.md` and must be updated whenever `SPEC.md` behavior changes:
+   - `website/src/pages/docs/how-tako-works.md`
+   - `website/src/pages/docs/tako-toml.md`
+   - `website/src/pages/docs/troubleshooting.md`
+   - `website/src/pages/docs/cli.md`
+   - `website/src/pages/docs/deployment.md`
+   - `website/src/pages/docs/development.md`
+
 ## Project Structure
 
 **Rust Crates:**
@@ -125,9 +133,16 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
 
 1. Ensure all applicable tests pass (Rust crates and SDK; website has no test requirement)
 2. Update SPEC.md if user-facing behavior changed
-3. Update affected README.md files if setup/usage/run commands changed
-4. Close or update the related issue/task entry
-5. Keep implementation details OUT of SPEC.md (focus on what users see/do)
+3. If `SPEC.md` changed, regenerate/sync SPEC-derived website docs:
+   - `website/src/pages/docs/how-tako-works.md`
+   - `website/src/pages/docs/tako-toml.md`
+   - `website/src/pages/docs/troubleshooting.md`
+   - `website/src/pages/docs/cli.md`
+   - `website/src/pages/docs/deployment.md`
+   - `website/src/pages/docs/development.md`
+4. Update affected README.md files if setup/usage/run commands changed
+5. Close or update the related issue/task entry
+6. Keep implementation details OUT of SPEC.md (focus on what users see/do)
 
 ### Example Changes
 
@@ -198,6 +213,13 @@ Integration tests in `{crate}/tests/` directory for command-level behavior.
 ## Documentation Standards
 
 - SPEC.md: High-level, user-focused, finalized behavior with examples
+- SPEC-derived website docs (auto-maintained by agent): keep these aligned with SPEC.md after every behavior change:
+  - `website/src/pages/docs/how-tako-works.md`
+  - `website/src/pages/docs/tako-toml.md`
+  - `website/src/pages/docs/troubleshooting.md`
+  - `website/src/pages/docs/cli.md`
+  - `website/src/pages/docs/deployment.md`
+  - `website/src/pages/docs/development.md`
 - README.md files: Basic orientation and practical usage (`what this is`, `how to run/test`). Keep concise and non-normative.
 - Planning/issues: Track planned work in the issue tracker or release notes; do not add in-repo TODO files
 - Code comments: Only where logic isn't self-evident
