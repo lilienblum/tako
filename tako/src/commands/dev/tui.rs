@@ -2,7 +2,7 @@
 //!
 //! Interactive dashboard for `tako dev`.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::io::{self, Stdout};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -288,6 +288,49 @@ fn parse_control_clients_from_info(info: &serde_json::Value) -> Option<u32> {
         .and_then(|v| v.get("control_clients"))
         .and_then(|v| v.as_u64())
         .and_then(|v| u32::try_from(v).ok())
+}
+
+fn collect_process_tree_pids(processes: &[(Pid, Option<Pid>)], root: Pid) -> Vec<Pid> {
+    let mut out = Vec::new();
+    let mut stack = vec![root];
+    let mut seen = HashSet::new();
+
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        out.push(pid);
+
+        for (candidate_pid, parent_pid) in processes {
+            if *parent_pid == Some(pid) {
+                stack.push(*candidate_pid);
+            }
+        }
+    }
+
+    out
+}
+
+fn process_tree_metrics(sys: &System, root: Pid) -> Option<(f32, u64)> {
+    sys.process(root)?;
+
+    let process_index = sys
+        .processes()
+        .iter()
+        .map(|(pid, process)| (*pid, process.parent()))
+        .collect::<Vec<_>>();
+    let tree_pids = collect_process_tree_pids(&process_index, root);
+
+    let mut cpu = 0.0_f32;
+    let mut mem = 0_u64;
+    for pid in tree_pids {
+        if let Some(process) = sys.process(pid) {
+            cpu += process.cpu_usage();
+            mem = mem.saturating_add(process.memory());
+        }
+    }
+
+    Some((cpu, mem))
 }
 
 fn right_aligned_metric_row(
@@ -1728,17 +1771,14 @@ pub async fn run_dev_tui(
                 state.clear_expired_status();
                 state.clear_expired_flash();
 
-                // Refresh CPU/memory metrics (only for the processes we care about).
-                if let Some(app_pid) = state.app_pid {
-                    sys.refresh_processes(ProcessesToUpdate::Some(&[app_pid]), false);
-                } else {
-                    sys.refresh_processes(ProcessesToUpdate::All, false);
-                }
+                // Refresh CPU/memory metrics for the app process tree so wrapper
+                // launchers (for example `bun run dev`) don't under-report usage.
+                sys.refresh_processes(ProcessesToUpdate::All, false);
 
                 if let Some(app_pid) = state.app_pid {
-                    if let Some(proc) = sys.process(app_pid) {
-                        state.metrics.app_cpu = Some(proc.cpu_usage());
-                        state.metrics.app_mem_bytes = Some(proc.memory());
+                    if let Some((cpu, mem)) = process_tree_metrics(&sys, app_pid) {
+                        state.metrics.app_cpu = Some(cpu);
+                        state.metrics.app_mem_bytes = Some(mem);
                     } else {
                         state.metrics.app_cpu = None;
                         state.metrics.app_mem_bytes = None;
@@ -2354,6 +2394,40 @@ mod tests {
     use super::*;
     use ratatui::buffer::Buffer;
     use ratatui::widgets::Widget;
+
+    #[test]
+    fn collect_process_tree_pids_includes_descendants() {
+        let root = Pid::from_u32(10);
+        let child = Pid::from_u32(11);
+        let grandchild = Pid::from_u32(12);
+        let unrelated = Pid::from_u32(99);
+
+        let got = collect_process_tree_pids(
+            &[
+                (root, None),
+                (child, Some(root)),
+                (grandchild, Some(child)),
+                (unrelated, None),
+            ],
+            root,
+        );
+
+        assert!(got.contains(&root));
+        assert!(got.contains(&child));
+        assert!(got.contains(&grandchild));
+        assert!(!got.contains(&unrelated));
+    }
+
+    #[test]
+    fn collect_process_tree_pids_handles_parent_cycle() {
+        let root = Pid::from_u32(1);
+        let child = Pid::from_u32(2);
+
+        let got = collect_process_tree_pids(&[(root, Some(child)), (child, Some(root))], root);
+        assert_eq!(got.len(), 2);
+        assert!(got.contains(&root));
+        assert!(got.contains(&child));
+    }
 
     #[test]
     fn default_theme_uses_tako_brand_palette() {
