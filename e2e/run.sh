@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FIXTURE=${1:-e2e/js/tanstack-start}
+FIXTURE=${1:-e2e/fixtures/js/tanstack-start}
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 COMPOSE_FILE="$REPO_ROOT/e2e/docker/compose.yml"
 PROJECT_NAME="tako-e2e"

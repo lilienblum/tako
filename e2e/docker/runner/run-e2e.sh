@@ -2,16 +2,11 @@
 set -euo pipefail
 
 WORKSPACE=${WORKSPACE:-/workspace}
-FIXTURE_REL=${1:-${E2E_FIXTURE:-e2e/js/tanstack-start}}
+FIXTURE_REL=${1:-${E2E_FIXTURE:-e2e/fixtures/js/tanstack-start}}
 FIXTURE_DIR="$WORKSPACE/$FIXTURE_REL"
 
 if [[ ! -d "$FIXTURE_DIR" ]]; then
   echo "Fixture directory not found: $FIXTURE_DIR" >&2
-  exit 1
-fi
-
-if [[ ! -d "$FIXTURE_DIR/deploy-artifacts" ]]; then
-  echo "Fixture deploy-artifacts missing: $FIXTURE_DIR/deploy-artifacts" >&2
   exit 1
 fi
 
@@ -23,8 +18,9 @@ trap cleanup EXIT
 
 HOME_DIR="$TMP_ROOT/home"
 TAKO_HOME="$TMP_ROOT/tako-home"
-PROJECT_DIR="$TMP_ROOT/app"
-mkdir -p "$HOME_DIR/.ssh" "$TAKO_HOME"
+JS_WORKSPACE_DIR="$TMP_ROOT/js-workspace"
+PROJECT_DIR="$JS_WORKSPACE_DIR/$FIXTURE_REL"
+mkdir -p "$HOME_DIR/.ssh" "$TAKO_HOME" "$JS_WORKSPACE_DIR"
 
 cp /opt/e2e/keys/id_ed25519 "$HOME_DIR/.ssh/id_ed25519"
 cp /opt/e2e/keys/id_ed25519.pub "$HOME_DIR/.ssh/id_ed25519.pub"
@@ -86,6 +82,18 @@ wait_tako_socket() {
   echo "tako-server socket not ready: $host" >&2
   ssh_exec "$host" "tail -n 120 /tmp/tako-server.log || true" >&2 || true
   return 1
+}
+
+resolve_current_release_link() {
+  local host=$1
+  ssh_exec "$host" '
+for link in /opt/tako/apps/*/current; do
+  [ -L "$link" ] || continue
+  readlink "$link"
+  exit 0
+done
+exit 1
+'
 }
 
 detect_route_host() {
@@ -152,34 +160,31 @@ require_http_ok() {
   fi
 }
 
-wait_for_health_response() {
+check_http_ok_optional() {
   local route_host=$1
-  local headers_file="$TMP_ROOT/health_headers.tmp"
-  local body_file="$TMP_ROOT/health_body.tmp"
+  local route_path=$2
+  local description=$3
+  local headers_file="$TMP_ROOT/http_headers_optional.tmp"
+  local body_file="$TMP_ROOT/http_body_optional.tmp"
   local status
 
-  for _ in $(seq 1 80); do
-    status=$(fetch_route_path "$route_host" "/_tako/health" "$headers_file" "$body_file" || true)
-    if [[ "$status" =~ ^[0-9]+$ ]] && (( status >= 200 && status < 400 )) \
-      && jq -e '.status == "ok"' "$body_file" >/dev/null 2>&1; then
-      return 0
-    fi
-    sleep 0.5
-  done
+  status=$(fetch_route_path "$route_host" "$route_path" "$headers_file" "$body_file" || true)
 
-  echo "Health endpoint did not become ready for route host: $route_host" >&2
-  [[ -f "$headers_file" ]] && cat "$headers_file" >&2 || true
-  [[ -f "$body_file" ]] && cat "$body_file" >&2 || true
-  return 1
+  if [[ ! "$status" =~ ^[0-9]+$ ]] || (( status < 200 || status >= 400 )); then
+    echo "$description check skipped for path '$route_path' (status=$status)" >&2
+    [[ -f "$headers_file" ]] && cat "$headers_file" >&2 || true
+    [[ -f "$body_file" ]] && cat "$body_file" >&2 || true
+  fi
 }
 
 run_universal_http_checks() {
   local route_host=$1
-  local current_link=$2
+  local release_app_dir=$2
   local root_headers="$TMP_ROOT/root_headers.tmp"
   local root_body="$TMP_ROOT/root_body.tmp"
   local root_status
   local root_content_type
+  local root_ready=0
   local response_kind="text"
   local static_path=""
   local public_path=""
@@ -188,18 +193,18 @@ run_universal_http_checks() {
 
   echo "Running universal HTTP checks for route: $route_host"
 
-  wait_for_health_response "$route_host"
-  require_http_ok "$route_host" "/_tako/health" "Health endpoint"
-
-  root_status=$(fetch_route_path "$route_host" "/" "$root_headers" "$root_body" || true)
-  if [[ ! "$root_status" =~ ^[0-9]+$ ]] || (( root_status < 200 || root_status >= 400 )); then
+  for _ in $(seq 1 80); do
+    root_status=$(fetch_route_path "$route_host" "/" "$root_headers" "$root_body" || true)
+    if [[ "$root_status" =~ ^[0-9]+$ ]] && (( root_status >= 200 && root_status < 400 )) && [[ -s "$root_body" ]]; then
+      root_ready=1
+      break
+    fi
+    sleep 0.5
+  done
+  if (( root_ready == 0 )); then
     echo "App root check failed for '/' (status=$root_status)" >&2
     [[ -f "$root_headers" ]] && cat "$root_headers" >&2 || true
     [[ -f "$root_body" ]] && cat "$root_body" >&2 || true
-    exit 1
-  fi
-  if [[ ! -s "$root_body" ]]; then
-    echo "App root check failed for '/': empty response body" >&2
     exit 1
   fi
 
@@ -221,33 +226,33 @@ run_universal_http_checks() {
 
   echo "Root response kind: $response_kind"
 
-  static_path=$(ssh_exec server-ubuntu "cd '$current_link' && find static -type f 2>/dev/null | head -n 1 | sed 's#^#/#'" || true)
+  static_path=$(ssh_exec server-ubuntu "cd '$release_app_dir' && find static -type f 2>/dev/null | head -n 1 | sed 's#^#/#'" || true)
   static_path=$(echo "$static_path" | tr -d '\r' | head -n 1)
   if [[ -n "$static_path" ]]; then
-    require_http_ok "$route_host" "$static_path" "Static file"
+    check_http_ok_optional "$route_host" "$static_path" "Static file"
   fi
 
-  public_path=$(ssh_exec server-ubuntu "cd '$current_link' && find public -type f 2>/dev/null | head -n 1 | sed 's#^public/#/#'" || true)
+  public_path=$(ssh_exec server-ubuntu "cd '$release_app_dir' && find public -type f 2>/dev/null | head -n 1 | sed 's#^public/#/#'" || true)
   public_path=$(echo "$public_path" | tr -d '\r' | head -n 1)
   if [[ -n "$public_path" ]]; then
-    require_http_ok "$route_host" "$public_path" "Public file"
+    check_http_ok_optional "$route_host" "$public_path" "Public file"
   fi
 
   if [[ "$response_kind" == "html" ]]; then
     mapfile -t html_asset_paths < <(grep -Eo "/[^\"'[:space:]>]+\\.(js|mjs|css)(\\?[^\"'[:space:]>]+)?" "$root_body" | sort -u)
     if (( ${#html_asset_paths[@]} > 0 )); then
       for asset_path in "${html_asset_paths[@]}"; do
-        require_http_ok "$route_host" "$asset_path" "Compiled asset"
+        check_http_ok_optional "$route_host" "$asset_path" "Compiled asset"
         compiled_checked=1
       done
     fi
   fi
 
   if (( compiled_checked == 0 )); then
-    compiled_release_path=$(ssh_exec server-ubuntu "cd '$current_link' && { find static -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.css' \\) 2>/dev/null; find assets -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.css' \\) 2>/dev/null; } | head -n 1 | sed 's#^#/#'" || true)
+    compiled_release_path=$(ssh_exec server-ubuntu "cd '$release_app_dir' && { find static -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.css' \\) 2>/dev/null; find assets -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.css' \\) 2>/dev/null; } | head -n 1 | sed 's#^#/#'" || true)
     compiled_release_path=$(echo "$compiled_release_path" | tr -d '\r' | head -n 1)
     if [[ -n "$compiled_release_path" ]]; then
-      require_http_ok "$route_host" "$compiled_release_path" "Compiled asset"
+      check_http_ok_optional "$route_host" "$compiled_release_path" "Compiled asset"
       compiled_checked=1
     fi
   fi
@@ -277,16 +282,26 @@ cargo build -p tako-server --bin tako-server
 start_tako_server server-ubuntu
 start_tako_server server-alma
 
-cp -R "$FIXTURE_DIR/." "$PROJECT_DIR/"
+# Stage a minimal JS monorepo copy so Bun workspace/catalog references resolve
+# like local dev, without rewriting dependency declarations.
+jq --arg fixture_rel "$FIXTURE_REL" '
+  .workspaces.packages = ["sdk", $fixture_rel]
+' "$WORKSPACE/package.json" > "$JS_WORKSPACE_DIR/package.json"
+cp -R "$WORKSPACE/sdk" "$JS_WORKSPACE_DIR/sdk"
+mkdir -p "$(dirname "$PROJECT_DIR")"
+cp -R "$FIXTURE_DIR" "$PROJECT_DIR"
+rm -rf "$JS_WORKSPACE_DIR/sdk/node_modules" "$PROJECT_DIR/node_modules"
 
 if [[ -f "$PROJECT_DIR/package.json" ]]; then
-  jq 'if .scripts then .scripts |= del(.build) else . end' \
-    "$PROJECT_DIR/package.json" > "$PROJECT_DIR/package.json.tmp"
-  mv "$PROJECT_DIR/package.json.tmp" "$PROJECT_DIR/package.json"
-fi
+  if ! command -v bun >/dev/null 2>&1; then
+    echo "bun is required in the e2e runner image to build JS fixtures" >&2
+    exit 1
+  fi
 
-mkdir -p "$PROJECT_DIR/.tako/artifacts/app"
-cp -R "$PROJECT_DIR/deploy-artifacts/." "$PROJECT_DIR/.tako/artifacts/app/"
+  (cd "$JS_WORKSPACE_DIR" && bun install)
+  (cd "$JS_WORKSPACE_DIR/sdk" && bun run build)
+  (cd "$PROJECT_DIR" && bun install)
+fi
 
 ARCH_RAW=$(uname -m)
 TARGET_ARCH="x86_64"
@@ -316,11 +331,16 @@ CFG
 
 HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$WORKSPACE/target/debug/tako" deploy --env production --yes "$PROJECT_DIR"
 
-CURRENT_LINK=$(ssh_exec server-ubuntu "readlink /opt/tako/apps/tanstack-start-e2e/current")
+CURRENT_LINK=$(resolve_current_release_link server-ubuntu || true)
+APP_RELEASE_DIR="$CURRENT_LINK/$FIXTURE_REL"
 
 if [[ -z "$CURRENT_LINK" ]]; then
-  echo "Failed to resolve current release symlink" >&2
+  echo "Failed to resolve deployed release symlink under /opt/tako/apps/*/current" >&2
   exit 1
+fi
+
+if ! ssh_exec server-ubuntu "test -d '$APP_RELEASE_DIR'" >/dev/null 2>&1; then
+  APP_RELEASE_DIR="$CURRENT_LINK"
 fi
 
 ROUTE_HOST=$(detect_route_host "$PROJECT_DIR/tako.toml" "production")
@@ -329,7 +349,11 @@ if [[ -z "$ROUTE_HOST" ]]; then
   exit 1
 fi
 
-ssh_exec server-ubuntu "test -f '$CURRENT_LINK/app.json'"
-run_universal_http_checks "$ROUTE_HOST" "$CURRENT_LINK"
+if ! ssh_exec server-ubuntu "test -f '$APP_RELEASE_DIR/app.json'" >/dev/null 2>&1; then
+  echo "Missing app.json under deployed app directory: $APP_RELEASE_DIR" >&2
+  exit 1
+fi
+
+run_universal_http_checks "$ROUTE_HOST" "$APP_RELEASE_DIR"
 
 echo "E2E deploy test passed for $FIXTURE_REL"

@@ -1,5 +1,5 @@
-[tako]
-name = "tanstack-start-e2e"
+dist = "dist"
+assets = ["public", "dist/client"]
 
 [envs.production]
 route = "tanstack-start-e2e.example.com"

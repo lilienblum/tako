@@ -4,12 +4,17 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     openssh-client \
     curl \
+    unzip \
     jq \
     cmake \
     pkg-config \
     ca-certificates \
     git \
   && rm -rf /var/lib/apt/lists/*
+
+ENV BUN_INSTALL=/root/.bun
+RUN curl -fsSL https://bun.sh/install | bash \
+  && ln -s "${BUN_INSTALL}/bin/bun" /usr/local/bin/bun
 
 WORKDIR /workspace
 

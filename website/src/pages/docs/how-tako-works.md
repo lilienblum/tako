@@ -38,7 +38,7 @@ Key config rules:
 - Route values must include a hostname.
 - Development routes must be `{app}.tako.local` or a subdomain of it.
 
-See full config details in [`tako.toml` Reference](/docs/tako-toml-reference).
+See full config details in [`tako.toml` Reference](/docs/tako-tom).
 
 ## Local Development (`tako dev`)
 

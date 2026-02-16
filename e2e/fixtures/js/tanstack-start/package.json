@@ -1,0 +1,30 @@
+{
+  "name": "tanstack-start-e2e",
+  "private": true,
+  "type": "module",
+  "sideEffects": false,
+  "main": "src/server.ts",
+  "scripts": {
+    "dev": "vite dev",
+    "build": "vite build && tsc --noEmit",
+    "preview": "vite preview",
+    "start": "vite preview"
+  },
+  "dependencies": {
+    "@tanstack/react-router": "catalog:web",
+    "@tanstack/react-start": "catalog:web",
+    "react": "catalog:web",
+    "react-dom": "catalog:web",
+    "tako.sh": "workspace:*"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "catalog:web",
+    "@types/node": "catalog:dev",
+    "@types/react": "catalog:web",
+    "@types/react-dom": "catalog:web",
+    "@vitejs/plugin-react": "catalog:web",
+    "tailwindcss": "catalog:web",
+    "typescript": "catalog:dev",
+    "vite": "catalog:web"
+  }
+}

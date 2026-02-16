@@ -1,0 +1,5 @@
+[envs.production]
+route = "bun-e2e.example.com"
+
+[servers.ssh]
+env = "production"

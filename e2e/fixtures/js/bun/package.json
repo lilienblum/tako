@@ -1,0 +1,9 @@
+{
+  "name": "bun-e2e",
+  "private": true,
+  "type": "module",
+  "main": "src/app.ts",
+  "dependencies": {
+    "tako.sh": "workspace:*"
+  }
+}

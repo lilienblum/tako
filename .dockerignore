@@ -1,12 +1,6 @@
 .git
-target
-debug
-.ruff_cache
-
-node_modules
-**/node_modules
-
-website/dist
-sdk/dist
-
+target/
+debug/
+node_modules/
+dist/
 *.log

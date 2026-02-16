@@ -1,8 +1,0 @@
-{
-  "name": "tanstack-start-e2e-release",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "dev": "bun run index.ts"
-  }
-}

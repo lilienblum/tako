@@ -41,6 +41,8 @@ bun install
 git config core.hooksPath .githooks
 cargo build
 cargo test --workspace
+# Full matrix: Rust workspace + SDK tests + Docker e2e fixture test
+just test
 ```
 
 Run CLI help from source:
@@ -61,6 +63,18 @@ Format Rust + repo files:
 just fmt
 ```
 
+Run lint checks:
+
+```bash
+just lint
+```
+
+Run full local CI flow (format, lint, tests):
+
+```bash
+just ci
+```
+
 ## Repo Layout
 
 - `tako/`: CLI crate (`tako`) and local dev daemon binary (`tako-dev-server`)
@@ -76,10 +90,11 @@ just fmt
 
 ## Deploy E2E Fixture Test
 
-Run Docker-based deploy e2e for the TanStack Start fixture:
+Run Docker-based deploy e2e for fixture apps:
 
 ```bash
-just e2e e2e/js/tanstack-start
+just e2e e2e/fixtures/js/bun
+just e2e e2e/fixtures/js/tanstack-start
 ```
 
 ## Docs

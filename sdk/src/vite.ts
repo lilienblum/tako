@@ -210,7 +210,9 @@ export function takoVitePlugin(options: TakoVitePluginOptions = {}): VitePluginL
     generateBundle(_options, bundle) {
       entryChunks = Object.values(bundle)
         .filter((chunk): chunk is ViteOutputChunkLike => {
-          return chunk.type === "chunk" && chunk.isEntry === true && typeof chunk.fileName === "string";
+          return (
+            chunk.type === "chunk" && chunk.isEntry === true && typeof chunk.fileName === "string"
+          );
         })
         .map((chunk) => chunk.fileName)
         .sort();

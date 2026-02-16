@@ -35,13 +35,16 @@ describe("tako Vite plugin metadata", () => {
       root: rootDir,
       build: { outDir: "dist" },
     });
-    plugin.generateBundle?.({}, {
-      "server/index.mjs": {
-        type: "chunk",
-        fileName: "server/index.mjs",
-        isEntry: true,
+    plugin.generateBundle?.(
+      {},
+      {
+        "server/index.mjs": {
+          type: "chunk",
+          fileName: "server/index.mjs",
+          isEntry: true,
+        },
       },
-    });
+    );
     await plugin.closeBundle?.();
 
     const metadata = (await readJson("dist/.tako-vite.json")) as {
@@ -73,18 +76,21 @@ describe("tako Vite plugin metadata", () => {
       root: rootDir,
       build: { outDir: "dist" },
     });
-    plugin.generateBundle?.({}, {
-      "client/index.js": {
-        type: "chunk",
-        fileName: "client/index.js",
-        isEntry: true,
+    plugin.generateBundle?.(
+      {},
+      {
+        "client/index.js": {
+          type: "chunk",
+          fileName: "client/index.js",
+          isEntry: true,
+        },
+        "server/index.mjs": {
+          type: "chunk",
+          fileName: "server/index.mjs",
+          isEntry: true,
+        },
       },
-      "server/index.mjs": {
-        type: "chunk",
-        fileName: "server/index.mjs",
-        isEntry: true,
-      },
-    });
+    );
     await plugin.closeBundle?.();
 
     const metadata = (await readJson("dist/.tako-vite.json")) as {
@@ -102,10 +108,13 @@ describe("tako Vite plugin metadata", () => {
       root: rootDir,
       build: { outDir: "dist" },
     });
-    plugin.generateBundle?.({}, {
-      "entry-a.js": { type: "chunk", fileName: "entry-a.js", isEntry: true },
-      "entry-b.js": { type: "chunk", fileName: "entry-b.js", isEntry: true },
-    });
+    plugin.generateBundle?.(
+      {},
+      {
+        "entry-a.js": { type: "chunk", fileName: "entry-a.js", isEntry: true },
+        "entry-b.js": { type: "chunk", fileName: "entry-b.js", isEntry: true },
+      },
+    );
 
     await expect(plugin.closeBundle?.()).rejects.toThrow(
       "Could not choose a single server entry chunk",
@@ -118,17 +127,18 @@ describe("tako Vite plugin metadata", () => {
       root: rootDir,
       build: { outDir: "dist" },
     });
-    plugin.generateBundle?.({}, {
-      "chunk.js": {
-        type: "chunk",
-        fileName: "chunk.js",
-        isEntry: false,
+    plugin.generateBundle?.(
+      {},
+      {
+        "chunk.js": {
+          type: "chunk",
+          fileName: "chunk.js",
+          isEntry: false,
+        },
       },
-    });
-
-    await expect(plugin.closeBundle?.()).rejects.toThrow(
-      "Could not detect server entry chunk",
     );
+
+    await expect(plugin.closeBundle?.()).rejects.toThrow("Could not detect server entry chunk");
   });
 
   test("fails when closeBundle runs before configResolved", async () => {
@@ -146,13 +156,16 @@ describe("tako Vite plugin metadata", () => {
       root: rootDir,
       build: { outDir: "dist/server" },
     });
-    plugin.generateBundle?.({}, {
-      "server.js": {
-        type: "chunk",
-        fileName: "server.js",
-        isEntry: true,
+    plugin.generateBundle?.(
+      {},
+      {
+        "server.js": {
+          type: "chunk",
+          fileName: "server.js",
+          isEntry: true,
+        },
       },
-    });
+    );
     await plugin.closeBundle?.();
 
     const metadata = (await readJson("dist/.tako-vite.json")) as {

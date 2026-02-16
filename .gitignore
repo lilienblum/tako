@@ -3,6 +3,8 @@ node_modules/
 target/
 debug/
 dist/
+.output/
+.tanstack/
 .astro/
 .tako/
 .e2e-cache/

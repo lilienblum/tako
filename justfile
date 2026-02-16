@@ -11,10 +11,16 @@ fmt:
     cargo fmt
     bun run fmt
 
+lint:
+    cargo clippy --workspace --all-targets
+    cd sdk && bun run typecheck
+
+ci: fmt lint test::all
+
 build-tako-server: run-debug::build-tako-server
 
 create-bun-server: run-debug::create-bun-server
 
 install-bun-server: run-debug::install-bun-server
 
-e2e fixture="e2e/js/tanstack-start": (test::e2e fixture)
+e2e fixture="e2e/fixtures/js/tanstack-start": (test::e2e fixture)

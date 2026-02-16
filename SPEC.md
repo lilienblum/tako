@@ -562,7 +562,7 @@ Deploy flow helpers:
 3. Resolve app subdirectory relative to source bundle root
 4. Resolve fallback runtime `main` (`main` config override, otherwise runtime source entry relative to app directory)
 5. Create source archive (`.tako/artifacts/{version}.tar.gz`) and write fallback `app.json` at app path inside archive
-7. Deploy to all servers in parallel:
+6. Deploy to all servers in parallel:
    - Require `tako-server` to be pre-installed and running on each server
    - Acquire deploy lock (prevents concurrent deploys)
    - Upload and extract archive
@@ -570,10 +570,11 @@ Deploy flow helpers:
    - Run the runtime adapter install command in extracted bundle root (Bun: `bun install --frozen-lockfile`)
    - Run build command in app directory when configured (`tako.toml build`, else runtime default, else skip)
    - Merge configured `assets` into app `public/` (ordered; later entries overwrite earlier ones)
-  - Resolve final runtime `main` (`main` config override, then Vite metadata from `<dist>/.tako-vite.json` resolved under `<dist>`, then fallback runtime source entry)
-   - Write final `app.json` in app directory
-   - Perform rolling update
-   - Release lock and clean up old releases (>30 days)
+
+- Resolve final runtime `main` (`main` config override, then Vite metadata from `<dist>/.tako-vite.json` resolved under `<dist>`, then fallback runtime source entry)
+- Write final `app.json` in app directory
+- Perform rolling update
+- Release lock and clean up old releases (>30 days)
 
 **Version naming:**
 
@@ -837,7 +838,7 @@ email = "admin@example.com"
 | Name              | Used by         | Meaning                                                                    | Typical source                                                                                |
 | ----------------- | --------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `PORT`            | app             | Listen port for HTTP server                                                | Set by `tako-server` when running app instances; set by `tako dev` for the local app process. |
-| `TAKO_ENV`        | app             | Environment name                                                           | Set during deploy manifest generation (`production`, `staging`, etc.).                         |
+| `TAKO_ENV`        | app             | Environment name                                                           | Set during deploy manifest generation (`production`, `staging`, etc.).                        |
 | `NODE_ENV`        | app             | Node.js convention env                                                     | Set by runtime adapter / server (`development` or `production`).                              |
 | `BUN_ENV`         | app             | Bun convention env                                                         | Set by runtime adapter (`development` or `production`).                                       |
 | `TAKO_BUILD`      | app             | Deployed build/version identifier                                          | Written into the release `.env` file during `tako deploy`.                                    |
