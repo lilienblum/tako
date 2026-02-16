@@ -72,6 +72,7 @@ High-level deploy flow:
 1. Validate config/runtime/secrets/server target metadata.
 2. Resolve source bundle root and app subdirectory.
 3. Create a source archive (`.tako/artifacts/{version}.tar.gz`) from filtered source files.
+   - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
 4. Deploy to target servers in parallel over SSH.
 5. On each server: lock, upload/extract, write `.env`, run install/build, merge assets, finalize `app.json`, rolling update, unlock.
 

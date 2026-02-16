@@ -240,43 +240,7 @@ impl BuildExecutor {
         let encoder = GzEncoder::new(file, Compression::default());
         let mut archive = tar::Builder::new(encoder);
 
-        let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
-        let mut walker = ignore::WalkBuilder::new(source_root);
-        walker
-            .hidden(false)
-            .git_ignore(true)
-            .git_global(true)
-            .git_exclude(true)
-            .parents(true)
-            .add_custom_ignore_filename(".takoignore");
-
-        for entry in walker.build() {
-            let entry = entry.map_err(|e| BuildError::ArchiveError(e.to_string()))?;
-            let file_type = match entry.file_type() {
-                Some(file_type) => file_type,
-                None => continue,
-            };
-            if !file_type.is_file() {
-                continue;
-            }
-
-            let path = entry.path();
-            let relative_path = path.strip_prefix(source_root).map_err(|e| {
-                BuildError::ArchiveError(format!(
-                    "Failed to compute relative path for {}: {}",
-                    path.display(),
-                    e
-                ))
-            })?;
-
-            if should_force_exclude_from_source_archive(relative_path) {
-                continue;
-            }
-
-            files.push((path.to_path_buf(), relative_path.to_path_buf()));
-        }
-
-        files.sort_by(|a, b| a.1.cmp(&b.1));
+        let files = collect_source_archive_files(source_root)?;
 
         for (full_path, relative_path) in files {
             archive
@@ -308,6 +272,29 @@ impl BuildExecutor {
 
         let metadata = std::fs::metadata(output_path)?;
         Ok(metadata.len())
+    }
+
+    /// Compute SHA256 hash over filtered source payload (same file selection as source archive).
+    pub fn compute_source_hash(&self, source_root: &Path) -> Result<String, BuildError> {
+        use sha2::{Digest, Sha256};
+
+        let files = collect_source_archive_files(source_root)?;
+        let mut hasher = Sha256::new();
+
+        for (full_path, relative_path) in files {
+            hasher.update(relative_path.to_string_lossy().as_bytes());
+            let mut file = std::fs::File::open(&full_path)?;
+            let mut buffer = [0u8; 8192];
+            loop {
+                let bytes_read = file.read(&mut buffer)?;
+                if bytes_read == 0 {
+                    break;
+                }
+                hasher.update(&buffer[..bytes_read]);
+            }
+        }
+
+        Ok(hex::encode(hasher.finalize()))
     }
 
     fn add_dir_to_archive<W: Write>(
@@ -454,6 +441,47 @@ fn should_force_exclude_from_source_archive(relative_path: &Path) -> bool {
         }
     }
     false
+}
+
+fn collect_source_archive_files(source_root: &Path) -> Result<Vec<(PathBuf, PathBuf)>, BuildError> {
+    let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let mut walker = ignore::WalkBuilder::new(source_root);
+    walker
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .parents(true)
+        .add_custom_ignore_filename(".takoignore");
+
+    for entry in walker.build() {
+        let entry = entry.map_err(|e| BuildError::ArchiveError(e.to_string()))?;
+        let file_type = match entry.file_type() {
+            Some(file_type) => file_type,
+            None => continue,
+        };
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        let relative_path = path.strip_prefix(source_root).map_err(|e| {
+            BuildError::ArchiveError(format!(
+                "Failed to compute relative path for {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        if should_force_exclude_from_source_archive(relative_path) {
+            continue;
+        }
+
+        files.push((path.to_path_buf(), relative_path.to_path_buf()));
+    }
+
+    files.sort_by(|a, b| a.1.cmp(&b.1));
+    Ok(files)
 }
 
 fn collect_files(
@@ -716,6 +744,49 @@ mod tests {
         fs::write(dir.join("a.txt"), "changed").unwrap();
         let hash3 = compute_dir_hash(&dir, &[]).unwrap();
         assert_ne!(hash1, hash3);
+    }
+
+    #[test]
+    fn test_compute_source_hash_matches_source_archive_filters() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        fs::create_dir_all(source.join("src")).unwrap();
+        fs::create_dir_all(source.join("dist")).unwrap();
+        fs::create_dir_all(source.join(".git")).unwrap();
+        fs::create_dir_all(source.join("node_modules/pkg")).unwrap();
+        fs::create_dir_all(source.join("target/debug")).unwrap();
+
+        fs::write(source.join(".gitignore"), "dist/\n").unwrap();
+        fs::write(
+            source.join(".takoignore"),
+            "!dist/\ndist/*\n!dist/keep.txt\n",
+        )
+        .unwrap();
+
+        fs::write(source.join("src/main.ts"), "main-v1").unwrap();
+        fs::write(source.join("dist/keep.txt"), "keep-v1").unwrap();
+        fs::write(source.join("dist/drop.txt"), "drop-v1").unwrap();
+        fs::write(source.join(".env.production"), "secret-v1").unwrap();
+        fs::write(source.join(".git/config"), "git-v1").unwrap();
+        fs::write(source.join("node_modules/pkg/index.js"), "pkg-v1").unwrap();
+        fs::write(source.join("target/debug/out.txt"), "out-v1").unwrap();
+
+        let executor = BuildExecutor::new(&source);
+        let hash1 = executor.compute_source_hash(&source).unwrap();
+
+        // Changes to excluded files should not change the source hash.
+        fs::write(source.join("dist/drop.txt"), "drop-v2").unwrap();
+        fs::write(source.join(".env.production"), "secret-v2").unwrap();
+        fs::write(source.join(".git/config"), "git-v2").unwrap();
+        fs::write(source.join("node_modules/pkg/index.js"), "pkg-v2").unwrap();
+        fs::write(source.join("target/debug/out.txt"), "out-v2").unwrap();
+        let hash2 = executor.compute_source_hash(&source).unwrap();
+        assert_eq!(hash1, hash2);
+
+        // Changes to included files should change the source hash.
+        fs::write(source.join("dist/keep.txt"), "keep-v2").unwrap();
+        let hash3 = executor.compute_source_hash(&source).unwrap();
+        assert_ne!(hash2, hash3);
     }
 
     #[test]

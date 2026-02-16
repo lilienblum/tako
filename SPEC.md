@@ -562,6 +562,7 @@ Deploy flow helpers:
 3. Resolve app subdirectory relative to source bundle root
 4. Resolve fallback runtime `main` (`main` config override, otherwise runtime source entry relative to app directory)
 5. Create source archive (`.tako/artifacts/{version}.tar.gz`) and write fallback `app.json` at app path inside archive
+   - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
 6. Deploy to all servers in parallel:
    - Require `tako-server` to be pre-installed and running on each server
    - Acquire deploy lock (prevents concurrent deploys)

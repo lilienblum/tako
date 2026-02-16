@@ -24,6 +24,7 @@ What happens during deploy:
 - Source filtering uses `.gitignore` with `.takoignore` overrides.
 - Non-overridable excludes: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
 - A versioned tarball is created under `.tako/artifacts/`.
+- Deploy version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
 - Deploys run to all target servers in parallel.
 - On each server, Tako writes `.env`, runs install/build, merges configured assets, resolves runtime `main`, writes final `app.json`, then performs rolling update.
 - Each server is handled independently, so partial success is possible.

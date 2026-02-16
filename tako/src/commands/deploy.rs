@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
 use crate::app::resolve_app_name;
-use crate::build::{BuildCache, BuildExecutor};
+use crate::build::{BuildCache, BuildError, BuildExecutor};
 use crate::commands::server;
 use crate::config::{SecretsStore, ServerEntry, ServerTarget, ServersToml, TakoToml};
 use crate::output;
@@ -248,7 +248,7 @@ async fn run_async(
     }
 
     // Generate version string
-    let version = executor.generate_version(None)?;
+    let version = resolve_deploy_version(&executor, &source_root)?;
     output::success(&format!("Version: {}", version));
 
     let runtime_mode = deploy_runtime_mode(&env);
@@ -905,6 +905,14 @@ fn resolve_app_subdir(source_root: &Path, project_dir: &Path) -> Result<String, 
     Ok(rel.to_string_lossy().replace('\\', "/"))
 }
 
+fn resolve_deploy_version(
+    executor: &BuildExecutor,
+    source_root: &Path,
+) -> Result<String, BuildError> {
+    let source_hash = executor.compute_source_hash(source_root)?;
+    executor.generate_version(Some(&source_hash))
+}
+
 fn archive_app_manifest_path(app_subdir: &str) -> String {
     if app_subdir.is_empty() {
         DEPLOY_ARCHIVE_MANIFEST_FILE.to_string()
@@ -1375,6 +1383,19 @@ fn build_remote_install_command(
     })
 }
 
+fn remote_release_archive_path(release_dir: &str) -> String {
+    format!("{release_dir}/artifacts.tar.gz")
+}
+
+fn build_remote_extract_archive_command(release_dir: &str, remote_archive: &str) -> String {
+    format!(
+        "tar -xzf {} -C {} && rm -f {}",
+        shell_single_quote(remote_archive),
+        shell_single_quote(release_dir),
+        shell_single_quote(remote_archive)
+    )
+}
+
 async fn read_remote_vite_metadata_main(
     ssh: &SshClient,
     release_app_dir: &str,
@@ -1504,7 +1525,7 @@ async fn deploy_to_server(
         .await?;
 
         // Upload archive.
-        let remote_archive = format!("{}/release.tar.gz", release_dir);
+        let remote_archive = remote_release_archive_path(&release_dir);
         run_deploy_step(
             "Uploading archive...",
             use_spinner,
@@ -1519,7 +1540,7 @@ async fn deploy_to_server(
         .await?;
 
         // Extract archive directly into release root.
-        let extract_cmd = format!("cd {} && tar -xzf release.tar.gz && rm release.tar.gz", release_dir);
+        let extract_cmd = build_remote_extract_archive_command(&release_dir, &remote_archive);
         run_deploy_step(
             "Extracting archive payload...",
             use_spinner,
@@ -2541,6 +2562,38 @@ mod tests {
     fn build_remote_install_command_returns_none_when_install_is_not_configured() {
         let cmd = build_remote_install_command("/opt/tako/apps/my-app/releases/v1", None);
         assert!(cmd.is_none());
+    }
+
+    #[test]
+    fn remote_release_archive_path_uses_artifacts_tar_gz_name() {
+        let path = remote_release_archive_path("/opt/tako/apps/my-app/releases/v1");
+        assert_eq!(path, "/opt/tako/apps/my-app/releases/v1/artifacts.tar.gz");
+    }
+
+    #[test]
+    fn build_remote_extract_archive_command_uses_quoted_paths_and_cleanup() {
+        let cmd = build_remote_extract_archive_command(
+            "/opt/tako/apps/a'b/releases/v1",
+            "/opt/tako/apps/a'b/releases/v1/artifacts.tar.gz",
+        );
+        assert!(cmd.contains("tar -xzf"));
+        assert!(cmd.contains(" -C "));
+        assert!(cmd.contains("rm -f"));
+        assert!(cmd.contains("'\\''"));
+    }
+
+    #[test]
+    fn resolve_deploy_version_uses_source_hash_when_git_commit_missing() {
+        let temp = TempDir::new().unwrap();
+        let source_root = temp.path().join("source");
+        std::fs::create_dir_all(&source_root).unwrap();
+        std::fs::write(source_root.join("index.ts"), "export default 1;\n").unwrap();
+
+        let executor = BuildExecutor::new(temp.path());
+        let source_hash = executor.compute_source_hash(&source_root).unwrap();
+        let version = resolve_deploy_version(&executor, &source_root).unwrap();
+
+        assert_eq!(version, format!("nogit_{}", &source_hash[..8]));
     }
 
     #[test]
