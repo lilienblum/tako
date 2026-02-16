@@ -14,13 +14,10 @@ pub struct TakoToml {
     /// Build command to run before deployment
     pub build: Option<String>,
 
-    /// Deploy artifact directory (relative to project root)
-    pub dist: Option<String>,
-
-    /// Runtime entrypoint override relative to dist root
+    /// Runtime entrypoint override relative to project root
     pub main: Option<String>,
 
-    /// Additional asset directories (relative to project root) merged into dist/public
+    /// Additional asset directories (relative to project root) merged into public/
     #[serde(default)]
     pub assets: Vec<String>,
 
@@ -139,12 +136,17 @@ impl TakoToml {
         // First parse into a raw Value to handle the dynamic server configs
         let raw: toml::Value = toml::from_str(content)?;
 
+        if raw.get("dist").is_some() {
+            return Err(ConfigError::Validation(
+                "'dist' is no longer supported; set `main` and `assets` instead".to_string(),
+            ));
+        }
+
         let mut config = TakoToml::default();
 
         // Parse top-level metadata
         config.name = parse_optional_string(&raw, "name")?;
         config.build = parse_optional_string(&raw, "build")?;
-        config.dist = parse_optional_string(&raw, "dist")?;
         config.main = parse_optional_string(&raw, "main")?;
         config.assets = parse_string_array(&raw, "assets")?.unwrap_or_default();
 
@@ -224,31 +226,6 @@ impl TakoToml {
         // Validate app name if specified
         if let Some(name) = &self.name {
             validate_app_name(name)?;
-        }
-
-        if let Some(dist) = &self.dist {
-            let trimmed = dist.trim();
-            if trimmed.is_empty() {
-                return Err(ConfigError::Validation(
-                    "dist path cannot be empty".to_string(),
-                ));
-            }
-            let path = Path::new(trimmed);
-            if path.is_absolute() {
-                return Err(ConfigError::Validation(format!(
-                    "dist path '{}' must be relative to project root",
-                    dist
-                )));
-            }
-            if path
-                .components()
-                .any(|component| matches!(component, Component::ParentDir))
-            {
-                return Err(ConfigError::Validation(format!(
-                    "dist path '{}' must not contain '..'",
-                    dist
-                )));
-            }
         }
 
         if let Some(main) = &self.main
@@ -683,13 +660,11 @@ mod tests {
         let toml = r#"
 name = "my-app"
 build = "bun build"
-dist = ".tako/dist"
 main = "server/index.mjs"
 "#;
         let config = TakoToml::parse(toml).unwrap();
         assert_eq!(config.name, Some("my-app".to_string()));
         assert_eq!(config.build, Some("bun build".to_string()));
-        assert_eq!(config.dist, Some(".tako/dist".to_string()));
         assert_eq!(config.main, Some("server/index.mjs".to_string()));
     }
 
@@ -738,7 +713,7 @@ route = "api.example.com"
 [envs.production]
 LOG_LEVEL = "info"
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = TakoToml::parse(&toml).unwrap_err();
         assert!(
             err.to_string()
                 .contains("must define either 'route' or 'routes'")
@@ -763,7 +738,7 @@ LOG_LEVEL = "debug"
 [envs.production]
 routes = []
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = TakoToml::parse(&toml).unwrap_err();
         assert!(err.to_string().contains("routes"));
     }
 
@@ -825,7 +800,6 @@ idle_timeout = 600
         let toml = r#"
 name = "my-api"
 build = "bun build"
-dist = ".tako/dist"
 main = "server/index.mjs"
 assets = ["public", ".output/public"]
 
@@ -846,7 +820,6 @@ port = 80
 
         assert_eq!(config.name, Some("my-api".to_string()));
         assert_eq!(config.build, Some("bun build".to_string()));
-        assert_eq!(config.dist, Some(".tako/dist".to_string()));
         assert_eq!(config.main, Some("server/index.mjs".to_string()));
         assert_eq!(
             config.assets,
@@ -973,27 +946,11 @@ assets = ["../shared-assets"]
     }
 
     #[test]
-    fn test_validate_dist_rejects_absolute_path() {
-        let toml = r#"
-dist = "/tmp/build"
-"#;
-        let err = TakoToml::parse(toml).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("dist path '/tmp/build' must be relative to project root")
-        );
-    }
-
-    #[test]
-    fn test_validate_dist_rejects_parent_directory_reference() {
-        let toml = r#"
-dist = "../build"
-"#;
-        let err = TakoToml::parse(toml).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("dist path '../build' must not contain '..'")
-        );
+    fn test_parse_rejects_legacy_dist_property() {
+        let legacy_key = ["di", "st"].join("");
+        let toml = format!(r#"{legacy_key} = ".tako/dist""#);
+        let err = TakoToml::parse(&toml).unwrap_err();
+        assert!(err.to_string().contains("'dist' is no longer supported"));
     }
 
     #[test]

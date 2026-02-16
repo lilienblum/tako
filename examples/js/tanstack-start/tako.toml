@@ -1,4 +1,3 @@
-dist = "dist"
 assets = ["dist/client"]
 
 [envs.production]

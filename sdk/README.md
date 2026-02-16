@@ -39,7 +39,7 @@ import { Tako as DenoTako } from "tako.sh/deno";
 
 ## Vite Plugin
 
-Use the Vite plugin to emit deploy metadata for Tako.
+Use the Vite plugin to prepare a deploy entry wrapper for Tako.
 
 ```ts
 import { defineConfig } from "vite";
@@ -50,16 +50,23 @@ export default defineConfig({
 });
 ```
 
-On build, the plugin writes metadata to deploy root:
+On build, the plugin:
 
-- forces `ssr.noExternal = true` so SSR bundles run from deploy dist without `node_modules`
-- emits `<outDir>/tako-entry.mjs`, a wrapped server entry that handles internal
-  `Host: tako.internal` + `/status` and forwards other requests to the compiled app entry
-- default: `<build.outDir>/.tako-vite.json`
-- when `build.outDir` ends with `server`: parent directory (for example `dist/.tako-vite.json` with `compiled_main` prefixed by `server/`)
+- emits `<outDir>/tako-entry.mjs`, which normalizes your compiled server module into a default-exported fetch handler
 
-- `compiled_main`: wrapped runtime entry path (`tako-entry.mjs`)
-- `entries`: all build entry chunk filenames
+On dev (`vite dev`), the plugin:
+
+- adds `.tako.local` to `server.allowedHosts`
+- binds Vite to `127.0.0.1:$PORT` with `strictPort: true` when `PORT` is provided
+
+Deploy entry resolution uses `main` from `tako.toml`, then `package.json#main`.
+For Vite apps, point `package.json#main` at the generated wrapper, for example:
+
+```json
+{
+  "main": "dist/server/tako-entry.mjs"
+}
+```
 
 ## Build and Test
 

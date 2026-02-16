@@ -67,11 +67,9 @@ fn generate_template(app_name: &str, _runtime: &str) -> String {
 # name = "{app_name}"
 # Optional: command to run before each deploy.
 # build = "bun run build"
-# Optional: deploy artifact directory (relative to project root).
-# dist = ".tako/dist"
-# Optional: runtime entrypoint override (relative to dist root).
+# Optional: runtime entrypoint override (relative to project root).
 # main = "server/index.mjs"
-# Optional: extra asset folders (relative to project root) merged into dist/public.
+# Optional: extra asset folders (relative to project root) merged into public/.
 # assets = ["public", ".output/public"]
 
 # Global environment variables applied to every environment.
@@ -171,10 +169,6 @@ mod tests {
         assert!(
             rendered.contains("# build = \"bun run build\""),
             "expected optional build command to be commented"
-        );
-        assert!(
-            rendered.contains("# dist = \".tako/dist\""),
-            "expected optional dist directory to be commented"
         );
         assert!(
             rendered.contains("# main = \"server/index.mjs\""),

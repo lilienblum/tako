@@ -42,7 +42,6 @@ Application configuration for build, variables, routes, and deployment.
 ```toml
 name = "my-app"           # Optional - auto-detected if omitted; once set, treat as stable and do not change
 build = "bun build"       # Optional - server-side build command override
-dist = ".tako/dist"       # Optional - build output root used for Vite metadata lookup (default: .tako/dist)
 main = "server/index.mjs" # Optional - deploy runtime entry override
 assets = ["assets/shared", "assets/branding"] # Optional - directories merged into app/public during deploy
 
@@ -86,8 +85,9 @@ env = "production"
 
 **Build/deploy behavior:**
 
-- `dist` is optional and must be a relative path under the project root (default: `.tako/dist`).
 - `main` is optional. If set, deploy uses it as the runtime entry in deployed `app.json`.
+  - If unset, deploy reads `package.json.main`.
+  - If neither is set, deploy fails with guidance to set one.
 - `assets` is optional and must be an array of relative directory paths under the project root.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise nearest workspace root or app directory).
 - Source bundle filtering uses `.gitignore` plus `.takoignore` overrides.
@@ -215,7 +215,7 @@ Template behavior:
 - Leaves only minimal starter options uncommented:
   - `[envs.production].route`
 - Includes commented examples/explanations for all supported `tako.toml` options:
-  - `name`, `build`, `dist`, `main`, and `assets`
+  - `name`, `build`, `main`, and `assets`
   - `[vars]`
   - `[vars.<env>]`
   - `[envs.<env>].routes` and inline env vars
@@ -560,8 +560,8 @@ Deploy flow helpers:
 1. Pre-deployment validation (secrets present, runtime detected, server target metadata present/valid for all selected servers)
 2. Resolve source bundle root (git root when available; otherwise nearest workspace root or app directory)
 3. Resolve app subdirectory relative to source bundle root
-4. Resolve fallback runtime `main` (`main` config override, otherwise runtime source entry relative to app directory)
-5. Create source archive (`.tako/artifacts/{version}.tar.gz`) and write fallback `app.json` at app path inside archive
+4. Resolve deploy runtime `main` (`main` from `tako.toml`, otherwise `package.json.main`)
+5. Create source archive (`.tako/artifacts/{version}.tar.gz`) and write `app.json` at app path inside archive
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
 6. Deploy to all servers in parallel:
    - Require `tako-server` to be pre-installed and running on each server
@@ -572,7 +572,7 @@ Deploy flow helpers:
    - Run build command in app directory when configured (`tako.toml build`, else runtime default, else skip)
    - Merge configured `assets` into app `public/` (ordered; later entries overwrite earlier ones)
 
-- Resolve final runtime `main` (`main` config override, then Vite metadata from `<dist>/.tako-vite.json` resolved under `<dist>`, then fallback runtime source entry)
+- Keep resolved runtime `main` (`main` from `tako.toml`, otherwise `package.json.main`)
 - Write final `app.json` in app directory
 - Perform rolling update
 - Release lock and clean up old releases (>30 days)
@@ -1073,15 +1073,12 @@ import { Tako } from "tako.sh"; // Auto-detect
 import { takoVitePlugin } from "tako.sh/vite";
 ```
 
-- `tako.sh/vite` provides a build-time plugin that writes deploy metadata into Vite output.
-- It forces `ssr.noExternal = true` for SSR builds so runtime startup does not depend on a separate production `node_modules` tree for SSR externals.
-- It emits `<outDir>/tako-entry.mjs`, which wraps the compiled server entry and serves internal status on `Host: tako.internal` + `/status` for runtime health checks.
-- On build, it writes `.tako-vite.json` at deploy root:
-  - default: `<build.outDir>/.tako-vite.json`
-  - if `build.outDir` ends with `server`, metadata is written to the parent directory and `compiled_main` is prefixed with `server/`
-  - `compiled_main`: wrapped runtime entry (`tako-entry.mjs`)
-  - `entries`: all detected entry chunks
-- Deploy uses `compiled_main` when `main` is not set in `tako.toml`.
+- `tako.sh/vite` provides a plugin that prepares a deploy entry wrapper in Vite output.
+- It emits `<outDir>/tako-entry.mjs`, which normalizes the compiled server module to a default-exported fetch handler.
+- During `vite dev`, it adds `.tako.local` to `server.allowedHosts`.
+- During `vite dev`, when `PORT` is set, it binds Vite to `127.0.0.1:$PORT` with `strictPort: true`.
+- Deploy does not read Vite metadata files.
+- To use the generated wrapper as deploy entry, set `package.json.main` to the generated file (for example `dist/server/tako-entry.mjs`) or set `main` in `tako.toml`.
 
 ### Feature Overview
 

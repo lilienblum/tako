@@ -10,15 +10,15 @@
     "catalogs": {
       "dev": {
         "@types/bun": "^1.3.9",
-        "@cloudflare/workers-types": "^4.20260213.0",
+        "@cloudflare/workers-types": "^4.20260214.0",
         "@types/node": "^25.2.3",
         "astro": "^5.17.2",
         "wrangler": "^4.65.0",
         "typescript": "^5"
       },
       "web": {
-        "@tanstack/react-router": "^1.159.10",
-        "@tanstack/react-start": "^1.159.12",
+        "@tanstack/react-router": "^1.160.0",
+        "@tanstack/react-start": "^1.160.0",
         "@types/react": "^19.0.8",
         "@types/react-dom": "^19.0.3",
         "@vitejs/plugin-react": "^4.6.0",

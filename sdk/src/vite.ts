@@ -1,23 +1,17 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-export interface TakoVitePluginOptions {
-  /**
-   * Output metadata file name written under Vite outDir.
-   * Defaults to `.tako-vite.json`.
-   */
-  metadataFile?: string;
-}
-
-export interface TakoViteBuildMetadata {
-  compiled_main: string;
-  entries: string[];
-}
-
 interface ViteUserConfigLike {
-  ssr?: {
-    noExternal?: true | string | RegExp | Array<string | RegExp>;
+  server?: {
+    host?: string;
+    port?: number;
+    strictPort?: boolean;
+    allowedHosts?: true | string[];
   };
+}
+
+interface ViteConfigEnvLike {
+  command?: "build" | "serve";
 }
 
 interface ViteResolvedConfigLike {
@@ -43,14 +37,13 @@ type ViteOutputBundleLike = Record<string, ViteOutputChunkLike | ViteOutputBundl
 
 export interface VitePluginLike {
   name: string;
-  apply?: "build";
-  config?: () => ViteUserConfigLike;
+  apply?: "build" | "serve";
+  config?: (_userConfig?: ViteUserConfigLike, env?: ViteConfigEnvLike) => ViteUserConfigLike;
   configResolved?: (config: ViteResolvedConfigLike) => void;
   generateBundle?: (_options: unknown, bundle: ViteOutputBundleLike) => void;
   closeBundle?: () => Promise<void>;
 }
 
-const DEFAULT_METADATA_FILE = ".tako-vite.json";
 const WRAPPED_ENTRY_FILE = "tako-entry.mjs";
 
 function toPosixPath(filePath: string): string {
@@ -67,97 +60,24 @@ function toRelativeImportSpecifier(filePath: string): string {
 
 function renderWrappedEntrySource(compiledMain: string): string {
   const importSpecifier = toRelativeImportSpecifier(compiledMain);
-  return `import entryModule from ${JSON.stringify(importSpecifier)};
+  return `import entryModule, * as entryNamespace from ${JSON.stringify(importSpecifier)};
 
-const startedAt = Date.now();
-const TAKO_INTERNAL_HOST = "tako.internal";
-
-function jsonResponse(payload, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function requestPathname(request) {
-  try {
-    return new URL(request.url).pathname;
-  } catch {
-    return "/";
-  }
-}
-
-function normalizeHost(value) {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = value.trim().toLowerCase();
-  if (!normalized) {
-    return null;
-  }
-  return normalized.split(":")[0];
-}
-
-function requestHost(request) {
-  const headerHost = normalizeHost(request?.headers?.get?.("host"));
-  if (headerHost) {
-    return headerHost;
-  }
-  try {
-    return normalizeHost(new URL(request.url).host);
-  } catch {
-    return null;
-  }
-}
-
-function statusPayload() {
-  const uptimeSeconds = Math.floor((Date.now() - startedAt) / 1000);
-  const pid = typeof process !== "undefined" && typeof process.pid === "number" ? process.pid : null;
-  return {
-    status: "ok",
-    pid,
-    uptime_seconds: uptimeSeconds,
-  };
-}
-
-const entryFetch =
+const fetchHandler =
   typeof entryModule === "function"
     ? entryModule
     : entryModule && typeof entryModule.fetch === "function"
       ? entryModule.fetch.bind(entryModule)
-      : null;
+      : typeof entryNamespace.fetch === "function"
+        ? entryNamespace.fetch
+        : null;
 
-export default {
-  async fetch(request, ...rest) {
-    const pathname = requestPathname(request);
-    const host = requestHost(request);
+if (!fetchHandler) {
+  throw new Error(
+    "Invalid server entry: export a default fetch function, a default object with fetch, or a named fetch export.",
+  );
+}
 
-    if (host === TAKO_INTERNAL_HOST && pathname === "/status") {
-      return jsonResponse(statusPayload());
-    }
-
-    if (host === TAKO_INTERNAL_HOST) {
-      return jsonResponse({ error: "Not found" }, 404);
-    }
-
-    if (!entryFetch) {
-      return jsonResponse(
-        {
-          error:
-            "Invalid server entry: default export must be fetch(request, ...args) (or legacy default object with fetch).",
-        },
-        500,
-      );
-    }
-
-    try {
-      return await entryFetch(request, ...rest);
-    } catch (error) {
-      console.error("[tako.sh] Wrapped server entry threw an error:", error);
-      return jsonResponse({ error: "Internal Server Error" }, 500);
-    }
-  },
-};
+export default fetchHandler;
 `;
 }
 
@@ -188,26 +108,62 @@ function pickCompiledMain(entries: string[]): string {
   );
 }
 
-export function takoVitePlugin(options: TakoVitePluginOptions = {}): VitePluginLike {
+function parsePortFromEnv(rawPort: string | undefined): number | null {
+  const parsedPort = Number.parseInt((rawPort ?? "").trim(), 10);
+  if (!Number.isInteger(parsedPort) || parsedPort <= 0 || parsedPort > 65535) {
+    return null;
+  }
+  return parsedPort;
+}
+
+function mergeServeAllowedHosts(existing: true | string[] | undefined): true | string[] {
+  if (existing === true) {
+    return true;
+  }
+
+  const merged = Array.isArray(existing) ? [...existing] : [];
+  if (!merged.includes(".tako.local")) {
+    merged.push(".tako.local");
+  }
+  return merged;
+}
+
+export function takoVitePlugin(): VitePluginLike {
   let resolvedConfig: ViteResolvedConfigLike | null = null;
   let entryChunks: string[] = [];
+  let sawBundleGeneration = false;
+  let activeCommand: "build" | "serve" | null = null;
 
   return {
-    name: "tako-vite-metadata",
-    apply: "build",
-    config() {
-      // Deploy archives include built output only. Force SSR dependency bundling
-      // so runtime startup does not depend on a separate node_modules tree.
-      return {
-        ssr: {
-          noExternal: true,
-        },
-      };
+    name: "tako-vite-entry",
+    config(_userConfig, env) {
+      if (env?.command === "build" || env?.command === "serve") {
+        activeCommand = env.command;
+      }
+
+      const config: ViteUserConfigLike = {};
+
+      // Allow `tako dev` to reserve the local app port and have Vite bind there.
+      if (activeCommand === "serve") {
+        const serverConfig: NonNullable<ViteUserConfigLike["server"]> = {
+          allowedHosts: mergeServeAllowedHosts(_userConfig?.server?.allowedHosts),
+        };
+        const parsedPort = parsePortFromEnv(process.env.PORT);
+        if (parsedPort !== null) {
+          serverConfig.host = "127.0.0.1";
+          serverConfig.port = parsedPort;
+          serverConfig.strictPort = true;
+        }
+        config.server = serverConfig;
+      }
+
+      return config;
     },
     configResolved(config) {
       resolvedConfig = config;
     },
     generateBundle(_options, bundle) {
+      sawBundleGeneration = true;
       entryChunks = Object.values(bundle)
         .filter((chunk): chunk is ViteOutputChunkLike => {
           return (
@@ -218,38 +174,25 @@ export function takoVitePlugin(options: TakoVitePluginOptions = {}): VitePluginL
         .sort();
     },
     async closeBundle() {
+      if (activeCommand === "serve") {
+        return;
+      }
       if (!resolvedConfig) {
         throw new Error("takoVitePlugin was not initialized by Vite configResolved hook.");
+      }
+      if (!sawBundleGeneration) {
+        return;
       }
 
       const outDirAbs = path.isAbsolute(resolvedConfig.build.outDir)
         ? path.normalize(resolvedConfig.build.outDir)
         : path.resolve(resolvedConfig.root, resolvedConfig.build.outDir);
-      const metadataFile = options.metadataFile ?? DEFAULT_METADATA_FILE;
       const compiledMain = pickCompiledMain(entryChunks);
       const wrappedEntrySource = renderWrappedEntrySource(compiledMain);
       const wrappedEntryPath = path.resolve(outDirAbs, WRAPPED_ENTRY_FILE);
-      const outDirBaseName = path.basename(outDirAbs).toLowerCase();
-
-      const metadataPath =
-        outDirBaseName === "server"
-          ? path.resolve(path.dirname(outDirAbs), metadataFile)
-          : path.resolve(outDirAbs, metadataFile);
-
-      const mainForMetadata =
-        outDirBaseName === "server"
-          ? path.posix.join("server", WRAPPED_ENTRY_FILE)
-          : WRAPPED_ENTRY_FILE;
-
-      const metadata: TakoViteBuildMetadata = {
-        compiled_main: mainForMetadata,
-        entries: entryChunks,
-      };
 
       await mkdir(path.dirname(wrappedEntryPath), { recursive: true });
       await writeFile(wrappedEntryPath, wrappedEntrySource, "utf8");
-      await mkdir(path.dirname(metadataPath), { recursive: true });
-      await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
     },
   };
 }

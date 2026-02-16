@@ -76,25 +76,14 @@ impl CliHistoryToml {
         Ok(home.join("history.toml"))
     }
 
-    fn legacy_path() -> Result<PathBuf> {
-        let home = crate::paths::tako_home_dir().map_err(|e| {
-            ConfigError::Validation(format!("Could not determine tako home directory: {}", e))
-        })?;
-        Ok(home.join("history").join("cli.toml"))
-    }
-
     pub fn load() -> Result<Self> {
         let path = Self::default_path()?;
-        let legacy_path = Self::legacy_path()?;
-        Self::load_from_paths(&path, &legacy_path)
+        Self::load_from_paths(&path)
     }
 
-    fn load_from_paths(path: &Path, legacy_path: &Path) -> Result<Self> {
+    fn load_from_paths(path: &Path) -> Result<Self> {
         if path.exists() {
             return Self::load_from_file(path);
-        }
-        if legacy_path.exists() {
-            return Self::load_from_file(legacy_path);
         }
         Ok(Self::default())
     }
@@ -379,31 +368,17 @@ port = "2222"
     }
 
     #[test]
-    fn load_uses_legacy_path_when_primary_missing() {
+    fn load_returns_default_when_primary_missing() {
         let temp_dir = TempDir::new().unwrap();
         let primary = temp_dir.path().join("history.toml");
-        let legacy = temp_dir.path().join("history").join("cli.toml");
-        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-        fs::write(
-            &legacy,
-            r#"[servers]
-hosts = ["legacy-host"]
-names = ["legacy-name"]
-ports = ["22"]
-"#,
-        )
-        .unwrap();
-
-        let loaded = CliHistoryToml::load_from_paths(&primary, &legacy).unwrap();
-        assert_eq!(loaded.servers.hosts, vec!["legacy-host".to_string()]);
+        let loaded = CliHistoryToml::load_from_paths(&primary).unwrap();
+        assert_eq!(loaded, CliHistoryToml::default());
     }
 
     #[test]
-    fn load_prefers_primary_over_legacy() {
+    fn load_uses_primary_when_present() {
         let temp_dir = TempDir::new().unwrap();
         let primary = temp_dir.path().join("history.toml");
-        let legacy = temp_dir.path().join("history").join("cli.toml");
-        fs::create_dir_all(legacy.parent().unwrap()).unwrap();
         fs::write(
             &primary,
             r#"[servers]
@@ -413,17 +388,8 @@ ports = ["2200"]
 "#,
         )
         .unwrap();
-        fs::write(
-            &legacy,
-            r#"[servers]
-hosts = ["legacy-host"]
-names = ["legacy-name"]
-ports = ["22"]
-"#,
-        )
-        .unwrap();
 
-        let loaded = CliHistoryToml::load_from_paths(&primary, &legacy).unwrap();
+        let loaded = CliHistoryToml::load_from_paths(&primary).unwrap();
         assert_eq!(loaded.servers.hosts, vec!["primary-host".to_string()]);
     }
 

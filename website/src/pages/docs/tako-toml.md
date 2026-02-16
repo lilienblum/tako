@@ -28,15 +28,15 @@ App-level metadata.
 ```toml
 name = "my-app"
 build = "bun run build"
-dist = ".tako/dist"
 main = "server/index.mjs"
 assets = ["assets/shared", "assets/branding"]
 ```
 
 - `name`: stable app identifier used in deploy paths and local dev hostnames. Set once and do not change after first deploy.
 - `build`: optional server-side build command run in app directory during `tako deploy`.
-- `dist`: optional project-relative Vite metadata lookup root. Defaults to `.tako/dist`.
 - `main`: optional runtime entry override written to deployed `app.json`.
+  - If omitted, deploy uses `package.json.main`.
+  - If neither is set, deploy fails with guidance.
 - `assets`: optional list of project-relative directories merged into deploy public assets during `tako deploy`.
   - Merges into app `public/` after build.
   - Merge order is list order; later entries overwrite earlier files on conflicts.
@@ -136,7 +136,6 @@ Later values override earlier ones when keys match.
 ```toml
 name = "my-app"
 build = "bun run build"
-dist = "dist"
 main = "server/index.mjs"
 assets = ["assets/shared"]
 

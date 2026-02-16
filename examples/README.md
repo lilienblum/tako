@@ -5,7 +5,7 @@ Sample applications for running Tako end-to-end.
 ## Available Examples
 
 - `js/bun/`: minimal Bun fetch-handler app integrated with `tako.sh`.
-- `js/tanstack-start/`: TanStack Start `start-basic`-style app with `tako.sh/vite` artifact staging.
+- `js/tanstack-start/`: TanStack Start `start-basic`-style app with `tako.sh/vite` server-entry wrapping.
 
 ## Run Example via Tako
 

@@ -21,7 +21,7 @@ This guide covers local development with Tako: trusted HTTPS, `.tako.local` URLs
 ## Files Created
 
 Paths are under `~/.tako/` in normal installs.
-When running from a source checkout in debug builds, Tako prefers `{repo}/debug/.tako/` instead.
+When running from a source checkout in debug builds, Tako prefers `{repo}/local-dev/.tako/` instead.
 
 Created/used by `tako dev` / `tako doctor`:
 
@@ -52,6 +52,13 @@ Default URL:
 
 - macOS (with local forwarding): `https://{app}.tako.local/`
 - Other platforms: `https://{app}.tako.local:47831/`
+
+## Vite Apps
+
+If your app runs `vite dev` under `tako dev` and uses `tako.sh/vite`:
+
+- the plugin adds `.tako.local` to Vite `server.allowedHosts` so local Tako hosts are accepted
+- when `PORT` is set by `tako dev`, Vite binds to `127.0.0.1:$PORT` with `strictPort: true`
 
 ## Local Workflow Checklist
 

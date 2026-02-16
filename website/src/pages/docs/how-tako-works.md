@@ -82,7 +82,7 @@ Important deployment behavior:
 - `development` is reserved for `tako dev` and cannot be deployed.
 - Source bundle filtering uses `.gitignore` with `.takoignore` overrides.
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
-- `dist` is used for Vite metadata lookup (for `compiled_main`), not as the deploy payload root.
+- Deploy runtime `main` is resolved from `tako.toml main`, then `package.json main`.
 - For production without explicit server mapping:
   - With one global server, Tako can guide/persist mapping.
   - With multiple global servers (interactive), Tako prompts for selection.

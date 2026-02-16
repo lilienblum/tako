@@ -6,28 +6,31 @@ import path from "node:path";
 import { takoVitePlugin } from "../src/vite";
 
 let rootDir = "";
-
-async function readJson(relPath: string): Promise<unknown> {
-  const content = await readFile(path.join(rootDir, relPath), "utf8");
-  return JSON.parse(content);
-}
+let originalPortEnv: string | undefined;
 
 async function readText(relPath: string): Promise<string> {
   return await readFile(path.join(rootDir, relPath), "utf8");
 }
 
-describe("tako Vite plugin metadata", () => {
+describe("tako Vite entry plugin", () => {
   beforeEach(async () => {
+    originalPortEnv = process.env.PORT;
+    delete process.env.PORT;
     rootDir = await mkdtemp(path.join(tmpdir(), "tako-vite-plugin-"));
   });
 
   afterEach(async () => {
+    if (originalPortEnv === undefined) {
+      delete process.env.PORT;
+    } else {
+      process.env.PORT = originalPortEnv;
+    }
     if (rootDir) {
       await rm(rootDir, { recursive: true, force: true });
     }
   });
 
-  test("writes wrapped compiled_main metadata for a single entry chunk", async () => {
+  test("writes wrapped server entry for a single entry chunk", async () => {
     await mkdir(path.join(rootDir, "dist"), { recursive: true });
 
     const plugin = takoVitePlugin();
@@ -47,27 +50,87 @@ describe("tako Vite plugin metadata", () => {
     );
     await plugin.closeBundle?.();
 
-    const metadata = (await readJson("dist/.tako-vite.json")) as {
-      compiled_main: string;
-      entries: string[];
-    };
-    expect(metadata.compiled_main).toBe("tako-entry.mjs");
-    expect(metadata.entries).toEqual(["server/index.mjs"]);
-
     const wrapper = await readText("dist/tako-entry.mjs");
-    expect(wrapper).toContain('import entryModule from "./server/index.mjs";');
-    expect(wrapper).toContain('"tako.internal"');
-    expect(wrapper).toContain('pathname === "/status"');
-    expect(wrapper).not.toContain("/_tako/status");
+    expect(wrapper).toContain('import entryModule, * as entryNamespace from "./server/index.mjs";');
+    expect(wrapper).toContain("const fetchHandler");
+    expect(wrapper).toContain("export default fetchHandler;");
   });
 
-  test("forces SSR bundling for deployable server output", () => {
+  test("does not force SSR bundling options", () => {
     const plugin = takoVitePlugin();
-    expect(plugin.config?.()).toEqual({
-      ssr: {
-        noExternal: true,
+    expect(plugin.config?.({}, { command: "build" })).toEqual({});
+  });
+
+  test("uses PORT env for dev server binding", () => {
+    process.env.PORT = "47831";
+    const plugin = takoVitePlugin();
+    expect(plugin.config?.({}, { command: "serve" })).toEqual({
+      server: {
+        allowedHosts: [".tako.local"],
+        host: "127.0.0.1",
+        port: 47831,
+        strictPort: true,
       },
     });
+  });
+
+  test("adds tako host allowance in serve mode without PORT", () => {
+    const plugin = takoVitePlugin();
+    expect(plugin.config?.({}, { command: "serve" })).toEqual({
+      server: {
+        allowedHosts: [".tako.local"],
+      },
+    });
+  });
+
+  test("merges user allowedHosts in serve mode", () => {
+    process.env.PORT = "47831";
+    const plugin = takoVitePlugin();
+    expect(
+      plugin.config?.(
+        {
+          server: {
+            allowedHosts: ["localhost"],
+          },
+        },
+        { command: "serve" },
+      ),
+    ).toEqual({
+      server: {
+        allowedHosts: ["localhost", ".tako.local"],
+        host: "127.0.0.1",
+        port: 47831,
+        strictPort: true,
+      },
+    });
+  });
+
+  test("keeps allowedHosts true in serve mode", () => {
+    process.env.PORT = "47831";
+    const plugin = takoVitePlugin();
+    expect(
+      plugin.config?.(
+        {
+          server: {
+            allowedHosts: true,
+          },
+        },
+        { command: "serve" },
+      ),
+    ).toEqual({
+      server: {
+        allowedHosts: true,
+        host: "127.0.0.1",
+        port: 47831,
+        strictPort: true,
+      },
+    });
+  });
+
+  test("ignores PORT env in build mode", () => {
+    process.env.PORT = "47831";
+    const plugin = takoVitePlugin();
+    expect(plugin.config?.({}, { command: "build" })).toEqual({});
   });
 
   test("prefers entry paths under server when multiple entry chunks exist", async () => {
@@ -93,13 +156,8 @@ describe("tako Vite plugin metadata", () => {
     );
     await plugin.closeBundle?.();
 
-    const metadata = (await readJson("dist/.tako-vite.json")) as {
-      compiled_main: string;
-    };
-    expect(metadata.compiled_main).toBe("tako-entry.mjs");
-
     const wrapper = await readText("dist/tako-entry.mjs");
-    expect(wrapper).toContain('import entryModule from "./server/index.mjs";');
+    expect(wrapper).toContain('import entryModule, * as entryNamespace from "./server/index.mjs";');
   });
 
   test("fails clearly when multiple entries are ambiguous", async () => {
@@ -148,7 +206,7 @@ describe("tako Vite plugin metadata", () => {
     );
   });
 
-  test("writes metadata to dist root when SSR outDir ends with server", async () => {
+  test("writes wrapped entry inside the configured outDir", async () => {
     await mkdir(path.join(rootDir, "dist/server"), { recursive: true });
 
     const plugin = takoVitePlugin();
@@ -168,12 +226,31 @@ describe("tako Vite plugin metadata", () => {
     );
     await plugin.closeBundle?.();
 
-    const metadata = (await readJson("dist/.tako-vite.json")) as {
-      compiled_main: string;
-    };
-    expect(metadata.compiled_main).toBe("server/tako-entry.mjs");
-
     const wrapper = await readText("dist/server/tako-entry.mjs");
-    expect(wrapper).toContain('import entryModule from "./server.js";');
+    expect(wrapper).toContain('import entryModule, * as entryNamespace from "./server.js";');
+  });
+
+  test("does not write deploy metadata files", async () => {
+    await mkdir(path.join(rootDir, "dist"), { recursive: true });
+
+    const plugin = takoVitePlugin();
+    plugin.configResolved?.({
+      root: rootDir,
+      build: { outDir: "dist" },
+    });
+    plugin.generateBundle?.(
+      {},
+      {
+        "server/index.mjs": {
+          type: "chunk",
+          fileName: "server/index.mjs",
+          isEntry: true,
+        },
+      },
+    );
+    await plugin.closeBundle?.();
+
+    await expect(readText(".tako/build.json")).rejects.toThrow();
+    await expect(readText("dist/.tako-vite.json")).rejects.toThrow();
   });
 });

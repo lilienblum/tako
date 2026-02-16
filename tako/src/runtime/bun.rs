@@ -16,6 +16,12 @@ pub struct BunRuntime {
 }
 
 impl BunRuntime {
+    fn read_package_json<P: AsRef<Path>>(dir: P) -> Option<serde_json::Value> {
+        let package_json_path = dir.as_ref().join("package.json");
+        let content = fs::read_to_string(&package_json_path).ok()?;
+        serde_json::from_str(&content).ok()
+    }
+
     fn git_repo_root(dir: &Path) -> Option<PathBuf> {
         let output = Command::new("git")
             .args(["rev-parse", "--show-toplevel"])
@@ -59,8 +65,15 @@ impl BunRuntime {
             return None;
         }
 
-        // Detect entry point
-        let entry_point = Self::detect_entry_point(dir)?;
+        // Detect entry point. Vite-script projects can run in dev mode without a
+        // concrete server entry file on disk, so allow package.json as a placeholder.
+        let entry_point = Self::detect_entry_point(dir).or_else(|| {
+            if Self::uses_vite_dev_script(dir) {
+                Some(dir.join("package.json"))
+            } else {
+                None
+            }
+        })?;
 
         Some(Self {
             dir: dir.to_path_buf(),
@@ -72,12 +85,8 @@ impl BunRuntime {
     ///
     /// Detection order:
     /// 1. package.json "main" field
-    /// 2. src/index.tsx
-    /// 3. src/index.ts
-    /// 4. index.tsx
-    /// 5. index.ts
-    /// 6. src/index.js
-    /// 7. index.js
+    /// 2. server-oriented source entries (src/server.ts, server.ts, etc.)
+    /// 3. index/main source entries (src/index.tsx, index.ts, src/main.ts, etc.)
     fn detect_entry_point<P: AsRef<Path>>(dir: P) -> Option<PathBuf> {
         let dir = dir.as_ref();
 
@@ -91,6 +100,14 @@ impl BunRuntime {
 
         // Try common entry points in order
         let candidates = [
+            "src/server.ts",
+            "src/server.tsx",
+            "src/server.js",
+            "src/server.mjs",
+            "server.ts",
+            "server.tsx",
+            "server.js",
+            "server.mjs",
             "src/index.tsx",
             "src/index.ts",
             "index.tsx",
@@ -115,12 +132,25 @@ impl BunRuntime {
 
     /// Get "main" field from package.json
     fn get_main_from_package_json<P: AsRef<Path>>(dir: P) -> Option<String> {
-        let package_json_path = dir.as_ref().join("package.json");
-        let content = fs::read_to_string(&package_json_path).ok()?;
-        let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+        let json = Self::read_package_json(dir)?;
         json.get("main")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
+    }
+
+    fn get_dev_script_from_package_json<P: AsRef<Path>>(dir: P) -> Option<String> {
+        let json = Self::read_package_json(dir)?;
+        json.get("scripts")
+            .and_then(|scripts| scripts.get("dev"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    fn uses_vite_dev_script<P: AsRef<Path>>(dir: P) -> bool {
+        let Some(dev_script) = Self::get_dev_script_from_package_json(dir) else {
+            return false;
+        };
+        dev_script.to_ascii_lowercase().contains("vite")
     }
 
     /// Get Bun version from command
@@ -175,6 +205,10 @@ impl RuntimeAdapter for BunRuntime {
     }
 
     fn run_command(&self, _port: u16) -> Vec<String> {
+        if Self::uses_vite_dev_script(&self.dir) {
+            return vec!["bun".to_string(), "run".to_string(), "dev".to_string()];
+        }
+
         // Run the app via tako.sh wrapper so user entry points can be a simple
         // default export `{ fetch() { ... } }` without calling Bun.serve().
         let wrapper = self
@@ -350,6 +384,35 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_entry_point_fallback_src_server_ts_when_package_main_is_missing_on_disk() {
+        let temp_dir = TempDir::new().unwrap();
+
+        fs::write(
+            temp_dir.path().join("package.json"),
+            r#"{"name":"test","main":"dist/server/tako-entry.mjs"}"#,
+        )
+        .unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(temp_dir.path().join("src/server.ts"), "").unwrap();
+
+        let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
+        assert!(runtime.entry_point().ends_with("src/server.ts"));
+    }
+
+    #[test]
+    fn test_detect_entry_point_prefers_src_server_ts_over_src_index_ts() {
+        let temp_dir = TempDir::new().unwrap();
+
+        File::create(temp_dir.path().join("bun.lockb")).unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(temp_dir.path().join("src/server.ts"), "").unwrap();
+        fs::write(temp_dir.path().join("src/index.ts"), "").unwrap();
+
+        let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
+        assert!(runtime.entry_point().ends_with("src/server.ts"));
+    }
+
+    #[test]
     fn test_detect_entry_point_fallback_order() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -478,6 +541,50 @@ mod tests {
         assert!(cmd[3].contains("tako.sh"));
         assert!(cmd[3].contains("wrapper.ts"));
         assert!(cmd[4].contains("index.ts"));
+    }
+
+    #[test]
+    fn test_run_command_uses_vite_dev_script() {
+        let temp_dir = TempDir::new().unwrap();
+
+        File::create(temp_dir.path().join("bun.lockb")).unwrap();
+        fs::write(
+            temp_dir.path().join("package.json"),
+            r#"{
+                "name": "test-app",
+                "scripts": {
+                    "dev": "vite dev"
+                }
+            }"#,
+        )
+        .unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(temp_dir.path().join("src/server.ts"), "export default {}").unwrap();
+
+        let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
+        let cmd = runtime.run_command(3000);
+        assert_eq!(cmd, vec!["bun", "run", "dev"]);
+    }
+
+    #[test]
+    fn test_detect_with_vite_dev_script_without_entry_file() {
+        let temp_dir = TempDir::new().unwrap();
+
+        File::create(temp_dir.path().join("bun.lockb")).unwrap();
+        fs::write(
+            temp_dir.path().join("package.json"),
+            r#"{
+                "name": "test-app",
+                "scripts": {
+                    "dev": "vite dev"
+                }
+            }"#,
+        )
+        .unwrap();
+
+        let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
+        assert!(runtime.entry_point().ends_with("package.json"));
+        assert_eq!(runtime.run_command(3000), vec!["bun", "run", "dev"]);
     }
 
     #[test]

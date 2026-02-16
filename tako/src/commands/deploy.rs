@@ -33,9 +33,7 @@ struct DeployConfig {
     routes: Vec<String>,
     app_subdir: String,
     runtime: String,
-    fallback_main: String,
-    main_override: Option<String>,
-    dist_subdir: String,
+    main: String,
     install_command: Option<String>,
     build_command: Option<String>,
     asset_roots: Vec<String>,
@@ -138,12 +136,6 @@ async fn run_async(
             let runtime = detect_runtime(&project_dir).ok_or_else(|| {
                 "Could not detect runtime. Make sure you have a bun.lockb, bunfig.toml, or package.json with bun config.".to_string()
             })?;
-            if !runtime.entry_point().exists() {
-                return Err(format!(
-                    "Entry point not found: {}",
-                    runtime.entry_point().display()
-                ));
-            }
 
             Ok(ValidationResult {
                 tako_config,
@@ -253,12 +245,8 @@ async fn run_async(
 
     let runtime_mode = deploy_runtime_mode(&env);
     let runtime_env_vars = runtime.env_vars(runtime_mode);
-    let fallback_main = resolve_fallback_main(&project_dir, &tako_config, runtime.entry_point())
+    let manifest_main = resolve_deploy_main(&project_dir, &tako_config)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    let manifest_main = tako_config
-        .main
-        .clone()
-        .unwrap_or_else(|| fallback_main.clone());
     let manifest = build_deploy_archive_manifest(
         &app_name,
         &env,
@@ -304,9 +292,7 @@ async fn run_async(
         routes,
         app_subdir,
         runtime: runtime.name().to_string(),
-        fallback_main,
-        main_override: tako_config.main.clone(),
-        dist_subdir: deploy_dist_subdir(&tako_config).to_string(),
+        main: manifest_main,
         install_command: remote_install_cmd,
         build_command: remote_build_cmd,
         asset_roots: tako_config.assets.clone(),
@@ -822,21 +808,7 @@ fn format_partial_failure_error(failed_servers: usize) -> String {
     format!("{} server(s) failed", failed_servers)
 }
 
-const DEFAULT_DEPLOY_DIST_SUBDIR: &str = ".tako/dist";
-const VITE_BUILD_METADATA_FILE: &str = ".tako-vite.json";
 const DEPLOY_ARCHIVE_MANIFEST_FILE: &str = "app.json";
-
-#[derive(Debug, serde::Deserialize)]
-struct ViteBuildMetadata {
-    compiled_main: String,
-}
-
-fn deploy_dist_subdir(tako_config: &TakoToml) -> &str {
-    tako_config
-        .dist
-        .as_deref()
-        .unwrap_or(DEFAULT_DEPLOY_DIST_SUBDIR)
-}
 
 fn git_repo_root(project_dir: &Path) -> Option<PathBuf> {
     let output = std::process::Command::new("git")
@@ -921,61 +893,74 @@ fn archive_app_manifest_path(app_subdir: &str) -> String {
     }
 }
 
-fn resolve_fallback_main(
-    project_dir: &Path,
-    tako_config: &TakoToml,
-    runtime_entry_point: &Path,
-) -> Result<String, String> {
-    if let Some(main) = &tako_config.main {
-        return Ok(main.clone());
+fn normalize_main_path(value: &str, source: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{source} main is empty"));
     }
-    let entry_rel = runtime_entry_point.strip_prefix(project_dir).map_err(|_| {
-        format!(
-            "Runtime entry point {} must be inside project or set `main` in tako.toml.",
-            runtime_entry_point.display()
-        )
-    })?;
-    Ok(entry_rel.to_string_lossy().to_string())
-}
 
-fn parse_vite_metadata_main(content: &str, source: &str) -> Result<String, String> {
-    let metadata: ViteBuildMetadata = serde_json::from_str(content)
-        .map_err(|e| format!("Failed to parse Vite metadata {}: {}", source, e))?;
-    if metadata.compiled_main.trim().is_empty() {
+    let raw_path = Path::new(trimmed);
+    if raw_path.is_absolute() {
         return Err(format!(
-            "Invalid Vite metadata {}: compiled_main is empty",
-            source
+            "{source} main '{trimmed}' must be relative to project root"
         ));
     }
-    Ok(metadata.compiled_main)
+
+    let mut normalized = trimmed.replace('\\', "/");
+    while let Some(stripped) = normalized.strip_prefix("./") {
+        normalized = stripped.to_string();
+    }
+    if normalized.starts_with('/') {
+        return Err(format!(
+            "{source} main '{trimmed}' must be relative to project root"
+        ));
+    }
+    if Path::new(&normalized)
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!("{source} main '{trimmed}' must not contain '..'"));
+    }
+    if normalized.is_empty() {
+        return Err(format!("{source} main is empty"));
+    }
+    Ok(normalized)
 }
 
-fn resolve_vite_compiled_main(dist_subdir: &str, compiled_main: &str) -> String {
-    let normalized_main = compiled_main
-        .replace('\\', "/")
-        .trim()
-        .trim_start_matches("./")
-        .trim_start_matches('/')
-        .to_string();
-
-    let normalized_dist = dist_subdir
-        .replace('\\', "/")
-        .trim()
-        .trim_start_matches("./")
-        .trim_end_matches('/')
-        .to_string();
-
-    if normalized_dist.is_empty() || normalized_dist == "." {
-        return normalized_main;
+fn parse_package_json_main(project_dir: &Path) -> Result<Option<String>, String> {
+    let package_json_path = project_dir.join("package.json");
+    if !package_json_path.exists() {
+        return Ok(None);
     }
 
-    if normalized_main == normalized_dist
-        || normalized_main.starts_with(&format!("{normalized_dist}/"))
-    {
-        return normalized_main;
+    let content = std::fs::read_to_string(&package_json_path)
+        .map_err(|e| format!("Failed to read {}: {}", package_json_path.display(), e))?;
+    let json = serde_json::from_str::<serde_json::Value>(&content)
+        .map_err(|e| format!("Failed to parse {}: {}", package_json_path.display(), e))?;
+
+    let Some(main_value) = json.get("main") else {
+        return Ok(None);
+    };
+    let Some(main_str) = main_value.as_str() else {
+        return Err(format!(
+            "Invalid {}: 'main' must be a string",
+            package_json_path.display()
+        ));
+    };
+
+    normalize_main_path(main_str, "package.json").map(Some)
+}
+
+fn resolve_deploy_main(project_dir: &Path, tako_config: &TakoToml) -> Result<String, String> {
+    if let Some(main) = &tako_config.main {
+        return normalize_main_path(main, "tako.toml");
     }
 
-    format!("{normalized_dist}/{normalized_main}")
+    if let Some(package_main) = parse_package_json_main(project_dir)? {
+        return Ok(package_main);
+    }
+
+    Err("No deploy entrypoint configured. Set `main` in tako.toml or package.json.".to_string())
 }
 
 fn build_deploy_archive_manifest(
@@ -1396,56 +1381,6 @@ fn build_remote_extract_archive_command(release_dir: &str, remote_archive: &str)
     )
 }
 
-async fn read_remote_vite_metadata_main(
-    ssh: &SshClient,
-    release_app_dir: &str,
-    dist_subdir: &str,
-) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
-    let metadata_path = format!(
-        "{}/{}/{}",
-        release_app_dir, dist_subdir, VITE_BUILD_METADATA_FILE
-    );
-    let quoted = shell_single_quote(&metadata_path);
-    let output = ssh
-        .exec(&format!("if [ -f {quoted} ]; then cat {quoted}; fi"))
-        .await?;
-
-    if !output.success() {
-        return Err(format!(
-            "Failed to read Vite metadata {}: {}",
-            metadata_path,
-            output.combined().trim()
-        )
-        .into());
-    }
-
-    let content = output.stdout.trim();
-    if content.is_empty() {
-        return Ok(None);
-    }
-    parse_vite_metadata_main(content, &metadata_path)
-        .map(Some)
-        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
-}
-
-async fn resolve_remote_main(
-    ssh: &SshClient,
-    config: &DeployConfig,
-    release_app_dir: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    if let Some(main) = &config.main_override {
-        return Ok(main.clone());
-    }
-
-    if let Some(main) =
-        read_remote_vite_metadata_main(ssh, release_app_dir, &config.dist_subdir).await?
-    {
-        return Ok(resolve_vite_compiled_main(&config.dist_subdir, &main));
-    }
-
-    Ok(config.fallback_main.clone())
-}
-
 /// Deploy to a single server
 async fn deploy_to_server(
     config: &DeployConfig,
@@ -1618,9 +1553,10 @@ async fn deploy_to_server(
             .await?;
         }
 
-        // Finalize runtime manifest now that server-side build output exists.
-        let resolved_main = run_deploy_step("Preparing runtime manifest...", use_spinner, async {
-            let main = resolve_remote_main(&ssh, config, &release_app_dir).await?;
+        // Finalize runtime manifest using the resolved deploy entrypoint.
+        let resolved_main = config.main.clone();
+        run_deploy_step("Preparing runtime manifest...", use_spinner, async {
+            let main = resolved_main.clone();
             let app_json = serde_json::to_vec_pretty(&serde_json::json!({
                 "runtime": config.runtime,
                 "main": main,
@@ -1635,7 +1571,7 @@ async fn deploy_to_server(
                 shell_single_quote(&app_json_path)
             );
             ssh.exec_checked(&write_manifest_cmd).await?;
-            Ok::<String, Box<dyn std::error::Error + Send + Sync>>(main)
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         })
         .await?;
         output::muted(&format!("Deploy main: {}", resolved_main));
@@ -2147,9 +2083,7 @@ mod tests {
             routes: vec![],
             app_subdir: "examples/bun".to_string(),
             runtime: "bun".to_string(),
-            fallback_main: "index.ts".to_string(),
-            main_override: None,
-            dist_subdir: ".tako/dist".to_string(),
+            main: "index.ts".to_string(),
             install_command: Some("bun install --frozen-lockfile".to_string()),
             build_command: Some("bun run build".to_string()),
             asset_roots: vec!["public".to_string()],
@@ -2441,21 +2375,6 @@ mod tests {
     }
 
     #[test]
-    fn deploy_dist_subdir_defaults_to_dot_tako_dist() {
-        let config = TakoToml::default();
-        assert_eq!(deploy_dist_subdir(&config), ".tako/dist");
-    }
-
-    #[test]
-    fn deploy_dist_subdir_uses_tako_toml_override() {
-        let config = TakoToml {
-            dist: Some("build/deploy".to_string()),
-            ..Default::default()
-        };
-        assert_eq!(deploy_dist_subdir(&config), "build/deploy");
-    }
-
-    #[test]
     fn archive_app_manifest_path_places_manifest_under_app_subdir() {
         assert_eq!(archive_app_manifest_path(""), "app.json");
         assert_eq!(archive_app_manifest_path("apps/web"), "apps/web/app.json");
@@ -2656,57 +2575,72 @@ mod tests {
     }
 
     #[test]
-    fn resolve_fallback_main_prefers_tako_toml_main() {
-        let project_dir = Path::new("/tmp/project");
+    fn resolve_deploy_main_prefers_tako_toml_main() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path();
+        std::fs::write(
+            project_dir.join("package.json"),
+            r#"{"name":"app","main":"dist/server/tako-entry.mjs"}"#,
+        )
+        .unwrap();
         let config = TakoToml {
             main: Some("server/custom.mjs".to_string()),
             ..Default::default()
         };
-        let resolved = resolve_fallback_main(project_dir, &config, Path::new("index.ts")).unwrap();
+        let resolved = resolve_deploy_main(project_dir, &config).unwrap();
         assert_eq!(resolved, "server/custom.mjs");
     }
 
     #[test]
-    fn resolve_fallback_main_uses_runtime_entry_relative_to_project() {
+    fn resolve_deploy_main_uses_package_json_main_when_tako_main_is_missing() {
         let temp = TempDir::new().unwrap();
-        let project_dir = temp.path().join("project");
-        std::fs::create_dir_all(project_dir.join("src")).unwrap();
-        let runtime_entry = project_dir.join("src/index.ts");
-        std::fs::write(&runtime_entry, "export default {};").unwrap();
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"app","main":"./dist/server/tako-entry.mjs"}"#,
+        )
+        .unwrap();
 
-        let resolved =
-            resolve_fallback_main(&project_dir, &TakoToml::default(), &runtime_entry).unwrap();
-        assert_eq!(resolved, "src/index.ts");
+        let resolved = resolve_deploy_main(temp.path(), &TakoToml::default()).unwrap();
+        assert_eq!(resolved, "dist/server/tako-entry.mjs");
     }
 
     #[test]
-    fn parse_vite_metadata_main_extracts_compiled_main() {
-        let main = parse_vite_metadata_main(r#"{"compiled_main":"server/index.mjs"}"#, "meta.json")
-            .unwrap();
-        assert_eq!(main, "server/index.mjs");
+    fn resolve_deploy_main_errors_when_neither_tako_nor_package_main_is_set() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+
+        let err = resolve_deploy_main(temp.path(), &TakoToml::default()).unwrap_err();
+        assert!(
+            err.contains("Set `main` in tako.toml or package.json"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn parse_vite_metadata_main_rejects_empty_value() {
-        let err = parse_vite_metadata_main(r#"{"compiled_main":" "}"#, "meta.json").unwrap_err();
-        assert!(err.contains("compiled_main is empty"));
+    fn resolve_deploy_main_rejects_parent_directory_segments() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"app","main":"../outside.js"}"#,
+        )
+        .unwrap();
+
+        let err = resolve_deploy_main(temp.path(), &TakoToml::default()).unwrap_err();
+        assert!(
+            err.contains("must not contain '..'"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
-    fn resolve_vite_compiled_main_prefixes_dist_subdir() {
-        let resolved = resolve_vite_compiled_main(".tako/dist", "server/tako-entry.mjs");
-        assert_eq!(resolved, ".tako/dist/server/tako-entry.mjs");
-    }
-
-    #[test]
-    fn resolve_vite_compiled_main_keeps_dot_dist_main() {
-        let resolved = resolve_vite_compiled_main(".", "tako-entry.mjs");
-        assert_eq!(resolved, "tako-entry.mjs");
-    }
-
-    #[test]
-    fn resolve_vite_compiled_main_avoids_double_prefix() {
-        let resolved = resolve_vite_compiled_main(".tako/dist", ".tako/dist/server/tako-entry.mjs");
-        assert_eq!(resolved, ".tako/dist/server/tako-entry.mjs");
+    fn resolve_deploy_main_rejects_empty_package_main() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"app","main":"  "}"#,
+        )
+        .unwrap();
+        let err = resolve_deploy_main(temp.path(), &TakoToml::default()).unwrap_err();
+        assert!(err.contains("main is empty"), "unexpected error: {err}");
     }
 }

@@ -19,7 +19,7 @@ tako deploy [--env <environment>]
 
 What happens during deploy:
 
-- Deploy packages source files (not prebuilt `dist`) into a versioned archive.
+- Deploy packages source files into a versioned archive (not a pre-staged build-only folder).
 - Source bundle root is resolved in this order: git root, nearest JS workspace root, current app directory.
 - Source filtering uses `.gitignore` with `.takoignore` overrides.
 - Non-overridable excludes: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
@@ -37,7 +37,7 @@ Before you ship, do a quick sanity pass:
 2. Confirm `tako.toml` has route/env/server mappings for the target environment.
 3. Verify secrets are present for the target env (`tako secrets sync` if needed).
 4. Run your local tests before deploy.
-5. If relying on Vite metadata for entrypoint resolution, ensure server build emits `<dist>/.tako-vite.json` (or set `main` explicitly).
+5. Ensure deploy entrypoint resolution is explicit: set `main` in `tako.toml` or `main` in `package.json`.
 6. If using `.takoignore`, verify it does not accidentally exclude files needed by server-side install/build.
 
 ## Server Prerequisites
@@ -59,7 +59,6 @@ Each target server should have:
 - Every non-development environment must define `route` or `routes`.
 - Empty route sets are rejected for non-development environments (no implicit catch-all mode).
 - Optional `build` runs on the server in the app directory after upload.
-- Optional `dist` (default `.tako/dist`) is used for Vite metadata lookup (`<dist>/.tako-vite.json`), not as the deploy payload root.
 - Optional `main` overrides runtime entrypoint in deployed `app.json`.
 - Optional `assets` directories are merged into app `public/` after build in listed order.
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
@@ -76,8 +75,7 @@ Each target server should have:
   - final `app.json` is written in app directory after resolving runtime `main`
 - Runtime `main` resolution order:
   1. `main` from `tako.toml`
-  2. `compiled_main` from `<dist>/.tako-vite.json` (resolved under `dist`)
-  3. runtime adapter fallback entry from source detection
+  2. `main` from `package.json`
 
 ### Global server inventory (`~/.tako/config.toml`)
 
