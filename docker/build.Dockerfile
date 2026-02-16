@@ -13,7 +13,9 @@ RUN apk add --no-cache \
     pkgconfig \
     perl \
     make \
-    openssl-dev
+    openssl-dev \
+    sqlite-dev \
+    sqlite-static
 
 WORKDIR /work
 
