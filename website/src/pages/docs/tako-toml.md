@@ -2,7 +2,7 @@
 layout: ../../layouts/DocsLayout.astro
 title: Tako Docs - tako.toml Reference
 heading: tako.toml Reference
-current: tako-toml-reference
+current: tako-tom
 ---
 
 # `tako.toml` Reference
@@ -34,11 +34,11 @@ assets = ["assets/shared", "assets/branding"]
 ```
 
 - `name`: stable app identifier used in deploy paths and local dev hostnames. Set once and do not change after first deploy.
-- `build`: optional build command run before deploy.
-- `dist`: optional project-relative deploy input directory. Defaults to `.tako/dist`.
-- `main`: optional runtime entry override written to archive `app.json`.
+- `build`: optional server-side build command run in app directory during `tako deploy`.
+- `dist`: optional project-relative Vite metadata lookup root. Defaults to `.tako/dist`.
+- `main`: optional runtime entry override written to deployed `app.json`.
 - `assets`: optional list of project-relative directories merged into deploy public assets during `tako deploy`.
-  - Merges into `<dist>/public`.
+  - Merges into app `public/` after build.
   - Merge order is list order; later entries overwrite earlier files on conflicts.
 
 ## `[vars]`

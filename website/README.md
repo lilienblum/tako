@@ -8,8 +8,8 @@ Astro static site deployed with Cloudflare Workers static assets.
 - `/docs`: docs Intro page ("The Why" section first) with docs navigation sidebar (mobile hamburger menu)
 - `/docs/quickstart`: user quickstart (local setup + remote setup)
 - `/docs/framework-guides`: framework adapter examples
-- `/docs/cli-reference`: CLI command reference
-- `/docs/tako-toml-reference`: `tako.toml` configuration reference
+- `/docs/cli`: CLI command reference
+- `/docs/tako-toml`: `tako.toml` configuration reference
 - `/docs/development`: local development guide
 - `/docs/deployment`: deployment guide
 - `/docs/troubleshooting`: troubleshooting runbook

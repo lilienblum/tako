@@ -16,7 +16,7 @@ This guide covers local development with Tako: trusted HTTPS, `.tako.local` URLs
 - `tako dev` owns your app process lifecycle and spawns the app locally on an ephemeral port.
 - `tako-dev-server` terminates HTTPS and routes by `Host` to that app port.
 - The client registers a **lease** with the daemon (TTL + heartbeat). If heartbeats stop, the route expires.
-- `tako dev` watches [`tako.toml`](/docs/tako-toml-reference) for changes. If dev env vars change, it restarts the app. If `[envs.development]` routes change, it re-registers routes with the daemon.
+- `tako dev` watches [`tako.toml`](/docs/tako-toml) for changes. If dev env vars change, it restarts the app. If `[envs.development]` routes change, it re-registers routes with the daemon.
 
 ## Files Created
 
@@ -82,6 +82,7 @@ If your browser still complains about certs:
 
 Deploy e2e uses Docker/SSH and is opt-in:
 
+- `just e2e e2e/fixtures/js/bun`
 - `just e2e e2e/fixtures/js/tanstack-start`
 
 Name resolution for `.tako.local` is done via local split DNS:
@@ -96,7 +97,8 @@ These are the environment variables Tako components read and/or set.
 | Name              | Used by         | Meaning                                          | Values / default                  | Notes                                                              |
 | ----------------- | --------------- | ------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------ |
 | `PORT`            | app             | Listen port for HTTP server                      | number                            | Set by `tako dev` for local runs and by `tako-server` remotely.    |
-| `ENV`             | app             | Environment name                                 | `development` / `production`      | Set by Tako runtime adapter.                                       |
+| `ENV`             | app             | Local development environment hint               | `development`                     | Set by `tako dev` for local app process compatibility.             |
+| `TAKO_ENV`        | app             | Deployed environment name                        | `production`, `staging`, ...      | Set during deploy manifest generation for remote runtime.          |
 | `NODE_ENV`        | app             | Node convention env                              | `development` / `production`      | Set by runtime adapter.                                            |
 | `BUN_ENV`         | app             | Bun convention env                               | `development` / `production`      | Set by runtime adapter.                                            |
 | `TAKO_BUILD`      | app             | Deployed build id                                | string                            | Written by `tako deploy` into release `.env`.                      |

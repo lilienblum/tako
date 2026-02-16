@@ -78,7 +78,7 @@ Expected deploy behavior:
   - Symptom: traffic arrives before instance becomes healthy.
   - Fix: check startup logs and health probe readiness.
 - `Route mismatch / wrong app`:
-  - Verify env route config in [`tako.toml` reference](/docs/tako-toml-reference).
+  - Verify env route config in [`tako.toml` reference](/docs/tako-toml).
   - Ensure environment has valid `route` or `routes` values.
 
 ## Config and State Edge Cases
@@ -109,4 +109,4 @@ If issue remains unresolved, capture:
 1. `tako servers status` output
 2. `tako logs --env <environment>` output
 3. host scope (`one host` vs `all hosts`)
-4. route/env/server mapping from [`tako.toml` reference](/docs/tako-toml-reference)
+4. route/env/server mapping from [`tako.toml` reference](/docs/tako-toml)

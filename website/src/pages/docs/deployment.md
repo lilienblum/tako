@@ -19,11 +19,13 @@ tako deploy [--env <environment>]
 
 What happens during deploy:
 
-- Build happens locally.
-- Deploy artifact source is `dist` in `tako.toml` (default `.tako/dist`).
-- Deploy packages `dist` directly and writes `app.json` at archive root.
+- Deploy packages source files (not prebuilt `dist`) into a versioned archive.
+- Source bundle root is resolved in this order: git root, nearest JS workspace root, current app directory.
+- Source filtering uses `.gitignore` with `.takoignore` overrides.
+- Non-overridable excludes: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
 - A versioned tarball is created under `.tako/artifacts/`.
 - Deploys run to all target servers in parallel.
+- On each server, Tako writes `.env`, runs install/build, merges configured assets, resolves runtime `main`, writes final `app.json`, then performs rolling update.
 - Each server is handled independently, so partial success is possible.
 
 ## Pre-Deploy Checklist
@@ -33,8 +35,9 @@ Before you ship, do a quick sanity pass:
 1. Ensure target hosts exist in `~/.tako/config.toml` (or check with `tako servers ls`) and were added with SSH checks enabled so target metadata was detected.
 2. Confirm `tako.toml` has route/env/server mappings for the target environment.
 3. Verify secrets are present for the target env (`tako secrets sync` if needed).
-4. Run your local tests/build so you do not upload a broken artifact.
-5. Ensure deployable files exist in your deploy `dist` directory (build output or prebuilt files).
+4. Run your local tests before deploy.
+5. If relying on Vite metadata for entrypoint resolution, ensure server build emits `<dist>/.tako-vite.json` (or set `main` explicitly).
+6. If using `.takoignore`, verify it does not accidentally exclude files needed by server-side install/build.
 
 ## Server Prerequisites
 
@@ -48,27 +51,32 @@ Each target server should have:
 
 ## Configuration Inputs
 
-### Project config ([`tako.toml`](/docs/tako-tom))
+### Project config ([`tako.toml`](/docs/tako-toml))
 
 - `tako.toml` is required in the project root.
 - Defines environments and routes.
 - Every non-development environment must define `route` or `routes`.
 - Empty route sets are rejected for non-development environments (no implicit catch-all mode).
-- Optional `assets` directories are merged into deploy public assets (`<dist>/public`) in listed order.
+- Optional `build` runs on the server in the app directory after upload.
+- Optional `dist` (default `.tako/dist`) is used for Vite metadata lookup (`<dist>/.tako-vite.json`), not as the deploy payload root.
+- Optional `main` overrides runtime entrypoint in deployed `app.json`.
+- Optional `assets` directories are merged into app `public/` after build in listed order.
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
 - Defines per-server scaling settings (`instances`, `idle_timeout`) via global and per-server overrides.
 
-### Build artifacts (`dist`)
+### Source bundle and runtime manifest
 
-- `tako deploy` reads deployable files from `dist` in `tako.toml` (default `.tako/dist`).
-- If your runtime build command runs, it must write deployable files into `dist`.
-- If no build command runs, pre-populate `dist` before deploying.
-- If `assets` is configured, those directories are merged into `<dist>/public` before packaging.
-- On asset merge conflicts, later configured asset roots overwrite earlier files.
-- Deploy fails before upload if `dist` is missing or empty.
-- Archive payload always includes:
-  - all files from `dist` at archive root
-  - `app.json` (metadata: app, env, runtime/entry point, env vars, secret names)
+- Archive payload is source-based and includes filtered files from the resolved source bundle root.
+- Archive includes a fallback `app.json` at app path inside the archive.
+- On each server:
+  - install runs at release bundle root (Bun default: `bun install --frozen-lockfile`)
+  - build runs in app directory (if configured)
+  - `assets` are copied into app `public/` after build (later entries overwrite earlier ones)
+  - final `app.json` is written in app directory after resolving runtime `main`
+- Runtime `main` resolution order:
+  1. `main` from `tako.toml`
+  2. `compiled_main` from `<dist>/.tako-vite.json` (resolved under `dist`)
+  3. runtime adapter fallback entry from source detection
 
 ### Global server inventory (`~/.tako/config.toml`)
 
@@ -88,10 +96,14 @@ Each target server should have:
 6. Create release and shared directories.
 7. Upload and extract archive into `/opt/tako/apps/<app>/releases/<version>/`.
 8. Link shared directories (for example `logs`).
-9. Write release `.env` including `TAKO_BUILD` and environment secrets.
-10. Send deploy command to `tako-server`.
-11. Update `current` symlink after server accepts deploy.
-12. Clean old release directories.
+9. Write release app `.env` including `TAKO_BUILD` and environment secrets.
+10. Run runtime install command at release bundle root.
+11. Run app build command in app directory (if configured).
+12. Merge configured `assets` into app `public/`.
+13. Resolve runtime `main`, write final app `app.json`.
+14. Send deploy command to `tako-server`.
+15. Update `current` symlink after server accepts deploy.
+16. Clean old release directories.
 
 ## Remote Layout
 
@@ -101,8 +113,10 @@ Each target server should have:
   .deploy_lock/
   releases/
     <version>/
-      ...app files...
-      .env
+      <app-subdir>/        # "." when deploying from app root
+        ...app files...
+        .env
+        app.json
       logs -> /opt/tako/apps/<app>/shared/logs
   shared/
     logs/
@@ -123,7 +137,9 @@ Each target server should have:
 
 - Use `tako servers status` to inspect deployed app state and per-server service/connectivity state.
 - Use `tako logs --env <environment>` to stream remote logs.
-- HTTP requests are redirected to HTTPS by default (ACME challenge and `/_tako/status` stay on HTTP).
+- HTTP requests are redirected to HTTPS by default.
+- Exceptions on HTTP: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status`.
+- Requests without internal host are routed to apps normally.
 
 ## Post-Deploy Verification
 
@@ -139,5 +155,6 @@ Right after deploy:
 Deploy E2E tests are opt-in and Docker-backed:
 
 ```bash
+just e2e e2e/fixtures/js/bun
 just e2e e2e/fixtures/js/tanstack-start
 ```

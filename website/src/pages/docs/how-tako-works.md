@@ -38,7 +38,7 @@ Key config rules:
 - Route values must include a hostname.
 - Development routes must be `{app}.tako.local` or a subdomain of it.
 
-See full config details in [`tako.toml` Reference](/docs/tako-tom).
+See full config details in [`tako.toml` Reference](/docs/tako-toml).
 
 ## Local Development (`tako dev`)
 
@@ -69,16 +69,19 @@ Session and idle behavior:
 
 High-level deploy flow:
 
-1. Validate config/runtime/secrets.
-2. Build locally.
-3. Create a release archive (`.tako/artifacts/{version}.tar.gz`).
+1. Validate config/runtime/secrets/server target metadata.
+2. Resolve source bundle root and app subdirectory.
+3. Create a source archive (`.tako/artifacts/{version}.tar.gz`) from filtered source files.
 4. Deploy to target servers in parallel over SSH.
-5. On each server: lock, upload/extract, apply env/secrets, rolling update, unlock.
+5. On each server: lock, upload/extract, write `.env`, run install/build, merge assets, finalize `app.json`, rolling update, unlock.
 
 Important deployment behavior:
 
 - `production` is the default environment when `--env` is omitted.
 - `development` is reserved for `tako dev` and cannot be deployed.
+- Source bundle filtering uses `.gitignore` with `.takoignore` overrides.
+- Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
+- `dist` is used for Vite metadata lookup (for `compiled_main`), not as the deploy payload root.
 - For production without explicit server mapping:
   - With one global server, Tako can guide/persist mapping.
   - With multiple global servers (interactive), Tako prompts for selection.
@@ -107,6 +110,7 @@ Wildcard and path routes are supported, for example:
 Tako uses active HTTP probing as the source of truth for instance health.
 
 - Probe interval: 1s (default)
+- Probe target: `GET /status` with `Host: tako.internal`
 - Failure handling:
   - consecutive failures mark instances unhealthy and remove them from balancing
   - deeper failure threshold marks instances stopped/killed
@@ -125,7 +129,9 @@ Remote TLS behavior:
 
 - HTTPS is default for remote app routes.
 - HTTP requests redirect to HTTPS by default.
-- Exceptions like ACME challenge paths remain on HTTP where needed.
+- `/.well-known/acme-challenge/*` remains on HTTP for ACME.
+- Internal `Host: tako.internal` + `/status` stays on HTTP.
+- Non-internal-host requests are routed to apps normally (no reserved `/_tako/*` edge namespace).
 
 Certificate behavior:
 
@@ -150,4 +156,4 @@ Typical remote layout:
 - `tako secrets ...`: encrypted secret management and sync to runtime.
 - `tako servers restart|reload|upgrade`: runtime lifecycle operations for remote `tako-server`.
 
-Use this page as the mental model, then use [CLI Reference](/docs/cli-reference) for command details.
+Use this page as the mental model, then use [CLI Reference](/docs/cli) for command details.

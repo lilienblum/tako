@@ -2,7 +2,7 @@
 layout: ../../layouts/DocsLayout.astro
 title: Tako Docs - CLI Reference
 heading: CLI Reference
-current: cli-reference
+current: cli
 ---
 
 # CLI Reference
