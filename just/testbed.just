@@ -1,47 +1,28 @@
 set working-directory := ".."
 
-export TAKO_HOME := "debug/.tako"
+# Docker-based deploy testbed (Alpine + sshd VPS simulation).
 
-# Docker-based deploy debugging (Alpine + sshd VPS simulation).
 CONTAINER_NAME := "tako-bun-server"
 IMAGE_NAME := "tako-bun-server:local"
 DOCKER_SSH_PORT := "2222"
 
-# Docker platform for the local debug container.
+# Docker platform for the local testbed container.
+
 DOCKER_PLATFORM := "linux/arm64"
 
-# For local debug installs, we serve a built `tako-server` binary from the host
+# For local testbed installs, we serve a built `tako-server` binary from the host
 # and have the Docker container download it.
-ARTIFACTS_DIR := "debug/artifacts"
+
+ARTIFACTS_DIR := "local-dev/artifacts"
 ARTIFACTS_PORT := "8000"
-DEBUG_TMP_DIR := "debug/tmp"
-DOCKER_SSH_KEY_FILE := "debug/tmp/docker_ssh_key"
+TESTBED_TMP_DIR := "local-dev/tmp"
+DOCKER_SSH_KEY_FILE := "local-dev/tmp/docker_ssh_key"
 
 # Docker Linux containers can reach the macOS host via this hostname.
 # If this doesn't resolve for you, try `host.docker.internal`.
 
-tako *arguments:
-    # Build both binaries, then run the current CLI source without installing.
-    cargo build -p tako --bins
-    TAKO_HOME="$(pwd)/{{ TAKO_HOME }}" cargo run -p tako --bin tako -- {{ arguments }}
-
-clean:
-    cargo clean
-    rm -rf {{ TAKO_HOME }}
-    # On macOS, remove the local dev CA from the keychain (best-effort).
-    if [ "$(uname -s)" = "Darwin" ]; then \
-    security delete-generic-password -s "tako-local-ca" -a "tako" >/dev/null 2>&1 || true; \
-    security find-certificate -c "Tako Local Development CA" /Library/Keychains/System.keychain >/dev/null 2>&1 && \
-        sudo security delete-certificate -c "Tako Local Development CA" /Library/Keychains/System.keychain >/dev/null 2>&1 || true; \
-    fi
-    # Remove any leftover containers and images.
-    docker rm -f {{ CONTAINER_NAME }} 2>/dev/null || true
-    docker rmi -f {{ IMAGE_NAME }} 2>/dev/null || true
-    # Kill the local dev server process if it's still around.
-    pkill -x tako-dev-server 2>/dev/null || true
-
 build-tako-server:
-    # Build both architectures for unknown deployment targets.
+    # Build both architectures used by testbed containers (see docker/bun.Dockerfile).
     mkdir -p {{ ARTIFACTS_DIR }}
     # Docker/buildx expects amd64/arm64 (not x86_64/aarch64).
     for arch in amd64 arm64; do \
@@ -59,10 +40,10 @@ build-tako-server:
     ls -la {{ ARTIFACTS_DIR }}/tako-server-linux-*
 
 create-bun-server:
-    # Create a named debug container with sshd for VPS-like installer behavior.
+    # Create a named testbed container with sshd for VPS-like installer behavior.
     docker rm -f {{ CONTAINER_NAME }} 2>/dev/null || true
     docker build --platform {{ DOCKER_PLATFORM }} -f docker/bun.Dockerfile -t {{ IMAGE_NAME }} .
-    mkdir -p {{ DEBUG_TMP_DIR }}
+    mkdir -p {{ TESTBED_TMP_DIR }}
     PUBKEY_FILE="${SSH_PUBKEY_FILE:-}"; \
         if [ -z "$PUBKEY_FILE" ]; then \
             for f in "$HOME/.ssh/id_ed25519.pub" "$HOME/.ssh/id_rsa.pub" "$HOME/.ssh/id_ecdsa.pub" "$HOME/.ssh/id_dsa.pub"; do \
@@ -90,11 +71,11 @@ create-bun-server:
             '
 
 install-bun-server:
-    # Install tako-server in the temporary Docker debug server container.
+    # Install tako-server in the temporary Docker testbed server container.
     # Starts a temporary local artifacts server for this install run.
-    test -f {{ DOCKER_SSH_KEY_FILE }} || (echo "Missing {{ DOCKER_SSH_KEY_FILE }}. Run 'just create-bun-server' first." >&2; exit 1)
+    test -f {{ DOCKER_SSH_KEY_FILE }} || (echo "Missing {{ DOCKER_SSH_KEY_FILE }}. Run 'just testbed::create-bun-server' first." >&2; exit 1)
     mkdir -p {{ ARTIFACTS_DIR }}
-    mkdir -p {{ DEBUG_TMP_DIR }}
+    mkdir -p {{ TESTBED_TMP_DIR }}
     sh -eu -c '\
         python3 -m http.server {{ ARTIFACTS_PORT }} --directory {{ ARTIFACTS_DIR }} >/dev/null 2>&1 & \
         artifacts_pid=$!; \

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 /// Get Tako's global home directory.
 ///
 /// Mirrors `tako/src/paths.rs`:
-/// - In debug builds, prefer `{repo}/debug/.tako` when running from a source checkout.
+/// - In debug builds, prefer `{repo}/local-dev/.tako` when running from a source checkout.
 /// - In release builds, default to `~/.tako`.
 pub fn tako_home_dir() -> Result<PathBuf, std::io::Error> {
     if let Ok(v) = std::env::var("TAKO_HOME")
@@ -46,7 +46,7 @@ pub fn target_dir_from_exe(exe_path: &Path) -> Option<PathBuf> {
 }
 
 pub fn dev_tako_home_from_exe(exe_path: &Path) -> Option<PathBuf> {
-    repo_root_from_exe(exe_path).map(|root| root.join("debug").join(".tako"))
+    repo_root_from_exe(exe_path).map(|root| root.join("local-dev").join(".tako"))
 }
 
 #[cfg(test)]
@@ -73,11 +73,11 @@ mod tests {
     }
 
     #[test]
-    fn dev_tako_home_is_under_debug() {
+    fn dev_tako_home_is_under_local_dev() {
         let exe = PathBuf::from("/Users/me/proj/target/debug/tako-dev-server");
         assert_eq!(
             dev_tako_home_from_exe(&exe).as_deref(),
-            Some(Path::new("/Users/me/proj/debug/.tako"))
+            Some(Path::new("/Users/me/proj/local-dev/.tako"))
         );
     }
 

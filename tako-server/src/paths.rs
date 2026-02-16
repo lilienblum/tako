@@ -22,10 +22,10 @@ pub fn repo_root_from_exe(exe_path: &Path) -> Option<PathBuf> {
 
 /// Default unix socket path for debug builds when running from a source checkout.
 ///
-/// Example: `{repo}/debug/tako-server/tmp/tako.sock`
+/// Example: `{repo}/local-dev/tako-server/tmp/tako.sock`
 pub fn debug_default_socket_from_exe(exe_path: &Path) -> Option<PathBuf> {
     repo_root_from_exe(exe_path).map(|root| {
-        root.join("debug")
+        root.join("local-dev")
             .join("tako-server")
             .join("tmp")
             .join("tako.sock")
@@ -34,9 +34,9 @@ pub fn debug_default_socket_from_exe(exe_path: &Path) -> Option<PathBuf> {
 
 /// Default data dir for debug builds when running from a source checkout.
 ///
-/// Example: `{repo}/debug/tako-server/data`
+/// Example: `{repo}/local-dev/tako-server/data`
 pub fn debug_default_data_dir_from_exe(exe_path: &Path) -> Option<PathBuf> {
-    repo_root_from_exe(exe_path).map(|root| root.join("debug").join("tako-server").join("data"))
+    repo_root_from_exe(exe_path).map(|root| root.join("local-dev").join("tako-server").join("data"))
 }
 
 #[cfg(test)]
@@ -53,11 +53,13 @@ mod tests {
     }
 
     #[test]
-    fn debug_default_socket_is_under_debug_tmp() {
+    fn debug_default_socket_is_under_local_dev_tmp() {
         let exe = PathBuf::from("/Users/me/proj/target/debug/tako-server");
         assert_eq!(
             debug_default_socket_from_exe(&exe).as_deref(),
-            Some(Path::new("/Users/me/proj/debug/tako-server/tmp/tako.sock"))
+            Some(Path::new(
+                "/Users/me/proj/local-dev/tako-server/tmp/tako.sock"
+            ))
         );
     }
 }

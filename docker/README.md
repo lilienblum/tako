@@ -16,15 +16,9 @@ Internal Docker tooling for building and debugging Tako server artifacts.
 From repository root:
 
 ```bash
-just run-debug::build-tako-server
-just run-debug::create-bun-server
-just run-debug::install-bun-server
+just testbed::build-tako-server
+just testbed::create-bun-server
+just testbed::install-bun-server
 ```
 
-Legacy top-level aliases still work:
-
-```bash
-just build-tako-server
-just create-bun-server
-just install-bun-server
-```
+Use the `testbed::` namespace for these recipes.

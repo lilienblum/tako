@@ -1,7 +1,7 @@
 .claude/settings.local.json
 node_modules/
 target/
-debug/
+local-dev/
 dist/
 .output/
 .tanstack/
