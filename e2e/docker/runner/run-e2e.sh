@@ -315,16 +315,7 @@ name = "ssh"
 host = "server-ubuntu"
 port = 22
 
-[[servers]]
-name = "ssh2"
-host = "server-alma"
-port = 22
-
 [server_targets.ssh]
-arch = "$TARGET_ARCH"
-libc = "gnu"
-
-[server_targets.ssh2]
 arch = "$TARGET_ARCH"
 libc = "gnu"
 CFG

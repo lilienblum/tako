@@ -1,11 +1,12 @@
 export default async function fetch(request: Request) {
   const url = new URL(request.url);
-  const host = request.headers.get("host") ?? url.host;
+  if (url.pathname === "/") {
+    return new Response("<h1>Tako app</h1>", {
+      headers: {
+        "content-type": "text/html; charset=utf-8",
+      },
+    });
+  }
 
-  return Response.json({
-    status: "ok",
-    app: "bun-e2e",
-    host,
-    pathname: url.pathname,
-  });
+  return new Response("Not Found", { status: 404 });
 }

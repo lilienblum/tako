@@ -1,5 +1,5 @@
 dist = "dist"
-assets = ["public", "dist/client"]
+assets = ["dist/client"]
 
 [envs.production]
 route = "tanstack-start-example.orb.local"

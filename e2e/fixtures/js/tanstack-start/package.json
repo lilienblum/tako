@@ -18,12 +18,10 @@
     "tako.sh": "workspace:*"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "catalog:web",
     "@types/node": "catalog:dev",
     "@types/react": "catalog:web",
     "@types/react-dom": "catalog:web",
     "@vitejs/plugin-react": "catalog:web",
-    "tailwindcss": "catalog:web",
     "typescript": "catalog:dev",
     "vite": "catalog:web"
   }

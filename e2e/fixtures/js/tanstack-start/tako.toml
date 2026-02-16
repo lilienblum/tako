@@ -1,8 +1,5 @@
 dist = "dist"
-assets = ["public", "dist/client"]
+assets = ["dist/client"]
 
 [envs.production]
 route = "tanstack-start-e2e.example.com"
-
-[servers.ssh]
-env = "production"

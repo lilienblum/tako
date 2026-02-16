@@ -819,7 +819,6 @@ entry = "index.ts"
 
 [envs.production]
 route = "prod.example.com"
-server = "prod-server"
 "#,
         )
         .unwrap();
@@ -935,7 +934,6 @@ entry = "index.ts"
 
 [envs.production]
 route = "prod.example.com"
-server = "prod-server"
 
 [servers.prod-server]
 env = "production"
@@ -1016,7 +1014,6 @@ instances = 2
 
 [envs.production]
 route = "prod.example.com"
-server = "prod-server"
 "#,
         )
         .unwrap();
@@ -1179,7 +1176,6 @@ entry = "index.ts"
 
 [envs.production]
 route = "prod.example.com"
-server = "prod-server"
 "#,
         )
         .unwrap();
@@ -1214,7 +1210,6 @@ name = "test-app"
 
 [envs.production]
 route = "prod.example.com"
-server = "prod-server"
 "#,
         )
         .unwrap();
@@ -1250,7 +1245,6 @@ entry = "nonexistent.ts"
 
 [envs.production]
 route = "prod.example.com"
-server = "prod-server"
 "#,
         )
         .unwrap();
@@ -1462,7 +1456,6 @@ libc = "glibc"
 name = "test-app"
 
 [envs.production]
-server = "test-server"
 routes = ["api.example.com"]
 "#,
         )

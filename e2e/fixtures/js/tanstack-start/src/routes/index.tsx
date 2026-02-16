@@ -5,10 +5,5 @@ export const Route = createFileRoute("/")({
 });
 
 function Home() {
-  return (
-    <section>
-      <h1>TanStack Start E2E Fixture</h1>
-      <p>This fixture is used by deploy e2e Docker tests.</p>
-    </section>
-  );
+  return <h1>Tako app</h1>;
 }

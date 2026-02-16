@@ -21,7 +21,7 @@ After build:
 
 - `dist/.tako-vite.json` contains the compiled server entry metadata.
 - `tako.toml` points deploy input to `dist`.
-- `assets` merge order populates `dist/public` from `public/` and `dist/client`.
+- `assets` merges `dist/client` into `dist/public`.
 
 ## Notes
 

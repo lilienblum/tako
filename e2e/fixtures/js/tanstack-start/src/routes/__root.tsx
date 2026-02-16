@@ -1,27 +1,6 @@
-import { HeadContent, Link, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
-import appCss from "../styles/app.css?url";
+import { HeadContent, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
 
 export const Route = createRootRoute({
-  head: () => ({
-    meta: [
-      {
-        charSet: "utf-8",
-      },
-      {
-        name: "viewport",
-        content: "width=device-width, initial-scale=1",
-      },
-      {
-        title: "TanStack Start E2E Fixture",
-      },
-    ],
-    links: [
-      {
-        rel: "stylesheet",
-        href: appCss,
-      },
-    ],
-  }),
   shellComponent: RootDocument,
   component: RootComponent,
 });
@@ -41,18 +20,5 @@ function RootDocument({ children }: { children: React.ReactNode }) {
 }
 
 function RootComponent() {
-  return (
-    <>
-      <header className="page-header">
-        <strong>TanStack Start E2E</strong>
-        <Link to="/" className="home-link">
-          Home
-        </Link>
-      </header>
-
-      <main className="page-main">
-        <Outlet />
-      </main>
-    </>
-  );
+  return <Outlet />;
 }
