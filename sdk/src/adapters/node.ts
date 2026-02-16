@@ -24,6 +24,7 @@
 
 import { Tako } from "../tako";
 import type { TakoOptions, TakoStatus } from "../types";
+import { TAKO_INTERNAL_HOST, TAKO_INTERNAL_STATUS_PATH } from "../endpoints";
 
 // Re-export core classes
 export { Tako } from "../tako";
@@ -61,37 +62,53 @@ export function setStatus(newStatus: TakoStatus["status"]): void {
  * Express/Connect-style middleware for Tako internal endpoints
  *
  * Handles:
- * - GET /_tako/status - Returns app status
- * - GET /_tako/health - Health check endpoint
+ * - GET /status on Host `tako.internal` - Returns app status
  */
 export function createMiddleware(): (
-  req: { url?: string; method?: string },
+  req: {
+    url?: string;
+    method?: string;
+    headers?: { host?: string | string[] };
+  },
   res: {
     writeHead: (status: number, headers: Record<string, string>) => void;
     end: (body: string) => void;
   },
   next: () => void,
 ) => void {
-  return (req, res, next) => {
-    const url = req.url || "";
-    const method = req.method || "GET";
+  const normalizeHost = (value: string | string[] | undefined): string => {
+    const candidate = Array.isArray(value) ? value[0] : value;
+    return (candidate || "").trim().toLowerCase().split(":")[0];
+  };
 
-    if (url === "/_tako/status" && method === "GET") {
+  const requestPathname = (value: string): string => {
+    try {
+      return new URL(value, "http://localhost").pathname;
+    } catch {
+      return "/";
+    }
+  };
+
+  return (req, res, next) => {
+    const url = req.url || "/";
+    const method = req.method || "GET";
+    const host = normalizeHost(req.headers?.host);
+    const pathname = requestPathname(url);
+
+    if (host !== TAKO_INTERNAL_HOST) {
+      next();
+      return;
+    }
+
+    if (pathname === TAKO_INTERNAL_STATUS_PATH && method === "GET") {
       const statusData = getStatus();
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(statusData));
       return;
     }
 
-    if (url === "/_tako/health" && method === "GET") {
-      const statusData = getStatus();
-      const isHealthy = statusData.status === "healthy";
-      res.writeHead(isHealthy ? 200 : 503, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ healthy: isHealthy, status: statusData.status }));
-      return;
-    }
-
-    next();
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
   };
 }
 

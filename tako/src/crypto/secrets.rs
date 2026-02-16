@@ -226,7 +226,31 @@ fn validate_key_scope(scope: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::OsString;
     use tempfile::TempDir;
+
+    fn with_temp_tako_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+        let _lock = crate::paths::test_tako_home_env_lock();
+
+        let temp = TempDir::new().unwrap();
+        let previous = std::env::var_os("TAKO_HOME");
+        unsafe {
+            std::env::set_var("TAKO_HOME", temp.path());
+        }
+
+        struct ResetEnv(Option<OsString>);
+        impl Drop for ResetEnv {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+                    None => unsafe { std::env::remove_var("TAKO_HOME") },
+                }
+            }
+        }
+        let _reset = ResetEnv(previous);
+
+        f(temp.path())
+    }
 
     #[test]
     fn test_generate_key() {
@@ -315,36 +339,17 @@ mod tests {
 
     #[test]
     fn test_key_store_for_env_uses_keys_subdir() {
-        let temp = TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("TAKO_HOME", temp.path());
-        }
-
-        let store = KeyStore::for_env("production").unwrap();
-
-        unsafe {
-            std::env::remove_var("TAKO_HOME");
-        }
-
-        assert_eq!(
-            store.key_path(),
-            temp.path().join("keys").join("production")
-        );
+        with_temp_tako_home(|temp_home| {
+            let store = KeyStore::for_env("production").unwrap();
+            assert_eq!(store.key_path(), temp_home.join("keys").join("production"));
+        });
     }
 
     #[test]
     fn test_key_store_for_env_rejects_invalid_name() {
-        let temp = TempDir::new().unwrap();
-        unsafe {
-            std::env::set_var("TAKO_HOME", temp.path());
-        }
-
-        let result = KeyStore::for_env("../production");
-
-        unsafe {
-            std::env::remove_var("TAKO_HOME");
-        }
-
-        assert!(result.is_err());
+        with_temp_tako_home(|_| {
+            let result = KeyStore::for_env("../production");
+            assert!(result.is_err());
+        });
     }
 }

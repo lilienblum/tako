@@ -653,30 +653,28 @@ async fn sync_to_server(
 mod tests {
     use super::*;
     use crate::config::{ServerEntry, ServersToml, TakoToml};
-    use std::sync::{Mutex, OnceLock};
+    use std::ffi::OsString;
     use tempfile::TempDir;
 
     fn with_temp_tako_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
-        static TAKO_HOME_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        let _lock = TAKO_HOME_LOCK
-            .get_or_init(|| Mutex::new(()))
-            .lock()
-            .expect("lock poisoned");
+        let _lock = crate::paths::test_tako_home_env_lock();
 
         let temp = TempDir::new().expect("temp dir");
+        let previous = std::env::var_os("TAKO_HOME");
         unsafe {
             std::env::set_var("TAKO_HOME", temp.path());
         }
 
-        struct ResetEnv;
+        struct ResetEnv(Option<OsString>);
         impl Drop for ResetEnv {
             fn drop(&mut self) {
-                unsafe {
-                    std::env::remove_var("TAKO_HOME");
+                match self.0.take() {
+                    Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+                    None => unsafe { std::env::remove_var("TAKO_HOME") },
                 }
             }
         }
-        let _reset = ResetEnv;
+        let _reset = ResetEnv(previous);
 
         f(temp.path())
     }

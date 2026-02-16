@@ -6,9 +6,16 @@
  * Standard web fetch handler interface
  * Compatible with Cloudflare Workers, Deno Deploy, Bun, etc.
  */
-export interface FetchHandler {
-  fetch(request: Request, env: Record<string, string>): Response | Promise<Response>;
-}
+export type FetchFunction = (
+  request: Request,
+  env: Record<string, string>,
+) => Response | Promise<Response>;
+
+export type FetchHandler =
+  | FetchFunction
+  | {
+      fetch: FetchFunction;
+    };
 
 /**
  * Options for Tako SDK

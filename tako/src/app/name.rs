@@ -18,7 +18,7 @@ pub type Result<T> = std::result::Result<T, AppNameError>;
 /// Resolve app name from a project directory
 ///
 /// Resolution order:
-/// 1. tako.toml `[tako].name` field
+/// 1. tako.toml top-level `name` field
 /// 2. package.json `name` field (for JS runtimes)
 /// 3. go.mod module name (for Go)
 /// 4. Directory name as fallback
@@ -52,16 +52,13 @@ pub fn resolve_app_name<P: AsRef<Path>>(dir: P) -> Result<String> {
     validate_and_sanitize_app_name(&dir_name)
 }
 
-/// Get name from tako.toml [tako] section
+/// Get top-level name from tako.toml
 fn get_name_from_tako_toml<P: AsRef<Path>>(dir: P) -> Option<String> {
     let path = dir.as_ref().join("tako.toml");
     let content = fs::read_to_string(&path).ok()?;
 
     let toml: toml::Value = toml::from_str(&content).ok()?;
-    toml.get("tako")?
-        .get("name")?
-        .as_str()
-        .map(|s| s.to_string())
+    toml.get("name")?.as_str().map(|s| s.to_string())
 }
 
 /// Get name from package.json
@@ -185,7 +182,6 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         let tako_toml = r#"
-[tako]
 name = "my-app"
 "#;
         fs::write(temp_dir.path().join("tako.toml"), tako_toml).unwrap();
@@ -233,7 +229,6 @@ name = "my-app"
 
         // Create both tako.toml and package.json
         let tako_toml = r#"
-[tako]
 name = "tako-name"
 "#;
         fs::write(temp_dir.path().join("tako.toml"), tako_toml).unwrap();

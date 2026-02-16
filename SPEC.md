@@ -33,17 +33,18 @@ App names must be URL-friendly (DNS hostname compatible):
 - **Examples:** `my-app`, `api-server`, `web-frontend`
 
 This ensures names work in DNS (`{app-name}.tako.local` by default), URLs, and environment variables.
-When `[tako].name` is set, it acts as the app's stable identity and should not change after first deploy.
+When `name` is set, it acts as the app's stable identity and should not change after first deploy.
 
 ### tako.toml (Project Root - Required)
 
 Application configuration for build, variables, routes, and deployment.
 
 ```toml
-[tako]
 name = "my-app"           # Optional - auto-detected if omitted; once set, treat as stable and do not change
-build = "bun build"       # Optional - uses runtime default if omitted
-assets = ["assets/shared", "assets/branding"] # Optional - extra asset directories merged into deploy public assets
+build = "bun build"       # Optional - server-side build command override
+dist = ".tako/dist"       # Optional - build output root used for Vite metadata lookup (default: .tako/dist)
+main = "server/index.mjs" # Optional - deploy runtime entry override
+assets = ["assets/shared", "assets/branding"] # Optional - directories merged into app/public during deploy
 
 [vars]
 LOG_LEVEL = "info"        # Base variables (all environments)
@@ -81,15 +82,18 @@ env = "production"
 
 1. `[vars]` - base
 2. `[vars.{environment}]` - environment-specific
-3. Auto-set by Tako: `ENV={environment}`, `TAKO_BUILD={version}`
+3. Auto-set by Tako during deploy: `TAKO_ENV={environment}` plus runtime env vars (for Bun: `NODE_ENV`, `BUN_ENV`)
 
-**Asset merge behavior:**
+**Build/deploy behavior:**
 
-- `[tako].assets` is optional and must be an array of relative directory paths under the project root.
-- During `tako deploy`, these directories are merged into deploy public assets:
-  - `.tako/artifacts/app/static` when that directory exists
-  - otherwise `.tako/artifacts/app/public`
-- Existing artifact files win on path conflicts (configured asset roots do not overwrite existing files).
+- `dist` is optional and must be a relative path under the project root (default: `.tako/dist`).
+- `main` is optional. If set, deploy uses it as the runtime entry in deployed `app.json`.
+- `assets` is optional and must be an array of relative directory paths under the project root.
+- During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise nearest workspace root or app directory).
+- Source bundle filtering uses `.gitignore` plus `.takoignore` overrides.
+- Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
+- Deploy runs the runtime adapter's install command on the server bundle root (Bun: `bun install --frozen-lockfile`), then runs build in the app directory when configured.
+- `assets` directories are merged into `public/` in the app directory after build, in listed order (later entries overwrite earlier ones).
 
 **Instance behavior:**
 
@@ -211,7 +215,7 @@ Template behavior:
 - Leaves only minimal starter options uncommented:
   - `[envs.production].route`
 - Includes commented examples/explanations for all supported `tako.toml` options:
-  - `[tako].name`, `[tako].build`, and `[tako].assets`
+  - `name`, `build`, `dist`, `main`, and `assets`
   - `[vars]`
   - `[vars.<env>]`
   - `[envs.<env>].routes` and inline env vars
@@ -554,17 +558,20 @@ Deploy flow helpers:
 **Steps:**
 
 1. Pre-deployment validation (secrets present, runtime detected, server target metadata present/valid for all selected servers)
-2. Build locally
-3. Validate build artifact directory (`.tako/artifacts/app`)
-4. Stage archive payload:
-   - copy artifact directory into archive payload as `artifacts/`
-   - write `app.json` manifest (app name, environment, runtime metadata, entry point, env vars for target env, and target secret names)
-5. Create archive (`.tako/artifacts/{version}.tar.gz`) from the staged payload (previous build archives are cleared before each deploy)
-6. Deploy to all servers in parallel:
+2. Resolve source bundle root (git root when available; otherwise nearest workspace root or app directory)
+3. Resolve app subdirectory relative to source bundle root
+4. Resolve fallback runtime `main` (`main` config override, otherwise runtime source entry relative to app directory)
+5. Create source archive (`.tako/artifacts/{version}.tar.gz`) and write fallback `app.json` at app path inside archive
+7. Deploy to all servers in parallel:
    - Require `tako-server` to be pre-installed and running on each server
    - Acquire deploy lock (prevents concurrent deploys)
    - Upload and extract archive
-   - Write `.env` with `TAKO_BUILD={version}` and secrets
+   - Write `.env` in app directory with `TAKO_BUILD={version}` and secrets
+   - Run the runtime adapter install command in extracted bundle root (Bun: `bun install --frozen-lockfile`)
+   - Run build command in app directory when configured (`tako.toml build`, else runtime default, else skip)
+   - Merge configured `assets` into app `public/` (ordered; later entries overwrite earlier ones)
+  - Resolve final runtime `main` (`main` config override, then Vite metadata from `<dist>/.tako-vite.json` resolved under `<dist>`, then fallback runtime source entry)
+   - Write final `app.json` in app directory
    - Perform rolling update
    - Release lock and clean up old releases (>30 days)
 
@@ -574,16 +581,16 @@ Deploy flow helpers:
 - Dirty working tree: `{commit_hash}_{content_hash}` (first 8 chars each)
 - No git commit/repo: `nogit_{timestamp}` (or `nogit_{content_hash}` when provided)
 
-**Build artifact contract:**
+**Source deploy contract:**
 
-- Deploy artifact source is always `.tako/artifacts/app`.
-- If a runtime build command is detected, it must write deployable files into `.tako/artifacts/app`.
-- If no build command is detected, `.tako/artifacts/app` must already contain prebuilt deployable files.
-- If `[tako].assets` is configured, each listed directory is merged into `.tako/artifacts/app/static` (or `.tako/artifacts/app/public` when `static/` is absent) before packaging.
-- Deploy fails before upload when `.tako/artifacts/app` is missing or empty.
-- Archive payload always includes:
-  - `artifacts/` directory (copied build output)
-  - `app.json` metadata manifest
+- Deploy archive source is the app's source bundle root (git root when available; otherwise nearest workspace root or app directory).
+- Deploy target app path is `DIR` from CLI (`tako deploy [DIR]`) relative to the source bundle root.
+- Source filtering uses `.gitignore`, with `.takoignore` as an override layer.
+- These paths are always excluded from archive payload: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
+- Runtime adapter install command runs on the server before build/start (Bun: `bun install --frozen-lockfile`).
+- Build command precedence: `tako.toml build` -> runtime adapter default -> no build.
+- If `assets` is configured, each listed directory is merged into app `public/` after build (ordered overwrite: later roots win on path conflicts).
+- Final `app.json` is written in the deployed app directory and contains runtime `main` used by `tako-server`.
 - Deploy requires valid `[server_targets.<name>]` metadata for each selected server (`arch` and `libc`).
 - Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
 - Deploy pre-validation still fails when target environment is missing secret keys used by other environments.
@@ -613,8 +620,11 @@ When deploying with `instances = 0`, rolling deploy still starts one temporary v
 **App start command (current):**
 
 - tako-server currently only supports Bun apps.
-- If `package.json` contains `scripts.dev`, tako-server starts the app with `bun run dev`.
-- Otherwise it starts with `bun run src/index.ts` (fallback: `index.ts`).
+- If release `app.json` exists, tako-server starts the app with `bun run node_modules/tako.sh/src/wrapper.ts <app.json.main>` for `runtime = "bun"`.
+- If `app.json` is missing, tako-server falls back to entry detection:
+  - If `package.json` contains `scripts.dev`, run `bun run dev`.
+  - Otherwise run `bun run <entry>` using the first existing default entry in this order:
+    `src/index.ts`, `index.ts`, `src/index.js`, `index.js`, `server/index.mjs`, `server/index.js`, `server/server.mjs`, `server/server.js`.
 
 **Partial failure:** If some servers fail while others succeed, deployment continues. Failures are reported at the end.
 
@@ -759,7 +769,8 @@ Reference script in this repo: `scripts/install-tako-server.sh` (source for `/in
 - ACME: Production Let's Encrypt
 - Renewal: Every 12 hours
 - HTTP requests redirect to HTTPS (`301`) by default.
-- Exceptions: `/.well-known/acme-challenge/*` and `/_tako/status` stay on HTTP.
+- Exceptions: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status` stay on HTTP.
+- No application path namespace is reserved at the edge proxy. Non-internal-host requests are routed to apps.
 
 **Optional `/opt/tako/server-config.toml`:**
 
@@ -826,7 +837,7 @@ email = "admin@example.com"
 | Name              | Used by         | Meaning                                                                    | Typical source                                                                                |
 | ----------------- | --------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `PORT`            | app             | Listen port for HTTP server                                                | Set by `tako-server` when running app instances; set by `tako dev` for the local app process. |
-| `ENV`             | app             | Environment name                                                           | Usually `development` in `tako dev`; `production` under `tako-server`.                        |
+| `TAKO_ENV`        | app             | Environment name                                                           | Set during deploy manifest generation (`production`, `staging`, etc.).                         |
 | `NODE_ENV`        | app             | Node.js convention env                                                     | Set by runtime adapter / server (`development` or `production`).                              |
 | `BUN_ENV`         | app             | Bun convention env                                                         | Set by runtime adapter (`development` or `production`).                                       |
 | `TAKO_BUILD`      | app             | Deployed build/version identifier                                          | Written into the release `.env` file during `tako deploy`.                                    |
@@ -935,17 +946,18 @@ Response:
 Active HTTP probing is the source of truth for instance health:
 
 - **Probe interval**: 1 second by default (configurable)
-- **Probe endpoint**: App's configured health check path (default: `/_tako/status`)
+- **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako.internal`
 - **Unhealthy threshold**: 2 consecutive failures → mark unhealthy, remove from load balancer
 - **Dead threshold**: 5 consecutive failures → mark stopped, kill process
 - **Recovery**: Single successful probe resets failure count and restores to healthy
 
-#### `/_tako/status` Endpoint
+#### Internal Status Endpoint
 
-Tako-server exposes a status endpoint for external health monitoring:
+Tako-server exposes a host-gated status endpoint for health monitoring:
 
 ```
-GET /_tako/status
+GET /status
+Host: tako.internal
 ```
 
 Response (200 if healthy, 503 if unhealthy):
@@ -974,7 +986,8 @@ Response (200 if healthy, 503 if unhealthy):
 }
 ```
 
-This endpoint is accessible on both HTTP and HTTPS, bypasses routing, and is not redirected.
+Requests that do not use internal host `tako.internal` are routed to apps normally.
+The internal status endpoint is accessible on both HTTP and HTTPS, bypasses routing, and is not redirected.
 
 ## TLS/SSL Certificates
 
@@ -1058,19 +1071,22 @@ import { Tako } from "tako.sh"; // Auto-detect
 import { takoVitePlugin } from "tako.sh/vite";
 ```
 
-- `tako.sh/vite` provides a build-time plugin that stages Vite output into `.tako/artifacts/app`.
-- Staged layout:
-  - `.tako/artifacts/app/static` = `public/` merged with the detected client output (client files override conflicts)
-  - `.tako/artifacts/app/server` = detected or configured server output
-- When client output cannot be auto-detected, plugin requires `clientDir` configuration.
-- `serverDir` is optional and can be explicitly configured (or disabled).
+- `tako.sh/vite` provides a build-time plugin that writes deploy metadata into Vite output.
+- It forces `ssr.noExternal = true` for SSR builds so runtime startup does not depend on a separate production `node_modules` tree for SSR externals.
+- It emits `<outDir>/tako-entry.mjs`, which wraps the compiled server entry and serves internal status on `Host: tako.internal` + `/status` for runtime health checks.
+- On build, it writes `.tako-vite.json` at deploy root:
+  - default: `<build.outDir>/.tako-vite.json`
+  - if `build.outDir` ends with `server`, metadata is written to the parent directory and `compiled_main` is prefixed with `server/`
+  - `compiled_main`: wrapped runtime entry (`tako-entry.mjs`)
+  - `entries`: all detected entry chunks
+- Deploy uses `compiled_main` when `main` is not set in `tako.toml`.
 
 ### Feature Overview
 
 - Unix socket creation and management
 - Ready signal on startup
 - Heartbeat every 1 second
-- `/_tako/status` endpoint
+- Internal status endpoint (`Host: tako.internal` + `/status`)
 - Graceful shutdown handling
 
 ### Optional Features
@@ -1084,7 +1100,7 @@ Tako.onConfigReload((newSecrets) => {
 
 ### Built-in Endpoints
 
-**`GET /_tako/status`**
+**`GET /status` with `Host: tako.internal`**
 
 ```json
 {

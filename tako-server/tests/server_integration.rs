@@ -160,14 +160,18 @@ impl TestServer {
     }
 
     fn http_get(&self, path: &str) -> Result<String, String> {
+        self.http_get_with_host("localhost", path)
+    }
+
+    fn http_get_with_host(&self, host: &str, path: &str) -> Result<String, String> {
         let addr = format!("127.0.0.1:{}", self.http_port);
         let mut stream =
             TcpStream::connect(&addr).map_err(|e| format!("Failed to connect: {}", e))?;
 
         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
         let request = format!(
-            "GET {} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-            path
+            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            path, host
         );
         stream
             .write_all(request.as_bytes())
@@ -238,7 +242,9 @@ mod instance_management {
 Bun.serve({
   port: Number(process.env.PORT || 3000),
   fetch(request) {
-    if (new URL(request.url).pathname === "/_tako/status") {
+    const url = new URL(request.url);
+    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (host === "tako.internal" && url.pathname === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -315,7 +321,7 @@ mod health_check {
         let server = TestServer::start();
 
         let response = server
-            .http_get("/_tako/status")
+            .http_get_with_host("tako.internal", "/status")
             .expect("status endpoint request should succeed");
 
         assert!(

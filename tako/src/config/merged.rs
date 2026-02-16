@@ -70,7 +70,6 @@ impl MergedConfig {
 
         // Determine app name
         let app_name = project
-            .tako
             .name
             .clone()
             .or_else(|| {
@@ -107,7 +106,6 @@ impl MergedConfig {
 
         // Determine app name
         let app_name = project
-            .tako
             .name
             .clone()
             .or_else(|| {
@@ -317,7 +315,6 @@ mod tests {
 
         // Create tako.toml
         let tako_toml = r#"
-[tako]
 name = "test-app"
 
 [vars]

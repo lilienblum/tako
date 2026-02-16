@@ -80,9 +80,9 @@ If your browser still complains about certs:
 
 ## Running Slow E2E Tests
 
-Some tests use Docker/SSH and are opt-in:
+Deploy e2e uses Docker/SSH and is opt-in:
 
-- `TAKO_E2E=1 cargo test -p tako --test deploy_e2e -- --nocapture`
+- `just e2e e2e/fixtures/js/tanstack-start`
 
 Name resolution for `.tako.local` is done via local split DNS:
 

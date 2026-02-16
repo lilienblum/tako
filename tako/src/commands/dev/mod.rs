@@ -37,7 +37,9 @@ use tokio::time::timeout;
 
 use crate::app::resolve_app_name;
 use crate::config::TakoToml;
-use crate::dev::{LocalCA, LocalCAStore};
+use crate::dev::LocalCA;
+#[cfg(target_os = "macos")]
+use crate::dev::LocalCAStore;
 use crate::runtime::RuntimeMode;
 use crate::runtime::detect_runtime;
 use crate::validation::validate_dev_route;
@@ -186,9 +188,12 @@ const DEV_LOCK_ACQUIRE_TIMEOUT_MS: u64 = 1_200;
 const DEV_LOCK_RETRY_POLL_MS: u64 = 20;
 const DEV_LOCK_INCOMPLETE_STALE_AGE_MS: u64 = 2_000;
 const LOCAL_DNS_PORT: u16 = 53535;
+#[cfg(any(target_os = "macos", test))]
 const RESOLVER_DIR: &str = "/etc/resolver";
+#[cfg(any(target_os = "macos", test))]
 const TAKO_RESOLVER_FILE: &str = "/etc/resolver/tako.local";
 const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
+#[cfg(any(target_os = "macos", test))]
 const LOCAL_HTTP_REDIRECT_PORT: u16 = 47830;
 const DEV_TLS_CERT_FILENAME: &str = "fullchain.pem";
 const DEV_TLS_KEY_FILENAME: &str = "privkey.pem";
@@ -327,16 +332,23 @@ fn preferred_public_url(
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 const PF_FORWARDING_ANCHOR_NAME: &str = "tako";
+#[cfg(any(target_os = "macos", test))]
 const PF_FORWARDING_ANCHOR_FILE: &str = "/etc/pf.anchors/tako";
+#[cfg(any(target_os = "macos", test))]
 const PF_CONF_FILE: &str = "/etc/pf.conf";
+#[cfg(any(target_os = "macos", test))]
 const PF_FORWARDING_MARK_BEGIN: &str = "# >>> tako >>>";
+#[cfg(any(target_os = "macos", test))]
 const PF_FORWARDING_MARK_END: &str = "# <<< tako <<<";
 
+#[cfg(any(target_os = "macos", test))]
 fn local_dns_resolver_contents(port: u16) -> String {
     format!("nameserver 127.0.0.1\nport {port}\n")
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn parse_local_dns_resolver(contents: &str) -> (Option<String>, Option<u16>) {
     let mut nameserver = None;
     let mut port = None;
@@ -396,12 +408,14 @@ fn ensure_dev_server_tls_material(ca: &LocalCA) -> Result<(), Box<dyn std::error
     ensure_dev_server_tls_material_for_home(ca, &home)
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn pf_conf_forwarding_hook_block() -> String {
     format!(
         "{PF_FORWARDING_MARK_BEGIN}\nrdr-anchor \"{PF_FORWARDING_ANCHOR_NAME}\"\nload anchor \"{PF_FORWARDING_ANCHOR_NAME}\" from \"{PF_FORWARDING_ANCHOR_FILE}\"\n{PF_FORWARDING_MARK_END}\n"
     )
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn pf_conf_with_forwarding_hook(existing: &str) -> String {
     let block_lines: Vec<String> = pf_conf_forwarding_hook_block()
         .trim_end_matches('\n')
@@ -475,6 +489,7 @@ fn pf_conf_with_forwarding_hook(existing: &str) -> String {
     out
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn pf_anchor_maps_loopback_port(
     anchor_rules: &str,
     loopback_addr: &str,
@@ -521,11 +536,6 @@ fn has_pf_https_forwarding(public_port: u16) -> bool {
     pf_anchor_maps_loopback_port(&anchor_rules, DEV_LOOPBACK_ADDR, 443, public_port)
 }
 
-#[cfg(not(target_os = "macos"))]
-fn has_pf_https_forwarding(_public_port: u16) -> bool {
-    false
-}
-
 #[cfg(target_os = "macos")]
 fn has_pf_http_redirect_forwarding() -> bool {
     let Ok(anchor_rules) = std::fs::read_to_string(PF_FORWARDING_ANCHOR_FILE) else {
@@ -539,11 +549,6 @@ fn has_pf_http_redirect_forwarding() -> bool {
     )
 }
 
-#[cfg(not(target_os = "macos"))]
-fn has_pf_http_redirect_forwarding() -> bool {
-    false
-}
-
 #[cfg(target_os = "macos")]
 fn sudo_run_checked(args: &[&str], context: &str) -> Result<(), Box<dyn std::error::Error>> {
     let status = Command::new("sudo").args(args).status()?;
@@ -554,6 +559,7 @@ fn sudo_run_checked(args: &[&str], context: &str) -> Result<(), Box<dyn std::err
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn pfctl_args<'a>(args: &'a [&'a str]) -> Vec<&'a str> {
     let mut out = Vec::with_capacity(args.len() + 2);
     out.push("pfctl");
@@ -562,6 +568,7 @@ fn pfctl_args<'a>(args: &'a [&'a str]) -> Vec<&'a str> {
     out
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn pfctl_shell_command(args: &[&str]) -> String {
     let argv = pfctl_args(args);
     format!("{} >/dev/null 2>&1", argv.join(" "))
@@ -596,11 +603,6 @@ fn local_dns_resolver_configured(port: u16) -> bool {
     };
     let (nameserver, configured_port) = parse_local_dns_resolver(&contents);
     nameserver.as_deref() == Some("127.0.0.1") && configured_port == Some(port)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn local_dns_resolver_configured(_port: u16) -> bool {
-    true
 }
 
 #[cfg(target_os = "macos")]
@@ -951,6 +953,7 @@ fn doctor_dev_server_unavailable_lines() -> Vec<String> {
     ]
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn doctor_local_forwarding_preflight_lines(
     advertised_ip: &str,
     listen_port: u16,
@@ -1076,6 +1079,10 @@ mod tests {
         }
 
         fn build_command(&self) -> Option<Vec<String>> {
+            None
+        }
+
+        fn install_command(&self) -> Option<Vec<String>> {
             None
         }
 
@@ -1947,6 +1954,9 @@ load anchor "com.apple" from "/etc/pf.anchors/com.apple"
 }
 
 pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(not(target_os = "macos"))]
+    let _ = dns;
+
     let info = match crate::dev_server_client::info().await {
         Ok(info) => info,
         Err(e) => {
@@ -1970,6 +1980,7 @@ pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|v| v.as_str())
         .unwrap_or("(unknown)");
     let port = i.get("port").and_then(|v| v.as_u64()).unwrap_or(0);
+    #[cfg(target_os = "macos")]
     let advertised_ip = i
         .get("advertised_ip")
         .and_then(|v| v.as_str())
@@ -1983,6 +1994,7 @@ pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|v| v.as_u64())
         .and_then(|v| u16::try_from(v).ok())
         .unwrap_or(LOCAL_DNS_PORT);
+    #[cfg(target_os = "macos")]
     let listen_port = port_from_listen(listen).unwrap_or_default();
     #[cfg(target_os = "macos")]
     let (
@@ -2009,14 +2021,7 @@ pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
         (false, false, false, false, false, false)
     };
     #[cfg(not(target_os = "macos"))]
-    let (
-        https_pf_ok,
-        http_pf_ok,
-        https_tcp_ok,
-        http_tcp_ok,
-        local_443_forwarding,
-        local_80_forwarding,
-    ) = (false, false, false, false, false, false);
+    let (local_443_forwarding, local_80_forwarding) = (false, false);
 
     for line in doctor_dev_server_lines(
         listen,
@@ -2042,18 +2047,6 @@ pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
         ) {
             println!("{line}");
         }
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        let _ = (
-            local_443_forwarding,
-            local_80_forwarding,
-            https_pf_ok,
-            http_pf_ok,
-            https_tcp_ok,
-            http_tcp_ok,
-        );
     }
 
     let apps = crate::dev_server_client::list_apps()

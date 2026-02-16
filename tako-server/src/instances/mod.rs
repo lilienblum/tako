@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 use tokio::process::Child;
 use tokio::sync::mpsc;
 
+pub const INTERNAL_STATUS_HOST: &str = "tako.internal";
+
 /// Configuration for an app
 #[derive(Debug, Clone)]
 pub struct AppConfig {
@@ -44,6 +46,8 @@ pub struct AppConfig {
     pub base_port: u16,
     /// Health check path
     pub health_check_path: String,
+    /// Health check host header
+    pub health_check_host: String,
     /// Health check interval
     pub health_check_interval: Duration,
     /// Startup timeout
@@ -64,7 +68,8 @@ impl Default for AppConfig {
             min_instances: 1,
             max_instances: 4,
             base_port: 3000,
-            health_check_path: "/_tako/status".to_string(),
+            health_check_path: "/status".to_string(),
+            health_check_host: INTERNAL_STATUS_HOST.to_string(),
             health_check_interval: crate::defaults::HEALTH_CHECK_INTERVAL,
             startup_timeout: Duration::from_secs(30),
             idle_timeout: crate::defaults::DEFAULT_IDLE_TIMEOUT,

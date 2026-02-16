@@ -1,5 +1,4 @@
 import { HeadContent, Link, Outlet, Scripts, createRootRoute } from "@tanstack/react-router";
-import { TanStackRouterDevtools } from "@tanstack/react-router-devtools";
 import appCss from "../styles/app.css?url";
 
 export const Route = createRootRoute({
@@ -11,9 +10,6 @@ export const Route = createRootRoute({
       {
         name: "viewport",
         content: "width=device-width, initial-scale=1",
-      },
-      {
-        title: "TanStack Start + Tako Artifacts",
       },
     ],
     links: [
@@ -54,8 +50,6 @@ function RootComponent() {
       <main className="page-main">
         <Outlet />
       </main>
-
-      <TanStackRouterDevtools position="bottom-right" />
     </>
   );
 }

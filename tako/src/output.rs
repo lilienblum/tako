@@ -96,7 +96,15 @@ pub fn set_verbose(verbose: bool) {
 }
 
 pub fn is_interactive() -> bool {
-    std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+    #[cfg(test)]
+    {
+        false
+    }
+
+    #[cfg(not(test))]
+    {
+        std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+    }
 }
 
 pub fn is_verbose() -> bool {
@@ -133,7 +141,9 @@ pub fn muted(message: &str) {
 }
 
 pub fn emphasized(value: &str) -> String {
-    if std::io::stdout().is_terminal() && colors_enabled() {
+    if cfg!(test) {
+        format!("'{}'", value)
+    } else if std::io::stdout().is_terminal() && colors_enabled() {
         // Use italic on/off (3/23) instead of a full reset so surrounding styles
         // (like dim hints) stay active after emphasized text.
         format!("\x1b[3m{}\x1b[23m", value)
@@ -332,12 +342,18 @@ mod tests {
 
     #[test]
     fn confirm_returns_default_in_non_tty_context() {
+        if is_interactive() {
+            return;
+        }
         let answer = confirm("Proceed?", false).unwrap();
         assert!(!answer);
     }
 
     #[test]
     fn prompt_input_uses_default_in_non_tty_context() {
+        if is_interactive() {
+            return;
+        }
         let value = prompt_input("Server host", false, Some("localhost")).unwrap();
         assert_eq!(value, "localhost");
     }
@@ -349,12 +365,18 @@ mod tests {
 
     #[test]
     fn prompt_input_without_default_errors_in_non_tty_context() {
+        if is_interactive() {
+            return;
+        }
         let err = prompt_input("Server host", false, None).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
     }
 
     #[test]
     fn prompt_input_with_suggestions_uses_default_in_non_tty_context() {
+        if is_interactive() {
+            return;
+        }
         let suggestions = vec!["localhost".to_string(), "127.0.0.1".to_string()];
         let value =
             prompt_input_with_suggestions("Server host", false, Some("localhost"), &suggestions)
@@ -364,6 +386,9 @@ mod tests {
 
     #[test]
     fn prompt_input_with_suggestions_without_default_errors_in_non_tty_context() {
+        if is_interactive() {
+            return;
+        }
         let suggestions = vec!["localhost".to_string()];
         let err =
             prompt_input_with_suggestions("Server host", false, None, &suggestions).unwrap_err();
@@ -402,6 +427,9 @@ mod tests {
 
     #[test]
     fn select_errors_in_non_tty_context() {
+        if is_interactive() {
+            return;
+        }
         let err = select("Pick one", None, vec![("server-a".to_string(), 1)]).unwrap_err();
         assert_eq!(err.kind(), std::io::ErrorKind::Unsupported);
     }

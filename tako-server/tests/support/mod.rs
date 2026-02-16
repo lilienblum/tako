@@ -251,7 +251,8 @@ pub fn write_bun_app(app_dir: &Path, body: &str) {
   port: Number(process.env.PORT),
   fetch(req) {{
     const url = new URL(req.url);
-    if (url.pathname === "/_tako/status") {{
+    const host = (req.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (host === "tako.internal" && url.pathname === "/status") {{
       return new Response(JSON.stringify({{ healthy: true }}), {{
         headers: {{ "content-type": "application/json" }},
       }});

@@ -15,22 +15,23 @@ import type {
 
 describe("Types", () => {
   describe("FetchHandler", () => {
-    test("accepts valid fetch handler", () => {
+    test("accepts default fetch function handler", () => {
+      const handler: FetchHandler = (request: Request, env: Record<string, string>) => {
+        return new Response("Hello");
+      };
+      expect(typeof handler).toBe("function");
+    });
+
+    test("accepts legacy object-with-fetch handler", () => {
       const handler: FetchHandler = {
         fetch: (request: Request, env: Record<string, string>) => {
           return new Response("Hello");
         },
       };
-      expect(handler.fetch).toBeDefined();
-    });
-
-    test("accepts async fetch handler", () => {
-      const handler: FetchHandler = {
-        fetch: async (request: Request, env: Record<string, string>) => {
-          return new Response("Hello");
-        },
-      };
-      expect(handler.fetch).toBeDefined();
+      expect(typeof handler).toBe("object");
+      if (typeof handler !== "function") {
+        expect(handler.fetch).toBeDefined();
+      }
     });
   });
 

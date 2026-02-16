@@ -3,7 +3,7 @@
 //! Routes incoming HTTP requests to app instances based on Host header.
 //! Supports TLS termination with automatic certificate management.
 //! Handles ACME HTTP-01 challenges for Let's Encrypt certificate issuance.
-//! Exposes `/_tako/status` endpoint for health monitoring.
+//! Exposes internal host status endpoint (`tako.internal/status`) for health monitoring.
 
 mod static_files;
 
@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
-/// Server status response for /_tako/status endpoint
+/// Server status response for internal `tako.internal/status` endpoint
 #[derive(Debug, Clone, Serialize)]
 pub struct ServerStatus {
     /// Overall server health (healthy if at least one app has healthy instances)
@@ -138,7 +138,7 @@ impl TakoProxy {
         &self.config
     }
 
-    /// Generate server status for /_tako/status endpoint
+    /// Generate server status for internal `tako.internal/status` endpoint
     fn get_server_status(&self) -> ServerStatus {
         let app_manager = self.lb.app_manager();
         let app_names = app_manager.list_apps();
@@ -252,6 +252,14 @@ impl ProxyHttp for TakoProxy {
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
         let path = session.req_header().uri.path();
+        let host = session
+            .req_header()
+            .headers
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        let hostname = host.split(':').next().unwrap_or(host);
+        let internal_status_request = is_internal_status_request(hostname, path);
 
         // Handle ACME HTTP-01 challenges
         if let Some(ref handler) = self.challenge_handler
@@ -276,8 +284,8 @@ impl ProxyHttp for TakoProxy {
             }
         }
 
-        // Handle /_tako/status endpoint for health monitoring
-        if path == "/_tako/status" {
+        // Handle internal status endpoint for health monitoring
+        if internal_status_request {
             let status = self.get_server_status();
             let status_code = if status.healthy { 200 } else { 503 };
 
@@ -296,23 +304,14 @@ impl ProxyHttp for TakoProxy {
             tracing::debug!(
                 healthy = status.healthy,
                 app_count = status.apps.len(),
-                "Served /_tako/status"
+                "Served internal status endpoint"
             );
             return Ok(true);
         }
 
-        // Handle HTTP to HTTPS redirect
-        let host = session
-            .req_header()
-            .headers
-            .get("host")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("");
-        let hostname = host.split(':').next().unwrap_or(host);
-
         // Handle HTTP to HTTPS redirect.
-        // Allow ACME challenges and status endpoint on HTTP.
-        if !path.starts_with("/.well-known/acme-challenge/") && path != "/_tako/status" {
+        // Allow ACME challenges and internal status endpoint on HTTP.
+        if !path.starts_with("/.well-known/acme-challenge/") && !internal_status_request {
             let is_https = session
                 .digest()
                 .map(|d| d.ssl_digest.is_some())
@@ -512,6 +511,10 @@ impl ProxyHttp for TakoProxy {
 
 fn should_redirect_http_request(is_https: bool, redirect_http_to_https: bool) -> bool {
     redirect_http_to_https && !is_https
+}
+
+fn is_internal_status_request(hostname: &str, path: &str) -> bool {
+    hostname.eq_ignore_ascii_case(crate::instances::INTERNAL_STATUS_HOST) && path == "/status"
 }
 
 /// TLS configuration for the proxy
@@ -958,6 +961,22 @@ mod tests {
     #[test]
     fn test_should_not_redirect_http_request_when_disabled() {
         assert!(!should_redirect_http_request(false, false));
+    }
+
+    #[test]
+    fn test_is_internal_status_request_matches_expected_host_and_path() {
+        assert!(is_internal_status_request("tako.internal", "/status"));
+        assert!(is_internal_status_request("TAKO.INTERNAL", "/status"));
+    }
+
+    #[test]
+    fn test_is_internal_status_request_rejects_non_internal_targets() {
+        assert!(!is_internal_status_request("example.com", "/status"));
+        assert!(!is_internal_status_request("tako.internal", "/"));
+        assert!(!is_internal_status_request(
+            "tako.internal",
+            "/_tako/status"
+        ));
     }
 
     #[test]

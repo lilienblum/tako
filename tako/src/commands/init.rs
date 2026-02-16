@@ -61,15 +61,18 @@ fn generate_template(app_name: &str, _runtime: &str) -> String {
         r#"# Tako configuration
 # tako.toml reference: https://tako.sh/docs/tako-toml
 
-# [tako]
 # Stable app identifier used for deploy paths and local dev hostnames.
 # Set once and do not change after first deploy.
 # If omitted, Tako auto-detects from runtime metadata or directory name.
 # name = "{app_name}"
 # Optional: command to run before each deploy.
 # build = "bun run build"
-# Optional: extra asset folders (relative to project root) merged into deploy public assets.
-# assets = ["assets/shared", "assets/branding"]
+# Optional: deploy artifact directory (relative to project root).
+# dist = ".tako/dist"
+# Optional: runtime entrypoint override (relative to dist root).
+# main = "server/index.mjs"
+# Optional: extra asset folders (relative to project root) merged into dist/public.
+# assets = ["public", ".output/public"]
 
 # Global environment variables applied to every environment.
 # [vars]
@@ -136,10 +139,6 @@ mod tests {
         let rendered = generate_template("demo-app", "bun");
 
         assert!(
-            rendered.contains("# [tako]"),
-            "expected tako section to be optional/commented by default"
-        );
-        assert!(
             rendered
                 .contains("# Stable app identifier used for deploy paths and local dev hostnames."),
             "expected template to explain app name identity semantics"
@@ -153,7 +152,7 @@ mod tests {
             "expected app name to remain commented by default"
         );
         assert!(
-            !rendered.contains("[tako]\nname = \"demo-app\""),
+            !rendered.contains("\nname = \"demo-app\"\n"),
             "expected app name not to be uncommented in minimal template"
         );
         assert!(
@@ -174,7 +173,15 @@ mod tests {
             "expected optional build command to be commented"
         );
         assert!(
-            rendered.contains("# assets = [\"assets/shared\", \"assets/branding\"]"),
+            rendered.contains("# dist = \".tako/dist\""),
+            "expected optional dist directory to be commented"
+        );
+        assert!(
+            rendered.contains("# main = \"server/index.mjs\""),
+            "expected optional main entrypoint to be commented"
+        );
+        assert!(
+            rendered.contains("# assets = [\"public\", \".output/public\"]"),
             "expected optional assets list to be commented"
         );
         assert!(

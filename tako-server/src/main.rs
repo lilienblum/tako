@@ -2016,7 +2016,7 @@ mod tests {
             r#"{"name":"broken-app","scripts":{"dev":"bun run index.ts"}}"#,
         )
         .unwrap();
-        // This script exits immediately and never exposes /_tako/status.
+        // This script exits immediately and never exposes the internal status endpoint.
         std::fs::write(
             release_dir.join("index.ts"),
             "console.log('boot then exit');",

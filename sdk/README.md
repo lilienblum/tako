@@ -7,9 +7,8 @@ Package name: `tako.sh`
 ## What It Provides
 
 - Runtime adapters for Bun, Node.js, and Deno.
-- Built-in Tako endpoints:
-  - `/_tako/status`
-  - `/_tako/health`
+- Built-in internal status endpoint:
+  - `GET /status` when `Host: tako.internal`
 - Optional lifecycle integration hooks (for example config reload handling).
 
 ## Install
@@ -40,28 +39,27 @@ import { Tako as DenoTako } from "tako.sh/deno";
 
 ## Vite Plugin
 
-Use the Vite plugin to normalize build output into Tako's deploy artifact contract.
+Use the Vite plugin to emit deploy metadata for Tako.
 
 ```ts
 import { defineConfig } from "vite";
 import { takoVitePlugin } from "tako.sh/vite";
 
 export default defineConfig({
-  plugins: [
-    takoVitePlugin({
-      // Optional when your client output is not named "client"
-      clientDir: "dist/web",
-      // Optional (auto-detected as dist/server when present)
-      serverDir: "dist/ssr",
-    }),
-  ],
+  plugins: [takoVitePlugin()],
 });
 ```
 
-Staging output defaults to `.tako/artifacts/app`:
+On build, the plugin writes metadata to deploy root:
 
-- `.tako/artifacts/app/static` = `public/` merged with client build output (client output wins on conflicts)
-- `.tako/artifacts/app/server` = copied server output (if configured/detected)
+- forces `ssr.noExternal = true` so SSR bundles run from deploy dist without `node_modules`
+- emits `<outDir>/tako-entry.mjs`, a wrapped server entry that handles internal
+  `Host: tako.internal` + `/status` and forwards other requests to the compiled app entry
+- default: `<build.outDir>/.tako-vite.json`
+- when `build.outDir` ends with `server`: parent directory (for example `dist/.tako-vite.json` with `compiled_main` prefixed by `server/`)
+
+- `compiled_main`: wrapped runtime entry path (`tako-entry.mjs`)
+- `entries`: all build entry chunk filenames
 
 ## Build and Test
 

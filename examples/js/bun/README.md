@@ -24,5 +24,5 @@ This runs the example through `tako dev` (HTTPS local ingress + routing).
 
 - `tako.toml` defines an explicit production route; local dev defaults to `bun-example.tako.local`.
 - The app starts Bun on `0.0.0.0:$PORT` (default `3000`) and serves HTTP directly.
-- `/_tako/status` and `/_tako/health` return `200` for Tako health checks.
+- Internal health checks use `Host: tako.internal` with path `/status` via the Tako SDK wrapper.
 - `/` response includes the request `host` value for routing verification.

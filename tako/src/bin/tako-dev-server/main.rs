@@ -1127,12 +1127,19 @@ mod tests {
 
     #[test]
     fn ensure_tcp_listener_can_bind_succeeds_when_port_is_available() {
-        let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", 0)) else {
-            return;
-        };
-        let addr = listener.local_addr().unwrap();
-        drop(listener);
-        assert!(ensure_tcp_listener_can_bind(&addr.to_string()).is_ok());
+        // On busy CI hosts, another process can race us for a just-freed port.
+        // Retry a few times with fresh ephemeral ports to keep this deterministic.
+        for _ in 0..8 {
+            let Ok(listener) = std::net::TcpListener::bind(("127.0.0.1", 0)) else {
+                return;
+            };
+            let addr = listener.local_addr().unwrap();
+            drop(listener);
+            if ensure_tcp_listener_can_bind(&addr.to_string()).is_ok() {
+                return;
+            }
+        }
+        panic!("failed to find an available loopback port after retries");
     }
 
     #[test]

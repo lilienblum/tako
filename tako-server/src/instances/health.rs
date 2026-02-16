@@ -1,6 +1,7 @@
 //! Health checker - monitors instance health via HTTP probing
 //!
-//! Performs active HTTP health checks to `/_tako/status` endpoint on each instance.
+//! Performs active HTTP health checks to internal host `tako.internal` at `/status` on each
+//! instance.
 //! This replaces passive heartbeat-only detection with active probing.
 
 use super::{App, Instance, InstanceState};
@@ -101,13 +102,25 @@ impl HealthChecker {
             return;
         }
 
-        // Build health check URL using app's configured health check path
-        let health_path = app.config.read().health_check_path.clone();
+        // Build health check target using app's configured path and internal host header
+        let (health_host, health_path) = {
+            let config = app.config.read();
+            (
+                config.health_check_host.clone(),
+                config.health_check_path.clone(),
+            )
+        };
         let health_url = format!("http://127.0.0.1:{}{}", instance.port, health_path);
         let instance_key = format!("{}:{}", app.name(), instance.id);
 
         // Perform HTTP probe
-        let probe_success = match self.client.get(&health_url).send().await {
+        let probe_success = match self
+            .client
+            .get(&health_url)
+            .header(reqwest::header::HOST, health_host)
+            .send()
+            .await
+        {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
         };
@@ -326,12 +339,23 @@ mod tests {
                     Ok(v) => v,
                     Err(_) => break,
                 };
-                // Always return 200 OK.
-                let _ = tokio::io::AsyncWriteExt::write_all(
-                    &mut sock,
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
-                )
-                .await;
+                let mut request_buf = [0_u8; 2048];
+                let n = match tokio::io::AsyncReadExt::read(&mut sock, &mut request_buf).await {
+                    Ok(v) if v > 0 => v,
+                    _ => continue,
+                };
+                let request = String::from_utf8_lossy(&request_buf[..n]);
+                let is_internal_status = request.starts_with("GET /status ")
+                    && request
+                        .lines()
+                        .any(|line| line.eq_ignore_ascii_case("host: tako.internal"));
+
+                let response = if is_internal_status {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
+                } else {
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found".as_slice()
+                };
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response).await;
             }
         });
 
@@ -342,7 +366,8 @@ mod tests {
             min_instances: 1,
             ..Default::default()
         };
-        config.health_check_path = "/_tako/status".to_string();
+        config.health_check_path = "/status".to_string();
+        config.health_check_host = "tako.internal".to_string();
 
         let app = Arc::new(App::new(config, tx));
         let instance = app.allocate_instance();

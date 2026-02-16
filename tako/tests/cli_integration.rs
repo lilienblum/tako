@@ -299,10 +299,10 @@ mod init {
         assert!(tako_toml.exists(), "tako.toml should be created");
 
         let content = fs::read_to_string(&tako_toml).unwrap();
-        // The generated format uses [tako] section, not [app]
+        // The generated format uses top-level app metadata fields.
         assert!(
-            content.contains("[tako]") || content.contains("[app]"),
-            "tako.toml should have [tako] or [app] section: {}",
+            content.contains("# name = \"test-app\""),
+            "tako.toml should have top-level name example: {}",
             content
         );
         assert!(
@@ -813,7 +813,6 @@ mod secret_commands {
         fs::write(
             path.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 runtime = "bun"
 entry = "index.ts"
@@ -835,7 +834,6 @@ server = "prod-server"
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 runtime = "bun"
 entry = "index.ts"
@@ -931,7 +929,6 @@ entry = "index.ts"
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 runtime = "bun"
 entry = "index.ts"
@@ -1011,7 +1008,6 @@ mod status_command {
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "my-test-app"
 runtime = "bun"
 entry = "index.ts"
@@ -1106,7 +1102,6 @@ mod deploy_command {
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 runtime = "bun"
 entry = "index.ts"
@@ -1140,7 +1135,6 @@ entry = "index.ts"
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 
 [envs.development]
@@ -1179,7 +1173,6 @@ env = "development"
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 runtime = "bun"
 entry = "index.ts"
@@ -1217,7 +1210,6 @@ server = "prod-server"
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 
 [envs.production]
@@ -1253,7 +1245,6 @@ server = "prod-server"
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 entry = "nonexistent.ts"
 
@@ -1306,7 +1297,6 @@ server = "prod-server"
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 
 [envs.production]
@@ -1360,7 +1350,6 @@ env = "production"
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 
 [envs.production]
@@ -1397,7 +1386,7 @@ route = "prod.example.com"
     }
 
     #[test]
-    fn test_deploy_requires_build_artifacts_under_dot_tako_artifacts_app() {
+    fn test_deploy_no_longer_requires_local_dist_artifacts() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().to_path_buf();
         let home = temp.path().join("home");
@@ -1408,7 +1397,6 @@ route = "prod.example.com"
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 
 [envs.production]
@@ -1447,13 +1435,13 @@ libc = "glibc"
         );
         assert!(
             !output.status.success(),
-            "deploy should fail when .tako/artifacts/app has no artifacts"
+            "deploy should fail due unreachable SSH server in this test setup"
         );
 
         let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
         assert!(
-            combined.contains(".tako/artifacts/app") && combined.contains("build artifacts"),
-            "should explain required build artifacts dir: {}",
+            !combined.contains("must contain build artifacts") && !combined.contains(".tako/dist"),
+            "deploy should not require local dist artifacts: {}",
             combined
         );
     }
@@ -1471,7 +1459,6 @@ libc = "glibc"
         fs::write(
             project_dir.join("tako.toml"),
             r#"
-[app]
 name = "test-app"
 
 [envs.production]

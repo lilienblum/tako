@@ -31,6 +31,14 @@ struct DeployConfig {
     archive_path: PathBuf,
     remote_base: String,
     routes: Vec<String>,
+    app_subdir: String,
+    runtime: String,
+    fallback_main: String,
+    main_override: Option<String>,
+    dist_subdir: String,
+    install_command: Option<String>,
+    build_command: Option<String>,
+    asset_roots: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -47,7 +55,7 @@ struct DeployArchiveManifest {
     environment: String,
     version: String,
     runtime: String,
-    entry_point: String,
+    main: String,
     env_vars: BTreeMap<String, String>,
     secret_names: Vec<String>,
 }
@@ -64,6 +72,22 @@ struct ValidationResult {
 impl DeployConfig {
     fn release_dir(&self) -> String {
         format!("{}/releases/{}", self.remote_base, self.version)
+    }
+
+    fn release_app_dir(&self) -> String {
+        if self.app_subdir.is_empty() {
+            self.release_dir()
+        } else {
+            format!("{}/{}", self.release_dir(), self.app_subdir)
+        }
+    }
+
+    fn release_app_manifest_path(&self) -> String {
+        format!(
+            "{}/{}",
+            self.release_app_dir(),
+            DEPLOY_ARCHIVE_MANIFEST_FILE
+        )
     }
 
     fn current_link(&self) -> String {
@@ -185,45 +209,43 @@ async fn run_async(
     output::section("Build");
 
     let executor = BuildExecutor::new(&project_dir);
-
-    // Build artifacts must be produced under .tako/artifacts/app.
     let cache = BuildCache::new(project_dir.join(".tako/artifacts"));
     let _ = cache.clear();
-    let artifact_input_dir = deploy_artifact_input_dir(&project_dir);
 
-    // Run build command if configured
-    if let Some(build_cmd) = runtime.build_command() {
-        prepare_artifact_input_dir(&artifact_input_dir)
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-        let cmd_str = build_cmd.join(" ");
-        let build_result =
-            output::with_spinner(format!("Running build command ({})...", cmd_str), || {
-                executor.run_build(&cmd_str)
-            })?
-            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+    let source_root = source_bundle_root(&project_dir);
+    let app_subdir = resolve_app_subdir(&source_root, &project_dir)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    output::success(&format!("Source root: {}", source_root.display()));
+    if !app_subdir.is_empty() {
+        output::success(&format!("App directory: {}", app_subdir));
+    }
 
-        if !build_result.success {
-            return Err(format!("Build failed:\n{}", build_result.stderr).into());
-        }
-        output::success("Build command succeeded");
-    } else {
+    // Build command precedence: tako.toml override -> adapter default -> skip
+    let configured_build_cmd = tako_config
+        .build
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(ToOwned::to_owned);
+    let remote_install_cmd = runtime.install_command().map(|cmd| cmd.join(" "));
+    let runtime_build_cmd = runtime.build_command().map(|cmd| cmd.join(" "));
+    let remote_build_cmd = configured_build_cmd.or(runtime_build_cmd);
+    if let Some(cmd_str) = remote_install_cmd.as_deref() {
         output::muted(&format!(
-            "No build command configured; expecting prebuilt artifacts in {}",
-            artifact_input_dir.display()
+            "Dependencies will install on server at bundle root: {}",
+            cmd_str
         ));
+    } else {
+        output::muted("No install command configured; deploy will skip dependency installation.");
     }
-
-    ensure_artifact_input_ready(&artifact_input_dir)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    merge_configured_asset_roots(&project_dir, &artifact_input_dir, &tako_config.tako.assets)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    if !tako_config.tako.assets.is_empty() {
-        output::success("Merged [tako].assets into deploy public assets");
+    if let Some(cmd_str) = remote_build_cmd.as_deref() {
+        output::muted(&format!(
+            "Build will run on server in app directory: {}",
+            cmd_str
+        ));
+    } else {
+        output::muted("No build command configured; deploy will run install and skip build.");
     }
-    output::success(&format!(
-        "Build artifacts: {}",
-        artifact_input_dir.display()
-    ));
 
     // Generate version string
     let version = executor.generate_version(None)?;
@@ -231,31 +253,37 @@ async fn run_async(
 
     let runtime_mode = deploy_runtime_mode(&env);
     let runtime_env_vars = runtime.env_vars(runtime_mode);
-
+    let fallback_main = resolve_fallback_main(&project_dir, &tako_config, runtime.entry_point())
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let manifest_main = tako_config
+        .main
+        .clone()
+        .unwrap_or_else(|| fallback_main.clone());
     let manifest = build_deploy_archive_manifest(
         &app_name,
         &env,
         &version,
         runtime.name(),
-        runtime.entry_point(),
+        &manifest_main,
         tako_config.get_merged_vars(&env),
         runtime_env_vars,
         secrets.get_env(&env),
     );
-    let package_dir = deploy_archive_package_dir(&project_dir);
-    prepare_archive_package_dir(&package_dir)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    stage_archive_package(&artifact_input_dir, &package_dir, &manifest)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::success(&format!(
-        "Archive manifest: {}",
-        package_dir.join(DEPLOY_ARCHIVE_MANIFEST_FILE).display()
-    ));
 
     // Create archive
     let archive_path = cache.cache_dir().join(format!("{}.tar.gz", version));
+    let app_json_bytes = serde_json::to_vec_pretty(&manifest)
+        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+    let app_manifest_archive_path = archive_app_manifest_path(&app_subdir);
     let archive_size = output::with_spinner("Creating archive...", || {
-        executor.create_archive(&package_dir, &archive_path, &[])
+        executor.create_source_archive_with_extra_files(
+            &source_root,
+            &archive_path,
+            &[(
+                app_manifest_archive_path.as_str(),
+                app_json_bytes.as_slice(),
+            )],
+        )
     })?
     .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
@@ -274,6 +302,14 @@ async fn run_async(
         archive_path: archive_path.clone(),
         remote_base: format!("/opt/tako/apps/{}", app_name),
         routes,
+        app_subdir,
+        runtime: runtime.name().to_string(),
+        fallback_main,
+        main_override: tako_config.main.clone(),
+        dist_subdir: deploy_dist_subdir(&tako_config).to_string(),
+        install_command: remote_install_cmd,
+        build_command: remote_build_cmd,
+        asset_roots: tako_config.assets.clone(),
     });
 
     let secrets = Arc::new(secrets);
@@ -786,240 +822,152 @@ fn format_partial_failure_error(failed_servers: usize) -> String {
     format!("{} server(s) failed", failed_servers)
 }
 
-const DEPLOY_ARTIFACT_INPUT_SUBDIR: &str = ".tako/artifacts/app";
-const DEPLOY_ARCHIVE_PACKAGE_SUBDIR: &str = ".tako/artifacts/package";
+const DEFAULT_DEPLOY_DIST_SUBDIR: &str = ".tako/dist";
+const VITE_BUILD_METADATA_FILE: &str = ".tako-vite.json";
 const DEPLOY_ARCHIVE_MANIFEST_FILE: &str = "app.json";
 
-fn deploy_artifact_input_dir(project_dir: &Path) -> PathBuf {
-    project_dir.join(DEPLOY_ARTIFACT_INPUT_SUBDIR)
+#[derive(Debug, serde::Deserialize)]
+struct ViteBuildMetadata {
+    compiled_main: String,
 }
 
-fn deploy_archive_package_dir(project_dir: &Path) -> PathBuf {
-    project_dir.join(DEPLOY_ARCHIVE_PACKAGE_SUBDIR)
+fn deploy_dist_subdir(tako_config: &TakoToml) -> &str {
+    tako_config
+        .dist
+        .as_deref()
+        .unwrap_or(DEFAULT_DEPLOY_DIST_SUBDIR)
 }
 
-fn prepare_artifact_input_dir(artifact_input_dir: &Path) -> Result<(), String> {
-    if artifact_input_dir.exists() {
-        std::fs::remove_dir_all(artifact_input_dir).map_err(|e| {
-            format!(
-                "Failed to clear artifact directory {}: {}",
-                artifact_input_dir.display(),
-                e
-            )
-        })?;
+fn git_repo_root(project_dir: &Path) -> Option<PathBuf> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_dir)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if value.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(value))
+}
 
-    std::fs::create_dir_all(artifact_input_dir).map_err(|e| {
+fn package_json_has_workspaces(path: &Path) -> bool {
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
+        return false;
+    };
+    let Some(workspaces) = json.get("workspaces") else {
+        return false;
+    };
+    workspaces.is_array()
+        || workspaces
+            .as_object()
+            .and_then(|obj| obj.get("packages"))
+            .map(|packages| packages.is_array())
+            .unwrap_or(false)
+}
+
+fn workspace_root(project_dir: &Path) -> Option<PathBuf> {
+    let mut current = Some(project_dir);
+    let mut found: Option<PathBuf> = None;
+    while let Some(dir) = current {
+        if package_json_has_workspaces(&dir.join("package.json")) {
+            found = Some(dir.to_path_buf());
+        }
+        current = dir.parent();
+    }
+    found
+}
+
+fn source_bundle_root(project_dir: &Path) -> PathBuf {
+    match git_repo_root(project_dir) {
+        Some(root) if project_dir.starts_with(&root) => root,
+        _ => workspace_root(project_dir).unwrap_or_else(|| project_dir.to_path_buf()),
+    }
+}
+
+fn resolve_app_subdir(source_root: &Path, project_dir: &Path) -> Result<String, String> {
+    let rel = project_dir.strip_prefix(source_root).map_err(|_| {
         format!(
-            "Failed to create artifact directory {}: {}",
-            artifact_input_dir.display(),
-            e
+            "Project directory {} must be within source root {}",
+            project_dir.display(),
+            source_root.display()
         )
     })?;
-
-    Ok(())
+    if rel.as_os_str().is_empty() {
+        return Ok(String::new());
+    }
+    Ok(rel.to_string_lossy().replace('\\', "/"))
 }
 
-fn ensure_artifact_input_ready(artifact_input_dir: &Path) -> Result<(), String> {
-    if !artifact_input_dir.is_dir() {
-        return Err(format!(
-            "Artifact directory {} must contain build artifacts for deploy, but it does not exist.",
-            artifact_input_dir.display()
-        ));
+fn archive_app_manifest_path(app_subdir: &str) -> String {
+    if app_subdir.is_empty() {
+        DEPLOY_ARCHIVE_MANIFEST_FILE.to_string()
+    } else {
+        format!("{}/{}", app_subdir, DEPLOY_ARCHIVE_MANIFEST_FILE)
     }
-
-    if !directory_contains_any_file(artifact_input_dir)? {
-        return Err(format!(
-            "Artifact directory {} is empty and must contain build artifacts for deploy.",
-            artifact_input_dir.display()
-        ));
-    }
-
-    Ok(())
 }
 
-fn merge_configured_asset_roots(
+fn resolve_fallback_main(
     project_dir: &Path,
-    artifact_input_dir: &Path,
-    asset_roots: &[String],
-) -> Result<(), String> {
-    if asset_roots.is_empty() {
-        return Ok(());
+    tako_config: &TakoToml,
+    runtime_entry_point: &Path,
+) -> Result<String, String> {
+    if let Some(main) = &tako_config.main {
+        return Ok(main.clone());
     }
-
-    let merge_target_dir = resolve_asset_merge_target_dir(artifact_input_dir)?;
-    std::fs::create_dir_all(&merge_target_dir).map_err(|e| {
+    let entry_rel = runtime_entry_point.strip_prefix(project_dir).map_err(|_| {
         format!(
-            "Failed to create asset merge target directory {}: {}",
-            merge_target_dir.display(),
-            e
+            "Runtime entry point {} must be inside project or set `main` in tako.toml.",
+            runtime_entry_point.display()
         )
     })?;
-
-    for asset_root in asset_roots {
-        let source_dir = resolve_project_asset_root(project_dir, asset_root)?;
-        merge_directory_contents_without_overwrite(&source_dir, &merge_target_dir)?;
-    }
-
-    Ok(())
+    Ok(entry_rel.to_string_lossy().to_string())
 }
 
-fn resolve_asset_merge_target_dir(artifact_input_dir: &Path) -> Result<PathBuf, String> {
-    let static_dir = artifact_input_dir.join("static");
-    if static_dir.exists() {
-        if !static_dir.is_dir() {
-            return Err(format!(
-                "Deploy artifact path {} exists but is not a directory",
-                static_dir.display()
-            ));
-        }
-        return Ok(static_dir);
-    }
-
-    let public_dir = artifact_input_dir.join("public");
-    if public_dir.exists() && !public_dir.is_dir() {
+fn parse_vite_metadata_main(content: &str, source: &str) -> Result<String, String> {
+    let metadata: ViteBuildMetadata = serde_json::from_str(content)
+        .map_err(|e| format!("Failed to parse Vite metadata {}: {}", source, e))?;
+    if metadata.compiled_main.trim().is_empty() {
         return Err(format!(
-            "Deploy artifact path {} exists but is not a directory",
-            public_dir.display()
+            "Invalid Vite metadata {}: compiled_main is empty",
+            source
         ));
     }
-
-    Ok(public_dir)
+    Ok(metadata.compiled_main)
 }
 
-fn resolve_project_asset_root(project_dir: &Path, asset_root: &str) -> Result<PathBuf, String> {
-    let trimmed = asset_root.trim();
-    if trimmed.is_empty() {
-        return Err("Configured [tako].assets entry cannot be empty".to_string());
+fn resolve_vite_compiled_main(dist_subdir: &str, compiled_main: &str) -> String {
+    let normalized_main = compiled_main
+        .replace('\\', "/")
+        .trim()
+        .trim_start_matches("./")
+        .trim_start_matches('/')
+        .to_string();
+
+    let normalized_dist = dist_subdir
+        .replace('\\', "/")
+        .trim()
+        .trim_start_matches("./")
+        .trim_end_matches('/')
+        .to_string();
+
+    if normalized_dist.is_empty() || normalized_dist == "." {
+        return normalized_main;
     }
 
-    let path = Path::new(trimmed);
-    if path.is_absolute() {
-        return Err(format!(
-            "Configured [tako].assets entry '{}' must be relative to project root",
-            asset_root
-        ));
-    }
-
-    if path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
+    if normalized_main == normalized_dist
+        || normalized_main.starts_with(&format!("{normalized_dist}/"))
     {
-        return Err(format!(
-            "Configured [tako].assets entry '{}' must not contain '..'",
-            asset_root
-        ));
+        return normalized_main;
     }
 
-    let source_dir = project_dir.join(path);
-    if !source_dir.exists() {
-        return Err(format!(
-            "Configured asset directory '{}' does not exist under {}",
-            asset_root,
-            project_dir.display()
-        ));
-    }
-    if !source_dir.is_dir() {
-        return Err(format!(
-            "Configured asset path '{}' is not a directory",
-            asset_root
-        ));
-    }
-
-    Ok(source_dir)
-}
-
-fn merge_directory_contents_without_overwrite(
-    source_dir: &Path,
-    dest_dir: &Path,
-) -> Result<(), String> {
-    let entries = std::fs::read_dir(source_dir).map_err(|e| {
-        format!(
-            "Failed to read source asset directory {}: {}",
-            source_dir.display(),
-            e
-        )
-    })?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            format!(
-                "Failed to read entry in source asset directory {}: {}",
-                source_dir.display(),
-                e
-            )
-        })?;
-        let source_path = entry.path();
-        let dest_path = dest_dir.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|e| {
-            format!(
-                "Failed to inspect source asset path {}: {}",
-                source_path.display(),
-                e
-            )
-        })?;
-
-        if file_type.is_dir() {
-            std::fs::create_dir_all(&dest_path).map_err(|e| {
-                format!(
-                    "Failed to create destination asset directory {}: {}",
-                    dest_path.display(),
-                    e
-                )
-            })?;
-            merge_directory_contents_without_overwrite(&source_path, &dest_path)?;
-        } else if file_type.is_file() {
-            if dest_path.exists() {
-                continue;
-            }
-            std::fs::copy(&source_path, &dest_path).map_err(|e| {
-                format!(
-                    "Failed to copy asset file {} to {}: {}",
-                    source_path.display(),
-                    dest_path.display(),
-                    e
-                )
-            })?;
-        } else if file_type.is_symlink() {
-            return Err(format!(
-                "Configured assets cannot contain symbolic links: {}",
-                source_path.display()
-            ));
-        }
-    }
-
-    Ok(())
-}
-
-fn directory_contains_any_file(dir: &Path) -> Result<bool, String> {
-    let entries = std::fs::read_dir(dir)
-        .map_err(|e| format!("Failed to read artifact directory {}: {}", dir.display(), e))?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            format!(
-                "Failed to read an entry in artifact directory {}: {}",
-                dir.display(),
-                e
-            )
-        })?;
-
-        let file_type = entry.file_type().map_err(|e| {
-            format!(
-                "Failed to inspect artifact entry {}: {}",
-                entry.path().display(),
-                e
-            )
-        })?;
-        if file_type.is_file() || file_type.is_symlink() {
-            return Ok(true);
-        }
-        if file_type.is_dir() && directory_contains_any_file(&entry.path())? {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
+    format!("{normalized_dist}/{normalized_main}")
 }
 
 fn build_deploy_archive_manifest(
@@ -1027,7 +975,7 @@ fn build_deploy_archive_manifest(
     environment: &str,
     version: &str,
     runtime_name: &str,
-    entry_point: &Path,
+    main: &str,
     app_env_vars: HashMap<String, String>,
     runtime_env_vars: HashMap<String, String>,
     env_secrets: Option<&HashMap<String, String>>,
@@ -1042,7 +990,7 @@ fn build_deploy_archive_manifest(
         environment: environment.to_string(),
         version: version.to_string(),
         runtime: runtime_name.to_string(),
-        entry_point: entry_point.display().to_string(),
+        main: main.to_string(),
         env_vars: build_manifest_env_vars(
             app_env_vars,
             runtime_env_vars,
@@ -1086,110 +1034,6 @@ fn deploy_runtime_mode(environment: &str) -> crate::runtime::RuntimeMode {
     } else {
         crate::runtime::RuntimeMode::Production
     }
-}
-
-fn prepare_archive_package_dir(package_dir: &Path) -> Result<(), String> {
-    if package_dir.exists() {
-        std::fs::remove_dir_all(package_dir).map_err(|e| {
-            format!(
-                "Failed to clear archive package directory {}: {}",
-                package_dir.display(),
-                e
-            )
-        })?;
-    }
-    std::fs::create_dir_all(package_dir).map_err(|e| {
-        format!(
-            "Failed to create archive package directory {}: {}",
-            package_dir.display(),
-            e
-        )
-    })?;
-    Ok(())
-}
-
-fn stage_archive_package(
-    artifact_input_dir: &Path,
-    package_dir: &Path,
-    manifest: &DeployArchiveManifest,
-) -> Result<(), String> {
-    let packaged_artifacts_dir = package_dir.join("artifacts");
-    std::fs::create_dir_all(&packaged_artifacts_dir).map_err(|e| {
-        format!(
-            "Failed to create packaged artifacts directory {}: {}",
-            packaged_artifacts_dir.display(),
-            e
-        )
-    })?;
-    copy_directory_contents(artifact_input_dir, &packaged_artifacts_dir)?;
-
-    let manifest_path = package_dir.join(DEPLOY_ARCHIVE_MANIFEST_FILE);
-    let manifest_json = serde_json::to_string_pretty(manifest)
-        .map_err(|e| format!("Failed to serialize deploy manifest: {}", e))?;
-    std::fs::write(&manifest_path, manifest_json).map_err(|e| {
-        format!(
-            "Failed to write deploy manifest {}: {}",
-            manifest_path.display(),
-            e
-        )
-    })?;
-    Ok(())
-}
-
-fn copy_directory_contents(source_dir: &Path, dest_dir: &Path) -> Result<(), String> {
-    let entries = std::fs::read_dir(source_dir).map_err(|e| {
-        format!(
-            "Failed to read source artifact directory {}: {}",
-            source_dir.display(),
-            e
-        )
-    })?;
-
-    for entry in entries {
-        let entry = entry.map_err(|e| {
-            format!(
-                "Failed to read entry in source artifact directory {}: {}",
-                source_dir.display(),
-                e
-            )
-        })?;
-        let source_path = entry.path();
-        let dest_path = dest_dir.join(entry.file_name());
-        let file_type = entry.file_type().map_err(|e| {
-            format!(
-                "Failed to inspect source artifact path {}: {}",
-                source_path.display(),
-                e
-            )
-        })?;
-
-        if file_type.is_dir() {
-            std::fs::create_dir_all(&dest_path).map_err(|e| {
-                format!(
-                    "Failed to create destination directory {}: {}",
-                    dest_path.display(),
-                    e
-                )
-            })?;
-            copy_directory_contents(&source_path, &dest_path)?;
-        } else if file_type.is_file() {
-            std::fs::copy(&source_path, &dest_path).map_err(|e| {
-                format!(
-                    "Failed to copy artifact file {} to {}: {}",
-                    source_path.display(),
-                    dest_path.display(),
-                    e
-                )
-            })?;
-        } else if file_type.is_symlink() {
-            return Err(format!(
-                "Deploy artifacts cannot contain symbolic links: {}",
-                source_path.display()
-            ));
-        }
-    }
-
-    Ok(())
 }
 
 fn format_runtime_summary(runtime_name: &str, version: Option<&str>) -> String {
@@ -1449,6 +1293,138 @@ where
     }
 }
 
+fn normalize_asset_root(asset_root: &str) -> Result<String, String> {
+    let trimmed = asset_root.trim();
+    if trimmed.is_empty() {
+        return Err("Configured assets entry cannot be empty".to_string());
+    }
+
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(format!(
+            "Configured assets entry '{}' must be relative to project root",
+            asset_root
+        ));
+    }
+
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(format!(
+            "Configured assets entry '{}' must not contain '..'",
+            asset_root
+        ));
+    }
+
+    Ok(trimmed.replace('\\', "/"))
+}
+
+fn build_remote_asset_merge_command(
+    release_app_dir: &str,
+    asset_roots: &[String],
+) -> Result<Option<String>, String> {
+    if asset_roots.is_empty() {
+        return Ok(None);
+    }
+
+    let mut roots_to_copy = Vec::new();
+    for asset_root in asset_roots {
+        let normalized = normalize_asset_root(asset_root)?;
+        // `public` already exists in the app directory; copying it into itself fails on GNU cp.
+        if normalized == "public" {
+            continue;
+        }
+        roots_to_copy.push(normalized);
+    }
+
+    if roots_to_copy.is_empty() {
+        return Ok(None);
+    }
+
+    let mut command = format!(
+        "cd {} && mkdir -p public",
+        shell_single_quote(release_app_dir)
+    );
+    for normalized in roots_to_copy {
+        let quoted_root = shell_single_quote(&normalized);
+        let missing_msg = shell_single_quote(&format!(
+            "Configured asset directory '{}' not found after build.",
+            normalized
+        ));
+        command.push_str(&format!(
+            " && if [ ! -d {root} ]; then echo {msg} >&2; exit 1; fi && cp -R {root}/. public/",
+            root = quoted_root,
+            msg = missing_msg
+        ));
+    }
+
+    Ok(Some(command))
+}
+
+fn build_remote_install_command(
+    release_dir: &str,
+    install_command: Option<&str>,
+) -> Option<String> {
+    install_command.map(|command| {
+        format!(
+            "cd {} && sh -lc {}",
+            shell_single_quote(release_dir),
+            shell_single_quote(command)
+        )
+    })
+}
+
+async fn read_remote_vite_metadata_main(
+    ssh: &SshClient,
+    release_app_dir: &str,
+    dist_subdir: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+    let metadata_path = format!(
+        "{}/{}/{}",
+        release_app_dir, dist_subdir, VITE_BUILD_METADATA_FILE
+    );
+    let quoted = shell_single_quote(&metadata_path);
+    let output = ssh
+        .exec(&format!("if [ -f {quoted} ]; then cat {quoted}; fi"))
+        .await?;
+
+    if !output.success() {
+        return Err(format!(
+            "Failed to read Vite metadata {}: {}",
+            metadata_path,
+            output.combined().trim()
+        )
+        .into());
+    }
+
+    let content = output.stdout.trim();
+    if content.is_empty() {
+        return Ok(None);
+    }
+    parse_vite_metadata_main(content, &metadata_path)
+        .map(Some)
+        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
+}
+
+async fn resolve_remote_main(
+    ssh: &SshClient,
+    config: &DeployConfig,
+    release_app_dir: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(main) = &config.main_override {
+        return Ok(main.clone());
+    }
+
+    if let Some(main) =
+        read_remote_vite_metadata_main(ssh, release_app_dir, &config.dist_subdir).await?
+    {
+        return Ok(resolve_vite_compiled_main(&config.dist_subdir, &main));
+    }
+
+    Ok(config.fallback_main.clone())
+}
+
 /// Deploy to a single server
 async fn deploy_to_server(
     config: &DeployConfig,
@@ -1486,6 +1462,7 @@ async fn deploy_to_server(
     .await?;
 
     let release_dir = config.release_dir();
+    let release_app_dir = config.release_app_dir();
     let release_dir_preexisted = remote_directory_exists(&ssh, &release_dir).await?;
 
     let result = async {
@@ -1541,11 +1518,8 @@ async fn deploy_to_server(
         )
         .await?;
 
-        // Extract archive and unpack payload/artifacts to release root.
-        let extract_cmd = format!(
-            "cd {} && tar -xzf release.tar.gz && rm release.tar.gz && if [ -d artifacts ]; then cp -R artifacts/. . && rm -rf artifacts; fi",
-            release_dir
-        );
+        // Extract archive directly into release root.
+        let extract_cmd = format!("cd {} && tar -xzf release.tar.gz && rm release.tar.gz", release_dir);
         run_deploy_step(
             "Extracting archive payload...",
             use_spinner,
@@ -1570,25 +1544,86 @@ async fn deploy_to_server(
         // Write .env file with TAKO_BUILD version and secrets.
         run_deploy_step("Writing .env...", use_spinner, async {
             let env_content = build_env_file_contents(&config.version, secrets.get_env(env));
-            let env_file = format!("{}/.env", release_dir);
+            let env_file = format!("{}/.env", release_app_dir);
             let encoded = base64::Engine::encode(
                 &base64::engine::general_purpose::STANDARD,
                 env_content.as_bytes(),
             );
             let env_cmd = format!(
                 "echo '{}' | base64 -d > {} && chmod 600 {}",
-                encoded, env_file, env_file
+                encoded,
+                shell_single_quote(&env_file),
+                shell_single_quote(&env_file)
             );
             ssh.exec_checked(&env_cmd).await?;
             Ok::<(), SshError>(())
         })
         .await?;
 
+        // Install dependencies at bundle root (supports monorepo workspaces).
+        if let Some(install_cmd) =
+            build_remote_install_command(&release_dir, config.install_command.as_deref())
+        {
+            run_deploy_step("Installing dependencies...", use_spinner, async {
+                ssh.exec_checked(&install_cmd).await?;
+                Ok::<(), SshError>(())
+            })
+            .await?;
+        }
+
+        // Run app build in app directory when configured.
+        if let Some(build_command) = config.build_command.as_deref() {
+            run_deploy_step("Running build...", use_spinner, async {
+                let remote_cmd = format!(
+                    "cd {} && sh -lc {}",
+                    shell_single_quote(&release_app_dir),
+                    shell_single_quote(build_command)
+                );
+                ssh.exec_checked(&remote_cmd).await?;
+                Ok::<(), SshError>(())
+            })
+            .await?;
+        }
+
+        // Merge configured static roots into app/public after build.
+        if let Some(asset_merge_cmd) =
+            build_remote_asset_merge_command(&release_app_dir, &config.asset_roots)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?
+        {
+            run_deploy_step("Merging assets...", use_spinner, async {
+                ssh.exec_checked(&asset_merge_cmd).await?;
+                Ok::<(), SshError>(())
+            })
+            .await?;
+        }
+
+        // Finalize runtime manifest now that server-side build output exists.
+        let resolved_main = run_deploy_step("Preparing runtime manifest...", use_spinner, async {
+            let main = resolve_remote_main(&ssh, config, &release_app_dir).await?;
+            let app_json = serde_json::to_vec_pretty(&serde_json::json!({
+                "runtime": config.runtime,
+                "main": main,
+            }))
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            let encoded =
+                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, app_json);
+            let app_json_path = config.release_app_manifest_path();
+            let write_manifest_cmd = format!(
+                "echo '{}' | base64 -d > {}",
+                encoded,
+                shell_single_quote(&app_json_path)
+            );
+            ssh.exec_checked(&write_manifest_cmd).await?;
+            Ok::<String, Box<dyn std::error::Error + Send + Sync>>(main)
+        })
+        .await?;
+        output::muted(&format!("Deploy main: {}", resolved_main));
+
         // Send deploy command to tako-server.
         let cmd = Command::Deploy {
             app: config.app_name.clone(),
             version: config.version.clone(),
-            path: release_dir.clone(),
+            path: release_app_dir.clone(),
             routes: config.routes.clone(),
             instances,
             idle_timeout,
@@ -2089,8 +2124,24 @@ mod tests {
             archive_path: PathBuf::from("/tmp/archive.tar.gz"),
             remote_base: "/opt/tako/apps/my-app".to_string(),
             routes: vec![],
+            app_subdir: "examples/bun".to_string(),
+            runtime: "bun".to_string(),
+            fallback_main: "index.ts".to_string(),
+            main_override: None,
+            dist_subdir: ".tako/dist".to_string(),
+            install_command: Some("bun install --frozen-lockfile".to_string()),
+            build_command: Some("bun run build".to_string()),
+            asset_roots: vec!["public".to_string()],
         };
         assert_eq!(cfg.release_dir(), "/opt/tako/apps/my-app/releases/v1");
+        assert_eq!(
+            cfg.release_app_dir(),
+            "/opt/tako/apps/my-app/releases/v1/examples/bun"
+        );
+        assert_eq!(
+            cfg.release_app_manifest_path(),
+            "/opt/tako/apps/my-app/releases/v1/examples/bun/app.json"
+        );
         assert_eq!(cfg.current_link(), "/opt/tako/apps/my-app/current");
         assert_eq!(cfg.shared_dir(), "/opt/tako/apps/my-app/shared");
     }
@@ -2369,106 +2420,127 @@ mod tests {
     }
 
     #[test]
-    fn deploy_artifact_input_dir_is_under_dot_tako_artifacts_app() {
-        let root = Path::new("/tmp/project");
-        assert_eq!(
-            deploy_artifact_input_dir(root),
-            PathBuf::from("/tmp/project/.tako/artifacts/app")
-        );
+    fn deploy_dist_subdir_defaults_to_dot_tako_dist() {
+        let config = TakoToml::default();
+        assert_eq!(deploy_dist_subdir(&config), ".tako/dist");
     }
 
     #[test]
-    fn ensure_artifact_input_ready_requires_existing_directory() {
-        let temp = TempDir::new().unwrap();
-        let missing = temp.path().join(".tako/artifacts/app");
-        let err = ensure_artifact_input_ready(&missing).unwrap_err();
-        assert!(err.contains(".tako/artifacts/app"));
-        assert!(err.contains("must contain build artifacts"));
+    fn deploy_dist_subdir_uses_tako_toml_override() {
+        let config = TakoToml {
+            dist: Some("build/deploy".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(deploy_dist_subdir(&config), "build/deploy");
     }
 
     #[test]
-    fn ensure_artifact_input_ready_rejects_empty_directory() {
-        let temp = TempDir::new().unwrap();
-        let artifact_dir = temp.path().join(".tako/artifacts/app");
-        std::fs::create_dir_all(&artifact_dir).unwrap();
-        let err = ensure_artifact_input_ready(&artifact_dir).unwrap_err();
-        assert!(err.contains("is empty"));
+    fn archive_app_manifest_path_places_manifest_under_app_subdir() {
+        assert_eq!(archive_app_manifest_path(""), "app.json");
+        assert_eq!(archive_app_manifest_path("apps/web"), "apps/web/app.json");
     }
 
     #[test]
-    fn ensure_artifact_input_ready_accepts_nested_files() {
-        let temp = TempDir::new().unwrap();
-        let artifact_dir = temp.path().join(".tako/artifacts/app");
-        std::fs::create_dir_all(artifact_dir.join("sub")).unwrap();
-        std::fs::write(artifact_dir.join("sub/index.js"), "ok").unwrap();
-        ensure_artifact_input_ready(&artifact_dir).expect("build artifacts should be accepted");
+    fn resolve_app_subdir_uses_source_root_prefix() {
+        let source_root = Path::new("/repo");
+        let project_dir = Path::new("/repo/apps/web");
+        let subdir = resolve_app_subdir(source_root, project_dir).unwrap();
+        assert_eq!(subdir, "apps/web");
     }
 
     #[test]
-    fn merge_configured_asset_roots_merges_into_static_without_overwriting_existing_files() {
+    fn package_json_has_workspaces_detects_array_and_object_forms() {
         let temp = TempDir::new().unwrap();
-        let project_dir = temp.path().join("project");
-        let artifact_dir = project_dir.join(".tako/artifacts/app");
-        let static_dir = artifact_dir.join("static");
+        let pkg = temp.path().join("package.json");
 
-        std::fs::create_dir_all(project_dir.join("assets/icons")).unwrap();
-        std::fs::create_dir_all(&static_dir).unwrap();
+        std::fs::write(&pkg, r#"{"name":"x","workspaces":["apps/*"]}"#).unwrap();
+        assert!(package_json_has_workspaces(&pkg));
 
-        std::fs::write(project_dir.join("assets/logo.svg"), "from-assets").unwrap();
-        std::fs::write(project_dir.join("assets/icons/app.svg"), "nested-asset").unwrap();
-        std::fs::write(static_dir.join("logo.svg"), "existing-client").unwrap();
-
-        merge_configured_asset_roots(&project_dir, &artifact_dir, &["assets".to_string()]).unwrap();
-
-        assert_eq!(
-            std::fs::read_to_string(static_dir.join("logo.svg")).unwrap(),
-            "existing-client"
-        );
-        assert_eq!(
-            std::fs::read_to_string(static_dir.join("icons/app.svg")).unwrap(),
-            "nested-asset"
-        );
-    }
-
-    #[test]
-    fn merge_configured_asset_roots_falls_back_to_public_dir_when_static_missing() {
-        let temp = TempDir::new().unwrap();
-        let project_dir = temp.path().join("project");
-        let artifact_dir = project_dir.join(".tako/artifacts/app");
-        let public_dir = artifact_dir.join("public");
-
-        std::fs::create_dir_all(project_dir.join("shared-assets")).unwrap();
-        std::fs::create_dir_all(&public_dir).unwrap();
         std::fs::write(
-            project_dir.join("shared-assets/robots.txt"),
-            "User-agent: *",
+            &pkg,
+            r#"{"name":"x","workspaces":{"packages":["apps/*","packages/*"]}}"#,
         )
         .unwrap();
+        assert!(package_json_has_workspaces(&pkg));
+    }
 
-        merge_configured_asset_roots(&project_dir, &artifact_dir, &["shared-assets".to_string()])
-            .unwrap();
+    #[test]
+    fn workspace_root_prefers_highest_workspace_ancestor() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("repo");
+        let nested = root.join("apps/web");
+        std::fs::create_dir_all(&nested).unwrap();
 
+        std::fs::write(
+            root.join("package.json"),
+            r#"{"name":"repo","workspaces":["apps/*"]}"#,
+        )
+        .unwrap();
+        std::fs::write(nested.join("package.json"), r#"{"name":"web"}"#).unwrap();
+
+        let detected = workspace_root(&nested).unwrap();
+        assert_eq!(detected, root);
+    }
+
+    #[test]
+    fn normalize_asset_root_rejects_invalid_paths() {
+        assert!(normalize_asset_root(" ").is_err());
+        assert!(normalize_asset_root("/tmp/assets").is_err());
+        assert!(normalize_asset_root("../assets").is_err());
+    }
+
+    #[test]
+    fn build_remote_asset_merge_command_orders_roots_and_targets_public() {
+        let cmd = build_remote_asset_merge_command(
+            "/opt/tako/apps/app/releases/v1",
+            &["a".to_string(), "b/c".to_string()],
+        )
+        .unwrap()
+        .unwrap();
+        assert!(cmd.contains("mkdir -p public"));
+        assert!(cmd.contains("cp -R 'a'/. public/"));
+        assert!(cmd.contains("cp -R 'b/c'/. public/"));
+    }
+
+    #[test]
+    fn build_remote_asset_merge_command_skips_public_self_copy() {
+        let cmd = build_remote_asset_merge_command(
+            "/opt/tako/apps/app/releases/v1",
+            &["public".to_string(), "dist/client".to_string()],
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!cmd.contains("cp -R 'public'/. public/"));
+        assert!(cmd.contains("cp -R 'dist/client'/. public/"));
+    }
+
+    #[test]
+    fn build_remote_asset_merge_command_returns_none_when_only_public_is_configured() {
+        let cmd = build_remote_asset_merge_command(
+            "/opt/tako/apps/app/releases/v1",
+            &["public".to_string()],
+        )
+        .unwrap();
+        assert!(cmd.is_none());
+    }
+
+    #[test]
+    fn build_remote_install_command_uses_release_dir_and_shell_quotes() {
+        let cmd = build_remote_install_command(
+            "/opt/tako/apps/my-app/releases/v1",
+            Some("bun install --frozen-lockfile"),
+        )
+        .unwrap();
         assert_eq!(
-            std::fs::read_to_string(public_dir.join("robots.txt")).unwrap(),
-            "User-agent: *"
+            cmd,
+            "cd '/opt/tako/apps/my-app/releases/v1' && sh -lc 'bun install --frozen-lockfile'"
         );
     }
 
     #[test]
-    fn merge_configured_asset_roots_errors_when_source_directory_is_missing() {
-        let temp = TempDir::new().unwrap();
-        let project_dir = temp.path().join("project");
-        let artifact_dir = project_dir.join(".tako/artifacts/app");
-        std::fs::create_dir_all(artifact_dir.join("static")).unwrap();
-
-        let err = merge_configured_asset_roots(
-            &project_dir,
-            &artifact_dir,
-            &["missing-assets".to_string()],
-        )
-        .unwrap_err();
-        assert!(err.contains("does not exist"));
-        assert!(err.contains("missing-assets"));
+    fn build_remote_install_command_returns_none_when_install_is_not_configured() {
+        let cmd = build_remote_install_command("/opt/tako/apps/my-app/releases/v1", None);
+        assert!(cmd.is_none());
     }
 
     #[test]
@@ -2491,7 +2563,7 @@ mod tests {
             "staging",
             "v1",
             "bun",
-            Path::new("index.ts"),
+            "server/index.mjs",
             app_env_vars,
             runtime_env_vars,
             Some(&secrets),
@@ -2501,6 +2573,7 @@ mod tests {
         assert_eq!(manifest.environment, "staging");
         assert_eq!(manifest.version, "v1");
         assert_eq!(manifest.runtime, "bun");
+        assert_eq!(manifest.main, "server/index.mjs");
         assert_eq!(
             manifest.env_vars.keys().cloned().collect::<Vec<_>>(),
             vec![
@@ -2530,32 +2603,57 @@ mod tests {
     }
 
     #[test]
-    fn stage_archive_package_writes_manifest_and_artifacts_tree() {
-        let temp = TempDir::new().unwrap();
-        let source = temp.path().join("source");
-        let package = temp.path().join("package");
-        std::fs::create_dir_all(source.join("nested")).unwrap();
-        std::fs::write(source.join("nested/app.js"), "console.log('ok')").unwrap();
-
-        let manifest = DeployArchiveManifest {
-            app_name: "my-app".to_string(),
-            environment: "production".to_string(),
-            version: "v1".to_string(),
-            runtime: "bun".to_string(),
-            entry_point: "index.ts".to_string(),
-            env_vars: BTreeMap::from([("NODE_ENV".to_string(), "production".to_string())]),
-            secret_names: vec!["API_KEY".to_string()],
+    fn resolve_fallback_main_prefers_tako_toml_main() {
+        let project_dir = Path::new("/tmp/project");
+        let config = TakoToml {
+            main: Some("server/custom.mjs".to_string()),
+            ..Default::default()
         };
+        let resolved = resolve_fallback_main(project_dir, &config, Path::new("index.ts")).unwrap();
+        assert_eq!(resolved, "server/custom.mjs");
+    }
 
-        prepare_archive_package_dir(&package).unwrap();
-        stage_archive_package(&source, &package, &manifest).unwrap();
+    #[test]
+    fn resolve_fallback_main_uses_runtime_entry_relative_to_project() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("project");
+        std::fs::create_dir_all(project_dir.join("src")).unwrap();
+        let runtime_entry = project_dir.join("src/index.ts");
+        std::fs::write(&runtime_entry, "export default {};").unwrap();
 
-        assert!(package.join("artifacts/nested/app.js").exists());
-        let manifest_path = package.join(DEPLOY_ARCHIVE_MANIFEST_FILE);
-        assert!(manifest_path.exists());
+        let resolved =
+            resolve_fallback_main(&project_dir, &TakoToml::default(), &runtime_entry).unwrap();
+        assert_eq!(resolved, "src/index.ts");
+    }
 
-        let decoded: DeployArchiveManifest =
-            serde_json::from_str(&std::fs::read_to_string(manifest_path).unwrap()).unwrap();
-        assert_eq!(decoded, manifest);
+    #[test]
+    fn parse_vite_metadata_main_extracts_compiled_main() {
+        let main = parse_vite_metadata_main(r#"{"compiled_main":"server/index.mjs"}"#, "meta.json")
+            .unwrap();
+        assert_eq!(main, "server/index.mjs");
+    }
+
+    #[test]
+    fn parse_vite_metadata_main_rejects_empty_value() {
+        let err = parse_vite_metadata_main(r#"{"compiled_main":" "}"#, "meta.json").unwrap_err();
+        assert!(err.contains("compiled_main is empty"));
+    }
+
+    #[test]
+    fn resolve_vite_compiled_main_prefixes_dist_subdir() {
+        let resolved = resolve_vite_compiled_main(".tako/dist", "server/tako-entry.mjs");
+        assert_eq!(resolved, ".tako/dist/server/tako-entry.mjs");
+    }
+
+    #[test]
+    fn resolve_vite_compiled_main_keeps_dot_dist_main() {
+        let resolved = resolve_vite_compiled_main(".", "tako-entry.mjs");
+        assert_eq!(resolved, "tako-entry.mjs");
+    }
+
+    #[test]
+    fn resolve_vite_compiled_main_avoids_double_prefix() {
+        let resolved = resolve_vite_compiled_main(".tako/dist", ".tako/dist/server/tako-entry.mjs");
+        assert_eq!(resolved, ".tako/dist/server/tako-entry.mjs");
     }
 }

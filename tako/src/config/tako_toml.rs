@@ -8,9 +8,21 @@ use super::error::{ConfigError, Result};
 /// Root configuration from tako.toml
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TakoToml {
-    /// [tako] section - app metadata
+    /// Application name (auto-detected if not specified; treat as stable once set)
+    pub name: Option<String>,
+
+    /// Build command to run before deployment
+    pub build: Option<String>,
+
+    /// Deploy artifact directory (relative to project root)
+    pub dist: Option<String>,
+
+    /// Runtime entrypoint override relative to dist root
+    pub main: Option<String>,
+
+    /// Additional asset directories (relative to project root) merged into dist/public
     #[serde(default)]
-    pub tako: TakoSection,
+    pub assets: Vec<String>,
 
     /// [vars] section - global environment variables
     #[serde(default)]
@@ -31,20 +43,6 @@ pub struct TakoToml {
     /// [servers.*] sections - per-server configurations
     #[serde(default)]
     pub servers: HashMap<String, ServerConfig>,
-}
-
-/// [tako] section - app metadata
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct TakoSection {
-    /// Application name (auto-detected if not specified; treat as stable once set)
-    pub name: Option<String>,
-
-    /// Build command to run before deployment
-    pub build: Option<String>,
-
-    /// Additional asset directories (relative to project root) to merge into deploy public assets
-    #[serde(default)]
-    pub assets: Vec<String>,
 }
 
 /// Environment configuration from [envs.*]
@@ -143,10 +141,12 @@ impl TakoToml {
 
         let mut config = TakoToml::default();
 
-        // Parse [tako] section
-        if let Some(tako) = raw.get("tako") {
-            config.tako = toml::from_str(&toml::to_string(tako)?)?;
-        }
+        // Parse top-level metadata
+        config.name = parse_optional_string(&raw, "name")?;
+        config.build = parse_optional_string(&raw, "build")?;
+        config.dist = parse_optional_string(&raw, "dist")?;
+        config.main = parse_optional_string(&raw, "main")?;
+        config.assets = parse_string_array(&raw, "assets")?.unwrap_or_default();
 
         // Parse [vars] section (global) and [vars.*] sections (per-environment)
         if let Some(vars) = raw.get("vars")
@@ -222,11 +222,42 @@ impl TakoToml {
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
         // Validate app name if specified
-        if let Some(name) = &self.tako.name {
+        if let Some(name) = &self.name {
             validate_app_name(name)?;
         }
 
-        for asset_path in &self.tako.assets {
+        if let Some(dist) = &self.dist {
+            let trimmed = dist.trim();
+            if trimmed.is_empty() {
+                return Err(ConfigError::Validation(
+                    "dist path cannot be empty".to_string(),
+                ));
+            }
+            let path = Path::new(trimmed);
+            if path.is_absolute() {
+                return Err(ConfigError::Validation(format!(
+                    "dist path '{}' must be relative to project root",
+                    dist
+                )));
+            }
+            if path
+                .components()
+                .any(|component| matches!(component, Component::ParentDir))
+            {
+                return Err(ConfigError::Validation(format!(
+                    "dist path '{}' must not contain '..'",
+                    dist
+                )));
+            }
+        }
+
+        if let Some(main) = &self.main
+            && main.trim().is_empty()
+        {
+            return Err(ConfigError::Validation("main cannot be empty".to_string()));
+        }
+
+        for asset_path in &self.assets {
             let trimmed = asset_path.trim();
             if trimmed.is_empty() {
                 return Err(ConfigError::Validation(
@@ -464,6 +495,36 @@ fn load_or_create_toml_document(path: &Path) -> Result<toml::Value> {
     toml::from_str::<toml::Value>(&content).map_err(ConfigError::TomlParse)
 }
 
+fn parse_optional_string(raw: &toml::Value, key: &str) -> Result<Option<String>> {
+    let Some(value) = raw.get(key) else {
+        return Ok(None);
+    };
+    value
+        .as_str()
+        .map(|s| Some(s.to_string()))
+        .ok_or_else(|| ConfigError::Validation(format!("'{}' must be a string", key)))
+}
+
+fn parse_string_array(raw: &toml::Value, key: &str) -> Result<Option<Vec<String>>> {
+    let Some(value) = raw.get(key) else {
+        return Ok(None);
+    };
+    let arr = value
+        .as_array()
+        .ok_or_else(|| ConfigError::Validation(format!("'{}' must be an array of strings", key)))?;
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(s) = item.as_str() else {
+            return Err(ConfigError::Validation(format!(
+                "'{}' must be an array of strings",
+                key
+            )));
+        };
+        out.push(s.to_string());
+    }
+    Ok(Some(out))
+}
+
 /// Validate app name format
 fn validate_app_name(name: &str) -> Result<()> {
     if name.is_empty() {
@@ -618,26 +679,28 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_tako_section_only() {
+    fn test_parse_top_level_metadata_fields() {
         let toml = r#"
-[tako]
 name = "my-app"
 build = "bun build"
+dist = ".tako/dist"
+main = "server/index.mjs"
 "#;
         let config = TakoToml::parse(toml).unwrap();
-        assert_eq!(config.tako.name, Some("my-app".to_string()));
-        assert_eq!(config.tako.build, Some("bun build".to_string()));
+        assert_eq!(config.name, Some("my-app".to_string()));
+        assert_eq!(config.build, Some("bun build".to_string()));
+        assert_eq!(config.dist, Some(".tako/dist".to_string()));
+        assert_eq!(config.main, Some("server/index.mjs".to_string()));
     }
 
     #[test]
-    fn test_parse_tako_assets_array() {
+    fn test_parse_assets_array() {
         let toml = r#"
-[tako]
 assets = ["public-assets", "shared/images"]
 "#;
         let config = TakoToml::parse(toml).unwrap();
         assert_eq!(
-            config.tako.assets,
+            config.assets,
             vec!["public-assets".to_string(), "shared/images".to_string()]
         );
     }
@@ -760,9 +823,11 @@ idle_timeout = 600
     #[test]
     fn test_parse_complete_config() {
         let toml = r#"
-[tako]
 name = "my-api"
 build = "bun build"
+dist = ".tako/dist"
+main = "server/index.mjs"
+assets = ["public", ".output/public"]
 
 [vars]
 LOG_LEVEL = "info"
@@ -779,8 +844,14 @@ port = 80
 "#;
         let config = TakoToml::parse(toml).unwrap();
 
-        assert_eq!(config.tako.name, Some("my-api".to_string()));
-        assert_eq!(config.tako.build, Some("bun build".to_string()));
+        assert_eq!(config.name, Some("my-api".to_string()));
+        assert_eq!(config.build, Some("bun build".to_string()));
+        assert_eq!(config.dist, Some(".tako/dist".to_string()));
+        assert_eq!(config.main, Some("server/index.mjs".to_string()));
+        assert_eq!(
+            config.assets,
+            vec!["public".to_string(), ".output/public".to_string()]
+        );
         assert_eq!(config.vars.get("LOG_LEVEL"), Some(&"info".to_string()));
 
         let prod = config.envs.get("production").unwrap();
@@ -880,7 +951,6 @@ port = 0
     #[test]
     fn test_validate_tako_assets_rejects_absolute_path() {
         let toml = r#"
-[tako]
 assets = ["/tmp/assets"]
 "#;
         let err = TakoToml::parse(toml).unwrap_err();
@@ -893,7 +963,6 @@ assets = ["/tmp/assets"]
     #[test]
     fn test_validate_tako_assets_rejects_parent_directory_reference() {
         let toml = r#"
-[tako]
 assets = ["../shared-assets"]
 "#;
         let err = TakoToml::parse(toml).unwrap_err();
@@ -901,6 +970,39 @@ assets = ["../shared-assets"]
             err.to_string()
                 .contains("asset path '../shared-assets' must not contain '..'")
         );
+    }
+
+    #[test]
+    fn test_validate_dist_rejects_absolute_path() {
+        let toml = r#"
+dist = "/tmp/build"
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("dist path '/tmp/build' must be relative to project root")
+        );
+    }
+
+    #[test]
+    fn test_validate_dist_rejects_parent_directory_reference() {
+        let toml = r#"
+dist = "../build"
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("dist path '../build' must not contain '..'")
+        );
+    }
+
+    #[test]
+    fn test_validate_main_rejects_empty_value() {
+        let toml = r#"
+main = "   "
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("main cannot be empty"));
     }
 
     // ==================== Helper Method Tests ====================
@@ -969,7 +1071,6 @@ name = "broken"
     #[test]
     fn test_wrong_type() {
         let toml = r#"
-[tako]
 name = 123
 "#;
         assert!(TakoToml::parse(toml).is_err());

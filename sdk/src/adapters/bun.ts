@@ -13,11 +13,9 @@
  *   }
  * });
  *
- * export default {
- *   fetch(request: Request, env: Record<string, string>) {
- *     return new Response("Hello from Bun!");
- *   }
- * };
+ * export default function fetch(request: Request, env: Record<string, string>) {
+ *   return new Response("Hello from Bun!");
+ * }
  * ```
  */
 
@@ -30,11 +28,18 @@ import { handleTakoEndpoint } from "../endpoints";
 export { Tako } from "../tako";
 export type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 
+function resolveFetch(handler: FetchHandler) {
+  if (typeof handler === "function") {
+    return handler;
+  }
+  return handler.fetch.bind(handler);
+}
+
 /**
  * Create a Tako-wrapped Bun server
  *
  * This wraps Bun.serve() with Tako functionality including:
- * - Internal /_tako/* endpoints
+ * - Internal status endpoint on Host `tako.internal` + `/status`
  * - Automatic heartbeat to tako-server
  * - Graceful shutdown handling
  */
@@ -47,6 +52,7 @@ export function serve(
 ): void {
   const port = options?.port ?? parseInt(process.env.PORT || "3000", 10);
   const takoOptions = options?.tako ?? {};
+  const userFetch = resolveFetch(handler);
 
   // Environment variables set by tako
   const TAKO_SOCKET = process.env.TAKO_SOCKET;
@@ -87,7 +93,7 @@ export function serve(
 
     // Pass through to user handler
     try {
-      return await handler.fetch(request, env);
+      return await userFetch(request, env);
     } catch (err) {
       console.error("[tako.sh] Error in fetch handler:", err);
       return new Response(JSON.stringify({ error: "Internal Server Error" }), {

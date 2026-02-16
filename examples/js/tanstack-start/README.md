@@ -1,6 +1,6 @@
 # TanStack Start Basic Example
 
-TanStack Start example based on `TanStack/router/examples/react/start-basic`, with Tako artifact staging via `tako.sh/vite`.
+TanStack Start example based on `TanStack/router/examples/react/start-basic`, with Tako deploy metadata via `tako.sh/vite`.
 
 ## Local TanStack Dev
 
@@ -10,19 +10,20 @@ bun install
 bun run dev
 ```
 
-## Build and Stage Deploy Artifacts
+## Build for Deploy
 
 ```bash
 cd examples/js/tanstack-start
 bun run build
 ```
 
-After build, deploy artifacts are staged to `.tako/artifacts/app`:
+After build:
 
-- `.tako/artifacts/app/static`: merged `public/` and client output (`.output/public`)
-- `.tako/artifacts/app/server`: Nitro server output (`.output/server`)
+- `dist/.tako-vite.json` contains the compiled server entry metadata.
+- `tako.toml` points deploy input to `dist`.
+- `assets` merge order populates `dist/public` from `public/` and `dist/client`.
 
 ## Notes
 
 - `vite.config.ts` wires TanStack Start and `tako.sh/vite`.
-- `src/index.ts` is a lightweight Tako runtime entry used for health/status endpoints.
+- Deploy uses `dist` as input and archive `app.json` as runtime manifest.

@@ -1,4 +1,6 @@
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{Mutex, MutexGuard, OnceLock};
 
 /// Get Tako's global home directory.
 ///
@@ -61,6 +63,14 @@ pub fn dev_tako_home_from_exe(exe_path: &Path) -> Option<PathBuf> {
 }
 
 #[cfg(test)]
+pub(crate) fn test_tako_home_env_lock() -> MutexGuard<'static, ()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+        .lock()
+        .expect("TAKO_HOME test env lock poisoned")
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
@@ -76,13 +86,16 @@ mod tests {
 
     #[test]
     fn tako_home_dir_respects_env_override() {
+        let _lock = test_tako_home_env_lock();
+        let previous = std::env::var_os("TAKO_HOME");
         let temp = TempDir::new().unwrap();
         unsafe {
             std::env::set_var("TAKO_HOME", temp.path());
         }
         let got = tako_home_dir().unwrap();
-        unsafe {
-            std::env::remove_var("TAKO_HOME");
+        match previous {
+            Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+            None => unsafe { std::env::remove_var("TAKO_HOME") },
         }
         assert_eq!(got, temp.path());
     }

@@ -20,8 +20,8 @@ tako deploy [--env <environment>]
 What happens during deploy:
 
 - Build happens locally.
-- Deploy artifact source is `.tako/artifacts/app`.
-- Deploy stages a payload with `artifacts/` plus `app.json`.
+- Deploy artifact source is `dist` in `tako.toml` (default `.tako/dist`).
+- Deploy packages `dist` directly and writes `app.json` at archive root.
 - A versioned tarball is created under `.tako/artifacts/`.
 - Deploys run to all target servers in parallel.
 - Each server is handled independently, so partial success is possible.
@@ -34,7 +34,7 @@ Before you ship, do a quick sanity pass:
 2. Confirm `tako.toml` has route/env/server mappings for the target environment.
 3. Verify secrets are present for the target env (`tako secrets sync` if needed).
 4. Run your local tests/build so you do not upload a broken artifact.
-5. Ensure deployable files exist in `.tako/artifacts/app` (build output or prebuilt files).
+5. Ensure deployable files exist in your deploy `dist` directory (build output or prebuilt files).
 
 ## Server Prerequisites
 
@@ -54,20 +54,20 @@ Each target server should have:
 - Defines environments and routes.
 - Every non-development environment must define `route` or `routes`.
 - Empty route sets are rejected for non-development environments (no implicit catch-all mode).
-- Optional `[tako].assets` directories are merged into deploy public assets (`.tako/artifacts/app/static`, or `.tako/artifacts/app/public` when `static/` is absent).
+- Optional `assets` directories are merged into deploy public assets (`<dist>/public`) in listed order.
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
 - Defines per-server scaling settings (`instances`, `idle_timeout`) via global and per-server overrides.
 
-### Build artifacts (`.tako/artifacts/app`)
+### Build artifacts (`dist`)
 
-- `tako deploy` always reads deployable files from `.tako/artifacts/app`.
-- If your runtime build command runs, it must write deployable files into `.tako/artifacts/app`.
-- If no build command runs, pre-populate `.tako/artifacts/app` before deploying.
-- If `[tako].assets` is configured, those directories are merged into deploy public assets before packaging.
-- On asset merge conflicts, existing files in `.tako/artifacts/app` win.
-- Deploy fails before upload if `.tako/artifacts/app` is missing or empty.
+- `tako deploy` reads deployable files from `dist` in `tako.toml` (default `.tako/dist`).
+- If your runtime build command runs, it must write deployable files into `dist`.
+- If no build command runs, pre-populate `dist` before deploying.
+- If `assets` is configured, those directories are merged into `<dist>/public` before packaging.
+- On asset merge conflicts, later configured asset roots overwrite earlier files.
+- Deploy fails before upload if `dist` is missing or empty.
 - Archive payload always includes:
-  - `artifacts/` (copied build output)
+  - all files from `dist` at archive root
   - `app.json` (metadata: app, env, runtime/entry point, env vars, secret names)
 
 ### Global server inventory (`~/.tako/config.toml`)
@@ -139,5 +139,5 @@ Right after deploy:
 Deploy E2E tests are opt-in and Docker-backed:
 
 ```bash
-TAKO_E2E=1 cargo test -p tako --test deploy_e2e -- --nocapture
+just e2e e2e/fixtures/js/tanstack-start
 ```

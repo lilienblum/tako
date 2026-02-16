@@ -26,6 +26,9 @@ pub trait RuntimeAdapter: Send + Sync {
     /// Get the build command (if any)
     fn build_command(&self) -> Option<Vec<String>>;
 
+    /// Get the dependency install command (if any)
+    fn install_command(&self) -> Option<Vec<String>>;
+
     /// Get the command to run the app with a specific port
     fn run_command(&self, port: u16) -> Vec<String>;
 
@@ -83,6 +86,10 @@ mod tests {
         }
 
         fn build_command(&self) -> Option<Vec<String>> {
+            None
+        }
+
+        fn install_command(&self) -> Option<Vec<String>> {
             None
         }
 

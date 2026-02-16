@@ -6,7 +6,7 @@
  * - Unix socket server creation
  * - Connection to tako-server
  * - Ready/heartbeat signals
- * - Internal endpoints (/_tako/*)
+ * - Internal status endpoint (Host: tako.internal, Path: /status)
  * - Graceful shutdown
  *
  * Users don't interact with this directly - it's used by tako dev and tako-server.
@@ -15,7 +15,7 @@
 import { ServerConnection } from "./connection";
 import { handleTakoEndpoint } from "./endpoints";
 import { Tako } from "./tako";
-import type { FetchHandler, TakoStatus, TakoOptions } from "./types";
+import type { FetchFunction, TakoStatus, TakoOptions } from "./types";
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -51,7 +51,7 @@ function getStatus(): TakoStatus {
 /**
  * Create the app server
  */
-async function createAppServer(userApp: FetchHandler, options: TakoOptions): Promise<void> {
+async function createAppServer(userFetch: FetchFunction, options: TakoOptions): Promise<void> {
   // Build environment object from process.env
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -70,7 +70,7 @@ async function createAppServer(userApp: FetchHandler, options: TakoOptions): Pro
 
     // Pass through to user app
     try {
-      return await userApp.fetch(request, env);
+      return await userFetch(request, env);
     } catch (err) {
       console.error("Error in user fetch handler:", err);
       return new Response(JSON.stringify({ error: "Internal Server Error" }), {
@@ -165,13 +165,19 @@ export async function run(userAppPath: string): Promise<void> {
   console.log("Starting application");
 
   // Import user's app
-  let userApp: FetchHandler;
+  let userFetch: FetchFunction;
   try {
     const module = await import(resolveUserAppImportUrl(userAppPath));
-    userApp = module.default;
+    const defaultExport = module.default;
 
-    if (!userApp || typeof userApp.fetch !== "function") {
-      throw new Error("App must export a default object with a fetch() method");
+    if (typeof defaultExport === "function") {
+      userFetch = defaultExport as FetchFunction;
+    } else if (defaultExport && typeof defaultExport.fetch === "function") {
+      userFetch = defaultExport.fetch.bind(defaultExport) as FetchFunction;
+    } else {
+      throw new Error(
+        "App must export a default fetch(request, env) function (or legacy default object with fetch).",
+      );
     }
   } catch (err) {
     console.error(`Failed to import app from ${userAppPath}:`, err);
@@ -183,7 +189,7 @@ export async function run(userAppPath: string): Promise<void> {
   const options: TakoOptions = takoInstance?.getOptions() || {};
 
   // Create the app server
-  await createAppServer(userApp, options);
+  await createAppServer(userFetch, options);
 
   // Connect to tako-server (production only)
   await connectToServer(options);

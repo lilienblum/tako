@@ -12,21 +12,27 @@ describe("handleTakoEndpoint", () => {
     uptime_seconds: 3600,
   };
 
-  test("returns null for non-tako paths", () => {
+  test("returns null for non-internal host even on /status", () => {
+    const request = new Request("http://localhost/status");
+    const response = handleTakoEndpoint(request, mockStatus);
+    expect(response).toBeNull();
+  });
+
+  test("returns null for non-internal host paths", () => {
     const request = new Request("http://localhost/api/users");
     const response = handleTakoEndpoint(request, mockStatus);
     expect(response).toBeNull();
   });
 
-  test("returns null for root path", () => {
-    const request = new Request("http://localhost/");
+  test("returns null for root path on non-internal host", () => {
+    const request = new Request("http://example.com/");
     const response = handleTakoEndpoint(request, mockStatus);
     expect(response).toBeNull();
   });
 
-  describe("/_tako/status", () => {
+  describe("internal host /status", () => {
     test("returns status JSON", async () => {
-      const request = new Request("http://localhost/_tako/status");
+      const request = new Request("http://tako.internal/status");
       const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();
@@ -42,67 +48,24 @@ describe("handleTakoEndpoint", () => {
         ...mockStatus,
         status: "draining",
       };
-      const request = new Request("http://localhost/_tako/status");
+      const request = new Request("http://tako.internal/status");
       const response = handleTakoEndpoint(request, unhealthyStatus);
 
       const body = await response!.json();
       expect(body.status).toBe("draining");
     });
-  });
-
-  describe("/_tako/health", () => {
-    test("returns 200 when healthy", async () => {
-      const request = new Request("http://localhost/_tako/health");
+    test("returns status for internal host with explicit port", async () => {
+      const request = new Request("http://tako.internal:3000/status");
       const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
-
-      const body = await response!.json();
-      expect(body.status).toBe("ok");
-    });
-
-    test("returns 503 when not healthy", async () => {
-      const unhealthyStatus: TakoStatus = {
-        ...mockStatus,
-        status: "draining",
-      };
-      const request = new Request("http://localhost/_tako/health");
-      const response = handleTakoEndpoint(request, unhealthyStatus);
-
-      expect(response).not.toBeNull();
-      expect(response!.status).toBe(503);
-
-      const body = await response!.json();
-      expect(body.status).toBe("draining");
-    });
-
-    test("returns 503 when starting", async () => {
-      const startingStatus: TakoStatus = {
-        ...mockStatus,
-        status: "starting",
-      };
-      const request = new Request("http://localhost/_tako/health");
-      const response = handleTakoEndpoint(request, startingStatus);
-
-      expect(response!.status).toBe(503);
-    });
-
-    test("returns 503 when unhealthy", async () => {
-      const unhealthyStatus: TakoStatus = {
-        ...mockStatus,
-        status: "unhealthy",
-      };
-      const request = new Request("http://localhost/_tako/health");
-      const response = handleTakoEndpoint(request, unhealthyStatus);
-
-      expect(response!.status).toBe(503);
     });
   });
 
-  describe("unknown /_tako/ paths", () => {
-    test("returns 404 for unknown paths", async () => {
-      const request = new Request("http://localhost/_tako/unknown");
+  describe("internal host unknown paths", () => {
+    test("returns 404 for unknown paths on internal host", async () => {
+      const request = new Request("http://tako.internal/unknown");
       const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();
@@ -110,13 +73,6 @@ describe("handleTakoEndpoint", () => {
 
       const body = await response!.json();
       expect(body.error).toBe("Not found");
-    });
-
-    test("returns 404 for /_tako/ without subpath", async () => {
-      const request = new Request("http://localhost/_tako/");
-      const response = handleTakoEndpoint(request, mockStatus);
-
-      expect(response!.status).toBe(404);
     });
   });
 });

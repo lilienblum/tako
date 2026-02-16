@@ -68,10 +68,11 @@ impl Spawner {
             "http://127.0.0.1:{}{}",
             instance.port, config.health_check_path
         );
+        let health_host = config.health_check_host.clone();
 
         match timeout(
             config.startup_timeout,
-            self.wait_for_ready(&health_url, instance.clone()),
+            self.wait_for_ready(&health_url, &health_host, instance.clone()),
         )
         .await
         {
@@ -110,6 +111,7 @@ impl Spawner {
     async fn wait_for_ready(
         &self,
         health_url: &str,
+        health_host: &str,
         instance: Arc<Instance>,
     ) -> Result<(), InstanceError> {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
@@ -126,7 +128,13 @@ impl Spawner {
             }
 
             // Try health check
-            match self.client.get(health_url).send().await {
+            match self
+                .client
+                .get(health_url)
+                .header(reqwest::header::HOST, health_host)
+                .send()
+                .await
+            {
                 Ok(resp) if resp.status().is_success() => {
                     instance.set_state(InstanceState::Ready);
                     return Ok(());
@@ -159,13 +167,22 @@ impl Spawner {
 
     /// Run health check on an instance
     pub async fn health_check(&self, app: &App, instance: &Instance) -> bool {
-        let health_check_path = {
+        let (health_check_path, health_check_host) = {
             let config = app.config.read();
-            config.health_check_path.clone()
+            (
+                config.health_check_path.clone(),
+                config.health_check_host.clone(),
+            )
         };
         let health_url = format!("http://127.0.0.1:{}{}", instance.port, health_check_path);
 
-        match self.client.get(&health_url).send().await {
+        match self
+            .client
+            .get(&health_url)
+            .header(reqwest::header::HOST, health_check_host)
+            .send()
+            .await
+        {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
         }
@@ -180,12 +197,57 @@ impl Default for Spawner {
 
 #[cfg(test)]
 mod tests {
+    use super::super::AppConfig;
     use super::*;
+    use tokio::sync::mpsc;
 
     #[test]
     fn test_spawner_creation() {
         let spawner = Spawner::new();
         // Just verify it creates without panic
         drop(spawner);
+    }
+
+    #[tokio::test]
+    async fn health_check_uses_internal_status_host_and_path() {
+        let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
+            return;
+        };
+        let port = listener.local_addr().unwrap().port();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request_buf = [0_u8; 2048];
+            let n = tokio::io::AsyncReadExt::read(&mut socket, &mut request_buf)
+                .await
+                .expect("read request");
+            let request = String::from_utf8_lossy(&request_buf[..n]);
+            let is_internal_status = request.starts_with("GET /status ")
+                && request
+                    .lines()
+                    .any(|line| line.eq_ignore_ascii_case("host: tako.internal"));
+
+            let response = if is_internal_status {
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
+            } else {
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found".as_slice()
+            };
+
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response).await;
+        });
+
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let config = AppConfig {
+            name: "test-app".to_string(),
+            base_port: port,
+            health_check_path: "/status".to_string(),
+            health_check_host: "tako.internal".to_string(),
+            ..Default::default()
+        };
+        let app = App::new(config, instance_tx);
+        let instance = app.allocate_instance();
+
+        let spawner = Spawner::new();
+        assert!(spawner.health_check(&app, &instance).await);
     }
 }

@@ -109,7 +109,7 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
 **SDK:**
 
 - Runtime-agnostic fetch handler interface
-- Built-in `/_tako/status` and `/_tako/health` endpoints
+- Built-in `/_tako/status` endpoint
 - Optional config reload support
 
 ## When Making Changes

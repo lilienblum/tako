@@ -75,6 +75,7 @@ flate2 = "1.1"
 tar = "0.4"
 sha2 = "0.10"
 hex = "0.4"
+ignore = "0.4"
 
 # Encryption for secrets
 aes-gcm = "0.10"

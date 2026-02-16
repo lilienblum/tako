@@ -238,8 +238,10 @@ mod deploy_flow {
 Bun.serve({
   port: Number(process.env.PORT || 3000),
   fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (path === "/_tako/status") {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (host === "tako.internal" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -290,8 +292,10 @@ mod routing {
 Bun.serve({
   port: Number(process.env.PORT || 3000),
   fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (path === "/_tako/status") {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (host === "tako.internal" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -307,8 +311,10 @@ Bun.serve({
 Bun.serve({
   port: Number(process.env.PORT || 3000),
   fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (path === "/_tako/status") {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (host === "tako.internal" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -376,8 +382,10 @@ mod rolling_updates {
 Bun.serve({
   port: Number(process.env.PORT || 3000),
   fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (path === "/_tako/status") {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (host === "tako.internal" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -413,8 +421,10 @@ Bun.serve({
 Bun.serve({
   port: Number(process.env.PORT || 3000),
   fetch(request) {
-    const path = new URL(request.url).pathname;
-    if (path === "/_tako/status") {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (host === "tako.internal" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });

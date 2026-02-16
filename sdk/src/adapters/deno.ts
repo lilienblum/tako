@@ -13,10 +13,8 @@
  *   }
  * });
  *
- * serve({
- *   fetch(request: Request) {
- *     return new Response("Hello from Deno!");
- *   }
+ * serve((request: Request) => {
+ *   return new Response("Hello from Deno!");
  * });
  * ```
  */
@@ -28,6 +26,13 @@ import { handleTakoEndpoint } from "../endpoints";
 // Re-export core classes
 export { Tako } from "../tako";
 export type { TakoOptions, TakoStatus, FetchHandler } from "../types";
+
+function resolveFetch(handler: FetchHandler) {
+  if (typeof handler === "function") {
+    return handler;
+  }
+  return handler.fetch.bind(handler);
+}
 
 // Environment variables set by tako (Deno uses Deno.env.get)
 const getEnv = (key: string, defaultValue: string = ""): string => {
@@ -66,7 +71,7 @@ export function getStatus(): TakoStatus {
  * Create a Tako-wrapped Deno server
  *
  * This wraps Deno.serve() with Tako functionality including:
- * - Internal /_tako/* endpoints
+ * - Internal status endpoint on Host `tako.internal` + `/status`
  * - Graceful shutdown handling
  */
 export function serve(
@@ -77,6 +82,7 @@ export function serve(
   },
 ): void {
   const port = options?.port ?? parseInt(getEnv("PORT", "3000"), 10);
+  const userFetch = resolveFetch(handler);
 
   // Build environment object
   const env: Record<string, string> = {};
@@ -99,7 +105,7 @@ export function serve(
 
     // Pass through to user handler
     try {
-      return await handler.fetch(request, env);
+      return await userFetch(request, env);
     } catch (err) {
       console.error("[tako.sh] Error in fetch handler:", err);
       return new Response(JSON.stringify({ error: "Internal Server Error" }), {

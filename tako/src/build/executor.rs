@@ -1,7 +1,7 @@
 //! Build executor - runs build commands and creates archives
 
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use thiserror::Error;
 
@@ -151,8 +151,20 @@ impl BuildExecutor {
         output_path: &Path,
         exclude_patterns: &[&str],
     ) -> Result<u64, BuildError> {
+        self.create_archive_with_extra_files(source_dir, output_path, exclude_patterns, &[])
+    }
+
+    /// Create a deployment archive (.tar.gz) with additional virtual files.
+    pub fn create_archive_with_extra_files(
+        &self,
+        source_dir: &Path,
+        output_path: &Path,
+        exclude_patterns: &[&str],
+        extra_files: &[(&str, &[u8])],
+    ) -> Result<u64, BuildError> {
         use flate2::Compression;
         use flate2::write::GzEncoder;
+        use tar::Header;
 
         // Create parent directory if needed
         if let Some(parent) = output_path.parent() {
@@ -183,6 +195,14 @@ impl BuildExecutor {
             exclude_patterns,
         )?;
 
+        for (path, bytes) in extra_files {
+            let mut header = Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, path, &mut std::io::Cursor::new(*bytes))?;
+        }
+
         let encoder = archive
             .into_inner()
             .map_err(|e| BuildError::ArchiveError(format!("Failed to finish archive: {}", e)))?;
@@ -192,6 +212,100 @@ impl BuildExecutor {
             .map_err(|e| BuildError::ArchiveError(format!("Failed to compress: {}", e)))?;
 
         // Return file size
+        let metadata = std::fs::metadata(output_path)?;
+        Ok(metadata.len())
+    }
+
+    /// Create a source deployment archive (.tar.gz).
+    ///
+    /// File selection rules:
+    /// - Base ignore semantics from `.gitignore`
+    /// - `.takoignore` acts as an override layer (supports `!` re-includes)
+    /// - Non-overridable excludes for safety/perf: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`
+    pub fn create_source_archive_with_extra_files(
+        &self,
+        source_root: &Path,
+        output_path: &Path,
+        extra_files: &[(&str, &[u8])],
+    ) -> Result<u64, BuildError> {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+        use tar::Header;
+
+        if let Some(parent) = output_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let file = std::fs::File::create(output_path)?;
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+
+        let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
+        let mut walker = ignore::WalkBuilder::new(source_root);
+        walker
+            .hidden(false)
+            .git_ignore(true)
+            .git_global(true)
+            .git_exclude(true)
+            .parents(true)
+            .add_custom_ignore_filename(".takoignore");
+
+        for entry in walker.build() {
+            let entry = entry.map_err(|e| BuildError::ArchiveError(e.to_string()))?;
+            let file_type = match entry.file_type() {
+                Some(file_type) => file_type,
+                None => continue,
+            };
+            if !file_type.is_file() {
+                continue;
+            }
+
+            let path = entry.path();
+            let relative_path = path.strip_prefix(source_root).map_err(|e| {
+                BuildError::ArchiveError(format!(
+                    "Failed to compute relative path for {}: {}",
+                    path.display(),
+                    e
+                ))
+            })?;
+
+            if should_force_exclude_from_source_archive(relative_path) {
+                continue;
+            }
+
+            files.push((path.to_path_buf(), relative_path.to_path_buf()));
+        }
+
+        files.sort_by(|a, b| a.1.cmp(&b.1));
+
+        for (full_path, relative_path) in files {
+            archive
+                .append_path_with_name(&full_path, &relative_path)
+                .map_err(|e| {
+                    BuildError::ArchiveError(format!(
+                        "Failed to add {}: {}",
+                        full_path.display(),
+                        e
+                    ))
+                })?;
+        }
+
+        for (path, bytes) in extra_files {
+            let mut header = Header::new_gnu();
+            header.set_size(bytes.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            archive.append_data(&mut header, path, &mut std::io::Cursor::new(*bytes))?;
+        }
+
+        let encoder = archive
+            .into_inner()
+            .map_err(|e| BuildError::ArchiveError(format!("Failed to finish archive: {}", e)))?;
+
+        encoder
+            .finish()
+            .map_err(|e| BuildError::ArchiveError(format!("Failed to compress: {}", e)))?;
+
         let metadata = std::fs::metadata(output_path)?;
         Ok(metadata.len())
     }
@@ -327,6 +441,21 @@ fn short_hash(s: &str) -> &str {
     &s[..8.min(s.len())]
 }
 
+fn should_force_exclude_from_source_archive(relative_path: &Path) -> bool {
+    for component in relative_path.components() {
+        if let Component::Normal(name) = component {
+            match name.to_str() {
+                Some(".git") | Some(".tako") | Some("node_modules") | Some("target") => {
+                    return true;
+                }
+                Some(name) if name.starts_with(".env") => return true,
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
 fn collect_files(
     dir: &Path,
     paths: &mut Vec<PathBuf>,
@@ -435,6 +564,34 @@ mod tests {
     }
 
     #[test]
+    fn test_create_archive_with_extra_files_includes_virtual_manifest() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let archive_path = temp.path().join("test.tar.gz");
+        let dest = temp.path().join("dest");
+
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("index.ts"), "export default {};").unwrap();
+
+        let executor = BuildExecutor::new(&source);
+        executor
+            .create_archive_with_extra_files(
+                &source,
+                &archive_path,
+                &[],
+                &[("app.json", br#"{"main":"index.ts"}"#)],
+            )
+            .unwrap();
+
+        BuildExecutor::extract_archive(&archive_path, &dest).unwrap();
+        assert!(dest.join("index.ts").exists());
+        assert_eq!(
+            fs::read_to_string(dest.join("app.json")).unwrap(),
+            r#"{"main":"index.ts"}"#
+        );
+    }
+
+    #[test]
     fn test_archive_excludes_node_modules() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
@@ -457,6 +614,76 @@ mod tests {
         BuildExecutor::extract_archive(&archive_path, &dest).unwrap();
         assert!(dest.join("index.js").exists());
         assert!(!dest.join("node_modules").exists());
+    }
+
+    #[test]
+    fn test_create_source_archive_respects_gitignore_and_takoignore_override() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let archive_path = temp.path().join("source.tar.gz");
+        let dest = temp.path().join("dest");
+        fs::create_dir_all(source.join("dist")).unwrap();
+        fs::create_dir_all(source.join("src")).unwrap();
+
+        fs::write(source.join(".gitignore"), "dist/\n").unwrap();
+        fs::write(
+            source.join(".takoignore"),
+            "!dist/\ndist/*\n!dist/keep.txt\n",
+        )
+        .unwrap();
+        fs::write(source.join("src/main.ts"), "export default 1;\n").unwrap();
+        fs::write(source.join("dist/keep.txt"), "keep").unwrap();
+        fs::write(source.join("dist/drop.txt"), "drop").unwrap();
+
+        let executor = BuildExecutor::new(&source);
+        executor
+            .create_source_archive_with_extra_files(&source, &archive_path, &[])
+            .unwrap();
+
+        BuildExecutor::extract_archive(&archive_path, &dest).unwrap();
+        assert!(dest.join("src/main.ts").exists());
+        assert!(dest.join("dist/keep.txt").exists());
+        assert!(!dest.join("dist/drop.txt").exists());
+    }
+
+    #[test]
+    fn test_create_source_archive_keeps_default_excludes_non_overridable() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let archive_path = temp.path().join("source.tar.gz");
+        let dest = temp.path().join("dest");
+
+        fs::create_dir_all(source.join("src")).unwrap();
+        fs::create_dir_all(source.join(".git")).unwrap();
+        fs::create_dir_all(source.join(".tako/cache")).unwrap();
+        fs::create_dir_all(source.join("node_modules/pkg")).unwrap();
+        fs::create_dir_all(source.join("target/debug")).unwrap();
+
+        fs::write(
+            source.join(".takoignore"),
+            "!.git/config\n!node_modules/pkg/index.js\n!.env.production\n!target/debug/out.txt\n",
+        )
+        .unwrap();
+
+        fs::write(source.join("src/main.ts"), "export default 1;\n").unwrap();
+        fs::write(source.join(".git/config"), "git").unwrap();
+        fs::write(source.join(".tako/cache/x"), "cache").unwrap();
+        fs::write(source.join("node_modules/pkg/index.js"), "module").unwrap();
+        fs::write(source.join("target/debug/out.txt"), "out").unwrap();
+        fs::write(source.join(".env.production"), "secret").unwrap();
+
+        let executor = BuildExecutor::new(&source);
+        executor
+            .create_source_archive_with_extra_files(&source, &archive_path, &[])
+            .unwrap();
+
+        BuildExecutor::extract_archive(&archive_path, &dest).unwrap();
+        assert!(dest.join("src/main.ts").exists());
+        assert!(!dest.join(".git/config").exists());
+        assert!(!dest.join(".tako/cache/x").exists());
+        assert!(!dest.join("node_modules/pkg/index.js").exists());
+        assert!(!dest.join("target/debug/out.txt").exists());
+        assert!(!dest.join(".env.production").exists());
     }
 
     #[test]

@@ -72,10 +72,12 @@ impl BunRuntime {
     ///
     /// Detection order:
     /// 1. package.json "main" field
-    /// 2. src/index.ts
-    /// 3. index.ts
-    /// 4. src/index.js
-    /// 5. index.js
+    /// 2. src/index.tsx
+    /// 3. src/index.ts
+    /// 4. index.tsx
+    /// 5. index.ts
+    /// 6. src/index.js
+    /// 7. index.js
     fn detect_entry_point<P: AsRef<Path>>(dir: P) -> Option<PathBuf> {
         let dir = dir.as_ref();
 
@@ -89,7 +91,9 @@ impl BunRuntime {
 
         // Try common entry points in order
         let candidates = [
+            "src/index.tsx",
             "src/index.ts",
+            "index.tsx",
             "index.ts",
             "src/index.js",
             "index.js",
@@ -160,6 +164,14 @@ impl RuntimeAdapter for BunRuntime {
             ]);
         }
         None
+    }
+
+    fn install_command(&self) -> Option<Vec<String>> {
+        Some(vec![
+            "bun".to_string(),
+            "install".to_string(),
+            "--frozen-lockfile".to_string(),
+        ])
     }
 
     fn run_command(&self, _port: u16) -> Vec<String> {
@@ -292,6 +304,18 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_entry_point_fallback_src_index_tsx() {
+        let temp_dir = TempDir::new().unwrap();
+
+        File::create(temp_dir.path().join("bun.lockb")).unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(temp_dir.path().join("src/index.tsx"), "").unwrap();
+
+        let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
+        assert!(runtime.entry_point().ends_with("src/index.tsx"));
+    }
+
+    #[test]
     fn test_detect_entry_point_fallback_index_ts() {
         let temp_dir = TempDir::new().unwrap();
 
@@ -300,6 +324,29 @@ mod tests {
 
         let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
         assert!(runtime.entry_point().ends_with("index.ts"));
+    }
+
+    #[test]
+    fn test_detect_entry_point_fallback_index_tsx() {
+        let temp_dir = TempDir::new().unwrap();
+
+        File::create(temp_dir.path().join("bun.lockb")).unwrap();
+        fs::write(temp_dir.path().join("index.tsx"), "").unwrap();
+
+        let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
+        assert!(runtime.entry_point().ends_with("index.tsx"));
+    }
+
+    #[test]
+    fn test_detect_entry_point_fallback_package_json_without_main_uses_index_candidates() {
+        let temp_dir = TempDir::new().unwrap();
+
+        fs::write(temp_dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+        fs::create_dir_all(temp_dir.path().join("src")).unwrap();
+        fs::write(temp_dir.path().join("src/index.tsx"), "").unwrap();
+
+        let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
+        assert!(runtime.entry_point().ends_with("src/index.tsx"));
     }
 
     #[test]
@@ -494,6 +541,27 @@ mod tests {
         let build_cmd = runtime.build_command();
 
         assert!(build_cmd.is_none());
+    }
+
+    #[test]
+    fn test_install_command_uses_frozen_lockfile() {
+        let temp_dir = TempDir::new().unwrap();
+
+        File::create(temp_dir.path().join("bun.lockb")).unwrap();
+        fs::write(temp_dir.path().join("index.ts"), "").unwrap();
+        fs::write(temp_dir.path().join("package.json"), r#"{"name":"test"}"#).unwrap();
+
+        let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
+        let install_cmd = runtime.install_command();
+
+        assert_eq!(
+            install_cmd,
+            Some(vec![
+                "bun".to_string(),
+                "install".to_string(),
+                "--frozen-lockfile".to_string(),
+            ])
+        );
     }
 
     #[test]

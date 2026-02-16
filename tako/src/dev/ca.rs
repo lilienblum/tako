@@ -10,6 +10,7 @@
 //! - Leaf certificates generated on-the-fly, stored in memory only
 //! - No unencrypted key material on disk
 
+#[cfg(target_os = "macos")]
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
@@ -302,8 +303,10 @@ pub struct LocalCAStore {
     /// Path to the CA certificate file
     ca_cert_path: PathBuf,
     /// Keychain service name for the CA private key
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     keychain_service: String,
     /// Keychain account name
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     keychain_account: String,
 }
 
