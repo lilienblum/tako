@@ -320,7 +320,28 @@ arch = "$TARGET_ARCH"
 libc = "gnu"
 CFG
 
-HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$WORKSPACE/target/debug/tako" deploy --env production --yes "$PROJECT_DIR"
+FIRST_DEPLOY_LOG="$TMP_ROOT/deploy-first.log"
+SECOND_DEPLOY_LOG="$TMP_ROOT/deploy-second.log"
+
+if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$WORKSPACE/target/debug/tako" deploy --env production --yes "$PROJECT_DIR" >"$FIRST_DEPLOY_LOG" 2>&1; then
+  cat "$FIRST_DEPLOY_LOG" >&2 || true
+  exit 1
+fi
+cat "$FIRST_DEPLOY_LOG"
+if ! grep -q "Building artifact for" "$FIRST_DEPLOY_LOG"; then
+  echo "Expected first deploy to build artifacts, but no build step was observed." >&2
+  exit 1
+fi
+
+if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$WORKSPACE/target/debug/tako" deploy --env production --yes "$PROJECT_DIR" >"$SECOND_DEPLOY_LOG" 2>&1; then
+  cat "$SECOND_DEPLOY_LOG" >&2 || true
+  exit 1
+fi
+cat "$SECOND_DEPLOY_LOG"
+if ! grep -q "Artifact cache hit for" "$SECOND_DEPLOY_LOG"; then
+  echo "Expected second deploy to reuse cached artifacts, but no cache hit was observed." >&2
+  exit 1
+fi
 
 CURRENT_LINK=$(resolve_current_release_link server-ubuntu || true)
 APP_RELEASE_DIR="$CURRENT_LINK/$FIXTURE_REL"

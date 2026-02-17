@@ -28,6 +28,7 @@ services:
       - e2e_ssh_keys:/opt/e2e/keys
       - ${E2E_CARGO_HOME_DIR}:/cargo-home
       - ${E2E_CARGO_TARGET_DIR}:/workspace/target
+      - /var/run/docker.sock:/var/run/docker.sock
     working_dir: /workspace
 
 volumes:

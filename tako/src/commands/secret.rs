@@ -1,5 +1,6 @@
 use crate::output;
 use clap::Subcommand;
+use tako_core::Command;
 
 #[derive(Subcommand)]
 pub enum SecretCommands {
@@ -607,52 +608,57 @@ async fn sync_to_server(
     let mut ssh = SshClient::new(ssh_config);
     ssh.connect().await?;
 
-    // Build .env content
-    let mut env_content = String::new();
-    for (key, value) in secrets {
-        // Escape values for .env format
-        let escaped = value.replace("\\", "\\\\").replace("\"", "\\\"");
-        env_content.push_str(&format!("{}=\"{}\"\n", key, escaped));
+    // Push secrets through the management protocol; no remote .env file writes.
+    let update_cmd = build_update_secrets_command(app_name, secrets)?;
+    let response = ssh.tako_command(&update_cmd).await?;
+    if tako_response_has_error(&response) {
+        return Err(format!("tako-server error (update-secrets): {response}").into());
     }
 
-    // Write to server
-    let env_file = format!("/opt/tako/apps/{}/shared/.env", app_name);
-
-    // Ensure directory exists
-    ssh.mkdir(&format!("/opt/tako/apps/{}/shared", app_name))
-        .await?;
-
-    // Write using base64 to safely transfer content
-    let encoded = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        env_content.as_bytes(),
-    );
-
-    ssh.exec_checked(&format!(
-        "echo '{}' | base64 -d > {} && chmod 600 {}",
-        encoded, env_file, env_file
-    ))
-    .await?;
-
-    // Reload app if running
-    let reload_cmd = serde_json::json!({
-        "Reload": {
-            "app": app_name
-        }
-    });
-
-    // Try to reload, but don't fail if app isn't running
-    let _ = ssh.tako_command(&reload_cmd.to_string()).await;
+    // Try to reload, but don't fail if app isn't running.
+    let reload_cmd = build_reload_command(app_name)?;
+    let _ = ssh.tako_command(&reload_cmd).await;
 
     ssh.disconnect().await?;
 
     Ok(())
 }
 
+fn build_update_secrets_command(
+    app_name: &str,
+    secrets: &std::collections::HashMap<String, String>,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    serde_json::to_string(&Command::UpdateSecrets {
+        app: app_name.to_string(),
+        secrets: secrets.clone(),
+    })
+    .map_err(|e| format!("Failed to serialize update-secrets command: {e}").into())
+}
+
+fn build_reload_command(
+    app_name: &str,
+) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+    serde_json::to_string(&Command::Reload {
+        app: app_name.to_string(),
+    })
+    .map_err(|e| format!("Failed to serialize reload command: {e}").into())
+}
+
+fn tako_response_has_error(response: &str) -> bool {
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(response) {
+        if value.get("status").and_then(|s| s.as_str()) == Some("error") {
+            return true;
+        }
+        return value.get("error").is_some();
+    }
+    response.contains("\"error\"")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{ServerEntry, ServersToml, TakoToml};
+    use std::collections::HashMap;
     use std::ffi::OsString;
     use tempfile::TempDir;
 
@@ -713,6 +719,28 @@ mod tests {
         let names = resolve_secret_sync_server_names("staging", &tako_config, &servers)
             .expect("should work");
         assert!(names.is_empty());
+    }
+
+    #[test]
+    fn build_update_secrets_command_uses_protocol_payload_not_env_file_writes() {
+        let secrets = HashMap::from([("API_KEY".to_string(), "secret".to_string())]);
+        let command = build_update_secrets_command("my-app", &secrets).expect("serialize command");
+        let value: serde_json::Value =
+            serde_json::from_str(&command).expect("parse serialized command");
+
+        assert_eq!(
+            value.get("command").and_then(|v| v.as_str()),
+            Some("update_secrets")
+        );
+        assert_eq!(value.get("app").and_then(|v| v.as_str()), Some("my-app"));
+        assert_eq!(
+            value
+                .get("secrets")
+                .and_then(|v| v.get("API_KEY"))
+                .and_then(|v| v.as_str()),
+            Some("secret")
+        );
+        assert!(!command.contains(".env"));
     }
 
     #[test]

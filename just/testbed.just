@@ -13,7 +13,7 @@ DOCKER_PLATFORM := "linux/arm64"
 # For local testbed installs, we serve a built `tako-server` binary from the host
 # and have the Docker container download it.
 
-ARTIFACTS_DIR := "local-dev/artifacts"
+ARTIFACTS_DIR := "dist/artifacts"
 ARTIFACTS_PORT := "8000"
 TESTBED_TMP_DIR := "local-dev/tmp"
 DOCKER_SSH_KEY_FILE := "local-dev/tmp/docker_ssh_key"
@@ -21,25 +21,7 @@ DOCKER_SSH_KEY_FILE := "local-dev/tmp/docker_ssh_key"
 # Docker Linux containers can reach the macOS host via this hostname.
 # If this doesn't resolve for you, try `host.docker.internal`.
 
-build-tako-server:
-    # Build both architectures used by testbed containers (see docker/bun.Dockerfile).
-    mkdir -p {{ ARTIFACTS_DIR }}
-    # Docker/buildx expects amd64/arm64 (not x86_64/aarch64).
-    for arch in amd64 arm64; do \
-        docker buildx build -f docker/build.Dockerfile \
-            --platform linux/$arch \
-            --target tako-server-artifact \
-            --output type=local,dest={{ ARTIFACTS_DIR }}/linux-$arch \
-            . || exit 1; \
-        if [ "$arch" = "amd64" ]; then outarch="x86_64"; else outarch="aarch64"; fi; \
-        cp {{ ARTIFACTS_DIR }}/linux-$arch/tako-server {{ ARTIFACTS_DIR }}/tako-server-linux-$outarch || exit 1; \
-        cp {{ ARTIFACTS_DIR }}/linux-$arch/tako-server.sha256 {{ ARTIFACTS_DIR }}/tako-server-linux-$outarch.sha256 || exit 1; \
-        rm -rf {{ ARTIFACTS_DIR }}/linux-$arch; \
-    done
-    echo "Built binaries:"
-    ls -la {{ ARTIFACTS_DIR }}/tako-server-linux-*
-
-create-bun-server:
+create-container:
     # Create a named testbed container with sshd for VPS-like installer behavior.
     docker rm -f {{ CONTAINER_NAME }} 2>/dev/null || true
     docker build --platform {{ DOCKER_PLATFORM }} -f docker/bun.Dockerfile -t {{ IMAGE_NAME }} .
@@ -70,10 +52,10 @@ create-bun-server:
                 exec /usr/sbin/sshd -D -e \
             '
 
-install-bun-server:
+install:
     # Install tako-server in the temporary Docker testbed server container.
     # Starts a temporary local artifacts server for this install run.
-    test -f {{ DOCKER_SSH_KEY_FILE }} || (echo "Missing {{ DOCKER_SSH_KEY_FILE }}. Run 'just testbed::create-bun-server' first." >&2; exit 1)
+    test -f {{ DOCKER_SSH_KEY_FILE }} || (echo "Missing {{ DOCKER_SSH_KEY_FILE }}. Run 'just testbed::create-container' first." >&2; exit 1)
     mkdir -p {{ ARTIFACTS_DIR }}
     mkdir -p {{ TESTBED_TMP_DIR }}
     sh -eu -c '\
@@ -100,12 +82,18 @@ install-bun-server:
             -p {{ DOCKER_SSH_PORT }} \
             root@localhost \
             '\''if ! command -v systemctl >/dev/null 2>&1; then \
-                if command -v pkill >/dev/null 2>&1; then \
-                    pkill -x tako-server >/dev/null 2>&1 || true; \
+                if command -v pidof >/dev/null 2>&1; then \
+                    for pid in $(pidof tako-server 2>/dev/null || true); do kill "$pid" >/dev/null 2>&1 || true; done; \
+                    sleep 1; \
+                    for pid in $(pidof tako-server 2>/dev/null || true); do kill -9 "$pid" >/dev/null 2>&1 || true; done; \
+                elif command -v pkill >/dev/null 2>&1; then \
+                    pkill -f "/usr/local/bin/tako-server" >/dev/null 2>&1 || true; \
+                    sleep 1; \
+                    pkill -9 -f "/usr/local/bin/tako-server" >/dev/null 2>&1 || true; \
                 elif command -v killall >/dev/null 2>&1; then \
                     killall tako-server >/dev/null 2>&1 || true; \
-                elif command -v pidof >/dev/null 2>&1; then \
-                    for pid in $(pidof tako-server 2>/dev/null || true); do kill "$pid" >/dev/null 2>&1 || true; done; \
+                    sleep 1; \
+                    killall -9 tako-server >/dev/null 2>&1 || true; \
                 fi; \
                 if id -u tako >/dev/null 2>&1; then \
                     if command -v usermod >/dev/null 2>&1; then usermod -U tako >/dev/null 2>&1 || true; fi; \

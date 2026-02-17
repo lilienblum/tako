@@ -71,18 +71,29 @@ High-level deploy flow:
 
 1. Validate config/runtime/secrets/server target metadata.
 2. Resolve source bundle root and app subdirectory.
-3. Create a source archive (`.tako/artifacts/{version}.tar.gz`) from filtered source files.
+3. Create a source archive (`.tako/artifacts/{version}-source.tar.gz`) from filtered source files.
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-4. Deploy to target servers in parallel over SSH.
-5. On each server: lock, upload/extract, write `.env`, run install/build, merge assets, finalize `app.json`, rolling update, unlock.
+4. Resolve build preset (`[build].preset`, default `bun`) and lock it to a commit in `.tako/build.lock.json`.
+5. Build target-specific artifacts locally in Docker (one artifact per required server target), with deterministic local artifact cache reuse when inputs are unchanged.
+6. Deploy to target servers in parallel over SSH.
+7. On each server: lock, upload/extract target artifact, finalize `app.json`, send deploy command with merged env/secrets payload, run runtime prep (Bun dependency install), rolling update, unlock.
 
 Important deployment behavior:
 
 - `production` is the default environment when `--env` is omitted.
 - `development` is reserved for `tako dev` and cannot be deployed.
-- Source bundle filtering uses `.gitignore` with `.takoignore` overrides.
+- Source bundle filtering uses `.gitignore`.
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
+- Deploy builds artifacts locally in Docker containers (servers do not run app build steps during deploy).
+- Deploy reuses per-target Docker dependency cache volumes (keyed by target label + builder image) while still creating fresh build containers each deploy.
+- Artifact filters use project `[build].include` (optional), plus preset `exclude` and project `[build].exclude`.
+- Bun deploys exclude `node_modules` by default and install release dependencies on server before startup (`bun install --production`).
+- If app `package.json` uses `workspace:` dependencies, deploy vendors those packages into the artifact (`tako_vendor/`) and rewrites them to local `file:` specs.
+- Target artifacts are cached in `.tako/artifacts/` and reused across deploys when source/preset/target/build inputs are unchanged.
+- Cached artifacts are checksum-verified; invalid cached entries are rebuilt automatically.
+- On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
 - Deploy runtime `main` is resolved from `tako.toml main`, then `package.json main`.
+- Server install resolves host target (`arch` + `libc`) and downloads matching `tako-server-linux-<arch>-<libc>` artifact.
 - For production without explicit server mapping:
   - With one global server, Tako can guide/persist mapping.
   - With multiple global servers (interactive), Tako prompts for selection.
@@ -119,17 +130,17 @@ Tako uses active HTTP probing as the source of truth for instance health.
 
 Instance mode by `instances`:
 
-- `instances = 0`: on-demand mode (scale-to-zero when idle)
+- `instances = 0`: on-demand mode (scale-to-zero when idle). Deploy keeps one warm instance running, then idle timeout can scale it to zero. Once at zero, the next request waits for cold start readiness up to startup timeout (30s default); if still not ready, it returns `504 App startup timed out`. If startup fails early, it returns `502 App failed to start`.
 - `instances > 0`: always-on baseline, with health-based rotation during deploy
 
-For on-demand deploys (`instances = 0`), deploy still does a startup validation instance before returning to idle-on-demand mode.
+For on-demand deploys (`instances = 0`), deploy starts one warm instance; if warm startup fails, deploy fails.
 
 ## TLS and Certificates
 
 Remote TLS behavior:
 
 - HTTPS is default for remote app routes.
-- HTTP requests redirect to HTTPS by default.
+- HTTP requests redirect to HTTPS by default (307 with `Cache-Control: no-store`).
 - `/.well-known/acme-challenge/*` remains on HTTP for ACME.
 - Internal `Host: tako.internal` + `/status` stays on HTTP.
 - Non-internal-host requests are routed to apps normally (no reserved `/_tako/*` edge namespace).
@@ -138,6 +149,7 @@ Certificate behavior:
 
 - Certs are selected by SNI.
 - ACME (Let's Encrypt) is used for issuance/renewal.
+- Private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) use deploy-time self-signed certs instead of ACME.
 - Renewal is automatic.
 - Wildcard routing is supported, but automated wildcard cert issuance via DNS-01 is not the default path.
 

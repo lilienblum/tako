@@ -91,10 +91,20 @@ Notes:
   - If `HOST` is provided, `--name` is required.
   - `--port` defaults to `22`.
   - By default, tests SSH connection before adding and connects as user `tako`.
+  - With SSH checks enabled, Tako detects and stores server target metadata (`arch`, `libc`), used for deploy target matching.
   - `--no-test` skips SSH checks and target detection.
 - `tako servers rm` aliases: `remove`, `delete`.
 - `tako servers ls` alias: `list`.
 - `tako servers status` prints a single global deployment/runtime snapshot across configured servers.
+
+Deploy note:
+
+- `tako deploy` resolves `[build].preset` (default `bun`), builds target artifacts locally in Docker, reuses locally cached verified artifacts on cache hits, then uploads those artifacts to servers.
+- Preset artifact filters come from top-level preset `exclude` plus app `[build].exclude` (`include` is app-level `[build].include` only).
+- Containerized deploy builds reuse per-target Docker dependency cache volumes (keyed by target + builder image) while keeping build containers ephemeral.
+- Bun release dependencies are installed on server before rollout (`bun install --production`).
+- On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
+- For private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`), deploy provisions self-signed certs on the server instead of ACME.
 
 ## `secrets` Subcommands
 
@@ -145,6 +155,7 @@ Notes:
 - `tako secrets sync`:
   - with `--env`: syncs only that environment.
   - without `--env`: syncs all environments declared in `tako.toml`.
+  - syncs via `tako-server` management commands (`update_secrets` + best-effort `reload`), not remote `.env` file writes.
 - `tako secrets key import/export` default to `production` when `--env` is omitted.
 
 ## Common Examples

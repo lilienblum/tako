@@ -34,6 +34,11 @@ pub trait RuntimeAdapter: Send + Sync {
 
     /// Get environment variables to set based on mode
     fn env_vars(&self, mode: RuntimeMode) -> HashMap<String, String>;
+
+    /// Default build preset reference used when `[build].preset` is omitted.
+    fn default_build_preset(&self) -> &str {
+        self.name()
+    }
 }
 
 /// Detect runtime from a directory
@@ -122,5 +127,6 @@ mod tests {
     fn test_minimal_runtime_impl_compiles() {
         let runtime = FakeRuntimeDefault;
         assert_eq!(runtime.name(), "fake-default");
+        assert_eq!(runtime.default_build_preset(), "fake-default");
     }
 }

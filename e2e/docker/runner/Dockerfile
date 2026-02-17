@@ -10,6 +10,7 @@ RUN apt-get update \
     pkg-config \
     ca-certificates \
     git \
+    docker.io \
   && rm -rf /var/lib/apt/lists/*
 
 ENV BUN_INSTALL=/root/.bun

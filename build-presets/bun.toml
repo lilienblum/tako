@@ -1,0 +1,23 @@
+exclude = ["**/node_modules/**"]
+
+[targets]
+builder_image = "oven/bun:1.2"
+install = '''
+if [ -f bun.lockb ] || [ -f bun.lock ]; then
+  bun install --frozen-lockfile
+else
+  bun install
+fi
+
+if [ -n "$TAKO_APP_SUBDIR" ] && [ -f "$TAKO_APP_DIR/package.json" ]; then
+  cd "$TAKO_APP_DIR"
+  if [ -f bun.lockb ] || [ -f bun.lock ]; then
+    bun install --frozen-lockfile
+  else
+    bun install
+  fi
+fi
+'''
+build = '''
+bun run --if-present build
+'''

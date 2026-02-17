@@ -174,6 +174,7 @@ impl BuildExecutor {
         let file = std::fs::File::create(output_path)?;
         let encoder = GzEncoder::new(file, Compression::default());
         let mut archive = tar::Builder::new(encoder);
+        archive.follow_symlinks(false);
 
         // Default exclusions
         let default_excludes = [
@@ -220,7 +221,6 @@ impl BuildExecutor {
     ///
     /// File selection rules:
     /// - Base ignore semantics from `.gitignore`
-    /// - `.takoignore` acts as an override layer (supports `!` re-includes)
     /// - Non-overridable excludes for safety/perf: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`
     pub fn create_source_archive_with_extra_files(
         &self,
@@ -239,6 +239,7 @@ impl BuildExecutor {
         let file = std::fs::File::create(output_path)?;
         let encoder = GzEncoder::new(file, Compression::default());
         let mut archive = tar::Builder::new(encoder);
+        archive.follow_symlinks(false);
 
         let files = collect_source_archive_files(source_root)?;
 
@@ -452,7 +453,7 @@ fn collect_source_archive_files(source_root: &Path) -> Result<Vec<(PathBuf, Path
         .git_global(true)
         .git_exclude(true)
         .parents(true)
-        .add_custom_ignore_filename(".takoignore");
+        .require_git(false);
 
     for entry in walker.build() {
         let entry = entry.map_err(|e| BuildError::ArchiveError(e.to_string()))?;
@@ -460,7 +461,7 @@ fn collect_source_archive_files(source_root: &Path) -> Result<Vec<(PathBuf, Path
             Some(file_type) => file_type,
             None => continue,
         };
-        if !file_type.is_file() {
+        if !file_type.is_file() && !file_type.is_symlink() {
             continue;
         }
 
@@ -645,7 +646,7 @@ mod tests {
     }
 
     #[test]
-    fn test_create_source_archive_respects_gitignore_and_takoignore_override() {
+    fn test_create_source_archive_respects_gitignore() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
         let archive_path = temp.path().join("source.tar.gz");
@@ -654,14 +655,8 @@ mod tests {
         fs::create_dir_all(source.join("src")).unwrap();
 
         fs::write(source.join(".gitignore"), "dist/\n").unwrap();
-        fs::write(
-            source.join(".takoignore"),
-            "!dist/\ndist/*\n!dist/keep.txt\n",
-        )
-        .unwrap();
         fs::write(source.join("src/main.ts"), "export default 1;\n").unwrap();
-        fs::write(source.join("dist/keep.txt"), "keep").unwrap();
-        fs::write(source.join("dist/drop.txt"), "drop").unwrap();
+        fs::write(source.join("dist/out.txt"), "out").unwrap();
 
         let executor = BuildExecutor::new(&source);
         executor
@@ -670,8 +665,7 @@ mod tests {
 
         BuildExecutor::extract_archive(&archive_path, &dest).unwrap();
         assert!(dest.join("src/main.ts").exists());
-        assert!(dest.join("dist/keep.txt").exists());
-        assert!(!dest.join("dist/drop.txt").exists());
+        assert!(!dest.join("dist/out.txt").exists());
     }
 
     #[test]
@@ -686,12 +680,6 @@ mod tests {
         fs::create_dir_all(source.join(".tako/cache")).unwrap();
         fs::create_dir_all(source.join("node_modules/pkg")).unwrap();
         fs::create_dir_all(source.join("target/debug")).unwrap();
-
-        fs::write(
-            source.join(".takoignore"),
-            "!.git/config\n!node_modules/pkg/index.js\n!.env.production\n!target/debug/out.txt\n",
-        )
-        .unwrap();
 
         fs::write(source.join("src/main.ts"), "export default 1;\n").unwrap();
         fs::write(source.join(".git/config"), "git").unwrap();
@@ -712,6 +700,31 @@ mod tests {
         assert!(!dest.join("node_modules/pkg/index.js").exists());
         assert!(!dest.join("target/debug/out.txt").exists());
         assert!(!dest.join(".env.production").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_create_source_archive_preserves_symlinks() {
+        use std::os::unix::fs as unix_fs;
+
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let archive_path = temp.path().join("source.tar.gz");
+        let dest = temp.path().join("dest");
+
+        fs::create_dir_all(source.join("sdk")).unwrap();
+        fs::create_dir_all(source.join("app")).unwrap();
+        fs::write(source.join("sdk/index.js"), "ok").unwrap();
+        unix_fs::symlink("../sdk", source.join("app/linked-sdk")).unwrap();
+
+        let executor = BuildExecutor::new(&source);
+        executor
+            .create_source_archive_with_extra_files(&source, &archive_path, &[])
+            .unwrap();
+
+        BuildExecutor::extract_archive(&archive_path, &dest).unwrap();
+        let metadata = fs::symlink_metadata(dest.join("app/linked-sdk")).unwrap();
+        assert!(metadata.file_type().is_symlink());
     }
 
     #[test]
@@ -757,15 +770,8 @@ mod tests {
         fs::create_dir_all(source.join("target/debug")).unwrap();
 
         fs::write(source.join(".gitignore"), "dist/\n").unwrap();
-        fs::write(
-            source.join(".takoignore"),
-            "!dist/\ndist/*\n!dist/keep.txt\n",
-        )
-        .unwrap();
-
         fs::write(source.join("src/main.ts"), "main-v1").unwrap();
-        fs::write(source.join("dist/keep.txt"), "keep-v1").unwrap();
-        fs::write(source.join("dist/drop.txt"), "drop-v1").unwrap();
+        fs::write(source.join("dist/out.txt"), "out-v1").unwrap();
         fs::write(source.join(".env.production"), "secret-v1").unwrap();
         fs::write(source.join(".git/config"), "git-v1").unwrap();
         fs::write(source.join("node_modules/pkg/index.js"), "pkg-v1").unwrap();
@@ -775,7 +781,7 @@ mod tests {
         let hash1 = executor.compute_source_hash(&source).unwrap();
 
         // Changes to excluded files should not change the source hash.
-        fs::write(source.join("dist/drop.txt"), "drop-v2").unwrap();
+        fs::write(source.join("dist/out.txt"), "out-v2").unwrap();
         fs::write(source.join(".env.production"), "secret-v2").unwrap();
         fs::write(source.join(".git/config"), "git-v2").unwrap();
         fs::write(source.join("node_modules/pkg/index.js"), "pkg-v2").unwrap();
@@ -784,7 +790,7 @@ mod tests {
         assert_eq!(hash1, hash2);
 
         // Changes to included files should change the source hash.
-        fs::write(source.join("dist/keep.txt"), "keep-v2").unwrap();
+        fs::write(source.join("src/main.ts"), "main-v2").unwrap();
         let hash3 = executor.compute_source_hash(&source).unwrap();
         assert_ne!(hash2, hash3);
     }

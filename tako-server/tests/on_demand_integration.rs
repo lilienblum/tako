@@ -57,7 +57,29 @@ fn run_on_demand_case() -> Result<(), String> {
         return Err(format!("deploy failed: {resp:?}"));
     }
 
-    // First request should cold start and then succeed.
+    // Deploy should leave one warm instance so the app is immediately reachable.
+    let warm_status = server.send_command(&serde_json::json!({
+        "command": "status",
+        "app": "test-app",
+    }));
+    let Some(warm_data) = warm_status.get("data") else {
+        return Err(format!(
+            "missing status payload after deploy: {warm_status:?}"
+        ));
+    };
+    let Some(warm_instances) = warm_data.get("instances").and_then(|v| v.as_array()) else {
+        return Err(format!(
+            "missing instance list in status payload after deploy: {warm_status:?}"
+        ));
+    };
+    if warm_instances.len() != 1 {
+        return Err(format!(
+            "expected one warm instance after on-demand deploy, got {}: {warm_status:?}",
+            warm_instances.len()
+        ));
+    }
+
+    // First request should succeed (warm instance may already be running).
     let mut first_last_status = String::new();
     let first_ok = wait_for(Duration::from_secs(30), || {
         match server.https_status(host, "/") {
@@ -124,4 +146,58 @@ fn run_on_demand_case() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[test]
+fn on_demand_startup_failure_does_not_hang() {
+    if !bun_ok() {
+        return;
+    }
+    if !can_bind_local_ports() {
+        return;
+    }
+
+    let server = TestServer::start();
+    let temp = TempDir::new().expect("create temp dir");
+    let app_dir = temp.path().join("app");
+    fs::create_dir_all(&app_dir).expect("create app dir");
+    fs::create_dir_all(app_dir.join("src")).expect("create src dir");
+    fs::write(
+        app_dir.join("package.json"),
+        r#"{"name":"test-app","scripts":{"dev":"bun src/index.ts"}}"#,
+    )
+    .expect("write package.json");
+    fs::write(
+        app_dir.join("src/index.ts"),
+        r#"process.exit(1);
+"#,
+    )
+    .expect("write failing app");
+
+    let host = "failing.localhost";
+    let resp = server.send_command(&serde_json::json!({
+        "command": "deploy",
+        "app": "failing-app",
+        "version": "v1",
+        "path": app_dir.to_string_lossy(),
+        "routes": [host],
+        "instances": 0,
+        "idle_timeout": 1,
+    }));
+    match resp.get("status").and_then(|s| s.as_str()) {
+        Some("error") => {
+            let message = resp.get("message").and_then(|v| v.as_str()).unwrap_or("");
+            assert!(
+                message.contains("Warm instance startup failed")
+                    || message.contains("Invalid app release"),
+                "unexpected deploy failure message: {resp:?}"
+            );
+        }
+        Some("ok") => match server.https_status(host, "/") {
+            Ok(502) => {}
+            Ok(code) => panic!("expected 502 for failing on-demand startup, got HTTP {code}"),
+            Err(err) => panic!("expected completed 502 response, got request error: {err}"),
+        },
+        other => panic!("unexpected deploy response status {other:?}: {resp:?}"),
+    }
 }

@@ -4,7 +4,7 @@ Internal Docker tooling for building and debugging Tako server artifacts.
 
 ## Files
 
-- `build.Dockerfile`: builds Linux `tako-server` artifacts (`x86_64` / `aarch64`) using musl.
+- `build.Dockerfile`: builds Linux `tako-server` artifacts for `x86_64` / `aarch64` across both libc families (`musl`, `glibc`).
 - `bun.Dockerfile`: internal debug container (`oven/bun:alpine` + sshd) used for deploy/install debugging.
   - Bootstraps server-side dependencies through `scripts/install-tako-server.sh` so debug image deps stay aligned with installer behavior.
 - `install-authorized-key.sh`: helper script used by debug container boot flow.
@@ -16,9 +16,16 @@ Internal Docker tooling for building and debugging Tako server artifacts.
 From repository root:
 
 ```bash
-just testbed::build-tako-server
-just testbed::create-bun-server
-just testbed::install-bun-server
+just build::tako-server
+just testbed::create-container
+just testbed::install
 ```
+
+`just build::tako-server` builds release artifacts for all Linux target/libc combinations:
+
+- `dist/artifacts/tako-server-linux-x86_64-musl`
+- `dist/artifacts/tako-server-linux-aarch64-musl`
+- `dist/artifacts/tako-server-linux-x86_64-glibc`
+- `dist/artifacts/tako-server-linux-aarch64-glibc`
 
 Use the `testbed::` namespace for these recipes.

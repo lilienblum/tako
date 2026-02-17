@@ -302,7 +302,7 @@ where
     T: Send,
     S: Into<String>,
 {
-    if !(std::io::stdout().is_terminal() && std::io::stderr().is_terminal()) {
+    if !is_interactive() {
         return Ok(work());
     }
 
@@ -317,7 +317,7 @@ where
     T: Send,
     S: Into<String>,
 {
-    if !(std::io::stdout().is_terminal() && std::io::stderr().is_terminal()) {
+    if !is_interactive() {
         return Ok(work.await);
     }
 

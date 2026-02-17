@@ -27,19 +27,34 @@ App-level metadata.
 
 ```toml
 name = "my-app"
-build = "bun run build"
 main = "server/index.mjs"
-assets = ["assets/shared", "assets/branding"]
+
+[build]
+preset = "bun"
+# include = ["dist/**", ".output/**"]
+# exclude = ["**/*.map"]
+# assets = ["dist/client", "assets/shared"]
 ```
 
 - `name`: stable app identifier used in deploy paths and local dev hostnames. Set once and do not change after first deploy.
-- `build`: optional server-side build command run in app directory during `tako deploy`.
 - `main`: optional runtime entry override written to deployed `app.json`.
   - If omitted, deploy uses `package.json.main`.
   - If neither is set, deploy fails with guidance.
-- `assets`: optional list of project-relative directories merged into deploy public assets during `tako deploy`.
-  - Merges into app `public/` after build.
-  - Merge order is list order; later entries overwrite earlier files on conflicts.
+- `[build]`: optional deploy artifact build config.
+  - `preset`: build preset reference. Supports:
+    - official aliases: `bun`, `bun/<commit-hash>`
+    - GitHub refs: `github:<owner>/<repo>/<path>.toml[@<commit-hash>]`
+  - `include`: optional artifact include globs (`**/*` is used when unset).
+  - `exclude`: optional artifact exclude globs (appended to preset excludes).
+  - `assets`: optional project-relative directories merged into app `public/` after build (later entries overwrite earlier files on conflicts).
+  - Build preset files support top-level `exclude` / `assets`; preset `include` and `[artifact]` are not supported.
+  - Deploy writes lock metadata to `.tako/build.lock.json` so the resolved preset commit stays reproducible across deploys.
+  - Deploy reuses per-target Docker dependency cache volumes (keyed by target label and builder image) while keeping build containers ephemeral.
+  - Deploy artifact cache keys include `build.preset`, resolved preset commit, and `build.include` / `build.exclude` / `build.assets`; changing these inputs invalidates cache and triggers rebuild for affected targets.
+  - For app `package.json` dependencies using `workspace:`, deploy vendors those packages into `tako_vendor/` and rewrites those specs to local `file:` paths in the artifact.
+  - Bun runtime dependencies are installed on server from the uploaded release (`bun install --production`).
+  - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
+- Legacy top-level `build = "..."` and top-level `assets = [...]` are not supported.
 
 ## `[vars]`
 
@@ -87,6 +102,7 @@ LOG_FORMAT = "json"
 - Additional keys in an environment section are treated as environment variables.
 - Routes must include a hostname (path-only routes are invalid).
 - `example.com` and `example.com/*` are equivalent and both match all paths on `example.com`.
+- Public route hostnames use ACME certificates; private/local hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) use self-signed certs generated during deploy.
 - Path route examples:
   - `example.com/api/*` matches `/api`, `/api/`, and `/api/...`
   - `example.com/admin/*` matches `/admin`, `/admin/`, and `/admin/...`
@@ -102,7 +118,7 @@ port = 80
 idle_timeout = 300
 ```
 
-- `instances = 0` means on-demand instances.
+- `instances = 0` means on-demand instances. Deploy keeps one warm instance running; idle timeout can scale it to zero. Once at zero, first request waits for cold start readiness up to startup timeout (30s default), then returns `504 App startup timed out` if still not ready. If startup fails before readiness, it returns `502 App failed to start`.
 - `port` is the app upstream port.
 - `idle_timeout` is in seconds.
 
@@ -120,6 +136,7 @@ idle_timeout = 300
 
 - `env` is required.
 - `instances`, `port`, and `idle_timeout` are optional overrides.
+- `arch`/`libc` are not configured in `tako.toml`; Tako detects and stores them in global server config (`~/.tako/config.toml`) when adding servers.
 
 ## Variable Merge Order
 
@@ -127,7 +144,7 @@ For a target environment, variables are merged in this order:
 
 1. `[vars]`
 2. `[vars.<environment>]`
-3. Auto-set by Tako during deploy (`TAKO_ENV=<environment>`, plus runtime vars like `NODE_ENV` / `BUN_ENV`)
+3. Auto-set by Tako during deploy (`TAKO_ENV=<environment>`, `TAKO_BUILD=<version>`, plus runtime vars like `NODE_ENV` / `BUN_ENV`)
 
 Later values override earlier ones when keys match.
 
@@ -135,8 +152,10 @@ Later values override earlier ones when keys match.
 
 ```toml
 name = "my-app"
-build = "bun run build"
 main = "server/index.mjs"
+
+[build]
+preset = "bun"
 assets = ["assets/shared"]
 
 [vars]

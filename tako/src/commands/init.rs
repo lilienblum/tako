@@ -65,11 +65,14 @@ fn generate_template(app_name: &str, _runtime: &str) -> String {
 # Set once and do not change after first deploy.
 # If omitted, Tako auto-detects from runtime metadata or directory name.
 # name = "{app_name}"
-# Optional: command to run before each deploy.
-# build = "bun run build"
 # Optional: runtime entrypoint override (relative to project root).
 # main = "server/index.mjs"
-# Optional: extra asset folders (relative to project root) merged into public/.
+
+# Build preset and artifact packaging.
+[build]
+preset = "bun"
+# include = ["dist/**", ".output/**"]
+# exclude = ["**/*.map"]
 # assets = ["public", ".output/public"]
 
 # Global environment variables applied to every environment.
@@ -167,8 +170,8 @@ mod tests {
         );
 
         assert!(
-            rendered.contains("# build = \"bun run build\""),
-            "expected optional build command to be commented"
+            rendered.contains("[build]\npreset = \"bun\""),
+            "expected build preset section to be present and uncommented"
         );
         assert!(
             rendered.contains("# main = \"server/index.mjs\""),
@@ -176,7 +179,7 @@ mod tests {
         );
         assert!(
             rendered.contains("# assets = [\"public\", \".output/public\"]"),
-            "expected optional assets list to be commented"
+            "expected optional build assets list to be commented"
         );
         assert!(
             rendered.contains("# [vars]"),
@@ -204,6 +207,10 @@ mod tests {
             rendered
                 .contains("# routes = [\"demo-app.example.com\", \"www.demo-app.example.com\"]"),
             "expected routes example in commented options"
+        );
+        assert!(
+            rendered.contains("# include = [\"dist/**\", \".output/**\"]"),
+            "expected build include example in commented options"
         );
         assert!(
             rendered.contains("# API_BASE_URL = \"https://api.example.com\""),

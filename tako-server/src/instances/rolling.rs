@@ -50,7 +50,7 @@ pub struct RollingUpdater {
 /// Determine how many instances the incoming build should start during rollout.
 ///
 /// The `instances` value is interpreted per build (not across old+new combined),
-/// and on-demand (`0`) still starts one temporary instance for startup validation.
+/// and on-demand (`0`) still starts one warm instance for immediate post-deploy traffic.
 pub(crate) fn target_new_instances_for_build(
     requested_instances: u32,
     _existing_instances: usize,
@@ -311,7 +311,7 @@ mod tests {
     }
 
     #[test]
-    fn target_new_instances_uses_single_validation_instance_for_zero() {
+    fn target_new_instances_uses_single_warm_instance_for_zero() {
         assert_eq!(target_new_instances_for_build(0, 5), 1);
         assert_eq!(target_new_instances_for_build(0, 0), 1);
     }

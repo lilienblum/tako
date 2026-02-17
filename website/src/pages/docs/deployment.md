@@ -19,14 +19,20 @@ tako deploy [--env <environment>]
 
 What happens during deploy:
 
-- Deploy packages source files into a versioned archive (not a pre-staged build-only folder).
+- Deploy packages source files into a versioned source archive, then builds target-specific artifacts locally.
 - Source bundle root is resolved in this order: git root, nearest JS workspace root, current app directory.
-- Source filtering uses `.gitignore` with `.takoignore` overrides.
+- Source filtering uses `.gitignore`.
 - Non-overridable excludes: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
-- A versioned tarball is created under `.tako/artifacts/`.
+- A versioned source tarball is created under `.tako/artifacts/`.
 - Deploy version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
+- Build preset is resolved from `[build].preset` (default `bun`) and locked in `.tako/build.lock.json`.
+- For each required server target (`arch`/`libc`), Tako runs preset install/build in a local Docker container and packages a target artifact tarball.
+- Container builds stay ephemeral, but dependency downloads are reused from per-target Docker cache volumes keyed by target label and builder image.
+- Target artifacts are cached locally in `.tako/artifacts/` using a deterministic build-input key.
+- On cache hit, deploy reuses the verified artifact; on cache mismatch/corruption, deploy rebuilds that target artifact automatically.
+- On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
 - Deploys run to all target servers in parallel.
-- On each server, Tako writes `.env`, runs install/build, merges configured assets, resolves runtime `main`, writes final `app.json`, then performs rolling update.
+- On each server, Tako writes final `app.json`, sends merged env/secrets in deploy command payload, performs runtime prep (Bun dependency install), and performs rolling update from the uploaded target artifact.
 - Each server is handled independently, so partial success is possible.
 
 ## Pre-Deploy Checklist
@@ -38,7 +44,7 @@ Before you ship, do a quick sanity pass:
 3. Verify secrets are present for the target env (`tako secrets sync` if needed).
 4. Run your local tests before deploy.
 5. Ensure deploy entrypoint resolution is explicit: set `main` in `tako.toml` or `main` in `package.json`.
-6. If using `.takoignore`, verify it does not accidentally exclude files needed by server-side install/build.
+6. Ensure Docker is available locally; deploy performs target builds in local containers.
 
 ## Server Prerequisites
 
@@ -46,6 +52,7 @@ Each target server should have:
 
 - SSH access as the configured deployment user (typically `tako`).
 - `tako-server` installed and running.
+- `tako-server` installed via the hosted installer (or equivalent) for the host target; installer resolves `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>`.
 - `nc` (netcat), `tar`, `base64`, and standard shell tools (`mkdir`, `find`, `stat`).
 - Writable runtime paths under `/opt/tako` and socket access at `/var/run/tako/tako.sock`.
 - Privileged bind capability for `tako-server` on `:80/:443` (provided by systemd service capabilities in the installer, plus `setcap` on the binary when available).
@@ -58,9 +65,11 @@ Each target server should have:
 - Defines environments and routes.
 - Every non-development environment must define `route` or `routes`.
 - Empty route sets are rejected for non-development environments (no implicit catch-all mode).
-- Optional `build` runs on the server in the app directory after upload.
 - Optional `main` overrides runtime entrypoint in deployed `app.json`.
-- Optional `assets` directories are merged into app `public/` after build in listed order.
+- Optional `[build]` controls artifact generation:
+  - `preset` (default `bun`)
+  - `include` / `exclude` artifact globs
+  - `assets` directories merged into app `public/` after container build in listed order
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
 - Defines per-server scaling settings (`instances`, `idle_timeout`) via global and per-server overrides.
 
@@ -68,11 +77,14 @@ Each target server should have:
 
 - Archive payload is source-based and includes filtered files from the resolved source bundle root.
 - Archive includes a fallback `app.json` at app path inside the archive.
-- On each server:
-  - install runs at release bundle root (Bun default: `bun install --frozen-lockfile`)
-  - build runs in app directory (if configured)
-  - `assets` are copied into app `public/` after build (later entries overwrite earlier ones)
-  - final `app.json` is written in app directory after resolving runtime `main`
+- Build preset resolves from official alias/GitHub ref and is locked to a commit in `.tako/build.lock.json`.
+- Artifact include precedence is `build.include` then `**/*`; artifact excludes are preset `exclude` plus `build.exclude`.
+- For app `package.json` dependencies that use `workspace:`, deploy vendors those workspace packages into `tako_vendor/` and rewrites those dependency specs to local `file:` paths in the packaged artifact.
+- For each server target label, Tako runs install/build in a local Docker container using preset target config.
+- Deploy reuses per-target Docker dependency cache volumes (keyed by target label + builder image) while still creating fresh build containers.
+- Local artifact cache key includes source hash, target label, resolved preset source/commit, target builder image/install/build commands, include/exclude patterns, asset roots, and app subdirectory.
+- `assets` are copied into app `public/` after container build (later entries overwrite earlier ones).
+- Final `app.json` is written in app directory after resolving runtime `main`.
 - Runtime `main` resolution order:
   1. `main` from `tako.toml`
   2. `main` from `package.json`
@@ -95,14 +107,10 @@ Each target server should have:
 6. Create release and shared directories.
 7. Upload and extract archive into `/opt/tako/apps/<app>/releases/<version>/`.
 8. Link shared directories (for example `logs`).
-9. Write release app `.env` including `TAKO_BUILD` and environment secrets.
-10. Run runtime install command at release bundle root.
-11. Run app build command in app directory (if configured).
-12. Merge configured `assets` into app `public/`.
-13. Resolve runtime `main`, write final app `app.json`.
-14. Send deploy command to `tako-server`.
-15. Update `current` symlink after server accepts deploy.
-16. Clean old release directories.
+9. Resolve runtime `main`, write final app `app.json`.
+10. Send deploy command to `tako-server` including merged environment (`TAKO_BUILD`, runtime vars, user vars, decrypted secrets); `tako-server` runs runtime prep (Bun dependency install) before rolling update.
+11. Update `current` symlink after server accepts deploy.
+12. Clean old release directories.
 
 ## Remote Layout
 
@@ -114,7 +122,6 @@ Each target server should have:
     <version>/
       <app-subdir>/        # "." when deploying from app root
         ...app files...
-        .env
         app.json
       logs -> /opt/tako/apps/<app>/shared/logs
   shared/
@@ -123,8 +130,9 @@ Each target server should have:
 
 ## Environment and Secrets
 
-- Deploy writes `TAKO_BUILD="<version>"` into release `.env`.
-- Local encrypted secrets are decrypted during deploy and written into release `.env` for the target environment.
+- Deploy sends `TAKO_BUILD="<version>"` in the deploy command payload and `tako-server` injects it into app process environment.
+- Local encrypted secrets are decrypted during deploy and sent in the deploy command payload for the target environment.
+- Bun runtime dependency install runs on server from the uploaded release (`bun install --production`, and `--frozen-lockfile` when lockfile exists).
 - Deploy pre-validation fails when target environment is missing secret keys used by other environments.
 - Deploy pre-validation warns (does not fail) when target environment has extra secret keys not present in other secret environments.
 - Manage secrets with:
@@ -136,9 +144,10 @@ Each target server should have:
 
 - Use `tako servers status` to inspect deployed app state and per-server service/connectivity state.
 - Use `tako logs --env <environment>` to stream remote logs.
-- HTTP requests are redirected to HTTPS by default.
+- HTTP requests are redirected to HTTPS by default (307 with `Cache-Control: no-store`).
 - Exceptions on HTTP: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status`.
 - Requests without internal host are routed to apps normally.
+- Private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) get self-signed certs during deploy; public hostnames use ACME.
 
 ## Post-Deploy Verification
 

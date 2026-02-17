@@ -92,6 +92,15 @@ Deploy e2e uses Docker/SSH and is opt-in:
 - `just e2e e2e/fixtures/js/bun`
 - `just e2e e2e/fixtures/js/tanstack-start`
 
+Deploy e2e exercises artifact-cache behavior too: first deploy builds target artifacts, then unchanged redeploy reuses verified cached artifacts from `.tako/artifacts/`.
+Containerized builds also reuse per-target Docker dependency cache volumes (prefix `tako-build-cache-`) across deploy runs.
+Preset artifact filters use top-level preset `exclude` (preset `include` and legacy `[artifact]` are not supported).
+If a fixture uses `workspace:` dependencies, deploy vendors those workspace packages into the artifact (`tako_vendor/`) and rewrites them to local `file:` specs.
+Bun release dependencies are installed on server before rollout (`bun install --production`).
+Hosted server install resolves Linux host `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>` artifact.
+Each deploy also prunes local `.tako/artifacts/` cache (best-effort), keeping 30 newest source archives and 90 newest target artifacts, and removing orphan target metadata files.
+When deploy targets private/local route hostnames (for example `*.local`), `tako-server` generates self-signed certs for those routes during deploy instead of ACME issuance.
+
 Name resolution for `.tako.local` is done via local split DNS:
 
 - `tako dev` installs `/etc/resolver/tako.local` (one-time sudo) pointing to `127.0.0.1:53535`.
@@ -101,18 +110,18 @@ Name resolution for `.tako.local` is done via local split DNS:
 
 These are the environment variables Tako components read and/or set.
 
-| Name              | Used by         | Meaning                                          | Values / default                  | Notes                                                              |
-| ----------------- | --------------- | ------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------ |
-| `PORT`            | app             | Listen port for HTTP server                      | number                            | Set by `tako dev` for local runs and by `tako-server` remotely.    |
-| `ENV`             | app             | Local development environment hint               | `development`                     | Set by `tako dev` for local app process compatibility.             |
-| `TAKO_ENV`        | app             | Deployed environment name                        | `production`, `staging`, ...      | Set during deploy manifest generation for remote runtime.          |
-| `NODE_ENV`        | app             | Node convention env                              | `development` / `production`      | Set by runtime adapter.                                            |
-| `BUN_ENV`         | app             | Bun convention env                               | `development` / `production`      | Set by runtime adapter.                                            |
-| `TAKO_BUILD`      | app             | Deployed build id                                | string                            | Written by `tako deploy` into release `.env`.                      |
-| `TAKO_SOCKET`     | app / `tako.sh` | Unix socket path for connecting to `tako-server` | default `/var/run/tako/tako.sock` | Used by SDK integrations when app-server communication is enabled. |
-| `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on        | path string                       | Set by `tako-server` when using socket-based proxying.             |
-| `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one)    | string                            | Optional; separate from `TAKO_BUILD`.                              |
-| `TAKO_INSTANCE`   | app / `tako.sh` | Instance ordinal                                 | integer string                    | Allocated by `tako-server`.                                        |
+| Name              | Used by         | Meaning                                          | Values / default                  | Notes                                                               |
+| ----------------- | --------------- | ------------------------------------------------ | --------------------------------- | ------------------------------------------------------------------- |
+| `PORT`            | app             | Listen port for HTTP server                      | number                            | Set by `tako dev` for local runs and by `tako-server` remotely.     |
+| `ENV`             | app             | Local development environment hint               | `development`                     | Set by `tako dev` for local app process compatibility.              |
+| `TAKO_ENV`        | app             | Deployed environment name                        | `production`, `staging`, ...      | Set during deploy manifest generation for remote runtime.           |
+| `NODE_ENV`        | app             | Node convention env                              | `development` / `production`      | Set by runtime adapter.                                             |
+| `BUN_ENV`         | app             | Bun convention env                               | `development` / `production`      | Set by runtime adapter.                                             |
+| `TAKO_BUILD`      | app             | Deployed build id                                | string                            | Sent by `tako deploy` in deploy payload; injected by `tako-server`. |
+| `TAKO_SOCKET`     | app / `tako.sh` | Unix socket path for connecting to `tako-server` | default `/var/run/tako/tako.sock` | Used by SDK integrations when app-server communication is enabled.  |
+| `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on        | path string                       | Set by `tako-server` when using socket-based proxying.              |
+| `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one)    | string                            | Optional; separate from `TAKO_BUILD`.                               |
+| `TAKO_INSTANCE`   | app / `tako.sh` | Instance ordinal                                 | integer string                    | Allocated by `tako-server`.                                         |
 
 ## macOS DNS resolver
 

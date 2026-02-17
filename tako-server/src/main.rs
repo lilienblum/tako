@@ -28,13 +28,15 @@ use crate::socket::{
     SocketServer,
 };
 use crate::state_store::{SqliteStateStore, StateStoreError};
-use crate::tls::{AcmeClient, AcmeConfig, CertManager, CertManagerConfig};
+use crate::tls::{AcmeClient, AcmeConfig, CertInfo, CertManager, CertManagerConfig};
 use clap::Parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
 use tako_core::{HelloResponse, PROTOCOL_VERSION, ServerRuntimeInfo, UpgradeMode};
+use tokio::process::Command as TokioCommand;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
@@ -136,7 +138,7 @@ pub struct ServerState {
     cert_manager: Arc<CertManager>,
     /// ACME client (optional)
     acme_client: Option<Arc<AcmeClient>>,
-    /// App secrets (app_name -> env vars)
+    /// App launch environment (app_name -> env vars)
     secrets: RwLock<HashMap<String, HashMap<String, String>>>,
 
     /// Route table (app_name -> route patterns)
@@ -353,13 +355,14 @@ impl ServerState {
                 version,
                 path,
                 routes,
+                env,
                 instances,
                 idle_timeout,
             } => {
                 if let Some(resp) = self.reject_mutating_when_upgrading("deploy").await {
                     return resp;
                 }
-                self.deploy_app(&app, &version, &path, routes, instances, idle_timeout)
+                self.deploy_app(&app, &version, &path, routes, env, instances, idle_timeout)
                     .await
             }
             Command::Stop { app } => {
@@ -429,6 +432,7 @@ impl ServerState {
         version: &str,
         path: &str,
         routes: Vec<String>,
+        env: HashMap<String, String>,
         instances: u8,
         idle_timeout: u32,
     ) -> Response {
@@ -454,6 +458,16 @@ impl ServerState {
             }
         };
 
+        if let Err(error) = prepare_release_runtime(Path::new(path), &env).await {
+            return Response::error(format!("Invalid app release: {}", error));
+        }
+
+        {
+            // Deploy carries the full launch environment (vars + secrets) for this release.
+            let mut secrets = self.secrets.write().await;
+            secrets.insert(app_name.to_string(), env.clone());
+        }
+
         // Get or create app
         let (app, deploy_config, is_new_app) =
             if let Some(existing) = self.app_manager.get_app(app_name) {
@@ -462,6 +476,7 @@ impl ServerState {
                 config.version = version.to_string();
                 config.path = PathBuf::from(path);
                 config.cwd = PathBuf::from(path);
+                config.env = env.clone();
                 config.min_instances = instances as u32;
                 config.idle_timeout = Duration::from_secs(idle_timeout as u64);
                 config.command = match command_for_release_dir(&config.cwd) {
@@ -474,9 +489,6 @@ impl ServerState {
                 (existing, config, false)
             } else {
                 // Create new app
-                let secrets = self.secrets.read().await;
-                let app_secrets = secrets.get(app_name).cloned().unwrap_or_default();
-
                 let config = AppConfig {
                     name: app_name.to_string(),
                     version: version.to_string(),
@@ -488,7 +500,7 @@ impl ServerState {
                             return Response::error(format!("Invalid app release: {}", e));
                         }
                     },
-                    env: app_secrets,
+                    env,
                     min_instances: instances as u32,
                     max_instances: 4,
                     base_port: self.allocate_port_range(),
@@ -510,46 +522,21 @@ impl ServerState {
 
         app.clear_last_error();
 
-        // Request certificates for route domains (if ACME is enabled)
-        if let Some(acme) = &self.acme_client {
-            for route in &routes {
-                // Extract domain from route (e.g., "api.example.com/api/*" -> "api.example.com")
-                let domain = route.split('/').next().unwrap_or(route);
-
-                // Skip if certificate already exists
-                if self.cert_manager.get_cert_for_host(domain).is_some() {
-                    tracing::debug!(domain = %domain, "Certificate already exists");
-                    continue;
-                }
-
-                // Request certificate (non-blocking, log errors but don't fail deploy)
-                tracing::info!(domain = %domain, app = app_name, "Requesting certificate for route");
-                match acme.request_certificate(domain).await {
-                    Ok(cert) => {
-                        tracing::info!(
-                            domain = %domain,
-                            expires_in_days = cert.days_until_expiry(),
-                            "Certificate issued successfully"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            domain = %domain,
-                            error = %e,
-                            "Failed to request certificate (HTTPS may not work for this domain)"
-                        );
-                    }
-                }
-            }
+        // Ensure certificates for route domains.
+        // Private/local domains get self-signed certs; public domains use ACME when enabled.
+        for route in &routes {
+            // Extract domain from route (e.g., "api.example.com/api/*" -> "api.example.com")
+            let domain = route.split('/').next().unwrap_or(route);
+            self.ensure_route_certificate(app_name, domain).await;
         }
 
         // Start the app
         if app.get_instances().is_empty() {
             // First deploy / currently stopped.
             if deploy_config.min_instances == 0 {
-                match self.validate_on_demand_startup(&app).await {
+                match self.start_on_demand_warm_instance(&app).await {
                     Ok(()) => {
-                        app.set_state(AppState::Idle);
+                        app.set_state(AppState::Running);
                         self.cold_start.reset(app_name);
                         self.persist_app_state(app_name).await;
                         Response::ok(serde_json::json!({
@@ -558,7 +545,8 @@ impl ServerState {
                             "version": version,
                             "new_app": is_new_app,
                             "on_demand": true,
-                            "startup_validated": true
+                            "startup_validated": true,
+                            "warm_instance": true
                         }))
                     }
                     Err(e) => {
@@ -604,19 +592,7 @@ impl ServerState {
                 Ok(result) => {
                     if result.success {
                         if deploy_config.min_instances == 0 {
-                            let instances = app.get_instances();
-                            for instance in instances {
-                                if let Err(e) = instance.kill().await {
-                                    tracing::warn!(
-                                        app = app_name,
-                                        instance = instance.id,
-                                        "Failed to stop validation instance after deploy: {}",
-                                        e
-                                    );
-                                }
-                                app.remove_instance(instance.id);
-                            }
-                            app.set_state(AppState::Idle);
+                            app.set_state(AppState::Running);
                             self.cold_start.reset(app_name);
                             self.persist_app_state(app_name).await;
                             Response::ok(serde_json::json!({
@@ -627,7 +603,8 @@ impl ServerState {
                                 "old_instances": result.old_instances,
                                 "rolled_back": false,
                                 "on_demand": true,
-                                "startup_validated": true
+                                "startup_validated": true,
+                                "warm_instance": true
                             }))
                         } else {
                             app.set_state(AppState::Running);
@@ -942,26 +919,69 @@ impl ServerState {
         true
     }
 
-    async fn validate_on_demand_startup(&self, app: &Arc<App>) -> Result<(), String> {
+    async fn start_on_demand_warm_instance(&self, app: &Arc<App>) -> Result<(), String> {
         let instance = app.allocate_instance();
         let spawner = self.app_manager.spawner();
 
         match spawner.spawn(app, instance.clone()).await {
-            Ok(()) => {
-                if let Err(e) = instance.kill().await {
-                    tracing::warn!(
-                        app = %app.name(),
-                        instance = instance.id,
-                        "Failed to stop startup validation instance: {}",
-                        e
-                    );
-                }
-                app.remove_instance(instance.id);
-                Ok(())
-            }
+            Ok(()) => Ok(()),
             Err(e) => {
                 app.remove_instance(instance.id);
-                Err(format!("Startup validation failed: {}", e))
+                Err(format!("Warm instance startup failed: {}", e))
+            }
+        }
+    }
+
+    async fn ensure_route_certificate(&self, app_name: &str, domain: &str) -> Option<CertInfo> {
+        if let Some(existing) = self.cert_manager.get_cert_for_host(domain) {
+            tracing::debug!(domain = %domain, "Certificate already exists");
+            return Some(existing);
+        }
+
+        if should_use_self_signed_route_cert(domain) {
+            match self.cert_manager.get_or_create_self_signed_cert(domain) {
+                Ok(cert) => {
+                    tracing::info!(
+                        domain = %domain,
+                        app = app_name,
+                        cert_path = %cert.cert_path.display(),
+                        "Generated self-signed certificate for private route domain"
+                    );
+                    return Some(cert);
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        domain = %domain,
+                        app = app_name,
+                        error = %e,
+                        "Failed to generate self-signed certificate for private route domain"
+                    );
+                    return None;
+                }
+            }
+        }
+
+        let Some(acme) = &self.acme_client else {
+            return None;
+        };
+
+        tracing::info!(domain = %domain, app = app_name, "Requesting certificate for route");
+        match acme.request_certificate(domain).await {
+            Ok(cert) => {
+                tracing::info!(
+                    domain = %domain,
+                    expires_in_days = cert.days_until_expiry(),
+                    "Certificate issued successfully"
+                );
+                Some(cert)
+            }
+            Err(e) => {
+                tracing::warn!(
+                    domain = %domain,
+                    error = %e,
+                    "Failed to request certificate (HTTPS may not work for this domain)"
+                );
+                None
             }
         }
     }
@@ -1015,6 +1035,169 @@ fn derive_build_state(instances: &[InstanceStatus]) -> AppState {
         return AppState::Error;
     }
     AppState::Stopped
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ReleaseRuntimeManifest {
+    runtime: String,
+}
+
+fn resolve_release_runtime(release_dir: &Path) -> Result<Option<String>, String> {
+    let manifest_path = release_dir.join("app.json");
+    if !manifest_path.exists() {
+        return Ok(None);
+    }
+
+    let raw = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        format!(
+            "failed to read deploy manifest {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
+    let manifest: ReleaseRuntimeManifest = serde_json::from_str(&raw).map_err(|e| {
+        format!(
+            "failed to parse deploy manifest {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
+    if manifest.runtime.trim().is_empty() {
+        return Err(format!(
+            "deploy manifest {} has empty runtime field",
+            manifest_path.display()
+        ));
+    }
+    Ok(Some(manifest.runtime))
+}
+
+fn bun_install_args_for_release(release_dir: &Path) -> Vec<String> {
+    let mut args = vec!["install".to_string(), "--production".to_string()];
+    if release_dir.join("bun.lockb").is_file() || release_dir.join("bun.lock").is_file() {
+        args.push("--frozen-lockfile".to_string());
+    }
+    args
+}
+
+async fn prepare_release_runtime(
+    release_dir: &Path,
+    env: &HashMap<String, String>,
+) -> Result<(), String> {
+    let Some(runtime) = resolve_release_runtime(release_dir)? else {
+        return Ok(());
+    };
+    if runtime == "bun" {
+        install_bun_dependencies_for_release(release_dir, env).await?;
+    }
+    Ok(())
+}
+
+async fn install_bun_dependencies_for_release(
+    release_dir: &Path,
+    env: &HashMap<String, String>,
+) -> Result<(), String> {
+    if !release_dir.join("package.json").is_file() {
+        return Err(format!(
+            "Bun release '{}' is missing package.json required for server-side dependency install.",
+            release_dir.display()
+        ));
+    }
+
+    let args = bun_install_args_for_release(release_dir);
+    let mut cmd = TokioCommand::new("bun");
+    cmd.args(args.iter().map(String::as_str))
+        .current_dir(release_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .envs(
+            env.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        );
+
+    let output = cmd.output().await.map_err(|e| {
+        format!(
+            "Failed to run 'bun {}' in {}: {}",
+            args.join(" "),
+            release_dir.display(),
+            e
+        )
+    })?;
+
+    if !output.status.success() {
+        return Err(format_process_failure(
+            "Bun dependency install failed",
+            output.status,
+            &output.stdout,
+            &output.stderr,
+        ));
+    }
+
+    let wrapper_path = release_dir.join("node_modules/tako.sh/src/wrapper.ts");
+    if !wrapper_path.is_file() {
+        return Err(format!(
+            "Bun dependency install completed but '{}' is missing. Ensure package 'tako.sh' is installed.",
+            wrapper_path.display()
+        ));
+    }
+
+    Ok(())
+}
+
+fn format_process_failure(
+    context: &str,
+    status: ExitStatus,
+    stdout: &[u8],
+    stderr: &[u8],
+) -> String {
+    let status_text = match status.code() {
+        Some(code) => format!("exit code {code}"),
+        None => "terminated by signal".to_string(),
+    };
+
+    let stderr_text = String::from_utf8_lossy(stderr).trim().to_string();
+    let stdout_text = String::from_utf8_lossy(stdout).trim().to_string();
+    let detail = if !stderr_text.is_empty() {
+        stderr_text
+    } else {
+        stdout_text
+    };
+
+    if detail.is_empty() {
+        return format!("{context} ({status_text})");
+    }
+
+    let preview: String = detail.chars().take(400).collect();
+    if detail.chars().count() > 400 {
+        format!("{context} ({status_text}): {preview}...")
+    } else {
+        format!("{context} ({status_text}): {preview}")
+    }
+}
+
+fn should_use_self_signed_route_cert(domain: &str) -> bool {
+    let host = domain
+        .split(':')
+        .next()
+        .unwrap_or(domain)
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+
+    if host.is_empty() {
+        return false;
+    }
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    if !host.contains('.') {
+        return true;
+    }
+
+    host.ends_with(".local")
+        || host.ends_with(".test")
+        || host.ends_with(".invalid")
+        || host.ends_with(".example")
+        || host.ends_with(".home.arpa")
 }
 
 fn validate_deploy_routes(routes: &[String]) -> Result<(), String> {
@@ -1562,13 +1745,16 @@ async fn replace_instance_if_needed(
 #[cfg(test)]
 mod tests {
     use super::{
-        ServerRuntimeConfig, ServerState, install_rustls_crypto_provider, validate_deploy_routes,
+        ServerRuntimeConfig, ServerState, bun_install_args_for_release,
+        install_rustls_crypto_provider, prepare_release_runtime, resolve_release_runtime,
+        should_use_self_signed_route_cert, validate_deploy_routes,
     };
     use crate::instances::AppConfig;
     use crate::socket::{Command, InstanceState, Response};
     use crate::tls::{CertManager, CertManagerConfig};
     use serde_json::Value;
     use std::collections::HashMap;
+    use std::process::{Command as StdCommand, Stdio};
     use std::sync::Arc;
     use std::time::Duration;
     use tako_core::UpgradeMode;
@@ -1593,6 +1779,175 @@ mod tests {
     fn validate_deploy_routes_rejects_empty_route_entry() {
         let err = validate_deploy_routes(&["".to_string()]).unwrap_err();
         assert!(err.contains("non-empty"));
+    }
+
+    #[test]
+    fn private_route_domains_prefer_self_signed_certs() {
+        assert!(should_use_self_signed_route_cert(
+            "tako-bun-server.orb.local"
+        ));
+        assert!(should_use_self_signed_route_cert("localhost"));
+        assert!(should_use_self_signed_route_cert("api.localhost"));
+        assert!(should_use_self_signed_route_cert("my-service"));
+    }
+
+    #[test]
+    fn public_route_domains_do_not_prefer_self_signed_certs() {
+        assert!(!should_use_self_signed_route_cert("api.example.com"));
+        assert!(!should_use_self_signed_route_cert("example.com"));
+    }
+
+    #[test]
+    fn resolve_release_runtime_returns_none_when_manifest_missing() {
+        let temp = TempDir::new().unwrap();
+        assert_eq!(resolve_release_runtime(temp.path()).unwrap(), None);
+    }
+
+    #[test]
+    fn resolve_release_runtime_reads_manifest_runtime() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_release_runtime(temp.path()).unwrap(),
+            Some("bun".to_string())
+        );
+    }
+
+    #[test]
+    fn bun_install_args_use_frozen_lockfile_when_lock_exists() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("bun.lock"), "").unwrap();
+        assert_eq!(
+            bun_install_args_for_release(temp.path()),
+            vec![
+                "install".to_string(),
+                "--production".to_string(),
+                "--frozen-lockfile".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn bun_install_args_use_plain_install_without_lockfile() {
+        let temp = TempDir::new().unwrap();
+        assert_eq!(
+            bun_install_args_for_release(temp.path()),
+            vec!["install".to_string(), "--production".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_release_runtime_installs_bun_dependencies() {
+        let temp = TempDir::new().unwrap();
+        let release_dir = temp.path().join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(
+            release_dir.join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            release_dir.join("package.json"),
+            r#"{"name":"test-app","dependencies":{"tako.sh":"0.0.0"}} "#,
+        )
+        .unwrap();
+
+        let fake_bin_dir = temp.path().join("bin");
+        std::fs::create_dir_all(&fake_bin_dir).unwrap();
+        let fake_bun = fake_bin_dir.join("bun");
+        std::fs::write(
+            &fake_bun,
+            r#"#!/bin/sh
+if [ "$1" = "install" ]; then
+  mkdir -p node_modules/tako.sh/src
+  printf "export {};\n" > node_modules/tako.sh/src/wrapper.ts
+  exit 0
+fi
+echo "unexpected bun args: $*" >&2
+exit 1
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&fake_bun).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&fake_bun, permissions).unwrap();
+        }
+
+        let mut env = HashMap::new();
+        let path = std::env::var("PATH").unwrap_or_default();
+        env.insert(
+            "PATH".to_string(),
+            format!("{}:{}", fake_bin_dir.display(), path),
+        );
+
+        prepare_release_runtime(&release_dir, &env).await.unwrap();
+        assert!(
+            release_dir
+                .join("node_modules/tako.sh/src/wrapper.ts")
+                .is_file()
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_release_runtime_bun_requires_package_json() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts"}"#,
+        )
+        .unwrap();
+
+        let err = prepare_release_runtime(temp.path(), &HashMap::new())
+            .await
+            .unwrap_err();
+        assert!(err.contains("missing package.json"));
+    }
+
+    fn python3_ok() -> bool {
+        StdCommand::new("python3")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    fn pick_free_port() -> Option<u16> {
+        std::net::TcpListener::bind("127.0.0.1:0")
+            .ok()
+            .and_then(|l| l.local_addr().ok().map(|a| a.port()))
+    }
+
+    #[tokio::test]
+    async fn ensure_route_certificate_generates_self_signed_for_private_domain() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        cert_manager.init().unwrap();
+        let state =
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+
+        let cert = state
+            .ensure_route_certificate("my-app", "tako-bun-server.orb.local")
+            .await
+            .expect("private domain should get a generated cert");
+        assert!(cert.is_self_signed);
+        assert_eq!(cert.domain, "tako-bun-server.orb.local");
+
+        let cached = cert_manager
+            .get_cert_for_host("tako-bun-server.orb.local")
+            .expect("generated cert should be cached");
+        assert!(cached.is_self_signed);
     }
 
     #[tokio::test]
@@ -2029,6 +2384,7 @@ mod tests {
                 version: "v1".to_string(),
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["broken.localhost".to_string()],
+                env: HashMap::new(),
                 instances: 0,
                 idle_timeout: 300,
             })
@@ -2038,6 +2394,125 @@ mod tests {
             matches!(response, Response::Error { .. }),
             "expected startup validation failure for on-demand deploy: {response:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn deploy_on_demand_keeps_one_warm_instance_after_successful_deploy() {
+        if !python3_ok() {
+            return;
+        }
+        let Some(base_port) = pick_free_port() else {
+            return;
+        };
+
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+
+        let fake_bin_dir = temp.path().join("bin");
+        std::fs::create_dir_all(&fake_bin_dir).unwrap();
+        let fake_bun = fake_bin_dir.join("bun");
+        std::fs::write(
+            &fake_bun,
+            r#"#!/bin/sh
+python3 - <<'PY'
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"ok")
+    def log_message(self, fmt, *args):
+        return
+
+HTTPServer(("127.0.0.1", int(os.environ.get("PORT", "3000"))), Handler).serve_forever()
+PY
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&fake_bun).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&fake_bun, permissions).unwrap();
+        }
+
+        let release_dir = temp
+            .path()
+            .join("apps")
+            .join("warm-app")
+            .join("releases")
+            .join("v1");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(
+            release_dir.join("package.json"),
+            r#"{"name":"warm-app","scripts":{"dev":"bun run index.ts"}}"#,
+        )
+        .unwrap();
+        std::fs::write(release_dir.join("index.ts"), "export default {};\n").unwrap();
+
+        let app = state.app_manager.register_app(AppConfig {
+            name: "warm-app".to_string(),
+            version: "v0".to_string(),
+            path: release_dir.clone(),
+            cwd: release_dir.clone(),
+            command: vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "exit 0".to_string(),
+            ],
+            min_instances: 0,
+            max_instances: 4,
+            base_port,
+            ..Default::default()
+        });
+        state.load_balancer.register_app(app);
+
+        let mut env = HashMap::new();
+        let path = std::env::var("PATH").unwrap_or_default();
+        env.insert(
+            "PATH".to_string(),
+            format!("{}:{}", fake_bin_dir.display(), path),
+        );
+
+        let response = state
+            .handle_command(Command::Deploy {
+                app: "warm-app".to_string(),
+                version: "v1".to_string(),
+                path: release_dir.to_string_lossy().to_string(),
+                routes: vec!["warm.localhost".to_string()],
+                env,
+                instances: 0,
+                idle_timeout: 300,
+            })
+            .await;
+        assert!(
+            matches!(response, Response::Ok { .. }),
+            "expected successful on-demand deploy: {response:?}"
+        );
+
+        let status = state
+            .handle_command(Command::Status {
+                app: "warm-app".to_string(),
+            })
+            .await;
+        let Response::Ok { data } = status else {
+            panic!("expected status response for warm-app");
+        };
+
+        assert_eq!(data.get("state").and_then(Value::as_str), Some("running"));
+        let instances = data
+            .get("instances")
+            .and_then(Value::as_array)
+            .expect("status should include instances");
+        assert_eq!(instances.len(), 1);
     }
 
     #[tokio::test]

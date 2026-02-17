@@ -164,14 +164,27 @@ impl TestServer {
     }
 
     fn http_get_with_host(&self, host: &str, path: &str) -> Result<String, String> {
+        self.http_get_with_host_and_headers(host, path, &[])
+    }
+
+    fn http_get_with_host_and_headers(
+        &self,
+        host: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<String, String> {
         let addr = format!("127.0.0.1:{}", self.http_port);
         let mut stream =
             TcpStream::connect(&addr).map_err(|e| format!("Failed to connect: {}", e))?;
 
         stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let extra_headers = headers
+            .iter()
+            .map(|(name, value)| format!("{name}: {value}\r\n"))
+            .collect::<String>();
         let request = format!(
-            "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            path, host
+            "GET {} HTTP/1.1\r\nHost: {}\r\n{}Connection: close\r\n\r\n",
+            path, host, extra_headers
         );
         stream
             .write_all(request.as_bytes())
@@ -303,12 +316,16 @@ mod health_check {
             .expect("root endpoint request should succeed");
 
         assert!(
-            response.starts_with("HTTP/1.1 301") || response.starts_with("HTTP/1.0 301"),
-            "expected 301 response: {response}"
+            response.starts_with("HTTP/1.1 307") || response.starts_with("HTTP/1.0 307"),
+            "expected 307 response: {response}"
         );
         assert!(
             response.contains("Location: https://localhost/"),
             "expected https location header: {response}"
+        );
+        assert!(
+            response.contains("Cache-Control: no-store"),
+            "expected no-store cache control on redirect: {response}"
         );
     }
 
@@ -331,6 +348,32 @@ mod health_check {
         assert!(
             response.contains("\"healthy\":true") || response.contains("\"healthy\": true"),
             "expected healthy payload: {response}"
+        );
+    }
+
+    #[test]
+    fn test_orbstack_host_does_not_redirect_when_proto_header_missing() {
+        if !can_bind_localhost() {
+            return;
+        }
+
+        let server = TestServer::start();
+
+        let response = server
+            .http_get_with_host_and_headers(
+                "test-app.orb.local",
+                "/",
+                &[("X-Forwarded-For", "127.0.0.1")],
+            )
+            .expect("orb.local request should succeed");
+
+        assert!(
+            response.starts_with("HTTP/1.1 404") || response.starts_with("HTTP/1.0 404"),
+            "expected 404 response without redirect loop: {response}"
+        );
+        assert!(
+            !response.contains("Location: https://"),
+            "did not expect https redirect for orb.local forwarded request: {response}"
         );
     }
 }

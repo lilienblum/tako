@@ -11,15 +11,12 @@ pub struct TakoToml {
     /// Application name (auto-detected if not specified; treat as stable once set)
     pub name: Option<String>,
 
-    /// Build command to run before deployment
-    pub build: Option<String>,
+    /// Build settings for deploy artifact generation.
+    #[serde(default)]
+    pub build: BuildConfig,
 
     /// Runtime entrypoint override relative to project root
     pub main: Option<String>,
-
-    /// Additional asset directories (relative to project root) merged into public/
-    #[serde(default)]
-    pub assets: Vec<String>,
 
     /// [vars] section - global environment variables
     #[serde(default)]
@@ -40,6 +37,25 @@ pub struct TakoToml {
     /// [servers.*] sections - per-server configurations
     #[serde(default)]
     pub servers: HashMap<String, ServerConfig>,
+}
+
+/// Build configuration from [build].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct BuildConfig {
+    /// Build preset reference (for example: "bun", "bun/<commit-hash>", or "github:owner/repo/path.toml@<sha>").
+    pub preset: Option<String>,
+
+    /// Additional file globs to include in the deploy artifact.
+    #[serde(default)]
+    pub include: Vec<String>,
+
+    /// File globs to exclude from the deploy artifact.
+    #[serde(default)]
+    pub exclude: Vec<String>,
+
+    /// Additional asset directories merged into app public/ after container build.
+    #[serde(default)]
+    pub assets: Vec<String>,
 }
 
 /// Environment configuration from [envs.*]
@@ -138,7 +154,14 @@ impl TakoToml {
 
         if raw.get("dist").is_some() {
             return Err(ConfigError::Validation(
-                "'dist' is no longer supported; set `main` and `assets` instead".to_string(),
+                "'dist' is no longer supported; set `main` and [build] settings instead"
+                    .to_string(),
+            ));
+        }
+        if raw.get("assets").is_some() {
+            return Err(ConfigError::Validation(
+                "'assets' is no longer supported at the top level; use [build].assets instead"
+                    .to_string(),
             ));
         }
 
@@ -146,9 +169,8 @@ impl TakoToml {
 
         // Parse top-level metadata
         config.name = parse_optional_string(&raw, "name")?;
-        config.build = parse_optional_string(&raw, "build")?;
         config.main = parse_optional_string(&raw, "main")?;
-        config.assets = parse_string_array(&raw, "assets")?.unwrap_or_default();
+        config.build = parse_build_config(&raw)?;
 
         // Parse [vars] section (global) and [vars.*] sections (per-environment)
         if let Some(vars) = raw.get("vars")
@@ -234,31 +256,22 @@ impl TakoToml {
             return Err(ConfigError::Validation("main cannot be empty".to_string()));
         }
 
-        for asset_path in &self.assets {
-            let trimmed = asset_path.trim();
-            if trimmed.is_empty() {
-                return Err(ConfigError::Validation(
-                    "asset path cannot be empty".to_string(),
-                ));
-            }
+        if let Some(preset) = &self.build.preset
+            && preset.trim().is_empty()
+        {
+            return Err(ConfigError::Validation(
+                "build.preset cannot be empty".to_string(),
+            ));
+        }
 
-            let path = Path::new(trimmed);
-            if path.is_absolute() {
-                return Err(ConfigError::Validation(format!(
-                    "asset path '{}' must be relative to project root",
-                    asset_path
-                )));
-            }
-
-            if path
-                .components()
-                .any(|component| matches!(component, Component::ParentDir))
-            {
-                return Err(ConfigError::Validation(format!(
-                    "asset path '{}' must not contain '..'",
-                    asset_path
-                )));
-            }
+        for include in &self.build.include {
+            validate_build_glob(include, "build.include")?;
+        }
+        for exclude in &self.build.exclude {
+            validate_build_glob(exclude, "build.exclude")?;
+        }
+        for asset_path in &self.build.assets {
+            validate_asset_path(asset_path)?;
         }
 
         // Validate each environment
@@ -482,6 +495,29 @@ fn parse_optional_string(raw: &toml::Value, key: &str) -> Result<Option<String>>
         .ok_or_else(|| ConfigError::Validation(format!("'{}' must be a string", key)))
 }
 
+fn parse_build_config(raw: &toml::Value) -> Result<BuildConfig> {
+    let Some(value) = raw.get("build") else {
+        return Ok(BuildConfig::default());
+    };
+
+    let table = value
+        .as_table()
+        .ok_or_else(|| ConfigError::Validation("'build' must be a table ([build])".to_string()))?;
+    let table_value = toml::Value::Table(table.clone());
+
+    let preset = parse_optional_string(&table_value, "preset")?;
+    let include = parse_string_array(&table_value, "include")?.unwrap_or_default();
+    let exclude = parse_string_array(&table_value, "exclude")?.unwrap_or_default();
+    let assets = parse_string_array(&table_value, "assets")?.unwrap_or_default();
+
+    Ok(BuildConfig {
+        preset,
+        include,
+        exclude,
+        assets,
+    })
+}
+
 fn parse_string_array(raw: &toml::Value, key: &str) -> Result<Option<Vec<String>>> {
     let Some(value) = raw.get(key) else {
         return Ok(None);
@@ -500,6 +536,63 @@ fn parse_string_array(raw: &toml::Value, key: &str) -> Result<Option<Vec<String>
         out.push(s.to_string());
     }
     Ok(Some(out))
+}
+
+fn validate_build_glob(pattern: &str, field: &str) -> Result<()> {
+    let trimmed = pattern.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "{field} entries cannot be empty"
+        )));
+    }
+
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(ConfigError::Validation(format!(
+            "{field} entry '{}' must be relative to project root",
+            pattern
+        )));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ConfigError::Validation(format!(
+            "{field} entry '{}' must not contain '..'",
+            pattern
+        )));
+    }
+
+    Ok(())
+}
+
+fn validate_asset_path(asset_path: &str) -> Result<()> {
+    let trimmed = asset_path.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::Validation(
+            "build.assets entry cannot be empty".to_string(),
+        ));
+    }
+
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(ConfigError::Validation(format!(
+            "build.assets entry '{}' must be relative to project root",
+            asset_path
+        )));
+    }
+
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ConfigError::Validation(format!(
+            "build.assets entry '{}' must not contain '..'",
+            asset_path
+        )));
+    }
+
+    Ok(())
 }
 
 /// Validate app name format
@@ -659,23 +752,32 @@ mod tests {
     fn test_parse_top_level_metadata_fields() {
         let toml = r#"
 name = "my-app"
-build = "bun build"
 main = "server/index.mjs"
+[build]
+preset = "bun"
 "#;
         let config = TakoToml::parse(toml).unwrap();
         assert_eq!(config.name, Some("my-app".to_string()));
-        assert_eq!(config.build, Some("bun build".to_string()));
         assert_eq!(config.main, Some("server/index.mjs".to_string()));
+        assert_eq!(config.build.preset, Some("bun".to_string()));
     }
 
     #[test]
-    fn test_parse_assets_array() {
+    fn test_parse_build_arrays() {
         let toml = r#"
+[build]
+include = [".output/**", "dist/**"]
+exclude = ["**/*.map"]
 assets = ["public-assets", "shared/images"]
 "#;
         let config = TakoToml::parse(toml).unwrap();
         assert_eq!(
-            config.assets,
+            config.build.include,
+            vec![".output/**".to_string(), "dist/**".to_string()]
+        );
+        assert_eq!(config.build.exclude, vec!["**/*.map".to_string()]);
+        assert_eq!(
+            config.build.assets,
             vec!["public-assets".to_string(), "shared/images".to_string()]
         );
     }
@@ -799,8 +901,12 @@ idle_timeout = 600
     fn test_parse_complete_config() {
         let toml = r#"
 name = "my-api"
-build = "bun build"
 main = "server/index.mjs"
+
+[build]
+preset = "bun"
+include = ["dist/**"]
+exclude = ["**/*.map"]
 assets = ["public", ".output/public"]
 
 [vars]
@@ -819,10 +925,12 @@ port = 80
         let config = TakoToml::parse(toml).unwrap();
 
         assert_eq!(config.name, Some("my-api".to_string()));
-        assert_eq!(config.build, Some("bun build".to_string()));
         assert_eq!(config.main, Some("server/index.mjs".to_string()));
+        assert_eq!(config.build.preset, Some("bun".to_string()));
+        assert_eq!(config.build.include, vec!["dist/**".to_string()]);
+        assert_eq!(config.build.exclude, vec!["**/*.map".to_string()]);
         assert_eq!(
-            config.assets,
+            config.build.assets,
             vec!["public".to_string(), ".output/public".to_string()]
         );
         assert_eq!(config.vars.get("LOG_LEVEL"), Some(&"info".to_string()));
@@ -922,27 +1030,61 @@ port = 0
     }
 
     #[test]
-    fn test_validate_tako_assets_rejects_absolute_path() {
+    fn test_validate_tako_build_assets_rejects_absolute_path() {
         let toml = r#"
+[build]
 assets = ["/tmp/assets"]
 "#;
         let err = TakoToml::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("asset path '/tmp/assets' must be relative to project root")
+                .contains("build.assets entry '/tmp/assets' must be relative to project root")
         );
     }
 
     #[test]
-    fn test_validate_tako_assets_rejects_parent_directory_reference() {
+    fn test_validate_tako_build_assets_rejects_parent_directory_reference() {
         let toml = r#"
+[build]
 assets = ["../shared-assets"]
 "#;
         let err = TakoToml::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("asset path '../shared-assets' must not contain '..'")
+                .contains("build.assets entry '../shared-assets' must not contain '..'")
         );
+    }
+
+    #[test]
+    fn test_validate_build_globs_reject_invalid_paths() {
+        let absolute = r#"
+[build]
+include = ["/tmp/out/**"]
+"#;
+        let err = TakoToml::parse(absolute).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("build.include entry '/tmp/out/**' must be relative to project root")
+        );
+
+        let parent = r#"
+[build]
+exclude = ["../secret/**"]
+"#;
+        let err = TakoToml::parse(parent).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("build.exclude entry '../secret/**' must not contain '..'")
+        );
+    }
+
+    #[test]
+    fn test_parse_rejects_legacy_build_string_property() {
+        let toml = r#"
+build = "bun run build"
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("'build' must be a table"));
     }
 
     #[test]
@@ -951,6 +1093,18 @@ assets = ["../shared-assets"]
         let toml = format!(r#"{legacy_key} = ".tako/dist""#);
         let err = TakoToml::parse(&toml).unwrap_err();
         assert!(err.to_string().contains("'dist' is no longer supported"));
+    }
+
+    #[test]
+    fn test_parse_rejects_legacy_top_level_assets_property() {
+        let toml = r#"
+assets = ["dist/client"]
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'assets' is no longer supported at the top level")
+        );
     }
 
     #[test]

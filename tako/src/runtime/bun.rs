@@ -164,6 +164,26 @@ impl BunRuntime {
             None
         }
     }
+
+    fn resolve_wrapper_path(dir: &Path) -> PathBuf {
+        let mut current = Some(dir);
+        while let Some(path) = current {
+            let candidate = path
+                .join("node_modules")
+                .join("tako.sh")
+                .join("src")
+                .join("wrapper.ts");
+            if candidate.exists() {
+                return candidate;
+            }
+            current = path.parent();
+        }
+
+        dir.join("node_modules")
+            .join("tako.sh")
+            .join("src")
+            .join("wrapper.ts")
+    }
 }
 
 impl RuntimeAdapter for BunRuntime {
@@ -211,12 +231,7 @@ impl RuntimeAdapter for BunRuntime {
 
         // Run the app via tako.sh wrapper so user entry points can be a simple
         // default export `{ fetch() { ... } }` without calling Bun.serve().
-        let wrapper = self
-            .dir
-            .join("node_modules")
-            .join("tako.sh")
-            .join("src")
-            .join("wrapper.ts");
+        let wrapper = Self::resolve_wrapper_path(&self.dir);
 
         vec![
             "bun".to_string(),
@@ -678,5 +693,47 @@ mod tests {
 
         let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
         assert_eq!(runtime.name(), "bun");
+    }
+
+    #[test]
+    fn test_default_build_preset_is_bun() {
+        let temp_dir = TempDir::new().unwrap();
+        create_bun_project(&temp_dir);
+
+        let runtime = BunRuntime::detect(temp_dir.path()).unwrap();
+        assert_eq!(runtime.default_build_preset(), "bun");
+    }
+
+    #[test]
+    fn resolve_wrapper_path_prefers_local_node_modules() {
+        let temp_dir = TempDir::new().unwrap();
+        let wrapper = temp_dir
+            .path()
+            .join("node_modules")
+            .join("tako.sh")
+            .join("src");
+        fs::create_dir_all(&wrapper).unwrap();
+        fs::write(wrapper.join("wrapper.ts"), "export {}").unwrap();
+
+        let resolved = BunRuntime::resolve_wrapper_path(temp_dir.path());
+        assert_eq!(resolved, wrapper.join("wrapper.ts"));
+    }
+
+    #[test]
+    fn resolve_wrapper_path_falls_back_to_parent_workspace_node_modules() {
+        let temp_dir = TempDir::new().unwrap();
+        let app_dir = temp_dir.path().join("apps/web");
+        fs::create_dir_all(&app_dir).unwrap();
+
+        let wrapper = temp_dir
+            .path()
+            .join("node_modules")
+            .join("tako.sh")
+            .join("src");
+        fs::create_dir_all(&wrapper).unwrap();
+        fs::write(wrapper.join("wrapper.ts"), "export {}").unwrap();
+
+        let resolved = BunRuntime::resolve_wrapper_path(&app_dir);
+        assert_eq!(resolved, wrapper.join("wrapper.ts"));
     }
 }

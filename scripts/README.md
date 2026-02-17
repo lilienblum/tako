@@ -8,8 +8,9 @@ Repository scripts used by installers, CI checks, and local development workflow
 - `install-tako-server.sh`: POSIX installer for `tako-server` on Linux hosts.
   - Configures systemd when available, including `KillMode=control-group` and `TimeoutStopSec=30min` for graceful shutdown windows.
   - Detects container/non-systemd environments and falls back to manual-start guidance instead of failing.
+  - Detects host architecture (`x86_64`/`aarch64`) and libc (`glibc`/`musl`) to download the matching server artifact.
   - Applies `setcap cap_net_bind_service=+ep` to `/usr/local/bin/tako-server` when possible for non-root `:80/:443` binds.
-  - Installs required runtime dependencies (including `nc` and sqlite runtime libraries) via the host package manager.
+  - Installs required runtime dependencies (including Unix-socket-capable `nc` with `-U` support, plus sqlite runtime libraries) via the host package manager.
 - `check_critical_coverage.sh`: coverage gate for selected critical source files.
 
 ## Typical Usage

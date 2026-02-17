@@ -40,16 +40,6 @@ Instructions for AI agents working on the Tako codebase.
 
 - `website/` - Marketing/docs site (do not add automated tests for this component)
 
-## Current Priorities
-
-Routing, deploy locking/parallelism, SNI TLS, and active HTTP health probing are implemented.
-
-Current release cleanup priorities:
-
-1. **Testing & Quality**
-   - Add edge case tests (deleted files, network failures)
-   - Achieve >80% test coverage on critical paths
-
 ## Build & Test Commands
 
 ```bash

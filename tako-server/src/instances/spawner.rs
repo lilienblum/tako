@@ -1,6 +1,7 @@
 //! Instance spawner - spawns and monitors app processes
 
 use super::{App, Instance, InstanceError, InstanceEvent, InstanceState};
+use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::process::Command;
@@ -39,7 +40,8 @@ impl Spawner {
         // Build environment
         let mut env = config.env.clone();
         env.insert("PORT".to_string(), instance.port.to_string());
-        env.insert("NODE_ENV".to_string(), "production".to_string());
+        env.entry("NODE_ENV".to_string())
+            .or_insert_with(|| "production".to_string());
 
         // Spawn process
         let child = Command::new(&config.command[0])
@@ -122,9 +124,8 @@ impl Spawner {
 
             // Check if process is still alive
             if !instance.is_alive().await {
-                return Err(InstanceError::HealthCheckFailed(
-                    "Process exited during startup".to_string(),
-                ));
+                let detail = startup_exit_detail(instance.clone()).await;
+                return Err(InstanceError::HealthCheckFailed(detail));
             }
 
             // Try health check
@@ -189,6 +190,49 @@ impl Spawner {
     }
 }
 
+async fn startup_exit_detail(instance: Arc<Instance>) -> String {
+    let Some(child) = instance.take_process() else {
+        return "Process exited during startup".to_string();
+    };
+
+    match child.wait_with_output().await {
+        Ok(output) => format_startup_exit_error(output.status, &output.stdout, &output.stderr),
+        Err(error) => format!("Process exited during startup; failed to read output: {error}"),
+    }
+}
+
+fn format_startup_exit_error(status: ExitStatus, stdout: &[u8], stderr: &[u8]) -> String {
+    let status_text = match status.code() {
+        Some(code) => format!("exit code {code}"),
+        None => "terminated by signal".to_string(),
+    };
+
+    let stderr_text = String::from_utf8_lossy(stderr).trim().to_string();
+    let stdout_text = String::from_utf8_lossy(stdout).trim().to_string();
+    let detail = if !stderr_text.is_empty() {
+        stderr_text
+    } else {
+        stdout_text
+    };
+
+    if detail.is_empty() {
+        return format!("Process exited during startup ({status_text})");
+    }
+
+    let preview = truncate_chars(&detail, 400);
+    format!("Process exited during startup ({status_text}): {preview}")
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    let mut chars = value.chars();
+    let preview: String = chars.by_ref().take(max_chars).collect();
+    if chars.next().is_some() {
+        format!("{preview}...")
+    } else {
+        preview
+    }
+}
+
 impl Default for Spawner {
     fn default() -> Self {
         Self::new()
@@ -206,6 +250,35 @@ mod tests {
         let spawner = Spawner::new();
         // Just verify it creates without panic
         drop(spawner);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn startup_exit_error_prefers_stderr_and_includes_status() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let status = ExitStatus::from_raw(2 << 8);
+        let message = format_startup_exit_error(status, b"", b"missing wrapper");
+        assert!(message.contains("exit code 2"));
+        assert!(message.contains("missing wrapper"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn startup_exit_error_uses_stdout_when_stderr_empty() {
+        use std::os::unix::process::ExitStatusExt;
+
+        let status = ExitStatus::from_raw(0);
+        let message = format_startup_exit_error(status, b"hello", b"");
+        assert!(message.contains("hello"));
+    }
+
+    #[test]
+    fn truncate_chars_adds_ellipsis_when_over_limit() {
+        let text = "a".repeat(405);
+        let truncated = truncate_chars(&text, 400);
+        assert_eq!(truncated.len(), 403);
+        assert!(truncated.ends_with("..."));
     }
 
     #[tokio::test]

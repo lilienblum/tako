@@ -1,11 +1,9 @@
+mod build 'just/build.just'
 mod testbed 'just/testbed.just'
 mod release 'just/release.just'
 mod test 'just/test.just'
 
 export TAKO_HOME := "local-dev/.tako"
-
-build-tako:
-    cargo build -p tako --bin tako --release
 
 tako *arguments:
     TAKO_HOME="$(pwd)/{{ TAKO_HOME }}" cargo run -p tako --bin tako --release -- {{ arguments }}

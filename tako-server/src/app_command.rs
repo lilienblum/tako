@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-const BUN_WRAPPER_PATH: &str = "node_modules/tako.sh/src/wrapper.ts";
+const BUN_WRAPPER_RELATIVE_PATH: &str = "node_modules/tako.sh/src/wrapper.ts";
 
 #[derive(Debug, serde::Deserialize)]
 struct DeployArchiveManifest {
@@ -77,18 +77,36 @@ fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String
     }
 
     match manifest.runtime.as_str() {
-        "bun" => Ok(Some(vec![
-            "bun".to_string(),
-            "run".to_string(),
-            BUN_WRAPPER_PATH.to_string(),
-            manifest.main,
-        ])),
+        "bun" => {
+            let wrapper = resolve_bun_wrapper_path(release_dir);
+            Ok(Some(vec![
+                "bun".to_string(),
+                "run".to_string(),
+                wrapper,
+                manifest.main,
+            ]))
+        }
         other => Err(format!(
             "unsupported runtime '{}' in deploy manifest {}",
             other,
             manifest_path.display()
         )),
     }
+}
+
+fn resolve_bun_wrapper_path(release_dir: &Path) -> String {
+    let mut current = Some(release_dir);
+    while let Some(dir) = current {
+        let candidate = dir.join(BUN_WRAPPER_RELATIVE_PATH);
+        if candidate.is_file() {
+            return candidate.to_string_lossy().to_string();
+        }
+        current = dir.parent();
+    }
+    release_dir
+        .join(BUN_WRAPPER_RELATIVE_PATH)
+        .to_string_lossy()
+        .to_string()
 }
 
 fn has_dev_script(package_json_path: &Path) -> bool {
@@ -134,6 +152,12 @@ mod tests {
     #[test]
     fn prefers_bun_run_dev_when_dev_script_exists() {
         let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("node_modules/tako.sh/src")).unwrap();
+        std::fs::write(
+            dir.path().join("node_modules/tako.sh/src/wrapper.ts"),
+            "export {};",
+        )
+        .unwrap();
         std::fs::write(
             dir.path().join("app.json"),
             r#"{"runtime":"bun","main":"server/index.mjs"}"#,
@@ -153,7 +177,9 @@ mod tests {
             vec![
                 "bun",
                 "run",
-                "node_modules/tako.sh/src/wrapper.ts",
+                &dir.path()
+                    .join("node_modules/tako.sh/src/wrapper.ts")
+                    .to_string_lossy(),
                 "server/index.mjs"
             ]
         );
@@ -162,6 +188,12 @@ mod tests {
     #[test]
     fn uses_manifest_main_when_present() {
         let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("node_modules/tako.sh/src")).unwrap();
+        std::fs::write(
+            dir.path().join("node_modules/tako.sh/src/wrapper.ts"),
+            "export {};",
+        )
+        .unwrap();
         std::fs::write(
             dir.path().join("app.json"),
             r#"{"runtime":"bun","main":"server/entry.js"}"#,
@@ -177,7 +209,9 @@ mod tests {
             vec![
                 "bun",
                 "run",
-                "node_modules/tako.sh/src/wrapper.ts",
+                &dir.path()
+                    .join("node_modules/tako.sh/src/wrapper.ts")
+                    .to_string_lossy(),
                 "server/entry.js"
             ]
         );
@@ -212,5 +246,59 @@ mod tests {
 
         let err = command_for_release_dir(dir.path()).unwrap_err();
         assert!(err.contains("entry"));
+    }
+
+    #[test]
+    fn resolves_bun_wrapper_from_parent_node_modules() {
+        let dir = TempDir::new().unwrap();
+        let release_root = dir.path().join("releases/v1");
+        let app_dir = release_root.join("apps/web");
+        std::fs::create_dir_all(app_dir.join("src")).unwrap();
+        std::fs::create_dir_all(release_root.join("node_modules/tako.sh/src")).unwrap();
+        std::fs::write(
+            release_root.join("node_modules/tako.sh/src/wrapper.ts"),
+            "export {};",
+        )
+        .unwrap();
+        std::fs::write(app_dir.join("src/app.ts"), "export default {};\n").unwrap();
+        std::fs::write(
+            app_dir.join("app.json"),
+            r#"{"runtime":"bun","main":"src/app.ts"}"#,
+        )
+        .unwrap();
+
+        let cmd = command_for_release_dir(&app_dir).unwrap();
+        assert_eq!(cmd[0], "bun");
+        assert_eq!(cmd[1], "run");
+        assert_eq!(
+            cmd[2],
+            release_root
+                .join("node_modules/tako.sh/src/wrapper.ts")
+                .to_string_lossy()
+        );
+        assert_eq!(cmd[3], "src/app.ts");
+    }
+
+    #[test]
+    fn uses_default_wrapper_path_when_manifest_wrapper_is_missing() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"src/app.ts"}"#,
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/app.ts"), "export default {};\n").unwrap();
+
+        let cmd = command_for_release_dir(dir.path()).unwrap();
+        assert_eq!(cmd[0], "bun");
+        assert_eq!(cmd[1], "run");
+        assert_eq!(
+            cmd[2],
+            dir.path()
+                .join("node_modules/tako.sh/src/wrapper.ts")
+                .to_string_lossy()
+        );
+        assert_eq!(cmd[3], "src/app.ts");
     }
 }

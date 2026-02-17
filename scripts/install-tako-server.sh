@@ -127,9 +127,65 @@ install_sqlite_runtime() {
   fi
 }
 
-ensure_nc() {
-  if need_cmd nc; then
+detect_libc() {
+  if need_cmd ldd; then
+    ldd_out="$(ldd --version 2>&1 || true)"
+    ldd_lower="$(printf "%s" "$ldd_out" | tr '[:upper:]' '[:lower:]')"
+    if printf "%s" "$ldd_lower" | grep -q "musl"; then
+      echo "musl"
+      return
+    fi
+    if printf "%s" "$ldd_lower" | grep -Eq "glibc|gnu libc|gnu c library"; then
+      echo "glibc"
+      return
+    fi
+  fi
+
+  if need_cmd getconf && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then
+    echo "glibc"
     return
+  fi
+
+  if ls /lib/ld-musl-*.so.1 /usr/lib/ld-musl-*.so.1 >/dev/null 2>&1; then
+    echo "musl"
+    return
+  fi
+
+  if ls /lib/*-linux-gnu/libc.so.6 /usr/lib/*-linux-gnu/libc.so.6 >/dev/null 2>&1; then
+    echo "glibc"
+    return
+  fi
+
+  echo "unknown"
+}
+
+ensure_nc() {
+  nc_supports_unix_socket() {
+    if ! need_cmd nc; then
+      return 1
+    fi
+
+    # Preferred check: implementation advertises -U in help output.
+    if nc -h 2>&1 | grep -Eq '(^|[[:space:][:punct:]])-U([[:space:][:punct:]]|$)'; then
+      return 0
+    fi
+
+    # Fallback probe: detect option-parser errors for -U.
+    nc_err="$(nc -U /var/run/tako/nonexistent.sock 2>&1 >/dev/null || true)"
+    if printf "%s" "$nc_err" | grep -Eqi 'unrecognized option|illegal option|invalid option'; then
+      return 1
+    fi
+
+    # If parser accepted -U, treat as supported even if connect failed.
+    return 0
+  }
+
+  if nc_supports_unix_socket; then
+    return
+  fi
+
+  if need_cmd nc; then
+    echo "warning: installed netcat ('nc') does not support Unix sockets (-U); installing a compatible netcat implementation." >&2
   fi
 
   if need_cmd apt-get; then
@@ -142,7 +198,7 @@ ensure_nc() {
   elif need_cmd pacman; then
     pacman -Sy --noconfirm openbsd-netcat || pacman -Sy --noconfirm gnu-netcat
   elif need_cmd apk; then
-    apk add --no-cache netcat-openbsd || apk add --no-cache busybox-extras
+    apk add --no-cache netcat-openbsd
   elif need_cmd zypper; then
     zypper --non-interactive install netcat-openbsd || zypper --non-interactive install netcat
   else
@@ -152,6 +208,12 @@ ensure_nc() {
 
   if ! need_cmd nc; then
     echo "error: netcat ('nc') not found after install. Install it manually and retry." >&2
+    exit 1
+  fi
+
+  if ! nc_supports_unix_socket; then
+    echo "error: netcat ('nc') does not support Unix sockets (-U)." >&2
+    echo "Install a compatible implementation (for example: netcat-openbsd or nmap-ncat), then retry." >&2
     exit 1
   fi
 }
@@ -181,7 +243,16 @@ case "$arch" in
     ;;
 esac
 
-bin_url="${TAKO_SERVER_URL:-$TAKO_DOWNLOAD_BASE_URL/tako-server-linux-$arch}"
+libc="$(detect_libc)"
+case "$libc" in
+  glibc|musl) ;;
+  *)
+    echo "error: unsupported libc: $libc (supported: glibc, musl)" >&2
+    exit 1
+    ;;
+esac
+
+bin_url="${TAKO_SERVER_URL:-$TAKO_DOWNLOAD_BASE_URL/tako-server-linux-$arch-$libc}"
 sha_url="${bin_url}.sha256"
 
 tmp="$(mktemp)"

@@ -1,3 +1,4 @@
+[build]
 assets = ["dist/client"]
 
 [envs.production]

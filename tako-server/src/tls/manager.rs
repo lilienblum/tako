@@ -1,5 +1,6 @@
 //! Certificate manager - handles certificate lifecycle
 
+use super::SelfSignedGenerator;
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -270,6 +271,49 @@ impl CertManager {
     /// Get domain certificate directory
     pub fn domain_cert_dir(&self, domain: &str) -> PathBuf {
         self.config.cert_dir.join(domain)
+    }
+
+    /// Get or create a self-signed certificate stored in the standard domain layout.
+    ///
+    /// This keeps private/local domains usable over HTTPS even when ACME cannot issue for them.
+    pub fn get_or_create_self_signed_cert(&self, domain: &str) -> Result<CertInfo, CertError> {
+        let domain = domain.trim();
+        if domain.is_empty() {
+            return Err(CertError::LoadError("domain must not be empty".to_string()));
+        }
+
+        if let Some(existing) = self.get_cert(domain) {
+            return Ok(existing);
+        }
+
+        let domain_dir = self.domain_cert_dir(domain);
+        let cert_path = domain_dir.join("fullchain.pem");
+        let key_path = domain_dir.join("privkey.pem");
+
+        if cert_path.exists() && key_path.exists() {
+            let cert_info = self.load_cert_info(domain)?;
+            self.add_cert(cert_info.clone());
+            return Ok(cert_info);
+        }
+
+        let generator = SelfSignedGenerator::new(self.config.cert_dir.clone());
+        let generated = generator
+            .get_or_create_for_domain(domain)
+            .map_err(|e| CertError::LoadError(format!("self-signed generation failed: {}", e)))?;
+
+        std::fs::create_dir_all(&domain_dir)?;
+        std::fs::copy(&generated.cert_path, &cert_path)?;
+        std::fs::copy(&generated.key_path, &key_path)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
+        }
+
+        let cert_info = self.load_cert_info(domain)?;
+        self.add_cert(cert_info.clone());
+        Ok(cert_info)
     }
 }
 
@@ -581,6 +625,55 @@ mod tests {
 
         let needing_renewal = manager.get_certs_needing_renewal();
         assert!(needing_renewal.is_empty());
+    }
+
+    #[test]
+    fn test_get_or_create_self_signed_cert_creates_domain_layout_and_caches_cert() {
+        let temp = TempDir::new().unwrap();
+        let cert_dir = temp.path().to_path_buf();
+        let config = CertManagerConfig {
+            cert_dir: cert_dir.clone(),
+            ..Default::default()
+        };
+        let manager = CertManager::new(config);
+        manager.init().unwrap();
+
+        let domain = "tako-bun-server.orb.local";
+        let cert = manager.get_or_create_self_signed_cert(domain).unwrap();
+
+        assert_eq!(cert.domain, domain);
+        assert!(cert.is_self_signed);
+        assert_eq!(cert.cert_path, cert_dir.join(domain).join("fullchain.pem"));
+        assert_eq!(cert.key_path, cert_dir.join(domain).join("privkey.pem"));
+        assert!(cert.cert_path.exists());
+        assert!(cert.key_path.exists());
+
+        let cached = manager.get_cert_for_host(domain).unwrap();
+        assert_eq!(cached.domain, domain);
+        assert!(cached.is_self_signed);
+    }
+
+    #[test]
+    fn test_get_or_create_self_signed_cert_is_discoverable_after_restart() {
+        let temp = TempDir::new().unwrap();
+        let cert_dir = temp.path().to_path_buf();
+        let config = CertManagerConfig {
+            cert_dir: cert_dir.clone(),
+            ..Default::default()
+        };
+        let manager = CertManager::new(config.clone());
+        manager.init().unwrap();
+        manager
+            .get_or_create_self_signed_cert("tako-bun-server.orb.local")
+            .unwrap();
+
+        let reloaded = CertManager::new(config);
+        reloaded.init().unwrap();
+        let cert = reloaded
+            .get_cert_for_host("tako-bun-server.orb.local")
+            .expect("cert should load from persisted cert dir");
+        assert!(cert.is_self_signed);
+        assert_eq!(cert.domain, "tako-bun-server.orb.local");
     }
 
     #[test]

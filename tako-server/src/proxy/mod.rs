@@ -138,6 +138,11 @@ impl TakoProxy {
         &self.config
     }
 
+    async fn load_balancer_cleanup(&self, app_name: &str) {
+        self.lb.unregister_app(app_name);
+        self.routes.write().await.remove_app_routes(app_name);
+    }
+
     /// Generate server status for internal `tako.internal/status` endpoint
     fn get_server_status(&self) -> ServerStatus {
         let app_manager = self.lb.app_manager();
@@ -238,6 +243,62 @@ pub struct RequestCtx {
     acme_response: Option<String>,
 }
 
+enum BackendResolution {
+    Ready(Backend),
+    StartupTimeout,
+    StartupFailed,
+    Unavailable,
+    AppMissing,
+}
+
+impl TakoProxy {
+    async fn resolve_backend(&self, app_name: &str) -> BackendResolution {
+        if let Some(backend) = self.lb.get_backend(app_name) {
+            return BackendResolution::Ready(backend);
+        }
+
+        let Some(app) = self.lb.app_manager().get_app(app_name) else {
+            return BackendResolution::AppMissing;
+        };
+
+        if app.config.read().min_instances != 0 {
+            return BackendResolution::Unavailable;
+        }
+
+        let begin = self.cold_start.begin(app_name);
+        if begin.leader {
+            app.set_state(crate::socket::AppState::Running);
+
+            let app_name = app_name.to_string();
+            let app = app.clone();
+            let spawner = self.lb.app_manager().spawner();
+            let cold_start = self.cold_start.clone();
+
+            tokio::spawn(async move {
+                let instance = app.allocate_instance();
+                if let Err(e) = spawner.spawn(&app, instance.clone()).await {
+                    tracing::error!(app = %app_name, "cold start spawn failed: {}", e);
+                    app.set_state(crate::socket::AppState::Error);
+                    app.set_last_error(format!("Cold start failed: {}", e));
+                    app.remove_instance(instance.id);
+                    cold_start.mark_failed(&app_name);
+                }
+            });
+        }
+
+        let ready = self.cold_start.wait_for_ready(app_name).await;
+        if ready && let Some(backend) = self.lb.get_backend(app_name) {
+            return BackendResolution::Ready(backend);
+        }
+
+        if self.cold_start.is_cold_starting(app_name) {
+            BackendResolution::StartupTimeout
+        } else {
+            BackendResolution::StartupFailed
+        }
+    }
+}
+
 #[async_trait]
 impl ProxyHttp for TakoProxy {
     type CTX = RequestCtx;
@@ -272,14 +333,13 @@ impl ProxyHttp for TakoProxy {
             } else {
                 tracing::warn!(path = path, "ACME challenge token not found");
                 // Return 404 for unknown challenge tokens
+                let body = "Token not found";
                 let mut header = ResponseHeader::build(404, None)?;
-                header.insert_header("Content-Type", "text/plain")?;
+                insert_body_headers(&mut header, "text/plain", body)?;
                 session
                     .write_response_header(Box::new(header), false)
                     .await?;
-                session
-                    .write_response_body(Some("Token not found".into()), true)
-                    .await?;
+                session.write_response_body(Some(body.into()), true).await?;
                 return Ok(true);
             }
         }
@@ -294,7 +354,7 @@ impl ProxyHttp for TakoProxy {
             });
 
             let mut header = ResponseHeader::build(status_code, None)?;
-            header.insert_header("Content-Type", "application/json")?;
+            insert_body_headers(&mut header, "application/json", &body)?;
             header.insert_header("Cache-Control", "no-cache, no-store")?;
             session
                 .write_response_header(Box::new(header), false)
@@ -312,23 +372,34 @@ impl ProxyHttp for TakoProxy {
         // Handle HTTP to HTTPS redirect.
         // Allow ACME challenges and internal status endpoint on HTTP.
         if !path.starts_with("/.well-known/acme-challenge/") && !internal_status_request {
-            let is_https = session
+            let transport_https = session
                 .digest()
                 .map(|d| d.ssl_digest.is_some())
                 .unwrap_or(false);
+            let request_headers = &session.req_header().headers;
+            let x_forwarded_proto = request_headers
+                .get("x-forwarded-proto")
+                .and_then(|h| h.to_str().ok());
+            let forwarded = request_headers
+                .get("forwarded")
+                .and_then(|h| h.to_str().ok());
+            let is_effective_https =
+                is_effective_request_https(transport_https, x_forwarded_proto, forwarded);
+            ctx.is_https = is_effective_https;
 
-            if should_redirect_http_request(is_https, self.config.redirect_http_to_https) {
+            if should_redirect_http_request(is_effective_https, self.config.redirect_http_to_https)
+            {
                 let redirect_url = format!("https://{}{}", host, path);
+                let body = "Redirecting to HTTPS";
 
-                let mut header = ResponseHeader::build(301, None)?;
+                let mut header = ResponseHeader::build(307, None)?;
                 header.insert_header("Location", &redirect_url)?;
-                header.insert_header("Content-Type", "text/plain")?;
+                header.insert_header("Cache-Control", "no-store")?;
+                insert_body_headers(&mut header, "text/plain", body)?;
                 session
                     .write_response_header(Box::new(header), false)
                     .await?;
-                session
-                    .write_response_body(Some("Redirecting to HTTPS".into()), true)
-                    .await?;
+                session.write_response_body(Some(body.into()), true).await?;
                 return Ok(true);
             }
         }
@@ -337,62 +408,66 @@ impl ProxyHttp for TakoProxy {
         let app_name = match self.routes.read().await.select(hostname, path) {
             Some(app) => app,
             None => {
+                let body = "Not Found";
                 let mut header = ResponseHeader::build(404, None)?;
-                header.insert_header("Content-Type", "text/plain")?;
+                insert_body_headers(&mut header, "text/plain", body)?;
                 session
                     .write_response_header(Box::new(header), false)
                     .await?;
-                session
-                    .write_response_body(Some("No route".into()), true)
-                    .await?;
+                session.write_response_body(Some(body.into()), true).await?;
                 return Ok(true);
             }
         };
 
-        // Try to get a healthy backend. If none exists and the app is on-demand
-        // (instances=0), attempt a cold start and wait for a healthy instance.
-        let backend = self.lb.get_backend(&app_name);
-
-        if backend.is_none()
-            && let Some(app) = self.lb.app_manager().get_app(&app_name)
-        {
-            let min_instances = app.config.read().min_instances;
-            if min_instances == 0 {
-                let begin = self.cold_start.begin(&app_name);
-                if begin.leader {
-                    app.set_state(crate::socket::AppState::Running);
-
-                    let app_name = app_name.clone();
-                    let app = app.clone();
-                    let spawner = self.lb.app_manager().spawner();
-                    let cold_start = self.cold_start.clone();
-
-                    tokio::spawn(async move {
-                        let instance = app.allocate_instance();
-                        if let Err(e) = spawner.spawn(&app, instance.clone()).await {
-                            tracing::error!(app = %app_name, "cold start spawn failed: {}", e);
-                            app.set_state(crate::socket::AppState::Error);
-                            app.set_last_error(format!("Cold start failed: {}", e));
-                            app.remove_instance(instance.id);
-                            cold_start.mark_failed(&app_name);
-                        }
-                    });
-                }
-
-                let mut header = ResponseHeader::build(503, None)?;
-                header.insert_header("Content-Type", "text/plain")?;
-                header.insert_header("Retry-After", "1")?;
+        // Try to get a healthy backend. For on-demand apps (instances=0), this
+        // waits for cold start readiness (up to the configured startup timeout).
+        let backend = match self.resolve_backend(&app_name).await {
+            BackendResolution::Ready(backend) => backend,
+            BackendResolution::StartupTimeout => {
+                let body = "App startup timed out";
+                let mut header = ResponseHeader::build(504, None)?;
+                insert_body_headers(&mut header, "text/plain", body)?;
                 session
                     .write_response_header(Box::new(header), false)
                     .await?;
-                session
-                    .write_response_body(Some("App is starting".into()), true)
-                    .await?;
+                session.write_response_body(Some(body.into()), true).await?;
                 return Ok(true);
             }
-        }
+            BackendResolution::StartupFailed => {
+                let body = "App failed to start";
+                let mut header = ResponseHeader::build(502, None)?;
+                insert_body_headers(&mut header, "text/plain", body)?;
+                session
+                    .write_response_header(Box::new(header), false)
+                    .await?;
+                session.write_response_body(Some(body.into()), true).await?;
+                return Ok(true);
+            }
+            BackendResolution::Unavailable => {
+                let body = "No healthy backend";
+                let mut header = ResponseHeader::build(503, None)?;
+                insert_body_headers(&mut header, "text/plain", body)?;
+                session
+                    .write_response_header(Box::new(header), false)
+                    .await?;
+                session.write_response_body(Some(body.into()), true).await?;
+                return Ok(true);
+            }
+            BackendResolution::AppMissing => {
+                // Route existed but app no longer exists (stale in-memory routing).
+                // Clean it up and return a normal 404 to callers.
+                self.load_balancer_cleanup(&app_name).await;
+                let body = "Not Found";
+                let mut header = ResponseHeader::build(404, None)?;
+                insert_body_headers(&mut header, "text/plain", body)?;
+                session
+                    .write_response_header(Box::new(header), false)
+                    .await?;
+                session.write_response_body(Some(body.into()), true).await?;
+                return Ok(true);
+            }
+        };
 
-        let backend = backend.ok_or_else(|| Error::new(ErrorType::ConnectNoRoute))?;
         ctx.backend = Some(backend);
 
         Ok(false)
@@ -410,10 +485,18 @@ impl ProxyHttp for TakoProxy {
         }
 
         // Check if this is an HTTPS connection
-        ctx.is_https = session
+        let transport_https = session
             .digest()
             .map(|d| d.ssl_digest.is_some())
             .unwrap_or(false);
+        let request_headers = &session.req_header().headers;
+        let x_forwarded_proto = request_headers
+            .get("x-forwarded-proto")
+            .and_then(|h| h.to_str().ok());
+        let forwarded = request_headers
+            .get("forwarded")
+            .and_then(|h| h.to_str().ok());
+        ctx.is_https = is_effective_request_https(transport_https, x_forwarded_proto, forwarded);
 
         let backend = ctx
             .backend
@@ -434,8 +517,7 @@ impl ProxyHttp for TakoProxy {
         // Handle ACME response if we have one
         if let Some(ref response) = ctx.acme_response {
             let mut header = ResponseHeader::build(200, None)?;
-            header.insert_header("Content-Type", "text/plain")?;
-            header.insert_header("Content-Length", response.len().to_string())?;
+            insert_body_headers(&mut header, "text/plain", response)?;
             session
                 .write_response_header(Box::new(header), false)
                 .await?;
@@ -509,12 +591,53 @@ impl ProxyHttp for TakoProxy {
     }
 }
 
-fn should_redirect_http_request(is_https: bool, redirect_http_to_https: bool) -> bool {
-    redirect_http_to_https && !is_https
+fn should_redirect_http_request(is_effective_https: bool, redirect_http_to_https: bool) -> bool {
+    redirect_http_to_https && !is_effective_https
+}
+
+fn is_request_forwarded_https(x_forwarded_proto: Option<&str>, forwarded: Option<&str>) -> bool {
+    x_forwarded_proto.is_some_and(x_forwarded_proto_is_https)
+        || forwarded.is_some_and(forwarded_header_proto_is_https)
+}
+
+fn is_effective_request_https(
+    transport_https: bool,
+    x_forwarded_proto: Option<&str>,
+    forwarded: Option<&str>,
+) -> bool {
+    transport_https || is_request_forwarded_https(x_forwarded_proto, forwarded)
+}
+
+fn x_forwarded_proto_is_https(value: &str) -> bool {
+    // Keep only the first forwarded hop; proxies append as comma-separated values.
+    value
+        .split(',')
+        .next()
+        .map(str::trim)
+        .is_some_and(|proto| proto.eq_ignore_ascii_case("https"))
+}
+
+fn forwarded_header_proto_is_https(value: &str) -> bool {
+    // RFC 7239: Forwarded: for=...,proto=https,by=...
+    value.split(',').any(|entry| {
+        entry.split(';').any(|param| {
+            let mut parts = param.splitn(2, '=');
+            let key = parts.next().map(str::trim).unwrap_or("");
+            let raw_value = parts.next().map(str::trim).unwrap_or("");
+            let parsed = raw_value.trim_matches('"');
+            key.eq_ignore_ascii_case("proto") && parsed.eq_ignore_ascii_case("https")
+        })
+    })
 }
 
 fn is_internal_status_request(hostname: &str, path: &str) -> bool {
     hostname.eq_ignore_ascii_case(crate::instances::INTERNAL_STATUS_HOST) && path == "/status"
+}
+
+fn insert_body_headers(header: &mut ResponseHeader, content_type: &str, body: &str) -> Result<()> {
+    header.insert_header("Content-Type", content_type)?;
+    header.insert_header("Content-Length", body.as_bytes().len().to_string())?;
+    Ok(())
 }
 
 /// TLS configuration for the proxy
@@ -835,9 +958,12 @@ impl ProxyBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instances::AppManager;
+    use crate::instances::{AppConfig, AppManager};
+    use crate::scaling::ColdStartConfig;
+    use crate::socket::InstanceState;
     use parking_lot::RwLock;
     use std::collections::HashMap;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     #[test]
@@ -964,6 +1090,57 @@ mod tests {
     }
 
     #[test]
+    fn test_should_not_redirect_http_request_when_forwarded_proto_is_https() {
+        assert!(is_request_forwarded_https(Some("https"), None));
+        assert!(!should_redirect_http_request(true, true));
+    }
+
+    #[test]
+    fn test_should_not_redirect_http_request_when_forwarded_header_proto_is_https() {
+        assert!(is_request_forwarded_https(
+            None,
+            Some("for=192.0.2.60;proto=https;by=203.0.113.43")
+        ));
+        assert!(!should_redirect_http_request(true, true));
+    }
+
+    #[test]
+    fn test_effective_request_https_prefers_transport_tls() {
+        assert!(is_effective_request_https(true, None, None));
+    }
+
+    #[test]
+    fn test_effective_request_https_uses_forwarded_https_when_transport_is_http() {
+        assert!(is_effective_request_https(false, Some("https"), None));
+        assert!(is_effective_request_https(
+            false,
+            None,
+            Some("for=192.0.2.60;proto=https")
+        ));
+        assert!(!is_effective_request_https(false, Some("http"), None));
+    }
+
+    #[test]
+    fn test_x_forwarded_proto_parsing_handles_case_and_commas() {
+        assert!(x_forwarded_proto_is_https("HTTPS"));
+        assert!(x_forwarded_proto_is_https("https, http"));
+        assert!(!x_forwarded_proto_is_https("http, https"));
+    }
+
+    #[test]
+    fn test_forwarded_header_parsing_handles_quotes_and_multiple_entries() {
+        assert!(forwarded_header_proto_is_https(
+            r#"for=192.0.2.60;proto="https";by=203.0.113.43"#
+        ));
+        assert!(forwarded_header_proto_is_https(
+            "for=192.0.2.60;proto=http,for=198.51.100.17;proto=https"
+        ));
+        assert!(!forwarded_header_proto_is_https(
+            "for=192.0.2.60;proto=http"
+        ));
+    }
+
+    #[test]
     fn test_is_internal_status_request_matches_expected_host_and_path() {
         assert!(is_internal_status_request("tako.internal", "/status"));
         assert!(is_internal_status_request("TAKO.INTERNAL", "/status"));
@@ -977,6 +1154,187 @@ mod tests {
             "tako.internal",
             "/_tako/status"
         ));
+    }
+
+    #[test]
+    fn body_headers_include_content_type_and_length() {
+        let mut header = ResponseHeader::build(404, None).expect("build header");
+        insert_body_headers(&mut header, "text/plain", "Not Found").expect("insert headers");
+
+        assert_eq!(
+            header
+                .headers
+                .get("Content-Type")
+                .and_then(|v| v.to_str().ok()),
+            Some("text/plain")
+        );
+        assert_eq!(
+            header
+                .headers
+                .get("Content-Length")
+                .and_then(|v| v.to_str().ok()),
+            Some("9")
+        );
+    }
+
+    #[test]
+    fn body_headers_use_utf8_byte_length() {
+        let mut header = ResponseHeader::build(200, None).expect("build header");
+        insert_body_headers(&mut header, "text/plain", "✓").expect("insert headers");
+
+        assert_eq!(
+            header
+                .headers
+                .get("Content-Length")
+                .and_then(|v| v.to_str().ok()),
+            Some("3")
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_backend_waits_for_ready_on_on_demand_apps() {
+        let manager = Arc::new(AppManager::new());
+        let lb = Arc::new(LoadBalancer::new(manager.clone()));
+        let app = manager.register_app(AppConfig {
+            name: "test-app".to_string(),
+            version: "v1".to_string(),
+            min_instances: 0,
+            base_port: 3010,
+            ..Default::default()
+        });
+        lb.register_app(app.clone());
+
+        let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
+        let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig {
+            startup_timeout: Duration::from_secs(1),
+            max_queued_requests: 100,
+        }));
+        let proxy = TakoProxy::new(lb, routes, ProxyConfig::default(), cold_start.clone());
+
+        let instance = app.allocate_instance();
+        cold_start.begin("test-app");
+
+        let ready_cold_start = cold_start.clone();
+        let ready_instance = instance.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            ready_instance.set_state(InstanceState::Healthy);
+            ready_cold_start.mark_ready("test-app");
+        });
+
+        let resolution = proxy.resolve_backend("test-app").await;
+        assert!(matches!(resolution, BackendResolution::Ready(_)));
+    }
+
+    #[tokio::test]
+    async fn resolve_backend_returns_startup_timeout_after_wait_timeout() {
+        let manager = Arc::new(AppManager::new());
+        let lb = Arc::new(LoadBalancer::new(manager.clone()));
+        let app = manager.register_app(AppConfig {
+            name: "test-app".to_string(),
+            version: "v1".to_string(),
+            min_instances: 0,
+            ..Default::default()
+        });
+        lb.register_app(app);
+
+        let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
+        let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig {
+            startup_timeout: Duration::from_millis(25),
+            max_queued_requests: 100,
+        }));
+        let proxy = TakoProxy::new(lb, routes, ProxyConfig::default(), cold_start.clone());
+
+        cold_start.begin("test-app");
+
+        let resolution = proxy.resolve_backend("test-app").await;
+        assert!(matches!(resolution, BackendResolution::StartupTimeout));
+    }
+
+    #[tokio::test]
+    async fn resolve_backend_returns_startup_failed_when_cold_start_fails() {
+        let manager = Arc::new(AppManager::new());
+        let lb = Arc::new(LoadBalancer::new(manager.clone()));
+        let app = manager.register_app(AppConfig {
+            name: "test-app".to_string(),
+            version: "v1".to_string(),
+            min_instances: 0,
+            ..Default::default()
+        });
+        lb.register_app(app);
+
+        let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
+        let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig {
+            startup_timeout: Duration::from_secs(1),
+            max_queued_requests: 100,
+        }));
+        let proxy = TakoProxy::new(lb, routes, ProxyConfig::default(), cold_start.clone());
+
+        cold_start.begin("test-app");
+        let failed_cold_start = cold_start.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+            failed_cold_start.mark_failed("test-app");
+        });
+
+        let resolution = proxy.resolve_backend("test-app").await;
+        assert!(matches!(resolution, BackendResolution::StartupFailed));
+    }
+
+    #[tokio::test]
+    async fn resolve_backend_returns_unavailable_for_non_on_demand_apps_without_backend() {
+        let manager = Arc::new(AppManager::new());
+        let lb = Arc::new(LoadBalancer::new(manager.clone()));
+        let app = manager.register_app(AppConfig {
+            name: "test-app".to_string(),
+            version: "v1".to_string(),
+            min_instances: 1,
+            ..Default::default()
+        });
+        lb.register_app(app);
+
+        let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
+        let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig::default()));
+        let proxy = TakoProxy::new(lb, routes, ProxyConfig::default(), cold_start);
+
+        let resolution = proxy.resolve_backend("test-app").await;
+        assert!(matches!(resolution, BackendResolution::Unavailable));
+    }
+
+    #[tokio::test]
+    async fn resolve_backend_returns_app_missing_when_app_not_registered() {
+        let manager = Arc::new(AppManager::new());
+        let lb = Arc::new(LoadBalancer::new(manager));
+
+        let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
+        let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig::default()));
+        let proxy = TakoProxy::new(lb, routes, ProxyConfig::default(), cold_start);
+
+        let resolution = proxy.resolve_backend("missing-app").await;
+        assert!(matches!(resolution, BackendResolution::AppMissing));
+    }
+
+    #[tokio::test]
+    async fn load_balancer_cleanup_removes_stale_routes_for_app() {
+        let manager = Arc::new(AppManager::new());
+        let lb = Arc::new(LoadBalancer::new(manager));
+        let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
+        {
+            let mut table = routes.write().await;
+            table.set_app_routes("test-app".to_string(), vec!["test.example.com".to_string()]);
+            assert_eq!(
+                table.select("test.example.com", "/"),
+                Some("test-app".to_string())
+            );
+        }
+        let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig::default()));
+        let proxy = TakoProxy::new(lb, routes.clone(), ProxyConfig::default(), cold_start);
+
+        proxy.load_balancer_cleanup("test-app").await;
+
+        let table = routes.read().await;
+        assert!(table.routes_for_app("test-app").is_empty());
+        assert_eq!(table.select("test.example.com", "/"), None);
     }
 
     #[test]

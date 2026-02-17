@@ -74,12 +74,36 @@ Expected deploy behavior:
 - `Low disk space under /opt/tako`:
   - Symptom: deploy fails before upload with required vs available sizes.
   - Fix: free space, then redeploy.
-- `503 App is starting`:
-  - Symptom: traffic arrives before instance becomes healthy.
+- `Local container build failed`:
+  - Symptom: deploy fails during artifact build before upload.
+  - Fix: confirm Docker is available locally, then check `[build].preset` resolution and target build logs.
+  - If preset parsing fails, ensure preset artifact filters use top-level `exclude` only (`include` and legacy `[artifact]` are rejected).
+  - Note: dependency downloads are cached in Docker volumes prefixed `tako-build-cache-`; if needed, remove stale volumes and redeploy.
+- `Installer reports unsupported libc`:
+  - Symptom: `install-server` exits with `unsupported libc`.
+  - Fix: run on Linux host with `glibc` or `musl`; for custom base images, set `TAKO_SERVER_URL` to a known matching artifact URL.
+- `Bun dependency install failed`:
+  - Symptom: server responds with `Invalid app release: Bun dependency install failed ...`.
+  - Fix: ensure app `package.json` exists in the release, runtime dependencies are resolvable in production, and Bun lockfile (if present) matches packaged dependency specs.
+  - For workspace deps (`workspace:`), deploy vendors them into `tako_vendor/` automatically; if you still see failures, inspect rewritten `package.json` in the release.
+- `Unexpected local artifact cache behavior`:
+  - Symptom: repeated deploy unexpectedly rebuilds or cache warning appears before rebuild.
+  - Expected: Tako verifies cached artifact checksum/size and automatically rebuilds if cache is invalid.
+  - Expected: each deploy also prunes local `.tako/artifacts/` cache (best-effort), keeping 30 newest source archives and 90 newest target artifacts, and removing orphan target metadata files.
+  - Fix: if needed, remove local cache directory `.tako/artifacts/` and redeploy.
+- `504 App startup timed out`:
+  - Symptom: on-demand app (`instances = 0`) was scaled to zero and did not become healthy within startup timeout (30s default).
   - Fix: check startup logs and health probe readiness.
+- `502 App failed to start`:
+  - Symptom: cold start failed before the app reached ready/healthy state.
+  - Fix: check runtime command, startup errors, and app dependencies.
 - `Route mismatch / wrong app`:
   - Verify env route config in [`tako.toml` reference](/docs/tako-toml).
   - Ensure environment has valid `route` or `routes` values.
+- `HTTPS 502 / TLS handshake failure on private domains (for example `\*.local`)`:
+  - Verify deploy completed after upgrading `tako-server` (private-domain cert generation happens at deploy time).
+  - Check cert files exist on host under `/opt/tako/certs/<route-host>/fullchain.pem` and `privkey.pem`.
+  - Re-run deploy to regenerate self-signed certs for private/local routes.
 
 ## Config and State Edge Cases
 

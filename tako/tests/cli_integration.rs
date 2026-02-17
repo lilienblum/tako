@@ -1028,6 +1028,7 @@ route = "prod.example.com"
                 || combined.contains("App:")
                 || combined.contains("No deployed apps found on configured servers.")
                 || combined.contains("No deployed apps.")
+                || combined.contains("No servers configured.")
                 || combined.contains("tako-server"),
             "Should show app info or status: {}",
             combined

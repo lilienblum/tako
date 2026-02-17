@@ -41,9 +41,13 @@ Application configuration for build, variables, routes, and deployment.
 
 ```toml
 name = "my-app"           # Optional - auto-detected if omitted; once set, treat as stable and do not change
-build = "bun build"       # Optional - server-side build command override
 main = "server/index.mjs" # Optional - deploy runtime entry override
-assets = ["assets/shared", "assets/branding"] # Optional - directories merged into app/public during deploy
+
+[build]
+preset = "bun"            # Optional - defaults to "bun"
+# include = ["dist/**", ".output/**"]
+# exclude = ["**/*.map"]
+# assets = ["dist/client", "assets/shared"]
 
 [vars]
 LOG_LEVEL = "info"        # Base variables (all environments)
@@ -81,24 +85,43 @@ env = "production"
 
 1. `[vars]` - base
 2. `[vars.{environment}]` - environment-specific
-3. Auto-set by Tako during deploy: `TAKO_ENV={environment}` plus runtime env vars (for Bun: `NODE_ENV`, `BUN_ENV`)
+3. Auto-set by Tako during deploy: `TAKO_ENV={environment}`, `TAKO_BUILD={version}`, plus runtime env vars (for Bun: `NODE_ENV`, `BUN_ENV`)
 
 **Build/deploy behavior:**
 
 - `main` is optional. If set, deploy uses it as the runtime entry in deployed `app.json`.
   - If unset, deploy reads `package.json.main`.
   - If neither is set, deploy fails with guidance to set one.
-- `assets` is optional and must be an array of relative directory paths under the project root.
+- Legacy top-level `dist` and `assets` keys are not supported.
+- `[build]` is optional; when omitted, deploy defaults to `build.preset = "bun"`.
+- `build.preset` supports:
+  - official aliases: `bun`, `bun/<commit-hash>`
+  - GitHub references: `github:<owner>/<repo>/<path>.toml[@<commit-hash>]`
+- Build preset TOML supports top-level `exclude` / `assets` and does not support preset `include` (or legacy `[artifact]`).
+- Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for reproducible preset fetches on later deploys.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise nearest workspace root or app directory).
-- Source bundle filtering uses `.gitignore` plus `.takoignore` overrides.
+- Source bundle filtering uses `.gitignore`.
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
-- Deploy runs the runtime adapter's install command on the server bundle root (Bun: `bun install --frozen-lockfile`), then runs build in the app directory when configured.
-- `assets` directories are merged into `public/` in the app directory after build, in listed order (later entries overwrite earlier ones).
+- Deploy sends merged app vars + runtime vars + decrypted secrets to `tako-server` in the `deploy` command payload; `tako-server` injects them directly into app process environment on spawn.
+- For each required server target (`arch`/`libc`), deploy builds an artifact locally in a Docker container using the preset target (`builder_image`, `install`, `build`).
+- Container builds are ephemeral, but dependency download caches are persisted with Docker volumes keyed by target label and builder image (Bun cache path: `/root/.bun/install/cache`).
+- Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, target build commands/image, include/exclude patterns, asset roots, and app subdirectory.
+- Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
+- On every deploy, local artifact cache is pruned automatically (best-effort): keep 30 most recent source archives (`*-source.tar.gz`), keep 90 most recent target artifacts (`artifact-cache-*.tar.gz`), and remove orphan target metadata files.
+- Artifact include patterns are resolved in this order:
+  - `build.include` (if set)
+  - fallback `**/*`
+- Artifact exclude patterns are preset `exclude` plus `build.exclude`.
+- For Bun deploys, default preset excludes `node_modules`; `tako-server` installs dependencies on server (`bun install --production`, plus `--frozen-lockfile` when Bun lockfile is present).
+- If app `package.json` uses `workspace:` dependencies, deploy vendors those workspace packages into `tako_vendor/` inside the artifact and rewrites dependency specs to local `file:` paths before packaging.
+- Asset roots are preset `assets` plus `build.assets` (deduplicated), then merged into app `public/` after container build in listed order (later entries overwrite earlier ones).
 
 **Instance behavior:**
 
-- `instances = 0`: On-demand. First request triggers a cold start; proxy returns `503 App is starting` until an instance becomes healthy. Instances are stopped after idle timeout.
-  - Deploy still performs a startup validation by briefly starting one instance. If startup/health fails, deploy fails. On success, that validation instance is stopped so the app remains on-demand.
+- `instances = 0`: On-demand with scale-to-zero. Deploy keeps one warm instance running so the app is immediately reachable after deploy. Instances are stopped after idle timeout.
+  - Once scaled to zero, the next request triggers a cold start and waits for readiness up to startup timeout (default 30 seconds). If no healthy instance is ready before timeout, proxy returns `504 App startup timed out`.
+  - If cold start setup fails before readiness, proxy returns `502 App failed to start`.
+  - If warm-instance startup fails during deploy, deploy fails.
 - `instances = N` (N > 0): Always-on. Minimum N instances maintained, scales up on load, scales down after idle timeout.
 - `idle_timeout`: Applies per-instance (default 300s / 5 minutes)
 - Instances are not stopped while serving in-flight requests.
@@ -215,7 +238,7 @@ Template behavior:
 - Leaves only minimal starter options uncommented:
   - `[envs.production].route`
 - Includes commented examples/explanations for all supported `tako.toml` options:
-  - `name`, `build`, `main`, and `assets`
+  - `name`, `main`, and `[build]` (`preset`, `include`, `exclude`, `assets`)
   - `[vars]`
   - `[vars.<env>]`
   - `[envs.<env>].routes` and inline env vars
@@ -516,6 +539,7 @@ Sync flow helpers:
 
 - For `production`, if no `[servers.*]` env mapping exists but exactly one global server exists, sync offers to target that server.
 - If no servers are configured and the terminal is interactive, sync offers to run the add-server wizard.
+- Sync sends `update_secrets` (and best-effort `reload`) to `tako-server`; it does not write remote `.env` files.
 
 ### tako secrets key import [--env {environment}]
 
@@ -561,38 +585,52 @@ Deploy flow helpers:
 2. Resolve source bundle root (git root when available; otherwise nearest workspace root or app directory)
 3. Resolve app subdirectory relative to source bundle root
 4. Resolve deploy runtime `main` (`main` from `tako.toml`, otherwise `package.json.main`)
-5. Create source archive (`.tako/artifacts/{version}.tar.gz`) and write `app.json` at app path inside archive
+5. Create source archive (`.tako/artifacts/{version}-source.tar.gz`) and write `app.json` at app path inside archive
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
-6. Deploy to all servers in parallel:
+   - Best-effort local artifact cache prune runs before target builds (retention: 30 source archives, 90 target artifacts; orphan target metadata is removed).
+6. Resolve build preset (`build.preset`, default `bun`) and persist lock metadata in `.tako/build.lock.json`
+7. Build target artifacts locally (one artifact per unique server target label):
+   - Resolve deterministic cache key per target.
+   - On cache hit, reuse existing verified target artifact.
+   - On cache miss (or invalid cache entry), extract source archive into a temporary workspace.
+   - Run preset install/build commands inside a local Docker container for that target.
+   - Merge configured assets into app `public/`.
+   - Package filtered artifact tarball for that target using include/exclude rules and store it in local cache.
+   - Per-target cache writes are serialized with a local lock to avoid duplicate concurrent builds.
+8. Deploy to all servers in parallel:
    - Require `tako-server` to be pre-installed and running on each server
    - Acquire deploy lock (prevents concurrent deploys)
-   - Upload and extract archive
-   - Write `.env` in app directory with `TAKO_BUILD={version}` and secrets
-   - Run the runtime adapter install command in extracted bundle root (Bun: `bun install --frozen-lockfile`)
-   - Run build command in app directory when configured (`tako.toml build`, else runtime default, else skip)
-   - Merge configured `assets` into app `public/` (ordered; later entries overwrite earlier ones)
-
-- Keep resolved runtime `main` (`main` from `tako.toml`, otherwise `package.json.main`)
-- Write final `app.json` in app directory
-- Perform rolling update
-- Release lock and clean up old releases (>30 days)
+   - Upload and extract target-specific artifact
+   - Write final `app.json` in app directory using resolved runtime `main`
+   - Send deploy command with merged environment payload (`TAKO_BUILD`, `TAKO_ENV`, runtime vars, user vars, decrypted secrets)
+   - Runtime prep runs on server before rolling update (Bun: dependency install in release directory)
+   - Perform rolling update
+   - Release lock and clean up old releases (>30 days)
 
 **Version naming:**
 
 - Clean git tree: `{commit_hash}` (e.g., `abc1234`)
 - Dirty working tree: `{commit_hash}_{content_hash}` (first 8 chars each)
-- No git commit/repo: `nogit_{timestamp}` (or `nogit_{content_hash}` when provided)
+- No git commit/repo: `nogit_{content_hash}` (first 8 chars)
 
 **Source deploy contract:**
 
 - Deploy archive source is the app's source bundle root (git root when available; otherwise nearest workspace root or app directory).
 - Deploy target app path is `DIR` from CLI (`tako deploy [DIR]`) relative to the source bundle root.
-- Source filtering uses `.gitignore`, with `.takoignore` as an override layer.
+- Source filtering uses `.gitignore`.
 - These paths are always excluded from archive payload: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
-- Runtime adapter install command runs on the server before build/start (Bun: `bun install --frozen-lockfile`).
-- Build command precedence: `tako.toml build` -> runtime adapter default -> no build.
-- If `assets` is configured, each listed directory is merged into app `public/` after build (ordered overwrite: later roots win on path conflicts).
+- Deploy builds target-specific artifacts locally in Docker containers; servers receive prebuilt artifacts and do not run app build steps during deploy.
+- For Bun runtime, `tako-server` runs dependency install for the release before starting/rolling instances.
+- Build logic comes from resolved preset target fields (`builder_image`, `install`, `build`).
+- Deploy reuses per-target dependency cache volumes during container builds (currently Bun cache), keyed by target label and builder image.
+- Artifact include precedence: `build.include` -> `**/*`.
+- Artifact exclude list: preset `exclude` plus `build.exclude`.
+- For `workspace:` dependency specs in app `package.json`, deploy vendors referenced workspace packages under `tako_vendor/` and rewrites specs to local `file:` paths in the packaged artifact.
+- Asset roots are preset `assets` plus `build.assets` (deduplicated), merged into app `public/` after container build with ordered overwrite.
+- Target artifacts are cached locally by deterministic key and reused across deploys when build inputs are unchanged.
+- Cached artifacts are validated by checksum/size before reuse; invalid cache entries are rebuilt automatically.
 - Final `app.json` is written in the deployed app directory and contains runtime `main` used by `tako-server`.
+- Deploy does not write a release `.env` file; runtime environment is provided through the `deploy` command payload and applied by `tako-server` when spawning instances.
 - Deploy requires valid `[server_targets.<name>]` metadata for each selected server (`arch` and `libc`).
 - Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
 - Deploy pre-validation still fails when target environment is missing secret keys used by other environments.
@@ -615,14 +653,15 @@ Deploy flow helpers:
 7. Clean up releases older than 30 days
 
 Rolling update target counts use the configured `instances` value for the incoming build itself (not old+new combined counts).
-When deploying with `instances = 0`, rolling deploy still starts one temporary validation instance for the new build before finalizing on-demand idle state.
+When deploying with `instances = 0`, rolling deploy starts one warm instance for the new build so traffic is immediately served after deploy.
 
 **On failure:** Automatic rollback - kill new instances, keep old ones running, return error to CLI.
 
 **App start command (current):**
 
 - tako-server currently only supports Bun apps.
-- If release `app.json` exists, tako-server starts the app with `bun run node_modules/tako.sh/src/wrapper.ts <app.json.main>` for `runtime = "bun"`.
+- If release `app.json` exists and `runtime = "bun"`, tako-server resolves `node_modules/tako.sh/src/wrapper.ts` by searching the app directory and its parent directories, then starts the app as `bun run <resolved-wrapper-path> <app.json.main>`.
+  - If no wrapper file is found, warm-instance startup fails with an explicit missing-wrapper error.
 - If `app.json` is missing, tako-server falls back to entry detection:
   - If `package.json` contains `scripts.dev`, run `bun run dev`.
   - Otherwise run `bun run <entry>` using the first existing default entry in this order:
@@ -755,6 +794,7 @@ Installer SSH key behavior:
 - If `TAKO_SSH_PUBKEY` is set, installer uses it and skips prompting.
 - If unset and running interactively, installer prompts for a public key to authorize for user `tako`.
 - If unset and non-interactive, installer continues without key setup and prints a warning.
+- Installer detects host target (`arch` + `libc`) and downloads matching artifact name `tako-server-linux-{arch}-{libc}` (supported: `x86_64`/`aarch64` with `glibc`/`musl`).
 - Installer ensures `nc` (netcat) is available so CLI management commands can talk to `/var/run/tako/tako.sock`.
 - Installer attempts to grant `CAP_NET_BIND_SERVICE` to `/usr/local/bin/tako-server` via `setcap` so non-systemd/manual runs can still bind `:80/:443` as a non-root user (warns when `setcap` is unavailable or fails).
 - Installer configures systemd with `KillMode=control-group` and `TimeoutStopSec=30min`, so restart/stop waits up to 30 minutes for graceful app shutdown across all service child processes before forced termination.
@@ -770,7 +810,7 @@ Reference script in this repo: `scripts/install-tako-server.sh` (source for `/in
 - Socket: `/var/run/tako/tako.sock`
 - ACME: Production Let's Encrypt
 - Renewal: Every 12 hours
-- HTTP requests redirect to HTTPS (`301`) by default.
+- HTTP requests redirect to HTTPS (`307`, non-cacheable) by default.
 - Exceptions: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status` stay on HTTP.
 - No application path namespace is reserved at the edge proxy. Non-internal-host requests are routed to apps.
 
@@ -812,7 +852,6 @@ email = "admin@example.com"
         ├── .deploy_lock/
         ├── releases/{version}/
         │   ├── build files...
-        │   ├── .env (merged vars/secrets + TAKO_BUILD)
         │   └── logs -> /opt/tako/apps/{app-name}/shared/logs
         └── shared/
             └── logs/
@@ -842,12 +881,12 @@ email = "admin@example.com"
 | `TAKO_ENV`        | app             | Environment name                                                           | Set during deploy manifest generation (`production`, `staging`, etc.).                        |
 | `NODE_ENV`        | app             | Node.js convention env                                                     | Set by runtime adapter / server (`development` or `production`).                              |
 | `BUN_ENV`         | app             | Bun convention env                                                         | Set by runtime adapter (`development` or `production`).                                       |
-| `TAKO_BUILD`      | app             | Deployed build/version identifier                                          | Written into the release `.env` file during `tako deploy`.                                    |
+| `TAKO_BUILD`      | app             | Deployed build/version identifier                                          | Included in deploy command payload and injected by `tako-server` at process spawn.            |
 | `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on (if using socket-based proxying) | path string or unset                                                                          |
 | `TAKO_SOCKET`     | app / `tako.sh` | Unix socket path for connecting to `tako-server`                           | default `/var/run/tako/tako.sock`                                                             |
 | `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one)                              | string                                                                                        |
 | `TAKO_INSTANCE`   | app / `tako.sh` | Instance identifier                                                        | integer string                                                                                |
-| _user-defined_    | app             | User config vars/secrets                                                   | From `[vars]` and `[envs.*].vars` plus secrets in release `.env`.                             |
+| _user-defined_    | app             | User config vars/secrets                                                   | From `[vars]` and `[envs.*].vars` plus decrypted secrets in deploy command payload.           |
 
 ### Messages (JSON over Unix Socket)
 
@@ -894,7 +933,7 @@ Response:
 { "command": "exit_upgrading", "owner": "upgrade-prod-..." }
 ```
 
-- `deploy` (includes route patterns for routing + TLS/ACME):
+- `deploy` (includes route patterns and launch env for routing/runtime):
 
 ```json
 {
@@ -903,6 +942,11 @@ Response:
   "version": "1.0.0",
   "path": "/opt/tako/apps/my-app/releases/1.0.0",
   "routes": ["api.example.com", "*.example.com/admin/*"],
+  "env": {
+    "TAKO_ENV": "production",
+    "TAKO_BUILD": "1.0.0",
+    "NODE_ENV": "production"
+  },
   "instances": 0,
   "idle_timeout": 300
 }
@@ -1009,6 +1053,7 @@ This requires OpenSSL (not rustls) for callback support.
 
 - ACME protocol (Let's Encrypt)
 - Automatic issuance for domains in app routes
+- For private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes such as `*.local`, `*.test`, `*.invalid`, `*.example`, `*.home.arpa`), Tako skips ACME and generates a self-signed certificate during deploy.
 - Automatic renewal 30 days before expiry
 - HTTP-01 challenge (port 80)
 - Zero-downtime renewal

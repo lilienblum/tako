@@ -23,6 +23,10 @@ pub enum Command {
         /// Route patterns for this app (host, wildcard, optional path).
         routes: Vec<String>,
 
+        /// Environment variables injected into app processes at spawn time.
+        #[serde(default)]
+        env: HashMap<String, String>,
+
         /// Minimum number of instances to keep running (0 = on-demand).
         instances: u8,
 
@@ -245,13 +249,33 @@ mod tests {
             version: "v1".to_string(),
             path: "/opt/tako/apps/my-app/releases/v1".to_string(),
             routes: vec!["example.com".to_string()],
+            env: HashMap::from([("TAKO_BUILD".to_string(), "v1".to_string())]),
             instances: 0,
             idle_timeout: 300,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains(r#""command":"deploy""#));
+        assert!(json.contains(r#""env":{"TAKO_BUILD":"v1"}"#));
         assert!(json.contains(r#""instances":0"#));
         assert!(json.contains(r#""idle_timeout":300"#));
+    }
+
+    #[test]
+    fn test_deploy_command_deserialization_defaults_env_when_missing() {
+        let json = r#"{
+            "command":"deploy",
+            "app":"my-app",
+            "version":"v1",
+            "path":"/opt/tako/apps/my-app/releases/v1",
+            "routes":["example.com"],
+            "instances":1,
+            "idle_timeout":300
+        }"#;
+        let cmd: Command = serde_json::from_str(json).unwrap();
+        match cmd {
+            Command::Deploy { env, .. } => assert!(env.is_empty()),
+            _ => panic!("Expected deploy command"),
+        }
     }
 
     #[test]
