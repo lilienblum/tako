@@ -1630,6 +1630,26 @@ async fn handle_idle_event(state: &ServerState, event: IdleEvent) {
                     tracing::warn!(app = %app, instance = instance_id, "Failed to kill idle instance: {}", e);
                 }
                 app_ref.remove_instance(instance_id);
+
+                let running_count = app_ref
+                    .get_instances()
+                    .iter()
+                    .filter(|i| {
+                        matches!(
+                            i.state(),
+                            InstanceState::Starting | InstanceState::Ready | InstanceState::Healthy
+                        )
+                    })
+                    .count();
+                let min_instances = app_ref.config.read().min_instances;
+
+                // When the final running instance is stopped, transition immediately so the
+                // next request can trigger a fresh cold start without waiting for another
+                // idle-monitor cycle.
+                if running_count == 0 && min_instances == 0 {
+                    app_ref.set_state(AppState::Idle);
+                    state.cold_start.reset(&app);
+                }
             }
         }
         IdleEvent::AppIdle { app } => {
@@ -1745,12 +1765,12 @@ async fn replace_instance_if_needed(
 #[cfg(test)]
 mod tests {
     use super::{
-        ServerRuntimeConfig, ServerState, bun_install_args_for_release,
+        ServerRuntimeConfig, ServerState, bun_install_args_for_release, handle_idle_event,
         install_rustls_crypto_provider, prepare_release_runtime, resolve_release_runtime,
         should_use_self_signed_route_cert, validate_deploy_routes,
     };
     use crate::instances::AppConfig;
-    use crate::socket::{Command, InstanceState, Response};
+    use crate::socket::{AppState, Command, InstanceState, Response};
     use crate::tls::{CertManager, CertManagerConfig};
     use serde_json::Value;
     use std::collections::HashMap;
@@ -2513,6 +2533,46 @@ PY
             .and_then(Value::as_array)
             .expect("status should include instances");
         assert_eq!(instances.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn instance_idle_event_resets_cold_start_when_app_scales_to_zero() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+
+        let app = state.app_manager.register_app(AppConfig {
+            name: "idle-app".to_string(),
+            version: "v1".to_string(),
+            min_instances: 0,
+            ..Default::default()
+        });
+        state.load_balancer.register_app(app.clone());
+        app.set_state(AppState::Running);
+
+        let instance = app.allocate_instance();
+        instance.set_state(InstanceState::Healthy);
+
+        // Simulate a prior successful cold start.
+        state.cold_start.begin("idle-app");
+        state.cold_start.mark_ready("idle-app");
+        assert!(!state.cold_start.begin("idle-app").leader);
+
+        handle_idle_event(
+            &state,
+            crate::scaling::IdleEvent::InstanceIdle {
+                app: "idle-app".to_string(),
+                instance_id: instance.id,
+            },
+        )
+        .await;
+
+        assert!(app.get_instances().is_empty());
+        assert_eq!(app.state(), AppState::Idle);
+        assert!(state.cold_start.begin("idle-app").leader);
     }
 
     #[tokio::test]
