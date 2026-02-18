@@ -499,7 +499,10 @@ impl ProxyHttp for TakoProxy {
             .map(|d| d.ssl_digest.is_some())
             .unwrap_or(false);
         let request_headers = &session.req_header().headers;
-        let host = request_headers.get("host").and_then(|h| h.to_str().ok()).unwrap_or("");
+        let host = request_headers
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
         let hostname = host.split(':').next().unwrap_or(host);
         let x_forwarded_for = request_headers
             .get("x-forwarded-for")
@@ -640,7 +643,8 @@ fn should_assume_forwarded_private_request_https(
 }
 
 fn has_forwarded_proto(x_forwarded_proto: Option<&str>, forwarded: Option<&str>) -> bool {
-    has_nonempty_header_value(x_forwarded_proto) || forwarded.is_some_and(forwarded_header_has_proto)
+    has_nonempty_header_value(x_forwarded_proto)
+        || forwarded.is_some_and(forwarded_header_has_proto)
 }
 
 fn has_nonempty_header_value(value: Option<&str>) -> bool {
@@ -1214,7 +1218,9 @@ mod tests {
         assert!(forwarded_header_has_proto(
             r#"for=192.0.2.60;proto="http";by=203.0.113.43"#
         ));
-        assert!(!forwarded_header_has_proto("for=192.0.2.60;by=203.0.113.43"));
+        assert!(!forwarded_header_has_proto(
+            "for=192.0.2.60;by=203.0.113.43"
+        ));
         assert!(!forwarded_header_has_proto(r#"for=192.0.2.60;proto="""#));
     }
 
