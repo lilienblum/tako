@@ -19,4 +19,4 @@ bun run --if-present build
 '''
 
 [build.targets]
-builder_image = "oven/bun:1.2"
+builder_image = "oven/bun:1.3"
