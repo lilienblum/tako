@@ -29,7 +29,7 @@ Directory selection is command-scoped:
 
 ## Top-Level Commands
 
-- `tako init [--force] [DIR]`: initialize `tako.toml` in a project.
+- `tako init [--force] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` and production `route`).
 - `tako help`: show all commands with brief descriptions.
 - `tako upgrade`: upgrade local CLI using the hosted installer.
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
@@ -99,8 +99,10 @@ Notes:
 
 Deploy note:
 
-- `tako deploy` resolves `[build].preset` (default `bun`), builds target artifacts locally in Docker, reuses locally cached verified artifacts on cache hits, then uploads those artifacts to servers.
-- Preset artifact filters come from top-level preset `exclude` plus app `[build].exclude` (`include` is app-level `[build].include` only).
+- `tako deploy` resolves `[build].preset`, builds target artifacts locally in Docker, reuses locally cached verified artifacts on cache hits, then uploads those artifacts to servers.
+- Preset artifact filters come from preset `[build].exclude` plus app `[build].exclude` (`include` is app-level `[build].include` only).
+- Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is unsupported).
+- During artifact prep, deploy verifies resolved `main` exists in the post-build app directory and fails if missing.
 - Containerized deploy builds reuse per-target Docker dependency cache volumes (keyed by target + builder image) while keeping build containers ephemeral.
 - Bun release dependencies are installed on server before rollout (`bun install --production`).
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
@@ -165,6 +167,8 @@ Initialize in current directory:
 ```bash
 tako init
 ```
+
+`tako init` prompts for app name and production route, and prompts for `main` only when the selected preset does not define a default `main`.
 
 Run local app with non-interactive output:
 

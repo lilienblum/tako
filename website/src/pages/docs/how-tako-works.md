@@ -70,10 +70,10 @@ Session and idle behavior:
 High-level deploy flow:
 
 1. Validate config/runtime/secrets/server target metadata.
-2. Resolve source bundle root and app subdirectory.
+2. Resolve source bundle root and app subdirectory (git root when available; otherwise app directory).
 3. Create a source archive (`.tako/artifacts/{version}-source.tar.gz`) from filtered source files.
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-4. Resolve build preset (`[build].preset`, default `bun`) and lock it to a commit in `.tako/build.lock.json`.
+4. Resolve build preset (`[build].preset`) and lock it to a commit in `.tako/build.lock.json`.
 5. Build target-specific artifacts locally in Docker (one artifact per required server target), with deterministic local artifact cache reuse when inputs are unchanged.
 6. Deploy to target servers in parallel over SSH.
 7. On each server: lock, upload/extract target artifact, finalize `app.json`, send deploy command with merged env/secrets payload, run runtime prep (Bun dependency install), rolling update, unlock.
@@ -86,13 +86,14 @@ Important deployment behavior:
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
 - Deploy builds artifacts locally in Docker containers (servers do not run app build steps during deploy).
 - Deploy reuses per-target Docker dependency cache volumes (keyed by target label + builder image) while still creating fresh build containers each deploy.
-- Artifact filters use project `[build].include` (optional), plus preset `exclude` and project `[build].exclude`.
+- Preset runtime fields use top-level `main`/`install`/`start` keys (legacy preset `[deploy]` is not supported).
+- Artifact filters use project `[build].include` (optional), plus preset `[build].exclude` and project `[build].exclude`.
 - Bun deploys exclude `node_modules` by default and install release dependencies on server before startup (`bun install --production`).
-- If app `package.json` uses `workspace:` dependencies, deploy vendors those packages into the artifact (`tako_vendor/`) and rewrites them to local `file:` specs.
 - Target artifacts are cached in `.tako/artifacts/` and reused across deploys when source/preset/target/build inputs are unchanged.
 - Cached artifacts are checksum-verified; invalid cached entries are rebuilt automatically.
+- Before packaging each target artifact, deploy verifies the resolved `main` exists in the post-build app directory.
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
-- Deploy runtime `main` is resolved from `tako.toml main`, then `package.json main`.
+- Deploy runtime `main` is resolved from `tako.toml main`, then preset top-level `main`.
 - Server install resolves host target (`arch` + `libc`) and downloads matching `tako-server-linux-<arch>-<libc>` artifact.
 - For production without explicit server mapping:
   - With one global server, Tako can guide/persist mapping.

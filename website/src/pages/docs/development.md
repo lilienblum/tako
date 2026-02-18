@@ -39,6 +39,8 @@ From an app directory:
 tako dev
 ```
 
+`tako.toml` must define top-level `name`; `tako dev` uses it for `{app}.tako.local`.
+
 If `[envs.development]` omits routes, `tako dev` defaults to `{app}.tako.local`.
 
 Useful commands:
@@ -94,8 +96,8 @@ Deploy e2e uses Docker/SSH and is opt-in:
 
 Deploy e2e exercises artifact-cache behavior too: first deploy builds target artifacts, then unchanged redeploy reuses verified cached artifacts from `.tako/artifacts/`.
 Containerized builds also reuse per-target Docker dependency cache volumes (prefix `tako-build-cache-`) across deploy runs.
-Preset artifact filters use top-level preset `exclude` (preset `include` and legacy `[artifact]` are not supported).
-If a fixture uses `workspace:` dependencies, deploy vendors those workspace packages into the artifact (`tako_vendor/`) and rewrites them to local `file:` specs.
+Preset artifact filters use preset `[build].exclude`; preset runtime/dev commands use top-level `main`/`install`/`start`/`dev` (legacy preset `[deploy]`, `[dev]`, preset `include`, and `[artifact]` are not supported; deprecated top-level `dev_cmd` is accepted as an alias).
+Deploy validates that the resolved runtime `main` exists after build and before artifact packaging.
 Bun release dependencies are installed on server before rollout (`bun install --production`).
 Hosted server install resolves Linux host `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>` artifact.
 Each deploy also prunes local `.tako/artifacts/` cache (best-effort), keeping 30 newest source archives and 90 newest target artifacts, and removing orphan target metadata files.

@@ -1,9 +1,11 @@
 use std::env::current_dir;
 use std::fs;
+use std::path::Path;
 
 use crate::app::resolve_app_name;
 use crate::output;
-use crate::runtime::detect_runtime;
+
+const EMBEDDED_BUN_PRESET_CONTENT: &str = include_str!("../../../presets/bun.toml");
 
 pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
@@ -20,15 +22,39 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Detect runtime
-    let runtime = detect_runtime(&project_dir);
-    let runtime_name = runtime.as_ref().map(|r| r.name()).unwrap_or("unknown");
+    let runtime_name = "bun";
 
     // Resolve app name
-    let app_name = resolve_app_name(&project_dir).unwrap_or_else(|_| "my-app".to_string());
+    let detected_app_name = resolve_app_name(&project_dir).unwrap_or_else(|_| "my-app".to_string());
+    let app_name = output::prompt_input(
+        "App name (`name` in tako.toml)",
+        false,
+        Some(&detected_app_name),
+    )?;
+    let default_production_route = format!("{}.example.com", app_name.trim());
+    let production_route = output::prompt_input(
+        "Production route (`[envs.production].route`)",
+        false,
+        Some(&default_production_route),
+    )?;
+    let preset_default_main = embedded_bun_preset_default_main();
+    let main = if preset_default_main.is_some() {
+        None
+    } else {
+        let default_main = infer_default_main_entrypoint(&project_dir);
+        Some(output::prompt_input(
+            "Deploy/dev entrypoint (`main` in tako.toml)",
+            false,
+            Some(&default_main),
+        )?)
+    };
 
     // Generate tako.toml
-    let template = generate_template(&app_name, runtime_name);
+    let template = generate_template(
+        app_name.trim(),
+        main.as_deref().map(str::trim),
+        production_route.trim(),
+    );
 
     fs::write(&tako_toml_path, template)?;
 
@@ -36,7 +62,13 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
 
     output::section("Detected");
     output::step(&format!("Runtime: {}", runtime_name));
-    output::step(&format!("App name: {}", app_name));
+    output::step(&format!("App name: {}", app_name.trim()));
+    output::step(&format!("Production route: {}", production_route.trim()));
+    if let Some(main) = main.as_deref() {
+        output::step(&format!("Main: {}", main.trim()));
+    } else if let Some(main) = preset_default_main.as_deref() {
+        output::step(&format!("Main: {} (from preset)", main));
+    }
 
     output::section("Next Steps");
     output::step("1. Edit tako.toml to configure environments and routes");
@@ -56,17 +88,57 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn generate_template(app_name: &str, _runtime: &str) -> String {
+fn infer_default_main_entrypoint(project_dir: &Path) -> String {
+    const CANDIDATES: &[&str] = &[
+        "index.ts",
+        "index.js",
+        "src/index.ts",
+        "src/index.js",
+        "server/index.mjs",
+        "server/index.ts",
+        "server/index.js",
+        "main.py",
+        "main.rb",
+        "main.go",
+    ];
+
+    for candidate in CANDIDATES {
+        if project_dir.join(candidate).is_file() {
+            return (*candidate).to_string();
+        }
+    }
+
+    "index.ts".to_string()
+}
+
+fn embedded_bun_preset_default_main() -> Option<String> {
+    let parsed: toml::Value = toml::from_str(EMBEDDED_BUN_PRESET_CONTENT).ok()?;
+    let main = parsed.get("main")?.as_str()?.trim();
+    if main.is_empty() {
+        None
+    } else {
+        Some(main.to_string())
+    }
+}
+
+fn generate_template(app_name: &str, main: Option<&str>, production_route: &str) -> String {
+    let main_line = if let Some(main) = main {
+        format!(
+            "# Required: runtime entrypoint used by `tako dev` and `tako deploy` (relative to project root).\nmain = \"{}\"",
+            main
+        )
+    } else {
+        "# Entrypoint comes from the selected preset default `main`.\n# main = \"index.ts\""
+            .to_string()
+    };
     format!(
         r#"# Tako configuration
 # tako.toml reference: https://tako.sh/docs/tako-toml
 
-# Stable app identifier used for deploy paths and local dev hostnames.
+# Required stable app identifier used for deploy paths and local dev hostnames.
 # Set once and do not change after first deploy.
-# If omitted, Tako auto-detects from runtime metadata or directory name.
-# name = "{app_name}"
-# Optional: runtime entrypoint override (relative to project root).
-# main = "server/index.mjs"
+name = "{app_name}"
+{main_line}
 
 # Build preset and artifact packaging.
 [build]
@@ -91,7 +163,7 @@ preset = "bun"
 
 # Environment declarations. Deploy environments must define `route` or `routes`.
 [envs.production]
-route = "{app_name}.example.com"
+route = "{production_route}"
 
 # Development routes are optional; default is `{app_name}.tako.local`.
 # [envs.development]
@@ -127,21 +199,28 @@ route = "{app_name}.example.com"
 # instances = 1
 # idle_timeout = 120
 "#,
-        app_name = app_name
+        app_name = app_name,
+        main_line = main_line,
+        production_route = production_route
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::generate_template;
+    use super::{
+        embedded_bun_preset_default_main, generate_template, infer_default_main_entrypoint,
+    };
+    use tempfile::TempDir;
 
     #[test]
     fn init_template_keeps_only_minimal_options_uncommented() {
-        let rendered = generate_template("demo-app", "bun");
+        let rendered =
+            generate_template("demo-app", Some("server/index.mjs"), "demo-app.example.com");
 
         assert!(
-            rendered
-                .contains("# Stable app identifier used for deploy paths and local dev hostnames."),
+            rendered.contains(
+                "# Required stable app identifier used for deploy paths and local dev hostnames."
+            ),
             "expected template to explain app name identity semantics"
         );
         assert!(
@@ -149,12 +228,12 @@ mod tests {
             "expected template to warn that app name should remain stable"
         );
         assert!(
-            rendered.contains("# name = \"demo-app\""),
-            "expected app name to remain commented by default"
+            rendered.contains("\nname = \"demo-app\"\n"),
+            "expected app name to be uncommented in minimal template"
         );
         assert!(
-            !rendered.contains("\nname = \"demo-app\"\n"),
-            "expected app name not to be uncommented in minimal template"
+            !rendered.contains("# name = \"demo-app\""),
+            "expected app name commented example to be removed"
         );
         assert!(
             rendered.contains("[envs.production]\nroute = \"demo-app.example.com\""),
@@ -174,8 +253,12 @@ mod tests {
             "expected build preset section to be present and uncommented"
         );
         assert!(
-            rendered.contains("# main = \"server/index.mjs\""),
-            "expected optional main entrypoint to be commented"
+            rendered.contains("main = \"server/index.mjs\""),
+            "expected required main entrypoint to be uncommented"
+        );
+        assert!(
+            !rendered.contains("# main = \"server/index.mjs\""),
+            "expected legacy commented main example to be removed"
         );
         assert!(
             rendered.contains("# assets = [\"public\", \".output/public\"]"),
@@ -197,7 +280,8 @@ mod tests {
 
     #[test]
     fn init_template_includes_reference_link_and_option_examples() {
-        let rendered = generate_template("demo-app", "bun");
+        let rendered =
+            generate_template("demo-app", Some("server/index.mjs"), "demo-app.example.com");
 
         assert!(
             rendered.contains("https://tako.sh/docs/tako-toml"),
@@ -219,6 +303,45 @@ mod tests {
         assert!(
             rendered.contains("# idle_timeout = 300"),
             "expected server idle timeout example"
+        );
+    }
+
+    #[test]
+    fn infer_default_main_entrypoint_prefers_existing_file() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("server")).unwrap();
+        std::fs::write(temp.path().join("server/index.ts"), "export {};").unwrap();
+        assert_eq!(
+            infer_default_main_entrypoint(temp.path()),
+            "server/index.ts"
+        );
+    }
+
+    #[test]
+    fn infer_default_main_entrypoint_falls_back_when_no_candidate_exists() {
+        let temp = TempDir::new().unwrap();
+        assert_eq!(infer_default_main_entrypoint(temp.path()), "index.ts");
+    }
+
+    #[test]
+    fn init_template_can_omit_main_when_preset_provides_default() {
+        let rendered = generate_template("demo-app", None, "demo-app.example.com");
+        assert!(rendered.contains("# Entrypoint comes from the selected preset default `main`."));
+        assert!(!rendered.contains("\nmain = \""));
+    }
+
+    #[test]
+    fn init_template_uses_prompted_production_route() {
+        let rendered = generate_template("demo-app", Some("server/index.mjs"), "api.demo-app.com");
+        assert!(rendered.contains("[envs.production]\nroute = \"api.demo-app.com\""));
+        assert!(!rendered.contains("[envs.production]\nroute = \"demo-app.example.com\""));
+    }
+
+    #[test]
+    fn embedded_bun_preset_default_main_is_set() {
+        assert_eq!(
+            embedded_bun_preset_default_main(),
+            Some("src/index.ts".to_string())
         );
     }
 }

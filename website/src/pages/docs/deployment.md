@@ -20,13 +20,14 @@ tako deploy [--env <environment>]
 What happens during deploy:
 
 - Deploy packages source files into a versioned source archive, then builds target-specific artifacts locally.
-- Source bundle root is resolved in this order: git root, nearest JS workspace root, current app directory.
+- Source bundle root is resolved in this order: git root, current app directory.
 - Source filtering uses `.gitignore`.
 - Non-overridable excludes: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
 - A versioned source tarball is created under `.tako/artifacts/`.
 - Deploy version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-- Build preset is resolved from `[build].preset` (default `bun`) and locked in `.tako/build.lock.json`.
+- Build preset is resolved from `[build].preset` and locked in `.tako/build.lock.json`.
 - For each required server target (`arch`/`libc`), Tako runs preset install/build in a local Docker container and packages a target artifact tarball.
+- Before packaging each target artifact, Tako verifies the resolved deploy `main` file exists in the post-build app directory.
 - Container builds stay ephemeral, but dependency downloads are reused from per-target Docker cache volumes keyed by target label and builder image.
 - Target artifacts are cached locally in `.tako/artifacts/` using a deterministic build-input key.
 - On cache hit, deploy reuses the verified artifact; on cache mismatch/corruption, deploy rebuilds that target artifact automatically.
@@ -43,8 +44,9 @@ Before you ship, do a quick sanity pass:
 2. Confirm `tako.toml` has route/env/server mappings for the target environment.
 3. Verify secrets are present for the target env (`tako secrets sync` if needed).
 4. Run your local tests before deploy.
-5. Ensure deploy entrypoint resolution is explicit: set `main` in `tako.toml` or `main` in `package.json`.
-6. Ensure Docker is available locally; deploy performs target builds in local containers.
+5. Ensure deploy entrypoint is set either in `tako.toml` (`main = "..."`) or preset top-level `main`.
+6. Ensure your build output includes that entrypoint path (deploy validates this before artifact packaging).
+7. Ensure Docker is available locally; deploy performs target builds in local containers.
 
 ## Server Prerequisites
 
@@ -67,7 +69,7 @@ Each target server should have:
 - Empty route sets are rejected for non-development environments (no implicit catch-all mode).
 - Optional `main` overrides runtime entrypoint in deployed `app.json`.
 - Optional `[build]` controls artifact generation:
-  - `preset` (default `bun`)
+  - `preset` (required)
   - `include` / `exclude` artifact globs
   - `assets` directories merged into app `public/` after container build in listed order
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
@@ -78,8 +80,8 @@ Each target server should have:
 - Archive payload is source-based and includes filtered files from the resolved source bundle root.
 - Archive includes a fallback `app.json` at app path inside the archive.
 - Build preset resolves from official alias/GitHub ref and is locked to a commit in `.tako/build.lock.json`.
-- Artifact include precedence is `build.include` then `**/*`; artifact excludes are preset `exclude` plus `build.exclude`.
-- For app `package.json` dependencies that use `workspace:`, deploy vendors those workspace packages into `tako_vendor/` and rewrites those dependency specs to local `file:` paths in the packaged artifact.
+- Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is not supported).
+- Artifact include precedence is `build.include` then `**/*`; artifact excludes are preset `[build].exclude` plus `build.exclude`.
 - For each server target label, Tako runs install/build in a local Docker container using preset target config.
 - Deploy reuses per-target Docker dependency cache volumes (keyed by target label + builder image) while still creating fresh build containers.
 - Local artifact cache key includes source hash, target label, resolved preset source/commit, target builder image/install/build commands, include/exclude patterns, asset roots, and app subdirectory.
@@ -87,7 +89,8 @@ Each target server should have:
 - Final `app.json` is written in app directory after resolving runtime `main`.
 - Runtime `main` resolution order:
   1. `main` from `tako.toml`
-  2. `main` from `package.json`
+  2. top-level `main` from preset
+- Before artifact packaging, deploy checks that the resolved `main` exists in the built app directory and fails if it is missing.
 
 ### Global server inventory (`~/.tako/config.toml`)
 

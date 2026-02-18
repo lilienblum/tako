@@ -5,7 +5,6 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::app::resolve_app_name;
 use crate::build::{
     BuildCache, BuildError, BuildExecutor, BuildPreset, ResolvedPresetSource, compute_file_hash,
     create_filtered_archive_with_prefix, load_build_preset, run_container_build,
@@ -13,7 +12,6 @@ use crate::build::{
 use crate::commands::server;
 use crate::config::{SecretsStore, ServerEntry, ServerTarget, ServersToml, TakoToml};
 use crate::output;
-use crate::runtime::detect_runtime;
 use crate::ssh::{SshClient, SshConfig, SshError, upload_via_scp};
 use crate::validation::{
     validate_full_config, validate_no_route_conflicts, validate_secrets_for_deployment,
@@ -38,6 +36,8 @@ struct DeployConfig {
     app_subdir: String,
     runtime: String,
     main: String,
+    deploy_install: Option<String>,
+    deploy_start: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -66,7 +66,6 @@ struct ValidationResult {
     servers: ServersToml,
     secrets: SecretsStore,
     env: String,
-    runtime: Box<dyn crate::runtime::RuntimeAdapter>,
     warnings: Vec<String>,
 }
 
@@ -75,8 +74,7 @@ const ARTIFACT_CACHE_LOCK_TIMEOUT_SECS: u64 = 10 * 60;
 const ARTIFACT_CACHE_STALE_LOCK_SECS: u64 = 30 * 60;
 const LOCAL_ARTIFACT_CACHE_KEEP_SOURCE_ARCHIVES: usize = 30;
 const LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS: usize = 90;
-const WORKSPACE_PROTOCOL_PREFIX: &str = "workspace:";
-const WORKSPACE_VENDOR_DIR: &str = "tako_vendor";
+const LOCAL_BUILD_WORKSPACE_RELATIVE_DIR: &str = ".tako/build-workspaces";
 
 #[derive(serde::Serialize)]
 struct ArtifactCacheKeyInput<'a> {
@@ -89,7 +87,7 @@ struct ArtifactCacheKeyInput<'a> {
     preset_path: &'a str,
     preset_commit: &'a str,
     app_subdir: &'a str,
-    builder_image: &'a str,
+    builder_image: Option<&'a str>,
     install: Option<&'a str>,
     build: Option<&'a str>,
     include_patterns: &'a [String],
@@ -204,20 +202,18 @@ async fn run_async(
 
             let secrets_result = validate_secrets_for_deployment(&secrets, &env);
             if secrets_result.has_errors() {
-                return Err(format!("Secret errors:\n  {}", secrets_result.errors.join("\n  ")));
+                return Err(format!(
+                    "Secret errors:\n  {}",
+                    secrets_result.errors.join("\n  ")
+                ));
             }
             warnings.extend(secrets_result.warnings.clone());
-
-            let runtime = detect_runtime(&project_dir).ok_or_else(|| {
-                "Could not detect runtime. Make sure you have a bun.lockb, bunfig.toml, or package.json with bun config.".to_string()
-            })?;
 
             Ok(ValidationResult {
                 tako_config,
                 servers,
                 secrets,
                 env,
-                runtime,
                 warnings,
             })
         },
@@ -233,7 +229,6 @@ async fn run_async(
         mut servers,
         secrets,
         env,
-        runtime,
         ..
     } = validation;
 
@@ -259,16 +254,15 @@ async fn run_async(
 
     output::section(&format_prepare_deploy_section(&env));
 
-    let app_name = resolve_app_name(&project_dir).unwrap_or_else(|_| "app".to_string());
+    let app_name = tako_config
+        .name
+        .clone()
+        .ok_or_else(|| "Missing top-level `name` in tako.toml.".to_string())
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let routes = required_env_routes(&tako_config, &env)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     output::success("Configuration valid");
-    output::success(&format_runtime_summary(
-        runtime.name(),
-        runtime.version().as_deref(),
-    ));
-    output::success(&format_entry_point_summary(runtime.entry_point()));
     output::success(&format_servers_summary(&server_names));
     output::success(&format_server_targets_summary(&server_targets));
 
@@ -294,6 +288,15 @@ async fn run_async(
         Ok(_) => {}
         Err(error) => output::warning(&format!("Local artifact cache cleanup skipped: {}", error)),
     }
+    let build_workspace_root = project_dir.join(LOCAL_BUILD_WORKSPACE_RELATIVE_DIR);
+    match cleanup_local_build_workspaces(&build_workspace_root) {
+        Ok(removed) if removed > 0 => output::muted(&format!(
+            "Local build workspace cleanup: removed {} workspace(s)",
+            removed
+        )),
+        Ok(_) => {}
+        Err(error) => output::warning(&format!("Local build workspace cleanup skipped: {}", error)),
+    }
 
     let source_root = source_bundle_root(&project_dir);
     let app_subdir = resolve_app_subdir(&source_root, &project_dir)
@@ -307,23 +310,41 @@ async fn run_async(
     let (version, source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)?;
     output::step(&format!("Version: {}", version));
 
-    let runtime_mode = deploy_runtime_mode(&env);
-    let runtime_env_vars = runtime.env_vars(runtime_mode);
-    let manifest_main = resolve_deploy_main(&project_dir, &tako_config)
+    let preset_ref = resolve_build_preset_ref(&tako_config)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let (build_preset, resolved_preset) = output::with_spinner_async(
+        "Resolving build preset...",
+        load_build_preset(&project_dir, &preset_ref),
+    )
+    .await
+    .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?
+    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    output::success(&format!(
+        "Build preset: {} @ {}",
+        resolved_preset.preset_ref,
+        shorten_commit(&resolved_preset.commit)
+    ));
+    output::success(&format_runtime_summary(&build_preset.name, None));
+
+    let manifest_main = resolve_deploy_main(&tako_config, build_preset.main.as_deref())
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    output::success(&format_entry_point_summary(
+        &project_dir.join(&manifest_main),
+    ));
+
     let manifest = build_deploy_archive_manifest(
         &app_name,
         &env,
         &version,
-        runtime.name(),
+        &build_preset.name,
         &manifest_main,
         tako_config.get_merged_vars(&env),
-        runtime_env_vars,
+        HashMap::new(),
         secrets.get_env(&env),
     );
     let deploy_env_vars = build_deploy_command_env_vars(&manifest, secrets.get_env(&env));
 
-    // Create source archive used as input for target-specific container builds.
+    // Create source archive used as input for target-specific builds.
     let source_archive_path = cache.cache_dir().join(format!("{}-source.tar.gz", version));
     let app_json_bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
@@ -346,20 +367,6 @@ async fn run_async(
         format_size(source_archive_size)
     ));
 
-    let preset_ref = resolve_build_preset_ref(&tako_config, runtime.as_ref());
-    let (build_preset, resolved_preset) = output::with_spinner_async(
-        "Resolving build preset...",
-        load_build_preset(&project_dir, &preset_ref),
-    )
-    .await
-    .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?
-    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::success(&format!(
-        "Build preset: {} @ {}",
-        resolved_preset.preset_ref,
-        shorten_commit(&resolved_preset.commit)
-    ));
-
     let include_patterns = build_artifact_include_patterns(&tako_config);
     let exclude_patterns = build_artifact_exclude_patterns(&build_preset, &tako_config);
     let asset_roots = build_asset_roots(&build_preset, &tako_config)
@@ -374,11 +381,13 @@ async fn run_async(
     let artifacts_by_target = build_target_artifacts(
         &project_dir,
         cache.cache_dir(),
+        &build_workspace_root,
         &source_archive_path,
         &source_hash,
         &version,
         &app_subdir,
-        runtime.name(),
+        &build_preset.name,
+        &manifest_main,
         &server_targets,
         &build_preset,
         &resolved_preset,
@@ -399,8 +408,10 @@ async fn run_async(
         routes,
         env_vars: deploy_env_vars,
         app_subdir,
-        runtime: runtime.name().to_string(),
+        runtime: build_preset.name.clone(),
         main: manifest_main,
+        deploy_install: build_preset.install.clone(),
+        deploy_start: build_preset.start.clone(),
     });
     let target_by_server: HashMap<String, ServerTarget> = server_targets.into_iter().collect();
 
@@ -952,40 +963,10 @@ fn git_repo_root(project_dir: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(value))
 }
 
-fn package_json_has_workspaces(path: &Path) -> bool {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return false;
-    };
-    let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) else {
-        return false;
-    };
-    let Some(workspaces) = json.get("workspaces") else {
-        return false;
-    };
-    workspaces.is_array()
-        || workspaces
-            .as_object()
-            .and_then(|obj| obj.get("packages"))
-            .map(|packages| packages.is_array())
-            .unwrap_or(false)
-}
-
-fn workspace_root(project_dir: &Path) -> Option<PathBuf> {
-    let mut current = Some(project_dir);
-    let mut found: Option<PathBuf> = None;
-    while let Some(dir) = current {
-        if package_json_has_workspaces(&dir.join("package.json")) {
-            found = Some(dir.to_path_buf());
-        }
-        current = dir.parent();
-    }
-    found
-}
-
 fn source_bundle_root(project_dir: &Path) -> PathBuf {
     match git_repo_root(project_dir) {
         Some(root) if project_dir.starts_with(&root) => root,
-        _ => workspace_root(project_dir).unwrap_or_else(|| project_dir.to_path_buf()),
+        _ => project_dir.to_path_buf(),
     }
 }
 
@@ -1054,40 +1035,19 @@ fn normalize_main_path(value: &str, source: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
-fn parse_package_json_main(project_dir: &Path) -> Result<Option<String>, String> {
-    let package_json_path = project_dir.join("package.json");
-    if !package_json_path.exists() {
-        return Ok(None);
-    }
-
-    let content = std::fs::read_to_string(&package_json_path)
-        .map_err(|e| format!("Failed to read {}: {}", package_json_path.display(), e))?;
-    let json = serde_json::from_str::<serde_json::Value>(&content)
-        .map_err(|e| format!("Failed to parse {}: {}", package_json_path.display(), e))?;
-
-    let Some(main_value) = json.get("main") else {
-        return Ok(None);
-    };
-    let Some(main_str) = main_value.as_str() else {
-        return Err(format!(
-            "Invalid {}: 'main' must be a string",
-            package_json_path.display()
-        ));
-    };
-
-    normalize_main_path(main_str, "package.json").map(Some)
-}
-
-fn resolve_deploy_main(project_dir: &Path, tako_config: &TakoToml) -> Result<String, String> {
+pub(crate) fn resolve_deploy_main(
+    tako_config: &TakoToml,
+    preset_main: Option<&str>,
+) -> Result<String, String> {
     if let Some(main) = &tako_config.main {
         return normalize_main_path(main, "tako.toml");
     }
 
-    if let Some(package_main) = parse_package_json_main(project_dir)? {
-        return Ok(package_main);
+    if let Some(main) = preset_main {
+        return normalize_main_path(main, "build preset");
     }
 
-    Err("No deploy entrypoint configured. Set `main` in tako.toml or package.json.".to_string())
+    Err("No deploy entrypoint configured. Set `main` in tako.toml or preset `main`.".to_string())
 }
 
 fn build_deploy_archive_manifest(
@@ -1164,14 +1124,6 @@ fn build_manifest_env_vars(
     }
     merged.insert("TAKO_ENV".to_string(), environment.to_string());
     merged
-}
-
-fn deploy_runtime_mode(environment: &str) -> crate::runtime::RuntimeMode {
-    if environment == "development" {
-        crate::runtime::RuntimeMode::Development
-    } else {
-        crate::runtime::RuntimeMode::Production
-    }
 }
 
 fn format_runtime_summary(runtime_name: &str, version: Option<&str>) -> String {
@@ -1266,7 +1218,7 @@ fn should_report_artifact_include_patterns(include_patterns: &[String]) -> bool 
 }
 
 fn build_artifact_exclude_patterns(preset: &BuildPreset, config: &TakoToml) -> Vec<String> {
-    let mut excludes = preset.exclude.clone();
+    let mut excludes = preset.build.exclude.clone();
     excludes.extend(config.build.exclude.clone());
     excludes
 }
@@ -1290,7 +1242,11 @@ fn resolve_build_target(
         return Ok(target.clone());
     }
 
-    let Some(builder_image) = preset.target_defaults.builder_image.clone() else {
+    if preset.target_defaults.builder_image.is_none()
+        && preset.target_defaults.install.is_none()
+        && preset.target_defaults.build.is_none()
+        && !preset.targets.is_empty()
+    {
         let mut available = preset.targets.keys().cloned().collect::<Vec<_>>();
         available.sort();
         return Err(format!(
@@ -1302,27 +1258,26 @@ fn resolve_build_target(
                 available.join(", ")
             }
         ));
-    };
+    }
 
     Ok(crate::build::BuildPresetTarget {
-        builder_image,
+        builder_image: preset.target_defaults.builder_image.clone(),
         install: preset.target_defaults.install.clone(),
         build: preset.target_defaults.build.clone(),
     })
 }
 
-fn resolve_build_preset_ref(
-    tako_config: &TakoToml,
-    runtime: &dyn crate::runtime::RuntimeAdapter,
-) -> String {
+fn resolve_build_preset_ref(tako_config: &TakoToml) -> Result<String, String> {
     tako_config
         .build
         .preset
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or(runtime.default_build_preset())
-        .to_string()
+        .map(|value| value.to_string())
+        .ok_or_else(|| {
+            "Missing [build].preset in tako.toml. Set an explicit preset (for example `preset = \"bun\"`).".to_string()
+        })
 }
 
 fn sanitize_cache_label(label: &str) -> String {
@@ -1375,7 +1330,7 @@ fn build_artifact_cache_key(
         preset_path: &preset_source.path,
         preset_commit: &preset_source.commit,
         app_subdir,
-        builder_image: &target_build.builder_image,
+        builder_image: target_build.builder_image.as_deref(),
         install: target_build.install.as_deref(),
         build: target_build.build.as_deref(),
         include_patterns,
@@ -1491,6 +1446,31 @@ fn cleanup_local_artifact_cache(
     }
 
     Ok(summary)
+}
+
+fn cleanup_local_build_workspaces(workspace_root: &Path) -> Result<usize, String> {
+    if !workspace_root.exists() {
+        return Ok(0);
+    }
+
+    let mut removed = 0usize;
+    for entry in std::fs::read_dir(workspace_root)
+        .map_err(|e| format!("Failed to read {}: {e}", workspace_root.display()))?
+    {
+        let entry = entry.map_err(|e| {
+            format!(
+                "Failed to read dir entry in {}: {e}",
+                workspace_root.display()
+            )
+        })?;
+        let path = entry.path();
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)
+                .map_err(|e| format!("Failed to remove build workspace {}: {e}", path.display()))?;
+            removed += 1;
+        }
+    }
+    Ok(removed)
 }
 
 fn artifact_cache_metadata_path_for_archive(archive_path: &Path) -> Option<PathBuf> {
@@ -1682,11 +1662,13 @@ fn acquire_artifact_cache_lock_with_options(
 async fn build_target_artifacts(
     project_dir: &Path,
     cache_dir: &Path,
+    build_workspace_root: &Path,
     source_archive_path: &Path,
     source_hash: &str,
     version: &str,
     app_subdir: &str,
     runtime_name: &str,
+    main: &str,
     server_targets: &[(String, ServerTarget)],
     preset: &BuildPreset,
     preset_source: &ResolvedPresetSource,
@@ -1738,7 +1720,9 @@ async fn build_target_artifacts(
             }
         }
 
-        let workspace = cache_dir.join(format!("work-{}-{}", version, target_label));
+        std::fs::create_dir_all(build_workspace_root)
+            .map_err(|e| format!("Failed to create {}: {e}", build_workspace_root.display()))?;
+        let workspace = build_workspace_root.join(format!("work-{}-{}", version, target_label));
         if workspace.exists() {
             std::fs::remove_dir_all(&workspace)
                 .map_err(|e| format!("Failed to clear {}: {e}", workspace.display()))?;
@@ -1753,21 +1737,37 @@ async fn build_target_artifacts(
             )
         })?;
 
-        let build_label = format!("Building artifact for {}...", target_label);
-        if use_local_build_spinners {
-            output::with_spinner(build_label.as_str(), || {
-                run_container_build(&workspace, app_subdir, &target_label, &target_build)
-            })
-            .map_err(|e| format!("Failed to render artifact build spinner: {e}"))??;
-        } else {
-            output::step(&build_label);
-            run_container_build(&workspace, app_subdir, &target_label, &target_build)?;
-        }
-        output::success(&format_build_completed_message(&target_label));
+        let build_result = (|| -> Result<u64, String> {
+            let build_label = format!("Building artifact for {}...", target_label);
+            if use_local_build_spinners {
+                output::with_spinner(build_label.as_str(), || {
+                    run_target_build(&workspace, app_subdir, &target_label, &target_build)
+                })
+                .map_err(|e| format!("Failed to render artifact build spinner: {e}"))??;
+            } else {
+                output::step(&build_label);
+                run_target_build(&workspace, app_subdir, &target_label, &target_build)?;
+            }
+            output::success(&format_build_completed_message(&target_label));
 
-        let prepare_label = format_prepare_artifact_message(&target_label);
-        let artifact_size = if use_local_build_spinners {
-            output::with_spinner(prepare_label.as_str(), || {
+            let prepare_label = format_prepare_artifact_message(&target_label);
+            if use_local_build_spinners {
+                output::with_spinner(prepare_label.as_str(), || {
+                    package_target_artifact(
+                        &workspace,
+                        app_subdir,
+                        asset_roots,
+                        include_patterns,
+                        exclude_patterns,
+                        &cache_paths,
+                        &cache_key,
+                        main,
+                        &target_label,
+                    )
+                })
+                .map_err(|e| format!("Failed to render artifact preparation spinner: {e}"))?
+            } else {
+                output::step(&prepare_label);
                 package_target_artifact(
                     &workspace,
                     app_subdir,
@@ -1776,23 +1776,13 @@ async fn build_target_artifacts(
                     exclude_patterns,
                     &cache_paths,
                     &cache_key,
+                    main,
                     &target_label,
                 )
-            })
-            .map_err(|e| format!("Failed to render artifact preparation spinner: {e}"))??
-        } else {
-            output::step(&prepare_label);
-            package_target_artifact(
-                &workspace,
-                app_subdir,
-                asset_roots,
-                include_patterns,
-                exclude_patterns,
-                &cache_paths,
-                &cache_key,
-                &target_label,
-            )?
-        };
+            }
+        })();
+        let _ = std::fs::remove_dir_all(&workspace);
+        let artifact_size = build_result?;
 
         output::success(&format!(
             "Artifact ready for {}: {} ({})",
@@ -1801,11 +1791,80 @@ async fn build_target_artifacts(
             format_size(artifact_size)
         ));
         artifacts.insert(target_label, cache_paths.artifact_path.clone());
-
-        let _ = std::fs::remove_dir_all(&workspace);
     }
 
     Ok(artifacts)
+}
+
+fn run_target_build(
+    workspace: &Path,
+    app_subdir: &str,
+    target_label: &str,
+    target_build: &crate::build::BuildPresetTarget,
+) -> Result<(), String> {
+    if target_build.builder_image.is_some() {
+        return run_container_build(workspace, app_subdir, target_label, target_build);
+    }
+    run_local_build(workspace, app_subdir, target_build)
+}
+
+fn run_local_build(
+    workspace: &Path,
+    app_subdir: &str,
+    target_build: &crate::build::BuildPresetTarget,
+) -> Result<(), String> {
+    let app_dir = workspace_app_dir(workspace, app_subdir);
+    if !app_dir.is_dir() {
+        return Err(format!(
+            "App directory '{}' does not exist inside build workspace",
+            app_dir.display()
+        ));
+    }
+
+    let app_subdir_value = app_subdir.replace('\\', "/");
+    let app_dir_value = app_dir.to_string_lossy().to_string();
+    let mut executed = false;
+
+    let run_shell = |cwd: &Path, command: &str, phase: &str| -> Result<(), String> {
+        let output = std::process::Command::new("sh")
+            .args(["-lc", command])
+            .current_dir(cwd)
+            .env("TAKO_APP_SUBDIR", &app_subdir_value)
+            .env("TAKO_APP_DIR", &app_dir_value)
+            .output()
+            .map_err(|e| format!("Failed to run local {phase} command: {e}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = if stderr.is_empty() { stdout } else { stderr };
+        Err(format!("Local {phase} command failed: {detail}"))
+    };
+
+    if let Some(install) = target_build
+        .install
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        executed = true;
+        run_shell(workspace, install, "install")?;
+    }
+    if let Some(build) = target_build
+        .build
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        executed = true;
+        run_shell(&app_dir, build, "build")?;
+    }
+    if !executed {
+        return Err("Build preset did not define install or build commands".to_string());
+    }
+
+    Ok(())
 }
 
 fn merge_assets_locally(
@@ -1854,6 +1913,24 @@ fn workspace_app_dir(workspace_root: &Path, app_subdir: &str) -> PathBuf {
     }
 }
 
+fn validate_main_exists_after_build(
+    workspace_root: &Path,
+    app_subdir: &str,
+    main: &str,
+) -> Result<(), String> {
+    let app_dir = workspace_app_dir(workspace_root, app_subdir);
+    let main_path = app_dir.join(main);
+    if main_path.is_file() {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Deploy entrypoint '{}' was not found after build at '{}'. Ensure the build output contains this file or update `main` in tako.toml/preset.",
+        main,
+        main_path.display()
+    ))
+}
+
 fn package_target_artifact(
     workspace: &Path,
     app_subdir: &str,
@@ -1862,6 +1939,7 @@ fn package_target_artifact(
     exclude_patterns: &[String],
     cache_paths: &ArtifactCachePaths,
     cache_key: &str,
+    main: &str,
     target_label: &str,
 ) -> Result<u64, String> {
     merge_assets_locally(workspace, app_subdir, asset_roots)?;
@@ -1872,20 +1950,15 @@ fn package_target_artifact(
             app_dir.display()
         ));
     }
-    rewrite_workspace_protocol_dependencies_for_artifact(workspace, &app_dir)?;
+    validate_main_exists_after_build(workspace, app_subdir, main)?;
 
     let artifact_temp_path = artifact_cache_temp_path(&cache_paths.artifact_path)?;
-    let archive_prefix = if app_subdir.is_empty() {
-        None
-    } else {
-        Some(Path::new(app_subdir))
-    };
     let artifact_size = create_filtered_archive_with_prefix(
-        &app_dir,
+        workspace,
         &artifact_temp_path,
         include_patterns,
         exclude_patterns,
-        archive_prefix,
+        None,
     )
     .map_err(|e| format!("Failed to create artifact for {}: {}", target_label, e))?;
 
@@ -1901,246 +1974,6 @@ fn package_target_artifact(
     }
 
     Ok(artifact_size)
-}
-
-fn rewrite_workspace_protocol_dependencies_for_artifact(
-    workspace_root: &Path,
-    app_dir: &Path,
-) -> Result<(), String> {
-    let package_json_path = app_dir.join("package.json");
-    if !package_json_path.is_file() {
-        return Ok(());
-    }
-
-    let package_json_content = std::fs::read_to_string(&package_json_path)
-        .map_err(|e| format!("Failed to read {}: {e}", package_json_path.display()))?;
-    let mut package_json: serde_json::Value =
-        serde_json::from_str(&package_json_content).map_err(|e| {
-            format!(
-                "Failed to parse {} as JSON: {}",
-                package_json_path.display(),
-                e
-            )
-        })?;
-
-    let workspace_packages = index_workspace_packages(workspace_root)?;
-    let mut rewritten_any = false;
-    let mut vendored_packages = BTreeSet::new();
-    let dependency_sections = [
-        "dependencies",
-        "optionalDependencies",
-        "devDependencies",
-        "peerDependencies",
-    ];
-
-    for section in dependency_sections {
-        let Some(deps) = package_json
-            .get_mut(section)
-            .and_then(|value| value.as_object_mut())
-        else {
-            continue;
-        };
-        for (dependency_name, spec_value) in deps {
-            let Some(spec) = spec_value.as_str() else {
-                continue;
-            };
-            if !spec.starts_with(WORKSPACE_PROTOCOL_PREFIX) {
-                continue;
-            }
-
-            let source_dir = workspace_packages.get(dependency_name).ok_or_else(|| {
-                format!(
-                    "Workspace dependency '{}' was not found under source root {}",
-                    dependency_name,
-                    workspace_root.display()
-                )
-            })?;
-
-            let relative_vendor_path = workspace_vendor_relative_path(dependency_name)?;
-            let target_dir = app_dir.join(&relative_vendor_path);
-            if !target_dir.exists() {
-                copy_workspace_package_contents(source_dir, &target_dir)?;
-            }
-
-            let file_spec = format!(
-                "file:{}",
-                relative_vendor_path.to_string_lossy().replace('\\', "/")
-            );
-            *spec_value = serde_json::Value::String(file_spec);
-            rewritten_any = true;
-            vendored_packages.insert(dependency_name.clone());
-        }
-    }
-
-    if !rewritten_any {
-        return Ok(());
-    }
-
-    let rewritten_json = serde_json::to_vec_pretty(&package_json)
-        .map_err(|e| format!("Failed to serialize {}: {e}", package_json_path.display()))?;
-    std::fs::write(&package_json_path, rewritten_json)
-        .map_err(|e| format!("Failed to write {}: {e}", package_json_path.display()))?;
-
-    // Rewritten workspace specs can invalidate lockfiles from the source tree.
-    for lockfile in ["bun.lock", "bun.lockb"] {
-        let _ = std::fs::remove_file(app_dir.join(lockfile));
-    }
-
-    if !vendored_packages.is_empty() {
-        output::muted(&format!(
-            "Vendored workspace dependencies: {}",
-            vendored_packages.into_iter().collect::<Vec<_>>().join(", ")
-        ));
-    }
-
-    Ok(())
-}
-
-fn workspace_vendor_relative_path(package_name: &str) -> Result<PathBuf, String> {
-    let mut relative = PathBuf::from(WORKSPACE_VENDOR_DIR);
-    let dependency_path = Path::new(package_name);
-    for component in dependency_path.components() {
-        match component {
-            Component::Normal(name) => relative.push(name),
-            _ => {
-                return Err(format!(
-                    "Workspace dependency '{}' cannot be vendored because the package name is invalid",
-                    package_name
-                ));
-            }
-        }
-    }
-    if relative == PathBuf::from(WORKSPACE_VENDOR_DIR) {
-        return Err(format!(
-            "Workspace dependency '{}' cannot be vendored because the package name is empty",
-            package_name
-        ));
-    }
-    Ok(relative)
-}
-
-fn index_workspace_packages(workspace_root: &Path) -> Result<HashMap<String, PathBuf>, String> {
-    let mut packages = HashMap::new();
-    let mut walker = ignore::WalkBuilder::new(workspace_root);
-    walker
-        .hidden(false)
-        .git_ignore(false)
-        .git_global(false)
-        .git_exclude(false)
-        .parents(false);
-
-    for entry in walker.build() {
-        let entry = entry.map_err(|e| {
-            format!(
-                "Failed to scan workspace source root {}: {}",
-                workspace_root.display(),
-                e
-            )
-        })?;
-        if !entry
-            .file_type()
-            .map(|kind| kind.is_file())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        if entry.file_name().to_str() != Some("package.json") {
-            continue;
-        }
-        let path = entry.path();
-        let Some(parent) = path.parent() else {
-            continue;
-        };
-        if path_has_workspace_excluded_component(workspace_root, parent) {
-            continue;
-        }
-
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-        let json: serde_json::Value = serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse {} as JSON: {e}", path.display()))?;
-        let Some(name) = json
-            .get("name")
-            .and_then(|value| value.as_str())
-            .map(|value| value.trim())
-            .filter(|value| !value.is_empty())
-        else {
-            continue;
-        };
-
-        packages
-            .entry(name.to_string())
-            .or_insert_with(|| parent.to_path_buf());
-    }
-
-    Ok(packages)
-}
-
-fn path_has_workspace_excluded_component(workspace_root: &Path, path: &Path) -> bool {
-    let relative = path.strip_prefix(workspace_root).unwrap_or(path);
-    for component in relative.components() {
-        if let Component::Normal(name) = component {
-            match name.to_str() {
-                Some(".git") | Some(".tako") | Some("node_modules") | Some("target") => {
-                    return true;
-                }
-                _ => {}
-            }
-        }
-    }
-    false
-}
-
-fn copy_workspace_package_contents(src: &Path, dst: &Path) -> Result<(), String> {
-    std::fs::create_dir_all(dst).map_err(|e| format!("Failed to create {}: {e}", dst.display()))?;
-    for entry in
-        std::fs::read_dir(src).map_err(|e| format!("Failed to read {}: {e}", src.display()))?
-    {
-        let entry =
-            entry.map_err(|e| format!("Failed to read dir entry in {}: {e}", src.display()))?;
-        let path = entry.path();
-        let target = dst.join(entry.file_name());
-        let file_type = entry
-            .file_type()
-            .map_err(|e| format!("Failed to inspect {}: {e}", path.display()))?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-
-        if file_type.is_dir() {
-            if matches!(name.as_ref(), ".git" | ".tako" | "node_modules" | "target") {
-                continue;
-            }
-            copy_workspace_package_contents(&path, &target)?;
-            continue;
-        }
-
-        if file_type.is_file() {
-            std::fs::copy(&path, &target).map_err(|e| {
-                format!(
-                    "Failed to copy {} to {}: {e}",
-                    path.display(),
-                    target.display()
-                )
-            })?;
-            continue;
-        }
-
-        #[cfg(unix)]
-        if file_type.is_symlink() {
-            use std::os::unix::fs as unix_fs;
-            let link_target = std::fs::read_link(&path)
-                .map_err(|e| format!("Failed to read symlink {}: {e}", path.display()))?;
-            unix_fs::symlink(&link_target, &target).map_err(|e| {
-                format!(
-                    "Failed to create symlink {} -> {}: {e}",
-                    target.display(),
-                    link_target.display()
-                )
-            })?;
-        }
-    }
-
-    Ok(())
 }
 
 fn copy_dir_contents(src: &Path, dst: &Path) -> Result<(), String> {
@@ -2515,6 +2348,8 @@ async fn deploy_to_server(
             let app_json = serde_json::to_vec_pretty(&serde_json::json!({
                 "runtime": config.runtime,
                 "main": main,
+                "install": config.deploy_install.clone(),
+                "start": config.deploy_start.clone(),
             }))
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
             let encoded =
@@ -2691,46 +2526,8 @@ fn format_path_relative_to(project_dir: &Path, path: &Path) -> String {
 mod tests {
     use super::*;
     use crate::config::{EnvConfig, ServerConfig, ServerEntry, ServersToml, TakoToml};
-    use crate::runtime::RuntimeMode;
     use std::collections::HashMap;
-    use std::path::Path;
     use tempfile::TempDir;
-
-    struct FakePresetRuntime;
-
-    impl crate::runtime::RuntimeAdapter for FakePresetRuntime {
-        fn name(&self) -> &str {
-            "fake-runtime"
-        }
-
-        fn version(&self) -> Option<String> {
-            None
-        }
-
-        fn entry_point(&self) -> &Path {
-            Path::new("index.ts")
-        }
-
-        fn build_command(&self) -> Option<Vec<String>> {
-            None
-        }
-
-        fn install_command(&self) -> Option<Vec<String>> {
-            None
-        }
-
-        fn run_command(&self, _port: u16) -> Vec<String> {
-            vec!["fake".to_string()]
-        }
-
-        fn env_vars(&self, _mode: RuntimeMode) -> HashMap<String, String> {
-            HashMap::new()
-        }
-
-        fn default_build_preset(&self) -> &str {
-            "fake-preset"
-        }
-    }
 
     #[test]
     fn resolve_deploy_environment_prefers_explicit_env() {
@@ -2763,20 +2560,18 @@ mod tests {
             },
             ..Default::default()
         };
-        let runtime = FakePresetRuntime;
 
         assert_eq!(
-            resolve_build_preset_ref(&config, &runtime),
+            resolve_build_preset_ref(&config).unwrap(),
             "github:owner/repo/presets/bun.toml@abc1234"
         );
     }
 
     #[test]
-    fn resolve_build_preset_ref_uses_runtime_default_when_unset() {
+    fn resolve_build_preset_ref_requires_explicit_preset() {
         let config = TakoToml::default();
-        let runtime = FakePresetRuntime;
-
-        assert_eq!(resolve_build_preset_ref(&config, &runtime), "fake-preset");
+        let err = resolve_build_preset_ref(&config).unwrap_err();
+        assert!(err.contains("Missing [build].preset"));
     }
 
     #[test]
@@ -3042,7 +2837,10 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_deploy_servers_with_setup_persists_single_server_mapping() {
-        let config = TakoToml::default();
+        let config = TakoToml {
+            name: Some("test-app".to_string()),
+            ..Default::default()
+        };
         let mut servers = ServersToml::default();
         servers.servers.insert(
             "solo".to_string(),
@@ -3054,6 +2852,13 @@ mod tests {
         );
 
         let temp_dir = TempDir::new().unwrap();
+        std::fs::write(
+            temp_dir.path().join("tako.toml"),
+            r#"
+name = "test-app"
+"#,
+        )
+        .unwrap();
 
         let resolved = resolve_deploy_server_names_with_setup(
             &config,
@@ -3114,6 +2919,8 @@ mod tests {
             app_subdir: "examples/bun".to_string(),
             runtime: "bun".to_string(),
             main: "index.ts".to_string(),
+            deploy_install: Some("bun install --production --frozen-lockfile".to_string()),
+            deploy_start: vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()],
         };
         assert_eq!(cfg.release_dir(), "/opt/tako/apps/my-app/releases/v1");
         assert_eq!(
@@ -3467,37 +3274,11 @@ mod tests {
     }
 
     #[test]
-    fn package_json_has_workspaces_detects_array_and_object_forms() {
+    fn source_bundle_root_falls_back_to_project_dir_without_git() {
         let temp = TempDir::new().unwrap();
-        let pkg = temp.path().join("package.json");
-
-        std::fs::write(&pkg, r#"{"name":"x","workspaces":["apps/*"]}"#).unwrap();
-        assert!(package_json_has_workspaces(&pkg));
-
-        std::fs::write(
-            &pkg,
-            r#"{"name":"x","workspaces":{"packages":["apps/*","packages/*"]}}"#,
-        )
-        .unwrap();
-        assert!(package_json_has_workspaces(&pkg));
-    }
-
-    #[test]
-    fn workspace_root_prefers_highest_workspace_ancestor() {
-        let temp = TempDir::new().unwrap();
-        let root = temp.path().join("repo");
-        let nested = root.join("apps/web");
-        std::fs::create_dir_all(&nested).unwrap();
-
-        std::fs::write(
-            root.join("package.json"),
-            r#"{"name":"repo","workspaces":["apps/*"]}"#,
-        )
-        .unwrap();
-        std::fs::write(nested.join("package.json"), r#"{"name":"web"}"#).unwrap();
-
-        let detected = workspace_root(&nested).unwrap();
-        assert_eq!(detected, root);
+        let project_dir = temp.path().join("app");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        assert_eq!(source_bundle_root(&project_dir), project_dir);
     }
 
     #[test]
@@ -3513,24 +3294,33 @@ mod tests {
         targets.insert(
             "linux-x86_64-glibc".to_string(),
             crate::build::BuildPresetTarget {
-                builder_image: "custom/image:latest".to_string(),
+                builder_image: Some("custom/image:latest".to_string()),
                 install: Some("bun install".to_string()),
                 build: Some("bun run build".to_string()),
             },
         );
         let preset = BuildPreset {
+            name: "bun".to_string(),
+            main: None,
+            builder_image: Some("oven/bun:1.2".to_string()),
+            build: crate::build::BuildPresetBuild::default(),
+            dev: vec![],
+            install: None,
+            start: vec![],
             targets,
             target_defaults: crate::build::BuildPresetTargetDefaults {
                 builder_image: Some("oven/bun:1.2".to_string()),
                 install: Some("default install".to_string()),
                 build: Some("default build".to_string()),
             },
-            exclude: vec![],
             assets: vec![],
         };
 
         let resolved = resolve_build_target(&preset, "linux-x86_64-glibc").unwrap();
-        assert_eq!(resolved.builder_image, "custom/image:latest");
+        assert_eq!(
+            resolved.builder_image.as_deref(),
+            Some("custom/image:latest")
+        );
         assert_eq!(resolved.install.as_deref(), Some("bun install"));
         assert_eq!(resolved.build.as_deref(), Some("bun run build"));
     }
@@ -3538,18 +3328,24 @@ mod tests {
     #[test]
     fn resolve_build_target_uses_defaults_when_target_is_missing() {
         let preset = BuildPreset {
+            name: "bun".to_string(),
+            main: None,
+            builder_image: Some("oven/bun:1.2".to_string()),
+            build: crate::build::BuildPresetBuild::default(),
+            dev: vec![],
+            install: None,
+            start: vec![],
             targets: HashMap::new(),
             target_defaults: crate::build::BuildPresetTargetDefaults {
                 builder_image: Some("oven/bun:1.2".to_string()),
                 install: Some("bun install".to_string()),
                 build: Some("bun run build".to_string()),
             },
-            exclude: vec![],
             assets: vec![],
         };
 
         let resolved = resolve_build_target(&preset, "linux-aarch64-musl").unwrap();
-        assert_eq!(resolved.builder_image, "oven/bun:1.2");
+        assert_eq!(resolved.builder_image.as_deref(), Some("oven/bun:1.2"));
         assert_eq!(resolved.install.as_deref(), Some("bun install"));
         assert_eq!(resolved.build.as_deref(), Some("bun run build"));
     }
@@ -3560,15 +3356,21 @@ mod tests {
         targets.insert(
             "linux-x86_64-glibc".to_string(),
             crate::build::BuildPresetTarget {
-                builder_image: "oven/bun:1.2".to_string(),
+                builder_image: Some("oven/bun:1.2".to_string()),
                 install: None,
                 build: None,
             },
         );
         let preset = BuildPreset {
+            name: "bun".to_string(),
+            main: None,
+            builder_image: None,
+            build: crate::build::BuildPresetBuild::default(),
+            dev: vec![],
+            install: None,
+            start: vec![],
             targets,
             target_defaults: Default::default(),
-            exclude: vec![],
             assets: vec![],
         };
 
@@ -3585,7 +3387,7 @@ mod tests {
             commit: "abc123def456".to_string(),
         };
         let target = crate::build::BuildPresetTarget {
-            builder_image: "oven/bun:1.2".to_string(),
+            builder_image: Some("oven/bun:1.2".to_string()),
             install: Some("bun install".to_string()),
             build: Some("bun run build".to_string()),
         };
@@ -3829,9 +3631,15 @@ mod tests {
     #[test]
     fn build_asset_roots_combines_and_deduplicates_preset_and_project_values() {
         let preset = BuildPreset {
+            name: "bun".to_string(),
+            main: None,
+            builder_image: None,
+            build: crate::build::BuildPresetBuild::default(),
+            dev: vec![],
+            install: None,
+            start: vec![],
             targets: HashMap::new(),
             target_defaults: Default::default(),
-            exclude: vec![],
             assets: vec!["public".to_string(), "dist/client".to_string()],
         };
         let config = TakoToml {
@@ -3927,7 +3735,7 @@ mod tests {
     }
 
     #[test]
-    fn package_target_artifact_preserves_app_subdir_layout_without_workspace_files() {
+    fn package_target_artifact_packages_workspace_root_contents() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
         let app_dir = workspace.join("apps/web");
@@ -3947,6 +3755,7 @@ mod tests {
             &[],
             &cache_paths,
             "cache-key",
+            "index.ts",
             "linux-aarch64-musl",
         )
         .unwrap();
@@ -3955,9 +3764,9 @@ mod tests {
         let unpacked = temp.path().join("unpacked");
         BuildExecutor::extract_archive(&cache_paths.artifact_path, &unpacked).unwrap();
 
+        assert!(unpacked.join("README.md").exists());
         assert!(unpacked.join("apps/web/index.ts").exists());
         assert!(unpacked.join("apps/web/app.json").exists());
-        assert!(!unpacked.join("README.md").exists());
         assert!(!unpacked.join("index.ts").exists());
     }
 
@@ -3981,6 +3790,7 @@ mod tests {
             &[],
             &cache_paths,
             "cache-key",
+            "index.ts",
             "linux-aarch64-musl",
         )
         .unwrap();
@@ -3988,30 +3798,18 @@ mod tests {
     }
 
     #[test]
-    fn package_target_artifact_rewrites_workspace_protocol_dependencies_to_local_file_packages() {
+    fn package_target_artifact_preserves_workspace_protocol_dependencies() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
         let app_dir = workspace.join("apps/web");
-        let sdk_dir = workspace.join("sdk");
         std::fs::create_dir_all(app_dir.join("src")).unwrap();
-        std::fs::create_dir_all(sdk_dir.join("src")).unwrap();
-        std::fs::write(
-            workspace.join("package.json"),
-            r#"{"private":true,"workspaces":["apps/*","sdk"]}"#,
-        )
-        .unwrap();
+        std::fs::write(workspace.join("package.json"), r#"{"private":true}"#).unwrap();
         std::fs::write(
             app_dir.join("package.json"),
             r#"{"name":"web","dependencies":{"tako.sh":"workspace:*"}}"#,
         )
         .unwrap();
         std::fs::write(app_dir.join("src/app.ts"), "export default {};\n").unwrap();
-        std::fs::write(
-            sdk_dir.join("package.json"),
-            r#"{"name":"tako.sh","version":"0.0.1"}"#,
-        )
-        .unwrap();
-        std::fs::write(sdk_dir.join("src/wrapper.ts"), "export default {};\n").unwrap();
 
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
@@ -4024,6 +3822,7 @@ mod tests {
             &["**/node_modules/**".to_string()],
             &cache_paths,
             "cache-key",
+            "src/app.ts",
             "linux-aarch64-musl",
         )
         .unwrap();
@@ -4038,17 +3837,13 @@ mod tests {
                 .get("dependencies")
                 .and_then(|deps| deps.get("tako.sh"))
                 .and_then(|value| value.as_str()),
-            Some("file:tako_vendor/tako.sh")
+            Some("workspace:*")
         );
-        assert!(
-            unpacked
-                .join("apps/web/tako_vendor/tako.sh/src/wrapper.ts")
-                .is_file()
-        );
+        assert!(!unpacked.join("apps/web/tako_vendor").exists());
     }
 
     #[test]
-    fn package_target_artifact_errors_when_workspace_dependency_cannot_be_resolved() {
+    fn package_target_artifact_does_not_validate_workspace_protocol_dependencies() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
         let app_dir = workspace.join("apps/web");
@@ -4063,7 +3858,7 @@ mod tests {
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
         let cache_paths = artifact_cache_paths(&cache_dir, "linux-aarch64-musl", "cache-key");
-        let error = package_target_artifact(
+        let archive_size = package_target_artifact(
             &workspace,
             "apps/web",
             &[],
@@ -4071,11 +3866,63 @@ mod tests {
             &[],
             &cache_paths,
             "cache-key",
+            "src.ts",
+            "linux-aarch64-musl",
+        )
+        .unwrap();
+        assert!(archive_size > 0);
+    }
+
+    #[test]
+    fn package_target_artifact_fails_when_main_file_is_missing_after_build() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(app_dir.join("index.ts"), "console.log('ok');").unwrap();
+
+        let cache_dir = temp.path().join("cache");
+        std::fs::create_dir_all(&cache_dir).unwrap();
+        let cache_paths = artifact_cache_paths(&cache_dir, "linux-aarch64-musl", "cache-key");
+        let err = package_target_artifact(
+            &workspace,
+            "apps/web",
+            &[],
+            &["**/*".to_string()],
+            &[],
+            &cache_paths,
+            "cache-key",
+            "dist/server/tako-entry.mjs",
             "linux-aarch64-musl",
         )
         .unwrap_err();
+        assert!(
+            err.contains("not found after build"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.contains("dist/server/tako-entry.mjs"),
+            "unexpected error: {err}"
+        );
+    }
 
-        assert!(error.contains("Workspace dependency 'missing-pkg'"));
+    #[test]
+    fn validate_main_exists_after_build_rejects_missing_main_file() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+        std::fs::create_dir_all(&app_dir).unwrap();
+
+        let err = validate_main_exists_after_build(&workspace, "apps/web", "dist/server/entry.mjs")
+            .unwrap_err();
+        assert!(
+            err.contains("not found after build"),
+            "unexpected error: {err}"
+        );
+        assert!(
+            err.contains("dist/server/entry.mjs"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]
@@ -4180,56 +4027,37 @@ mod tests {
 
     #[test]
     fn resolve_deploy_main_prefers_tako_toml_main() {
-        let temp = TempDir::new().unwrap();
-        let project_dir = temp.path();
-        std::fs::write(
-            project_dir.join("package.json"),
-            r#"{"name":"app","main":"dist/server/tako-entry.mjs"}"#,
-        )
-        .unwrap();
         let config = TakoToml {
             main: Some("server/custom.mjs".to_string()),
             ..Default::default()
         };
-        let resolved = resolve_deploy_main(project_dir, &config).unwrap();
+        let resolved = resolve_deploy_main(&config, Some("preset-default.ts")).unwrap();
         assert_eq!(resolved, "server/custom.mjs");
     }
 
     #[test]
-    fn resolve_deploy_main_uses_package_json_main_when_tako_main_is_missing() {
-        let temp = TempDir::new().unwrap();
-        std::fs::write(
-            temp.path().join("package.json"),
-            r#"{"name":"app","main":"./dist/server/tako-entry.mjs"}"#,
-        )
-        .unwrap();
-
-        let resolved = resolve_deploy_main(temp.path(), &TakoToml::default()).unwrap();
-        assert_eq!(resolved, "dist/server/tako-entry.mjs");
+    fn resolve_deploy_main_uses_preset_default_main_when_tako_main_is_missing() {
+        let resolved =
+            resolve_deploy_main(&TakoToml::default(), Some("./dist/server/entry.mjs")).unwrap();
+        assert_eq!(resolved, "dist/server/entry.mjs");
     }
 
     #[test]
-    fn resolve_deploy_main_errors_when_neither_tako_nor_package_main_is_set() {
-        let temp = TempDir::new().unwrap();
-        std::fs::write(temp.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
-
-        let err = resolve_deploy_main(temp.path(), &TakoToml::default()).unwrap_err();
+    fn resolve_deploy_main_errors_when_tako_and_preset_main_are_missing() {
+        let err = resolve_deploy_main(&TakoToml::default(), None).unwrap_err();
         assert!(
-            err.contains("Set `main` in tako.toml or package.json"),
+            err.contains("Set `main` in tako.toml or preset `main`"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn resolve_deploy_main_rejects_parent_directory_segments() {
-        let temp = TempDir::new().unwrap();
-        std::fs::write(
-            temp.path().join("package.json"),
-            r#"{"name":"app","main":"../outside.js"}"#,
-        )
-        .unwrap();
-
-        let err = resolve_deploy_main(temp.path(), &TakoToml::default()).unwrap_err();
+    fn resolve_deploy_main_rejects_parent_directory_segments_from_tako_toml() {
+        let config = TakoToml {
+            main: Some("../outside.js".to_string()),
+            ..Default::default()
+        };
+        let err = resolve_deploy_main(&config, None).unwrap_err();
         assert!(
             err.contains("must not contain '..'"),
             "unexpected error: {err}"
@@ -4237,14 +4065,21 @@ mod tests {
     }
 
     #[test]
-    fn resolve_deploy_main_rejects_empty_package_main() {
-        let temp = TempDir::new().unwrap();
-        std::fs::write(
-            temp.path().join("package.json"),
-            r#"{"name":"app","main":"  "}"#,
-        )
-        .unwrap();
-        let err = resolve_deploy_main(temp.path(), &TakoToml::default()).unwrap_err();
+    fn resolve_deploy_main_rejects_empty_tako_toml_main() {
+        let config = TakoToml {
+            main: Some("  ".to_string()),
+            ..Default::default()
+        };
+        let err = resolve_deploy_main(&config, None).unwrap_err();
         assert!(err.contains("main is empty"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn resolve_deploy_main_rejects_invalid_preset_main() {
+        let err = resolve_deploy_main(&TakoToml::default(), Some("../outside.js")).unwrap_err();
+        assert!(
+            err.contains("must not contain '..'"),
+            "unexpected error: {err}"
+        );
     }
 }

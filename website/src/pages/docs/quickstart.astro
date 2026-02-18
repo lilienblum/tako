@@ -1,9 +1,6 @@
 ---
 import Snippet from "../../components/Snippet.astro";
 import DocsLayout from "../../layouts/DocsLayout.astro";
-
-const envMappingToml = `[envs.production]
-route = "my-app.example.com"`;
 ---
 <DocsLayout title="Tako Docs - Quickstart" heading="Quickstart" current="quickstart">
   <h1 id="quickstart">Quickstart</h1>
@@ -101,10 +98,10 @@ route = "my-app.example.com"`;
   <p>Run the following commands from your app directory.</p>
   <p>Initialize Tako config:</p>
   <Snippet code="tako init" lang="bash" />
-
-  <p>Set a production route in <code>tako.toml</code>:</p>
-  <Snippet code={envMappingToml} lang="toml" />
-  <p>Make sure <code>tako.toml</code> includes a production route before deploy.</p>
+  <p>
+    <code>tako init</code> prompts for app name and production route, and writes them to
+    <code>tako.toml</code>.
+  </p>
 
   <p>
     <code>tako dev</code> uses <code>{"{app}.tako.local"}</code> by default. Add <code>[envs.development]</code> only when

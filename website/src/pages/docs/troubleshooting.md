@@ -77,15 +77,17 @@ Expected deploy behavior:
 - `Local container build failed`:
   - Symptom: deploy fails during artifact build before upload.
   - Fix: confirm Docker is available locally, then check `[build].preset` resolution and target build logs.
-  - If preset parsing fails, ensure preset artifact filters use top-level `exclude` only (`include` and legacy `[artifact]` are rejected).
+  - If preset parsing fails, ensure preset artifact filters use `[build].exclude` and runtime/dev commands use top-level `main`/`install`/`start`/`dev` (legacy `[deploy]`, `[dev]`, `include`, and `[artifact]` are rejected; deprecated top-level `dev_cmd` is accepted as an alias).
   - Note: dependency downloads are cached in Docker volumes prefixed `tako-build-cache-`; if needed, remove stale volumes and redeploy.
+- `Deploy entrypoint missing after build`:
+  - Symptom: deploy fails during artifact preparation with a message that the deploy entrypoint (`main`) was not found after build.
+  - Fix: ensure your build output creates the configured `main` path (from `tako.toml` or preset), or update `main` to the actual generated file.
 - `Installer reports unsupported libc`:
   - Symptom: `install-server` exits with `unsupported libc`.
   - Fix: run on Linux host with `glibc` or `musl`; for custom base images, set `TAKO_SERVER_URL` to a known matching artifact URL.
 - `Bun dependency install failed`:
   - Symptom: server responds with `Invalid app release: Bun dependency install failed ...`.
-  - Fix: ensure app `package.json` exists in the release, runtime dependencies are resolvable in production, and Bun lockfile (if present) matches packaged dependency specs.
-  - For workspace deps (`workspace:`), deploy vendors them into `tako_vendor/` automatically; if you still see failures, inspect rewritten `package.json` in the release.
+  - Fix: ensure release dependencies are resolvable in production, and Bun lockfile (if present) matches packaged dependency specs.
 - `Unexpected local artifact cache behavior`:
   - Symptom: repeated deploy unexpectedly rebuilds or cache warning appears before rebuild.
   - Expected: Tako verifies cached artifact checksum/size and automatically rebuilds if cache is invalid.
