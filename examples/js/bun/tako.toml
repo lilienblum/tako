@@ -1,7 +1,7 @@
-name = "bun-example"
 main = "index.ts"
 
 [build]
+adapter = "bun"
 preset = "bun"
 
 [envs.production]

@@ -1,7 +1,7 @@
-name = "bun-e2e"
 main = "index.ts"
 
 [build]
+adapter = "bun"
 preset = "bun"
 
 [envs.production]

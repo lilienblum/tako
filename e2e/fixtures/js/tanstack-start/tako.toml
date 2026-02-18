@@ -1,6 +1,5 @@
-name = "tanstack-start-e2e"
-
 [build]
+adapter = "bun"
 preset = "bun-tanstack-start"
 
 [envs.production]
