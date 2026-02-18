@@ -5,8 +5,8 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::build::adapter::{
-    BUILTIN_BUN_PRESET_PATH, BUILTIN_DENO_PRESET_PATH, BUILTIN_NODE_PRESET_PATH,
-    builtin_base_preset_content_for_path,
+    BUILTIN_BUN_PRESET_PATH, BUILTIN_DENO_PRESET_PATH, BUILTIN_NODE_PRESET_PATH, BuildAdapter,
+    builtin_base_preset_content_for_alias, builtin_base_preset_content_for_path,
 };
 
 pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
@@ -15,7 +15,6 @@ const EMBEDDED_PRESET_REPO: &str = "embedded";
 const EMBEDDED_BUN_TANSTACK_START_PRESET_PATH: &str = "presets/bun/tanstack-start.toml";
 const EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT: &str =
     include_str!("../../../presets/bun/tanstack-start.toml");
-const LEGACY_BUN_TANSTACK_START_PRESET_PATH: &str = "presets/bun-tanstack-start.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -140,7 +139,7 @@ struct BuildLockFile {
 pub fn parse_preset_reference(value: &str) -> Result<PresetReference, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        return Err("build.preset cannot be empty".to_string());
+        return Err("preset cannot be empty".to_string());
     }
 
     if let Some(rest) = trimmed.strip_prefix("github:") {
@@ -176,6 +175,11 @@ pub fn parse_preset_reference(value: &str) -> Result<PresetReference, String> {
     };
 
     validate_official_alias(trimmed, &name)?;
+    if name == "bun-tanstack-start" {
+        return Err(
+            "Invalid preset alias 'bun-tanstack-start'. Use 'bun/tanstack-start'.".to_string(),
+        );
+    }
     Ok(PresetReference::OfficialAlias { name, commit })
 }
 
@@ -366,7 +370,6 @@ pub async fn load_build_preset(
 fn official_alias_to_path(alias: &str) -> String {
     match alias {
         "bun" => BUILTIN_BUN_PRESET_PATH.to_string(),
-        "bun-tanstack-start" => EMBEDDED_BUN_TANSTACK_START_PRESET_PATH.to_string(),
         "node" => BUILTIN_NODE_PRESET_PATH.to_string(),
         "deno" => BUILTIN_DENO_PRESET_PATH.to_string(),
         _ => format!("presets/{alias}.toml"),
@@ -378,9 +381,7 @@ fn embedded_official_preset_content(path: &str) -> Option<&'static str> {
         return Some(content);
     }
     match path {
-        EMBEDDED_BUN_TANSTACK_START_PRESET_PATH | LEGACY_BUN_TANSTACK_START_PRESET_PATH => {
-            Some(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT)
-        }
+        EMBEDDED_BUN_TANSTACK_START_PRESET_PATH => Some(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT),
         _ => None,
     }
 }
@@ -406,7 +407,10 @@ async fn load_content_for_resolved_source(source: &ResolvedPresetSource) -> Resu
     fetch_preset_content_by_commit(&source.repo, &source.path, &source.commit).await
 }
 
-fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<BuildPreset, String> {
+pub fn parse_and_validate_preset(
+    content: &str,
+    inferred_name: &str,
+) -> Result<BuildPreset, String> {
     let value: toml::Value =
         toml::from_str(content).map_err(|e| format!("Failed to parse build preset TOML: {e}"))?;
     if value.get("artifact").is_some() {
@@ -524,6 +528,61 @@ fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<Build
     };
 
     Ok(preset)
+}
+
+pub fn apply_adapter_base_runtime_defaults(
+    preset: &mut BuildPreset,
+    adapter: BuildAdapter,
+) -> Result<(), String> {
+    if adapter == BuildAdapter::Unknown {
+        return Ok(());
+    }
+
+    let base_content = builtin_base_preset_content_for_alias(adapter.id()).ok_or_else(|| {
+        format!(
+            "Missing built-in base preset content for runtime '{}'.",
+            adapter.id()
+        )
+    })?;
+    let base_preset = parse_and_validate_preset(base_content, adapter.id())?;
+
+    if preset.main.is_none() {
+        preset.main = base_preset.main;
+    }
+    if preset.dev.is_empty() {
+        preset.dev = base_preset.dev;
+    }
+    if preset.install.is_none() {
+        preset.install = base_preset.install;
+    }
+    if preset.start.is_empty() {
+        preset.start = base_preset.start;
+    }
+    if preset.build.install.is_none() {
+        preset.build.install = base_preset.build.install;
+    }
+    if preset.build.build.is_none() {
+        preset.build.build = base_preset.build.build;
+    }
+
+    Ok(())
+}
+
+pub fn infer_adapter_from_preset_reference(preset_ref: &str) -> BuildAdapter {
+    let Ok(reference) = parse_preset_reference(preset_ref) else {
+        return BuildAdapter::Unknown;
+    };
+    match reference {
+        PresetReference::OfficialAlias { name, .. } => {
+            infer_adapter_from_official_alias_name(&name)
+        }
+        PresetReference::Github { .. } => BuildAdapter::Unknown,
+    }
+}
+
+fn infer_adapter_from_official_alias_name(alias: &str) -> BuildAdapter {
+    let family_or_name = alias.split('/').next().unwrap_or(alias);
+    BuildAdapter::from_id(family_or_name).unwrap_or(BuildAdapter::Unknown)
 }
 
 fn infer_preset_name_from_path(path: &str) -> Result<String, String> {
@@ -780,6 +839,7 @@ mod tests {
         assert!(parse_preset_reference("github:owner/repo/path.yaml").is_err());
         assert!(parse_preset_reference("bun/abc12").is_err());
         assert!(parse_preset_reference("bun/abc12345/extra").is_err());
+        assert!(parse_preset_reference("bun-tanstack-start").is_err());
         assert!(parse_preset_reference("bun/tanstack-start@").is_err());
         assert!(parse_preset_reference("Bun").is_err());
     }
@@ -787,10 +847,6 @@ mod tests {
     #[test]
     fn official_alias_to_path_maps_family_layout() {
         assert_eq!(official_alias_to_path("bun"), "presets/bun/bun.toml");
-        assert_eq!(
-            official_alias_to_path("bun-tanstack-start"),
-            "presets/bun/tanstack-start.toml"
-        );
         assert_eq!(
             official_alias_to_path("bun/tanstack-start"),
             "presets/bun/tanstack-start.toml"
@@ -806,7 +862,6 @@ mod tests {
         assert!(embedded_official_preset_content("presets/deno/deno.toml").is_some());
         assert!(embedded_official_preset_content("presets/bun/tanstack-start.toml").is_some());
         assert!(embedded_official_preset_content("presets/bun.toml").is_some());
-        assert!(embedded_official_preset_content("presets/bun-tanstack-start.toml").is_some());
     }
 
     #[test]
@@ -827,6 +882,83 @@ mod tests {
         assert_eq!(preset.name, "tanstack-start");
         assert_eq!(preset.main.as_deref(), Some("dist/server/tako-entry.mjs"));
         assert_eq!(preset.assets, vec!["dist/client"]);
+    }
+
+    #[test]
+    fn infer_adapter_from_preset_reference_supports_official_aliases() {
+        assert_eq!(
+            infer_adapter_from_preset_reference("bun"),
+            BuildAdapter::Bun
+        );
+        assert_eq!(
+            infer_adapter_from_preset_reference("bun/tanstack-start"),
+            BuildAdapter::Bun
+        );
+        assert_eq!(
+            infer_adapter_from_preset_reference("node"),
+            BuildAdapter::Node
+        );
+        assert_eq!(
+            infer_adapter_from_preset_reference("deno"),
+            BuildAdapter::Deno
+        );
+        assert_eq!(
+            infer_adapter_from_preset_reference("github:owner/repo/presets/custom.toml"),
+            BuildAdapter::Unknown
+        );
+        assert_eq!(
+            infer_adapter_from_preset_reference("bun-tanstack-start"),
+            BuildAdapter::Unknown
+        );
+    }
+
+    #[test]
+    fn apply_adapter_base_runtime_defaults_fills_missing_fields_from_base_preset() {
+        let raw = r#"
+name = "tanstack-start"
+main = "dist/server/tako-entry.mjs"
+assets = ["dist/client"]
+
+[build]
+exclude = ["node_modules/"]
+targets = ["linux-x86_64-glibc"]
+"#;
+        let mut preset = parse_preset(raw).unwrap();
+        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
+
+        assert_eq!(preset.main.as_deref(), Some("dist/server/tako-entry.mjs"));
+        assert_eq!(preset.dev, vec!["bun", "run", "dev"]);
+        assert!(preset.install.is_some());
+        assert!(!preset.start.is_empty());
+        assert!(preset.build.install.is_some());
+        assert!(preset.build.build.is_some());
+    }
+
+    #[test]
+    fn apply_adapter_base_runtime_defaults_keeps_explicit_variant_overrides() {
+        let raw = r#"
+name = "custom-bun"
+main = "custom-main.ts"
+dev = ["bun", "run", "custom-dev"]
+install = "custom-install"
+start = ["bun", "run", "custom-start", "{main}"]
+
+[build]
+install = "custom-build-install"
+build = "custom-build"
+"#;
+        let mut preset = parse_preset(raw).unwrap();
+        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
+
+        assert_eq!(preset.main.as_deref(), Some("custom-main.ts"));
+        assert_eq!(preset.dev, vec!["bun", "run", "custom-dev"]);
+        assert_eq!(preset.install.as_deref(), Some("custom-install"));
+        assert_eq!(preset.start, vec!["bun", "run", "custom-start", "{main}"]);
+        assert_eq!(
+            preset.build.install.as_deref(),
+            Some("custom-build-install")
+        );
+        assert_eq!(preset.build.build.as_deref(), Some("custom-build"));
     }
 
     #[test]

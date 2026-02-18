@@ -1,6 +1,5 @@
-[build]
-adapter = "bun"
-preset = "bun-tanstack-start"
+runtime = "bun"
+preset = "bun/tanstack-start"
 
 [envs.production]
 route = "tanstack-start-e2e.example.com"

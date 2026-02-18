@@ -3,6 +3,8 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Component, Path};
 
+use crate::build::BuildAdapter;
+
 use super::error::{ConfigError, Result};
 
 /// Root configuration from tako.toml
@@ -10,6 +12,12 @@ use super::error::{ConfigError, Result};
 pub struct TakoToml {
     /// Application name (required; stable identity)
     pub name: Option<String>,
+
+    /// Build runtime override used for default preset selection when `preset` is omitted.
+    pub runtime: Option<String>,
+
+    /// Build preset reference (for example: "bun", "bun@<commit-hash>", "bun/tanstack-start", or "github:owner/repo/path.toml@<sha>").
+    pub preset: Option<String>,
 
     /// Build settings for deploy artifact generation.
     #[serde(default)]
@@ -42,9 +50,6 @@ pub struct TakoToml {
 /// Build configuration from [build].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct BuildConfig {
-    /// Build preset reference (for example: "bun", "bun@<commit-hash>", "bun/tanstack-start", or "github:owner/repo/path.toml@<sha>").
-    pub preset: Option<String>,
-
     /// Additional file globs to include in the deploy artifact.
     #[serde(default)]
     pub include: Vec<String>,
@@ -172,6 +177,13 @@ impl TakoToml {
         // Parse top-level metadata
         config.name = parse_optional_string(&raw, "name")?;
         config.main = parse_optional_string(&raw, "main")?;
+        if raw.get("adapter").is_some() {
+            return Err(ConfigError::Validation(
+                "'adapter' is no longer supported at top level; use `runtime`".to_string(),
+            ));
+        }
+        config.runtime = parse_optional_string(&raw, "runtime")?;
+        config.preset = parse_optional_string(&raw, "preset")?;
         config.build = parse_build_config(&raw)?;
 
         // Parse [vars] section (global) and [vars.*] sections (per-environment)
@@ -258,12 +270,25 @@ impl TakoToml {
             return Err(ConfigError::Validation("main cannot be empty".to_string()));
         }
 
-        if let Some(preset) = &self.build.preset
+        if let Some(preset) = &self.preset
             && preset.trim().is_empty()
         {
             return Err(ConfigError::Validation(
-                "build.preset cannot be empty".to_string(),
+                "preset cannot be empty".to_string(),
             ));
+        }
+        if let Some(runtime) = &self.runtime {
+            let trimmed = runtime.trim();
+            if trimmed.is_empty() {
+                return Err(ConfigError::Validation(
+                    "runtime cannot be empty".to_string(),
+                ));
+            }
+            if BuildAdapter::from_id(trimmed).is_none() {
+                return Err(ConfigError::Validation(
+                    "runtime must be one of: bun, node, deno".to_string(),
+                ));
+            }
         }
 
         for include in &self.build.include {
@@ -519,15 +544,23 @@ fn parse_build_config(raw: &toml::Value) -> Result<BuildConfig> {
     let table = value
         .as_table()
         .ok_or_else(|| ConfigError::Validation("'build' must be a table ([build])".to_string()))?;
+    if table.contains_key("adapter") {
+        return Err(ConfigError::Validation(
+            "'build.adapter' is no longer supported; use top-level `runtime`".to_string(),
+        ));
+    }
+    if table.contains_key("preset") {
+        return Err(ConfigError::Validation(
+            "'build.preset' is no longer supported; use top-level `preset`".to_string(),
+        ));
+    }
     let table_value = toml::Value::Table(table.clone());
 
-    let preset = parse_optional_string(&table_value, "preset")?;
     let include = parse_string_array(&table_value, "include")?.unwrap_or_default();
     let exclude = parse_string_array(&table_value, "exclude")?.unwrap_or_default();
     let assets = parse_string_array(&table_value, "assets")?.unwrap_or_default();
 
     Ok(BuildConfig {
-        preset,
         include,
         exclude,
         assets,
@@ -769,13 +802,12 @@ mod tests {
         let toml = r#"
 name = "my-app"
 main = "server/index.mjs"
-[build]
 preset = "bun"
 "#;
         let config = TakoToml::parse(toml).unwrap();
         assert_eq!(config.name, Some("my-app".to_string()));
         assert_eq!(config.main, Some("server/index.mjs".to_string()));
-        assert_eq!(config.build.preset, Some("bun".to_string()));
+        assert_eq!(config.preset, Some("bun".to_string()));
     }
 
     #[test]
@@ -795,6 +827,47 @@ assets = ["public-assets", "shared/images"]
         assert_eq!(
             config.build.assets,
             vec!["public-assets".to_string(), "shared/images".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_parse_runtime() {
+        let toml = r#"
+runtime = "deno"
+"#;
+        let config = TakoToml::parse(toml).unwrap();
+        assert_eq!(config.runtime, Some("deno".to_string()));
+    }
+
+    #[test]
+    fn test_parse_rejects_legacy_adapter_and_build_preset_keys() {
+        let top_level_adapter = r#"
+adapter = "node"
+"#;
+        let err = TakoToml::parse(top_level_adapter).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'adapter' is no longer supported at top level")
+        );
+
+        let build_adapter = r#"
+[build]
+adapter = "bun"
+"#;
+        let err = TakoToml::parse(build_adapter).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'build.adapter' is no longer supported")
+        );
+
+        let build_preset = r#"
+[build]
+preset = "bun/tanstack-start"
+"#;
+        let err = TakoToml::parse(build_preset).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'build.preset' is no longer supported")
         );
     }
 
@@ -918,9 +991,9 @@ idle_timeout = 600
         let toml = r#"
 name = "my-api"
 main = "server/index.mjs"
+preset = "bun"
 
 [build]
-preset = "bun"
 include = ["dist/**"]
 exclude = ["**/*.map"]
 assets = ["public", ".output/public"]
@@ -942,7 +1015,7 @@ port = 80
 
         assert_eq!(config.name, Some("my-api".to_string()));
         assert_eq!(config.main, Some("server/index.mjs".to_string()));
-        assert_eq!(config.build.preset, Some("bun".to_string()));
+        assert_eq!(config.preset, Some("bun".to_string()));
         assert_eq!(config.build.include, vec!["dist/**".to_string()]);
         assert_eq!(config.build.exclude, vec!["**/*.map".to_string()]);
         assert_eq!(
@@ -1091,6 +1164,24 @@ exclude = ["../secret/**"]
         assert!(
             err.to_string()
                 .contains("build.exclude entry '../secret/**' must not contain '..'")
+        );
+    }
+
+    #[test]
+    fn test_validate_runtime_rejects_empty_and_unknown_values() {
+        let empty = r#"
+runtime = ""
+"#;
+        let err = TakoToml::parse(empty).unwrap_err();
+        assert!(err.to_string().contains("runtime cannot be empty"));
+
+        let unknown = r#"
+runtime = "python"
+"#;
+        let err = TakoToml::parse(unknown).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("runtime must be one of: bun, node, deno")
         );
     }
 

@@ -1,8 +1,5 @@
+runtime = "bun"
 main = "index.ts"
-
-[build]
-adapter = "bun"
-preset = "bun"
 
 [envs.production]
 route = "tako-bun-server.orb.local/bun"

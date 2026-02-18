@@ -42,9 +42,10 @@ Application configuration for build, variables, routes, and deployment.
 ```toml
 name = "my-app"           # Required - stable identity used by deploy/dev
 main = "server/index.mjs" # Optional override; required only when preset does not define top-level `main`
+runtime = "bun"           # Optional override; defaults to detected adapter
+# preset = "bun/tanstack-start" # Optional; omit for adapter base preset
 
 [build]
-preset = "bun"            # Optional override; defaults to detected adapter base preset
 # include = ["dist/**", ".output/**"]
 # exclude = ["**/*.map"]
 # assets = ["dist/client", "assets/shared"]
@@ -94,15 +95,17 @@ env = "production"
 - If `main` is omitted in `tako.toml`, deploy/dev use preset top-level `main` when present.
 - If neither `tako.toml main` nor preset `main` is set, deploy/dev fail with guidance.
 - Legacy top-level `dist` and `assets` keys are not supported.
-- `[build].preset` is optional; when omitted, `tako deploy`/`tako dev` use the detected adapter base preset (`bun`, `node`, or `deno`).
-- `build.preset` supports:
+- Top-level `runtime` is optional; when set to `bun`, `node`, or `deno`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
+- Top-level `preset` is optional; when omitted, `tako deploy`/`tako dev` use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`).
+- `preset` supports:
   - official aliases: `bun`, `node`, `deno`, `bun/tanstack-start`
   - pinned official aliases: `bun/<commit-hash>` (legacy), `bun@<commit-hash>`, `bun/tanstack-start@<commit-hash>`
   - GitHub references: `github:<owner>/<repo>/<path>.toml[@<commit-hash>]`
 - Adapter base presets (`bun`, `node`, `deno`) are built into the CLI (not loaded from workspace preset files).
 - File-based presets remain for named variants under `presets/<adapter>/<name>.toml` (for example `presets/bun/tanstack-start.toml`).
-- `bun/tanstack-start` (legacy alias `bun-tanstack-start`) defaults `main = "dist/server/tako-entry.mjs"` and adds `assets = ["dist/client"]`.
-- Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `dev` (`tako dev` command), top-level `install`/`start` (server runtime prep/start commands), top-level `assets`, and `[build]` (`exclude`, `install`, `build`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false` with deprecated alias `docker = true|false`). Legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Top-level `dev_cmd` remains accepted as a deprecated alias for compatibility.
+- `bun/tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and adds `assets = ["dist/client"]`.
+- Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`dev`, `install`, `start`, `[build].install`, `[build].build`).
+- Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `assets`, and `[build]` (`exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false` with deprecated alias `docker = true|false`). Presets can still override runtime lifecycle fields (`dev`, `install`, `start`, `[build].install`, `[build].build`) when needed. Legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Top-level `dev_cmd` remains accepted as a deprecated alias for compatibility.
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for reproducible preset fetches on later deploys.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Source bundle filtering uses `.gitignore`.
@@ -238,7 +241,7 @@ Directory selection is command-scoped:
 - `tako deploy [DIR]`
 - `tako delete [DIR]`
 
-### tako init [--force] [DIR]
+### tako init [--force] [--runtime <bun|node|deno>] [DIR]
 
 Create `tako.toml` template with helpful comments.
 
@@ -251,9 +254,10 @@ Template behavior:
 - Leaves only minimal starter options uncommented:
   - `name`
   - `[envs.production].route`
-  - `[build].preset` when a built-in preset is selected (left commented when "custom preset" is selected)
+  - top-level `runtime`
+  - top-level `preset` only when a non-base preset is selected (for base adapter presets and custom mode, it remains commented/unset)
 - Includes commented examples/explanations for all supported `tako.toml` options:
-  - `name`, `main`, and `[build]` (`preset`, `include`, `exclude`, `assets`)
+  - `name`, `main`, top-level `runtime`/`preset`, and `[build]` (`include`, `exclude`, `assets`)
   - `[vars]`
   - `[vars.<env>]`
   - `[envs.<env>].routes` and inline env vars
@@ -262,12 +266,12 @@ Template behavior:
 - Includes a docs link to `https://tako.sh/docs/tako-toml`.
 - Prompts for required app `name` (default from directory-derived app name).
 - Prompts for required production route (`[envs.production].route`) with default `{name}.example.com`.
-- Detects adapter (`bun`, `node`, `deno`, fallback `unknown`) and offers built-in preset choices plus a "custom preset reference" option.
+- Detects adapter (`bun`, `node`, `deno`, fallback `unknown`) and prompts for runtime selection unless `--runtime` is provided.
 - For built-in base adapters, init defaults to:
   - Bun: `bun`
   - Node: `node`
   - Deno: `deno`
-- When "custom preset reference" is selected, init leaves `[build].preset` unset (commented).
+- When "custom preset reference" is selected, init leaves top-level `preset` unset (commented) but still writes top-level `runtime`.
 - For `main`, init behavior is:
   - if adapter inference finds an entrypoint and it differs from preset default `main`, write it as top-level `main`;
   - if inferred `main` matches preset default (or preset default exists and no inference is available), omit top-level `main`;
@@ -615,7 +619,7 @@ Deploy flow helpers:
 5. Create source archive (`.tako/artifacts/{version}-source.tar.gz`) and write `app.json` at app path inside archive
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
    - Best-effort local artifact cache prune runs before target builds (retention: 30 source archives, 90 target artifacts; orphan target metadata is removed).
-6. Resolve build preset (`build.preset` override or detected adapter base preset) and persist lock metadata in `.tako/build.lock.json`
+6. Resolve build preset (top-level `preset` override or adapter base preset from top-level `runtime`/detection) and persist lock metadata in `.tako/build.lock.json`
 7. Build target artifacts locally (one artifact per unique server target label):
    - Resolve deterministic cache key per target.
    - On cache hit, reuse existing verified target artifact.

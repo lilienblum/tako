@@ -1,59 +1,19 @@
 # Preset template example.
-# Copy to `presets/<adapter>/<name>.toml` and customize for your runtime.
-# Keep this `.example` file out of actual preset references.
-
-# Optional preset identifier used in logs/errors and deploy metadata.
-# If omitted, Tako uses the preset file name (without `.toml`).
-name = "bun"
+# Preset reference docs: https://tako.sh/docs/presets
+# Use in `tako.toml` as: preset = "github:username/my-presets/custom-preset.toml"
+# For official preset contributions, use `presets/<runtime>/<name>.toml`.
 
 # Optional default runtime entrypoint.
 # Used when app `tako.toml` omits top-level `main`.
-# main = "index.ts"
+# main = "dist/server/tako-entry.mjs"
 
-# Command used by `tako dev`.
-# `{main}` (if present) is replaced with resolved app entrypoint.
-dev = ["bun", "run", "dev"]
-
-# Command run on the server before starting the app.
-# Keep this deterministic. For Bun presets, use proto-managed runtime installs.
-install = '''
-proto install --yes
-if [ -f bun.lockb ] || [ -f bun.lock ]; then
-  proto run bun -- install --production --frozen-lockfile
-else
-  proto run bun -- install --production
-fi
-'''
-
-# Production start command on the server.
-# `{main}` is replaced with resolved app entrypoint.
-start = ["proto", "run", "bun", "--", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
+# Optional static assets merged into runtime public directory during packaging.
+# assets = ["dist/client"]
 
 [build]
 # Exclude patterns use gitignore-style matching relative to workspace root.
 # Common exclusions: dependency folders, local caches, source maps.
 exclude = ["node_modules/"]
 
-# Build dependency/bootstrap command.
-# Runs from workspace root; use `cd "$TAKO_APP_DIR"` for app-local commands.
-install = '''
-# Install runtime and dependencies in workspace root
-# proto install --yes
-# if [ -f bun.lockb ] || [ -f bun.lock ]; then
-#   proto run bun -- install --frozen-lockfile
-# else
-#   proto run bun -- install
-# fi
-'''
-
-# Build command that produces runtime output.
-# Runs from workspace root; switch to app dir when needed.
-build = '''
-# cd "$TAKO_APP_DIR"
-# proto run bun -- run --if-present build
-'''
-
-# Optional target labels for Docker builds. If omitted or empty, Tako uses local builds.
-# Set `container = true` to force container builds for these targets (default: true when targets are set).
+# Optional explicit container toggle.
 # container = true
-# targets = ["linux-x86_64-glibc", "linux-aarch64-glibc"]

@@ -309,6 +309,27 @@ mod tests {
             ),
         }
     }
+
+    #[test]
+    fn init_parses_runtime_flag() {
+        let cli = Cli::try_parse_from(["tako", "init", "--runtime", "deno"]).unwrap();
+        let Commands::Init { runtime, .. } = cli.command.expect("command") else {
+            panic!("expected Init");
+        };
+        assert_eq!(runtime.as_deref(), Some("deno"));
+    }
+
+    #[test]
+    fn init_rejects_unknown_runtime_flag_value() {
+        let res = Cli::try_parse_from(["tako", "init", "--runtime", "python"]);
+        match res {
+            Ok(_) => panic!("expected parse failure"),
+            Err(err) => assert!(
+                err.to_string().contains("invalid value 'python'"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -318,6 +339,10 @@ pub enum Commands {
         /// Force overwrite of existing tako.toml
         #[arg(long)]
         force: bool,
+
+        /// Override detected runtime (bun, node, deno)
+        #[arg(long, value_parser = ["bun", "node", "deno"])]
+        runtime: Option<String>,
 
         /// Run in this directory (defaults to current directory)
         #[arg(value_name = "DIR")]
@@ -406,11 +431,15 @@ impl Cli {
         };
 
         match command {
-            Commands::Init { force, dir } => {
+            Commands::Init {
+                force,
+                runtime,
+                dir,
+            } => {
                 if let Some(dir) = dir {
                     std::env::set_current_dir(dir)?;
                 }
-                commands::init::run(force)
+                commands::init::run(force, runtime.as_deref())
             }
             Commands::Logs { env } => commands::logs::run(&env),
             Commands::Dev { tui, no_tui, dir } => {

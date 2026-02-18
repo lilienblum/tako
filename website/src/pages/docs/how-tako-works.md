@@ -73,7 +73,7 @@ High-level deploy flow:
 2. Resolve source bundle root and app subdirectory (git root when available; otherwise app directory).
 3. Create a source archive (`.tako/artifacts/{version}-source.tar.gz`) from filtered source files.
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-4. Resolve build preset (`[build].preset` override or adapter base default) and lock it to a commit in `.tako/build.lock.json`.
+4. Resolve build preset (top-level `preset` override or adapter base default from top-level `runtime`/detection) and lock it to a commit in `.tako/build.lock.json`.
 5. Build target-specific artifacts locally (Docker or local host based on preset `[build].container`/`[build].docker`, with defaults derived from `[build].targets`), with deterministic local artifact cache reuse when inputs are unchanged.
 6. Deploy to target servers in parallel over SSH.
 7. On each server: lock, upload/extract target artifact, finalize `app.json`, send deploy command with merged env/secrets payload, run runtime prep (Bun dependency install), rolling update, unlock.

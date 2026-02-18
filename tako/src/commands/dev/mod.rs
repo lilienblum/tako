@@ -35,7 +35,10 @@ use tokio::sync::watch;
 #[cfg(test)]
 use tokio::time::timeout;
 
-use crate::build::{BuildPreset, PresetReference, load_build_preset, parse_preset_reference};
+use crate::build::{
+    BuildAdapter, BuildPreset, PresetReference, apply_adapter_base_runtime_defaults,
+    infer_adapter_from_preset_reference, load_build_preset, parse_preset_reference,
+};
 use crate::config::TakoToml;
 use crate::dev::LocalCA;
 #[cfg(target_os = "macos")]
@@ -277,9 +280,44 @@ fn compute_dev_env(cfg: &TakoToml) -> std::collections::HashMap<String, String> 
     env
 }
 
+fn resolve_dev_build_adapter(project_dir: &Path, cfg: &TakoToml) -> Result<BuildAdapter, String> {
+    if let Some(adapter_override) = cfg
+        .runtime
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return BuildAdapter::from_id(adapter_override).ok_or_else(|| {
+            format!(
+                "Invalid runtime '{}'; expected one of: bun, node, deno",
+                adapter_override
+            )
+        });
+    }
+
+    Ok(crate::build::detect_build_adapter(project_dir))
+}
+
+fn resolve_effective_dev_build_adapter(
+    project_dir: &Path,
+    cfg: &TakoToml,
+    preset_ref: &str,
+) -> Result<BuildAdapter, String> {
+    let configured_or_detected = resolve_dev_build_adapter(project_dir, cfg)?;
+    if configured_or_detected != BuildAdapter::Unknown {
+        return Ok(configured_or_detected);
+    }
+
+    let inferred = infer_adapter_from_preset_reference(preset_ref);
+    if inferred != BuildAdapter::Unknown {
+        return Ok(inferred);
+    }
+
+    Ok(configured_or_detected)
+}
+
 fn resolve_dev_preset_ref(project_dir: &Path, cfg: &TakoToml) -> Result<String, String> {
     if let Some(preset_ref) = cfg
-        .build
         .preset
         .as_deref()
         .map(str::trim)
@@ -287,7 +325,7 @@ fn resolve_dev_preset_ref(project_dir: &Path, cfg: &TakoToml) -> Result<String, 
     {
         return Ok(preset_ref.to_string());
     }
-    Ok(crate::build::detect_build_adapter(project_dir)
+    Ok(resolve_dev_build_adapter(project_dir, cfg)?
         .default_preset()
         .to_string())
 }
@@ -1079,10 +1117,12 @@ mod tests {
         local_dns_resolver_contents, local_https_probe_error, parse_local_dns_resolver,
         parse_stored_log_line, pf_anchor_maps_loopback_port, pf_conf_forwarding_hook_block,
         pf_conf_with_forwarding_hook, pfctl_args, pfctl_shell_command, port_from_listen,
-        preferred_public_url, replay_and_follow_logs, restart_required_for_requested_listen,
+        preferred_public_url, replay_and_follow_logs, resolve_dev_preset_ref,
+        resolve_effective_dev_build_adapter, restart_required_for_requested_listen,
         selected_public_url_port, should_linger_after_disconnect, tcp_probe,
         wait_for_localhost_tcp_port_open,
     };
+    use crate::build::BuildAdapter;
     use crate::config::TakoToml;
     use crate::dev::LocalCA;
     use std::path::Path;
@@ -1097,6 +1137,40 @@ mod tests {
             upstream_port: 0,
             pid: None,
         }
+    }
+
+    #[test]
+    fn resolve_dev_preset_ref_uses_build_adapter_override_when_preset_is_missing() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("package.json"), r#"{"name":"demo"}"#).unwrap();
+        let cfg = TakoToml {
+            runtime: Some("deno".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(resolve_dev_preset_ref(temp.path(), &cfg).unwrap(), "deno");
+    }
+
+    #[test]
+    fn resolve_dev_preset_ref_rejects_unknown_build_adapter_override() {
+        let temp = TempDir::new().unwrap();
+        let cfg = TakoToml {
+            runtime: Some("python".to_string()),
+            ..Default::default()
+        };
+
+        let err = resolve_dev_preset_ref(temp.path(), &cfg).unwrap_err();
+        assert!(err.contains("Invalid runtime"));
+    }
+
+    #[test]
+    fn resolve_effective_dev_build_adapter_uses_preset_family_when_detection_is_unknown() {
+        let temp = TempDir::new().unwrap();
+        let cfg = TakoToml::default();
+
+        let adapter =
+            resolve_effective_dev_build_adapter(temp.path(), &cfg, "bun/tanstack-start").unwrap();
+        assert_eq!(adapter, BuildAdapter::Bun);
     }
 
     #[test]
@@ -2150,9 +2224,13 @@ pub async fn run(
     let project_dir = current_dir()?;
     let cfg = load_dev_tako_toml(&project_dir)?;
     let preset_ref = resolve_dev_preset_ref(&project_dir, &cfg)?;
-    let (build_preset, _) = load_build_preset(&project_dir, &preset_ref)
+    let runtime_adapter = resolve_effective_dev_build_adapter(&project_dir, &cfg, &preset_ref)
+        .map_err(|e| format!("Failed to resolve runtime adapter: {}", e))?;
+    let (mut build_preset, _) = load_build_preset(&project_dir, &preset_ref)
         .await
         .map_err(|e| format!("Failed to resolve build preset '{}': {}", preset_ref, e))?;
+    apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter)
+        .map_err(|e| format!("Failed to apply runtime defaults to preset: {}", e))?;
     let main = crate::commands::deploy::resolve_deploy_main(&cfg, build_preset.main.as_deref())
         .map_err(|e| format!("Failed to resolve deploy entrypoint: {}", e))?;
 

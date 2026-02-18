@@ -1,28 +1,5 @@
 main = "dist/server/tako-entry.mjs"
-dev = ["bun", "run", "dev"]
-install = '''
-proto install --yes
-if [ -f bun.lockb ] || [ -f bun.lock ]; then
-  proto run bun -- install --production --frozen-lockfile
-else
-  proto run bun -- install --production
-fi
-'''
-start = ["proto", "run", "bun", "--", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
 assets = ["dist/client"]
 
 [build]
 exclude = ["node_modules/"]
-install = '''
-proto install --yes
-if [ -f bun.lockb ] || [ -f bun.lock ]; then
-  proto run bun -- install --frozen-lockfile
-else
-  proto run bun -- install
-fi
-'''
-build = '''
-cd "$TAKO_APP_DIR"
-proto run bun -- run --if-present build
-'''
-targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]

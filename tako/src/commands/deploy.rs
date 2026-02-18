@@ -6,8 +6,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::build::{
-    BuildCache, BuildError, BuildExecutor, BuildPreset, ResolvedPresetSource, compute_file_hash,
-    create_filtered_archive_with_prefix, load_build_preset, run_container_build,
+    BuildAdapter, BuildCache, BuildError, BuildExecutor, BuildPreset, ResolvedPresetSource,
+    apply_adapter_base_runtime_defaults, compute_file_hash, create_filtered_archive_with_prefix,
+    infer_adapter_from_preset_reference, load_build_preset, run_container_build,
 };
 use crate::commands::server;
 use crate::config::{SecretsStore, ServerEntry, ServerTarget, ServersToml, TakoToml};
@@ -240,23 +241,6 @@ async fn run_async(
     confirm_production_deploy(&env, assume_yes)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    // Resolve target servers (explicit env mapping first, then production fallback).
-    let server_names =
-        resolve_deploy_server_names_with_setup(&tako_config, &mut servers, &env, &project_dir)
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    let use_per_server_spinners =
-        should_use_per_server_spinners(server_names.len(), output::is_interactive());
-
-    // Check all servers exist
-    for server_name in &server_names {
-        if !servers.contains(server_name) {
-            return Err(format_server_not_found_error(server_name).into());
-        }
-    }
-    let server_targets = resolve_deploy_server_targets(&servers, &server_names)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-
     output::section(&format_prepare_deploy_section(&env));
 
     let app_name = tako_config
@@ -268,8 +252,6 @@ async fn run_async(
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     output::success("Configuration valid");
-    output::success(&format_servers_summary(&server_names));
-    output::success(&format_server_targets_summary(&server_targets));
 
     // ===== Build =====
     output::section("Build");
@@ -317,13 +299,17 @@ async fn run_async(
 
     let preset_ref = resolve_build_preset_ref(&project_dir, &tako_config)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    let (build_preset, resolved_preset) = output::with_spinner_async(
+    let runtime_adapter = resolve_effective_build_adapter(&project_dir, &tako_config, &preset_ref)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let (mut build_preset, resolved_preset) = output::with_spinner_async(
         "Resolving build preset...",
         load_build_preset(&project_dir, &preset_ref),
     )
     .await
     .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     output::success(&format!(
         "Build preset: {} @ {}",
         resolved_preset.preset_ref,
@@ -384,6 +370,25 @@ async fn run_async(
             exclude_patterns.join(", ")
         ));
     }
+
+    // Resolve target servers (explicit env mapping first, then production fallback).
+    let server_names =
+        resolve_deploy_server_names_with_setup(&tako_config, &mut servers, &env, &project_dir)
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let use_per_server_spinners =
+        should_use_per_server_spinners(server_names.len(), output::is_interactive());
+
+    // Check all servers exist
+    for server_name in &server_names {
+        if !servers.contains(server_name) {
+            return Err(format_server_not_found_error(server_name).into());
+        }
+    }
+    let server_targets = resolve_deploy_server_targets(&servers, &server_names)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    output::success(&format_servers_summary(&server_names));
+    output::success(&format_server_targets_summary(&server_targets));
 
     let artifacts_by_target = build_target_artifacts(
         &project_dir,
@@ -1296,9 +1301,47 @@ fn should_use_docker_build(preset: &BuildPreset) -> bool {
     preset.build.container
 }
 
+fn resolve_build_adapter(
+    project_dir: &Path,
+    tako_config: &TakoToml,
+) -> Result<BuildAdapter, String> {
+    if let Some(adapter_override) = tako_config
+        .runtime
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return BuildAdapter::from_id(adapter_override).ok_or_else(|| {
+            format!(
+                "Invalid runtime '{}'; expected one of: bun, node, deno",
+                adapter_override
+            )
+        });
+    }
+
+    Ok(crate::build::detect_build_adapter(project_dir))
+}
+
+fn resolve_effective_build_adapter(
+    project_dir: &Path,
+    tako_config: &TakoToml,
+    preset_ref: &str,
+) -> Result<BuildAdapter, String> {
+    let configured_or_detected = resolve_build_adapter(project_dir, tako_config)?;
+    if configured_or_detected != BuildAdapter::Unknown {
+        return Ok(configured_or_detected);
+    }
+
+    let inferred = infer_adapter_from_preset_reference(preset_ref);
+    if inferred != BuildAdapter::Unknown {
+        return Ok(inferred);
+    }
+
+    Ok(configured_or_detected)
+}
+
 fn resolve_build_preset_ref(project_dir: &Path, tako_config: &TakoToml) -> Result<String, String> {
     if let Some(preset_ref) = tako_config
-        .build
         .preset
         .as_deref()
         .map(str::trim)
@@ -1306,7 +1349,7 @@ fn resolve_build_preset_ref(project_dir: &Path, tako_config: &TakoToml) -> Resul
     {
         return Ok(preset_ref.to_string());
     }
-    Ok(crate::build::detect_build_adapter(project_dir)
+    Ok(resolve_build_adapter(project_dir, tako_config)?
         .default_preset()
         .to_string())
 }
@@ -2845,10 +2888,7 @@ mod tests {
     fn resolve_build_preset_ref_prefers_tako_toml_override() {
         let temp = TempDir::new().unwrap();
         let config = TakoToml {
-            build: crate::config::BuildConfig {
-                preset: Some("github:owner/repo/presets/bun.toml@abc1234".to_string()),
-                ..Default::default()
-            },
+            preset: Some("github:owner/repo/presets/bun.toml@abc1234".to_string()),
             ..Default::default()
         };
 
@@ -2867,6 +2907,54 @@ mod tests {
             resolve_build_preset_ref(temp.path(), &config).unwrap(),
             "node"
         );
+    }
+
+    #[test]
+    fn resolve_build_preset_ref_uses_build_adapter_override_when_preset_is_missing() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("package.json"), r#"{"name":"demo"}"#).unwrap();
+        let config = TakoToml {
+            runtime: Some("deno".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_build_preset_ref(temp.path(), &config).unwrap(),
+            "deno"
+        );
+    }
+
+    #[test]
+    fn resolve_build_preset_ref_rejects_unknown_build_adapter_override() {
+        let temp = TempDir::new().unwrap();
+        let config = TakoToml {
+            runtime: Some("python".to_string()),
+            ..Default::default()
+        };
+        let err = resolve_build_preset_ref(temp.path(), &config).unwrap_err();
+        assert!(err.contains("Invalid runtime"));
+    }
+
+    #[test]
+    fn resolve_effective_build_adapter_uses_preset_family_when_detection_is_unknown() {
+        let temp = TempDir::new().unwrap();
+        let config = TakoToml::default();
+
+        let adapter =
+            resolve_effective_build_adapter(temp.path(), &config, "bun/tanstack-start").unwrap();
+        assert_eq!(adapter, BuildAdapter::Bun);
+    }
+
+    #[test]
+    fn resolve_effective_build_adapter_prefers_runtime_override() {
+        let temp = TempDir::new().unwrap();
+        let config = TakoToml {
+            runtime: Some("node".to_string()),
+            ..Default::default()
+        };
+
+        let adapter =
+            resolve_effective_build_adapter(temp.path(), &config, "bun/tanstack-start").unwrap();
+        assert_eq!(adapter, BuildAdapter::Node);
     }
 
     #[test]
@@ -3960,7 +4048,6 @@ name = "test-app"
         };
         let config = TakoToml {
             build: crate::config::BuildConfig {
-                preset: Some("bun".to_string()),
                 include: vec![],
                 exclude: vec![],
                 assets: vec!["dist/client".to_string(), "assets/shared".to_string()],
@@ -3982,7 +4069,6 @@ name = "test-app"
     fn build_artifact_include_patterns_uses_project_values_when_set() {
         let config = TakoToml {
             build: crate::config::BuildConfig {
-                preset: Some("bun".to_string()),
                 include: vec!["custom/**".to_string()],
                 exclude: vec![],
                 assets: vec![],

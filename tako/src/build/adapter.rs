@@ -125,6 +125,15 @@ pub enum BuildAdapter {
 }
 
 impl BuildAdapter {
+    pub fn from_id(value: &str) -> Option<Self> {
+        match value {
+            "bun" => Some(BuildAdapter::Bun),
+            "node" => Some(BuildAdapter::Node),
+            "deno" => Some(BuildAdapter::Deno),
+            _ => None,
+        }
+    }
+
     pub fn id(self) -> &'static str {
         match self {
             BuildAdapter::Bun => "bun",
@@ -350,5 +359,13 @@ mod tests {
         assert!(builtin_base_preset_content_for_path(BUILTIN_NODE_PRESET_PATH).is_some());
         assert!(builtin_base_preset_content_for_path(BUILTIN_DENO_PRESET_PATH).is_some());
         assert!(builtin_base_preset_content_for_path("presets/bun.toml").is_some());
+    }
+
+    #[test]
+    fn build_adapter_from_id_parses_known_values() {
+        assert_eq!(BuildAdapter::from_id("bun"), Some(BuildAdapter::Bun));
+        assert_eq!(BuildAdapter::from_id("node"), Some(BuildAdapter::Node));
+        assert_eq!(BuildAdapter::from_id("deno"), Some(BuildAdapter::Deno));
+        assert_eq!(BuildAdapter::from_id("python"), None);
     }
 }

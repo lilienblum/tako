@@ -29,7 +29,7 @@ Directory selection is command-scoped:
 
 ## Top-Level Commands
 
-- `tako init [--force] [DIR]`: initialize `tako.toml` in a project (prompts for app `name`, production `route`, and preset selection).
+- `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name`, production `route`, runtime, and preset selection).
 - `tako help`: show all commands with brief descriptions.
 - `tako upgrade`: upgrade local CLI using the hosted installer.
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
@@ -99,7 +99,7 @@ Notes:
 
 Deploy note:
 
-- `tako deploy` resolves preset from `[build].preset` or adapter default (`bun`/`node`/`deno`), builds target artifacts locally (Docker or local based on preset `[build].container` / deprecated `[build].docker`), reuses locally cached verified artifacts on cache hits, then uploads those artifacts to servers.
+- `tako deploy` resolves preset from top-level `preset` or adapter default (top-level `runtime` override, otherwise detected adapter), builds target artifacts locally (Docker or local based on preset `[build].container` / deprecated `[build].docker`), reuses locally cached verified artifacts on cache hits, then uploads those artifacts to servers.
 - Preset artifact filters come from preset `[build].exclude` plus app `[build].exclude` (`include` is app-level `[build].include` only).
 - Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is unsupported).
 - During artifact prep, deploy verifies resolved `main` exists in the post-build app directory and fails if missing.
@@ -168,7 +168,7 @@ Initialize in current directory:
 tako init
 ```
 
-`tako init` prompts for app name and production route, offers built-in adapter presets plus a custom option, and only prompts for `main` when neither adapter inference nor preset default provides it.
+`tako init` prompts for app name and production route, prompts for runtime (top-level `runtime`), offers built-in adapter presets plus a custom option, and only prompts for `main` when neither adapter inference nor preset default provides it.
 
 Run local app with non-interactive output:
 

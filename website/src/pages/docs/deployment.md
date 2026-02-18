@@ -25,7 +25,7 @@ What happens during deploy:
 - Non-overridable excludes: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
 - A versioned source tarball is created under `.tako/artifacts/`.
 - Deploy version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-- Build preset is resolved from `[build].preset` (or adapter base default when omitted) and locked in `.tako/build.lock.json`.
+- Build preset is resolved from top-level `preset` (or adapter base default from top-level `runtime`/detection when omitted) and locked in `.tako/build.lock.json`.
 - For each required server target (`arch`/`libc`), Tako runs preset install/build locally and packages a target artifact tarball (Docker/local based on preset `[build].container` or deprecated `[build].docker`; default derived from `[build].targets`).
 - Before packaging each target artifact, Tako verifies the resolved deploy `main` file exists in the post-build app directory.
 - Docker build containers stay ephemeral, but dependency downloads are reused from per-target Docker cache volumes keyed by cache kind + target label + builder image.
@@ -70,9 +70,11 @@ Each target server should have:
 - Empty route sets are rejected for non-development environments (no implicit catch-all mode).
 - Optional `main` overrides runtime entrypoint in deployed `app.json`.
 - Optional `[build]` controls artifact generation:
-  - `preset` (optional override; defaults to detected adapter base preset)
   - `include` / `exclude` artifact globs
   - `assets` directories merged into app `public/` after container build in listed order
+- Optional top-level preset selection controls runtime/build defaults:
+  - `runtime` (optional override: `bun`, `node`, `deno`)
+  - `preset` (optional override; defaults to adapter base preset from top-level `runtime` or detection)
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
 - Defines per-server scaling settings (`instances`, `idle_timeout`) via global and per-server overrides.
 

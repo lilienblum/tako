@@ -1209,8 +1209,6 @@ route = "prod.example.com"
             project_dir.join("tako.toml"),
             r#"
 name = "test-app"
-
-[build]
 preset = "bun"
 
 [envs.production]
@@ -1259,8 +1257,6 @@ route = "prod.example.com"
             r#"
 name = "test-app"
 main = "nonexistent.ts"
-
-[build]
 preset = "bun"
 
 [envs.production]

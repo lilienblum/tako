@@ -19,6 +19,7 @@ Instructions for AI agents working on the Tako codebase.
 7. **Keep SPEC-derived website docs in sync** - The following docs are agent-maintained outputs derived from `SPEC.md` and must be updated whenever `SPEC.md` behavior changes:
    - `website/src/pages/docs/how-tako-works.md`
    - `website/src/pages/docs/tako-toml.md`
+   - `website/src/pages/docs/presets.md`
    - `website/src/pages/docs/troubleshooting.md`
    - `website/src/pages/docs/cli.md`
    - `website/src/pages/docs/deployment.md`
@@ -126,6 +127,7 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
 3. If `SPEC.md` changed, regenerate/sync SPEC-derived website docs:
    - `website/src/pages/docs/how-tako-works.md`
    - `website/src/pages/docs/tako-toml.md`
+   - `website/src/pages/docs/presets.md`
    - `website/src/pages/docs/troubleshooting.md`
    - `website/src/pages/docs/cli.md`
    - `website/src/pages/docs/deployment.md`
@@ -206,6 +208,7 @@ Integration tests in `{crate}/tests/` directory for command-level behavior.
 - SPEC-derived website docs (auto-maintained by agent): keep these aligned with SPEC.md after every behavior change:
   - `website/src/pages/docs/how-tako-works.md`
   - `website/src/pages/docs/tako-toml.md`
+  - `website/src/pages/docs/presets.md`
   - `website/src/pages/docs/troubleshooting.md`
   - `website/src/pages/docs/cli.md`
   - `website/src/pages/docs/deployment.md`
