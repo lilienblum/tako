@@ -812,6 +812,7 @@ Reference script in this repo: `scripts/install-tako-server.sh` (source for `/in
 - Renewal: Every 12 hours
 - HTTP requests redirect to HTTPS (`307`, non-cacheable) by default.
 - Exceptions: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status` stay on HTTP.
+- Forwarded requests for private/local hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing, so local forwarding setups do not enter redirect loops.
 - No application path namespace is reserved at the edge proxy. Non-internal-host requests are routed to apps.
 
 **Optional `/opt/tako/server-config.toml`:**

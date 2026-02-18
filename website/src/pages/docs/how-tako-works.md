@@ -143,6 +143,7 @@ Remote TLS behavior:
 - HTTP requests redirect to HTTPS by default (307 with `Cache-Control: no-store`).
 - `/.well-known/acme-challenge/*` remains on HTTP for ACME.
 - Internal `Host: tako.internal` + `/status` stays on HTTP.
+- Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.
 - Non-internal-host requests are routed to apps normally (no reserved `/_tako/*` edge namespace).
 
 Certificate behavior:

@@ -377,6 +377,9 @@ impl ProxyHttp for TakoProxy {
                 .map(|d| d.ssl_digest.is_some())
                 .unwrap_or(false);
             let request_headers = &session.req_header().headers;
+            let x_forwarded_for = request_headers
+                .get("x-forwarded-for")
+                .and_then(|h| h.to_str().ok());
             let x_forwarded_proto = request_headers
                 .get("x-forwarded-proto")
                 .and_then(|h| h.to_str().ok());
@@ -384,7 +387,13 @@ impl ProxyHttp for TakoProxy {
                 .get("forwarded")
                 .and_then(|h| h.to_str().ok());
             let is_effective_https =
-                is_effective_request_https(transport_https, x_forwarded_proto, forwarded);
+                is_effective_request_https(transport_https, x_forwarded_proto, forwarded)
+                    || should_assume_forwarded_private_request_https(
+                        hostname,
+                        x_forwarded_for,
+                        x_forwarded_proto,
+                        forwarded,
+                    );
             ctx.is_https = is_effective_https;
 
             if should_redirect_http_request(is_effective_https, self.config.redirect_http_to_https)
@@ -490,13 +499,24 @@ impl ProxyHttp for TakoProxy {
             .map(|d| d.ssl_digest.is_some())
             .unwrap_or(false);
         let request_headers = &session.req_header().headers;
+        let host = request_headers.get("host").and_then(|h| h.to_str().ok()).unwrap_or("");
+        let hostname = host.split(':').next().unwrap_or(host);
+        let x_forwarded_for = request_headers
+            .get("x-forwarded-for")
+            .and_then(|h| h.to_str().ok());
         let x_forwarded_proto = request_headers
             .get("x-forwarded-proto")
             .and_then(|h| h.to_str().ok());
         let forwarded = request_headers
             .get("forwarded")
             .and_then(|h| h.to_str().ok());
-        ctx.is_https = is_effective_request_https(transport_https, x_forwarded_proto, forwarded);
+        ctx.is_https = is_effective_request_https(transport_https, x_forwarded_proto, forwarded)
+            || should_assume_forwarded_private_request_https(
+                hostname,
+                x_forwarded_for,
+                x_forwarded_proto,
+                forwarded,
+            );
 
         let backend = ctx
             .backend
@@ -608,6 +628,25 @@ fn is_effective_request_https(
     transport_https || is_request_forwarded_https(x_forwarded_proto, forwarded)
 }
 
+fn should_assume_forwarded_private_request_https(
+    hostname: &str,
+    x_forwarded_for: Option<&str>,
+    x_forwarded_proto: Option<&str>,
+    forwarded: Option<&str>,
+) -> bool {
+    crate::is_private_local_hostname(hostname)
+        && has_nonempty_header_value(x_forwarded_for)
+        && !has_forwarded_proto(x_forwarded_proto, forwarded)
+}
+
+fn has_forwarded_proto(x_forwarded_proto: Option<&str>, forwarded: Option<&str>) -> bool {
+    has_nonempty_header_value(x_forwarded_proto) || forwarded.is_some_and(forwarded_header_has_proto)
+}
+
+fn has_nonempty_header_value(value: Option<&str>) -> bool {
+    value.is_some_and(|raw| !raw.trim().is_empty())
+}
+
 fn x_forwarded_proto_is_https(value: &str) -> bool {
     // Keep only the first forwarded hop; proxies append as comma-separated values.
     value
@@ -626,6 +665,18 @@ fn forwarded_header_proto_is_https(value: &str) -> bool {
             let raw_value = parts.next().map(str::trim).unwrap_or("");
             let parsed = raw_value.trim_matches('"');
             key.eq_ignore_ascii_case("proto") && parsed.eq_ignore_ascii_case("https")
+        })
+    })
+}
+
+fn forwarded_header_has_proto(value: &str) -> bool {
+    value.split(',').any(|entry| {
+        entry.split(';').any(|param| {
+            let mut parts = param.splitn(2, '=');
+            let key = parts.next().map(str::trim).unwrap_or("");
+            let raw_value = parts.next().map(str::trim).unwrap_or("");
+            let parsed = raw_value.trim_matches('"');
+            key.eq_ignore_ascii_case("proto") && !parsed.is_empty()
         })
     })
 }
@@ -1118,6 +1169,53 @@ mod tests {
             Some("for=192.0.2.60;proto=https")
         ));
         assert!(!is_effective_request_https(false, Some("http"), None));
+    }
+
+    #[test]
+    fn test_private_local_forwarded_request_without_proto_is_treated_as_https() {
+        let inferred_https = should_assume_forwarded_private_request_https(
+            "test-app.orb.local",
+            Some("127.0.0.1"),
+            None,
+            None,
+        );
+        assert!(inferred_https);
+    }
+
+    #[test]
+    fn test_private_local_forwarded_request_with_proto_is_not_inferred() {
+        assert!(!should_assume_forwarded_private_request_https(
+            "test-app.orb.local",
+            Some("127.0.0.1"),
+            Some("http"),
+            None,
+        ));
+        assert!(!should_assume_forwarded_private_request_https(
+            "test-app.orb.local",
+            None,
+            None,
+            Some("for=127.0.0.1;proto=https"),
+        ));
+    }
+
+    #[test]
+    fn test_public_forwarded_request_without_proto_is_not_inferred() {
+        assert!(!should_assume_forwarded_private_request_https(
+            "api.example.com",
+            Some("127.0.0.1"),
+            None,
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_forwarded_header_has_proto_detects_presence() {
+        assert!(forwarded_header_has_proto("for=192.0.2.60;proto=https"));
+        assert!(forwarded_header_has_proto(
+            r#"for=192.0.2.60;proto="http";by=203.0.113.43"#
+        ));
+        assert!(!forwarded_header_has_proto("for=192.0.2.60;by=203.0.113.43"));
+        assert!(!forwarded_header_has_proto(r#"for=192.0.2.60;proto="""#));
     }
 
     #[test]

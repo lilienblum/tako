@@ -6,7 +6,7 @@
 //! - Health endpoint availability
 
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
@@ -50,6 +50,21 @@ fn can_bind_localhost() -> bool {
     TcpListener::bind("127.0.0.1:0").is_ok()
 }
 
+fn should_fail_when_localhost_bind_unavailable(ci_env: Option<&str>) -> bool {
+    ci_env.is_some_and(|value| !value.trim().is_empty())
+}
+
+fn require_localhost_bind() -> bool {
+    if can_bind_localhost() {
+        return true;
+    }
+    if should_fail_when_localhost_bind_unavailable(std::env::var("CI").ok().as_deref()) {
+        panic!("integration test requires localhost bind access in CI environment");
+    }
+    eprintln!("skipping integration test: localhost bind access unavailable");
+    false
+}
+
 fn bun_available() -> bool {
     Command::new("bun")
         .arg("--version")
@@ -70,65 +85,47 @@ struct TestServer {
     http_port: u16,
 }
 
+const SERVER_START_RETRIES: usize = 5;
+const SERVER_START_POLL_ATTEMPTS: usize = 100;
+const SERVER_START_POLL_DELAY: Duration = Duration::from_millis(100);
+const SERVER_START_RETRY_DELAY: Duration = Duration::from_millis(50);
+
 impl TestServer {
     fn start() -> Self {
         let data_dir = TempDir::new().unwrap();
         let socket_path = data_dir.path().join("tako.sock");
-        let http_port = pick_unused_port();
-        let tls_port = pick_unused_port();
+        let mut last_error = None;
 
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_tako-server"));
-        cmd.arg("--socket")
-            .arg(&socket_path)
-            .arg("--data-dir")
-            .arg(data_dir.path())
-            .arg("--port")
-            .arg(http_port.to_string())
-            .arg("--tls-port")
-            .arg(tls_port.to_string())
-            .arg("--no-acme")
-            .env("RUST_LOG", "warn")
-            .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit());
-        apply_coverage_env(&mut cmd);
-        let mut child = cmd.spawn().expect("Failed to start tako-server");
+        for attempt in 1..=SERVER_START_RETRIES {
+            let http_port = pick_unused_port();
+            let tls_port = pick_unused_port();
 
-        // Wait for socket to be ready
-        for _ in 0..100 {
-            if socket_path.exists() && UnixStream::connect(&socket_path).is_ok() {
-                thread::sleep(Duration::from_millis(100));
-                return TestServer {
-                    child: Some(child),
-                    socket_path,
-                    data_dir,
-                    http_port,
-                };
-            }
-
-            if let Ok(Some(status)) = child.try_wait() {
-                let mut stderr = String::new();
-                if let Some(mut s) = child.stderr.take() {
-                    let _ = s.read_to_string(&mut stderr);
+            let _ = fs::remove_file(&socket_path);
+            let mut child = spawn_test_server(&socket_path, data_dir.path(), http_port, tls_port);
+            match wait_for_server_socket(&socket_path, &mut child) {
+                Ok(()) => {
+                    return TestServer {
+                        child: Some(child),
+                        socket_path,
+                        data_dir,
+                        http_port,
+                    };
                 }
-                panic!(
-                    "tako-server exited before socket became available: {} ({})",
-                    status,
-                    stderr.trim()
-                );
+                Err(error) => {
+                    last_error = Some(format!(
+                        "attempt {attempt}/{SERVER_START_RETRIES} failed (http={http_port}, tls={tls_port}): {error}"
+                    ));
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    thread::sleep(SERVER_START_RETRY_DELAY);
+                }
             }
-            thread::sleep(Duration::from_millis(100));
         }
 
-        let mut stderr = String::new();
-        if let Some(mut s) = child.stderr.take() {
-            let _ = s.read_to_string(&mut stderr);
-        }
-        let _ = child.kill();
-        let _ = child.wait();
         panic!(
-            "Server socket never became available (stderr: {})",
-            stderr.trim()
+            "failed to start tako-server after {} attempts: {}",
+            SERVER_START_RETRIES,
+            last_error.unwrap_or_else(|| "unknown error".to_string())
         );
     }
 
@@ -202,6 +199,46 @@ impl TestServer {
     }
 }
 
+fn spawn_test_server(
+    socket_path: &std::path::Path,
+    data_dir: &std::path::Path,
+    http_port: u16,
+    tls_port: u16,
+) -> Child {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tako-server"));
+    cmd.arg("--socket")
+        .arg(socket_path)
+        .arg("--data-dir")
+        .arg(data_dir)
+        .arg("--port")
+        .arg(http_port.to_string())
+        .arg("--tls-port")
+        .arg(tls_port.to_string())
+        .arg("--no-acme")
+        .env("RUST_LOG", "warn")
+        .stdin(Stdio::null())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    apply_coverage_env(&mut cmd);
+    cmd.spawn().expect("Failed to start tako-server")
+}
+
+fn wait_for_server_socket(socket_path: &std::path::Path, child: &mut Child) -> Result<(), String> {
+    for _ in 0..SERVER_START_POLL_ATTEMPTS {
+        if socket_path.exists() && UnixStream::connect(socket_path).is_ok() {
+            thread::sleep(SERVER_START_POLL_DELAY);
+            return Ok(());
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(format!(
+                "tako-server exited before socket became available: {status}"
+            ));
+        }
+        thread::sleep(SERVER_START_POLL_DELAY);
+    }
+    Err("server socket never became available".to_string())
+}
+
 impl Drop for TestServer {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
@@ -211,12 +248,23 @@ impl Drop for TestServer {
     }
 }
 
+mod localhost_bind {
+    use super::*;
+
+    #[test]
+    fn ci_env_requires_failure_when_bind_is_unavailable() {
+        assert!(should_fail_when_localhost_bind_unavailable(Some("true")));
+        assert!(!should_fail_when_localhost_bind_unavailable(None));
+        assert!(!should_fail_when_localhost_bind_unavailable(Some("  ")));
+    }
+}
+
 mod instance_management {
     use super::*;
 
     #[test]
     fn test_list_apps_empty() {
-        if !can_bind_localhost() {
+        if !require_localhost_bind() {
             return;
         }
 
@@ -235,7 +283,7 @@ mod instance_management {
 
     #[test]
     fn test_deploy_and_list() {
-        if !can_bind_localhost() || !e2e_enabled() || !bun_available() {
+        if !require_localhost_bind() || !e2e_enabled() || !bun_available() {
             return;
         }
 
@@ -306,7 +354,7 @@ mod health_check {
 
     #[test]
     fn test_http_redirects_to_https() {
-        if !can_bind_localhost() {
+        if !require_localhost_bind() {
             return;
         }
 
@@ -331,7 +379,7 @@ mod health_check {
 
     #[test]
     fn test_health_endpoint() {
-        if !can_bind_localhost() {
+        if !require_localhost_bind() {
             return;
         }
 
@@ -353,7 +401,7 @@ mod health_check {
 
     #[test]
     fn test_orbstack_host_does_not_redirect_when_proto_header_missing() {
-        if !can_bind_localhost() {
+        if !require_localhost_bind() {
             return;
         }
 
@@ -383,7 +431,7 @@ mod rolling_update {
 
     #[test]
     fn test_reload_missing_app_returns_error() {
-        if !can_bind_localhost() {
+        if !require_localhost_bind() {
             return;
         }
 

@@ -1174,7 +1174,7 @@ fn format_process_failure(
     }
 }
 
-fn should_use_self_signed_route_cert(domain: &str) -> bool {
+pub(crate) fn is_private_local_hostname(domain: &str) -> bool {
     let host = domain
         .split(':')
         .next()
@@ -1198,6 +1198,10 @@ fn should_use_self_signed_route_cert(domain: &str) -> bool {
         || host.ends_with(".invalid")
         || host.ends_with(".example")
         || host.ends_with(".home.arpa")
+}
+
+fn should_use_self_signed_route_cert(domain: &str) -> bool {
+    is_private_local_hostname(domain)
 }
 
 fn validate_deploy_routes(routes: &[String]) -> Result<(), String> {
