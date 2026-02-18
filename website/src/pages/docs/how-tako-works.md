@@ -73,8 +73,8 @@ High-level deploy flow:
 2. Resolve source bundle root and app subdirectory (git root when available; otherwise app directory).
 3. Create a source archive (`.tako/artifacts/{version}-source.tar.gz`) from filtered source files.
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-4. Resolve build preset (`[build].preset`) and lock it to a commit in `.tako/build.lock.json`.
-5. Build target-specific artifacts locally (Docker when preset `[build].targets` is configured; local host build when omitted/empty), with deterministic local artifact cache reuse when inputs are unchanged.
+4. Resolve build preset (`[build].preset` override or adapter base default) and lock it to a commit in `.tako/build.lock.json`.
+5. Build target-specific artifacts locally (Docker or local host based on preset `[build].container`/`[build].docker`, with defaults derived from `[build].targets`), with deterministic local artifact cache reuse when inputs are unchanged.
 6. Deploy to target servers in parallel over SSH.
 7. On each server: lock, upload/extract target artifact, finalize `app.json`, send deploy command with merged env/secrets payload, run runtime prep (Bun dependency install), rolling update, unlock.
 
@@ -84,9 +84,9 @@ Important deployment behavior:
 - `development` is reserved for `tako dev` and cannot be deployed.
 - Source bundle filtering uses `.gitignore`.
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
-- Deploy always builds artifacts locally (Docker when preset `[build].targets` is configured; local host build when omitted/empty); servers do not run app build steps during deploy.
+- Deploy always builds artifacts locally (Docker or local host based on preset build mode); servers do not run app build steps during deploy.
 - Docker builds reuse per-target dependency cache volumes (proto + runtime cache mounts) keyed by cache kind + target label + builder image while still creating fresh build containers each deploy.
-- During Docker builds, Tako bootstraps `proto`, resolves runtime tool version from workspace `.prototools` (fallback `latest`), and writes release `.prototools` so server runtime matches build runtime.
+- Runtime version resolution is proto-first: Tako tries `proto run <tool> -- --version` (local and Docker contexts), then falls back to `.prototools`, then `latest`; deploy writes release `.prototools` so server runtime matches build runtime.
 - Preset runtime fields use top-level `main`/`install`/`start` keys (legacy preset `[deploy]` is not supported).
 - Artifact filters use project `[build].include` (optional), plus preset `[build].exclude` and project `[build].exclude`.
 - Bun deploys exclude `node_modules` by default and install release dependencies on server before startup (`bun install --production`).

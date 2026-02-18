@@ -7,11 +7,17 @@ use serde::{Deserialize, Serialize};
 pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const EMBEDDED_PRESET_REPO: &str = "embedded";
-const EMBEDDED_BUN_PRESET_PATH: &str = "presets/bun.toml";
-const EMBEDDED_BUN_PRESET_CONTENT: &str = include_str!("../../../presets/bun.toml");
-const EMBEDDED_BUN_TANSTACK_START_PRESET_PATH: &str = "presets/bun-tanstack-start.toml";
+const EMBEDDED_BUN_PRESET_PATH: &str = "presets/bun/bun.toml";
+const EMBEDDED_BUN_PRESET_CONTENT: &str = include_str!("../../../presets/bun/bun.toml");
+const EMBEDDED_BUN_TANSTACK_START_PRESET_PATH: &str = "presets/bun/tanstack-start.toml";
 const EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT: &str =
-    include_str!("../../../presets/bun-tanstack-start.toml");
+    include_str!("../../../presets/bun/tanstack-start.toml");
+const EMBEDDED_NODE_PRESET_PATH: &str = "presets/node/node.toml";
+const EMBEDDED_NODE_PRESET_CONTENT: &str = include_str!("../../../presets/node/node.toml");
+const EMBEDDED_DENO_PRESET_PATH: &str = "presets/deno/deno.toml";
+const EMBEDDED_DENO_PRESET_CONTENT: &str = include_str!("../../../presets/deno/deno.toml");
+const LEGACY_BUN_PRESET_PATH: &str = "presets/bun.toml";
+const LEGACY_BUN_TANSTACK_START_PRESET_PATH: &str = "presets/bun-tanstack-start.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -59,6 +65,8 @@ pub struct BuildPresetBuild {
     pub build: Option<String>,
     #[serde(default)]
     pub targets: Vec<String>,
+    #[serde(default)]
+    pub container: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -111,6 +119,10 @@ struct BuildPresetRawBuild {
     build: Option<String>,
     #[serde(default)]
     targets: Option<toml::Value>,
+    #[serde(default)]
+    container: Option<bool>,
+    #[serde(default)]
+    docker: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -137,38 +149,93 @@ pub fn parse_preset_reference(value: &str) -> Result<PresetReference, String> {
         return parse_github_reference(trimmed, rest);
     }
 
-    if trimmed.contains('@') || trimmed.contains(':') {
+    if trimmed.contains(':') {
         return Err(format!(
-            "Invalid preset reference '{}'. Use an official alias like 'bun' or 'bun/<commit-hash>', or github:<owner>/<repo>/<path>.toml[@<commit-hash>].",
+            "Invalid preset reference '{}'. Use an official alias like 'bun', 'bun/tanstack-start', or 'bun@<commit-hash>', or github:<owner>/<repo>/<path>.toml[@<commit-hash>].",
             trimmed
         ));
     }
 
-    let (name, commit) = match trimmed.split_once('/') {
+    let (without_at_commit, explicit_commit) = match trimmed.rsplit_once('@') {
         Some((name, commit)) => {
-            if name.is_empty() || commit.is_empty() || commit.contains('/') {
+            let commit = commit.trim();
+            if commit.is_empty() {
                 return Err(format!(
-                    "Invalid preset alias '{}'. Expected '<name>' or '<name>/<commit-hash>'.",
+                    "Invalid preset reference '{}': commit hash cannot be empty after '@'.",
                     trimmed
                 ));
             }
             validate_commit_hash(trimmed, commit)?;
-            (name.to_string(), Some(commit.to_string()))
+            (name.trim(), Some(commit.to_string()))
         }
-        None => (trimmed.to_string(), None),
+        None => (trimmed, None),
     };
 
-    if !name
-        .chars()
-        .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
-    {
+    let (name, commit) = if let Some(commit) = explicit_commit {
+        (without_at_commit.to_string(), Some(commit))
+    } else {
+        parse_alias_with_optional_legacy_commit(trimmed, without_at_commit)?
+    };
+
+    validate_official_alias(trimmed, &name)?;
+    Ok(PresetReference::OfficialAlias { name, commit })
+}
+
+fn parse_alias_with_optional_legacy_commit(
+    raw_value: &str,
+    alias_value: &str,
+) -> Result<(String, Option<String>), String> {
+    let Some((name, candidate_commit)) = alias_value.rsplit_once('/') else {
+        return Ok((alias_value.to_string(), None));
+    };
+
+    if candidate_commit.is_empty() || name.is_empty() {
         return Err(format!(
-            "Invalid preset alias '{}'. Alias must use lowercase letters, digits, '-' or '_'.",
-            trimmed
+            "Invalid preset alias '{}'. Expected '<name>', '<family>/<name>', or alias with commit suffix.",
+            raw_value
         ));
     }
 
-    Ok(PresetReference::OfficialAlias { name, commit })
+    if candidate_commit.chars().all(|ch| ch.is_ascii_hexdigit()) {
+        validate_commit_hash(raw_value, candidate_commit)?;
+        return Ok((name.to_string(), Some(candidate_commit.to_string())));
+    }
+
+    Ok((alias_value.to_string(), None))
+}
+
+fn validate_official_alias(raw_value: &str, alias: &str) -> Result<(), String> {
+    if alias.is_empty() {
+        return Err(format!(
+            "Invalid preset alias '{}'. Alias is empty.",
+            raw_value
+        ));
+    }
+    let segments: Vec<&str> = alias.split('/').collect();
+    if segments.len() > 2 {
+        return Err(format!(
+            "Invalid preset alias '{}'. Expected '<name>' or '<family>/<name>'.",
+            raw_value
+        ));
+    }
+    if segments.iter().any(|segment| segment.is_empty()) {
+        return Err(format!(
+            "Invalid preset alias '{}'. Alias segments cannot be empty.",
+            raw_value
+        ));
+    }
+    for segment in segments {
+        if !segment
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
+        {
+            return Err(format!(
+                "Invalid preset alias '{}'. Alias must use lowercase letters, digits, '-' or '_' (with optional one '/').",
+                raw_value
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn parse_github_reference(raw_value: &str, rest: &str) -> Result<PresetReference, String> {
@@ -247,7 +314,7 @@ pub async fn load_build_preset(
 
     let (repo, path, commit, content) = match parsed_ref {
         PresetReference::OfficialAlias { name, commit } => {
-            let path = format!("presets/{name}.toml");
+            let path = official_alias_to_path(&name);
             if let Some(commit) = commit {
                 let content =
                     fetch_preset_content_by_commit(OFFICIAL_PRESET_REPO, &path, &commit).await?;
@@ -298,10 +365,24 @@ pub async fn load_build_preset(
     Ok((preset, resolved))
 }
 
+fn official_alias_to_path(alias: &str) -> String {
+    match alias {
+        "bun" => EMBEDDED_BUN_PRESET_PATH.to_string(),
+        "bun-tanstack-start" => EMBEDDED_BUN_TANSTACK_START_PRESET_PATH.to_string(),
+        "node" => EMBEDDED_NODE_PRESET_PATH.to_string(),
+        "deno" => EMBEDDED_DENO_PRESET_PATH.to_string(),
+        _ => format!("presets/{alias}.toml"),
+    }
+}
+
 fn embedded_official_preset_content(path: &str) -> Option<&'static str> {
     match path {
         EMBEDDED_BUN_PRESET_PATH => Some(EMBEDDED_BUN_PRESET_CONTENT),
         EMBEDDED_BUN_TANSTACK_START_PRESET_PATH => Some(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT),
+        EMBEDDED_NODE_PRESET_PATH => Some(EMBEDDED_NODE_PRESET_CONTENT),
+        EMBEDDED_DENO_PRESET_PATH => Some(EMBEDDED_DENO_PRESET_CONTENT),
+        LEGACY_BUN_PRESET_PATH => Some(EMBEDDED_BUN_PRESET_CONTENT),
+        LEGACY_BUN_TANSTACK_START_PRESET_PATH => Some(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT),
         _ => None,
     }
 }
@@ -417,7 +498,9 @@ fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<Build
         );
     }
 
-    let target_labels = parse_build_target_labels(raw.build.targets)?;
+    let target_labels = parse_build_target_labels(raw.build.targets.clone())?;
+    let use_container_build =
+        resolve_container_build_toggle(raw.build.container, raw.build.docker, &target_labels)?;
 
     let preset = BuildPreset {
         name,
@@ -428,6 +511,7 @@ fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<Build
             install: raw.build.install.clone(),
             build: raw.build.build.clone(),
             targets: target_labels,
+            container: use_container_build,
         },
         dev: if raw.dev.is_empty() {
             raw.dev_cmd
@@ -475,6 +559,25 @@ fn parse_build_target_labels(raw_targets: Option<toml::Value>) -> Result<Vec<Str
         labels.push(trimmed.to_string());
     }
     Ok(labels)
+}
+
+fn resolve_container_build_toggle(
+    container: Option<bool>,
+    docker: Option<bool>,
+    target_labels: &[String],
+) -> Result<bool, String> {
+    if let (Some(container), Some(docker)) = (container, docker)
+        && container != docker
+    {
+        return Err(
+            "Build preset [build] cannot set conflicting `container` and `docker` values."
+                .to_string(),
+        );
+    }
+    if let Some(value) = container.or(docker) {
+        return Ok(value);
+    }
+    Ok(!target_labels.is_empty())
 }
 
 fn read_locked_preset(project_dir: &Path) -> Result<Option<ResolvedPresetSource>, String> {
@@ -618,6 +721,30 @@ mod tests {
     }
 
     #[test]
+    fn parse_preset_reference_accepts_namespaced_official_alias() {
+        let parsed = parse_preset_reference("bun/tanstack-start").unwrap();
+        assert_eq!(
+            parsed,
+            PresetReference::OfficialAlias {
+                name: "bun/tanstack-start".to_string(),
+                commit: None,
+            }
+        );
+    }
+
+    #[test]
+    fn parse_preset_reference_accepts_namespaced_official_alias_with_commit() {
+        let parsed = parse_preset_reference("bun/tanstack-start@abc1234").unwrap();
+        assert_eq!(
+            parsed,
+            PresetReference::OfficialAlias {
+                name: "bun/tanstack-start".to_string(),
+                commit: Some("abc1234".to_string()),
+            }
+        );
+    }
+
+    #[test]
     fn parse_preset_reference_accepts_github_with_commit() {
         let parsed =
             parse_preset_reference("github:my-user/tako/presets/presets/bun.toml@abc123def456")
@@ -648,13 +775,29 @@ mod tests {
     #[test]
     fn parse_preset_reference_rejects_invalid_values() {
         assert!(parse_preset_reference("").is_err());
-        assert!(parse_preset_reference("bun/not-a-hash").is_err());
         assert!(parse_preset_reference("github:owner/repo").is_err());
         assert!(parse_preset_reference("github:owner/repo/path.jsonc").is_err());
         assert!(parse_preset_reference("github:owner/repo/path.json").is_err());
         assert!(parse_preset_reference("github:owner/repo/path.yaml").is_err());
         assert!(parse_preset_reference("bun/abc12").is_err());
         assert!(parse_preset_reference("bun/abc12345/extra").is_err());
+        assert!(parse_preset_reference("bun/tanstack-start@").is_err());
+        assert!(parse_preset_reference("Bun").is_err());
+    }
+
+    #[test]
+    fn official_alias_to_path_maps_family_layout() {
+        assert_eq!(official_alias_to_path("bun"), "presets/bun/bun.toml");
+        assert_eq!(
+            official_alias_to_path("bun-tanstack-start"),
+            "presets/bun/tanstack-start.toml"
+        );
+        assert_eq!(
+            official_alias_to_path("bun/tanstack-start"),
+            "presets/bun/tanstack-start.toml"
+        );
+        assert_eq!(official_alias_to_path("node"), "presets/node/node.toml");
+        assert_eq!(official_alias_to_path("deno"), "presets/deno/deno.toml");
     }
 
     #[test]
@@ -668,10 +811,10 @@ mod tests {
 
     #[test]
     fn embedded_bun_tanstack_start_preset_parses() {
-        let content = embedded_official_preset_content("presets/bun-tanstack-start.toml")
+        let content = embedded_official_preset_content("presets/bun/tanstack-start.toml")
             .expect("embedded bun-tanstack-start preset should exist");
-        let preset = parse_and_validate_preset(content, "bun-tanstack-start").unwrap();
-        assert_eq!(preset.name, "bun-tanstack-start");
+        let preset = parse_and_validate_preset(content, "tanstack-start").unwrap();
+        assert_eq!(preset.name, "tanstack-start");
         assert_eq!(preset.main.as_deref(), Some("dist/server/tako-entry.mjs"));
         assert_eq!(preset.assets, vec!["dist/client"]);
     }
@@ -867,6 +1010,52 @@ targets = ["linux-x86_64-glibc", "linux-aarch64-musl"]
                 "linux-aarch64-musl".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn parse_and_validate_preset_accepts_build_container_toggle() {
+        let raw = r#"
+name = "bun"
+
+[build]
+container = true
+install = "bun install --frozen-lockfile"
+build = "bun run --if-present build"
+targets = ["linux-x86_64-glibc"]
+"#;
+        let preset = parse_preset(raw).unwrap();
+        assert!(preset.build.container);
+    }
+
+    #[test]
+    fn parse_and_validate_preset_accepts_deprecated_build_docker_toggle() {
+        let raw = r#"
+name = "bun"
+
+[build]
+docker = true
+install = "bun install --frozen-lockfile"
+build = "bun run --if-present build"
+targets = ["linux-x86_64-glibc"]
+"#;
+        let preset = parse_preset(raw).unwrap();
+        assert!(preset.build.container);
+    }
+
+    #[test]
+    fn parse_and_validate_preset_rejects_conflicting_container_and_docker_toggles() {
+        let raw = r#"
+name = "bun"
+
+[build]
+container = true
+docker = false
+install = "bun install --frozen-lockfile"
+build = "bun run --if-present build"
+"#;
+        let err = parse_preset(raw).unwrap_err();
+        assert!(err.contains("container"));
+        assert!(err.contains("docker"));
     }
 
     #[test]

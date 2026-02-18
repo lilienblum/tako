@@ -42,7 +42,7 @@ pub struct TakoToml {
 /// Build configuration from [build].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct BuildConfig {
-    /// Build preset reference (for example: "bun", "bun/<commit-hash>", or "github:owner/repo/path.toml@<sha>").
+    /// Build preset reference (for example: "bun", "bun@<commit-hash>", "bun/tanstack-start", or "github:owner/repo/path.toml@<sha>").
     pub preset: Option<String>,
 
     /// Additional file globs to include in the deploy artifact.

@@ -25,8 +25,8 @@ What happens during deploy:
 - Non-overridable excludes: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
 - A versioned source tarball is created under `.tako/artifacts/`.
 - Deploy version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-- Build preset is resolved from `[build].preset` and locked in `.tako/build.lock.json`.
-- For each required server target (`arch`/`libc`), Tako runs preset install/build locally and packages a target artifact tarball (Docker when preset `[build].targets` is configured; local host build when omitted/empty).
+- Build preset is resolved from `[build].preset` (or adapter base default when omitted) and locked in `.tako/build.lock.json`.
+- For each required server target (`arch`/`libc`), Tako runs preset install/build locally and packages a target artifact tarball (Docker/local based on preset `[build].container` or deprecated `[build].docker`; default derived from `[build].targets`).
 - Before packaging each target artifact, Tako verifies the resolved deploy `main` file exists in the post-build app directory.
 - Docker build containers stay ephemeral, but dependency downloads are reused from per-target Docker cache volumes keyed by cache kind + target label + builder image.
 - Target artifacts are cached locally in `.tako/artifacts/` using a deterministic build-input key.
@@ -46,7 +46,7 @@ Before you ship, do a quick sanity pass:
 4. Run your local tests before deploy.
 5. Ensure deploy entrypoint is set either in `tako.toml` (`main = "..."`) or preset top-level `main`.
 6. Ensure your build output includes that entrypoint path (deploy validates this before artifact packaging).
-7. If preset `[build].targets` is configured, ensure Docker is available locally for containerized target builds.
+7. If preset build mode resolves to container (`[build].container = true` or `[build].docker = true`), ensure Docker is available locally.
 
 ## Server Prerequisites
 
@@ -70,7 +70,7 @@ Each target server should have:
 - Empty route sets are rejected for non-development environments (no implicit catch-all mode).
 - Optional `main` overrides runtime entrypoint in deployed `app.json`.
 - Optional `[build]` controls artifact generation:
-  - `preset` (required)
+  - `preset` (optional override; defaults to detected adapter base preset)
   - `include` / `exclude` artifact globs
   - `assets` directories merged into app `public/` after container build in listed order
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
@@ -83,8 +83,9 @@ Each target server should have:
 - Build preset resolves from official alias/GitHub ref and is locked to a commit in `.tako/build.lock.json`.
 - Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is not supported).
 - Artifact include precedence is `build.include` then `**/*`; artifact excludes are preset `[build].exclude` plus `build.exclude`.
-- For each server target label, Tako runs install/build from preset `[build].install` and `[build].build` (Docker when preset `[build].targets` is non-empty; local host build otherwise).
+- For each server target label, Tako runs install/build from preset `[build].install` and `[build].build` (Docker/local mode from preset `[build].container` / deprecated `[build].docker`; unset defaults to Docker when `[build].targets` is non-empty).
 - Containerized deploy builds reuse per-target dependency cache volumes (proto + runtime cache mounts) while still creating fresh build containers.
+- Runtime version is resolved proto-first (`proto run <tool> -- --version`), with fallback to `.prototools`, then `latest`.
 - Local artifact cache key includes source hash, target label, resolved preset source/commit, runtime tool/version, Docker/local mode, build commands, include/exclude patterns, asset roots, and app subdirectory.
 - `assets` are copied into app `public/` after container build (later entries overwrite earlier ones).
 - Final `app.json` is written in app directory after resolving runtime `main`.

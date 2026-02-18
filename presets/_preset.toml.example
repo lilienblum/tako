@@ -1,5 +1,5 @@
 # Preset template example.
-# Copy to `presets/<your-preset>.toml` and customize for your runtime.
+# Copy to `presets/<adapter>/<name>.toml` and customize for your runtime.
 # Keep this `.example` file out of actual preset references.
 
 # Optional preset identifier used in logs/errors and deploy metadata.
@@ -54,4 +54,6 @@ build = '''
 '''
 
 # Optional target labels for Docker builds. If omitted or empty, Tako uses local builds.
+# Set `container = true` to force container builds for these targets (default: true when targets are set).
+# container = true
 # targets = ["linux-x86_64-glibc", "linux-aarch64-glibc"]

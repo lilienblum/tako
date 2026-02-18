@@ -3,9 +3,11 @@ use std::fs;
 use std::path::Path;
 
 use crate::app::resolve_app_name;
+use crate::build::{BuildAdapter, detect_build_adapter};
 use crate::output;
 
-const EMBEDDED_BUN_PRESET_CONTENT: &str = include_str!("../../../presets/bun.toml");
+const EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT: &str =
+    include_str!("../../../presets/bun/tanstack-start.toml");
 
 pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
@@ -22,7 +24,11 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    let runtime_name = "bun";
+    let adapter = detect_build_adapter(&project_dir);
+    let selected_preset = select_preset_for_adapter(adapter)?;
+    let preset_default_main = selected_preset
+        .as_deref()
+        .and_then(|preset| embedded_preset_default_main(preset, adapter));
 
     // Resolve app name
     let detected_app_name = resolve_app_name(&project_dir).unwrap_or_else(|_| "my-app".to_string());
@@ -37,8 +43,14 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
         false,
         Some(&default_production_route),
     )?;
-    let preset_default_main = embedded_bun_preset_default_main();
-    let main = if preset_default_main.is_some() {
+    let inferred_main = adapter.infer_main_entrypoint(&project_dir);
+    let main = if let Some(inferred_main) = inferred_main {
+        if preset_default_main.as_deref() == Some(inferred_main.as_str()) {
+            None
+        } else {
+            Some(inferred_main)
+        }
+    } else if preset_default_main.is_some() {
         None
     } else {
         let default_main = infer_default_main_entrypoint(&project_dir);
@@ -54,6 +66,7 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
         app_name.trim(),
         main.as_deref().map(str::trim),
         production_route.trim(),
+        selected_preset.as_deref(),
     );
 
     fs::write(&tako_toml_path, template)?;
@@ -61,7 +74,12 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
     output::success("Created tako.toml");
 
     output::section("Detected");
-    output::step(&format!("Runtime: {}", runtime_name));
+    output::step(&format!("Adapter: {}", adapter.id()));
+    if let Some(preset_ref) = selected_preset.as_deref() {
+        output::step(&format!("Preset: {}", preset_ref));
+    } else {
+        output::step("Preset: custom (unset in tako.toml)");
+    }
     output::step(&format!("App name: {}", app_name.trim()));
     output::step(&format!("Production route: {}", production_route.trim()));
     if let Some(main) = main.as_deref() {
@@ -89,15 +107,20 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn infer_default_main_entrypoint(project_dir: &Path) -> String {
-    if let Some(main) = infer_main_from_package_json(project_dir) {
+    let adapter = detect_build_adapter(project_dir);
+    if let Some(main) = adapter.infer_main_entrypoint(project_dir) {
         return main;
     }
 
     const CANDIDATES: &[&str] = &[
         "index.ts",
+        "index.tsx",
         "index.js",
+        "index.jsx",
         "src/index.ts",
+        "src/index.tsx",
         "src/index.js",
+        "src/index.jsx",
         "server/index.mjs",
         "server/index.ts",
         "server/index.js",
@@ -115,32 +138,8 @@ fn infer_default_main_entrypoint(project_dir: &Path) -> String {
     "index.ts".to_string()
 }
 
-fn infer_main_from_package_json(project_dir: &Path) -> Option<String> {
-    let package_json_path = project_dir.join("package.json");
-    if !package_json_path.is_file() {
-        return None;
-    }
-    let raw = fs::read_to_string(package_json_path).ok()?;
-    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let main = parsed.get("main")?.as_str()?.trim();
-    if main.is_empty() {
-        return None;
-    }
-
-    let normalized = main.replace('\\', "/");
-    let normalized = normalized.trim_start_matches("./").to_string();
-    if normalized.is_empty() || normalized.starts_with('/') || normalized.contains("..") {
-        return None;
-    }
-    if project_dir.join(&normalized).is_file() {
-        Some(normalized)
-    } else {
-        None
-    }
-}
-
-fn embedded_bun_preset_default_main() -> Option<String> {
-    let parsed: toml::Value = toml::from_str(EMBEDDED_BUN_PRESET_CONTENT).ok()?;
+fn parse_preset_default_main(content: &str) -> Option<String> {
+    let parsed: toml::Value = toml::from_str(content).ok()?;
     let main = parsed.get("main")?.as_str()?.trim();
     if main.is_empty() {
         None
@@ -149,7 +148,59 @@ fn embedded_bun_preset_default_main() -> Option<String> {
     }
 }
 
-fn generate_template(app_name: &str, main: Option<&str>, production_route: &str) -> String {
+fn embedded_preset_default_main(preset_ref: &str, adapter: BuildAdapter) -> Option<String> {
+    match preset_ref {
+        "bun" | "bun/bun" => adapter.embedded_preset_default_main(),
+        "bun/tanstack-start" | "bun-tanstack-start" => {
+            parse_preset_default_main(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT)
+        }
+        "node" | "node/node" | "deno" | "deno/deno" => adapter.embedded_preset_default_main(),
+        _ => None,
+    }
+}
+
+fn select_preset_for_adapter(adapter: BuildAdapter) -> std::io::Result<Option<String>> {
+    if !output::is_interactive() {
+        return Ok(Some(adapter.default_preset().to_string()));
+    }
+
+    let mut options: Vec<(String, Option<String>)> = Vec::new();
+    match adapter {
+        BuildAdapter::Bun => {
+            options.push(("bun (base preset)".to_string(), Some("bun".to_string())));
+            options.push((
+                "bun/tanstack-start".to_string(),
+                Some("bun/tanstack-start".to_string()),
+            ));
+        }
+        BuildAdapter::Node => {
+            options.push(("node (base preset)".to_string(), Some("node".to_string())));
+        }
+        BuildAdapter::Deno => {
+            options.push(("deno (base preset)".to_string(), Some("deno".to_string())));
+        }
+        BuildAdapter::Unknown => {
+            options.push(("bun (base preset)".to_string(), Some("bun".to_string())));
+        }
+    }
+    options.push((
+        "Custom preset reference (leave unset for now)".to_string(),
+        None,
+    ));
+
+    output::select(
+        "Build preset (`[build].preset` in tako.toml)",
+        Some("Choose a built-in preset or leave it unset and add your own later."),
+        options,
+    )
+}
+
+fn generate_template(
+    app_name: &str,
+    main: Option<&str>,
+    production_route: &str,
+    preset_ref: Option<&str>,
+) -> String {
     let main_line = if let Some(main) = main {
         format!(
             "# Required: runtime entrypoint used by `tako dev` and `tako deploy` (relative to project root).\nmain = \"{}\"",
@@ -158,6 +209,11 @@ fn generate_template(app_name: &str, main: Option<&str>, production_route: &str)
     } else {
         "# Entrypoint comes from the selected preset default `main`.\n# main = \"index.ts\""
             .to_string()
+    };
+    let preset_line = if let Some(preset_ref) = preset_ref {
+        format!("preset = \"{}\"", preset_ref)
+    } else {
+        "# preset = \"bun\"".to_string()
     };
     format!(
         r#"# Tako configuration
@@ -170,7 +226,7 @@ name = "{app_name}"
 
 # Build preset and artifact packaging.
 [build]
-preset = "bun"
+{preset_line}
 # include = ["dist/**", ".output/**"]
 # exclude = ["**/*.map"]
 # assets = ["public", ".output/public"]
@@ -229,21 +285,25 @@ route = "{production_route}"
 "#,
         app_name = app_name,
         main_line = main_line,
+        preset_line = preset_line,
         production_route = production_route
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        embedded_bun_preset_default_main, generate_template, infer_default_main_entrypoint,
-    };
+    use super::{embedded_preset_default_main, generate_template, infer_default_main_entrypoint};
+    use crate::build::BuildAdapter;
     use tempfile::TempDir;
 
     #[test]
     fn init_template_keeps_only_minimal_options_uncommented() {
-        let rendered =
-            generate_template("demo-app", Some("server/index.mjs"), "demo-app.example.com");
+        let rendered = generate_template(
+            "demo-app",
+            Some("server/index.mjs"),
+            "demo-app.example.com",
+            Some("bun"),
+        );
 
         assert!(
             rendered.contains(
@@ -308,8 +368,12 @@ mod tests {
 
     #[test]
     fn init_template_includes_reference_link_and_option_examples() {
-        let rendered =
-            generate_template("demo-app", Some("server/index.mjs"), "demo-app.example.com");
+        let rendered = generate_template(
+            "demo-app",
+            Some("server/index.mjs"),
+            "demo-app.example.com",
+            Some("bun"),
+        );
 
         assert!(
             rendered.contains("https://tako.sh/docs/tako-toml"),
@@ -343,6 +407,25 @@ mod tests {
             infer_default_main_entrypoint(temp.path()),
             "server/index.ts"
         );
+    }
+
+    #[test]
+    fn infer_default_main_entrypoint_prefers_root_js_extension_order_before_src() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("index.jsx"), "export default {};").unwrap();
+        std::fs::write(temp.path().join("src/index.ts"), "export {};").unwrap();
+
+        assert_eq!(infer_default_main_entrypoint(temp.path()), "index.jsx");
+    }
+
+    #[test]
+    fn infer_default_main_entrypoint_supports_tsx_candidates() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/index.tsx"), "export default {};").unwrap();
+
+        assert_eq!(infer_default_main_entrypoint(temp.path()), "src/index.tsx");
     }
 
     #[test]
@@ -384,23 +467,42 @@ mod tests {
 
     #[test]
     fn init_template_can_omit_main_when_preset_provides_default() {
-        let rendered = generate_template("demo-app", None, "demo-app.example.com");
+        let rendered = generate_template("demo-app", None, "demo-app.example.com", Some("bun"));
         assert!(rendered.contains("# Entrypoint comes from the selected preset default `main`."));
         assert!(!rendered.contains("\nmain = \""));
     }
 
     #[test]
     fn init_template_uses_prompted_production_route() {
-        let rendered = generate_template("demo-app", Some("server/index.mjs"), "api.demo-app.com");
+        let rendered = generate_template(
+            "demo-app",
+            Some("server/index.mjs"),
+            "api.demo-app.com",
+            Some("bun"),
+        );
         assert!(rendered.contains("[envs.production]\nroute = \"api.demo-app.com\""));
         assert!(!rendered.contains("[envs.production]\nroute = \"demo-app.example.com\""));
     }
 
     #[test]
+    fn init_template_can_leave_preset_unset() {
+        let rendered = generate_template("demo-app", None, "demo-app.example.com", None);
+        assert!(rendered.contains("[build]\n# preset = \"bun\""));
+    }
+
+    #[test]
     fn embedded_bun_preset_default_main_is_set() {
         assert_eq!(
-            embedded_bun_preset_default_main(),
+            embedded_preset_default_main("bun", BuildAdapter::Bun),
             Some("src/index.ts".to_string())
+        );
+    }
+
+    #[test]
+    fn embedded_bun_tanstack_start_preset_default_main_is_set() {
+        assert_eq!(
+            embedded_preset_default_main("bun/tanstack-start", BuildAdapter::Bun),
+            Some("dist/server/tako-entry.mjs".to_string())
         );
     }
 }

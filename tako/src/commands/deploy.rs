@@ -315,7 +315,7 @@ async fn run_async(
     let (version, source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)?;
     output::step(&format!("Version: {}", version));
 
-    let preset_ref = resolve_build_preset_ref(&tako_config)
+    let preset_ref = resolve_build_preset_ref(&project_dir, &tako_config)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let (build_preset, resolved_preset) = output::with_spinner_async(
         "Resolving build preset...",
@@ -1293,20 +1293,22 @@ fn resolve_build_target(
 }
 
 fn should_use_docker_build(preset: &BuildPreset) -> bool {
-    !preset.build.targets.is_empty()
+    preset.build.container
 }
 
-fn resolve_build_preset_ref(tako_config: &TakoToml) -> Result<String, String> {
-    tako_config
+fn resolve_build_preset_ref(project_dir: &Path, tako_config: &TakoToml) -> Result<String, String> {
+    if let Some(preset_ref) = tako_config
         .build
         .preset
         .as_deref()
         .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(|value| value.to_string())
-        .ok_or_else(|| {
-            "Missing [build].preset in tako.toml. Set an explicit preset (for example `preset = \"bun\"`).".to_string()
-        })
+        .filter(|value| !value.is_empty())
+    {
+        return Ok(preset_ref.to_string());
+    }
+    Ok(crate::build::detect_build_adapter(project_dir)
+        .default_preset()
+        .to_string())
 }
 
 fn sanitize_cache_label(label: &str) -> String {
@@ -2040,6 +2042,12 @@ fn resolve_runtime_version_from_workspace(
             app_dir.display()
         ));
     }
+    if let Some(version) =
+        resolve_runtime_version_with_local_proto(workspace, &app_dir, runtime_tool)?
+    {
+        return Ok(version);
+    }
+
     let app_tools = app_dir.join(PROTO_TOOLS_FILE);
     let workspace_tools = workspace.join(PROTO_TOOLS_FILE);
 
@@ -2052,6 +2060,52 @@ fn resolve_runtime_version_from_workspace(
     };
 
     Ok(spec.unwrap_or_else(|| "latest".to_string()))
+}
+
+fn resolve_runtime_version_with_local_proto(
+    workspace: &Path,
+    app_dir: &Path,
+    runtime_tool: &str,
+) -> Result<Option<String>, String> {
+    #[cfg(test)]
+    {
+        let _ = workspace;
+        let _ = app_dir;
+        let _ = runtime_tool;
+        return Ok(None);
+    }
+
+    #[cfg(not(test))]
+    {
+        let app_dir_str = app_dir.to_string_lossy().to_string();
+        let workspace_str = workspace.to_string_lossy().to_string();
+        let command = format!(
+            "cd {} && proto install --yes >/dev/null 2>&1 || true; proto run {} -- --version",
+            shell_single_quote(&app_dir_str),
+            shell_single_quote(runtime_tool)
+        );
+        let output = std::process::Command::new("sh")
+            .args(["-lc", &command])
+            .current_dir(workspace)
+            .output()
+            .map_err(|e| {
+                format!(
+                    "Failed to run local runtime version probe with proto in '{}': {e}",
+                    workspace_str
+                )
+            })?;
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let version = stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(str::to_string);
+        Ok(version)
+    }
 }
 
 fn read_runtime_version_spec_from_prototools(
@@ -2789,6 +2843,7 @@ mod tests {
 
     #[test]
     fn resolve_build_preset_ref_prefers_tako_toml_override() {
+        let temp = TempDir::new().unwrap();
         let config = TakoToml {
             build: crate::config::BuildConfig {
                 preset: Some("github:owner/repo/presets/bun.toml@abc1234".to_string()),
@@ -2798,16 +2853,20 @@ mod tests {
         };
 
         assert_eq!(
-            resolve_build_preset_ref(&config).unwrap(),
+            resolve_build_preset_ref(temp.path(), &config).unwrap(),
             "github:owner/repo/presets/bun.toml@abc1234"
         );
     }
 
     #[test]
-    fn resolve_build_preset_ref_requires_explicit_preset() {
+    fn resolve_build_preset_ref_falls_back_to_detected_adapter_default() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("package.json"), r#"{"name":"demo"}"#).unwrap();
         let config = TakoToml::default();
-        let err = resolve_build_preset_ref(&config).unwrap_err();
-        assert!(err.contains("Missing [build].preset"));
+        assert_eq!(
+            resolve_build_preset_ref(temp.path(), &config).unwrap(),
+            "node"
+        );
     }
 
     #[test]
@@ -3535,6 +3594,7 @@ name = "test-app"
                 install: Some("bun install".to_string()),
                 build: Some("bun run build".to_string()),
                 targets: vec!["linux-x86_64-glibc".to_string()],
+                container: true,
             },
             dev: vec![],
             install: None,
@@ -3582,6 +3642,7 @@ name = "test-app"
                 install: Some("bun install".to_string()),
                 build: Some("bun run build".to_string()),
                 targets: vec!["linux-x86_64-glibc".to_string()],
+                container: true,
             },
             dev: vec![],
             install: None,
@@ -3954,6 +4015,38 @@ name = "test-app"
             "dist/**".to_string(),
             ".output/**".to_string()
         ]));
+    }
+
+    #[test]
+    fn should_use_docker_build_respects_build_container_flag() {
+        let local_preset = BuildPreset {
+            name: "bun".to_string(),
+            main: None,
+            builder_image: None,
+            build: crate::build::BuildPresetBuild {
+                exclude: vec![],
+                install: Some("bun install".to_string()),
+                build: Some("bun run build".to_string()),
+                targets: vec!["linux-x86_64-glibc".to_string()],
+                container: false,
+            },
+            dev: vec![],
+            install: None,
+            start: vec![],
+            targets: HashMap::new(),
+            target_defaults: crate::build::BuildPresetTargetDefaults::default(),
+            assets: vec![],
+        };
+        assert!(!should_use_docker_build(&local_preset));
+
+        let container_preset = BuildPreset {
+            build: crate::build::BuildPresetBuild {
+                container: true,
+                ..local_preset.build.clone()
+            },
+            ..local_preset
+        };
+        assert!(should_use_docker_build(&container_preset));
     }
 
     #[test]

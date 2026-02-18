@@ -44,7 +44,7 @@ name = "my-app"           # Required - stable identity used by deploy/dev
 main = "server/index.mjs" # Optional override; required only when preset does not define top-level `main`
 
 [build]
-preset = "bun"            # Required for `tako deploy` and `tako dev`
+preset = "bun"            # Optional override; defaults to detected adapter base preset
 # include = ["dist/**", ".output/**"]
 # exclude = ["**/*.map"]
 # assets = ["dist/client", "assets/shared"]
@@ -94,20 +94,29 @@ env = "production"
 - If `main` is omitted in `tako.toml`, deploy/dev use preset top-level `main` when present.
 - If neither `tako.toml main` nor preset `main` is set, deploy/dev fail with guidance.
 - Legacy top-level `dist` and `assets` keys are not supported.
-- `[build].preset` is required for `tako deploy` and `tako dev`.
+- `[build].preset` is optional; when omitted, `tako deploy`/`tako dev` use the detected adapter base preset (`bun`, `node`, or `deno`).
 - `build.preset` supports:
-  - official aliases: `bun`, `bun/<commit-hash>`, `bun-tanstack-start`, `bun-tanstack-start/<commit-hash>`
+  - official aliases: `bun`, `node`, `deno`, `bun/tanstack-start`
+  - pinned official aliases: `bun/<commit-hash>` (legacy), `bun@<commit-hash>`, `bun/tanstack-start@<commit-hash>`
   - GitHub references: `github:<owner>/<repo>/<path>.toml[@<commit-hash>]`
-- `bun-tanstack-start` preset defaults `main = "dist/server/tako-entry.mjs"` and adds `assets = ["dist/client"]`.
-- Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `dev` (`tako dev` command), top-level `install`/`start` (server runtime prep/start commands), top-level `assets`, and `[build]` (`exclude`, `install`, `build`, optional `targets = ["linux-<arch>-<libc>", ...]`). Legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Top-level `dev_cmd` remains accepted as a deprecated alias for compatibility.
+- Built-in presets are organized by adapter family under `presets/<adapter>/<name>.toml` (for example `presets/bun/bun.toml`, `presets/bun/tanstack-start.toml`).
+- `bun/tanstack-start` (legacy alias `bun-tanstack-start`) defaults `main = "dist/server/tako-entry.mjs"` and adds `assets = ["dist/client"]`.
+- Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `dev` (`tako dev` command), top-level `install`/`start` (server runtime prep/start commands), top-level `assets`, and `[build]` (`exclude`, `install`, `build`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false` with deprecated alias `docker = true|false`). Legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Top-level `dev_cmd` remains accepted as a deprecated alias for compatibility.
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for reproducible preset fetches on later deploys.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Source bundle filtering uses `.gitignore`.
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
 - Deploy sends merged app vars + runtime vars + decrypted secrets to `tako-server` in the `deploy` command payload; `tako-server` injects them directly into app process environment on spawn.
-- If preset `[build].targets` is non-empty, deploy builds each required target artifact in Docker (one per target label). If preset `[build].targets` is omitted/empty, deploy uses local host build commands (no Docker).
+- Deploy build mode is controlled by preset `[build].container` (or deprecated `[build].docker`):
+  - `true`: build each target artifact in Docker.
+  - `false`: run build commands on the local host workspace for each target.
+  - when unset, default is `true` if `[build].targets` is non-empty, otherwise `false`.
 - Docker build containers are ephemeral; dependency caches are persisted with target-scoped Docker volumes keyed by cache kind + target label + builder image (proto cache: `/var/cache/tako/proto`, Bun cache: `/var/cache/tako/bun/install/cache`).
-- For Docker target builds, Tako bootstraps `proto` inside the build container, installs tools from workspace `.prototools` (fallback `<runtime-tool> = "latest"`), probes runtime version with `proto run <tool> -- --version`, and writes that resolved runtime version into release `.prototools` before packaging.
+- Runtime version resolution is proto-driven:
+  - local builds try `proto install --yes` + `proto run <tool> -- --version` from app workspace first.
+  - if local proto probing is unavailable/fails, deploy falls back to reading `.prototools` (app then workspace), then `latest`.
+  - Docker target builds bootstrap `proto` in-container and probe with `proto run <tool> -- --version`.
+  - deploy writes the resolved runtime tool version into release `.prototools` before packaging.
 - Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, target build commands/image, include/exclude patterns, asset roots, and app subdirectory.
 - Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
 - After each target build (and asset merge), deploy verifies the resolved runtime `main` file exists in the build workspace before artifact packaging; missing files fail deploy with an explicit error.
@@ -240,8 +249,8 @@ Template behavior:
 
 - Leaves only minimal starter options uncommented:
   - `name`
-  - `[build].preset`
   - `[envs.production].route`
+  - `[build].preset` when a built-in preset is selected (left commented when "custom preset" is selected)
 - Includes commented examples/explanations for all supported `tako.toml` options:
   - `name`, `main`, and `[build]` (`preset`, `include`, `exclude`, `assets`)
   - `[vars]`
@@ -252,7 +261,16 @@ Template behavior:
 - Includes a docs link to `https://tako.sh/docs/tako-toml`.
 - Prompts for required app `name` (default from directory-derived app name).
 - Prompts for required production route (`[envs.production].route`) with default `{name}.example.com`.
-- Prompts for `main` entrypoint (with a detected default) only when selected preset does not define top-level `main`; when preset `main` exists, template omits `main`.
+- Detects adapter (`bun`, `node`, `deno`, fallback `unknown`) and offers built-in preset choices plus a "custom preset reference" option.
+- For built-in base adapters, init defaults to:
+  - Bun: `bun`
+  - Node: `node`
+  - Deno: `deno`
+- When "custom preset reference" is selected, init leaves `[build].preset` unset (commented).
+- For `main`, init behavior is:
+  - if adapter inference finds an entrypoint and it differs from preset default `main`, write it as top-level `main`;
+  - if inferred `main` matches preset default (or preset default exists and no inference is available), omit top-level `main`;
+  - prompt only when neither adapter inference nor preset default `main` is available.
 
 If `tako.toml` already exists:
 
@@ -589,20 +607,21 @@ Deploy flow helpers:
 
 **Steps:**
 
-1. Pre-deployment validation (secrets present, preset configured, server target metadata present/valid for all selected servers)
+1. Pre-deployment validation (secrets present, server target metadata present/valid for all selected servers)
 2. Resolve source bundle root (git root when available; otherwise app directory)
 3. Resolve app subdirectory relative to source bundle root
 4. Resolve deploy runtime `main` (`main` from `tako.toml`, otherwise preset top-level `main`)
 5. Create source archive (`.tako/artifacts/{version}-source.tar.gz`) and write `app.json` at app path inside archive
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
    - Best-effort local artifact cache prune runs before target builds (retention: 30 source archives, 90 target artifacts; orphan target metadata is removed).
-6. Resolve build preset (`build.preset`) and persist lock metadata in `.tako/build.lock.json`
+6. Resolve build preset (`build.preset` override or detected adapter base preset) and persist lock metadata in `.tako/build.lock.json`
 7. Build target artifacts locally (one artifact per unique server target label):
    - Resolve deterministic cache key per target.
    - On cache hit, reuse existing verified target artifact.
    - On cache miss (or invalid cache entry), extract source archive into a temporary workspace.
-   - If preset `[build].targets` is non-empty: run preset install/build commands in a Docker container for that target.
-   - If preset `[build].targets` is empty: run preset install/build commands on the local host workspace.
+   - Build in Docker when preset `[build].container = true` (or deprecated `[build].docker = true`).
+   - Build on local host workspace when `[build].container = false`.
+   - When `container/docker` is unset, default to Docker only when `[build].targets` is non-empty.
    - Merge configured assets into app `public/`.
    - Verify resolved runtime `main` exists in the built app directory.
    - Materialize release `.prototools` in app dir with resolved runtime tool version for server runtime parity.
@@ -630,11 +649,12 @@ Deploy flow helpers:
 - Deploy target app path is `DIR` from CLI (`tako deploy [DIR]`) relative to the source bundle root.
 - Source filtering uses `.gitignore`.
 - These paths are always excluded from archive payload: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
-- Deploy always builds target-specific artifacts locally (Docker when preset `[build].targets` is configured, local host build when omitted/empty); servers receive prebuilt artifacts and do not run app build steps during deploy.
+- Deploy always builds target-specific artifacts locally (Docker when preset build mode resolves to container, local host otherwise); servers receive prebuilt artifacts and do not run app build steps during deploy.
 - For Bun runtime, `tako-server` runs dependency install for the release before starting/rolling instances.
 - Build logic comes from resolved preset `[build].install` and `[build].build` commands.
 - Runtime prep/start on server comes from preset top-level `install` and `start`.
 - During container builds, deploy reuses target-scoped dependency cache volumes (proto and runtime-specific cache mounts such as Bun), keyed by cache kind, target label, and builder image.
+- During local builds, deploy resolves runtime version by asking proto directly (`proto run <tool> -- --version`) when available, then falls back to `.prototools` and finally `latest`.
 - Artifact include precedence: `build.include` -> `**/*`.
 - Artifact exclude list: preset `[build].exclude` plus `build.exclude`.
 - Asset roots are preset `assets` plus `build.assets` (deduplicated), merged into app `public/` after container build with ordered overwrite.

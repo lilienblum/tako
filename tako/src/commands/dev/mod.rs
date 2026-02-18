@@ -277,17 +277,19 @@ fn compute_dev_env(cfg: &TakoToml) -> std::collections::HashMap<String, String> 
     env
 }
 
-fn resolve_dev_preset_ref(cfg: &TakoToml) -> Result<String, String> {
-    cfg.build
+fn resolve_dev_preset_ref(project_dir: &Path, cfg: &TakoToml) -> Result<String, String> {
+    if let Some(preset_ref) = cfg
+        .build
         .preset
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(|value| value.to_string())
-        .ok_or_else(|| {
-            "Missing [build].preset in tako.toml. Set an explicit preset before running `tako dev`."
-                .to_string()
-        })
+    {
+        return Ok(preset_ref.to_string());
+    }
+    Ok(crate::build::detect_build_adapter(project_dir)
+        .default_preset()
+        .to_string())
 }
 
 fn resolve_dev_start_command(preset: &BuildPreset, main: &str) -> Result<Vec<String>, String> {
@@ -2147,7 +2149,7 @@ pub async fn run(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
     let cfg = load_dev_tako_toml(&project_dir)?;
-    let preset_ref = resolve_dev_preset_ref(&cfg)?;
+    let preset_ref = resolve_dev_preset_ref(&project_dir, &cfg)?;
     let (build_preset, _) = load_build_preset(&project_dir, &preset_ref)
         .await
         .map_err(|e| format!("Failed to resolve build preset '{}': {}", preset_ref, e))?;
@@ -3889,7 +3891,7 @@ async fn run_attached_dev_client(
     if use_tui {
         let adapter_name = if let Ok(project_dir) = std::env::current_dir() {
             if let Ok(cfg) = load_dev_tako_toml(&project_dir) {
-                if let Ok(preset_ref) = resolve_dev_preset_ref(&cfg) {
+                if let Ok(preset_ref) = resolve_dev_preset_ref(&project_dir, &cfg) {
                     match load_build_preset(&project_dir, &preset_ref).await {
                         Ok((preset, _)) => preset.name,
                         Err(_) => infer_preset_name_from_ref(&preset_ref),

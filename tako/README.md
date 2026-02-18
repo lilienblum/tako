@@ -35,11 +35,12 @@ Operational behavior highlights:
 - App heading lines show `app (environment) state`; build/version is shown on the nested `build:` line.
 - `tako deploy` packages source files from the app's source root (git root when available; otherwise app directory), filtered by `.gitignore`.
 - `tako deploy` always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/` from source bundles.
-- `tako deploy` requires `[build].preset` and locks resolved preset source metadata in `.tako/build.lock.json`.
-- `tako deploy` builds per-target artifacts locally in Docker containers (preset-defined install/build steps) before uploading to servers.
+- `tako deploy` resolves preset from `[build].preset` when set, otherwise falls back to detected adapter base preset (`bun`, `node`, or `deno`), and locks resolved preset source metadata in `.tako/build.lock.json`.
+- `tako deploy` builds per-target artifacts locally before upload, using Docker only when preset `[build].container` (or deprecated `[build].docker`) resolves to `true`.
 - Container builds stay ephemeral; dependency downloads are reused via per-target Docker cache volumes keyed by target label and builder image.
 - `tako deploy` caches target artifacts in `.tako/artifacts` and reuses verified cache hits when build inputs are unchanged; invalid cache entries are rebuilt automatically.
-- `tako deploy` merges build assets (preset assets + `build.assets`) into app `public/` after container build, in listed order.
+- Local runtime version resolution is proto-first (`proto run <tool> -- --version`) with fallback to `.prototools` and `latest`.
+- `tako deploy` merges build assets (preset assets + `build.assets`) into app `public/` after target build, in listed order.
 - `tako deploy` writes `app.json` in the deployed app directory and `tako-server` uses it to resolve the runtime start command.
 - `tako servers add` captures per-server target metadata (`arch`, `libc`) during SSH checks and stores it in `~/.tako/config.toml` under `[server_targets.<name>]`.
 - `tako deploy` requires valid target metadata for each selected server and does not probe targets during deploy.
