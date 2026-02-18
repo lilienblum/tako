@@ -39,7 +39,7 @@ From an app directory:
 tako dev
 ```
 
-`tako.toml` must define top-level `name`; `tako dev` uses it for `{app}.tako.local`.
+`tako dev` resolves app name from top-level `name` when set, otherwise from sanitized project directory name. This name is used for `{app}.tako.local`.
 
 If `[envs.development]` omits routes, `tako dev` defaults to `{app}.tako.local`.
 
@@ -97,7 +97,7 @@ Deploy e2e uses Docker/SSH and is opt-in:
 Deploy e2e exercises artifact-cache behavior too: first deploy builds target artifacts, then unchanged redeploy reuses verified cached artifacts from `.tako/artifacts/`.
 When top-level `preset` is omitted, dev/deploy choose adapter base preset from top-level `runtime` when set, otherwise adapter detection (`unknown` falls back to `bun`).
 When preset build mode resolves to container (`[build].container` / `[build].docker`), containerized builds reuse per-target Docker dependency cache volumes (prefix `tako-build-cache-`) across deploy runs.
-Preset artifact filters use preset `[build].exclude`; runtime base presets provide lifecycle defaults for `dev`/`install`/`start` plus `[build].install`/`[build].build`, and variant presets can override them when needed (legacy preset `[deploy]`, `[dev]`, preset `include`, and `[artifact]` are not supported; deprecated top-level `dev_cmd` is accepted as an alias).
+Preset artifact filters use preset `[build].exclude`; runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`. Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while `[build].targets` and `[build].container` override when set (legacy preset `[deploy]`, `[dev]`, preset `include`, and `[artifact]` are not supported; deprecated top-level `dev_cmd` is accepted as an alias).
 Deploy validates that the resolved runtime `main` exists after build and before artifact packaging.
 Bun release dependencies are installed on server before rollout (`bun install --production`).
 Hosted server install resolves Linux host `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>` artifact.

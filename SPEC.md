@@ -33,14 +33,15 @@ App names must be URL-friendly (DNS hostname compatible):
 - **Examples:** `my-app`, `api-server`, `web-frontend`
 
 This ensures names work in DNS (`{app-name}.tako.local` by default), URLs, and environment variables.
-`name` is required and acts as the app's stable identity; do not change it after first deploy.
+`name` is optional in `tako.toml`. If omitted, Tako resolves app name from the project directory name.
+Using top-level `name` is recommended for stability: it must be unique per server. Renaming it later creates a new app identity/path; delete the old deployment manually.
 
 ### tako.toml (Project Root - Required)
 
 Application configuration for build, variables, routes, and deployment.
 
 ```toml
-name = "my-app"           # Required - stable identity used by deploy/dev
+name = "my-app"           # Optional but recommended stable identity used by deploy/dev
 main = "server/index.mjs" # Optional override; required only when preset does not define top-level `main`
 runtime = "bun"           # Optional override; defaults to detected adapter
 # preset = "bun/tanstack-start" # Optional; omit for adapter base preset
@@ -90,7 +91,12 @@ env = "production"
 
 **Build/deploy behavior:**
 
-- `name` in `tako.toml` is required.
+- `name` in `tako.toml` is optional.
+- App name resolution order for deploy/dev/logs/secrets/delete:
+  1. top-level `name` (when set)
+  2. sanitized project directory name fallback
+- For predictable deploy identity, set `name` explicitly and keep it unique per server.
+- Renaming app identity (`name` or directory fallback) is treated as a different app; remove the previous deployment manually if needed.
 - `main` in `tako.toml` is an optional runtime entrypoint override written to deployed `app.json`.
 - If `main` is omitted in `tako.toml`, deploy/dev use preset top-level `main` when present.
 - If neither `tako.toml main` nor preset `main` is set, deploy/dev fail with guidance.
@@ -105,6 +111,10 @@ env = "production"
 - File-based presets remain for named variants under `presets/<adapter>/<name>.toml` (for example `presets/bun/tanstack-start.toml`).
 - `bun/tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and adds `assets = ["dist/client"]`.
 - Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`dev`, `install`, `start`, `[build].install`, `[build].build`).
+- Runtime base presets also provide default build filters/targets (`[build].exclude`, `[build].targets`, `[build].container`) and default `assets`.
+- Preset `[build].exclude` entries are appended to runtime-base excludes (base-first, deduplicated).
+- Preset `[build].targets` and `[build].container` override runtime defaults when set (including explicit empty arrays or explicit `container` values).
+- Preset `assets` override runtime-base `assets` when set.
 - Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `assets`, and `[build]` (`exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false` with deprecated alias `docker = true|false`). Presets can still override runtime lifecycle fields (`dev`, `install`, `start`, `[build].install`, `[build].build`) when needed. Legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Top-level `dev_cmd` remains accepted as a deprecated alias for compatibility.
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for reproducible preset fetches on later deploys.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).

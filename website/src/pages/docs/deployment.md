@@ -65,6 +65,8 @@ Each target server should have:
 ### Project config ([`tako.toml`](/docs/tako-toml))
 
 - `tako.toml` is required in the project root.
+- App identity resolves from top-level `name` when set, otherwise sanitized project directory name.
+- Set `name` explicitly for stable identity and uniqueness per server; renaming identity later creates a new app path and requires manual cleanup of the old deployment.
 - Defines environments and routes.
 - Every non-development environment must define `route` or `routes`.
 - Empty route sets are rejected for non-development environments (no implicit catch-all mode).
@@ -84,7 +86,9 @@ Each target server should have:
 - Archive includes a fallback `app.json` at app path inside the archive.
 - Build preset resolves from official alias/GitHub ref and is locked to a commit in `.tako/build.lock.json`.
 - Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is not supported).
-- Artifact include precedence is `build.include` then `**/*`; artifact excludes are preset `[build].exclude` plus `build.exclude`.
+- Runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`.
+- Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.
+- Artifact include precedence is `build.include` then `**/*`; artifact excludes are effective preset `[build].exclude` plus `build.exclude`.
 - For each server target label, Tako runs install/build from preset `[build].install` and `[build].build` (Docker/local mode from preset `[build].container` / deprecated `[build].docker`; unset defaults to Docker when `[build].targets` is non-empty).
 - Containerized deploy builds reuse per-target dependency cache volumes (proto + runtime cache mounts) while still creating fresh build containers.
 - Runtime version is resolved proto-first (`proto run <tool> -- --version`), with fallback to `.prototools`, then `latest`.

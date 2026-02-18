@@ -35,6 +35,7 @@ use tokio::sync::watch;
 #[cfg(test)]
 use tokio::time::timeout;
 
+use crate::app::resolve_app_name;
 use crate::build::{
     BuildAdapter, BuildPreset, PresetReference, apply_adapter_base_runtime_defaults,
     infer_adapter_from_preset_reference, load_build_preset, parse_preset_reference,
@@ -2236,12 +2237,8 @@ pub async fn run(
 
     let runtime_name = build_preset.name.clone();
 
-    let app_name = cfg.name.clone().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "Missing top-level `name` in tako.toml.",
-        )
-    })?;
+    let app_name = resolve_app_name(&project_dir)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let domain = LocalCA::app_domain(&app_name);
     let local_ca = setup_local_ca().await?;
     ensure_dev_server_tls_material(&local_ca)?;

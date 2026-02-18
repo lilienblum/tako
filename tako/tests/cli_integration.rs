@@ -1323,6 +1323,73 @@ libc = "glibc"
     }
 
     #[test]
+    fn test_deploy_without_name_uses_directory_name_fallback() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("fallback-app");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let home = temp.path().join("home");
+        let tako_home = temp.path().join("tako-home");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&tako_home).unwrap();
+
+        // No top-level `name`; deploy should fall back to directory-derived app name.
+        fs::write(
+            project_dir.join("tako.toml"),
+            r#"
+main = "nonexistent.ts"
+preset = "bun"
+
+[envs.production]
+route = "prod.example.com"
+
+[servers.test-server]
+env = "production"
+"#,
+        )
+        .unwrap();
+
+        fs::write(
+            tako_home.join("config.toml"),
+            r#"
+[[servers]]
+name = "test-server"
+host = "127.0.0.1"
+port = 22222
+
+[server_targets.test-server]
+arch = "x86_64"
+libc = "glibc"
+"#,
+        )
+        .unwrap();
+
+        fs::write(project_dir.join("bun.lockb"), "").unwrap();
+        fs::write(
+            project_dir.join("package.json"),
+            r#"{"name": "fallback-app", "version": "1.0.0", "main": "nonexistent.ts"}"#,
+        )
+        .unwrap();
+
+        let output = run_tako_with_env(
+            &["deploy", "--env", "production"],
+            &project_dir,
+            &home,
+            &tako_home,
+        );
+
+        assert!(
+            !output.status.success(),
+            "Deploy should fail in this fixture"
+        );
+        let stderr = stderr_str(&output);
+        assert!(
+            !stderr.contains("Missing top-level `name`"),
+            "Deploy should not require top-level name: {}",
+            stderr
+        );
+    }
+
+    #[test]
     fn test_deploy_validates_server_exists() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().to_path_buf();

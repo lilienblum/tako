@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::app::resolve_app_name;
+
 use super::error::{ConfigError, Result};
 use super::secrets::SecretsStore;
 use super::servers_toml::{ServerEntry, ServersToml};
@@ -18,7 +20,7 @@ pub struct MergedConfig {
     /// Secrets from project .tako/secrets
     pub secrets: SecretsStore,
 
-    /// App name (from required top-level `name` in tako.toml)
+    /// Resolved app name (top-level `name` when set, otherwise directory fallback)
     pub app_name: String,
 }
 
@@ -68,9 +70,7 @@ impl MergedConfig {
         // Load tako.toml
         let project = TakoToml::load_from_dir(dir)?;
 
-        let app_name = project.name.clone().ok_or_else(|| {
-            ConfigError::Validation("Missing top-level `name` in tako.toml.".to_string())
-        })?;
+        let app_name = resolve_app_name(dir).map_err(|e| ConfigError::Validation(e.to_string()))?;
 
         // Load global servers
         let global_servers = ServersToml::load()?;
@@ -97,9 +97,7 @@ impl MergedConfig {
         // Load tako.toml
         let project = TakoToml::load_from_dir(dir)?;
 
-        let app_name = project.name.clone().ok_or_else(|| {
-            ConfigError::Validation("Missing top-level `name` in tako.toml.".to_string())
-        })?;
+        let app_name = resolve_app_name(dir).map_err(|e| ConfigError::Validation(e.to_string()))?;
 
         // Load global servers
         let global_servers = if let Some(path) = servers_path {
@@ -546,21 +544,20 @@ host = "5.6.7.8"
     }
 
     #[test]
-    fn test_load_requires_name_in_tako_toml() {
+    fn test_load_uses_directory_name_when_tako_toml_name_is_missing() {
         let temp_dir = TempDir::new().unwrap();
+        let project_dir = temp_dir.path().join("sample-app");
+        std::fs::create_dir_all(&project_dir).unwrap();
 
         // Create tako.toml without name
         let tako_toml = r#"
 [envs.production]
 route = "api.example.com"
 "#;
-        fs::write(temp_dir.path().join("tako.toml"), tako_toml).unwrap();
+        fs::write(project_dir.join("tako.toml"), tako_toml).unwrap();
 
-        let err = MergedConfig::load_with_paths(temp_dir.path(), None, None).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Missing top-level `name` in tako.toml")
-        );
+        let config = MergedConfig::load_with_paths(&project_dir, None, None).unwrap();
+        assert_eq!(config.app_name, "sample-app");
     }
 
     #[test]

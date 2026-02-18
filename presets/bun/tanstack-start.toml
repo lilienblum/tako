@@ -1,5 +1,2 @@
 main = "dist/server/tako-entry.mjs"
 assets = ["dist/client"]
-
-[build]
-exclude = ["node_modules/"]

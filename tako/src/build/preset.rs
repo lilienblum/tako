@@ -64,6 +64,10 @@ pub struct BuildPresetBuild {
     pub targets: Vec<String>,
     #[serde(default)]
     pub container: bool,
+    #[serde(skip)]
+    pub targets_explicit: bool,
+    #[serde(skip)]
+    pub container_explicit: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -477,6 +481,12 @@ pub fn parse_and_validate_preset(
         );
     }
 
+    let build_table = value.get("build").and_then(toml::Value::as_table);
+    let targets_explicit = build_table.and_then(|table| table.get("targets")).is_some();
+    let container_explicit = build_table
+        .and_then(|table| table.get("container").or_else(|| table.get("docker")))
+        .is_some();
+
     let raw: BuildPresetRaw = value
         .try_into()
         .map_err(|e| format!("Failed to parse build preset TOML: {e}"))?;
@@ -514,6 +524,8 @@ pub fn parse_and_validate_preset(
             build: raw.build.build.clone(),
             targets: target_labels,
             container: use_container_build,
+            targets_explicit,
+            container_explicit,
         },
         dev: if raw.dev.is_empty() {
             raw.dev_cmd
@@ -558,14 +570,35 @@ pub fn apply_adapter_base_runtime_defaults(
     if preset.start.is_empty() {
         preset.start = base_preset.start;
     }
+    let base_build = base_preset.build;
+    preset.build.exclude = merge_string_lists_unique(
+        base_build.exclude,
+        std::mem::take(&mut preset.build.exclude),
+    );
     if preset.build.install.is_none() {
-        preset.build.install = base_preset.build.install;
+        preset.build.install = base_build.install;
     }
     if preset.build.build.is_none() {
-        preset.build.build = base_preset.build.build;
+        preset.build.build = base_build.build;
+    }
+    if !preset.build.targets_explicit && preset.build.targets.is_empty() {
+        preset.build.targets = base_build.targets;
+    }
+    if !preset.build.container_explicit && !preset.build.targets_explicit {
+        preset.build.container = base_build.container;
     }
 
     Ok(())
+}
+
+fn merge_string_lists_unique(base: Vec<String>, extra: Vec<String>) -> Vec<String> {
+    let mut merged = base;
+    for item in extra {
+        if !merged.contains(&item) {
+            merged.push(item);
+        }
+    }
+    merged
 }
 
 pub fn infer_adapter_from_preset_reference(preset_ref: &str) -> BuildAdapter {
@@ -918,10 +951,6 @@ mod tests {
 name = "tanstack-start"
 main = "dist/server/tako-entry.mjs"
 assets = ["dist/client"]
-
-[build]
-exclude = ["node_modules/"]
-targets = ["linux-x86_64-glibc"]
 "#;
         let mut preset = parse_preset(raw).unwrap();
         apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
@@ -930,8 +959,19 @@ targets = ["linux-x86_64-glibc"]
         assert_eq!(preset.dev, vec!["bun", "run", "dev"]);
         assert!(preset.install.is_some());
         assert!(!preset.start.is_empty());
+        assert_eq!(preset.build.exclude, vec!["node_modules/".to_string()]);
         assert!(preset.build.install.is_some());
         assert!(preset.build.build.is_some());
+        assert_eq!(
+            preset.build.targets,
+            vec![
+                "linux-x86_64-glibc".to_string(),
+                "linux-aarch64-glibc".to_string(),
+                "linux-x86_64-musl".to_string(),
+                "linux-aarch64-musl".to_string(),
+            ]
+        );
+        assert!(preset.build.container);
     }
 
     #[test]
@@ -959,6 +999,43 @@ build = "custom-build"
             Some("custom-build-install")
         );
         assert_eq!(preset.build.build.as_deref(), Some("custom-build"));
+    }
+
+    #[test]
+    fn apply_adapter_base_runtime_defaults_keeps_explicit_target_and_container_overrides() {
+        let raw = r#"
+name = "custom-bun"
+assets = ["dist/client"]
+
+[build]
+exclude = []
+targets = []
+container = false
+"#;
+        let mut preset = parse_preset(raw).unwrap();
+        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
+
+        assert_eq!(preset.build.exclude, vec!["node_modules/".to_string()]);
+        assert!(preset.build.targets.is_empty());
+        assert!(!preset.build.container);
+    }
+
+    #[test]
+    fn apply_adapter_base_runtime_defaults_appends_variant_excludes_to_base() {
+        let raw = r#"
+name = "custom-bun"
+assets = ["dist/client"]
+
+[build]
+exclude = ["dist/**/*.map", "node_modules/"]
+"#;
+        let mut preset = parse_preset(raw).unwrap();
+        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
+
+        assert_eq!(
+            preset.build.exclude,
+            vec!["node_modules/".to_string(), "dist/**/*.map".to_string()]
+        );
     }
 
     #[test]

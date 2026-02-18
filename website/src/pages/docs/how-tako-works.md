@@ -53,6 +53,7 @@ Default route behavior:
 
 - If `[envs.development]` routes are configured, those are used.
 - Otherwise, Tako uses `{app}.tako.local`.
+- App identity comes from top-level `name` when set, otherwise from sanitized project directory name.
 
 macOS local networking behavior:
 
@@ -88,13 +89,16 @@ Important deployment behavior:
 - Docker builds reuse per-target dependency cache volumes (proto + runtime cache mounts) keyed by cache kind + target label + builder image while still creating fresh build containers each deploy.
 - Runtime version resolution is proto-first: Tako tries `proto run <tool> -- --version` (local and Docker contexts), then falls back to `.prototools`, then `latest`; deploy writes release `.prototools` so server runtime matches build runtime.
 - Preset runtime fields use top-level `main`/`install`/`start` keys (legacy preset `[deploy]` is not supported).
-- Artifact filters use project `[build].include` (optional), plus preset `[build].exclude` and project `[build].exclude`.
+- Runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`.
+- Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.
+- Artifact filters use project `[build].include` (optional), plus effective preset `[build].exclude` and project `[build].exclude`.
 - Bun deploys exclude `node_modules` by default and install release dependencies on server before startup (`bun install --production`).
 - Target artifacts are cached in `.tako/artifacts/` and reused across deploys when source/preset/target/build inputs are unchanged.
 - Cached artifacts are checksum-verified; invalid cached entries are rebuilt automatically.
 - Before packaging each target artifact, deploy verifies the resolved `main` exists in the post-build app directory.
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
 - Deploy runtime `main` is resolved from `tako.toml main`, then preset top-level `main`.
+- Deploy app identity is resolved from top-level `name` when set, otherwise sanitized project directory name.
 - Server install resolves host target (`arch` + `libc`) and downloads matching `tako-server-linux-<arch>-<libc>` artifact.
 - Server install also installs `proto` (package-manager first, then upstream installer fallback when unavailable).
 - For production without explicit server mapping:

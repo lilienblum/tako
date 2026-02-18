@@ -61,12 +61,13 @@ main = "dist/server/tako-entry.mjs" # Optional default app entry
 assets = ["dist/client"]            # Optional static assets merged into public/
 
 [build]
-exclude = ["node_modules/"]         # Optional artifact excludes
+# exclude = ["dist/**/*.map"]        # Optional artifact excludes
 # targets = ["linux-x86_64-glibc"]  # Optional target labels
 # container = true                  # Optional build mode override
 ```
 
-Runtime base presets (`bun`, `node`, `deno`) provide default lifecycle commands (`dev`, `install`, `start`, `[build].install`, `[build].build`). Variant presets usually only need app-shape/build fields such as `main`, `assets`, and `[build].*`.
+Runtime base presets (`bun`, `node`, `deno`) provide default lifecycle commands (`dev`, `install`, `start`, `[build].install`, `[build].build`), default build filters/targets, and default `assets`.
+Preset `build.exclude` adds extra patterns on top of runtime-base excludes (base-first, deduplicated), while preset `assets` replace runtime-base assets when set.
 
 ### Supported Keys
 

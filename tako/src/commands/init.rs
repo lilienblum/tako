@@ -37,8 +37,11 @@ pub fn run(force: bool, runtime_override: Option<&str>) -> Result<(), Box<dyn st
 
     // Resolve app name
     let detected_app_name = resolve_app_name(&project_dir).unwrap_or_else(|_| "my-app".to_string());
+    output::muted(
+        "App name should be unique per server. Renaming later creates a new app; delete the old deployment manually with `tako delete`.",
+    );
     let app_name = output::prompt_input(
-        "App name (`name` in tako.toml)",
+        "App name (`name` in tako.toml; unique per server)",
         false,
         Some(&detected_app_name),
     )?;
@@ -283,8 +286,9 @@ fn generate_template(
         r#"# Tako configuration
 # tako.toml reference: https://tako.sh/docs/tako-toml
 
-# Required stable app identifier used for deploy paths and local dev hostnames.
-# Set once and do not change after first deploy.
+# Stable app identifier used for deploy paths and local dev hostnames.
+# Keep it unique per server. Renaming creates a new app path.
+# If you rename it, delete the old deployment manually with `tako delete`.
 name = "{app_name}"
 {main_line}
 
@@ -378,14 +382,19 @@ mod tests {
         );
 
         assert!(
-            rendered.contains(
-                "# Required stable app identifier used for deploy paths and local dev hostnames."
-            ),
+            rendered
+                .contains("# Stable app identifier used for deploy paths and local dev hostnames."),
             "expected template to explain app name identity semantics"
         );
         assert!(
-            rendered.contains("# Set once and do not change after first deploy."),
-            "expected template to warn that app name should remain stable"
+            rendered.contains("# Keep it unique per server. Renaming creates a new app path."),
+            "expected template to warn that app names must be unique"
+        );
+        assert!(
+            rendered.contains(
+                "# If you rename it, delete the old deployment manually with `tako delete`."
+            ),
+            "expected template to explain rename cleanup behavior"
         );
         assert!(
             rendered.contains("\nname = \"demo-app\"\n"),

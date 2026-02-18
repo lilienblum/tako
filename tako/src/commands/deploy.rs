@@ -5,6 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::app::resolve_app_name;
 use crate::build::{
     BuildAdapter, BuildCache, BuildError, BuildExecutor, BuildPreset, ResolvedPresetSource,
     apply_adapter_base_runtime_defaults, compute_file_hash, create_filtered_archive_with_prefix,
@@ -243,11 +244,9 @@ async fn run_async(
 
     output::section(&format_prepare_deploy_section(&env));
 
-    let app_name = tako_config
-        .name
-        .clone()
-        .ok_or_else(|| "Missing top-level `name` in tako.toml.".to_string())
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let app_name = resolve_app_name(&project_dir).map_err(|e| -> Box<dyn std::error::Error> {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()).into()
+    })?;
     let routes = required_env_routes(&tako_config, &env)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
@@ -3683,6 +3682,7 @@ name = "test-app"
                 build: Some("bun run build".to_string()),
                 targets: vec!["linux-x86_64-glibc".to_string()],
                 container: true,
+                ..crate::build::BuildPresetBuild::default()
             },
             dev: vec![],
             install: None,
@@ -3731,6 +3731,7 @@ name = "test-app"
                 build: Some("bun run build".to_string()),
                 targets: vec!["linux-x86_64-glibc".to_string()],
                 container: true,
+                ..crate::build::BuildPresetBuild::default()
             },
             dev: vec![],
             install: None,
@@ -4115,6 +4116,7 @@ name = "test-app"
                 build: Some("bun run build".to_string()),
                 targets: vec!["linux-x86_64-glibc".to_string()],
                 container: false,
+                ..crate::build::BuildPresetBuild::default()
             },
             dev: vec![],
             install: None,

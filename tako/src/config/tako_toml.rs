@@ -10,7 +10,7 @@ use super::error::{ConfigError, Result};
 /// Root configuration from tako.toml
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TakoToml {
-    /// Application name (required; stable identity)
+    /// Application name (optional; stable identity when set)
     pub name: Option<String>,
 
     /// Build runtime override used for default preset selection when `preset` is omitted.
@@ -146,7 +146,6 @@ impl TakoToml {
         let content = fs::read_to_string(path.as_ref())
             .map_err(|e| ConfigError::FileRead(path.as_ref().to_path_buf(), e))?;
         let config = Self::parse(&content)?;
-        config.validate_required_fields()?;
         Ok(config)
     }
 
@@ -373,20 +372,6 @@ impl TakoToml {
             }
         }
 
-        Ok(())
-    }
-
-    fn validate_required_fields(&self) -> Result<()> {
-        let Some(name) = self.name.as_deref() else {
-            return Err(ConfigError::Validation(
-                "Missing top-level `name` in tako.toml. Run `tako init` and set `name`."
-                    .to_string(),
-            ));
-        };
-        if name.trim().is_empty() {
-            return Err(ConfigError::Validation("name cannot be empty".to_string()));
-        }
-        validate_app_name(name)?;
         Ok(())
     }
 
@@ -1261,7 +1246,7 @@ routes = ["api.example.com", "www.example.com"]
     }
 
     #[test]
-    fn test_load_from_dir_requires_name() {
+    fn test_load_from_dir_allows_missing_name() {
         let temp = tempfile::TempDir::new().unwrap();
         fs::write(
             temp.path().join("tako.toml"),
@@ -1272,10 +1257,13 @@ route = "prod.example.com"
         )
         .unwrap();
 
-        let err = TakoToml::load_from_dir(temp.path()).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("Missing top-level `name` in tako.toml")
+        let config = TakoToml::load_from_dir(temp.path()).unwrap();
+        assert!(config.name.is_none());
+        assert_eq!(
+            config
+                .get_routes("production")
+                .expect("production routes should exist"),
+            vec!["prod.example.com".to_string()]
         );
     }
 

@@ -11,9 +11,9 @@
 # assets = ["dist/client"]
 
 [build]
-# Exclude patterns use gitignore-style matching relative to workspace root.
-# Common exclusions: dependency folders, local caches, source maps.
-exclude = ["node_modules/"]
+# Optional artifact excludes (gitignore-style, relative to workspace root).
+# Added on top of runtime-base defaults (for example node_modules exclusion).
+# exclude = ["dist/**/*.map"]
 
 # Optional explicit container toggle.
 # container = true
