@@ -23,9 +23,9 @@ just testbed::install
 
 `just build::tako-server` builds release artifacts for all Linux target/libc combinations:
 
-- `dist/artifacts/tako-server-linux-x86_64-musl`
-- `dist/artifacts/tako-server-linux-aarch64-musl`
-- `dist/artifacts/tako-server-linux-x86_64-glibc`
-- `dist/artifacts/tako-server-linux-aarch64-glibc`
+- `dist/tako-server-linux-x86_64-musl`
+- `dist/tako-server-linux-aarch64-musl`
+- `dist/tako-server-linux-x86_64-glibc`
+- `dist/tako-server-linux-aarch64-glibc`
 
 Use the `testbed::` namespace for these recipes.

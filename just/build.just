@@ -1,6 +1,6 @@
 set working-directory := ".."
 
-ARTIFACTS_DIR := "dist/artifacts"
+ARTIFACTS_DIR := "dist"
 
 tako:
     cargo build -p tako --bin tako --release

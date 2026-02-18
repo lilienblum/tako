@@ -13,7 +13,7 @@ DOCKER_PLATFORM := "linux/arm64"
 # For local testbed installs, we serve a built `tako-server` binary from the host
 # and have the Docker container download it.
 
-ARTIFACTS_DIR := "dist/artifacts"
+ARTIFACTS_DIR := "dist"
 ARTIFACTS_PORT := "8000"
 TESTBED_TMP_DIR := "local-dev/tmp"
 DOCKER_SSH_KEY_FILE := "local-dev/tmp/docker_ssh_key"
