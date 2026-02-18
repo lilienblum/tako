@@ -55,6 +55,7 @@ Each target server should have:
 - SSH access as the configured deployment user (typically `tako`).
 - `tako-server` installed and running.
 - `tako-server` installed via the hosted installer (or equivalent) for the host target; installer resolves `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>`.
+- `proto` installed on host (`install-server` attempts distro package manager first, then upstream installer fallback).
 - `nc` (netcat), `tar`, `base64`, and standard shell tools (`mkdir`, `find`, `stat`).
 - Writable runtime paths under `/opt/tako` and socket access at `/var/run/tako/tako.sock`.
 - Privileged bind capability for `tako-server` on `:80/:443` (provided by systemd service capabilities in the installer, plus `setcap` on the binary when available).

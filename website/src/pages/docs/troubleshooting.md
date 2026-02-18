@@ -85,6 +85,9 @@ Expected deploy behavior:
 - `Installer reports unsupported libc`:
   - Symptom: `install-server` exits with `unsupported libc`.
   - Fix: run on Linux host with `glibc` or `musl`; for custom base images, set `TAKO_SERVER_URL` to a known matching artifact URL.
+- `Installer failed to install proto`:
+  - Symptom: `install-server` exits after reporting proto install failure.
+  - Fix: install `proto` manually on the host ([proto install docs](https://moonrepo.dev/docs/proto/install)), ensure `proto` is on `PATH`, then rerun installer (or set `TAKO_INSTALL_PROTO=0` to skip installer-managed proto setup).
 - `Bun dependency install failed`:
   - Symptom: server responds with `Invalid app release: Bun dependency install failed ...`.
   - Fix: ensure release dependencies are resolvable in production, and Bun lockfile (if present) matches packaged dependency specs.

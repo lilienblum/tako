@@ -95,6 +95,7 @@ Important deployment behavior:
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
 - Deploy runtime `main` is resolved from `tako.toml main`, then preset top-level `main`.
 - Server install resolves host target (`arch` + `libc`) and downloads matching `tako-server-linux-<arch>-<libc>` artifact.
+- Server install also installs `proto` (package-manager first, then upstream installer fallback when unavailable).
 - For production without explicit server mapping:
   - With one global server, Tako can guide/persist mapping.
   - With multiple global servers (interactive), Tako prompts for selection.

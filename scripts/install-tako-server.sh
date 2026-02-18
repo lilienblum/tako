@@ -20,6 +20,9 @@ set -eu
 #
 #   TAKO_SERVER_URL         override binary URL (optional)
 #   TAKO_DOWNLOAD_BASE_URL  default: https://github.com/lilienblum/tako/releases/latest/download
+#   TAKO_INSTALL_PROTO      default: 1 (set 0/false to skip proto install)
+#   TAKO_PROTO_VERSION      optional proto version for installer (default: latest)
+#   TAKO_PROTO_HOME         default: /usr/local/lib/proto
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "error: run as root (use sudo)" >&2
@@ -35,8 +38,22 @@ TAKO_USER="${TAKO_USER:-tako}"
 TAKO_HOME="${TAKO_HOME:-/opt/tako}"
 TAKO_SOCKET="${TAKO_SOCKET:-/var/run/tako/tako.sock}"
 TAKO_DOWNLOAD_BASE_URL="${TAKO_DOWNLOAD_BASE_URL:-https://github.com/lilienblum/tako/releases/latest/download}"
+TAKO_INSTALL_PROTO="${TAKO_INSTALL_PROTO:-1}"
+TAKO_PROTO_VERSION="${TAKO_PROTO_VERSION:-}"
+TAKO_PROTO_HOME="${TAKO_PROTO_HOME:-/usr/local/lib/proto}"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+is_enabled() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
 
 systemd_is_usable() {
   if ! need_cmd systemctl; then
@@ -125,6 +142,110 @@ install_sqlite_runtime() {
   else
     echo "warning: unsupported package manager; install libsqlite3 runtime manually if needed." >&2
   fi
+}
+
+install_proto_prerequisites() {
+  if need_cmd apt-get; then
+    apt-get update -y
+    apt-get install -y bash git unzip gzip xz-utils
+  elif need_cmd dnf; then
+    dnf install -y bash git unzip gzip xz
+  elif need_cmd yum; then
+    yum install -y bash git unzip gzip xz
+  elif need_cmd pacman; then
+    pacman -Sy --noconfirm bash git unzip gzip xz
+  elif need_cmd apk; then
+    apk add --no-cache bash git unzip gzip xz
+  elif need_cmd zypper; then
+    zypper --non-interactive install bash git unzip gzip xz
+  else
+    echo "warning: unsupported package manager; proto prerequisites may be missing." >&2
+  fi
+}
+
+try_install_proto_package_manager() {
+  if need_cmd proto; then
+    return 0
+  fi
+
+  if need_cmd apt-get; then
+    apt-get update -y
+    if apt-get install -y proto >/dev/null 2>&1; then
+      return 0
+    fi
+  elif need_cmd dnf; then
+    if dnf install -y proto >/dev/null 2>&1; then
+      return 0
+    fi
+  elif need_cmd yum; then
+    if yum install -y proto >/dev/null 2>&1; then
+      return 0
+    fi
+  elif need_cmd pacman; then
+    if pacman -Sy --noconfirm proto >/dev/null 2>&1; then
+      return 0
+    fi
+  elif need_cmd apk; then
+    if apk add --no-cache proto >/dev/null 2>&1; then
+      return 0
+    fi
+  elif need_cmd zypper; then
+    if zypper --non-interactive install proto >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  need_cmd proto
+}
+
+install_proto_via_script() {
+  install_proto_prerequisites
+
+  installer_url="https://moonrepo.dev/install/proto.sh"
+  installer="$(mktemp)"
+
+  if need_cmd curl; then
+    curl -fsSL "$installer_url" -o "$installer"
+  else
+    wget -qO "$installer" "$installer_url"
+  fi
+
+  chmod +x "$installer"
+  if [ -n "$TAKO_PROTO_VERSION" ]; then
+    PROTO_HOME="$TAKO_PROTO_HOME" bash "$installer" "$TAKO_PROTO_VERSION" --yes --no-profile
+  else
+    PROTO_HOME="$TAKO_PROTO_HOME" bash "$installer" --yes --no-profile
+  fi
+  rm -f "$installer"
+
+  if [ -x "$TAKO_PROTO_HOME/bin/proto" ]; then
+    ln -sf "$TAKO_PROTO_HOME/bin/proto" /usr/local/bin/proto
+  fi
+}
+
+ensure_proto_toolchain() {
+  if ! is_enabled "$TAKO_INSTALL_PROTO"; then
+    return
+  fi
+
+  if need_cmd proto; then
+    echo "OK proto is already installed"
+    return
+  fi
+
+  if try_install_proto_package_manager && need_cmd proto; then
+    echo "OK installed proto via package manager"
+    return
+  fi
+
+  echo "info: package manager install for proto is unavailable; falling back to upstream installer." >&2
+  install_proto_via_script
+
+  if ! need_cmd proto; then
+    echo "error: failed to install proto. Install it manually (https://moonrepo.dev/docs/proto/install) and re-run installer." >&2
+    exit 1
+  fi
+  echo "OK installed proto at $(command -v proto)"
 }
 
 detect_libc() {
@@ -230,6 +351,7 @@ fi
 if ! need_cmd sudo; then
   install_pkgs sudo
 fi
+ensure_proto_toolchain
 ensure_nc
 install_sqlite_runtime
 
