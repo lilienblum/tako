@@ -89,6 +89,10 @@ pub fn run(force: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn infer_default_main_entrypoint(project_dir: &Path) -> String {
+    if let Some(main) = infer_main_from_package_json(project_dir) {
+        return main;
+    }
+
     const CANDIDATES: &[&str] = &[
         "index.ts",
         "index.js",
@@ -109,6 +113,30 @@ fn infer_default_main_entrypoint(project_dir: &Path) -> String {
     }
 
     "index.ts".to_string()
+}
+
+fn infer_main_from_package_json(project_dir: &Path) -> Option<String> {
+    let package_json_path = project_dir.join("package.json");
+    if !package_json_path.is_file() {
+        return None;
+    }
+    let raw = fs::read_to_string(package_json_path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let main = parsed.get("main")?.as_str()?.trim();
+    if main.is_empty() {
+        return None;
+    }
+
+    let normalized = main.replace('\\', "/");
+    let normalized = normalized.trim_start_matches("./").to_string();
+    if normalized.is_empty() || normalized.starts_with('/') || normalized.contains("..") {
+        return None;
+    }
+    if project_dir.join(&normalized).is_file() {
+        Some(normalized)
+    } else {
+        None
+    }
 }
 
 fn embedded_bun_preset_default_main() -> Option<String> {
@@ -321,6 +349,37 @@ mod tests {
     fn infer_default_main_entrypoint_falls_back_when_no_candidate_exists() {
         let temp = TempDir::new().unwrap();
         assert_eq!(infer_default_main_entrypoint(temp.path()), "index.ts");
+    }
+
+    #[test]
+    fn infer_default_main_entrypoint_uses_package_json_main_when_file_exists() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("app")).unwrap();
+        std::fs::write(temp.path().join("app/server.ts"), "export {};").unwrap();
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"demo","main":"app/server.ts"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(infer_default_main_entrypoint(temp.path()), "app/server.ts");
+    }
+
+    #[test]
+    fn infer_default_main_entrypoint_ignores_package_json_main_when_file_is_missing() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("server")).unwrap();
+        std::fs::write(temp.path().join("server/index.ts"), "export {};").unwrap();
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"demo","main":"dist/index.js"}"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            infer_default_main_entrypoint(temp.path()),
+            "server/index.ts"
+        );
     }
 
     #[test]
