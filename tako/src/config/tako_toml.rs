@@ -65,16 +65,13 @@ pub struct BuildConfig {
 
 /// Environment configuration from [envs.*]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
 pub struct EnvConfig {
     /// Single route (mutually exclusive with routes)
     pub route: Option<String>,
 
     /// Multiple routes (mutually exclusive with route)
     pub routes: Option<Vec<String>>,
-
-    /// Environment-specific variables (merged with global vars)
-    #[serde(flatten)]
-    pub vars: HashMap<String, String>,
 }
 
 /// Default server settings from [servers]
@@ -887,7 +884,6 @@ route = "api.example.com"
     fn test_parse_env_without_routes_is_rejected() {
         let toml = r#"
 [envs.production]
-LOG_LEVEL = "info"
 "#;
         let err = TakoToml::parse(&toml).unwrap_err();
         assert!(
@@ -900,7 +896,6 @@ LOG_LEVEL = "info"
     fn test_parse_development_env_without_routes_is_allowed() {
         let toml = r#"
 [envs.development]
-LOG_LEVEL = "debug"
 "#;
         let config = TakoToml::parse(toml).unwrap();
         let env = config.envs.get("development").unwrap();
@@ -947,6 +942,18 @@ routes = ["api.example.com", "*.api.example.com", "example.com/api/*"]
                 "example.com/api/*".to_string(),
             ])
         );
+    }
+
+    #[test]
+    fn test_parse_env_rejects_additional_keys() {
+        let toml = r#"
+[envs.production]
+route = "api.example.com"
+LOG_LEVEL = "info"
+LOG_FORMAT = "json"
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]

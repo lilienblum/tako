@@ -270,7 +270,7 @@ Template behavior:
   - `name`, `main`, top-level `runtime`/`preset`, and `[build]` (`include`, `exclude`, `assets`)
   - `[vars]`
   - `[vars.<env>]`
-  - `[envs.<env>].routes` and inline env vars
+  - `[envs.<env>]` route declarations (`route`/`routes`)
   - `[servers]`
   - `[servers.<name>]` overrides
 - Includes a docs link to `https://tako.sh/docs/tako-toml`.
@@ -789,6 +789,7 @@ Apps specify routes at environment level (not per-server). Routes support:
 
 - Routes must include hostname (path-only routes invalid: `"/api/*"` ❌)
 - Each `[envs.{env}]` can have either `route` or `routes`, not both
+- `[envs.{env}]` accepts only route keys (`route`/`routes`); env vars belong in `[vars]` / `[vars.{env}]`
 - Each non-development environment must define `route` or `routes`
 - Empty route lists are invalid for non-development environments
 - Development routes must be `{app-name}.tako.local` or a subdomain of it
@@ -932,7 +933,7 @@ email = "admin@example.com"
 | `TAKO_SOCKET`     | app / `tako.sh` | Unix socket path for connecting to `tako-server`                           | default `/var/run/tako/tako.sock`                                                             |
 | `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one)                              | string                                                                                        |
 | `TAKO_INSTANCE`   | app / `tako.sh` | Instance identifier                                                        | integer string                                                                                |
-| _user-defined_    | app             | User config vars/secrets                                                   | From `[vars]` and `[envs.*].vars` plus decrypted secrets in deploy command payload.           |
+| _user-defined_    | app             | User config vars/secrets                                                   | From `[vars]` and `[vars.*]` plus decrypted secrets in deploy command payload.                |
 
 ### Messages (JSON over Unix Socket)
 

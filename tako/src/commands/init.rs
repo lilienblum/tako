@@ -327,14 +327,12 @@ route = "{production_route}"
 # Optional: use multiple routes instead of `route`.
 # routes = ["{app_name}.example.com", "www.{app_name}.example.com"]
 
-# Optional: env-local variables can be set directly in this section.
-# LOG_FORMAT = "json"
-# FEATURE_FLAG_NEW_CHECKOUT = "true"
+# Environment sections only define routes.
+# Set environment variables in [vars] and [vars.<environment>].
 
 # [envs.staging]
 # route = "staging.{app_name}.example.com"
 # routes = ["staging.{app_name}.example.com", "www.staging.{app_name}.example.com"]
-# LOG_LEVEL = "debug"
 
 # Default runtime settings for every mapped server.
 # [servers]

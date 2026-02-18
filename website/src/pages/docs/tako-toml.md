@@ -106,7 +106,7 @@ API_BASE_URL = "https://staging-api.example.com"
 
 ## `[envs.<environment>]`
 
-Environment route declarations and optional environment-local variables.
+Environment route declarations.
 
 ```toml
 [envs.production]
@@ -114,17 +114,16 @@ route = "api.example.com"
 # routes = ["api.example.com", "www.api.example.com"]
 # route = "example.com/api/*"
 # routes = ["example.com/api/*", "example.com/admin/*"]
-LOG_FORMAT = "json"
 ```
 
 - `route`: single hostname/path pattern.
 - `routes`: multiple route patterns (use this instead of `route` when you have more than one).
 - Each environment can set `route` or `routes`, but not both.
+- Environment sections accept only `route`/`routes`. Put env vars in `[vars]` / `[vars.<environment>]`.
 - Every non-development environment must define `route` or `routes`.
 - `[envs.development]` may omit routes and defaults to `{app}.tako.local` for `tako dev`.
 - Development routes must be `{app}.tako.local` or a subdomain of it.
 - Empty route sets are rejected for non-development environments. There is no implicit catch-all routing mode.
-- Additional keys in an environment section are treated as environment variables.
 - Routes must include a hostname (path-only routes are invalid).
 - `example.com` and `example.com/*` are equivalent and both match all paths on `example.com`.
 - Public route hostnames use ACME certificates; private/local hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) use self-signed certs generated during deploy.
@@ -188,14 +187,16 @@ LOG_LEVEL = "info"
 
 [vars.production]
 LOG_LEVEL = "warn"
+LOG_FORMAT = "json"
+
+[vars.staging]
+LOG_LEVEL = "debug"
 
 [envs.production]
 routes = ["api.example.com", "www.api.example.com"]
-LOG_FORMAT = "json"
 
 [envs.staging]
 route = "staging.example.com"
-LOG_LEVEL = "debug"
 
 [servers]
 instances = 0
