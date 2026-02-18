@@ -4,19 +4,17 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
+use crate::build::adapter::{
+    BUILTIN_BUN_PRESET_PATH, BUILTIN_DENO_PRESET_PATH, BUILTIN_NODE_PRESET_PATH,
+    builtin_base_preset_content_for_path,
+};
+
 pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const EMBEDDED_PRESET_REPO: &str = "embedded";
-const EMBEDDED_BUN_PRESET_PATH: &str = "presets/bun/bun.toml";
-const EMBEDDED_BUN_PRESET_CONTENT: &str = include_str!("../../../presets/bun/bun.toml");
 const EMBEDDED_BUN_TANSTACK_START_PRESET_PATH: &str = "presets/bun/tanstack-start.toml";
 const EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT: &str =
     include_str!("../../../presets/bun/tanstack-start.toml");
-const EMBEDDED_NODE_PRESET_PATH: &str = "presets/node/node.toml";
-const EMBEDDED_NODE_PRESET_CONTENT: &str = include_str!("../../../presets/node/node.toml");
-const EMBEDDED_DENO_PRESET_PATH: &str = "presets/deno/deno.toml";
-const EMBEDDED_DENO_PRESET_CONTENT: &str = include_str!("../../../presets/deno/deno.toml");
-const LEGACY_BUN_PRESET_PATH: &str = "presets/bun.toml";
 const LEGACY_BUN_TANSTACK_START_PRESET_PATH: &str = "presets/bun-tanstack-start.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -367,22 +365,22 @@ pub async fn load_build_preset(
 
 fn official_alias_to_path(alias: &str) -> String {
     match alias {
-        "bun" => EMBEDDED_BUN_PRESET_PATH.to_string(),
+        "bun" => BUILTIN_BUN_PRESET_PATH.to_string(),
         "bun-tanstack-start" => EMBEDDED_BUN_TANSTACK_START_PRESET_PATH.to_string(),
-        "node" => EMBEDDED_NODE_PRESET_PATH.to_string(),
-        "deno" => EMBEDDED_DENO_PRESET_PATH.to_string(),
+        "node" => BUILTIN_NODE_PRESET_PATH.to_string(),
+        "deno" => BUILTIN_DENO_PRESET_PATH.to_string(),
         _ => format!("presets/{alias}.toml"),
     }
 }
 
 fn embedded_official_preset_content(path: &str) -> Option<&'static str> {
+    if let Some(content) = builtin_base_preset_content_for_path(path) {
+        return Some(content);
+    }
     match path {
-        EMBEDDED_BUN_PRESET_PATH => Some(EMBEDDED_BUN_PRESET_CONTENT),
-        EMBEDDED_BUN_TANSTACK_START_PRESET_PATH => Some(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT),
-        EMBEDDED_NODE_PRESET_PATH => Some(EMBEDDED_NODE_PRESET_CONTENT),
-        EMBEDDED_DENO_PRESET_PATH => Some(EMBEDDED_DENO_PRESET_CONTENT),
-        LEGACY_BUN_PRESET_PATH => Some(EMBEDDED_BUN_PRESET_CONTENT),
-        LEGACY_BUN_TANSTACK_START_PRESET_PATH => Some(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT),
+        EMBEDDED_BUN_TANSTACK_START_PRESET_PATH | LEGACY_BUN_TANSTACK_START_PRESET_PATH => {
+            Some(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT)
+        }
         _ => None,
     }
 }
@@ -691,6 +689,7 @@ pub fn lock_file_path(project_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::build::adapter::builtin_base_preset_content_for_alias;
 
     fn parse_preset(raw: &str) -> Result<BuildPreset, String> {
         parse_and_validate_preset(raw, "bun")
@@ -801,8 +800,19 @@ mod tests {
     }
 
     #[test]
+    fn embedded_official_preset_content_supports_base_and_variant_paths() {
+        assert!(embedded_official_preset_content("presets/bun/bun.toml").is_some());
+        assert!(embedded_official_preset_content("presets/node/node.toml").is_some());
+        assert!(embedded_official_preset_content("presets/deno/deno.toml").is_some());
+        assert!(embedded_official_preset_content("presets/bun/tanstack-start.toml").is_some());
+        assert!(embedded_official_preset_content("presets/bun.toml").is_some());
+        assert!(embedded_official_preset_content("presets/bun-tanstack-start.toml").is_some());
+    }
+
+    #[test]
     fn embedded_bun_preset_parses() {
-        let preset = parse_and_validate_preset(EMBEDDED_BUN_PRESET_CONTENT, "bun").unwrap();
+        let content = builtin_base_preset_content_for_alias("bun").expect("embedded bun preset");
+        let preset = parse_and_validate_preset(content, "bun").unwrap();
         assert_eq!(preset.name, "bun");
         assert!(!preset.dev.is_empty());
         assert!(preset.install.is_some());

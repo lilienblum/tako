@@ -55,7 +55,8 @@ preset = "bun"
   - `include`: optional artifact include globs (`**/*` is used when unset).
   - `exclude`: optional artifact exclude globs (appended to preset excludes).
   - `assets`: optional project-relative directories merged into app `public/` after build (later entries overwrite earlier files on conflicts).
-  - Built-in presets are organized under `presets/<adapter>/<name>.toml` (for example `presets/bun/bun.toml`, `presets/bun/tanstack-start.toml`).
+  - Adapter base presets (`bun`, `node`, `deno`) are built into the CLI (not loaded from workspace preset files).
+  - File-based presets remain for named variants under `presets/<adapter>/<name>.toml` (for example `presets/bun/tanstack-start.toml`).
   - Build preset files support optional top-level `name`, top-level `main` (default app entrypoint), top-level `dev`, top-level `install`/`start`, top-level `assets`, and preset `[build]` keys (`exclude`, `install`, `build`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container` with deprecated alias `docker`); legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Deprecated top-level `dev_cmd` is still accepted as an alias.
   - `bun/tanstack-start` (legacy alias `bun-tanstack-start`) defaults `main = "dist/server/tako-entry.mjs"` and `assets = ["dist/client"]`.
   - Deploy writes lock metadata to `.tako/build.lock.json` so the resolved preset commit stays reproducible across deploys.

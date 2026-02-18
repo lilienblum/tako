@@ -99,7 +99,8 @@ env = "production"
   - official aliases: `bun`, `node`, `deno`, `bun/tanstack-start`
   - pinned official aliases: `bun/<commit-hash>` (legacy), `bun@<commit-hash>`, `bun/tanstack-start@<commit-hash>`
   - GitHub references: `github:<owner>/<repo>/<path>.toml[@<commit-hash>]`
-- Built-in presets are organized by adapter family under `presets/<adapter>/<name>.toml` (for example `presets/bun/bun.toml`, `presets/bun/tanstack-start.toml`).
+- Adapter base presets (`bun`, `node`, `deno`) are built into the CLI (not loaded from workspace preset files).
+- File-based presets remain for named variants under `presets/<adapter>/<name>.toml` (for example `presets/bun/tanstack-start.toml`).
 - `bun/tanstack-start` (legacy alias `bun-tanstack-start`) defaults `main = "dist/server/tako-entry.mjs"` and adds `assets = ["dist/client"]`.
 - Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `dev` (`tako dev` command), top-level `install`/`start` (server runtime prep/start commands), top-level `assets`, and `[build]` (`exclude`, `install`, `build`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false` with deprecated alias `docker = true|false`). Legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Top-level `dev_cmd` remains accepted as a deprecated alias for compatibility.
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for reproducible preset fetches on later deploys.

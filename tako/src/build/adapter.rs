@@ -1,9 +1,120 @@
 use std::fs;
 use std::path::Path;
 
-const EMBEDDED_BUN_PRESET_CONTENT: &str = include_str!("../../../presets/bun/bun.toml");
-const EMBEDDED_NODE_PRESET_CONTENT: &str = include_str!("../../../presets/node/node.toml");
-const EMBEDDED_DENO_PRESET_CONTENT: &str = include_str!("../../../presets/deno/deno.toml");
+pub const BUILTIN_BUN_PRESET_PATH: &str = "presets/bun/bun.toml";
+pub const BUILTIN_NODE_PRESET_PATH: &str = "presets/node/node.toml";
+pub const BUILTIN_DENO_PRESET_PATH: &str = "presets/deno/deno.toml";
+pub const LEGACY_BUILTIN_BUN_PRESET_PATH: &str = "presets/bun.toml";
+
+const BUILTIN_BUN_PRESET_CONTENT: &str = r#"main = "src/index.ts"
+dev = ["bun", "run", "dev"]
+install = '''
+proto install --yes
+if [ -f bun.lockb ] || [ -f bun.lock ]; then
+  proto run bun -- install --production --frozen-lockfile
+else
+  proto run bun -- install --production
+fi
+'''
+start = ["proto", "run", "bun", "--", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
+
+[build]
+exclude = ["node_modules/"]
+install = '''
+proto install --yes
+if [ -f bun.lockb ] || [ -f bun.lock ]; then
+  proto run bun -- install --frozen-lockfile
+else
+  proto run bun -- install
+fi
+'''
+build = '''
+cd "$TAKO_APP_DIR"
+proto run bun -- run --if-present build
+'''
+targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
+"#;
+
+const BUILTIN_NODE_PRESET_CONTENT: &str = r#"main = "index.js"
+dev = ["proto", "run", "node", "--", "{main}"]
+install = '''
+proto install --yes
+if [ -f package-lock.json ]; then
+  npm ci --omit=dev
+else
+  npm install --omit=dev
+fi
+'''
+start = ["proto", "run", "node", "--", "{main}"]
+
+[build]
+exclude = ["node_modules/"]
+install = '''
+proto install --yes
+if [ -f package-lock.json ]; then
+  npm ci
+else
+  npm install
+fi
+'''
+build = '''
+cd "$TAKO_APP_DIR"
+npm run --if-present build
+'''
+targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
+"#;
+
+const BUILTIN_DENO_PRESET_CONTENT: &str = r#"main = "main.ts"
+dev = [
+  "proto",
+  "run",
+  "deno",
+  "--",
+  "run",
+  "--watch",
+  "--allow-net",
+  "--allow-env",
+  "--allow-read",
+  "{main}",
+]
+install = "proto install --yes"
+start = [
+  "proto",
+  "run",
+  "deno",
+  "--",
+  "run",
+  "--allow-net",
+  "--allow-env",
+  "--allow-read",
+  "{main}",
+]
+
+[build]
+install = "proto install --yes"
+build = "true"
+targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
+"#;
+
+pub fn builtin_base_preset_content_for_alias(alias: &str) -> Option<&'static str> {
+    match alias {
+        "bun" => Some(BUILTIN_BUN_PRESET_CONTENT),
+        "node" => Some(BUILTIN_NODE_PRESET_CONTENT),
+        "deno" => Some(BUILTIN_DENO_PRESET_CONTENT),
+        _ => None,
+    }
+}
+
+pub fn builtin_base_preset_content_for_path(path: &str) -> Option<&'static str> {
+    match path {
+        BUILTIN_BUN_PRESET_PATH | LEGACY_BUILTIN_BUN_PRESET_PATH => {
+            Some(BUILTIN_BUN_PRESET_CONTENT)
+        }
+        BUILTIN_NODE_PRESET_PATH => Some(BUILTIN_NODE_PRESET_CONTENT),
+        BUILTIN_DENO_PRESET_PATH => Some(BUILTIN_DENO_PRESET_CONTENT),
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildAdapter {
@@ -42,9 +153,9 @@ impl BuildAdapter {
 
     pub fn embedded_preset_default_main(self) -> Option<String> {
         match self {
-            BuildAdapter::Bun => parse_embedded_preset_default_main(EMBEDDED_BUN_PRESET_CONTENT),
-            BuildAdapter::Node => parse_embedded_preset_default_main(EMBEDDED_NODE_PRESET_CONTENT),
-            BuildAdapter::Deno => parse_embedded_preset_default_main(EMBEDDED_DENO_PRESET_CONTENT),
+            BuildAdapter::Bun => parse_embedded_preset_default_main(BUILTIN_BUN_PRESET_CONTENT),
+            BuildAdapter::Node => parse_embedded_preset_default_main(BUILTIN_NODE_PRESET_CONTENT),
+            BuildAdapter::Deno => parse_embedded_preset_default_main(BUILTIN_DENO_PRESET_CONTENT),
             BuildAdapter::Unknown => None,
         }
     }
@@ -147,7 +258,11 @@ fn parse_embedded_preset_default_main(content: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{BuildAdapter, detect_build_adapter};
+    use super::{
+        BUILTIN_BUN_PRESET_PATH, BUILTIN_DENO_PRESET_PATH, BUILTIN_NODE_PRESET_PATH, BuildAdapter,
+        builtin_base_preset_content_for_alias, builtin_base_preset_content_for_path,
+        detect_build_adapter,
+    };
     use tempfile::TempDir;
 
     #[test]
@@ -216,5 +331,24 @@ mod tests {
             BuildAdapter::Bun.embedded_preset_default_main(),
             Some("src/index.ts".to_string())
         );
+    }
+
+    #[test]
+    fn builtin_base_preset_content_is_available_by_alias() {
+        let bun = builtin_base_preset_content_for_alias("bun").expect("bun preset");
+        let node = builtin_base_preset_content_for_alias("node").expect("node preset");
+        let deno = builtin_base_preset_content_for_alias("deno").expect("deno preset");
+
+        assert!(bun.contains("main = \"src/index.ts\""));
+        assert!(node.contains("main = \"index.js\""));
+        assert!(deno.contains("main = \"main.ts\""));
+    }
+
+    #[test]
+    fn builtin_base_preset_content_is_available_by_path() {
+        assert!(builtin_base_preset_content_for_path(BUILTIN_BUN_PRESET_PATH).is_some());
+        assert!(builtin_base_preset_content_for_path(BUILTIN_NODE_PRESET_PATH).is_some());
+        assert!(builtin_base_preset_content_for_path(BUILTIN_DENO_PRESET_PATH).is_some());
+        assert!(builtin_base_preset_content_for_path("presets/bun.toml").is_some());
     }
 }
