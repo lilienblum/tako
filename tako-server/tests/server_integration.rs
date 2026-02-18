@@ -292,9 +292,20 @@ mod instance_management {
         // Create a Bun app that serves requests on PORT.
         let app_dir = server.data_dir().join("releases").join("test-app-v1");
         fs::create_dir_all(&app_dir).unwrap();
+        fs::create_dir_all(app_dir.join("node_modules/tako.sh/src")).unwrap();
         fs::write(
             app_dir.join("package.json"),
             r#"{"name":"test-app","scripts":{"dev":"bun run index.ts"}}"#,
+        )
+        .unwrap();
+        fs::write(
+            app_dir.join("node_modules/tako.sh/src/wrapper.ts"),
+            "export default {};",
+        )
+        .unwrap();
+        fs::write(
+            app_dir.join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","install":"true","start":["bun","{main}"]}"#,
         )
         .unwrap();
         fs::write(

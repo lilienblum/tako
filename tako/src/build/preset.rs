@@ -57,6 +57,8 @@ pub struct BuildPresetBuild {
     pub install: Option<String>,
     #[serde(default)]
     pub build: Option<String>,
+    #[serde(default)]
+    pub targets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -109,16 +111,6 @@ struct BuildPresetRawBuild {
     build: Option<String>,
     #[serde(default)]
     targets: Option<toml::Value>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct BuildPresetRawTarget {
-    #[serde(default)]
-    builder_image: Option<String>,
-    #[serde(default)]
-    install: Option<String>,
-    #[serde(default)]
-    build: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -352,7 +344,7 @@ fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<Build
     }
     if value.get("targets").is_some() {
         return Err(
-            "Build preset no longer supports top-level [targets]. Use [build.targets].".to_string(),
+            "Build preset no longer supports top-level [targets]. Use [build].targets = [\"linux-x86_64-glibc\", ...].".to_string(),
         );
     }
     if value.get("exclude").is_some() {
@@ -362,7 +354,7 @@ fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<Build
     }
     if value.get("builder_image").is_some() {
         return Err(
-            "Build preset no longer supports top-level `builder_image`. Use [build.targets].builder_image."
+            "Build preset no longer supports top-level `builder_image`. Builder image overrides are no longer supported."
                 .to_string(),
         );
     }
@@ -397,7 +389,7 @@ fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<Build
         .is_some()
     {
         return Err(
-            "Build preset no longer supports [build].builder_image. Use [build.targets].builder_image."
+            "Build preset no longer supports [build].builder_image. Builder image overrides are no longer supported."
                 .to_string(),
         );
     }
@@ -425,22 +417,17 @@ fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<Build
         );
     }
 
-    let (default_target, targets_table) = parse_build_targets_table(raw.build.targets)?;
-    let (target_defaults, targets) = resolve_targets(
-        raw.build.install.clone(),
-        raw.build.build.clone(),
-        default_target,
-        targets_table,
-    );
+    let target_labels = parse_build_target_labels(raw.build.targets)?;
 
     let preset = BuildPreset {
         name,
         main: raw.main,
-        builder_image: target_defaults.builder_image.clone(),
+        builder_image: None,
         build: BuildPresetBuild {
             exclude: raw.build.exclude,
-            install: target_defaults.install.clone(),
-            build: target_defaults.build.clone(),
+            install: raw.build.install.clone(),
+            build: raw.build.build.clone(),
+            targets: target_labels,
         },
         dev: if raw.dev.is_empty() {
             raw.dev_cmd
@@ -449,8 +436,8 @@ fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<Build
         },
         install: raw.install,
         start: raw.start,
-        targets,
-        target_defaults,
+        targets: std::collections::HashMap::new(),
+        target_defaults: BuildPresetTargetDefaults::default(),
         assets: raw.assets,
     };
 
@@ -467,135 +454,27 @@ fn infer_preset_name_from_path(path: &str) -> Result<String, String> {
         .ok_or_else(|| format!("Failed to infer preset name from path '{}'.", path))
 }
 
-fn resolve_targets(
-    default_install: Option<String>,
-    default_build: Option<String>,
-    default_target: BuildPresetRawTarget,
-    raw_targets: std::collections::HashMap<String, BuildPresetRawTarget>,
-) -> (
-    BuildPresetTargetDefaults,
-    std::collections::HashMap<String, BuildPresetTarget>,
-) {
-    let target_defaults = BuildPresetTargetDefaults {
-        builder_image: default_target.builder_image.and_then(|value| {
-            let trimmed = value.trim();
-            if trimmed.is_empty() {
-                None
-            } else {
-                Some(trimmed.to_string())
-            }
-        }),
-        install: default_target.install.or(default_install),
-        build: default_target.build.or(default_build),
-    };
-    let mut resolved = std::collections::HashMap::new();
-
-    for (target_label, target) in raw_targets {
-        let merged = merge_raw_target(
-            target,
-            BuildPresetRawTarget {
-                builder_image: target_defaults.builder_image.clone(),
-                install: target_defaults.install.clone(),
-                build: target_defaults.build.clone(),
-            },
-        );
-
-        resolved.insert(
-            target_label,
-            BuildPresetTarget {
-                builder_image: merged.builder_image.and_then(|value| {
-                    let trimmed = value.trim();
-                    if trimmed.is_empty() {
-                        None
-                    } else {
-                        Some(trimmed.to_string())
-                    }
-                }),
-                install: merged.install,
-                build: merged.build,
-            },
-        );
-    }
-
-    (target_defaults, resolved)
-}
-
-fn parse_build_targets_table(
-    raw_targets: Option<toml::Value>,
-) -> Result<
-    (
-        BuildPresetRawTarget,
-        std::collections::HashMap<String, BuildPresetRawTarget>,
-    ),
-    String,
-> {
+fn parse_build_target_labels(raw_targets: Option<toml::Value>) -> Result<Vec<String>, String> {
     let Some(raw_targets) = raw_targets else {
-        return Ok((
-            BuildPresetRawTarget::default(),
-            std::collections::HashMap::new(),
-        ));
+        return Ok(Vec::new());
     };
-    let table = raw_targets.as_table().ok_or_else(|| {
-        "Build preset [build.targets] must be a table with optional default fields and optional per-target subtables.".to_string()
+    let array = raw_targets.as_array().ok_or_else(|| {
+        "Build preset [build].targets must be an array of target labels (for example [\"linux-x86_64-glibc\"]).".to_string()
     })?;
-
-    let mut default_target = BuildPresetRawTarget::default();
-    let mut targets = std::collections::HashMap::new();
-
-    for (key, value) in table {
-        match key.as_str() {
-            "builder_image" => {
-                let image = value.as_str().ok_or_else(|| {
-                    "Build preset [build.targets].builder_image must be a string.".to_string()
-                })?;
-                default_target.builder_image = Some(image.to_string());
-            }
-            "install" => {
-                let install = value.as_str().ok_or_else(|| {
-                    "Build preset [build.targets].install must be a string.".to_string()
-                })?;
-                default_target.install = Some(install.to_string());
-            }
-            "build" => {
-                let build = value.as_str().ok_or_else(|| {
-                    "Build preset [build.targets].build must be a string.".to_string()
-                })?;
-                default_target.build = Some(build.to_string());
-            }
-            "default" => {
-                return Err(
-                    "Build preset no longer supports [build.targets.default]. Put default fields directly under [build.targets]."
-                        .to_string(),
-                );
-            }
-            target_label => {
-                let target_table = value.as_table().ok_or_else(|| {
-                    format!(
-                        "Build preset [build.targets.{}] must be a table.",
-                        target_label
-                    )
-                })?;
-                let target_value = toml::Value::Table(target_table.clone());
-                let target: BuildPresetRawTarget = target_value.try_into().map_err(|e| {
-                    format!("Failed to parse [build.targets.{}]: {}", target_label, e)
-                })?;
-                targets.insert(target_label.to_string(), target);
-            }
+    let mut labels = Vec::new();
+    for value in array {
+        let Some(label) = value.as_str() else {
+            return Err(
+                "Build preset [build].targets entries must be strings (target labels).".to_string(),
+            );
+        };
+        let trimmed = label.trim();
+        if trimmed.is_empty() {
+            return Err("Build preset [build].targets cannot contain empty values.".to_string());
         }
+        labels.push(trimmed.to_string());
     }
-
-    Ok((default_target, targets))
-}
-
-fn merge_raw_target(
-    primary: BuildPresetRawTarget,
-    fallback: BuildPresetRawTarget,
-) -> BuildPresetRawTarget {
-    BuildPresetRawTarget {
-        builder_image: primary.builder_image.or(fallback.builder_image),
-        install: primary.install.or(fallback.install),
-        build: primary.build.or(fallback.build),
-    }
+    Ok(labels)
 }
 
 fn read_locked_preset(project_dir: &Path) -> Result<Option<ResolvedPresetSource>, String> {
@@ -811,18 +690,20 @@ start = ["bun", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
 exclude = ["**/*.map"]
 install = "bun install"
 build = "bun run build"
-
-[build.targets]
-builder_image = "oven/bun:1.2"
-
-[build.targets.linux-aarch64-musl]
-builder_image = "oven/bun:1.3"
+targets = ["linux-x86_64-glibc", "linux-aarch64-musl"]
 "#;
         let preset = parse_preset(raw).unwrap();
         assert_eq!(preset.name, "bun");
         assert_eq!(preset.main.as_deref(), Some("index.ts"));
-        assert_eq!(preset.builder_image.as_deref(), Some("oven/bun:1.2"));
+        assert_eq!(preset.builder_image.as_deref(), None);
         assert_eq!(preset.build.exclude, vec!["**/*.map".to_string()]);
+        assert_eq!(
+            preset.build.targets,
+            vec![
+                "linux-x86_64-glibc".to_string(),
+                "linux-aarch64-musl".to_string()
+            ]
+        );
         assert_eq!(preset.dev, vec!["bun", "run", "dev"]);
         assert_eq!(
             preset.start,
@@ -833,8 +714,7 @@ builder_image = "oven/bun:1.3"
                 "{main}"
             ]
         );
-        assert!(!preset.targets.contains_key("default"));
-        assert!(preset.targets.contains_key("linux-aarch64-musl"));
+        assert!(preset.targets.is_empty());
     }
 
     #[test]
@@ -852,11 +732,11 @@ install = "bun install"
         let raw = r#"
 name = "bun"
 
-[targets]
-builder_image = "oven/bun:1.2"
-"#;
+        [targets]
+        builder_image = "oven/bun:1.2"
+        "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("Use [build.targets]"));
+        assert!(err.contains("Use [build].targets"));
     }
 
     #[test]
@@ -970,31 +850,27 @@ start = ["bun", "run", "index.ts"]
     }
 
     #[test]
-    fn parse_and_validate_preset_target_inherits_defaults() {
+    fn parse_and_validate_preset_accepts_build_targets_array() {
         let raw = r#"
 name = "bun"
 
 [build]
 install = "bun install --frozen-lockfile"
 build = "bun run --if-present build"
-
-[build.targets]
-builder_image = "oven/bun:1.2"
-
-[build.targets.linux-x86_64-glibc]
+targets = ["linux-x86_64-glibc", "linux-aarch64-musl"]
 "#;
         let preset = parse_preset(raw).unwrap();
-        let target = preset.targets.get("linux-x86_64-glibc").unwrap();
-        assert_eq!(target.builder_image.as_deref(), Some("oven/bun:1.2"));
         assert_eq!(
-            target.install.as_deref(),
-            Some("bun install --frozen-lockfile")
+            preset.build.targets,
+            vec![
+                "linux-x86_64-glibc".to_string(),
+                "linux-aarch64-musl".to_string()
+            ]
         );
-        assert_eq!(target.build.as_deref(), Some("bun run --if-present build"));
     }
 
     #[test]
-    fn parse_and_validate_preset_target_overrides_defaults() {
+    fn parse_and_validate_preset_rejects_legacy_build_targets_table() {
         let raw = r#"
 name = "bun"
 
@@ -1004,17 +880,9 @@ build = "bun run build"
 
 [build.targets]
 builder_image = "oven/bun:1.2"
-
-[build.targets.linux-x86_64-glibc]
-builder_image = "custom/image:latest"
-build = "bun run custom-build"
 "#;
-
-        let preset = parse_preset(raw).unwrap();
-        let target = preset.targets.get("linux-x86_64-glibc").unwrap();
-        assert_eq!(target.builder_image.as_deref(), Some("custom/image:latest"));
-        assert_eq!(target.install.as_deref(), Some("bun install"));
-        assert_eq!(target.build.as_deref(), Some("bun run custom-build"));
+        let err = parse_preset(raw).unwrap_err();
+        assert!(err.contains("[build].targets must be an array"));
     }
 
     #[test]
@@ -1027,13 +895,13 @@ build = "bun run --if-present build"
 "#;
         let preset = parse_preset(raw).unwrap();
         assert!(preset.targets.is_empty());
-        assert_eq!(preset.target_defaults.builder_image, None);
+        assert_eq!(preset.build.targets, Vec::<String>::new());
         assert_eq!(
-            preset.target_defaults.install.as_deref(),
+            preset.build.install.as_deref(),
             Some("bun install --frozen-lockfile")
         );
         assert_eq!(
-            preset.target_defaults.build.as_deref(),
+            preset.build.build.as_deref(),
             Some("bun run --if-present build")
         );
     }
@@ -1041,9 +909,6 @@ build = "bun run --if-present build"
     #[test]
     fn parse_and_validate_preset_rejects_legacy_artifact_table() {
         let raw = r#"
-[build.targets.linux-x86_64-glibc]
-builder_image = "oven/bun:1.2"
-
 [artifact]
 include = ["**/*"]
 "#;
@@ -1063,7 +928,7 @@ install = "bun install"
 builder_image = "oven/bun:1.2"
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("[build.targets.default]"));
+        assert!(err.contains("[build].targets must be an array"));
     }
 
     #[test]

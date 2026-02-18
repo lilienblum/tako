@@ -1246,9 +1246,14 @@ route = "prod.example.com"
     fn test_deploy_validates_entry_point_exists() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().to_path_buf();
+        let home = temp.path().join("home");
+        let tako_home = temp.path().join("tako-home");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&tako_home).unwrap();
 
         // Create tako.toml with explicit main that doesn't exist.
-        // Include required build preset so deploy reaches entrypoint validation.
+        // Include required build preset and explicit server mapping so deploy
+        // reaches entrypoint/build validation before any remote operations.
         fs::write(
             project_dir.join("tako.toml"),
             r#"
@@ -1260,6 +1265,25 @@ preset = "bun"
 
 [envs.production]
 route = "prod.example.com"
+
+[servers.test-server]
+env = "production"
+"#,
+        )
+        .unwrap();
+
+        // Configure one global server with explicit target metadata.
+        fs::write(
+            tako_home.join("config.toml"),
+            r#"
+[[servers]]
+name = "test-server"
+host = "127.0.0.1"
+port = 22222
+
+[server_targets.test-server]
+arch = "x86_64"
+libc = "glibc"
 "#,
         )
         .unwrap();
@@ -1273,7 +1297,12 @@ route = "prod.example.com"
         )
         .unwrap();
 
-        let output = run_tako(&["deploy", "--env", "production"], &project_dir);
+        let output = run_tako_with_env(
+            &["deploy", "--env", "production"],
+            &project_dir,
+            &home,
+            &tako_home,
+        );
 
         // Should fail. In fully provisioned environments this is a missing-entrypoint error.
         // In restricted CI/sandbox environments it may fail earlier at container build startup.

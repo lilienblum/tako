@@ -173,6 +173,17 @@ fn on_demand_startup_failure_does_not_hang() {
 "#,
     )
     .expect("write failing app");
+    fs::create_dir_all(app_dir.join("node_modules/tako.sh/src")).expect("create wrapper dir");
+    fs::write(
+        app_dir.join("node_modules/tako.sh/src/wrapper.ts"),
+        "export default {};",
+    )
+    .expect("write wrapper");
+    fs::write(
+        app_dir.join("app.json"),
+        r#"{"runtime":"bun","main":"src/index.ts","install":"true","start":["bun","{main}"]}"#,
+    )
+    .expect("write deploy manifest");
 
     let host = "failing.localhost";
     let resp = server.send_command(&serde_json::json!({

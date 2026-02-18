@@ -69,18 +69,22 @@ struct ValidationResult {
     warnings: Vec<String>,
 }
 
-const ARTIFACT_CACHE_SCHEMA_VERSION: u32 = 2;
+const ARTIFACT_CACHE_SCHEMA_VERSION: u32 = 3;
 const ARTIFACT_CACHE_LOCK_TIMEOUT_SECS: u64 = 10 * 60;
 const ARTIFACT_CACHE_STALE_LOCK_SECS: u64 = 30 * 60;
 const LOCAL_ARTIFACT_CACHE_KEEP_SOURCE_ARCHIVES: usize = 30;
 const LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS: usize = 90;
 const LOCAL_BUILD_WORKSPACE_RELATIVE_DIR: &str = ".tako/build-workspaces";
+const RUNTIME_VERSION_OUTPUT_FILE: &str = ".tako-runtime-version";
+const PROTO_TOOLS_FILE: &str = ".prototools";
 
 #[derive(serde::Serialize)]
 struct ArtifactCacheKeyInput<'a> {
     schema_version: u32,
     source_hash: &'a str,
     runtime: &'a str,
+    runtime_tool: &'a str,
+    runtime_version: &'a str,
     target_label: &'a str,
     preset_ref: &'a str,
     preset_repo: &'a str,
@@ -88,6 +92,7 @@ struct ArtifactCacheKeyInput<'a> {
     preset_commit: &'a str,
     app_subdir: &'a str,
     builder_image: Option<&'a str>,
+    use_docker: bool,
     install: Option<&'a str>,
     build: Option<&'a str>,
     include_patterns: &'a [String],
@@ -325,6 +330,8 @@ async fn run_async(
         shorten_commit(&resolved_preset.commit)
     ));
     output::success(&format_runtime_summary(&build_preset.name, None));
+    let runtime_tool = resolve_proto_runtime_tool(&build_preset.name, &build_preset)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     let manifest_main = resolve_deploy_main(&tako_config, build_preset.main.as_deref())
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -387,6 +394,7 @@ async fn run_async(
         &version,
         &app_subdir,
         &build_preset.name,
+        &runtime_tool,
         &manifest_main,
         &server_targets,
         &build_preset,
@@ -1135,6 +1143,25 @@ fn format_runtime_summary(runtime_name: &str, version: Option<&str>) -> String {
     }
 }
 
+fn resolve_proto_runtime_tool(runtime_name: &str, preset: &BuildPreset) -> Result<String, String> {
+    if preset.start.len() >= 3
+        && preset.start[0] == "proto"
+        && preset.start[1] == "run"
+        && !preset.start[2].trim().is_empty()
+    {
+        return Ok(preset.start[2].trim().to_string());
+    }
+
+    if runtime_name == "bun" || runtime_name.starts_with("bun-") {
+        return Ok("bun".to_string());
+    }
+
+    Err(format!(
+        "Unable to infer proto runtime tool for preset '{}'. Set preset `start` to begin with [\"proto\", \"run\", \"<tool>\", ...].",
+        runtime_name
+    ))
+}
+
 fn format_entry_point_summary(entry_point: &Path) -> String {
     format!("Entry point: {}", entry_point.display())
 }
@@ -1238,16 +1265,14 @@ fn resolve_build_target(
     preset: &BuildPreset,
     target_label: &str,
 ) -> Result<crate::build::BuildPresetTarget, String> {
-    if let Some(target) = preset.targets.get(target_label) {
-        return Ok(target.clone());
-    }
-
-    if preset.target_defaults.builder_image.is_none()
-        && preset.target_defaults.install.is_none()
-        && preset.target_defaults.build.is_none()
-        && !preset.targets.is_empty()
+    if !preset.build.targets.is_empty()
+        && !preset
+            .build
+            .targets
+            .iter()
+            .any(|value| value == target_label)
     {
-        let mut available = preset.targets.keys().cloned().collect::<Vec<_>>();
+        let mut available = preset.build.targets.clone();
         available.sort();
         return Err(format!(
             "Build preset does not define target '{}'. Available targets: {}",
@@ -1261,10 +1286,14 @@ fn resolve_build_target(
     }
 
     Ok(crate::build::BuildPresetTarget {
-        builder_image: preset.target_defaults.builder_image.clone(),
-        install: preset.target_defaults.install.clone(),
-        build: preset.target_defaults.build.clone(),
+        builder_image: None,
+        install: preset.build.install.clone(),
+        build: preset.build.build.clone(),
     })
+}
+
+fn should_use_docker_build(preset: &BuildPreset) -> bool {
+    !preset.build.targets.is_empty()
 }
 
 fn resolve_build_preset_ref(tako_config: &TakoToml) -> Result<String, String> {
@@ -1310,6 +1339,9 @@ fn artifact_cache_paths(
 fn build_artifact_cache_key(
     source_hash: &str,
     runtime_name: &str,
+    runtime_tool: &str,
+    runtime_version: &str,
+    use_docker: bool,
     target_label: &str,
     preset_source: &ResolvedPresetSource,
     target_build: &crate::build::BuildPresetTarget,
@@ -1324,6 +1356,8 @@ fn build_artifact_cache_key(
         schema_version: ARTIFACT_CACHE_SCHEMA_VERSION,
         source_hash,
         runtime: runtime_name,
+        runtime_tool,
+        runtime_version,
         target_label,
         preset_ref: &preset_source.preset_ref,
         preset_repo: &preset_source.repo,
@@ -1331,6 +1365,7 @@ fn build_artifact_cache_key(
         preset_commit: &preset_source.commit,
         app_subdir,
         builder_image: target_build.builder_image.as_deref(),
+        use_docker,
         install: target_build.install.as_deref(),
         build: target_build.build.as_deref(),
         include_patterns,
@@ -1668,6 +1703,7 @@ async fn build_target_artifacts(
     version: &str,
     app_subdir: &str,
     runtime_name: &str,
+    runtime_tool: &str,
     main: &str,
     server_targets: &[(String, ServerTarget)],
     preset: &BuildPreset,
@@ -1680,14 +1716,46 @@ async fn build_target_artifacts(
         .iter()
         .map(|(_, target)| target.label())
         .collect();
+    let use_docker_build = should_use_docker_build(preset);
     let mut artifacts = HashMap::new();
 
     for target_label in unique_targets {
         let target_build = resolve_build_target(preset, &target_label)?;
         let use_local_build_spinners = should_use_local_build_spinners(output::is_interactive());
+        std::fs::create_dir_all(build_workspace_root)
+            .map_err(|e| format!("Failed to create {}: {e}", build_workspace_root.display()))?;
+        let workspace = build_workspace_root.join(format!("work-{}-{}", version, target_label));
+        if workspace.exists() {
+            std::fs::remove_dir_all(&workspace)
+                .map_err(|e| format!("Failed to clear {}: {e}", workspace.display()))?;
+        }
+        std::fs::create_dir_all(&workspace)
+            .map_err(|e| format!("Failed to create {}: {e}", workspace.display()))?;
+        BuildExecutor::extract_archive(source_archive_path, &workspace).map_err(|e| {
+            format!(
+                "Failed to extract source archive for {}: {}",
+                target_label, e
+            )
+        })?;
+
+        let runtime_version = if use_docker_build {
+            resolve_runtime_version_with_docker_probe(
+                &workspace,
+                app_subdir,
+                &target_label,
+                runtime_tool,
+                &target_build,
+            )?
+        } else {
+            resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool)?
+        };
+
         let cache_key = build_artifact_cache_key(
             source_hash,
             runtime_name,
+            runtime_tool,
+            &runtime_version,
+            use_docker_build,
             &target_label,
             preset_source,
             &target_build,
@@ -1708,6 +1776,7 @@ async fn build_target_artifacts(
                     format_size(cached.size_bytes)
                 ));
                 artifacts.insert(target_label, cached.path);
+                let _ = std::fs::remove_dir_all(&workspace);
                 continue;
             }
             Ok(None) => {}
@@ -1720,34 +1789,37 @@ async fn build_target_artifacts(
             }
         }
 
-        std::fs::create_dir_all(build_workspace_root)
-            .map_err(|e| format!("Failed to create {}: {e}", build_workspace_root.display()))?;
-        let workspace = build_workspace_root.join(format!("work-{}-{}", version, target_label));
-        if workspace.exists() {
-            std::fs::remove_dir_all(&workspace)
-                .map_err(|e| format!("Failed to clear {}: {e}", workspace.display()))?;
-        }
-        std::fs::create_dir_all(&workspace)
-            .map_err(|e| format!("Failed to create {}: {e}", workspace.display()))?;
-
-        BuildExecutor::extract_archive(source_archive_path, &workspace).map_err(|e| {
-            format!(
-                "Failed to extract source archive for {}: {}",
-                target_label, e
-            )
-        })?;
-
         let build_result = (|| -> Result<u64, String> {
             let build_label = format!("Building artifact for {}...", target_label);
             if use_local_build_spinners {
                 output::with_spinner(build_label.as_str(), || {
-                    run_target_build(&workspace, app_subdir, &target_label, &target_build)
+                    run_target_build(
+                        &workspace,
+                        app_subdir,
+                        &target_label,
+                        runtime_tool,
+                        use_docker_build,
+                        &target_build,
+                    )
                 })
                 .map_err(|e| format!("Failed to render artifact build spinner: {e}"))??;
             } else {
                 output::step(&build_label);
-                run_target_build(&workspace, app_subdir, &target_label, &target_build)?;
+                run_target_build(
+                    &workspace,
+                    app_subdir,
+                    &target_label,
+                    runtime_tool,
+                    use_docker_build,
+                    &target_build,
+                )?;
             }
+            materialize_runtime_tool_version(
+                &workspace,
+                app_subdir,
+                runtime_tool,
+                &runtime_version,
+            )?;
             output::success(&format_build_completed_message(&target_label));
 
             let prepare_label = format_prepare_artifact_message(&target_label);
@@ -1800,12 +1872,22 @@ fn run_target_build(
     workspace: &Path,
     app_subdir: &str,
     target_label: &str,
+    runtime_tool: &str,
+    use_docker_build: bool,
     target_build: &crate::build::BuildPresetTarget,
 ) -> Result<(), String> {
-    if target_build.builder_image.is_some() {
-        return run_container_build(workspace, app_subdir, target_label, target_build);
+    if use_docker_build {
+        run_container_build(
+            workspace,
+            app_subdir,
+            target_label,
+            runtime_tool,
+            target_build,
+        )?;
+    } else {
+        run_local_build(workspace, app_subdir, target_build)?;
     }
-    run_local_build(workspace, app_subdir, target_build)
+    Ok(())
 }
 
 fn run_local_build(
@@ -1865,6 +1947,160 @@ fn run_local_build(
     }
 
     Ok(())
+}
+
+fn materialize_runtime_tool_version(
+    workspace: &Path,
+    app_subdir: &str,
+    runtime_tool: &str,
+    runtime_version: &str,
+) -> Result<(), String> {
+    let app_dir = workspace_app_dir(workspace, app_subdir);
+    if !app_dir.is_dir() {
+        return Err(format!(
+            "App directory '{}' does not exist inside build workspace",
+            app_dir.display()
+        ));
+    }
+
+    write_runtime_proto_tools_file(workspace, &app_dir, runtime_tool, runtime_version)?;
+    let _ = std::fs::remove_file(app_dir.join(RUNTIME_VERSION_OUTPUT_FILE));
+    Ok(())
+}
+
+fn write_runtime_proto_tools_file(
+    workspace_root: &Path,
+    app_dir: &Path,
+    runtime_name: &str,
+    version: &str,
+) -> Result<(), String> {
+    let proto_tools_path = app_dir.join(PROTO_TOOLS_FILE);
+    let workspace_tools_path = workspace_root.join(PROTO_TOOLS_FILE);
+    let mut table = if proto_tools_path.is_file() {
+        match std::fs::read_to_string(&proto_tools_path)
+            .map_err(|e| format!("Failed to read {}: {e}", proto_tools_path.display()))?
+            .parse::<toml::Table>()
+        {
+            Ok(existing) => existing,
+            Err(_) => toml::Table::new(),
+        }
+    } else if app_dir != workspace_root && workspace_tools_path.is_file() {
+        match std::fs::read_to_string(&workspace_tools_path)
+            .map_err(|e| format!("Failed to read {}: {e}", workspace_tools_path.display()))?
+            .parse::<toml::Table>()
+        {
+            Ok(existing) => existing,
+            Err(_) => toml::Table::new(),
+        }
+    } else {
+        toml::Table::new()
+    };
+    table.insert(
+        runtime_name.to_string(),
+        toml::Value::String(version.to_string()),
+    );
+    let rendered = toml::to_string(&table)
+        .map_err(|e| format!("Failed to render {}: {e}", proto_tools_path.display()))?;
+    std::fs::write(&proto_tools_path, rendered)
+        .map_err(|e| format!("Failed to write {}: {e}", proto_tools_path.display()))?;
+    Ok(())
+}
+
+fn resolve_runtime_version_with_docker_probe(
+    workspace: &Path,
+    app_subdir: &str,
+    target_label: &str,
+    runtime_tool: &str,
+    target_build: &crate::build::BuildPresetTarget,
+) -> Result<String, String> {
+    let probe_target = crate::build::BuildPresetTarget {
+        builder_image: target_build.builder_image.clone(),
+        install: None,
+        build: Some("true".to_string()),
+    };
+    run_container_build(
+        workspace,
+        app_subdir,
+        target_label,
+        runtime_tool,
+        &probe_target,
+    )?;
+    read_runtime_version_output(workspace, app_subdir, runtime_tool)
+}
+
+fn resolve_runtime_version_from_workspace(
+    workspace: &Path,
+    app_subdir: &str,
+    runtime_tool: &str,
+) -> Result<String, String> {
+    let app_dir = workspace_app_dir(workspace, app_subdir);
+    if !app_dir.is_dir() {
+        return Err(format!(
+            "App directory '{}' does not exist inside build workspace",
+            app_dir.display()
+        ));
+    }
+    let app_tools = app_dir.join(PROTO_TOOLS_FILE);
+    let workspace_tools = workspace.join(PROTO_TOOLS_FILE);
+
+    let spec = if app_tools.is_file() {
+        read_runtime_version_spec_from_prototools(&app_tools, runtime_tool)?
+    } else if workspace_tools.is_file() {
+        read_runtime_version_spec_from_prototools(&workspace_tools, runtime_tool)?
+    } else {
+        None
+    };
+
+    Ok(spec.unwrap_or_else(|| "latest".to_string()))
+}
+
+fn read_runtime_version_spec_from_prototools(
+    path: &Path,
+    runtime_tool: &str,
+) -> Result<Option<String>, String> {
+    let raw = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    let table = match raw.parse::<toml::Table>() {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    Ok(table
+        .get(runtime_tool)
+        .and_then(|value| value.as_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string()))
+}
+
+fn read_runtime_version_output(
+    workspace: &Path,
+    app_subdir: &str,
+    runtime_tool: &str,
+) -> Result<String, String> {
+    let app_dir = workspace_app_dir(workspace, app_subdir);
+    let runtime_version_path = app_dir.join(RUNTIME_VERSION_OUTPUT_FILE);
+    if !runtime_version_path.is_file() {
+        return Err(format!(
+            "Runtime version probe for '{}' did not produce {}",
+            runtime_tool,
+            runtime_version_path.display()
+        ));
+    }
+    let raw = std::fs::read_to_string(&runtime_version_path)
+        .map_err(|e| format!("Failed to read {}: {e}", runtime_version_path.display()))?;
+    let version = raw
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "Runtime version probe for '{}' returned empty output",
+                runtime_tool
+            )
+        })?
+        .to_string();
+    let _ = std::fs::remove_file(runtime_version_path);
+    Ok(version)
 }
 
 fn merge_assets_locally(
@@ -3289,78 +3525,33 @@ name = "test-app"
     }
 
     #[test]
-    fn resolve_build_target_returns_explicit_target_config() {
-        let mut targets = HashMap::new();
-        targets.insert(
-            "linux-x86_64-glibc".to_string(),
-            crate::build::BuildPresetTarget {
-                builder_image: Some("custom/image:latest".to_string()),
+    fn resolve_build_target_uses_preset_build_commands() {
+        let preset = BuildPreset {
+            name: "bun".to_string(),
+            main: None,
+            builder_image: None,
+            build: crate::build::BuildPresetBuild {
+                exclude: vec![],
                 install: Some("bun install".to_string()),
                 build: Some("bun run build".to_string()),
+                targets: vec!["linux-x86_64-glibc".to_string()],
             },
-        );
-        let preset = BuildPreset {
-            name: "bun".to_string(),
-            main: None,
-            builder_image: Some("oven/bun:1.2".to_string()),
-            build: crate::build::BuildPresetBuild::default(),
-            dev: vec![],
-            install: None,
-            start: vec![],
-            targets,
-            target_defaults: crate::build::BuildPresetTargetDefaults {
-                builder_image: Some("oven/bun:1.2".to_string()),
-                install: Some("default install".to_string()),
-                build: Some("default build".to_string()),
-            },
-            assets: vec![],
-        };
-
-        let resolved = resolve_build_target(&preset, "linux-x86_64-glibc").unwrap();
-        assert_eq!(
-            resolved.builder_image.as_deref(),
-            Some("custom/image:latest")
-        );
-        assert_eq!(resolved.install.as_deref(), Some("bun install"));
-        assert_eq!(resolved.build.as_deref(), Some("bun run build"));
-    }
-
-    #[test]
-    fn resolve_build_target_uses_defaults_when_target_is_missing() {
-        let preset = BuildPreset {
-            name: "bun".to_string(),
-            main: None,
-            builder_image: Some("oven/bun:1.2".to_string()),
-            build: crate::build::BuildPresetBuild::default(),
             dev: vec![],
             install: None,
             start: vec![],
             targets: HashMap::new(),
-            target_defaults: crate::build::BuildPresetTargetDefaults {
-                builder_image: Some("oven/bun:1.2".to_string()),
-                install: Some("bun install".to_string()),
-                build: Some("bun run build".to_string()),
-            },
+            target_defaults: crate::build::BuildPresetTargetDefaults::default(),
             assets: vec![],
         };
 
-        let resolved = resolve_build_target(&preset, "linux-aarch64-musl").unwrap();
-        assert_eq!(resolved.builder_image.as_deref(), Some("oven/bun:1.2"));
+        let resolved = resolve_build_target(&preset, "linux-x86_64-glibc").unwrap();
+        assert_eq!(resolved.builder_image.as_deref(), None);
         assert_eq!(resolved.install.as_deref(), Some("bun install"));
         assert_eq!(resolved.build.as_deref(), Some("bun run build"));
     }
 
     #[test]
-    fn resolve_build_target_errors_without_defaults_for_missing_target() {
-        let mut targets = HashMap::new();
-        targets.insert(
-            "linux-x86_64-glibc".to_string(),
-            crate::build::BuildPresetTarget {
-                builder_image: Some("oven/bun:1.2".to_string()),
-                install: None,
-                build: None,
-            },
-        );
+    fn resolve_build_target_allows_any_target_when_targets_are_not_configured() {
         let preset = BuildPreset {
             name: "bun".to_string(),
             main: None,
@@ -3369,8 +3560,34 @@ name = "test-app"
             dev: vec![],
             install: None,
             start: vec![],
-            targets,
-            target_defaults: Default::default(),
+            targets: HashMap::new(),
+            target_defaults: crate::build::BuildPresetTargetDefaults::default(),
+            assets: vec![],
+        };
+
+        let resolved = resolve_build_target(&preset, "linux-aarch64-musl").unwrap();
+        assert_eq!(resolved.builder_image.as_deref(), None);
+        assert_eq!(resolved.install.as_deref(), None);
+        assert_eq!(resolved.build.as_deref(), None);
+    }
+
+    #[test]
+    fn resolve_build_target_errors_when_target_is_not_listed() {
+        let preset = BuildPreset {
+            name: "bun".to_string(),
+            main: None,
+            builder_image: None,
+            build: crate::build::BuildPresetBuild {
+                exclude: vec![],
+                install: Some("bun install".to_string()),
+                build: Some("bun run build".to_string()),
+                targets: vec!["linux-x86_64-glibc".to_string()],
+            },
+            dev: vec![],
+            install: None,
+            start: vec![],
+            targets: HashMap::new(),
+            target_defaults: crate::build::BuildPresetTargetDefaults::default(),
             assets: vec![],
         };
 
@@ -3398,6 +3615,9 @@ name = "test-app"
         let baseline = build_artifact_cache_key(
             "source-hash-a",
             "bun",
+            "bun",
+            "1.3.9",
+            true,
             "linux-x86_64-glibc",
             &resolved,
             &target,
@@ -3411,6 +3631,9 @@ name = "test-app"
         let changed_source = build_artifact_cache_key(
             "source-hash-b",
             "bun",
+            "bun",
+            "1.3.9",
+            true,
             "linux-x86_64-glibc",
             &resolved,
             &target,
@@ -3425,6 +3648,9 @@ name = "test-app"
         let changed_runtime = build_artifact_cache_key(
             "source-hash-a",
             "node",
+            "bun",
+            "1.3.9",
+            true,
             "linux-x86_64-glibc",
             &resolved,
             &target,
@@ -3439,6 +3665,9 @@ name = "test-app"
         let changed_target = build_artifact_cache_key(
             "source-hash-a",
             "bun",
+            "bun",
+            "1.3.9",
+            true,
             "linux-aarch64-glibc",
             &resolved,
             &target,
@@ -3450,11 +3679,31 @@ name = "test-app"
         .unwrap();
         assert_ne!(baseline, changed_target);
 
+        let changed_runtime_version = build_artifact_cache_key(
+            "source-hash-a",
+            "bun",
+            "bun",
+            "1.3.10",
+            true,
+            "linux-x86_64-glibc",
+            &resolved,
+            &target,
+            &include_patterns,
+            &exclude_patterns,
+            &asset_roots,
+            "apps/web",
+        )
+        .unwrap();
+        assert_ne!(baseline, changed_runtime_version);
+
         let mut changed_preset = resolved.clone();
         changed_preset.commit = "fff111aaa222".to_string();
         let changed_preset_commit = build_artifact_cache_key(
             "source-hash-a",
             "bun",
+            "bun",
+            "1.3.9",
+            true,
             "linux-x86_64-glibc",
             &changed_preset,
             &target,
@@ -3471,6 +3720,9 @@ name = "test-app"
         let changed_script = build_artifact_cache_key(
             "source-hash-a",
             "bun",
+            "bun",
+            "1.3.9",
+            true,
             "linux-x86_64-glibc",
             &resolved,
             &changed_build_target,
@@ -3485,6 +3737,9 @@ name = "test-app"
         let changed_include = build_artifact_cache_key(
             "source-hash-a",
             "bun",
+            "bun",
+            "1.3.9",
+            true,
             "linux-x86_64-glibc",
             &resolved,
             &target,
@@ -3732,6 +3987,66 @@ name = "test-app"
         let err =
             merge_assets_locally(&workspace, "apps/web", &["missing".to_string()]).unwrap_err();
         assert!(err.contains("not found after build"));
+    }
+
+    #[test]
+    fn materialize_runtime_tool_version_writes_prototools_file() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        materialize_runtime_tool_version(&workspace, "apps/web", "bun", "1.3.9").unwrap();
+
+        let tools_raw = std::fs::read_to_string(app_dir.join(PROTO_TOOLS_FILE)).unwrap();
+        let tools = tools_raw.parse::<toml::Table>().unwrap();
+        assert_eq!(
+            tools.get("bun").and_then(|value| value.as_str()),
+            Some("1.3.9")
+        );
+        assert!(!app_dir.join(RUNTIME_VERSION_OUTPUT_FILE).exists());
+    }
+
+    #[test]
+    fn materialize_runtime_tool_version_preserves_existing_prototools_entries() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(app_dir.join(PROTO_TOOLS_FILE), "node = \"20.11.1\"\n").unwrap();
+        materialize_runtime_tool_version(&workspace, "apps/web", "bun", "1.3.9").unwrap();
+
+        let tools_raw = std::fs::read_to_string(app_dir.join(PROTO_TOOLS_FILE)).unwrap();
+        let tools = tools_raw.parse::<toml::Table>().unwrap();
+        assert_eq!(
+            tools.get("bun").and_then(|value| value.as_str()),
+            Some("1.3.9")
+        );
+        assert_eq!(
+            tools.get("node").and_then(|value| value.as_str()),
+            Some("20.11.1")
+        );
+    }
+
+    #[test]
+    fn materialize_runtime_tool_version_falls_back_to_workspace_prototools_entries() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(workspace.join(PROTO_TOOLS_FILE), "node = \"20.11.1\"\n").unwrap();
+
+        materialize_runtime_tool_version(&workspace, "apps/web", "bun", "1.3.9").unwrap();
+
+        let tools_raw = std::fs::read_to_string(app_dir.join(PROTO_TOOLS_FILE)).unwrap();
+        let tools = tools_raw.parse::<toml::Table>().unwrap();
+        assert_eq!(
+            tools.get("bun").and_then(|value| value.as_str()),
+            Some("1.3.9")
+        );
+        assert_eq!(
+            tools.get("node").and_then(|value| value.as_str()),
+            Some("20.11.1")
+        );
     }
 
     #[test]

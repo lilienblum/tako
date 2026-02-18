@@ -99,11 +99,11 @@ Notes:
 
 Deploy note:
 
-- `tako deploy` resolves `[build].preset`, builds target artifacts locally in Docker, reuses locally cached verified artifacts on cache hits, then uploads those artifacts to servers.
+- `tako deploy` resolves `[build].preset`, builds target artifacts locally (Docker when preset `[build].targets` is configured; local host build otherwise), reuses locally cached verified artifacts on cache hits, then uploads those artifacts to servers.
 - Preset artifact filters come from preset `[build].exclude` plus app `[build].exclude` (`include` is app-level `[build].include` only).
 - Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is unsupported).
 - During artifact prep, deploy verifies resolved `main` exists in the post-build app directory and fails if missing.
-- Containerized deploy builds reuse per-target Docker dependency cache volumes (keyed by target + builder image) while keeping build containers ephemeral.
+- Containerized deploy builds reuse per-target dependency cache volumes (proto + runtime cache mounts, keyed by cache kind + target + builder image) while keeping build containers ephemeral.
 - Bun release dependencies are installed on server before rollout (`bun install --production`).
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
 - For private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`), deploy provisions self-signed certs on the server instead of ACME.

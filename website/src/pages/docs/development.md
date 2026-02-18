@@ -95,7 +95,7 @@ Deploy e2e uses Docker/SSH and is opt-in:
 - `just e2e e2e/fixtures/js/tanstack-start`
 
 Deploy e2e exercises artifact-cache behavior too: first deploy builds target artifacts, then unchanged redeploy reuses verified cached artifacts from `.tako/artifacts/`.
-Containerized builds also reuse per-target Docker dependency cache volumes (prefix `tako-build-cache-`) across deploy runs.
+When preset `[build].targets` is configured, containerized builds reuse per-target Docker dependency cache volumes (prefix `tako-build-cache-`) across deploy runs.
 Preset artifact filters use preset `[build].exclude`; preset runtime/dev commands use top-level `main`/`install`/`start`/`dev` (legacy preset `[deploy]`, `[dev]`, preset `include`, and `[artifact]` are not supported; deprecated top-level `dev_cmd` is accepted as an alias).
 Deploy validates that the resolved runtime `main` exists after build and before artifact packaging.
 Bun release dependencies are installed on server before rollout (`bun install --production`).

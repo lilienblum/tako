@@ -55,11 +55,12 @@ preset = "bun"
   - `include`: optional artifact include globs (`**/*` is used when unset).
   - `exclude`: optional artifact exclude globs (appended to preset excludes).
   - `assets`: optional project-relative directories merged into app `public/` after build (later entries overwrite earlier files on conflicts).
-  - Build preset files support optional top-level `name`, top-level `main` (default app entrypoint), top-level `dev`, top-level `install`/`start`, preset `[build].exclude`, and top-level `assets`; legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Deprecated top-level `dev_cmd` is still accepted as an alias.
+  - Build preset files support optional top-level `name`, top-level `main` (default app entrypoint), top-level `dev`, top-level `install`/`start`, top-level `assets`, and preset `[build]` keys (`exclude`, `install`, `build`, optional `targets = ["linux-<arch>-<libc>", ...]`); legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Deprecated top-level `dev_cmd` is still accepted as an alias.
   - `bun-tanstack-start` preset defaults `main = "dist/server/tako-entry.mjs"` and `assets = ["dist/client"]`.
   - Deploy writes lock metadata to `.tako/build.lock.json` so the resolved preset commit stays reproducible across deploys.
-  - Deploy reuses per-target Docker dependency cache volumes (keyed by target label and builder image) while keeping build containers ephemeral.
-  - Deploy artifact cache keys include `build.preset`, resolved preset commit, and `build.include` / `build.exclude` / `build.assets`; changing these inputs invalidates cache and triggers rebuild for affected targets.
+  - Deploy uses Docker only when preset `[build].targets` is non-empty; when omitted/empty, deploy uses local host build commands.
+  - Docker builds reuse target-scoped dependency cache volumes (proto + runtime cache mounts) while keeping build containers ephemeral.
+  - Deploy artifact cache keys include `build.preset`, resolved preset commit, runtime tool/version, build mode (Docker/local), and `build.include` / `build.exclude` / `build.assets`; changing these inputs invalidates cache and triggers rebuild for affected targets.
   - Bun runtime dependencies are installed on server from the uploaded release (`bun install --production`).
   - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
 - Legacy top-level `build = "..."` and top-level `assets = [...]` are not supported.

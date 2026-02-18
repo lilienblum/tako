@@ -15,12 +15,19 @@ name = "bun"
 dev = ["bun", "run", "dev"]
 
 # Command run on the server before starting the app.
-# Keep this deterministic (lockfile-aware install is recommended).
-install = "bun install --production --frozen-lockfile"
+# Keep this deterministic. For Bun presets, use proto-managed runtime installs.
+install = '''
+proto install --yes
+if [ -f bun.lockb ] || [ -f bun.lock ]; then
+  proto run bun -- install --production --frozen-lockfile
+else
+  proto run bun -- install --production
+fi
+'''
 
 # Production start command on the server.
 # `{main}` is replaced with resolved app entrypoint.
-start = ["bun", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
+start = ["proto", "run", "bun", "--", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
 
 [build]
 # Exclude patterns use gitignore-style matching relative to workspace root.
@@ -30,25 +37,21 @@ exclude = ["node_modules/"]
 # Build dependency/bootstrap command.
 # Runs from workspace root; use `cd "$TAKO_APP_DIR"` for app-local commands.
 install = '''
-# Install dependencies in workspace root
+# Install runtime and dependencies in workspace root
+# proto install --yes
+# if [ -f bun.lockb ] || [ -f bun.lock ]; then
+#   proto run bun -- install --frozen-lockfile
+# else
+#   proto run bun -- install
+# fi
 '''
 
 # Build command that produces runtime output.
 # Runs from workspace root; switch to app dir when needed.
 build = '''
-# Run build command
+# cd "$TAKO_APP_DIR"
+# proto run bun -- run --if-present build
 '''
 
-# Optional target defaults and per-target build overrides.
-# Set `build.targets.builder_image` to run builds in Docker.
-# Omit it for local builds.
-# [build.targets]
-# builder_image = "your-image:tag"
-#
-# Target labels should match server target labels, for example:
-# `linux-x86_64-glibc`, `linux-aarch64-musl`.
-# [build.targets.linux-x86_64-glibc]
-# builder_image = "your-image:tag"
-#
-# [build.targets.linux-aarch64-musl]
-# builder_image = "your-image:tag"
+# Optional target labels for Docker builds. If omitted or empty, Tako uses local builds.
+# targets = ["linux-x86_64-glibc", "linux-aarch64-glibc"]

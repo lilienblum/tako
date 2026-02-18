@@ -158,6 +158,7 @@ impl E2EEnvironment {
     fn create_test_app(&self, name: &str, code: &str) -> PathBuf {
         let app_dir = self.data_dir.path().join("apps").join(name);
         fs::create_dir_all(&app_dir).unwrap();
+        fs::create_dir_all(app_dir.join("node_modules/tako.sh/src")).unwrap();
 
         fs::write(
             app_dir.join("package.json"),
@@ -165,6 +166,16 @@ impl E2EEnvironment {
                 r#"{{"name":"{}","scripts":{{"dev":"bun run index.ts"}}}}"#,
                 name
             ),
+        )
+        .unwrap();
+        fs::write(
+            app_dir.join("node_modules/tako.sh/src/wrapper.ts"),
+            "export default {};",
+        )
+        .unwrap();
+        fs::write(
+            app_dir.join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","install":"true","start":["bun","{main}"]}"#,
         )
         .unwrap();
         fs::write(app_dir.join("index.ts"), code).unwrap();

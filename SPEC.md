@@ -99,14 +99,15 @@ env = "production"
   - official aliases: `bun`, `bun/<commit-hash>`, `bun-tanstack-start`, `bun-tanstack-start/<commit-hash>`
   - GitHub references: `github:<owner>/<repo>/<path>.toml[@<commit-hash>]`
 - `bun-tanstack-start` preset defaults `main = "dist/server/tako-entry.mjs"` and adds `assets = ["dist/client"]`.
-- Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `dev` (`tako dev` command), top-level `install`/`start` (server runtime prep/start commands), top-level `assets`, and `[build]` (`exclude`, `install`, `build`, optional `[build.targets]` defaults/overrides). Legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Top-level `dev_cmd` remains accepted as a deprecated alias for compatibility.
+- Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `dev` (`tako dev` command), top-level `install`/`start` (server runtime prep/start commands), top-level `assets`, and `[build]` (`exclude`, `install`, `build`, optional `targets = ["linux-<arch>-<libc>", ...]`). Legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Top-level `dev_cmd` remains accepted as a deprecated alias for compatibility.
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for reproducible preset fetches on later deploys.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Source bundle filtering uses `.gitignore`.
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
 - Deploy sends merged app vars + runtime vars + decrypted secrets to `tako-server` in the `deploy` command payload; `tako-server` injects them directly into app process environment on spawn.
-- For each required server target (`arch`/`libc`), deploy builds an artifact locally in a Docker container using the preset target (`builder_image`, `install`, `build`).
-- Container builds are ephemeral, but dependency download caches are persisted with Docker volumes keyed by target label and builder image (Bun cache path: `/root/.bun/install/cache`).
+- If preset `[build].targets` is non-empty, deploy builds each required target artifact in Docker (one per target label). If preset `[build].targets` is omitted/empty, deploy uses local host build commands (no Docker).
+- Docker build containers are ephemeral; dependency caches are persisted with target-scoped Docker volumes keyed by cache kind + target label + builder image (proto cache: `/var/cache/tako/proto`, Bun cache: `/var/cache/tako/bun/install/cache`).
+- For Docker target builds, Tako bootstraps `proto` inside the build container, installs tools from workspace `.prototools` (fallback `<runtime-tool> = "latest"`), probes runtime version with `proto run <tool> -- --version`, and writes that resolved runtime version into release `.prototools` before packaging.
 - Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, target build commands/image, include/exclude patterns, asset roots, and app subdirectory.
 - Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
 - After each target build (and asset merge), deploy verifies the resolved runtime `main` file exists in the build workspace before artifact packaging; missing files fail deploy with an explicit error.
@@ -600,9 +601,11 @@ Deploy flow helpers:
    - Resolve deterministic cache key per target.
    - On cache hit, reuse existing verified target artifact.
    - On cache miss (or invalid cache entry), extract source archive into a temporary workspace.
-   - Run preset install/build commands inside a local Docker container for that target.
+   - If preset `[build].targets` is non-empty: run preset install/build commands in a Docker container for that target.
+   - If preset `[build].targets` is empty: run preset install/build commands on the local host workspace.
    - Merge configured assets into app `public/`.
    - Verify resolved runtime `main` exists in the built app directory.
+   - Materialize release `.prototools` in app dir with resolved runtime tool version for server runtime parity.
    - Package filtered artifact tarball for that target using include/exclude rules and store it in local cache.
    - Per-target cache writes are serialized with a local lock to avoid duplicate concurrent builds.
 8. Deploy to all servers in parallel:
@@ -627,16 +630,17 @@ Deploy flow helpers:
 - Deploy target app path is `DIR` from CLI (`tako deploy [DIR]`) relative to the source bundle root.
 - Source filtering uses `.gitignore`.
 - These paths are always excluded from archive payload: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
-- Deploy builds target-specific artifacts locally in Docker containers; servers receive prebuilt artifacts and do not run app build steps during deploy.
+- Deploy always builds target-specific artifacts locally (Docker when preset `[build].targets` is configured, local host build when omitted/empty); servers receive prebuilt artifacts and do not run app build steps during deploy.
 - For Bun runtime, `tako-server` runs dependency install for the release before starting/rolling instances.
-- Build logic comes from resolved preset target fields (`builder_image`, `install`, `build`).
+- Build logic comes from resolved preset `[build].install` and `[build].build` commands.
 - Runtime prep/start on server comes from preset top-level `install` and `start`.
-- Deploy reuses per-target dependency cache volumes during container builds (currently Bun cache), keyed by target label and builder image.
+- During container builds, deploy reuses target-scoped dependency cache volumes (proto and runtime-specific cache mounts such as Bun), keyed by cache kind, target label, and builder image.
 - Artifact include precedence: `build.include` -> `**/*`.
 - Artifact exclude list: preset `[build].exclude` plus `build.exclude`.
 - Asset roots are preset `assets` plus `build.assets` (deduplicated), merged into app `public/` after container build with ordered overwrite.
 - Target artifacts are cached locally by deterministic key and reused across deploys when build inputs are unchanged.
 - Cached artifacts are validated by checksum/size before reuse; invalid cache entries are rebuilt automatically.
+- Artifact cache keys include runtime tool + resolved runtime version + Docker/local mode to avoid cross-target and cross-runtime cache contamination.
 - Final `app.json` is written in the deployed app directory and contains runtime `main` used by `tako-server`.
 - Deploy does not write a release `.env` file; runtime environment is provided through the `deploy` command payload and applied by `tako-server` when spawning instances.
 - Deploy requires valid `[server_targets.<name>]` metadata for each selected server (`arch` and `libc`).

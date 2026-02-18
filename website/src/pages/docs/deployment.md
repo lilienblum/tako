@@ -26,9 +26,9 @@ What happens during deploy:
 - A versioned source tarball is created under `.tako/artifacts/`.
 - Deploy version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
 - Build preset is resolved from `[build].preset` and locked in `.tako/build.lock.json`.
-- For each required server target (`arch`/`libc`), Tako runs preset install/build in a local Docker container and packages a target artifact tarball.
+- For each required server target (`arch`/`libc`), Tako runs preset install/build locally and packages a target artifact tarball (Docker when preset `[build].targets` is configured; local host build when omitted/empty).
 - Before packaging each target artifact, Tako verifies the resolved deploy `main` file exists in the post-build app directory.
-- Container builds stay ephemeral, but dependency downloads are reused from per-target Docker cache volumes keyed by target label and builder image.
+- Docker build containers stay ephemeral, but dependency downloads are reused from per-target Docker cache volumes keyed by cache kind + target label + builder image.
 - Target artifacts are cached locally in `.tako/artifacts/` using a deterministic build-input key.
 - On cache hit, deploy reuses the verified artifact; on cache mismatch/corruption, deploy rebuilds that target artifact automatically.
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
@@ -46,7 +46,7 @@ Before you ship, do a quick sanity pass:
 4. Run your local tests before deploy.
 5. Ensure deploy entrypoint is set either in `tako.toml` (`main = "..."`) or preset top-level `main`.
 6. Ensure your build output includes that entrypoint path (deploy validates this before artifact packaging).
-7. Ensure Docker is available locally; deploy performs target builds in local containers.
+7. If preset `[build].targets` is configured, ensure Docker is available locally for containerized target builds.
 
 ## Server Prerequisites
 
@@ -83,9 +83,9 @@ Each target server should have:
 - Build preset resolves from official alias/GitHub ref and is locked to a commit in `.tako/build.lock.json`.
 - Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is not supported).
 - Artifact include precedence is `build.include` then `**/*`; artifact excludes are preset `[build].exclude` plus `build.exclude`.
-- For each server target label, Tako runs install/build in a local Docker container using preset target config.
-- Deploy reuses per-target Docker dependency cache volumes (keyed by target label + builder image) while still creating fresh build containers.
-- Local artifact cache key includes source hash, target label, resolved preset source/commit, target builder image/install/build commands, include/exclude patterns, asset roots, and app subdirectory.
+- For each server target label, Tako runs install/build from preset `[build].install` and `[build].build` (Docker when preset `[build].targets` is non-empty; local host build otherwise).
+- Containerized deploy builds reuse per-target dependency cache volumes (proto + runtime cache mounts) while still creating fresh build containers.
+- Local artifact cache key includes source hash, target label, resolved preset source/commit, runtime tool/version, Docker/local mode, build commands, include/exclude patterns, asset roots, and app subdirectory.
 - `assets` are copied into app `public/` after container build (later entries overwrite earlier ones).
 - Final `app.json` is written in app directory after resolving runtime `main`.
 - Runtime `main` resolution order:

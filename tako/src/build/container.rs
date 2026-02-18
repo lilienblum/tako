@@ -5,7 +5,8 @@ use sha2::{Digest, Sha256};
 
 use super::BuildPresetTarget;
 
-const BUN_INSTALL_CACHE_PATH: &str = "/root/.bun/install/cache";
+const BUN_INSTALL_CACHE_PATH: &str = "/var/cache/tako/bun/install/cache";
+const PROTO_HOME_PATH: &str = "/var/cache/tako/proto";
 const CACHE_VOLUME_PREFIX: &str = "tako-build-cache";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,28 +19,31 @@ pub fn run_container_build(
     workspace_dir: &Path,
     app_subdir: &str,
     target_label: &str,
+    runtime_tool: &str,
     target: &BuildPresetTarget,
 ) -> Result<(), String> {
-    let image = target.builder_image.as_deref().ok_or_else(|| {
-        format!(
-            "Build preset does not define builder_image for target '{}' (required for container build).",
-            target_label
-        )
-    })?;
+    let image = target
+        .builder_image
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or(default_builder_image_for_target_label(target_label)?.to_string());
     let platform = docker_platform_for_target_label(target_label)?;
     let script = build_container_script(
         app_subdir,
+        runtime_tool,
         target.install.as_deref(),
         target.build.as_deref(),
     )?;
-    let cache_mounts = dependency_cache_mounts(target_label, target);
+    let cache_mounts = dependency_cache_mounts(target_label, runtime_tool, &image);
     let workspace = workspace_dir.canonicalize().map_err(|e| {
         format!(
             "Failed to canonicalize workspace {}: {e}",
             workspace_dir.display()
         )
     })?;
-    let create_args = build_docker_create_args(platform, image, &script, &cache_mounts);
+    let create_args = build_docker_create_args(platform, &image, &script, &cache_mounts);
     let create_output = Command::new("docker")
         .args(&create_args)
         .output()
@@ -167,6 +171,7 @@ fn build_docker_create_args(
 
 fn build_container_script(
     app_subdir: &str,
+    runtime_tool: &str,
     install_command: Option<&str>,
     build_command: Option<&str>,
 ) -> Result<String, String> {
@@ -179,6 +184,33 @@ fn build_container_script(
             shell_single_quote(&app_subdir_value)
         ),
         format!("export TAKO_APP_DIR={}", shell_single_quote(&app_dir)),
+        format!("export PROTO_HOME={}", shell_single_quote(PROTO_HOME_PATH)),
+        format!(
+            "export PATH=\"$PROTO_HOME/bin:$PROTO_HOME/shims:$PATH\""
+        ),
+        format!(
+            "export BUN_INSTALL_CACHE_DIR={}",
+            shell_single_quote(BUN_INSTALL_CACHE_PATH)
+        ),
+        "if command -v apk >/dev/null 2>&1; then apk add --no-cache bash ca-certificates curl git gzip unzip xz; elif command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends bash ca-certificates curl git gzip unzip xz-utils; rm -rf /var/lib/apt/lists/*; else echo \"Unsupported builder image: expected apk or apt-get\" >&2; exit 1; fi".to_string(),
+        "if [ ! -x \"$PROTO_HOME/bin/proto\" ]; then installer=\"$(mktemp)\"; curl -fsSL https://moonrepo.dev/install/proto.sh -o \"$installer\"; chmod +x \"$installer\"; PROTO_HOME=\"$PROTO_HOME\" bash \"$installer\" --yes --no-profile; rm -f \"$installer\"; fi".to_string(),
+        "if ! command -v proto >/dev/null 2>&1; then echo \"Failed to install proto in build container\" >&2; exit 1; fi".to_string(),
+        format!(
+            "if [ ! -f /workspace/.prototools ] && [ -f {} ]; then cp {} /workspace/.prototools; fi",
+            shell_single_quote(&format!("{app_dir}/.prototools")),
+            shell_single_quote(&format!("{app_dir}/.prototools"))
+        ),
+        format!(
+            "if [ ! -f /workspace/.prototools ]; then printf '%s = \"latest\"\\n' {} > /workspace/.prototools; fi",
+            shell_single_quote(runtime_tool)
+        ),
+        "cd /workspace && proto install --yes".to_string(),
+        format!(
+            "cd {} && proto run {} -- --version > {}",
+            shell_single_quote(&app_dir),
+            shell_single_quote(runtime_tool),
+            shell_single_quote(".tako-runtime-version")
+        ),
     ];
 
     if let Some(install) = install_command.map(str::trim).filter(|s| !s.is_empty()) {
@@ -189,7 +221,7 @@ fn build_container_script(
         lines.push(format!("cd {} && {}", shell_single_quote(&app_dir), build));
     }
 
-    if lines.len() == 4 {
+    if lines.len() == 14 {
         return Err("Build preset did not define install or build commands".to_string());
     }
 
@@ -217,43 +249,20 @@ fn shell_single_quote(value: &str) -> String {
 
 fn dependency_cache_mounts(
     target_label: &str,
-    target: &BuildPresetTarget,
+    runtime_tool: &str,
+    builder_image: &str,
 ) -> Vec<ContainerCacheMount> {
-    if target_uses_bun(target) {
-        return vec![ContainerCacheMount {
-            volume_name: dependency_cache_volume_name(
-                "bun",
-                target_label,
-                target.builder_image.as_deref().unwrap_or_default(),
-            ),
+    let mut mounts = vec![ContainerCacheMount {
+        volume_name: dependency_cache_volume_name("proto", target_label, builder_image),
+        container_path: PROTO_HOME_PATH.to_string(),
+    }];
+    if runtime_tool == "bun" {
+        mounts.push(ContainerCacheMount {
+            volume_name: dependency_cache_volume_name("bun", target_label, builder_image),
             container_path: BUN_INSTALL_CACHE_PATH.to_string(),
-        }];
+        });
     }
-    Vec::new()
-}
-
-fn target_uses_bun(target: &BuildPresetTarget) -> bool {
-    if target
-        .builder_image
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .contains("bun")
-    {
-        return true;
-    }
-    target
-        .install
-        .as_deref()
-        .unwrap_or_default()
-        .to_ascii_lowercase()
-        .contains("bun")
-        || target
-            .build
-            .as_deref()
-            .unwrap_or_default()
-            .to_ascii_lowercase()
-            .contains("bun")
+    mounts
 }
 
 fn dependency_cache_volume_name(kind: &str, target_label: &str, builder_image: &str) -> String {
@@ -319,10 +328,33 @@ pub fn docker_platform_for_target_label(target_label: &str) -> Result<&'static s
     }
 }
 
+fn default_builder_image_for_target_label(target_label: &str) -> Result<&'static str, String> {
+    if !target_label.starts_with("linux-") {
+        return Err(format!(
+            "Unsupported target '{}': expected linux-<arch>-<libc>",
+            target_label
+        ));
+    }
+    let without_linux = target_label.trim_start_matches("linux-");
+    let Some((_arch, libc)) = without_linux.split_once('-') else {
+        return Err(format!(
+            "Unsupported target '{}': expected linux-<arch>-<libc>",
+            target_label
+        ));
+    };
+    match libc {
+        "glibc" => Ok("debian:bookworm-slim"),
+        "musl" => Ok("alpine:3.20"),
+        other => Err(format!(
+            "Unsupported target libc '{}': supported values are glibc and musl",
+            other
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::BuildPresetTarget;
 
     #[test]
     fn docker_platform_mapping_supports_known_targets() {
@@ -343,15 +375,30 @@ mod tests {
     }
 
     #[test]
+    fn default_builder_image_mapping_supports_target_libc() {
+        assert_eq!(
+            default_builder_image_for_target_label("linux-x86_64-glibc").unwrap(),
+            "debian:bookworm-slim"
+        );
+        assert_eq!(
+            default_builder_image_for_target_label("linux-aarch64-musl").unwrap(),
+            "alpine:3.20"
+        );
+    }
+
+    #[test]
     fn container_script_uses_workspace_root_for_install_and_app_dir_for_build() {
         let script = build_container_script(
             "apps/web",
+            "bun",
             Some("bun install --frozen-lockfile"),
             Some("bun run build"),
         )
         .unwrap();
         assert!(script.contains("export TAKO_APP_SUBDIR='apps/web'"));
         assert!(script.contains("export TAKO_APP_DIR='/workspace/apps/web'"));
+        assert!(script.contains("export PROTO_HOME='/var/cache/tako/proto'"));
+        assert!(script.contains("cd /workspace && proto install --yes"));
         assert!(script.contains("cd /workspace && bun install --frozen-lockfile"));
         assert!(script.contains("cd '/workspace/apps/web' && bun run build"));
     }
@@ -369,16 +416,16 @@ mod tests {
 
     #[test]
     fn bun_target_enables_bun_dependency_cache_mount() {
-        let target = BuildPresetTarget {
-            builder_image: Some("oven/bun:1.2".to_string()),
-            install: Some("bun install --frozen-lockfile".to_string()),
-            build: Some("bun run build".to_string()),
-        };
-        let mounts = dependency_cache_mounts("linux-x86_64-glibc", &target);
+        let mounts = dependency_cache_mounts("linux-x86_64-glibc", "bun", "debian:bookworm-slim");
 
-        assert_eq!(mounts.len(), 1);
-        assert_eq!(mounts[0].container_path, "/root/.bun/install/cache");
-        assert!(mounts[0].volume_name.starts_with("tako-build-cache-bun-"));
+        assert_eq!(mounts.len(), 2);
+        assert_eq!(mounts[0].container_path, "/var/cache/tako/proto");
+        assert!(mounts[0].volume_name.starts_with("tako-build-cache-proto-"));
+        assert_eq!(
+            mounts[1].container_path,
+            "/var/cache/tako/bun/install/cache"
+        );
+        assert!(mounts[1].volume_name.starts_with("tako-build-cache-bun-"));
     }
 
     #[test]
@@ -395,10 +442,10 @@ mod tests {
     fn docker_create_args_include_cache_mounts() {
         let mounts = vec![ContainerCacheMount {
             volume_name: "tako-build-cache-bun-linux-x86_64-glibc-abcd1234".to_string(),
-            container_path: "/root/.bun/install/cache".to_string(),
+            container_path: "/var/cache/tako/bun/install/cache".to_string(),
         }];
         let args = build_docker_create_args("linux/amd64", "oven/bun:1.2", "echo hello", &mounts);
-        let expected_mount = "type=volume,src=tako-build-cache-bun-linux-x86_64-glibc-abcd1234,dst=/root/.bun/install/cache".to_string();
+        let expected_mount = "type=volume,src=tako-build-cache-bun-linux-x86_64-glibc-abcd1234,dst=/var/cache/tako/bun/install/cache".to_string();
         assert!(
             args.windows(2)
                 .any(|pair| pair[0] == "--mount" && pair[1] == expected_mount)
@@ -407,7 +454,16 @@ mod tests {
 
     #[test]
     fn container_script_rejects_empty_commands() {
-        let err = build_container_script("", None, None).unwrap_err();
+        let err = build_container_script("", "bun", None, None).unwrap_err();
         assert!(err.contains("did not define install or build commands"));
+    }
+
+    #[test]
+    fn container_script_bootstraps_latest_runtime_when_no_prototools_exists() {
+        let script = build_container_script("apps/web", "bun", Some("bun install"), None).unwrap();
+        assert!(
+            script
+                .contains("if [ ! -f /workspace/.prototools ]; then printf '%s = \"latest\"\\n' 'bun' > /workspace/.prototools; fi")
+        );
     }
 }

@@ -14,10 +14,6 @@ RUN chmod +x /tmp/install-tako-server.sh \
     && TAKO_SERVER_URL="file:///tmp/tako-server" sh /tmp/install-tako-server.sh \
     && rm -f /tmp/install-tako-server.sh /tmp/tako-server
 
-RUN curl -fsSL https://bun.sh/install | bash \
-    && mv /root/.bun/bin/bun /usr/local/bin/bun \
-    && chmod +x /usr/local/bin/bun
-
 RUN mkdir -p /run/sshd /var/run/tako /opt/tako /usr/local/bin /opt/e2e/keys
 RUN ssh-keygen -A
 

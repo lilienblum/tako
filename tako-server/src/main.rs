@@ -2599,6 +2599,17 @@ PY
         )
         .unwrap();
         std::fs::write(release_dir.join("index.ts"), "export default {};\n").unwrap();
+        std::fs::create_dir_all(release_dir.join("node_modules/tako.sh/src")).unwrap();
+        std::fs::write(
+            release_dir.join("node_modules/tako.sh/src/wrapper.ts"),
+            "export default {};",
+        )
+        .unwrap();
+        std::fs::write(
+            release_dir.join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","install":"true"}"#,
+        )
+        .unwrap();
 
         let app = state.app_manager.register_app(AppConfig {
             name: "warm-app".to_string(),
