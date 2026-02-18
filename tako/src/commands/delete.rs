@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env::current_dir;
 
-use crate::app::resolve_app_name;
 use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::{SshClient, SshConfig};
@@ -34,8 +33,13 @@ async fn run_async(
     let interactive = output::is_interactive();
 
     let project_tako = load_optional_project_tako_toml(&project_dir)?;
-    let project_app = if project_tako.is_some() {
-        Some(resolve_app_name(&project_dir)?)
+    let project_app = if let Some(tako_config) = project_tako.as_ref() {
+        Some(tako_config.name.clone().ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Missing top-level `name` in tako.toml.",
+            )
+        })?)
     } else {
         None
     };

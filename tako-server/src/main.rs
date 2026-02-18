@@ -1040,9 +1040,13 @@ fn derive_build_state(instances: &[InstanceStatus]) -> AppState {
 #[derive(Debug, serde::Deserialize)]
 struct ReleaseRuntimeManifest {
     runtime: String,
+    #[serde(default)]
+    install: Option<String>,
 }
 
-fn resolve_release_runtime(release_dir: &Path) -> Result<Option<String>, String> {
+fn load_release_runtime_manifest(
+    release_dir: &Path,
+) -> Result<Option<ReleaseRuntimeManifest>, String> {
     let manifest_path = release_dir.join("app.json");
     if !manifest_path.exists() {
         return Ok(None);
@@ -1062,6 +1066,14 @@ fn resolve_release_runtime(release_dir: &Path) -> Result<Option<String>, String>
             e
         )
     })?;
+    Ok(Some(manifest))
+}
+
+fn resolve_release_runtime(release_dir: &Path) -> Result<Option<String>, String> {
+    let Some(manifest) = load_release_runtime_manifest(release_dir)? else {
+        return Ok(None);
+    };
+    let manifest_path = release_dir.join("app.json");
     if manifest.runtime.trim().is_empty() {
         return Err(format!(
             "deploy manifest {} has empty runtime field",
@@ -1069,6 +1081,42 @@ fn resolve_release_runtime(release_dir: &Path) -> Result<Option<String>, String>
         ));
     }
     Ok(Some(manifest.runtime))
+}
+
+async fn run_release_install_command(
+    release_dir: &Path,
+    command: &str,
+    env: &HashMap<String, String>,
+) -> Result<(), String> {
+    let output = TokioCommand::new("sh")
+        .args(["-lc", command])
+        .current_dir(release_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .envs(
+            env.iter()
+                .map(|(key, value)| (key.as_str(), value.as_str())),
+        )
+        .output()
+        .await
+        .map_err(|e| {
+            format!(
+                "Failed to run release install command '{}' in {}: {}",
+                command,
+                release_dir.display(),
+                e
+            )
+        })?;
+
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(format_process_failure(
+        "Release dependency install failed",
+        output.status,
+        &output.stdout,
+        &output.stderr,
+    ))
 }
 
 fn bun_install_args_for_release(release_dir: &Path) -> Vec<String> {
@@ -1083,11 +1131,35 @@ async fn prepare_release_runtime(
     release_dir: &Path,
     env: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let Some(runtime) = resolve_release_runtime(release_dir)? else {
+    let Some(manifest) = load_release_runtime_manifest(release_dir)? else {
         return Ok(());
     };
-    if runtime == "bun" {
+    if manifest.runtime.trim().is_empty() {
+        return Err(format!(
+            "deploy manifest {} has empty runtime field",
+            release_dir.join("app.json").display()
+        ));
+    }
+
+    if let Some(install_cmd) = manifest
+        .install
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        run_release_install_command(release_dir, install_cmd, env).await?;
+    } else if manifest.runtime == "bun" {
         install_bun_dependencies_for_release(release_dir, env).await?;
+    }
+
+    if manifest.runtime == "bun" {
+        let wrapper_path = release_dir.join("node_modules/tako.sh/src/wrapper.ts");
+        if !wrapper_path.is_file() {
+            return Err(format!(
+                "Bun dependency install completed but '{}' is missing. Ensure package 'tako.sh' is installed.",
+                wrapper_path.display()
+            ));
+        }
     }
     Ok(())
 }
@@ -1096,13 +1168,6 @@ async fn install_bun_dependencies_for_release(
     release_dir: &Path,
     env: &HashMap<String, String>,
 ) -> Result<(), String> {
-    if !release_dir.join("package.json").is_file() {
-        return Err(format!(
-            "Bun release '{}' is missing package.json required for server-side dependency install.",
-            release_dir.display()
-        ));
-    }
-
     let args = bun_install_args_for_release(release_dir);
     let mut cmd = TokioCommand::new("bun");
     cmd.args(args.iter().map(String::as_str))
@@ -1129,14 +1194,6 @@ async fn install_bun_dependencies_for_release(
             output.status,
             &output.stdout,
             &output.stderr,
-        ));
-    }
-
-    let wrapper_path = release_dir.join("node_modules/tako.sh/src/wrapper.ts");
-    if !wrapper_path.is_file() {
-        return Err(format!(
-            "Bun dependency install completed but '{}' is missing. Ensure package 'tako.sh' is installed.",
-            wrapper_path.display()
         ));
     }
 
@@ -1920,18 +1977,79 @@ exit 1
     }
 
     #[tokio::test]
-    async fn prepare_release_runtime_bun_requires_package_json() {
+    async fn prepare_release_runtime_bun_install_does_not_require_package_json() {
         let temp = TempDir::new().unwrap();
+        let release_dir = temp.path().join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
-            temp.path().join("app.json"),
+            release_dir.join("app.json"),
             r#"{"runtime":"bun","main":"index.ts"}"#,
         )
         .unwrap();
 
-        let err = prepare_release_runtime(temp.path(), &HashMap::new())
+        let fake_bin_dir = temp.path().join("bin");
+        std::fs::create_dir_all(&fake_bin_dir).unwrap();
+        let fake_bun = fake_bin_dir.join("bun");
+        std::fs::write(
+            &fake_bun,
+            r#"#!/bin/sh
+if [ "$1" = "install" ]; then
+  mkdir -p node_modules/tako.sh/src
+  printf "export {};\n" > node_modules/tako.sh/src/wrapper.ts
+  exit 0
+fi
+echo "unexpected bun args: $*" >&2
+exit 1
+"#,
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut permissions = std::fs::metadata(&fake_bun).unwrap().permissions();
+            permissions.set_mode(0o755);
+            std::fs::set_permissions(&fake_bun, permissions).unwrap();
+        }
+
+        let mut env = HashMap::new();
+        let path = std::env::var("PATH").unwrap_or_default();
+        env.insert(
+            "PATH".to_string(),
+            format!("{}:{}", fake_bin_dir.display(), path),
+        );
+
+        prepare_release_runtime(&release_dir, &env).await.unwrap();
+        assert!(
+            release_dir
+                .join("node_modules/tako.sh/src/wrapper.ts")
+                .is_file()
+        );
+    }
+
+    #[tokio::test]
+    async fn prepare_release_runtime_runs_manifest_install_command_when_present() {
+        let temp = TempDir::new().unwrap();
+        let release_dir = temp.path().join("release");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(
+            release_dir.join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","install":"mkdir -p node_modules/tako.sh/src && printf 'export {};\n' > node_modules/tako.sh/src/wrapper.ts"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            release_dir.join("package.json"),
+            r#"{"name":"test-app","dependencies":{"tako.sh":"0.0.0"}} "#,
+        )
+        .unwrap();
+
+        prepare_release_runtime(&release_dir, &HashMap::new())
             .await
-            .unwrap_err();
-        assert!(err.contains("missing package.json"));
+            .unwrap();
+        assert!(
+            release_dir
+                .join("node_modules/tako.sh/src/wrapper.ts")
+                .is_file()
+        );
     }
 
     fn python3_ok() -> bool {

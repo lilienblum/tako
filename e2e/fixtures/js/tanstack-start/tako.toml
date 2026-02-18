@@ -1,5 +1,7 @@
+name = "tanstack-start-e2e"
+
 [build]
-assets = ["dist/client"]
+preset = "bun-tanstack-start"
 
 [envs.production]
 route = "tanstack-start-e2e.example.com"

@@ -47,7 +47,7 @@
     },
     "./vite": {
       "types": "./src/vite.ts",
-      "import": "./dist/vite.js",
+      "import": "./src/vite.ts",
       "require": "./dist/vite.js"
     }
   },

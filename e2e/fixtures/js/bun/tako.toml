@@ -1,2 +1,8 @@
+name = "bun-e2e"
+main = "index.ts"
+
+[build]
+preset = "bun"
+
 [envs.production]
 route = "bun-e2e.example.com"

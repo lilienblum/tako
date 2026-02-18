@@ -35,13 +35,11 @@ use tokio::sync::watch;
 #[cfg(test)]
 use tokio::time::timeout;
 
-use crate::app::resolve_app_name;
+use crate::build::{BuildPreset, PresetReference, load_build_preset, parse_preset_reference};
 use crate::config::TakoToml;
 use crate::dev::LocalCA;
 #[cfg(target_os = "macos")]
 use crate::dev::LocalCAStore;
-use crate::runtime::RuntimeMode;
-use crate::runtime::detect_runtime;
 use crate::validation::validate_dev_route;
 
 pub use ca_setup::setup_local_ca;
@@ -273,20 +271,62 @@ fn compute_dev_hosts(
     }
 }
 
-fn compute_dev_env(
-    cfg: &TakoToml,
-    runtime: &dyn crate::runtime::RuntimeAdapter,
-) -> std::collections::HashMap<String, String> {
+fn compute_dev_env(cfg: &TakoToml) -> std::collections::HashMap<String, String> {
     let mut env = cfg.get_merged_vars("development");
     env.insert("ENV".to_string(), "development".to_string());
-    env.extend(runtime.env_vars(RuntimeMode::Development));
     env
+}
+
+fn resolve_dev_preset_ref(cfg: &TakoToml) -> Result<String, String> {
+    cfg.build
+        .preset
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string())
+        .ok_or_else(|| {
+            "Missing [build].preset in tako.toml. Set an explicit preset before running `tako dev`."
+                .to_string()
+        })
+}
+
+fn resolve_dev_start_command(preset: &BuildPreset, main: &str) -> Result<Vec<String>, String> {
+    if preset.dev.is_empty() {
+        return Err(format!(
+            "Preset '{}' does not define top-level `dev` command.",
+            preset.name.as_str()
+        ));
+    }
+    Ok(preset
+        .dev
+        .iter()
+        .map(|arg| {
+            if arg == "{main}" {
+                main.to_string()
+            } else {
+                arg.clone()
+            }
+        })
+        .collect())
+}
+
+fn infer_preset_name_from_ref(preset_ref: &str) -> String {
+    match parse_preset_reference(preset_ref) {
+        Ok(PresetReference::OfficialAlias { name, .. }) => name,
+        Ok(PresetReference::Github { path, .. }) => Path::new(&path)
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .map(str::to_string)
+            .unwrap_or_else(|| "preset".to_string()),
+        Err(_) => "preset".to_string(),
+    }
 }
 
 fn dev_startup_lines(
     verbose: bool,
     app_name: &str,
-    runtime: &dyn crate::runtime::RuntimeAdapter,
+    runtime_name: &str,
+    entry_point: &Path,
     url: &str,
 ) -> Vec<String> {
     let mut lines = Vec::new();
@@ -295,12 +335,8 @@ fn dev_startup_lines(
         lines.push("Tako Dev Server".to_string());
         lines.push("───────────────────────────────────────".to_string());
         lines.push(format!("App:     {}", app_name));
-        lines.push(format!(
-            "Runtime: {} {}",
-            runtime.name(),
-            runtime.version().unwrap_or_default()
-        ));
-        lines.push(format!("Entry:   {}", runtime.entry_point().display()));
+        lines.push(format!("Runtime: {}", runtime_name));
+        lines.push(format!("Entry:   {}", entry_point.display()));
         lines.push(format!("URL:     {}", url));
         lines.push("───────────────────────────────────────".to_string());
     } else {
@@ -1047,8 +1083,6 @@ mod tests {
     };
     use crate::config::TakoToml;
     use crate::dev::LocalCA;
-    use crate::runtime::{RuntimeAdapter, RuntimeMode};
-    use std::collections::HashMap;
     use std::path::Path;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -1063,50 +1097,28 @@ mod tests {
         }
     }
 
-    struct FakeRuntime;
-
-    impl RuntimeAdapter for FakeRuntime {
-        fn name(&self) -> &str {
-            "fake"
-        }
-
-        fn version(&self) -> Option<String> {
-            Some("0.0.0".to_string())
-        }
-
-        fn entry_point(&self) -> &Path {
-            Path::new("index.ts")
-        }
-
-        fn build_command(&self) -> Option<Vec<String>> {
-            None
-        }
-
-        fn install_command(&self) -> Option<Vec<String>> {
-            None
-        }
-
-        fn run_command(&self, _port: u16) -> Vec<String> {
-            vec![]
-        }
-
-        fn env_vars(&self, _mode: RuntimeMode) -> HashMap<String, String> {
-            HashMap::new()
-        }
-    }
-
     #[test]
     fn dev_startup_lines_quiet_is_short() {
-        let rt = FakeRuntime;
-        let lines = dev_startup_lines(false, "app", &rt, "https://app.tako.local:8443/");
+        let lines = dev_startup_lines(
+            false,
+            "app",
+            "fake",
+            Path::new("index.ts"),
+            "https://app.tako.local:8443/",
+        );
         assert_eq!(lines[0], "https://app.tako.local:8443/");
         assert!(lines.iter().all(|l| !l.contains("Tako Dev Server")));
     }
 
     #[test]
     fn dev_startup_lines_verbose_includes_banner() {
-        let rt = FakeRuntime;
-        let lines = dev_startup_lines(true, "app", &rt, "https://app.tako.local:8443/");
+        let lines = dev_startup_lines(
+            true,
+            "app",
+            "fake",
+            Path::new("index.ts"),
+            "https://app.tako.local:8443/",
+        );
         assert!(lines.iter().any(|l| l == "Tako Dev Server"));
         assert!(lines.iter().any(|l| l.starts_with("URL:")));
     }
@@ -2134,12 +2146,22 @@ pub async fn run(
     no_tui: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
+    let cfg = load_dev_tako_toml(&project_dir)?;
+    let preset_ref = resolve_dev_preset_ref(&cfg)?;
+    let (build_preset, _) = load_build_preset(&project_dir, &preset_ref)
+        .await
+        .map_err(|e| format!("Failed to resolve build preset '{}': {}", preset_ref, e))?;
+    let main = crate::commands::deploy::resolve_deploy_main(&cfg, build_preset.main.as_deref())
+        .map_err(|e| format!("Failed to resolve deploy entrypoint: {}", e))?;
 
-    // Detect runtime
-    let runtime = detect_runtime(&project_dir).ok_or("Could not detect runtime. Supported: bun")?;
-    let runtime: Arc<dyn crate::runtime::RuntimeAdapter> = runtime.into();
+    let runtime_name = build_preset.name.clone();
 
-    let app_name = resolve_app_name(&project_dir).unwrap_or_else(|_| "app".to_string());
+    let app_name = cfg.name.clone().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Missing top-level `name` in tako.toml.",
+        )
+    })?;
     let domain = LocalCA::app_domain(&app_name);
     let local_ca = setup_local_ca().await?;
     ensure_dev_server_tls_material(&local_ca)?;
@@ -2235,13 +2257,12 @@ pub async fn run(
     }
 
     // Compute initial dev config snapshot from tako.toml.
-    let cfg = load_dev_tako_toml(&project_dir)?;
     let dev_hosts = compute_dev_hosts(&app_name, &cfg, &domain)
         .map_err(|e| format!("invalid development routes: {}", e))?;
     let primary_host = dev_hosts.first().cloned().unwrap_or_else(|| domain.clone());
 
     let hosts_state = Arc::new(tokio::sync::Mutex::new(dev_hosts.clone()));
-    let env = compute_dev_env(&cfg, runtime.as_ref());
+    let env = compute_dev_env(&cfg);
     let env_state = Arc::new(tokio::sync::Mutex::new(env));
 
     // Create channels for communication (child stdout/stderr + file watcher events).
@@ -2263,7 +2284,8 @@ pub async fn run(
 
     // Allocate an ephemeral port for the app.
     let (upstream_port, reserve_listener) = reserve_ephemeral_port()?;
-    let cmd = runtime.run_command(upstream_port);
+    let cmd = resolve_dev_start_command(&build_preset, &main)
+        .map_err(|e| format!("Invalid dev start command: {}", e))?;
 
     // Keep receivers optional until we decide whether to launch the TUI.
     let mut log_rx_opt = Some(log_rx);
@@ -2548,7 +2570,7 @@ pub async fn run(
         let public_port_for_tui = public_url_port;
         let hosts = hosts_state.lock().await.clone();
         let app_name_for_tui = app_name.clone();
-        let adapter_name_for_tui = runtime.name().to_string();
+        let adapter_name_for_tui = runtime_name.clone();
         let control_tx_for_tui = control_tx.clone();
         let log_store_for_tui = log_store_path.clone();
         let log_rx = log_rx_opt.take().unwrap();
@@ -2573,7 +2595,13 @@ pub async fn run(
     let verbose = crate::output::is_verbose();
     let url = preferred_public_url(&primary_host, &lease.url, public_port, public_url_port);
     if !use_tui {
-        for line in dev_startup_lines(verbose, &app_name, runtime.as_ref(), &url) {
+        for line in dev_startup_lines(
+            verbose,
+            &app_name,
+            &runtime_name,
+            &project_dir.join(&main),
+            &url,
+        ) {
             println!("{}", line);
         }
     }
@@ -2753,7 +2781,6 @@ pub async fn run(
     // Config change loop (tako.toml): update env + routing.
     {
         let project_dir = project_dir.clone();
-        let runtime = runtime.clone();
         let app_name = app_name.clone();
         let domain = domain.clone();
         let env_state = env_state.clone();
@@ -2780,7 +2807,7 @@ pub async fn run(
                     }
                 };
 
-                let new_env = compute_dev_env(&cfg, runtime.as_ref());
+                let new_env = compute_dev_env(&cfg);
                 let mut restart_needed = false;
                 {
                     let mut cur = env_state.lock().await;
@@ -3860,11 +3887,22 @@ async fn run_attached_dev_client(
     }
 
     if use_tui {
-        let adapter_name = std::env::current_dir()
-            .ok()
-            .and_then(crate::runtime::detect_runtime)
-            .map(|runtime| runtime.name().to_string())
-            .unwrap_or_default();
+        let adapter_name = if let Ok(project_dir) = std::env::current_dir() {
+            if let Ok(cfg) = load_dev_tako_toml(&project_dir) {
+                if let Ok(preset_ref) = resolve_dev_preset_ref(&cfg) {
+                    match load_build_preset(&project_dir, &preset_ref).await {
+                        Ok((preset, _)) => preset.name,
+                        Err(_) => infer_preset_name_from_ref(&preset_ref),
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
 
         tui::run_dev_tui(
             app_name.to_string(),

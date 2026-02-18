@@ -8,7 +8,7 @@ use super::error::{ConfigError, Result};
 /// Root configuration from tako.toml
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TakoToml {
-    /// Application name (auto-detected if not specified; treat as stable once set)
+    /// Application name (required; stable identity)
     pub name: Option<String>,
 
     /// Build settings for deploy artifact generation.
@@ -140,7 +140,9 @@ impl TakoToml {
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let content = fs::read_to_string(path.as_ref())
             .map_err(|e| ConfigError::FileRead(path.as_ref().to_path_buf(), e))?;
-        Self::parse(&content)
+        let config = Self::parse(&content)?;
+        config.validate_required_fields()?;
+        Ok(config)
     }
 
     /// Parse tako.toml content
@@ -346,6 +348,20 @@ impl TakoToml {
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_required_fields(&self) -> Result<()> {
+        let Some(name) = self.name.as_deref() else {
+            return Err(ConfigError::Validation(
+                "Missing top-level `name` in tako.toml. Run `tako init` and set `name`."
+                    .to_string(),
+            ));
+        };
+        if name.trim().is_empty() {
+            return Err(ConfigError::Validation("name cannot be empty".to_string()));
+        }
+        validate_app_name(name)?;
         Ok(())
     }
 
@@ -1151,6 +1167,25 @@ routes = ["api.example.com", "www.example.com"]
         let temp = tempfile::TempDir::new().unwrap();
         let err = TakoToml::load_from_dir(temp.path()).unwrap_err();
         assert!(err.to_string().contains("tako.toml"));
+    }
+
+    #[test]
+    fn test_load_from_dir_requires_name() {
+        let temp = tempfile::TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("tako.toml"),
+            r#"
+[envs.production]
+route = "prod.example.com"
+"#,
+        )
+        .unwrap();
+
+        let err = TakoToml::load_from_dir(temp.path()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Missing top-level `name` in tako.toml")
+        );
     }
 
     #[test]

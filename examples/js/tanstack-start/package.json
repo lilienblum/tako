@@ -3,7 +3,6 @@
   "private": true,
   "type": "module",
   "sideEffects": false,
-  "main": "dist/server/tako-entry.mjs",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build && tsc --noEmit",

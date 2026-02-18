@@ -1,3 +1,9 @@
+name = "bun-example"
+main = "index.ts"
+
+[build]
+preset = "bun"
+
 [envs.production]
 route = "tako-bun-server.orb.local/bun"
 

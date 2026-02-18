@@ -1,5 +1,10 @@
+name = "tanstack-start-example"
+
 [build]
-assets = ["dist/client"]
+preset = "bun-tanstack-start"
 
 [envs.production]
-route = "tanstack-start-example.orb.local"
+route = "tako-bun-server.orb.local/tanstack-start"
+
+[servers.tako-server]
+env = "production"

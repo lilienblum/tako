@@ -18,7 +18,7 @@ pub struct MergedConfig {
     /// Secrets from project .tako/secrets
     pub secrets: SecretsStore,
 
-    /// App name (from tako.toml or directory name)
+    /// App name (from required top-level `name` in tako.toml)
     pub app_name: String,
 }
 
@@ -68,16 +68,9 @@ impl MergedConfig {
         // Load tako.toml
         let project = TakoToml::load_from_dir(dir)?;
 
-        // Determine app name
-        let app_name = project
-            .name
-            .clone()
-            .or_else(|| {
-                dir.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_string())
-            })
-            .ok_or_else(|| ConfigError::Validation("Could not determine app name".to_string()))?;
+        let app_name = project.name.clone().ok_or_else(|| {
+            ConfigError::Validation("Missing top-level `name` in tako.toml.".to_string())
+        })?;
 
         // Load global servers
         let global_servers = ServersToml::load()?;
@@ -104,16 +97,9 @@ impl MergedConfig {
         // Load tako.toml
         let project = TakoToml::load_from_dir(dir)?;
 
-        // Determine app name
-        let app_name = project
-            .name
-            .clone()
-            .or_else(|| {
-                dir.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_string())
-            })
-            .ok_or_else(|| ConfigError::Validation("Could not determine app name".to_string()))?;
+        let app_name = project.name.clone().ok_or_else(|| {
+            ConfigError::Validation("Missing top-level `name` in tako.toml.".to_string())
+        })?;
 
         // Load global servers
         let global_servers = if let Some(path) = servers_path {
@@ -560,7 +546,7 @@ host = "5.6.7.8"
     }
 
     #[test]
-    fn test_app_name_from_directory() {
+    fn test_load_requires_name_in_tako_toml() {
         let temp_dir = TempDir::new().unwrap();
 
         // Create tako.toml without name
@@ -570,10 +556,11 @@ route = "api.example.com"
 "#;
         fs::write(temp_dir.path().join("tako.toml"), tako_toml).unwrap();
 
-        let config = MergedConfig::load_with_paths(temp_dir.path(), None, None).unwrap();
-
-        // App name should be derived from directory
-        assert!(!config.app_name.is_empty());
+        let err = MergedConfig::load_with_paths(temp_dir.path(), None, None).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Missing top-level `name` in tako.toml")
+        );
     }
 
     #[test]

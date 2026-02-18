@@ -2,7 +2,6 @@ use std::env::current_dir;
 use std::io::{Write, stdout};
 use std::sync::Arc;
 
-use crate::app::resolve_app_name;
 use crate::commands::server;
 use crate::config::{ServersToml, TakoToml};
 use crate::output;
@@ -21,7 +20,12 @@ async fn run_async(env: &str) -> Result<(), Box<dyn std::error::Error>> {
     let mut servers = ServersToml::load()?;
 
     // Resolve app name
-    let app_name = resolve_app_name(&project_dir).unwrap_or_else(|_| "app".to_string());
+    let app_name = tako_config.name.clone().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "Missing top-level `name` in tako.toml.",
+        )
+    })?;
 
     // Check environment exists
     if !tako_config.envs.contains_key(env) {

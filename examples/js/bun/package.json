@@ -2,7 +2,6 @@
   "name": "bun-example",
   "private": true,
   "type": "module",
-  "main": "index.ts",
   "scripts": {
     "dev": "bun run index.ts"
   },

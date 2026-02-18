@@ -20,6 +20,12 @@ pub fn run_container_build(
     target_label: &str,
     target: &BuildPresetTarget,
 ) -> Result<(), String> {
+    let image = target.builder_image.as_deref().ok_or_else(|| {
+        format!(
+            "Build preset does not define builder_image for target '{}' (required for container build).",
+            target_label
+        )
+    })?;
     let platform = docker_platform_for_target_label(target_label)?;
     let script = build_container_script(
         app_subdir,
@@ -33,8 +39,7 @@ pub fn run_container_build(
             workspace_dir.display()
         )
     })?;
-    let create_args =
-        build_docker_create_args(platform, &target.builder_image, &script, &cache_mounts);
+    let create_args = build_docker_create_args(platform, image, &script, &cache_mounts);
     let create_output = Command::new("docker")
         .args(&create_args)
         .output()
@@ -216,7 +221,11 @@ fn dependency_cache_mounts(
 ) -> Vec<ContainerCacheMount> {
     if target_uses_bun(target) {
         return vec![ContainerCacheMount {
-            volume_name: dependency_cache_volume_name("bun", target_label, &target.builder_image),
+            volume_name: dependency_cache_volume_name(
+                "bun",
+                target_label,
+                target.builder_image.as_deref().unwrap_or_default(),
+            ),
             container_path: BUN_INSTALL_CACHE_PATH.to_string(),
         }];
     }
@@ -224,7 +233,13 @@ fn dependency_cache_mounts(
 }
 
 fn target_uses_bun(target: &BuildPresetTarget) -> bool {
-    if target.builder_image.to_ascii_lowercase().contains("bun") {
+    if target
+        .builder_image
+        .as_deref()
+        .unwrap_or_default()
+        .to_ascii_lowercase()
+        .contains("bun")
+    {
         return true;
     }
     target
@@ -355,7 +370,7 @@ mod tests {
     #[test]
     fn bun_target_enables_bun_dependency_cache_mount() {
         let target = BuildPresetTarget {
-            builder_image: "oven/bun:1.2".to_string(),
+            builder_image: Some("oven/bun:1.2".to_string()),
             install: Some("bun install --frozen-lockfile".to_string()),
             build: Some("bun run build".to_string()),
         };

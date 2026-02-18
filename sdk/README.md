@@ -59,13 +59,11 @@ On dev (`vite dev`), the plugin:
 - adds `.tako.local` to `server.allowedHosts`
 - binds Vite to `127.0.0.1:$PORT` with `strictPort: true` when `PORT` is provided
 
-Deploy entry resolution uses `main` from `tako.toml`, then `package.json#main`.
-For Vite apps, point `package.json#main` at the generated wrapper, for example:
+Deploy entry resolution uses `main` from `tako.toml`, then preset top-level `main`.
+For Vite apps, point `tako.toml main` at the generated wrapper, for example:
 
-```json
-{
-  "main": "dist/server/tako-entry.mjs"
-}
+```toml
+main = "dist/server/tako-entry.mjs"
 ```
 
 ## Build and Test

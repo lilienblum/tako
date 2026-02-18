@@ -1,0 +1,22 @@
+main = "dist/server/tako-entry.mjs"
+dev = ["bun", "run", "dev"]
+install = "bun install --production --frozen-lockfile"
+start = ["bun", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
+assets = ["dist/client"]
+
+[build]
+exclude = ["node_modules/"]
+install = '''
+if [ -f bun.lockb ] || [ -f bun.lock ]; then
+  bun install --frozen-lockfile
+else
+  bun install
+fi
+'''
+build = '''
+cd "$TAKO_APP_DIR"
+bun run --if-present build
+'''
+
+[build.targets]
+builder_image = "oven/bun:1.2"

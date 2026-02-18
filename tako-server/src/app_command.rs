@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 const BUN_WRAPPER_RELATIVE_PATH: &str = "node_modules/tako.sh/src/wrapper.ts";
 
@@ -6,47 +6,20 @@ const BUN_WRAPPER_RELATIVE_PATH: &str = "node_modules/tako.sh/src/wrapper.ts";
 struct DeployArchiveManifest {
     runtime: String,
     main: String,
+    #[serde(default)]
+    start: Option<Vec<String>>,
 }
 
 /// Determine the command to launch an app from its release directory.
 ///
-/// For now this is intentionally minimal:
-/// - If `package.json` has a `scripts.dev`, we run `bun run dev`.
-/// - Otherwise we run `bun run <entry>` using a small set of conventional entry paths.
+/// Release launch behavior is derived from deploy manifest (`app.json`) only.
 pub fn command_for_release_dir(release_dir: &Path) -> Result<Vec<String>, String> {
-    if let Some(cmd) = command_from_archive_manifest(release_dir)? {
-        return Ok(cmd);
-    }
-
-    let pkg_json = release_dir.join("package.json");
-    if pkg_json.exists() {
-        if has_dev_script(&pkg_json) {
-            return Ok(vec![
-                "bun".to_string(),
-                "run".to_string(),
-                "dev".to_string(),
-            ]);
-        }
-
-        let entry = default_entry(release_dir).ok_or_else(|| {
-            "could not find an entry point (expected src/index.ts, index.ts, server/index.mjs, or server/server.js)".to_string()
-        })?;
-        return Ok(vec![
-            "bun".to_string(),
-            "run".to_string(),
-            entry.to_string_lossy().to_string(),
-        ]);
-    }
-
-    // No package.json: still allow a plain entry file.
-    let entry = default_entry(release_dir).ok_or_else(|| {
-        "could not find an entry point (expected src/index.ts, index.ts, server/index.mjs, or server/server.js)".to_string()
-    })?;
-    Ok(vec![
-        "bun".to_string(),
-        "run".to_string(),
-        entry.to_string_lossy().to_string(),
-    ])
+    command_from_archive_manifest(release_dir)?.ok_or_else(|| {
+        format!(
+            "missing deploy manifest {}",
+            release_dir.join("app.json").display()
+        )
+    })
 }
 
 fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String>>, String> {
@@ -74,6 +47,23 @@ fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String
             "deploy manifest {} has empty main field",
             manifest_path.display()
         ));
+    }
+
+    if let Some(start) = manifest.start {
+        if !start.is_empty() {
+            return Ok(Some(
+                start
+                    .into_iter()
+                    .map(|arg| {
+                        if arg == "{main}" {
+                            manifest.main.clone()
+                        } else {
+                            arg
+                        }
+                    })
+                    .collect(),
+            ));
+        }
     }
 
     match manifest.runtime.as_str() {
@@ -109,81 +99,10 @@ fn resolve_bun_wrapper_path(release_dir: &Path) -> String {
         .to_string()
 }
 
-fn has_dev_script(package_json_path: &Path) -> bool {
-    let Ok(contents) = std::fs::read_to_string(package_json_path) else {
-        return false;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(&contents) else {
-        return false;
-    };
-
-    v.get("scripts")
-        .and_then(|s| s.get("dev"))
-        .and_then(|d| d.as_str())
-        .is_some()
-}
-
-fn default_entry(release_dir: &Path) -> Option<PathBuf> {
-    let candidates = [
-        PathBuf::from("src/index.ts"),
-        PathBuf::from("index.ts"),
-        PathBuf::from("src/index.js"),
-        PathBuf::from("index.js"),
-        PathBuf::from("server/index.mjs"),
-        PathBuf::from("server/index.js"),
-        PathBuf::from("server/server.mjs"),
-        PathBuf::from("server/server.js"),
-    ];
-
-    for rel in candidates {
-        let p = release_dir.join(&rel);
-        if p.exists() {
-            return Some(rel);
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
-
-    #[test]
-    fn prefers_bun_run_dev_when_dev_script_exists() {
-        let dir = TempDir::new().unwrap();
-        std::fs::create_dir_all(dir.path().join("node_modules/tako.sh/src")).unwrap();
-        std::fs::write(
-            dir.path().join("node_modules/tako.sh/src/wrapper.ts"),
-            "export {};",
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"server/index.mjs"}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            dir.path().join("package.json"),
-            r#"{"name":"x","scripts":{"dev":"bun src/index.ts"}}"#,
-        )
-        .unwrap();
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/index.ts"), "export {};\n").unwrap();
-
-        let cmd = command_for_release_dir(dir.path()).unwrap();
-        assert_eq!(
-            cmd,
-            vec![
-                "bun",
-                "run",
-                &dir.path()
-                    .join("node_modules/tako.sh/src/wrapper.ts")
-                    .to_string_lossy(),
-                "server/index.mjs"
-            ]
-        );
-    }
 
     #[test]
     fn uses_manifest_main_when_present() {
@@ -199,7 +118,6 @@ mod tests {
             r#"{"runtime":"bun","main":"server/entry.js"}"#,
         )
         .unwrap();
-        std::fs::write(dir.path().join("package.json"), r#"{"name":"x"}"#).unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
         std::fs::write(dir.path().join("src/index.ts"), "export {};\n").unwrap();
 
@@ -218,13 +136,31 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_entry_guessing_when_manifest_missing() {
+    fn uses_manifest_start_command_when_present() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("package.json"), r#"{"name":"x"}"#).unwrap();
-        std::fs::write(dir.path().join("index.ts"), "export {};\n").unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"server/entry.js","start":["bun","run","node_modules/tako.sh/src/wrapper.ts","{main}"]}"#,
+        )
+        .unwrap();
 
         let cmd = command_for_release_dir(dir.path()).unwrap();
-        assert_eq!(cmd, vec!["bun", "run", "index.ts"]);
+        assert_eq!(
+            cmd,
+            vec![
+                "bun",
+                "run",
+                "node_modules/tako.sh/src/wrapper.ts",
+                "server/entry.js"
+            ]
+        );
+    }
+
+    #[test]
+    fn errors_when_manifest_is_missing() {
+        let dir = TempDir::new().unwrap();
+        let err = command_for_release_dir(dir.path()).unwrap_err();
+        assert!(err.contains("missing deploy manifest"));
     }
 
     #[test]
@@ -240,12 +176,16 @@ mod tests {
     }
 
     #[test]
-    fn errors_when_no_entry_found() {
+    fn errors_when_manifest_main_is_empty() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("package.json"), r#"{"name":"x"}"#).unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"  "}"#,
+        )
+        .unwrap();
 
         let err = command_for_release_dir(dir.path()).unwrap_err();
-        assert!(err.contains("entry"));
+        assert!(err.contains("empty main"));
     }
 
     #[test]

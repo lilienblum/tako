@@ -19,9 +19,7 @@ pub type Result<T> = std::result::Result<T, AppNameError>;
 ///
 /// Resolution order:
 /// 1. tako.toml top-level `name` field
-/// 2. package.json `name` field (for JS runtimes)
-/// 3. go.mod module name (for Go)
-/// 4. Directory name as fallback
+/// 2. Directory name as fallback
 pub fn resolve_app_name<P: AsRef<Path>>(dir: P) -> Result<String> {
     let dir = dir.as_ref();
 
@@ -30,17 +28,7 @@ pub fn resolve_app_name<P: AsRef<Path>>(dir: P) -> Result<String> {
         return validate_and_sanitize_app_name(&name);
     }
 
-    // 2. Check package.json
-    if let Some(name) = get_name_from_package_json(dir) {
-        return validate_and_sanitize_app_name(&name);
-    }
-
-    // 3. Check go.mod
-    if let Some(name) = get_name_from_go_mod(dir) {
-        return validate_and_sanitize_app_name(&name);
-    }
-
-    // 4. Fallback to directory name
+    // 2. Fallback to directory name
     let dir_name = dir
         .file_name()
         .and_then(|n| n.to_str())
@@ -59,33 +47,6 @@ fn get_name_from_tako_toml<P: AsRef<Path>>(dir: P) -> Option<String> {
 
     let toml: toml::Value = toml::from_str(&content).ok()?;
     toml.get("name")?.as_str().map(|s| s.to_string())
-}
-
-/// Get name from package.json
-fn get_name_from_package_json<P: AsRef<Path>>(dir: P) -> Option<String> {
-    let path = dir.as_ref().join("package.json");
-    let content = fs::read_to_string(&path).ok()?;
-
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-    json.get("name")?.as_str().map(|s| s.to_string())
-}
-
-/// Get name from go.mod (module path, extracting last component)
-fn get_name_from_go_mod<P: AsRef<Path>>(dir: P) -> Option<String> {
-    let path = dir.as_ref().join("go.mod");
-    let content = fs::read_to_string(&path).ok()?;
-
-    // Parse "module github.com/user/project" line
-    for line in content.lines() {
-        let line = line.trim();
-        if line.starts_with("module ") {
-            let module_path = line.trim_start_matches("module ").trim();
-            // Get the last component of the module path
-            return module_path.rsplit('/').next().map(|s| s.to_string());
-        }
-    }
-
-    None
 }
 
 /// Validate and sanitize app name
@@ -191,29 +152,7 @@ name = "my-app"
     }
 
     #[test]
-    fn test_resolve_from_package_json() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let package_json = r#"{"name": "my-npm-package"}"#;
-        fs::write(temp_dir.path().join("package.json"), package_json).unwrap();
-
-        let name = resolve_app_name(temp_dir.path()).unwrap();
-        assert_eq!(name, "my-npm-package");
-    }
-
-    #[test]
-    fn test_resolve_from_go_mod() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let go_mod = "module github.com/user/my-go-app\n\ngo 1.21\n";
-        fs::write(temp_dir.path().join("go.mod"), go_mod).unwrap();
-
-        let name = resolve_app_name(temp_dir.path()).unwrap();
-        assert_eq!(name, "my-go-app");
-    }
-
-    #[test]
-    fn test_resolve_from_directory_name() {
+    fn test_resolve_from_directory_name_when_tako_toml_name_is_missing() {
         let temp_dir = TempDir::new().unwrap();
 
         // No config files, should use directory name
@@ -227,32 +166,28 @@ name = "my-app"
     fn test_tako_toml_takes_priority() {
         let temp_dir = TempDir::new().unwrap();
 
-        // Create both tako.toml and package.json
+        // Use tako.toml value directly.
         let tako_toml = r#"
 name = "tako-name"
 "#;
         fs::write(temp_dir.path().join("tako.toml"), tako_toml).unwrap();
-
-        let package_json = r#"{"name": "package-name"}"#;
-        fs::write(temp_dir.path().join("package.json"), package_json).unwrap();
 
         let name = resolve_app_name(temp_dir.path()).unwrap();
         assert_eq!(name, "tako-name");
     }
 
     #[test]
-    fn test_package_json_takes_priority_over_go_mod() {
+    fn test_resolve_prefers_tako_toml_over_directory_name() {
         let temp_dir = TempDir::new().unwrap();
 
-        // Create both package.json and go.mod
-        let package_json = r#"{"name": "package-name"}"#;
-        fs::write(temp_dir.path().join("package.json"), package_json).unwrap();
-
-        let go_mod = "module github.com/user/go-name\n";
-        fs::write(temp_dir.path().join("go.mod"), go_mod).unwrap();
+        fs::write(
+            temp_dir.path().join("tako.toml"),
+            "name = \"config-name\"\n",
+        )
+        .unwrap();
 
         let name = resolve_app_name(temp_dir.path()).unwrap();
-        assert_eq!(name, "package-name");
+        assert_eq!(name, "config-name");
     }
 
     // ==================== Sanitization Tests ====================
@@ -341,68 +276,5 @@ name = "tako-name"
     fn test_validate_cannot_end_with_hyphen() {
         // After sanitization, trailing hyphens are stripped
         assert_eq!(validate_and_sanitize_app_name("my-app-").unwrap(), "my-app");
-    }
-
-    // ==================== go.mod Parsing Tests ====================
-
-    #[test]
-    fn test_parse_go_mod_simple() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let go_mod = "module myapp\n\ngo 1.21\n";
-        fs::write(temp_dir.path().join("go.mod"), go_mod).unwrap();
-
-        let name = get_name_from_go_mod(temp_dir.path()).unwrap();
-        assert_eq!(name, "myapp");
-    }
-
-    #[test]
-    fn test_parse_go_mod_with_path() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let go_mod = "module github.com/organization/project\n\ngo 1.21\n";
-        fs::write(temp_dir.path().join("go.mod"), go_mod).unwrap();
-
-        let name = get_name_from_go_mod(temp_dir.path()).unwrap();
-        assert_eq!(name, "project");
-    }
-
-    #[test]
-    fn test_parse_go_mod_deeply_nested() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let go_mod = "module github.com/org/repo/cmd/api\n";
-        fs::write(temp_dir.path().join("go.mod"), go_mod).unwrap();
-
-        let name = get_name_from_go_mod(temp_dir.path()).unwrap();
-        assert_eq!(name, "api");
-    }
-
-    // ==================== package.json Parsing Tests ====================
-
-    #[test]
-    fn test_parse_package_json_simple() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let package_json = r#"{"name": "simple-app"}"#;
-        fs::write(temp_dir.path().join("package.json"), package_json).unwrap();
-
-        let name = get_name_from_package_json(temp_dir.path()).unwrap();
-        assert_eq!(name, "simple-app");
-    }
-
-    #[test]
-    fn test_parse_package_json_scoped() {
-        let temp_dir = TempDir::new().unwrap();
-
-        let package_json = r#"{"name": "@org/my-package"}"#;
-        fs::write(temp_dir.path().join("package.json"), package_json).unwrap();
-
-        let name = get_name_from_package_json(temp_dir.path()).unwrap();
-        assert_eq!(name, "@org/my-package");
-
-        // When resolved, @ and / are stripped (not alphanumeric)
-        let resolved = resolve_app_name(temp_dir.path()).unwrap();
-        assert_eq!(resolved, "orgmy-package");
     }
 }
