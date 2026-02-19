@@ -39,7 +39,7 @@ Operational behavior highlights:
 - `tako deploy` builds per-target artifacts locally before upload, using Docker only when preset `[build].container` (or deprecated `[build].docker`) resolves to `true`.
 - Container builds stay ephemeral; dependency downloads are reused via per-target Docker cache volumes keyed by target label and builder image.
 - `tako deploy` caches target artifacts in `.tako/artifacts` and reuses verified cache hits when build inputs are unchanged; invalid cache entries are rebuilt automatically.
-- Local runtime version resolution is proto-first (`proto run <tool> -- --version`) with fallback to `.prototools` and `latest`.
+- Local runtime version resolution is mise-aware: Tako probes `mise exec -- <tool> --version` when `mise` is installed, then falls back to `mise.toml` and `latest`.
 - `tako deploy` merges build assets (preset assets + `build.assets`) into app `public/` after target build, in listed order.
 - `tako deploy` writes `app.json` in the deployed app directory and `tako-server` uses it to resolve the runtime start command.
 - `tako servers add` captures per-server target metadata (`arch`, `libc`) during SSH checks and stores it in `~/.tako/config.toml` under `[server_targets.<name>]`.

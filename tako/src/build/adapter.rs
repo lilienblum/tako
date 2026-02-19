@@ -23,67 +23,106 @@ impl PresetFamily {
 const BUILTIN_BUN_PRESET_CONTENT: &str = r#"main = "src/index.ts"
 dev = ["bun", "run", "dev"]
 install = '''
-proto install --yes
-if [ -f bun.lockb ] || [ -f bun.lock ]; then
-  proto run bun -- install --production --frozen-lockfile
+if command -v mise >/dev/null 2>&1; then
+  mise install >/dev/null 2>&1 || true
+  if [ -f bun.lockb ] || [ -f bun.lock ]; then
+    mise exec -- bun install --production --frozen-lockfile
+  else
+    mise exec -- bun install --production
+  fi
 else
-  proto run bun -- install --production
+  if [ -f bun.lockb ] || [ -f bun.lock ]; then
+    bun install --production --frozen-lockfile
+  else
+    bun install --production
+  fi
 fi
 '''
-start = ["proto", "run", "bun", "--", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
+start = ["mise", "exec", "--", "bun", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
 
 [build]
 exclude = ["node_modules/"]
 install = '''
-proto install --yes
-if [ -f bun.lockb ] || [ -f bun.lock ]; then
-  proto run bun -- install --frozen-lockfile
+if command -v mise >/dev/null 2>&1; then
+  mise install >/dev/null 2>&1 || true
+  if [ -f bun.lockb ] || [ -f bun.lock ]; then
+    mise exec -- bun install --frozen-lockfile
+  else
+    mise exec -- bun install
+  fi
 else
-  proto run bun -- install
+  if [ -f bun.lockb ] || [ -f bun.lock ]; then
+    bun install --frozen-lockfile
+  else
+    bun install
+  fi
 fi
 '''
 build = '''
 cd "$TAKO_APP_DIR"
-proto run bun -- run --if-present build
+if command -v mise >/dev/null 2>&1; then
+  mise install >/dev/null 2>&1 || true
+  mise exec -- bun run --if-present build
+else
+  bun run --if-present build
+fi
 '''
 targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
 "#;
 
 const BUILTIN_NODE_PRESET_CONTENT: &str = r#"main = "index.js"
-dev = ["proto", "run", "node", "--", "{main}"]
+dev = ["node", "{main}"]
 install = '''
-proto install --yes
-if [ -f package-lock.json ]; then
-  npm ci --omit=dev
+if command -v mise >/dev/null 2>&1; then
+  mise install >/dev/null 2>&1 || true
+  if [ -f package-lock.json ]; then
+    mise exec -- npm ci --omit=dev
+  else
+    mise exec -- npm install --omit=dev
+  fi
 else
-  npm install --omit=dev
+  if [ -f package-lock.json ]; then
+    npm ci --omit=dev
+  else
+    npm install --omit=dev
+  fi
 fi
 '''
-start = ["proto", "run", "node", "--", "{main}"]
+start = ["mise", "exec", "--", "node", "{main}"]
 
 [build]
 exclude = ["node_modules/"]
 install = '''
-proto install --yes
-if [ -f package-lock.json ]; then
-  npm ci
+if command -v mise >/dev/null 2>&1; then
+  mise install >/dev/null 2>&1 || true
+  if [ -f package-lock.json ]; then
+    mise exec -- npm ci
+  else
+    mise exec -- npm install
+  fi
 else
-  npm install
+  if [ -f package-lock.json ]; then
+    npm ci
+  else
+    npm install
+  fi
 fi
 '''
 build = '''
 cd "$TAKO_APP_DIR"
-npm run --if-present build
+if command -v mise >/dev/null 2>&1; then
+  mise install >/dev/null 2>&1 || true
+  mise exec -- npm run --if-present build
+else
+  npm run --if-present build
+fi
 '''
 targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
 "#;
 
 const BUILTIN_DENO_PRESET_CONTENT: &str = r#"main = "main.ts"
 dev = [
-  "proto",
-  "run",
   "deno",
-  "--",
   "run",
   "--watch",
   "--allow-net",
@@ -91,12 +130,16 @@ dev = [
   "--allow-read",
   "{main}",
 ]
-install = "proto install --yes"
+install = '''
+if command -v mise >/dev/null 2>&1; then
+  mise install >/dev/null 2>&1 || true
+fi
+'''
 start = [
-  "proto",
-  "run",
-  "deno",
+  "mise",
+  "exec",
   "--",
+  "deno",
   "run",
   "--allow-net",
   "--allow-env",
@@ -105,7 +148,11 @@ start = [
 ]
 
 [build]
-install = "proto install --yes"
+install = '''
+if command -v mise >/dev/null 2>&1; then
+  mise install >/dev/null 2>&1 || true
+fi
+'''
 build = "true"
 targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
 "#;

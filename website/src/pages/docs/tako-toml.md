@@ -87,8 +87,8 @@ runtime = "bun"
     - `true`: Docker target builds
     - `false`: local host target builds
     - unset: defaults to Docker only when `[build].targets` is non-empty
-  - Docker builds reuse target-scoped dependency cache volumes (proto + runtime cache mounts) while keeping build containers ephemeral.
-  - Runtime version is resolved via `proto run <tool> -- --version` when available, then falls back to `.prototools`, then `latest`.
+  - Docker builds reuse target-scoped dependency cache volumes (mise + runtime cache mounts) while keeping build containers ephemeral.
+  - Runtime version is resolved via `mise exec -- <tool> --version` when local `mise` is available, then falls back to `mise.toml`, then `latest`.
   - Deploy artifact cache keys include resolved preset source/commit, runtime tool/version, build mode (Docker/local), and `build.include` / `build.exclude` / `build.assets` / `build.stages`; changing these inputs invalidates cache and triggers rebuild for affected targets.
   - Bun runtime dependencies are installed on server from the uploaded release (`bun install --production`).
   - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.

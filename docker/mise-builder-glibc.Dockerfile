@@ -2,10 +2,10 @@
 
 FROM debian:bookworm-slim
 
-ARG PROTO_HOME=/usr/local/lib/proto
+ARG MISE_INSTALL_PATH=/usr/local/bin/mise
 
-ENV PROTO_HOME=${PROTO_HOME}
-ENV PATH="${PROTO_HOME}/bin:${PROTO_HOME}/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+ENV MISE_INSTALL_PATH=${MISE_INSTALL_PATH}
+ENV PATH="/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 RUN set -eux; \
     apt-get update; \
@@ -18,20 +18,19 @@ RUN set -eux; \
         unzip \
         xz-utils; \
     rm -rf /var/lib/apt/lists/*; \
-    if ! command -v proto >/dev/null 2>&1; then \
+    if ! command -v mise >/dev/null 2>&1; then \
         apt-get update; \
-        if apt-get install -y --no-install-recommends proto >/dev/null 2>&1; then \
+        if apt-get install -y --no-install-recommends mise >/dev/null 2>&1; then \
             rm -rf /var/lib/apt/lists/*; \
         else \
             rm -rf /var/lib/apt/lists/*; \
             installer="$(mktemp)"; \
-            curl -fsSL https://moonrepo.dev/install/proto.sh -o "$installer"; \
+            curl -fsSL https://mise.run -o "$installer"; \
             chmod +x "$installer"; \
-            PROTO_HOME="$PROTO_HOME" bash "$installer" --yes --no-profile; \
-            ln -sf "$PROTO_HOME/bin/proto" /usr/local/bin/proto; \
+            MISE_INSTALL_PATH="$MISE_INSTALL_PATH" sh "$installer"; \
             rm -f "$installer"; \
         fi; \
     fi; \
-    proto --version
+    mise --version
 
 WORKDIR /workspace

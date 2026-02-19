@@ -55,7 +55,7 @@ Each target server should have:
 - SSH access as the configured deployment user (typically `tako`).
 - `tako-server` installed and running.
 - `tako-server` installed via the hosted installer (or equivalent) for the host target; installer resolves `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>`.
-- `proto` installed on host (`install-server` attempts distro package manager first, then upstream installer fallback).
+- `mise` installed on host (`install-server` attempts distro package manager first, then upstream installer fallback).
 - `nc` (netcat), `tar`, `base64`, and standard shell tools (`mkdir`, `find`, `stat`).
 - Writable runtime paths under `/opt/tako` and socket access at `/var/run/tako/tako.sock`.
 - Privileged bind capability for `tako-server` on `:80/:443` (provided by systemd service capabilities in the installer, plus `setcap` on the binary when available).
@@ -92,8 +92,8 @@ Each target server should have:
 - Preset `[[build.stages]]` is not supported; app-level custom stages are configured in `tako.toml` under `[[build.stages]]`.
 - Artifact include precedence is `build.include` then `**/*`; artifact excludes are effective preset `[build].exclude` plus `build.exclude`.
 - For each server target label, Tako runs build commands in fixed order: preset `[build].install` + `[build].build` first, then app `[[build.stages]]` in declaration order (Docker/local mode from preset `[build].container`; unset defaults to Docker when `[build].targets` is non-empty).
-- Containerized deploy builds reuse per-target dependency cache volumes (proto + runtime cache mounts) while still creating fresh build containers.
-- Runtime version is resolved proto-first (`proto run <tool> -- --version`), with fallback to `.prototools`, then `latest`.
+- Containerized deploy builds reuse per-target dependency cache volumes (mise + runtime cache mounts) while still creating fresh build containers.
+- Runtime version is resolved with `mise` when available (`mise exec -- <tool> --version`), with fallback to `mise.toml`, then `latest`.
 - Local artifact cache key includes source hash, target label, resolved preset source/commit, runtime tool/version, Docker/local mode, preset build commands, app `[[build.stages]]`, include/exclude patterns, asset roots, and app subdirectory.
 - `assets` are copied into app `public/` after container build (later entries overwrite earlier ones).
 - Final `app.json` is written in app directory after resolving runtime `main`.

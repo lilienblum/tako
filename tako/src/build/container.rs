@@ -6,7 +6,7 @@ use sha2::{Digest, Sha256};
 use super::BuildPresetTarget;
 
 const BUN_INSTALL_CACHE_PATH: &str = "/var/cache/tako/bun/install/cache";
-const PROTO_HOME_PATH: &str = "/var/cache/tako/proto";
+const MISE_DATA_DIR_PATH: &str = "/var/cache/tako/mise";
 const CACHE_VOLUME_PREFIX: &str = "tako-build-cache";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -203,29 +203,32 @@ fn build_container_script(
             shell_single_quote(&app_subdir_value)
         ),
         format!("export TAKO_APP_DIR={}", shell_single_quote(&app_dir)),
-        format!("export PROTO_HOME={}", shell_single_quote(PROTO_HOME_PATH)),
         format!(
-            "export PATH=\"$PROTO_HOME/bin:$PROTO_HOME/shims:$PATH\""
+            "export MISE_DATA_DIR={}",
+            shell_single_quote(MISE_DATA_DIR_PATH)
+        ),
+        format!(
+            "export PATH=\"/root/.local/bin:$PATH\""
         ),
         format!(
             "export BUN_INSTALL_CACHE_DIR={}",
             shell_single_quote(BUN_INSTALL_CACHE_PATH)
         ),
         "if command -v apk >/dev/null 2>&1; then apk add --no-cache bash ca-certificates curl git gzip unzip xz; elif command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends bash ca-certificates curl git gzip unzip xz-utils; rm -rf /var/lib/apt/lists/*; else echo \"Unsupported builder image: expected apk or apt-get\" >&2; exit 1; fi".to_string(),
-        "if [ ! -x \"$PROTO_HOME/bin/proto\" ]; then installer=\"$(mktemp)\"; curl -fsSL https://moonrepo.dev/install/proto.sh -o \"$installer\"; chmod +x \"$installer\"; PROTO_HOME=\"$PROTO_HOME\" bash \"$installer\" --yes --no-profile; rm -f \"$installer\"; fi".to_string(),
-        "if ! command -v proto >/dev/null 2>&1; then echo \"Failed to install proto in build container\" >&2; exit 1; fi".to_string(),
+        "if ! command -v mise >/dev/null 2>&1; then installer=\"$(mktemp)\"; curl -fsSL https://mise.run -o \"$installer\"; chmod +x \"$installer\"; sh \"$installer\"; rm -f \"$installer\"; fi".to_string(),
+        "if ! command -v mise >/dev/null 2>&1; then echo \"Failed to install mise in build container\" >&2; exit 1; fi".to_string(),
         format!(
-            "if [ ! -f /workspace/.prototools ] && [ -f {} ]; then cp {} /workspace/.prototools; fi",
-            shell_single_quote(&format!("{app_dir}/.prototools")),
-            shell_single_quote(&format!("{app_dir}/.prototools"))
+            "if [ ! -f /workspace/mise.toml ] && [ -f {} ]; then cp {} /workspace/mise.toml; fi",
+            shell_single_quote(&format!("{app_dir}/mise.toml")),
+            shell_single_quote(&format!("{app_dir}/mise.toml"))
         ),
         format!(
-            "if [ ! -f /workspace/.prototools ]; then printf '%s = \"latest\"\\n' {} > /workspace/.prototools; fi",
+            "if [ ! -f /workspace/mise.toml ]; then printf '[tools]\\n%s = \"latest\"\\n' {} > /workspace/mise.toml; fi",
             shell_single_quote(runtime_tool)
         ),
-        "cd /workspace && proto install --yes".to_string(),
+        "cd /workspace && mise install".to_string(),
         format!(
-            "cd {} && proto run {} -- --version > {}",
+            "cd {} && mise exec -- {} --version > {}",
             shell_single_quote(&app_dir),
             shell_single_quote(runtime_tool),
             shell_single_quote(".tako-runtime-version")
@@ -311,8 +314,8 @@ fn dependency_cache_mounts(
     builder_image: &str,
 ) -> Vec<ContainerCacheMount> {
     let mut mounts = vec![ContainerCacheMount {
-        volume_name: dependency_cache_volume_name("proto", target_label, builder_image),
-        container_path: PROTO_HOME_PATH.to_string(),
+        volume_name: dependency_cache_volume_name("mise", target_label, builder_image),
+        container_path: MISE_DATA_DIR_PATH.to_string(),
     }];
     if runtime_tool == "bun" {
         mounts.push(ContainerCacheMount {
@@ -456,8 +459,8 @@ mod tests {
         .unwrap();
         assert!(script.contains("export TAKO_APP_SUBDIR='apps/web'"));
         assert!(script.contains("export TAKO_APP_DIR='/workspace/apps/web'"));
-        assert!(script.contains("export PROTO_HOME='/var/cache/tako/proto'"));
-        assert!(script.contains("cd /workspace && proto install --yes"));
+        assert!(script.contains("export MISE_DATA_DIR='/var/cache/tako/mise'"));
+        assert!(script.contains("cd /workspace && mise install"));
         assert!(script.contains("cd /workspace && bun install --frozen-lockfile"));
         assert!(script.contains("cd '/workspace/apps/web' && bun run build"));
     }
@@ -478,8 +481,8 @@ mod tests {
         let mounts = dependency_cache_mounts("linux-x86_64-glibc", "bun", "debian:bookworm-slim");
 
         assert_eq!(mounts.len(), 2);
-        assert_eq!(mounts[0].container_path, "/var/cache/tako/proto");
-        assert!(mounts[0].volume_name.starts_with("tako-build-cache-proto-"));
+        assert_eq!(mounts[0].container_path, "/var/cache/tako/mise");
+        assert!(mounts[0].volume_name.starts_with("tako-build-cache-mise-"));
         assert_eq!(
             mounts[1].container_path,
             "/var/cache/tako/bun/install/cache"
@@ -518,12 +521,12 @@ mod tests {
     }
 
     #[test]
-    fn container_script_bootstraps_latest_runtime_when_no_prototools_exists() {
+    fn container_script_bootstraps_latest_runtime_when_no_mise_toml_exists() {
         let script =
             build_container_script("apps/web", "bun", Some("bun install"), None, &[]).unwrap();
         assert!(
             script
-                .contains("if [ ! -f /workspace/.prototools ]; then printf '%s = \"latest\"\\n' 'bun' > /workspace/.prototools; fi")
+                .contains("if [ ! -f /workspace/mise.toml ]; then printf '[tools]\\n%s = \"latest\"\\n' 'bun' > /workspace/mise.toml; fi")
         );
     }
 

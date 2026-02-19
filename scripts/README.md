@@ -10,8 +10,8 @@ Repository scripts used by installers, CI checks, and local development workflow
   - Detects container/non-systemd environments and falls back to manual-start guidance instead of failing.
   - Detects host architecture (`x86_64`/`aarch64`) and libc (`glibc`/`musl`) to download the matching server artifact.
   - Applies `setcap cap_net_bind_service=+ep` to `/usr/local/bin/tako-server` when possible for non-root `:80/:443` binds.
-  - Installs required runtime dependencies (including Unix-socket-capable `nc` with `-U` support, sqlite runtime libraries, and `proto`) via the host package manager when available.
-  - Falls back to the official `proto` installer if distro package managers do not provide `proto`.
+  - Installs required runtime dependencies (including Unix-socket-capable `nc` with `-U` support, sqlite runtime libraries, and `mise`) via the host package manager when available.
+  - Falls back to the official `mise` installer if distro package managers do not provide `mise`.
 - `check_critical_coverage.sh`: coverage gate for selected critical source files.
 
 ## Typical Usage

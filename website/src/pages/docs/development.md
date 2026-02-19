@@ -103,7 +103,7 @@ Per target build order is fixed: preset `[build].install`/`[build].build` first,
 Deploy validates that the resolved runtime `main` exists after build and before artifact packaging.
 Bun release dependencies are installed on server before rollout (`bun install --production`).
 Hosted server install resolves Linux host `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>` artifact.
-Hosted server install also installs `proto` (package-manager first, with upstream installer fallback when distro packages are unavailable).
+Hosted server install also installs `mise` (package-manager first, with upstream installer fallback when distro packages are unavailable).
 Each deploy also prunes local `.tako/artifacts/` cache (best-effort), keeping 30 newest source archives and 90 newest target artifacts, and removing orphan target metadata files.
 When deploy targets private/local route hostnames (for example `*.local`), `tako-server` generates self-signed certs for those routes during deploy instead of ACME issuance.
 

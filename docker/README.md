@@ -5,8 +5,8 @@ Internal Docker tooling for building and debugging Tako server artifacts.
 ## Files
 
 - `build.Dockerfile`: builds Linux `tako-server` artifacts for `x86_64` / `aarch64` across both libc families (`musl`, `glibc`).
-- `proto-builder-musl.Dockerfile`: base build image (`alpine:3.20`) with `proto` preinstalled (package-manager first, installer fallback).
-- `proto-builder-glibc.Dockerfile`: base build image (`debian:bookworm-slim`) with `proto` preinstalled (package-manager first, installer fallback).
+- `mise-builder-musl.Dockerfile`: base build image (`alpine:3.20`) with `mise` preinstalled (package-manager first, installer fallback).
+- `mise-builder-glibc.Dockerfile`: base build image (`debian:bookworm-slim`) with `mise` preinstalled (package-manager first, installer fallback).
 - `bun.Dockerfile`: internal debug container (`oven/bun:alpine` + sshd) used for deploy/install debugging.
   - Bootstraps server-side dependencies through `scripts/install-tako-server.sh` so debug image deps stay aligned with installer behavior.
 - `install-authorized-key.sh`: helper script used by debug container boot flow.
@@ -32,23 +32,23 @@ just testbed::install
 
 Use the `testbed::` namespace for these recipes.
 
-Build local proto-enabled builder images:
+Build local mise-enabled builder images:
 
 ```bash
-docker build -f docker/proto-builder-musl.Dockerfile -t tako-builder:musl-proto .
-docker build -f docker/proto-builder-glibc.Dockerfile -t tako-builder:glibc-proto .
+docker build -f docker/mise-builder-musl.Dockerfile -t tako-builder:musl-mise .
+docker build -f docker/mise-builder-glibc.Dockerfile -t tako-builder:glibc-mise .
 ```
 
 Example multi-arch publish (adjust registry/tag):
 
 ```bash
-docker buildx build -f docker/proto-builder-musl.Dockerfile \
+docker buildx build -f docker/mise-builder-musl.Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/tako-sh/builder-musl-proto:latest \
+  -t ghcr.io/tako-sh/builder-musl-mise:latest \
   --push .
 
-docker buildx build -f docker/proto-builder-glibc.Dockerfile \
+docker buildx build -f docker/mise-builder-glibc.Dockerfile \
   --platform linux/amd64,linux/arm64 \
-  -t ghcr.io/tako-sh/builder-glibc-proto:latest \
+  -t ghcr.io/tako-sh/builder-glibc-mise:latest \
   --push .
 ```

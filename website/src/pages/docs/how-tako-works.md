@@ -86,8 +86,8 @@ Important deployment behavior:
 - Source bundle filtering uses `.gitignore`.
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
 - Deploy always builds artifacts locally (Docker or local host based on preset build mode); servers do not run app build steps during deploy.
-- Docker builds reuse per-target dependency cache volumes (proto + runtime cache mounts) keyed by cache kind + target label + builder image while still creating fresh build containers each deploy.
-- Runtime version resolution is proto-first: Tako tries `proto run <tool> -- --version` (local and Docker contexts), then falls back to `.prototools`, then `latest`; deploy writes release `.prototools` so server runtime matches build runtime.
+- Docker builds reuse per-target dependency cache volumes (mise + runtime cache mounts) keyed by cache kind + target label + builder image while still creating fresh build containers each deploy.
+- Runtime version resolution is mise-aware: Tako tries `mise exec -- <tool> --version` when local `mise` is available (and in Docker build contexts), then falls back to `mise.toml`, then `latest`; deploy writes release `mise.toml` so server runtime matches build runtime.
 - Preset runtime fields use top-level `main`/`install`/`start` keys (legacy preset `[deploy]` is not supported).
 - Top-level `preset` in `tako.toml` must be runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `js/tanstack-start` are rejected and `github:` refs are not supported.
 - Runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`.
@@ -103,7 +103,7 @@ Important deployment behavior:
 - Deploy runtime `main` is resolved from `tako.toml main`, then preset top-level `main`.
 - Deploy app identity is resolved from top-level `name` when set, otherwise sanitized project directory name.
 - Server install resolves host target (`arch` + `libc`) and downloads matching `tako-server-linux-<arch>-<libc>` artifact.
-- Server install also installs `proto` (package-manager first, then upstream installer fallback when unavailable).
+- Server install also installs `mise` (package-manager first, then upstream installer fallback when unavailable).
 - For production without explicit server mapping:
   - With one global server, Tako can guide/persist mapping.
   - With multiple global servers (interactive), Tako prompts for selection.
