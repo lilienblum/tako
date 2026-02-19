@@ -61,7 +61,7 @@ runtime = "bun"
   - pinned runtime-local aliases: `tanstack-start@<commit-hash>`
   - GitHub refs: `github:<owner>/<repo>/<path>.toml[@<commit-hash>]`
   - Namespaced aliases in `tako.toml` (for example `bun/tanstack-start`) are rejected.
-  - Full schema/examples: [`Preset Reference`](/docs/presets)
+  - Full schema/examples: [`Presets`](/docs/presets)
 - `[build]`: deploy artifact build config.
   - `include`: optional artifact include globs (`**/*` is used when unset).
   - `exclude`: optional artifact exclude globs (appended to preset excludes).

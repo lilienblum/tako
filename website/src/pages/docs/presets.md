@@ -1,11 +1,11 @@
 ---
 layout: ../../layouts/DocsLayout.astro
-title: Tako Docs - Preset Reference
-heading: Preset Reference
+title: Tako Docs - Presets
+heading: Presets
 current: presets
 ---
 
-# Preset Reference
+# Presets
 
 Presets define build/runtime defaults for `tako dev` and `tako deploy`.
 
@@ -22,7 +22,7 @@ You can also reference your own preset file directly from GitHub:
 preset = "github:username/my-presets/custom-preset.toml"
 ```
 
-## Preset Reference Formats
+## Preset Formats
 
 - Runtime-local aliases:
   - `tanstack-start` (resolved under selected top-level `runtime`)
