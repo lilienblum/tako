@@ -202,6 +202,7 @@ async fn run_async(
     assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
+    let source_root = source_bundle_root(&project_dir);
 
     let validation = output::with_spinner(
         "Validating configuration...",
@@ -240,22 +241,41 @@ async fn run_async(
         },
     )?
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::success("Validate");
-    output::bullet("Configuration valid");
-    for warning in &validation.warnings {
-        output::warning(&format!("Validation: {}", warning));
-    }
 
     let ValidationResult {
         tako_config,
         mut servers,
         secrets,
         env,
-        ..
+        warnings,
     } = validation;
+
+    let preflight_preset_ref = resolve_build_preset_ref(&project_dir, &tako_config)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let preflight_runtime_adapter =
+        resolve_effective_build_adapter(&project_dir, &tako_config, &preflight_preset_ref)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+    let bun_lockfile_checked = if preflight_runtime_adapter == BuildAdapter::Bun {
+        output::with_spinner("Checking Bun lockfile...", || {
+            run_bun_lockfile_preflight(&source_root)
+        })?
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
+    } else {
+        false
+    };
 
     confirm_production_deploy(&env, assume_yes)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+    output::success("Validate");
+    output::bullet("Configuration valid");
+    if bun_lockfile_checked {
+        output::bullet("Bun lockfile valid");
+    }
+    for warning in &warnings {
+        output::warning(&format!("Validation: {}", warning));
+    }
 
     let app_name = resolve_app_name(&project_dir).map_err(|e| -> Box<dyn std::error::Error> {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()).into()
@@ -318,7 +338,6 @@ async fn run_async(
         Err(error) => output::warning(&format!("Local build workspace cleanup skipped: {}", error)),
     }
 
-    let source_root = source_bundle_root(&project_dir);
     let app_subdir = resolve_app_subdir(&source_root, &project_dir)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     if output::is_verbose() {
@@ -1771,6 +1790,47 @@ fn resolve_build_preset_ref(project_dir: &Path, tako_config: &TakoToml) -> Resul
         return qualify_runtime_local_preset_ref(runtime, preset_ref);
     }
     Ok(runtime.default_preset().to_string())
+}
+
+fn has_bun_lockfile(workspace_root: &Path) -> bool {
+    workspace_root.join("bun.lock").is_file() || workspace_root.join("bun.lockb").is_file()
+}
+
+fn run_bun_lockfile_preflight(workspace_root: &Path) -> Result<bool, String> {
+    if !has_bun_lockfile(workspace_root) {
+        return Ok(false);
+    }
+
+    let shell_runner = detect_local_shell_runner();
+    let (program, args) = local_shell_command_program_and_args(
+        shell_runner,
+        "bun install --frozen-lockfile --lockfile-only",
+    );
+    let output = std::process::Command::new(program)
+        .args(args)
+        .current_dir(workspace_root)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .map_err(|e| format!("Failed to run Bun lockfile check: {e}"))?;
+    if output.status.success() {
+        return Ok(true);
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let detail = if stderr.is_empty() { stdout } else { stderr };
+    Err(format_bun_lockfile_preflight_error(&detail))
+}
+
+fn format_bun_lockfile_preflight_error(detail: &str) -> String {
+    let normalized = detail.trim();
+    if normalized.contains("lockfile had changes, but lockfile is frozen") {
+        return "Bun lockfile check failed: package manifests and the Bun lockfile are out of sync. Run `bun install`, commit bun.lock/bun.lockb, then re-run `tako deploy`.".to_string();
+    }
+    if normalized.is_empty() {
+        return "Bun lockfile check failed with no output.".to_string();
+    }
+    format!("Bun lockfile check failed: {}", normalized)
 }
 
 fn sanitize_cache_label(label: &str) -> String {
@@ -3635,6 +3695,42 @@ mod tests {
         let adapter =
             resolve_effective_build_adapter(temp.path(), &config, "tanstack-start").unwrap();
         assert_eq!(adapter, BuildAdapter::Node);
+    }
+
+    #[test]
+    fn has_bun_lockfile_detects_both_supported_lockfiles() {
+        let temp = TempDir::new().unwrap();
+        assert!(!has_bun_lockfile(temp.path()));
+
+        std::fs::write(temp.path().join("bun.lock"), "").unwrap();
+        assert!(has_bun_lockfile(temp.path()));
+
+        std::fs::remove_file(temp.path().join("bun.lock")).unwrap();
+        std::fs::write(temp.path().join("bun.lockb"), "").unwrap();
+        assert!(has_bun_lockfile(temp.path()));
+    }
+
+    #[test]
+    fn run_bun_lockfile_preflight_skips_when_lockfile_is_missing() {
+        let temp = TempDir::new().unwrap();
+        let checked = run_bun_lockfile_preflight(temp.path()).unwrap();
+        assert!(!checked);
+    }
+
+    #[test]
+    fn format_bun_lockfile_preflight_error_includes_fix_hint_for_frozen_lockfile_mismatch() {
+        let message = format_bun_lockfile_preflight_error(
+            "error: lockfile had changes, but lockfile is frozen",
+        );
+        assert!(message.contains("Bun lockfile check failed"));
+        assert!(message.contains("Run `bun install`"));
+        assert!(message.contains("bun.lock"));
+    }
+
+    #[test]
+    fn format_bun_lockfile_preflight_error_falls_back_to_raw_detail() {
+        let message = format_bun_lockfile_preflight_error("permission denied");
+        assert_eq!(message, "Bun lockfile check failed: permission denied");
     }
 
     #[test]
