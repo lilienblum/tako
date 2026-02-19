@@ -550,7 +550,9 @@ mod tests {
     fn container_script_installs_runtime_libraries_for_toolchain_binaries() {
         let script =
             build_container_script("apps/web", "bun", Some("bun install"), None, &[]).unwrap();
-        assert!(script.contains("apk add --no-cache bash ca-certificates curl git gzip libgcc libstdc++ unzip xz"));
+        assert!(script.contains(
+            "apk add --no-cache bash ca-certificates curl git gzip libgcc libstdc++ unzip xz"
+        ));
         assert!(script.contains("apt-get install -y --no-install-recommends bash ca-certificates curl git gzip libgcc-s1 libstdc++6 unzip xz-utils"));
     }
 
