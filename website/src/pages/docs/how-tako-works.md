@@ -103,7 +103,7 @@ Important deployment behavior:
 - Cached artifacts are checksum-verified; invalid cached entries are rebuilt automatically.
 - Before packaging each target artifact, deploy verifies the resolved `main` exists in the post-build app directory.
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
-- Deploy runtime `main` is resolved from `tako.toml main`, then preset top-level `main`.
+- Deploy runtime `main` is resolved from `tako.toml main`, then preset top-level `main`; for JS runtimes (`bun`, `node`, `deno`) when preset `main` is `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`), Tako tries `index.<ext>` first, then `src/index.<ext>`.
 - Deploy app identity is resolved from top-level `name` when set, otherwise sanitized project directory name.
 - Server install resolves host target (`arch` + `libc`) and downloads matching `tako-server-linux-<arch>-<libc>` artifact.
 - Server install also installs `mise` (package-manager first, then upstream installer fallback when unavailable).

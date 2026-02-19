@@ -101,7 +101,8 @@ Each target server should have:
 - Final `app.json` is written in app directory after resolving runtime `main`.
 - Runtime `main` resolution order:
   1. `main` from `tako.toml`
-  2. top-level `main` from preset
+  2. for JS runtimes (`bun`, `node`, `deno`) when preset `main` is `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`): existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`
+  3. top-level `main` from preset
 - Before artifact packaging, deploy checks that the resolved `main` exists in the built app directory and fails if it is missing.
 
 ### Global server inventory (`~/.tako/config.toml`)

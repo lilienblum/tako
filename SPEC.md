@@ -104,6 +104,7 @@ env = "production"
 - Renaming app identity (`name` or directory fallback) is treated as a different app; remove the previous deployment manually if needed.
 - `main` in `tako.toml` is an optional runtime entrypoint override written to deployed `app.json`.
 - If `main` is omitted in `tako.toml`, deploy/dev use preset top-level `main` when present.
+- For JS adapters (`bun`, `node`, `deno`), when preset `main` is `index.<ext>` or `src/index.<ext>` (`ext`: `ts`, `tsx`, `js`, `jsx`), deploy/dev resolve in this order: existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`.
 - If neither `tako.toml main` nor preset `main` is set, deploy/dev fail with guidance.
 - Legacy top-level `dist` and `assets` keys are not supported.
 - Top-level `runtime` is optional; when set to `bun`, `node`, or `deno`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
@@ -643,7 +644,7 @@ Deploy flow helpers:
 1. Pre-deployment validation (secrets present, server target metadata present/valid for all selected servers)
 2. Resolve source bundle root (git root when available; otherwise app directory)
 3. Resolve app subdirectory relative to source bundle root
-4. Resolve deploy runtime `main` (`main` from `tako.toml`, otherwise preset top-level `main`)
+4. Resolve deploy runtime `main` (`main` from `tako.toml`; otherwise preset top-level `main`, with JS index fallback order: `index.<ext>` then `src/index.<ext>` for `ts`/`tsx`/`js`/`jsx` when applicable)
 5. Create source archive (`.tako/artifacts/{version}-source.tar.gz`) and write `app.json` at app path inside archive
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
    - Best-effort local artifact cache prune runs before target builds (retention: 30 source archives, 90 target artifacts; orphan target metadata is removed).

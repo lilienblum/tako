@@ -82,7 +82,7 @@ Expected deploy behavior:
   - Note: containerized builds cache dependencies in Docker volumes prefixed `tako-build-cache-`; if needed, remove stale volumes and redeploy.
 - `Deploy entrypoint missing after build`:
   - Symptom: deploy fails during artifact preparation with a message that the deploy entrypoint (`main`) was not found after build.
-  - Fix: ensure your build output creates the configured `main` path (from `tako.toml` or preset), or update `main` to the actual generated file.
+  - Fix: ensure your build output creates the configured `main` path (from `tako.toml` or preset), or update `main` to the actual generated file. For JS runtimes (`bun`, `node`, `deno`) with preset `main` set to `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`), Tako automatically checks `index.<ext>` first, then `src/index.<ext>`.
 - `Installer reports unsupported libc`:
   - Symptom: `install-server` exits with `unsupported libc`.
   - Fix: run on Linux host with `glibc` or `musl`; for custom base images, set `TAKO_SERVER_URL` to a known matching artifact URL.

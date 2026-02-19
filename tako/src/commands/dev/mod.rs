@@ -2395,8 +2395,13 @@ pub async fn run(
         .map_err(|e| format!("Failed to resolve build preset '{}': {}", preset_ref, e))?;
     apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter)
         .map_err(|e| format!("Failed to apply runtime defaults to preset: {}", e))?;
-    let main = crate::commands::deploy::resolve_deploy_main(&cfg, build_preset.main.as_deref())
-        .map_err(|e| format!("Failed to resolve deploy entrypoint: {}", e))?;
+    let main = crate::commands::deploy::resolve_deploy_main(
+        &project_dir,
+        runtime_adapter,
+        &cfg,
+        build_preset.main.as_deref(),
+    )
+    .map_err(|e| format!("Failed to resolve deploy entrypoint: {}", e))?;
 
     let runtime_name = build_preset.name.clone();
 

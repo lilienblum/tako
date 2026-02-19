@@ -330,8 +330,13 @@ async fn run_async(
     let runtime_tool = resolve_runtime_tool_for_mise(&build_preset.name, &build_preset)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    let manifest_main = resolve_deploy_main(&tako_config, build_preset.main.as_deref())
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let manifest_main = resolve_deploy_main(
+        &project_dir,
+        runtime_adapter,
+        &tako_config,
+        build_preset.main.as_deref(),
+    )
+    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     output::success(&format_entry_point_summary(
         &project_dir.join(&manifest_main),
     ));
@@ -375,13 +380,6 @@ async fn run_async(
     let exclude_patterns = build_artifact_exclude_patterns(&build_preset, &tako_config);
     let asset_roots = build_asset_roots(&build_preset, &tako_config)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    if !exclude_patterns.is_empty() {
-        output::muted(&format!(
-            "Artifact exclude patterns: {}",
-            exclude_patterns.join(", ")
-        ));
-    }
-
     // Resolve target servers (explicit env mapping first, then production fallback).
     let server_names =
         resolve_deploy_server_names_with_setup(&tako_config, &mut servers, &env, &project_dir)
@@ -1139,7 +1137,50 @@ fn normalize_main_path(value: &str, source: &str) -> Result<String, String> {
     Ok(normalized)
 }
 
+fn js_entrypoint_extension_for_index_paths(main: &str) -> Option<&str> {
+    let extension = if let Some(value) = main.strip_prefix("index.") {
+        value
+    } else if let Some(value) = main.strip_prefix("src/index.") {
+        value
+    } else {
+        return None;
+    };
+
+    if matches!(extension, "ts" | "tsx" | "js" | "jsx") {
+        Some(extension)
+    } else {
+        None
+    }
+}
+
+fn resolve_js_preset_main_for_project(
+    project_dir: &Path,
+    runtime_adapter: BuildAdapter,
+    preset_main: &str,
+) -> Option<String> {
+    if !matches!(
+        runtime_adapter,
+        BuildAdapter::Bun | BuildAdapter::Node | BuildAdapter::Deno
+    ) {
+        return None;
+    }
+
+    let extension = js_entrypoint_extension_for_index_paths(preset_main)?;
+    let candidates = [
+        format!("index.{extension}"),
+        format!("src/index.{extension}"),
+    ];
+    for candidate in candidates {
+        if project_dir.join(&candidate).is_file() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 pub(crate) fn resolve_deploy_main(
+    project_dir: &Path,
+    runtime_adapter: BuildAdapter,
     tako_config: &TakoToml,
     preset_main: Option<&str>,
 ) -> Result<String, String> {
@@ -1148,7 +1189,13 @@ pub(crate) fn resolve_deploy_main(
     }
 
     if let Some(main) = preset_main {
-        return normalize_main_path(main, "build preset");
+        let normalized = normalize_main_path(main, "build preset")?;
+        if let Some(resolved) =
+            resolve_js_preset_main_for_project(project_dir, runtime_adapter, &normalized)
+        {
+            return Ok(resolved);
+        }
+        return Ok(normalized);
     }
 
     Err("No deploy entrypoint configured. Set `main` in tako.toml or preset `main`.".to_string())
@@ -5358,24 +5405,39 @@ name = "test-app"
 
     #[test]
     fn resolve_deploy_main_prefers_tako_toml_main() {
+        let temp = TempDir::new().unwrap();
         let config = TakoToml {
             main: Some("server/custom.mjs".to_string()),
             ..Default::default()
         };
-        let resolved = resolve_deploy_main(&config, Some("preset-default.ts")).unwrap();
+        let resolved = resolve_deploy_main(
+            temp.path(),
+            BuildAdapter::Node,
+            &config,
+            Some("preset-default.ts"),
+        )
+        .unwrap();
         assert_eq!(resolved, "server/custom.mjs");
     }
 
     #[test]
     fn resolve_deploy_main_uses_preset_default_main_when_tako_main_is_missing() {
-        let resolved =
-            resolve_deploy_main(&TakoToml::default(), Some("./dist/server/entry.mjs")).unwrap();
+        let temp = TempDir::new().unwrap();
+        let resolved = resolve_deploy_main(
+            temp.path(),
+            BuildAdapter::Node,
+            &TakoToml::default(),
+            Some("./dist/server/entry.mjs"),
+        )
+        .unwrap();
         assert_eq!(resolved, "dist/server/entry.mjs");
     }
 
     #[test]
     fn resolve_deploy_main_errors_when_tako_and_preset_main_are_missing() {
-        let err = resolve_deploy_main(&TakoToml::default(), None).unwrap_err();
+        let temp = TempDir::new().unwrap();
+        let err = resolve_deploy_main(temp.path(), BuildAdapter::Node, &TakoToml::default(), None)
+            .unwrap_err();
         assert!(
             err.contains("Set `main` in tako.toml or preset `main`"),
             "unexpected error: {err}"
@@ -5384,11 +5446,12 @@ name = "test-app"
 
     #[test]
     fn resolve_deploy_main_rejects_parent_directory_segments_from_tako_toml() {
+        let temp = TempDir::new().unwrap();
         let config = TakoToml {
             main: Some("../outside.js".to_string()),
             ..Default::default()
         };
-        let err = resolve_deploy_main(&config, None).unwrap_err();
+        let err = resolve_deploy_main(temp.path(), BuildAdapter::Node, &config, None).unwrap_err();
         assert!(
             err.contains("must not contain '..'"),
             "unexpected error: {err}"
@@ -5397,20 +5460,77 @@ name = "test-app"
 
     #[test]
     fn resolve_deploy_main_rejects_empty_tako_toml_main() {
+        let temp = TempDir::new().unwrap();
         let config = TakoToml {
             main: Some("  ".to_string()),
             ..Default::default()
         };
-        let err = resolve_deploy_main(&config, None).unwrap_err();
+        let err = resolve_deploy_main(temp.path(), BuildAdapter::Node, &config, None).unwrap_err();
         assert!(err.contains("main is empty"), "unexpected error: {err}");
     }
 
     #[test]
     fn resolve_deploy_main_rejects_invalid_preset_main() {
-        let err = resolve_deploy_main(&TakoToml::default(), Some("../outside.js")).unwrap_err();
+        let temp = TempDir::new().unwrap();
+        let err = resolve_deploy_main(
+            temp.path(),
+            BuildAdapter::Node,
+            &TakoToml::default(),
+            Some("../outside.js"),
+        )
+        .unwrap_err();
         assert!(
             err.contains("must not contain '..'"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn resolve_deploy_main_prefers_root_index_for_js_presets() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("index.tsx"), "export {};\n").unwrap();
+
+        let resolved = resolve_deploy_main(
+            temp.path(),
+            BuildAdapter::Bun,
+            &TakoToml::default(),
+            Some("src/index.tsx"),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, "index.tsx");
+    }
+
+    #[test]
+    fn resolve_deploy_main_falls_back_to_src_index_when_root_index_is_missing() {
+        let temp = TempDir::new().unwrap();
+        std::fs::create_dir_all(temp.path().join("src")).unwrap();
+        std::fs::write(temp.path().join("src/index.js"), "export {};\n").unwrap();
+
+        let resolved = resolve_deploy_main(
+            temp.path(),
+            BuildAdapter::Node,
+            &TakoToml::default(),
+            Some("index.js"),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, "src/index.js");
+    }
+
+    #[test]
+    fn resolve_deploy_main_applies_index_fallback_for_deno() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("index.ts"), "export {};\n").unwrap();
+
+        let resolved = resolve_deploy_main(
+            temp.path(),
+            BuildAdapter::Deno,
+            &TakoToml::default(),
+            Some("src/index.ts"),
+        )
+        .unwrap();
+
+        assert_eq!(resolved, "index.ts");
     }
 }

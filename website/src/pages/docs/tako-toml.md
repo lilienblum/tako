@@ -53,6 +53,7 @@ runtime = "bun"
   - Keep it unique per server. Renaming it creates a new app identity/path; delete old deployment manually if needed.
 - `main`: optional runtime entry override written to deployed `app.json` and used by `tako dev`/`tako deploy`.
   - If omitted, Tako uses preset top-level `main` when present.
+  - For JS runtimes (`bun`, `node`, `deno`), when preset `main` is `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`), Tako resolves in this order: existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`.
   - If neither `tako.toml main` nor preset `main` is set, deploy/dev fail.
   - During deploy artifact prep, Tako verifies this resolved path exists in the post-build app directory and fails if it is missing.
 - `runtime`: optional adapter override (`bun`, `node`, `deno`) used when selecting the default base preset.
