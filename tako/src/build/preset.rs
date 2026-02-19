@@ -847,8 +847,7 @@ async fn fetch_preset_content_from_master_branch(
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(normalized)
         .map_err(|_e| "Failed to fetch preset".to_string())?;
-    let content = String::from_utf8(bytes)
-        .map_err(|_e| "Failed to fetch preset".to_string())?;
+    let content = String::from_utf8(bytes).map_err(|_e| "Failed to fetch preset".to_string())?;
     Ok((sha, content))
 }
 
