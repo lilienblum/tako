@@ -95,9 +95,9 @@ Deploy e2e uses Docker/SSH and is opt-in:
 - `just e2e e2e/fixtures/js/tanstack-start`
 
 Deploy e2e exercises artifact-cache behavior too: first deploy builds target artifacts, then unchanged redeploy reuses verified cached artifacts from `.tako/artifacts/`.
-When top-level `preset` is omitted, dev/deploy choose adapter base preset from top-level `runtime` when set, otherwise adapter detection (`unknown` falls back to `bun`).
-When preset build mode resolves to container (`[build].container` / `[build].docker`), containerized builds reuse per-target Docker dependency cache volumes (prefix `tako-build-cache-`) across deploy runs.
-Preset artifact filters use preset `[build].exclude`; runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`. Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while `[build].targets` and `[build].container` override when set (legacy preset `[deploy]`, `[dev]`, preset `include`, and `[artifact]` are not supported; deprecated top-level `dev_cmd` is accepted as an alias).
+When top-level `preset` is omitted, dev/deploy choose adapter base preset from top-level `runtime` when set, otherwise adapter detection (`unknown` falls back to `bun`). When set, top-level `preset` is runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `bun/tanstack-start` are rejected.
+When preset build mode resolves to container (`[build].container`), containerized builds reuse per-target Docker dependency cache volumes (prefix `tako-build-cache-`) across deploy runs.
+Preset artifact filters use preset `[build].exclude`; runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`. Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while `[build].targets` and `[build].container` override when set (legacy preset `[deploy]`, `[dev]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported).
 Deploy validates that the resolved runtime `main` exists after build and before artifact packaging.
 Bun release dependencies are installed on server before rollout (`bun install --production`).
 Hosted server install resolves Linux host `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>` artifact.

@@ -101,8 +101,6 @@ struct BuildPresetRaw {
     #[serde(default)]
     dev: Vec<String>,
     #[serde(default)]
-    dev_cmd: Vec<String>,
-    #[serde(default)]
     install: Option<String>,
     #[serde(default)]
     start: Vec<String>,
@@ -122,8 +120,6 @@ struct BuildPresetRawBuild {
     targets: Option<toml::Value>,
     #[serde(default)]
     container: Option<bool>,
-    #[serde(default)]
-    docker: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -152,7 +148,7 @@ pub fn parse_preset_reference(value: &str) -> Result<PresetReference, String> {
 
     if trimmed.contains(':') {
         return Err(format!(
-            "Invalid preset reference '{}'. Use an official alias like 'bun', 'bun/tanstack-start', or 'bun@<commit-hash>', or github:<owner>/<repo>/<path>.toml[@<commit-hash>].",
+            "Invalid preset reference '{}'. Use an official alias like 'bun', 'bun/tanstack-start', or 'bun/tanstack-start@<commit-hash>', or github:<owner>/<repo>/<path>.toml[@<commit-hash>].",
             trimmed
         ));
     }
@@ -172,42 +168,57 @@ pub fn parse_preset_reference(value: &str) -> Result<PresetReference, String> {
         None => (trimmed, None),
     };
 
-    let (name, commit) = if let Some(commit) = explicit_commit {
-        (without_at_commit.to_string(), Some(commit))
-    } else {
-        parse_alias_with_optional_legacy_commit(trimmed, without_at_commit)?
+    let (name, commit) = match explicit_commit {
+        Some(commit) => (without_at_commit.to_string(), Some(commit)),
+        None => (without_at_commit.to_string(), None),
     };
 
     validate_official_alias(trimmed, &name)?;
-    if name == "bun-tanstack-start" {
-        return Err(
-            "Invalid preset alias 'bun-tanstack-start'. Use 'bun/tanstack-start'.".to_string(),
-        );
-    }
     Ok(PresetReference::OfficialAlias { name, commit })
 }
 
-fn parse_alias_with_optional_legacy_commit(
-    raw_value: &str,
-    alias_value: &str,
-) -> Result<(String, Option<String>), String> {
-    let Some((name, candidate_commit)) = alias_value.rsplit_once('/') else {
-        return Ok((alias_value.to_string(), None));
-    };
+pub fn qualify_runtime_local_preset_ref(
+    runtime: BuildAdapter,
+    preset_ref: &str,
+) -> Result<String, String> {
+    let trimmed = preset_ref.trim();
+    if trimmed.is_empty() {
+        return Err("preset cannot be empty".to_string());
+    }
+    if trimmed.starts_with("github:") {
+        return Ok(trimmed.to_string());
+    }
+    if trimmed.contains('/') {
+        return Err(
+            "preset must not include runtime namespace (for example `bun/rails`); set top-level `runtime` and use local preset name only."
+                .to_string(),
+        );
+    }
 
-    if candidate_commit.is_empty() || name.is_empty() {
+    if runtime == BuildAdapter::Unknown {
         return Err(format!(
-            "Invalid preset alias '{}'. Expected '<name>', '<family>/<name>', or alias with commit suffix.",
-            raw_value
+            "Cannot resolve preset '{}' without a known runtime. Set top-level `runtime` explicitly.",
+            trimmed
         ));
     }
 
-    if candidate_commit.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        validate_commit_hash(raw_value, candidate_commit)?;
-        return Ok((name.to_string(), Some(candidate_commit.to_string())));
-    }
+    let (name, commit) = match trimmed.rsplit_once('@') {
+        Some((name, commit)) if !name.trim().is_empty() && !commit.trim().is_empty() => {
+            (name.trim(), Some(commit.trim()))
+        }
+        Some((_, commit)) if commit.trim().is_empty() => {
+            return Err(format!(
+                "Invalid preset reference '{}': commit hash cannot be empty after '@'.",
+                trimmed
+            ));
+        }
+        _ => (trimmed, None),
+    };
 
-    Ok((alias_value.to_string(), None))
+    Ok(match commit {
+        Some(commit) => format!("{}/{}@{}", runtime.id(), name, commit),
+        None => format!("{}/{}", runtime.id(), name),
+    })
 }
 
 fn validate_official_alias(raw_value: &str, alias: &str) -> Result<(), String> {
@@ -470,6 +481,11 @@ pub fn parse_and_validate_preset(
                 .to_string(),
         );
     }
+    if value.get("dev_cmd").is_some() {
+        return Err(
+            "Build preset no longer supports top-level `dev_cmd`. Use top-level `dev`.".to_string(),
+        );
+    }
     if value
         .get("build")
         .and_then(|build| build.get("builder_image"))
@@ -480,23 +496,25 @@ pub fn parse_and_validate_preset(
                 .to_string(),
         );
     }
+    if value
+        .get("build")
+        .and_then(|build| build.get("docker"))
+        .is_some()
+    {
+        return Err(
+            "Build preset no longer supports [build].docker. Use [build].container.".to_string(),
+        );
+    }
 
     let build_table = value.get("build").and_then(toml::Value::as_table);
     let targets_explicit = build_table.and_then(|table| table.get("targets")).is_some();
     let container_explicit = build_table
-        .and_then(|table| table.get("container").or_else(|| table.get("docker")))
+        .and_then(|table| table.get("container"))
         .is_some();
 
     let raw: BuildPresetRaw = value
         .try_into()
         .map_err(|e| format!("Failed to parse build preset TOML: {e}"))?;
-
-    if !raw.dev.is_empty() && !raw.dev_cmd.is_empty() {
-        return Err(
-            "Build preset cannot set both top-level `dev` and deprecated `dev_cmd`. Use only `dev`."
-                .to_string(),
-        );
-    }
 
     let name = raw
         .name
@@ -511,8 +529,7 @@ pub fn parse_and_validate_preset(
     }
 
     let target_labels = parse_build_target_labels(raw.build.targets.clone())?;
-    let use_container_build =
-        resolve_container_build_toggle(raw.build.container, raw.build.docker, &target_labels)?;
+    let use_container_build = resolve_container_build_toggle(raw.build.container, &target_labels)?;
 
     let preset = BuildPreset {
         name,
@@ -527,11 +544,7 @@ pub fn parse_and_validate_preset(
             targets_explicit,
             container_explicit,
         },
-        dev: if raw.dev.is_empty() {
-            raw.dev_cmd
-        } else {
-            raw.dev
-        },
+        dev: raw.dev,
         install: raw.install,
         start: raw.start,
         targets: std::collections::HashMap::new(),
@@ -653,18 +666,9 @@ fn parse_build_target_labels(raw_targets: Option<toml::Value>) -> Result<Vec<Str
 
 fn resolve_container_build_toggle(
     container: Option<bool>,
-    docker: Option<bool>,
     target_labels: &[String],
 ) -> Result<bool, String> {
-    if let (Some(container), Some(docker)) = (container, docker)
-        && container != docker
-    {
-        return Err(
-            "Build preset [build] cannot set conflicting `container` and `docker` values."
-                .to_string(),
-        );
-    }
-    if let Some(value) = container.or(docker) {
+    if let Some(value) = container {
         return Ok(value);
     }
     Ok(!target_labels.is_empty())
@@ -801,7 +805,7 @@ mod tests {
 
     #[test]
     fn parse_preset_reference_accepts_official_alias_with_commit() {
-        let parsed = parse_preset_reference("bun/abc1234").unwrap();
+        let parsed = parse_preset_reference("bun@abc1234").unwrap();
         assert_eq!(
             parsed,
             PresetReference::OfficialAlias {
@@ -870,9 +874,8 @@ mod tests {
         assert!(parse_preset_reference("github:owner/repo/path.jsonc").is_err());
         assert!(parse_preset_reference("github:owner/repo/path.json").is_err());
         assert!(parse_preset_reference("github:owner/repo/path.yaml").is_err());
-        assert!(parse_preset_reference("bun/abc12").is_err());
         assert!(parse_preset_reference("bun/abc12345/extra").is_err());
-        assert!(parse_preset_reference("bun-tanstack-start").is_err());
+        assert!(parse_preset_reference("bun@").is_err());
         assert!(parse_preset_reference("bun/tanstack-start@").is_err());
         assert!(parse_preset_reference("Bun").is_err());
     }
@@ -894,7 +897,6 @@ mod tests {
         assert!(embedded_official_preset_content("presets/node/node.toml").is_some());
         assert!(embedded_official_preset_content("presets/deno/deno.toml").is_some());
         assert!(embedded_official_preset_content("presets/bun/tanstack-start.toml").is_some());
-        assert!(embedded_official_preset_content("presets/bun.toml").is_some());
     }
 
     #[test]
@@ -1152,32 +1154,17 @@ install = "bun install"
     }
 
     #[test]
-    fn parse_and_validate_preset_accepts_deprecated_dev_cmd_alias() {
+    fn parse_and_validate_preset_rejects_legacy_dev_cmd() {
         let raw = r#"
 name = "bun"
 
-dev_cmd = ["bun", "run", "dev"]
-
-[build]
-install = "bun install"
-"#;
-        let preset = parse_preset(raw).unwrap();
-        assert_eq!(preset.dev, vec!["bun", "run", "dev"]);
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_dev_and_dev_cmd_together() {
-        let raw = r#"
-name = "bun"
-
-dev = ["bun", "run", "dev"]
 dev_cmd = ["bun", "run", "dev"]
 
 [build]
 install = "bun install"
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("both top-level `dev` and deprecated `dev_cmd`"));
+        assert!(err.contains("top-level `dev_cmd`"));
     }
 
     #[test]
@@ -1247,7 +1234,7 @@ targets = ["linux-x86_64-glibc"]
     }
 
     #[test]
-    fn parse_and_validate_preset_accepts_deprecated_build_docker_toggle() {
+    fn parse_and_validate_preset_rejects_legacy_build_docker_toggle() {
         let raw = r#"
 name = "bun"
 
@@ -1257,24 +1244,8 @@ install = "bun install --frozen-lockfile"
 build = "bun run --if-present build"
 targets = ["linux-x86_64-glibc"]
 "#;
-        let preset = parse_preset(raw).unwrap();
-        assert!(preset.build.container);
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_conflicting_container_and_docker_toggles() {
-        let raw = r#"
-name = "bun"
-
-[build]
-container = true
-docker = false
-install = "bun install --frozen-lockfile"
-build = "bun run --if-present build"
-"#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("container"));
-        assert!(err.contains("docker"));
+        assert!(err.contains("[build].docker"));
     }
 
     #[test]
@@ -1358,7 +1329,7 @@ install = "bun install"
         let resolved = ResolvedPresetSource {
             preset_ref: "bun".to_string(),
             repo: "tako-sh/presets".to_string(),
-            path: "presets/bun.toml".to_string(),
+            path: "presets/bun/bun.toml".to_string(),
             commit: "abc123".to_string(),
         };
         write_locked_preset(temp.path(), &resolved).unwrap();

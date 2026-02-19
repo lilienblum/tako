@@ -4,7 +4,6 @@ use std::path::Path;
 pub const BUILTIN_BUN_PRESET_PATH: &str = "presets/bun/bun.toml";
 pub const BUILTIN_NODE_PRESET_PATH: &str = "presets/node/node.toml";
 pub const BUILTIN_DENO_PRESET_PATH: &str = "presets/deno/deno.toml";
-pub const LEGACY_BUILTIN_BUN_PRESET_PATH: &str = "presets/bun.toml";
 
 const BUILTIN_BUN_PRESET_CONTENT: &str = r#"main = "src/index.ts"
 dev = ["bun", "run", "dev"]
@@ -107,9 +106,7 @@ pub fn builtin_base_preset_content_for_alias(alias: &str) -> Option<&'static str
 
 pub fn builtin_base_preset_content_for_path(path: &str) -> Option<&'static str> {
     match path {
-        BUILTIN_BUN_PRESET_PATH | LEGACY_BUILTIN_BUN_PRESET_PATH => {
-            Some(BUILTIN_BUN_PRESET_CONTENT)
-        }
+        BUILTIN_BUN_PRESET_PATH => Some(BUILTIN_BUN_PRESET_CONTENT),
         BUILTIN_NODE_PRESET_PATH => Some(BUILTIN_NODE_PRESET_CONTENT),
         BUILTIN_DENO_PRESET_PATH => Some(BUILTIN_DENO_PRESET_CONTENT),
         _ => None,
@@ -358,7 +355,6 @@ mod tests {
         assert!(builtin_base_preset_content_for_path(BUILTIN_BUN_PRESET_PATH).is_some());
         assert!(builtin_base_preset_content_for_path(BUILTIN_NODE_PRESET_PATH).is_some());
         assert!(builtin_base_preset_content_for_path(BUILTIN_DENO_PRESET_PATH).is_some());
-        assert!(builtin_base_preset_content_for_path("presets/bun.toml").is_some());
     }
 
     #[test]

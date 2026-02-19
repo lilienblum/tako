@@ -44,7 +44,7 @@ Application configuration for build, variables, routes, and deployment.
 name = "my-app"           # Optional but recommended stable identity used by deploy/dev
 main = "server/index.mjs" # Optional override; required only when preset does not define top-level `main`
 runtime = "bun"           # Optional override; defaults to detected adapter
-# preset = "bun/tanstack-start" # Optional; omit for adapter base preset
+# preset = "tanstack-start" # Optional runtime-local preset; omit for adapter base preset
 
 [build]
 # include = ["dist/**", ".output/**"]
@@ -104,24 +104,25 @@ env = "production"
 - Top-level `runtime` is optional; when set to `bun`, `node`, or `deno`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
 - Top-level `preset` is optional; when omitted, `tako deploy`/`tako dev` use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`).
 - `preset` supports:
-  - official aliases: `bun`, `node`, `deno`, `bun/tanstack-start`
-  - pinned official aliases: `bun/<commit-hash>` (legacy), `bun@<commit-hash>`, `bun/tanstack-start@<commit-hash>`
+  - runtime-local aliases: `tanstack-start` (resolved under selected runtime, e.g. `runtime = "bun"`)
+  - pinned runtime-local aliases: `tanstack-start@<commit-hash>`
   - GitHub references: `github:<owner>/<repo>/<path>.toml[@<commit-hash>]`
+- namespaced preset aliases in `tako.toml` (for example `bun/tanstack-start`) are rejected; choose runtime via top-level `runtime` and keep `preset` runtime-local.
 - Adapter base presets (`bun`, `node`, `deno`) are built into the CLI (not loaded from workspace preset files).
 - File-based presets remain for named variants under `presets/<adapter>/<name>.toml` (for example `presets/bun/tanstack-start.toml`).
-- `bun/tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and adds `assets = ["dist/client"]`.
+- Bun `tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and adds `assets = ["dist/client"]`.
 - Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`dev`, `install`, `start`, `[build].install`, `[build].build`).
 - Runtime base presets also provide default build filters/targets (`[build].exclude`, `[build].targets`, `[build].container`) and default `assets`.
 - Preset `[build].exclude` entries are appended to runtime-base excludes (base-first, deduplicated).
 - Preset `[build].targets` and `[build].container` override runtime defaults when set (including explicit empty arrays or explicit `container` values).
 - Preset `assets` override runtime-base `assets` when set.
-- Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `assets`, and `[build]` (`exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false` with deprecated alias `docker = true|false`). Presets can still override runtime lifecycle fields (`dev`, `install`, `start`, `[build].install`, `[build].build`) when needed. Legacy preset `[dev]`, `[deploy]`, preset `include`, and `[artifact]` are not supported. Top-level `dev_cmd` remains accepted as a deprecated alias for compatibility.
+- Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `assets`, and `[build]` (`exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false`). Presets can still override runtime lifecycle fields (`dev`, `install`, `start`, `[build].install`, `[build].build`) when needed. Legacy preset `[dev]`, `[deploy]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported.
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for reproducible preset fetches on later deploys.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Source bundle filtering uses `.gitignore`.
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
 - Deploy sends merged app vars + runtime vars + decrypted secrets to `tako-server` in the `deploy` command payload; `tako-server` injects them directly into app process environment on spawn.
-- Deploy build mode is controlled by preset `[build].container` (or deprecated `[build].docker`):
+- Deploy build mode is controlled by preset `[build].container`:
   - `true`: build each target artifact in Docker.
   - `false`: run build commands on the local host workspace for each target.
   - when unset, default is `true` if `[build].targets` is non-empty, otherwise `false`.
@@ -634,9 +635,9 @@ Deploy flow helpers:
    - Resolve deterministic cache key per target.
    - On cache hit, reuse existing verified target artifact.
    - On cache miss (or invalid cache entry), extract source archive into a temporary workspace.
-   - Build in Docker when preset `[build].container = true` (or deprecated `[build].docker = true`).
+   - Build in Docker when preset `[build].container = true`.
    - Build on local host workspace when `[build].container = false`.
-   - When `container/docker` is unset, default to Docker only when `[build].targets` is non-empty.
+   - When `container` is unset, default to Docker only when `[build].targets` is non-empty.
    - Merge configured assets into app `public/`.
    - Verify resolved runtime `main` exists in the built app directory.
    - Materialize release `.prototools` in app dir with resolved runtime tool version for server runtime parity.

@@ -76,8 +76,8 @@ Expected deploy behavior:
   - Fix: free space, then redeploy.
 - `Local artifact build failed`:
   - Symptom: deploy fails during artifact build before upload.
-  - Fix: check preset resolution (explicit top-level `preset` or adapter default from top-level `runtime`/detection) and target build logs. If preset build mode resolves to container (`[build].container`/`[build].docker`), also confirm Docker is available locally.
-  - If preset parsing fails, ensure preset artifact filters use `[build].exclude` and runtime/dev commands use top-level `main`/`install`/`start`/`dev` (legacy `[deploy]`, `[dev]`, `include`, and `[artifact]` are rejected; deprecated top-level `dev_cmd` is accepted as an alias).
+  - Fix: check preset resolution (explicit top-level runtime-local `preset` or adapter default from top-level `runtime`/detection) and target build logs. Namespaced aliases in `tako.toml` (for example `bun/tanstack-start`) are rejected. If preset build mode resolves to container (`[build].container`), also confirm Docker is available locally.
+  - If preset parsing fails, ensure preset artifact filters use `[build].exclude` and runtime/dev commands use top-level `main`/`install`/`start`/`dev` (legacy `[deploy]`, `[dev]`, `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are rejected).
   - Note: containerized builds cache dependencies in Docker volumes prefixed `tako-build-cache-`; if needed, remove stale volumes and redeploy.
 - `Deploy entrypoint missing after build`:
   - Symptom: deploy fails during artifact preparation with a message that the deploy entrypoint (`main`) was not found after build.

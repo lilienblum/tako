@@ -74,8 +74,8 @@ High-level deploy flow:
 2. Resolve source bundle root and app subdirectory (git root when available; otherwise app directory).
 3. Create a source archive (`.tako/artifacts/{version}-source.tar.gz`) from filtered source files.
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-4. Resolve build preset (top-level `preset` override or adapter base default from top-level `runtime`/detection) and lock it to a commit in `.tako/build.lock.json`.
-5. Build target-specific artifacts locally (Docker or local host based on preset `[build].container`/`[build].docker`, with defaults derived from `[build].targets`), with deterministic local artifact cache reuse when inputs are unchanged.
+4. Resolve build preset (top-level runtime-local `preset` override or adapter base default from top-level `runtime`/detection) and lock it to a commit in `.tako/build.lock.json`.
+5. Build target-specific artifacts locally (Docker or local host based on preset `[build].container`, with defaults derived from `[build].targets`), with deterministic local artifact cache reuse when inputs are unchanged.
 6. Deploy to target servers in parallel over SSH.
 7. On each server: lock, upload/extract target artifact, finalize `app.json`, send deploy command with merged env/secrets payload, run runtime prep (Bun dependency install), rolling update, unlock.
 
@@ -89,6 +89,7 @@ Important deployment behavior:
 - Docker builds reuse per-target dependency cache volumes (proto + runtime cache mounts) keyed by cache kind + target label + builder image while still creating fresh build containers each deploy.
 - Runtime version resolution is proto-first: Tako tries `proto run <tool> -- --version` (local and Docker contexts), then falls back to `.prototools`, then `latest`; deploy writes release `.prototools` so server runtime matches build runtime.
 - Preset runtime fields use top-level `main`/`install`/`start` keys (legacy preset `[deploy]` is not supported).
+- Top-level `preset` in `tako.toml` must be runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `bun/tanstack-start` are rejected.
 - Runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`.
 - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.
 - Artifact filters use project `[build].include` (optional), plus effective preset `[build].exclude` and project `[build].exclude`.

@@ -13,7 +13,7 @@ Presets define build/runtime defaults for `tako dev` and `tako deploy`.
 
 ```toml
 runtime = "bun"
-preset = "bun/tanstack-start"
+preset = "tanstack-start"
 ```
 
 You can also reference your own preset file directly from GitHub:
@@ -24,18 +24,15 @@ preset = "github:username/my-presets/custom-preset.toml"
 
 ## Preset Reference Formats
 
-- Official aliases:
-  - `bun`
-  - `node`
-  - `deno`
-  - `bun/tanstack-start`
+- Runtime-local aliases:
+  - `tanstack-start` (resolved under selected top-level `runtime`)
 - Pinned refs:
-  - `bun@<commit-hash>`
-  - `bun/tanstack-start@<commit-hash>`
-  - legacy alias pin format `bun/<commit-hash>` is still accepted
+  - `tanstack-start@<commit-hash>`
 - GitHub refs:
   - `github:<owner>/<repo>/<path>.toml`
   - `github:<owner>/<repo>/<path>.toml@<commit-hash>`
+
+Namespaced aliases in `tako.toml` (for example `bun/tanstack-start`) are rejected; choose runtime with top-level `runtime` and keep `preset` runtime-local.
 
 ## Official Preset Layout
 
@@ -80,10 +77,10 @@ Preset `build.exclude` adds extra patterns on top of runtime-base excludes (base
   - `exclude` (optional)
   - `install`, `build` (optional advanced overrides)
   - `targets` (optional)
-  - `container` (optional; deprecated alias `docker`)
+  - `container` (optional)
 
 ### Not Supported
 
 - Legacy `[artifact]`, `[dev]`, `[deploy]`
-- top-level `include`, `exclude`, `builder_image`, `runtime`, `id`
-- top-level `[targets]` and `[build].builder_image`
+- top-level `include`, `exclude`, `builder_image`, `runtime`, `id`, `dev_cmd`
+- top-level `[targets]`, `[build].builder_image`, and `[build].docker`

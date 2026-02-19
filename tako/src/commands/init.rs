@@ -209,11 +209,9 @@ fn parse_preset_default_main(content: &str) -> Option<String> {
 
 fn embedded_preset_default_main(preset_ref: &str, adapter: BuildAdapter) -> Option<String> {
     match preset_ref {
-        "bun" | "bun/bun" => adapter.embedded_preset_default_main(),
-        "bun/tanstack-start" => {
-            parse_preset_default_main(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT)
-        }
-        "node" | "node/node" | "deno" | "deno/deno" => adapter.embedded_preset_default_main(),
+        "bun" => adapter.embedded_preset_default_main(),
+        "tanstack-start" => parse_preset_default_main(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT),
+        "node" | "deno" => adapter.embedded_preset_default_main(),
         _ => None,
     }
 }
@@ -228,8 +226,8 @@ fn select_preset_for_adapter(adapter: BuildAdapter) -> std::io::Result<Option<St
         BuildAdapter::Bun => {
             options.push(("bun (base preset)".to_string(), Some("bun".to_string())));
             options.push((
-                "bun/tanstack-start".to_string(),
-                Some("bun/tanstack-start".to_string()),
+                "tanstack-start".to_string(),
+                Some("tanstack-start".to_string()),
             ));
         }
         BuildAdapter::Node => {
@@ -275,12 +273,16 @@ fn generate_template(
     } else {
         "# runtime = \"bun\"".to_string()
     };
-    let default_preset_comment = runtime.unwrap_or("bun");
-    let explicit_preset = preset_ref.filter(|preset| *preset != default_preset_comment);
-    let preset_line = if let Some(preset_ref) = explicit_preset {
+    let preset_example = match runtime {
+        Some("bun") => "tanstack-start",
+        Some("node") => "my-node-preset",
+        Some("deno") => "my-deno-preset",
+        _ => "my-preset",
+    };
+    let preset_line = if let Some(preset_ref) = preset_ref {
         format!("preset = \"{}\"", preset_ref)
     } else {
-        format!("# preset = \"{}\"", default_preset_comment)
+        format!("# preset = \"{}\"", preset_example)
     };
     format!(
         r#"# Tako configuration
@@ -376,7 +378,7 @@ mod tests {
             Some("server/index.mjs"),
             "demo-app.example.com",
             Some("bun"),
-            Some("bun"),
+            None,
         );
 
         assert!(
@@ -416,7 +418,7 @@ mod tests {
         );
 
         assert!(
-            rendered.contains("runtime = \"bun\"\n# preset = \"bun\""),
+            rendered.contains("runtime = \"bun\"\n# preset = \"tanstack-start\""),
             "expected base runtime preset to be omitted/commented"
         );
         assert!(
@@ -452,7 +454,7 @@ mod tests {
             Some("server/index.mjs"),
             "demo-app.example.com",
             Some("bun"),
-            Some("bun"),
+            None,
         );
 
         assert!(
@@ -559,13 +561,8 @@ mod tests {
 
     #[test]
     fn init_template_can_omit_main_when_preset_provides_default() {
-        let rendered = generate_template(
-            "demo-app",
-            None,
-            "demo-app.example.com",
-            Some("bun"),
-            Some("bun"),
-        );
+        let rendered =
+            generate_template("demo-app", None, "demo-app.example.com", Some("bun"), None);
         assert!(rendered.contains("# Entrypoint comes from the selected preset default `main`."));
         assert!(!rendered.contains("\nmain = \""));
     }
@@ -577,7 +574,7 @@ mod tests {
             Some("server/index.mjs"),
             "api.demo-app.com",
             Some("bun"),
-            Some("bun"),
+            None,
         );
         assert!(rendered.contains("[envs.production]\nroute = \"api.demo-app.com\""));
         assert!(!rendered.contains("[envs.production]\nroute = \"demo-app.example.com\""));
@@ -587,19 +584,27 @@ mod tests {
     fn init_template_can_leave_preset_unset() {
         let rendered =
             generate_template("demo-app", None, "demo-app.example.com", Some("node"), None);
-        assert!(rendered.contains("runtime = \"node\"\n# preset = \"node\""));
+        assert!(rendered.contains("runtime = \"node\"\n# preset = \"my-node-preset\""));
     }
 
     #[test]
     fn init_template_writes_selected_build_adapter() {
+        let rendered =
+            generate_template("demo-app", None, "demo-app.example.com", Some("bun"), None);
+        assert!(rendered.contains("runtime = \"bun\""));
+    }
+
+    #[test]
+    fn init_template_writes_runtime_local_preset_reference() {
         let rendered = generate_template(
             "demo-app",
             None,
             "demo-app.example.com",
             Some("bun"),
-            Some("bun"),
+            Some("tanstack-start"),
         );
-        assert!(rendered.contains("runtime = \"bun\""));
+        assert!(rendered.contains("preset = \"tanstack-start\""));
+        assert!(!rendered.contains("preset = \"bun/tanstack-start\""));
     }
 
     #[test]
@@ -613,7 +618,7 @@ mod tests {
     #[test]
     fn embedded_bun_tanstack_start_preset_default_main_is_set() {
         assert_eq!(
-            embedded_preset_default_main("bun/tanstack-start", BuildAdapter::Bun),
+            embedded_preset_default_main("tanstack-start", BuildAdapter::Bun),
             Some("dist/server/tako-entry.mjs".to_string())
         );
     }

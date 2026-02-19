@@ -39,6 +39,7 @@ use crate::app::resolve_app_name;
 use crate::build::{
     BuildAdapter, BuildPreset, PresetReference, apply_adapter_base_runtime_defaults,
     infer_adapter_from_preset_reference, load_build_preset, parse_preset_reference,
+    qualify_runtime_local_preset_ref,
 };
 use crate::config::TakoToml;
 use crate::dev::LocalCA;
@@ -318,17 +319,16 @@ fn resolve_effective_dev_build_adapter(
 }
 
 fn resolve_dev_preset_ref(project_dir: &Path, cfg: &TakoToml) -> Result<String, String> {
+    let runtime = resolve_dev_build_adapter(project_dir, cfg)?;
     if let Some(preset_ref) = cfg
         .preset
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return Ok(preset_ref.to_string());
+        return qualify_runtime_local_preset_ref(runtime, preset_ref);
     }
-    Ok(resolve_dev_build_adapter(project_dir, cfg)?
-        .default_preset()
-        .to_string())
+    Ok(runtime.default_preset().to_string())
 }
 
 fn resolve_dev_start_command(preset: &BuildPreset, main: &str) -> Result<Vec<String>, String> {
@@ -1153,6 +1153,33 @@ mod tests {
     }
 
     #[test]
+    fn resolve_dev_preset_ref_qualifies_runtime_local_alias() {
+        let temp = TempDir::new().unwrap();
+        let cfg = TakoToml {
+            runtime: Some("bun".to_string()),
+            preset: Some("tanstack-start".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_dev_preset_ref(temp.path(), &cfg).unwrap(),
+            "bun/tanstack-start"
+        );
+    }
+
+    #[test]
+    fn resolve_dev_preset_ref_errors_when_runtime_is_unknown_for_local_alias() {
+        let temp = TempDir::new().unwrap();
+        let cfg = TakoToml {
+            preset: Some("tanstack-start".to_string()),
+            ..Default::default()
+        };
+
+        let err = resolve_dev_preset_ref(temp.path(), &cfg).unwrap_err();
+        assert!(err.contains("Cannot resolve preset"));
+    }
+
+    #[test]
     fn resolve_dev_preset_ref_rejects_unknown_build_adapter_override() {
         let temp = TempDir::new().unwrap();
         let cfg = TakoToml {
@@ -1169,8 +1196,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let cfg = TakoToml::default();
 
-        let adapter =
-            resolve_effective_dev_build_adapter(temp.path(), &cfg, "bun/tanstack-start").unwrap();
+        let adapter = resolve_effective_dev_build_adapter(temp.path(), &cfg, "bun").unwrap();
         assert_eq!(adapter, BuildAdapter::Bun);
     }
 

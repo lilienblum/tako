@@ -25,8 +25,8 @@ What happens during deploy:
 - Non-overridable excludes: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
 - A versioned source tarball is created under `.tako/artifacts/`.
 - Deploy version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-- Build preset is resolved from top-level `preset` (or adapter base default from top-level `runtime`/detection when omitted) and locked in `.tako/build.lock.json`.
-- For each required server target (`arch`/`libc`), Tako runs preset install/build locally and packages a target artifact tarball (Docker/local based on preset `[build].container` or deprecated `[build].docker`; default derived from `[build].targets`).
+- Build preset is resolved from top-level `preset` (runtime-local alias or GitHub ref; namespaced aliases like `bun/tanstack-start` are rejected) or adapter base default from top-level `runtime`/detection when omitted, and locked in `.tako/build.lock.json`.
+- For each required server target (`arch`/`libc`), Tako runs preset install/build locally and packages a target artifact tarball (Docker/local based on preset `[build].container`; default derived from `[build].targets`).
 - Before packaging each target artifact, Tako verifies the resolved deploy `main` file exists in the post-build app directory.
 - Docker build containers stay ephemeral, but dependency downloads are reused from per-target Docker cache volumes keyed by cache kind + target label + builder image.
 - Target artifacts are cached locally in `.tako/artifacts/` using a deterministic build-input key.
@@ -46,7 +46,7 @@ Before you ship, do a quick sanity pass:
 4. Run your local tests before deploy.
 5. Ensure deploy entrypoint is set either in `tako.toml` (`main = "..."`) or preset top-level `main`.
 6. Ensure your build output includes that entrypoint path (deploy validates this before artifact packaging).
-7. If preset build mode resolves to container (`[build].container = true` or `[build].docker = true`), ensure Docker is available locally.
+7. If preset build mode resolves to container (`[build].container = true`), ensure Docker is available locally.
 
 ## Server Prerequisites
 
@@ -76,7 +76,7 @@ Each target server should have:
   - `assets` directories merged into app `public/` after container build in listed order
 - Optional top-level preset selection controls runtime/build defaults:
   - `runtime` (optional override: `bun`, `node`, `deno`)
-  - `preset` (optional override; defaults to adapter base preset from top-level `runtime` or detection)
+  - `preset` (optional runtime-local override such as `tanstack-start`; defaults to adapter base preset from top-level `runtime` or detection)
 - Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
 - Defines per-server scaling settings (`instances`, `idle_timeout`) via global and per-server overrides.
 
@@ -89,7 +89,7 @@ Each target server should have:
 - Runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`.
 - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.
 - Artifact include precedence is `build.include` then `**/*`; artifact excludes are effective preset `[build].exclude` plus `build.exclude`.
-- For each server target label, Tako runs install/build from preset `[build].install` and `[build].build` (Docker/local mode from preset `[build].container` / deprecated `[build].docker`; unset defaults to Docker when `[build].targets` is non-empty).
+- For each server target label, Tako runs install/build from preset `[build].install` and `[build].build` (Docker/local mode from preset `[build].container`; unset defaults to Docker when `[build].targets` is non-empty).
 - Containerized deploy builds reuse per-target dependency cache volumes (proto + runtime cache mounts) while still creating fresh build containers.
 - Runtime version is resolved proto-first (`proto run <tool> -- --version`), with fallback to `.prototools`, then `latest`.
 - Local artifact cache key includes source hash, target label, resolved preset source/commit, runtime tool/version, Docker/local mode, build commands, include/exclude patterns, asset roots, and app subdirectory.

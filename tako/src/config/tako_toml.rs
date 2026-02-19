@@ -16,7 +16,7 @@ pub struct TakoToml {
     /// Build runtime override used for default preset selection when `preset` is omitted.
     pub runtime: Option<String>,
 
-    /// Build preset reference (for example: "bun", "bun@<commit-hash>", "bun/tanstack-start", or "github:owner/repo/path.toml@<sha>").
+    /// Build preset reference (for example: "tanstack-start", "tanstack-start@<commit-hash>", or "github:owner/repo/path.toml@<sha>").
     pub preset: Option<String>,
 
     /// Build settings for deploy artifact generation.
@@ -272,6 +272,14 @@ impl TakoToml {
             return Err(ConfigError::Validation(
                 "preset cannot be empty".to_string(),
             ));
+        }
+        if let Some(preset) = &self.preset {
+            let trimmed = preset.trim();
+            if !trimmed.is_empty() && !trimmed.starts_with("github:") && trimmed.contains('/') {
+                return Err(ConfigError::Validation(
+                    "preset must not include runtime namespace; set top-level `runtime` and use a local preset name (for example `preset = \"tanstack-start\"`).".to_string(),
+                ));
+            }
         }
         if let Some(runtime) = &self.runtime {
             let trimmed = runtime.trim();
@@ -1174,6 +1182,18 @@ runtime = "python"
         assert!(
             err.to_string()
                 .contains("runtime must be one of: bun, node, deno")
+        );
+    }
+
+    #[test]
+    fn test_validate_preset_rejects_namespaced_alias_in_tako_toml() {
+        let raw = r#"
+preset = "bun/tanstack-start"
+"#;
+        let err = TakoToml::parse(raw).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("preset must not include runtime namespace")
         );
     }
 

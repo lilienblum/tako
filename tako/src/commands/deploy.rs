@@ -9,7 +9,8 @@ use crate::app::resolve_app_name;
 use crate::build::{
     BuildAdapter, BuildCache, BuildError, BuildExecutor, BuildPreset, ResolvedPresetSource,
     apply_adapter_base_runtime_defaults, compute_file_hash, create_filtered_archive_with_prefix,
-    infer_adapter_from_preset_reference, load_build_preset, run_container_build,
+    infer_adapter_from_preset_reference, load_build_preset, qualify_runtime_local_preset_ref,
+    run_container_build,
 };
 use crate::commands::server;
 use crate::config::{SecretsStore, ServerEntry, ServerTarget, ServersToml, TakoToml};
@@ -1340,17 +1341,16 @@ fn resolve_effective_build_adapter(
 }
 
 fn resolve_build_preset_ref(project_dir: &Path, tako_config: &TakoToml) -> Result<String, String> {
+    let runtime = resolve_build_adapter(project_dir, tako_config)?;
     if let Some(preset_ref) = tako_config
         .preset
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return Ok(preset_ref.to_string());
+        return qualify_runtime_local_preset_ref(runtime, preset_ref);
     }
-    Ok(resolve_build_adapter(project_dir, tako_config)?
-        .default_preset()
-        .to_string())
+    Ok(runtime.default_preset().to_string())
 }
 
 fn sanitize_cache_label(label: &str) -> String {
@@ -2898,6 +2898,33 @@ mod tests {
     }
 
     #[test]
+    fn resolve_build_preset_ref_qualifies_runtime_local_alias() {
+        let temp = TempDir::new().unwrap();
+        let config = TakoToml {
+            runtime: Some("bun".to_string()),
+            preset: Some("tanstack-start".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_build_preset_ref(temp.path(), &config).unwrap(),
+            "bun/tanstack-start"
+        );
+    }
+
+    #[test]
+    fn resolve_build_preset_ref_errors_when_runtime_is_unknown_for_local_alias() {
+        let temp = TempDir::new().unwrap();
+        let config = TakoToml {
+            preset: Some("tanstack-start".to_string()),
+            ..Default::default()
+        };
+
+        let err = resolve_build_preset_ref(temp.path(), &config).unwrap_err();
+        assert!(err.contains("Cannot resolve preset"));
+    }
+
+    #[test]
     fn resolve_build_preset_ref_falls_back_to_detected_adapter_default() {
         let temp = TempDir::new().unwrap();
         std::fs::write(temp.path().join("package.json"), r#"{"name":"demo"}"#).unwrap();
@@ -2938,8 +2965,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let config = TakoToml::default();
 
-        let adapter =
-            resolve_effective_build_adapter(temp.path(), &config, "bun/tanstack-start").unwrap();
+        let adapter = resolve_effective_build_adapter(temp.path(), &config, "bun").unwrap();
         assert_eq!(adapter, BuildAdapter::Bun);
     }
 
@@ -2952,7 +2978,7 @@ mod tests {
         };
 
         let adapter =
-            resolve_effective_build_adapter(temp.path(), &config, "bun/tanstack-start").unwrap();
+            resolve_effective_build_adapter(temp.path(), &config, "tanstack-start").unwrap();
         assert_eq!(adapter, BuildAdapter::Node);
     }
 
@@ -3750,7 +3776,7 @@ name = "test-app"
         let resolved = crate::build::ResolvedPresetSource {
             preset_ref: "bun".to_string(),
             repo: "tako-sh/presets".to_string(),
-            path: "presets/bun.toml".to_string(),
+            path: "presets/bun/bun.toml".to_string(),
             commit: "abc123def456".to_string(),
         };
         let target = crate::build::BuildPresetTarget {
