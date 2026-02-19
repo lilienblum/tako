@@ -82,18 +82,28 @@ install:
             -p {{ DOCKER_SSH_PORT }} \
             root@localhost \
             '\''if ! command -v systemctl >/dev/null 2>&1; then \
-                if command -v pidof >/dev/null 2>&1; then \
-                    for pid in $(pidof tako-server 2>/dev/null || true); do kill "$pid" >/dev/null 2>&1 || true; done; \
+                list_tako_pids() { \
+                    if command -v pidof >/dev/null 2>&1; then \
+                        pidof tako-server 2>/dev/null || true; \
+                        return; \
+                    fi; \
+                    if command -v pgrep >/dev/null 2>&1; then \
+                        pgrep -f "/usr/local/bin/tako-server" 2>/dev/null || true; \
+                        return; \
+                    fi; \
+                    for proc in /proc/[0-9]*; do \
+                        [ -r "$proc/cmdline" ] || continue; \
+                        cmd="$(tr "\\000" " " < "$proc/cmdline" 2>/dev/null || true)"; \
+                        case "$cmd" in \
+                            *"/usr/local/bin/tako-server"*) printf "%s " "${proc##*/}" ;; \
+                        esac; \
+                    done; \
+                }; \
+                pids="$(list_tako_pids)"; \
+                if [ -n "$pids" ]; then \
+                    for pid in $pids; do kill "$pid" >/dev/null 2>&1 || true; done; \
                     sleep 1; \
-                    for pid in $(pidof tako-server 2>/dev/null || true); do kill -9 "$pid" >/dev/null 2>&1 || true; done; \
-                elif command -v pkill >/dev/null 2>&1; then \
-                    pkill -f "/usr/local/bin/tako-server" >/dev/null 2>&1 || true; \
-                    sleep 1; \
-                    pkill -9 -f "/usr/local/bin/tako-server" >/dev/null 2>&1 || true; \
-                elif command -v killall >/dev/null 2>&1; then \
-                    killall tako-server >/dev/null 2>&1 || true; \
-                    sleep 1; \
-                    killall -9 tako-server >/dev/null 2>&1 || true; \
+                    for pid in $(list_tako_pids); do kill -9 "$pid" >/dev/null 2>&1 || true; done; \
                 fi; \
                 if id -u tako >/dev/null 2>&1; then \
                     if command -v usermod >/dev/null 2>&1; then usermod -U tako >/dev/null 2>&1 || true; fi; \
