@@ -2,8 +2,8 @@ set working-directory := ".."
 
 # Docker-based deploy testbed (Alpine + sshd VPS simulation).
 
-CONTAINER_NAME := "tako-bun-server"
-IMAGE_NAME := "tako-bun-server:local"
+CONTAINER_NAME := "tako-testbed"
+IMAGE_NAME := "tako-testbed:local"
 DOCKER_SSH_PORT := "2222"
 
 # Docker platform for the local testbed container.
