@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::commands::{self, delete, secret, server, upgrade};
+use crate::commands::{self, delete, releases, secret, server, upgrade};
 use clap::CommandFactory;
 
 const DEV_PUBLIC_PORT: u16 = 47831;
@@ -266,6 +266,38 @@ mod tests {
     }
 
     #[test]
+    fn releases_list_parses() {
+        let cli = Cli::try_parse_from(["tako", "releases", "ls"]).unwrap();
+        let Some(Commands::Releases(releases::ReleaseCommands::Ls { env })) = cli.command else {
+            panic!("expected Releases::Ls");
+        };
+        assert!(env.is_none());
+    }
+
+    #[test]
+    fn releases_list_parses_with_env() {
+        let cli = Cli::try_parse_from(["tako", "releases", "ls", "--env", "staging"]).unwrap();
+        let Some(Commands::Releases(releases::ReleaseCommands::Ls { env })) = cli.command else {
+            panic!("expected Releases::Ls");
+        };
+        assert_eq!(env.as_deref(), Some("staging"));
+    }
+
+    #[test]
+    fn releases_rollback_parses_release_id_and_yes_flag() {
+        let cli =
+            Cli::try_parse_from(["tako", "releases", "rollback", "abc1234", "--yes"]).unwrap();
+        let Some(Commands::Releases(releases::ReleaseCommands::Rollback { release, env, yes })) =
+            cli.command
+        else {
+            panic!("expected Releases::Rollback");
+        };
+        assert_eq!(release, "abc1234");
+        assert!(env.is_none());
+        assert!(yes);
+    }
+
+    #[test]
     fn delete_without_env_parses_env_as_none() {
         let cli = Cli::try_parse_from(["tako", "delete"]).unwrap();
         let Some(Commands::Delete { env, yes, .. }) = cli.command else {
@@ -382,6 +414,10 @@ pub enum Commands {
     #[command(subcommand)]
     Secrets(secret::SecretCommands),
 
+    /// Release history and rollback commands
+    #[command(subcommand)]
+    Releases(releases::ReleaseCommands),
+
     /// Upgrade the local tako CLI to the latest version
     Upgrade,
 
@@ -458,6 +494,7 @@ impl Cli {
             }
             Commands::Servers(cmd) => server::run(cmd),
             Commands::Secrets(cmd) => secret::run(cmd),
+            Commands::Releases(cmd) => releases::run(cmd),
             Commands::Upgrade => upgrade::run(),
             Commands::Deploy { env, yes, dir } => {
                 if let Some(dir) = dir {

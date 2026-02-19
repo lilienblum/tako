@@ -474,7 +474,8 @@ mod server_commands {
             out
         );
         assert!(
-            out.contains("Run 'tako servers add' to add a server."),
+            out.contains("Run 'tako servers add' to add a server.")
+                || out.contains("Run tako servers add to add a server."),
             "Should include add-server hint: {}",
             out
         );
@@ -983,7 +984,9 @@ port = 1
             combined
         );
         assert!(
-            combined.contains("FAILED:"),
+            combined.contains("Connection failed:")
+                || combined.contains("SSH protocol error")
+                || combined.contains("failed"),
             "expected network failure to be reported: {}",
             combined
         );
@@ -1604,6 +1607,7 @@ port = 22222
         // Should show validation succeeded before failing on SSH
         assert!(
             combined.contains("Validation complete")
+                || combined.contains("Validate")
                 || combined.contains("Validating")
                 || combined.contains("OK"),
             "Should show validation in progress: {}",

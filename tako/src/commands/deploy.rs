@@ -240,7 +240,8 @@ async fn run_async(
         },
     )?
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::success("Validation complete");
+    output::success("Validate");
+    output::bullet("Configuration valid");
     for warning in &validation.warnings {
         output::warning(&format!("Validation: {}", warning));
     }
@@ -256,15 +257,32 @@ async fn run_async(
     confirm_production_deploy(&env, assume_yes)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    output::section(&format_prepare_deploy_section(&env));
-
     let app_name = resolve_app_name(&project_dir).map_err(|e| -> Box<dyn std::error::Error> {
         std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()).into()
     })?;
     let routes = required_env_routes(&tako_config, &env)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let server_names =
+        resolve_deploy_server_names_with_setup(&tako_config, &mut servers, &env, &project_dir)
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let use_per_server_spinners =
+        should_use_per_server_spinners(server_names.len(), output::is_interactive());
 
-    output::success("Configuration valid");
+    let primary_target_and_server = if server_names.len() == 1 {
+        let target_name = server_names[0].as_str();
+        servers.get(target_name).map(|entry| (target_name, entry))
+    } else {
+        None
+    };
+    for line in format_deploy_overview_lines(
+        &app_name,
+        &env,
+        server_names.len(),
+        primary_target_and_server,
+    ) {
+        output::info(&line);
+    }
 
     // ===== Build =====
     output::section("Build");
@@ -304,9 +322,9 @@ async fn run_async(
     let app_subdir = resolve_app_subdir(&source_root, &project_dir)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     if output::is_verbose() {
-        output::step(&format!("Source root: {}", source_root.display()));
+        output::muted(&format!("Source root: {}", source_root.display()));
         if !app_subdir.is_empty() {
-            output::step(&format!("App directory: {}", app_subdir));
+            output::muted(&format!("App directory: {}", app_subdir));
         }
     }
 
@@ -315,7 +333,7 @@ async fn run_async(
     let git_commit_message = resolve_git_commit_message(&source_root);
     let git_dirty = executor.is_git_dirty().ok();
     if output::is_verbose() {
-        output::step(&format!("Version: {}", version));
+        output::muted(&format!("Version: {}", version));
     }
 
     let preset_ref = resolve_build_preset_ref(&project_dir, &tako_config)
@@ -332,15 +350,15 @@ async fn run_async(
     apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     if output::is_verbose() {
-        output::success(&format!(
+        output::bullet(&format!(
             "Build preset: {} @ {}",
             resolved_preset.preset_ref,
             shorten_commit(&resolved_preset.commit)
         ));
     } else {
-        output::success(&format!("Build preset: {}", resolved_preset.preset_ref));
+        output::bullet(&format!("Build preset: {}", resolved_preset.preset_ref));
     }
-    output::success(&format_runtime_summary(&build_preset.name, None));
+    output::bullet(&format_runtime_summary(&build_preset.name, None));
     let runtime_tool = resolve_runtime_tool_for_mise(&build_preset.name, &build_preset)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
@@ -352,7 +370,7 @@ async fn run_async(
     )
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     if output::is_verbose() {
-        output::success(&format_entry_point_summary(
+        output::muted(&format_entry_point_summary(
             &project_dir.join(&manifest_main),
         ));
     }
@@ -386,7 +404,7 @@ async fn run_async(
     })?
     .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
-    output::success(&format_source_archive_created_message(
+    output::bullet(&format_source_archive_created_message(
         &format_path_relative_to(&project_dir, &source_archive_path),
         &format_size(source_archive_size),
         output::is_verbose(),
@@ -396,13 +414,6 @@ async fn run_async(
     let exclude_patterns = build_artifact_exclude_patterns(&build_preset, &tako_config);
     let asset_roots = build_asset_roots(&build_preset, &tako_config)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    // Resolve target servers (explicit env mapping first, then production fallback).
-    let server_names =
-        resolve_deploy_server_names_with_setup(&tako_config, &mut servers, &env, &project_dir)
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    let use_per_server_spinners =
-        should_use_per_server_spinners(server_names.len(), output::is_interactive());
 
     // Check all servers exist
     for server_name in &server_names {
@@ -412,7 +423,7 @@ async fn run_async(
     }
     let server_targets = resolve_deploy_server_targets(&servers, &server_names)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::success(&format_servers_summary(&server_names));
+    output::bullet(&format_servers_summary(&server_names));
     let use_unified_js_target_process = should_use_unified_js_target_process(
         &runtime_tool,
         should_use_docker_build(&build_preset),
@@ -422,7 +433,7 @@ async fn run_async(
         if let Some(server_targets_summary) =
             format_server_targets_summary(&server_targets, use_unified_js_target_process)
         {
-            output::success(&server_targets_summary);
+            output::muted(&server_targets_summary);
         }
     }
 
@@ -449,6 +460,8 @@ async fn run_async(
     .await
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
+    output::success("Build");
+
     // ===== Deploy =====
     output::section("Deploy");
 
@@ -456,7 +469,7 @@ async fn run_async(
         app_name: app_name.clone(),
         version: version.clone(),
         remote_base: format!("/opt/tako/apps/{}", app_name),
-        routes,
+        routes: routes.clone(),
         env_vars: deploy_env_vars,
         app_subdir,
         runtime: runtime_adapter.id().to_string(),
@@ -496,7 +509,7 @@ async fn run_async(
         });
     }
     if targets.len() > 1 {
-        output::step(&format_parallel_deploy_step(targets.len()));
+        output::info(&format_parallel_deploy_step(targets.len()));
     }
 
     // ===== tako-server preflight =====
@@ -513,10 +526,32 @@ async fn run_async(
         }));
     }
 
-    for h in preflight_handles {
-        let (server_name, status) = h
-            .await
-            .map_err(|e| format!("tako-server preflight task panic: {e}"))?;
+    let preflight_results = if output::is_interactive() && preflight_handles.len() > 1 {
+        output::with_spinner_async(
+            format!(
+                "Checking remote servers ({} targets)...",
+                preflight_handles.len()
+            ),
+            async {
+                let mut results = Vec::new();
+                for handle in preflight_handles {
+                    results.push(handle.await);
+                }
+                results
+            },
+        )
+        .await?
+    } else {
+        let mut results = Vec::new();
+        for handle in preflight_handles {
+            results.push(handle.await);
+        }
+        results
+    };
+
+    for result in preflight_results {
+        let (server_name, status) =
+            result.map_err(|e| format!("tako-server preflight task panic: {e}"))?;
         match status {
             Ok(TakoServerStatus::Ready) => {}
             Ok(TakoServerStatus::Missing) => missing_servers.push(server_name),
@@ -566,11 +601,29 @@ async fn run_async(
     let mut success_count = 0;
     let mut errors = Vec::new();
 
-    for handle in handles {
-        match handle.await {
+    let deploy_results =
+        if output::is_interactive() && !use_per_server_spinners && handles.len() > 1 {
+            output::with_spinner_async(format_parallel_deploy_step(handles.len()), async {
+                let mut results = Vec::new();
+                for handle in handles {
+                    results.push(handle.await);
+                }
+                results
+            })
+            .await?
+        } else {
+            let mut results = Vec::new();
+            for handle in handles {
+                results.push(handle.await);
+            }
+            results
+        };
+
+    for result in deploy_results {
+        match result {
             Ok((server_name, server, result)) => match result {
                 Ok(()) => {
-                    output::success(&format_server_deploy_success(&server_name, &server));
+                    output::bullet(&format_server_deploy_success(&server_name, &server));
                     success_count += 1;
                 }
                 Err(e) => {
@@ -591,21 +644,20 @@ async fn run_async(
 
     // ===== Summary =====
     if errors.is_empty() {
+        output::success("Deploy");
         output::section("Summary");
-        output::success(&format!("Deployed {} v{} to {}", app_name, version, env));
-
-        let routes = required_env_routes(&tako_config, &env)
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-        output::step("Available at:");
-        for route in routes {
-            println!(
-                "  {}",
-                output::brand_secondary(format!("https://{}", route))
-            );
+        output::info(&format!("Revision: {}", version));
+        for (index, route) in routes.iter().enumerate() {
+            if index == 0 {
+                output::info(&format!("URL     : https://{}", route));
+            } else {
+                output::info(&format!("          https://{}", route));
+            }
         }
 
         Ok(())
     } else {
+        output::error("Deploy");
         output::section("Summary");
         output::warning(&format!(
             "Deployment partially failed: {}/{} servers succeeded",
@@ -777,7 +829,7 @@ async fn resolve_deploy_server_names_with_setup(
         Ok(names) => {
             if env == "production" && !has_explicit_env_mapping && names.len() == 1 {
                 persist_server_env_mapping(project_dir, &names[0], env)?;
-                output::success(&format!(
+                output::info(&format!(
                     "Mapped server {} to {} in tako.toml",
                     output::emphasized(&names[0]),
                     output::emphasized(env)
@@ -822,7 +874,7 @@ async fn resolve_deploy_server_names_with_setup(
             };
 
             persist_server_env_mapping(project_dir, &selected_server, env)?;
-            output::success(&format!(
+            output::info(&format!(
                 "Mapped server {} to {} in tako.toml",
                 output::emphasized(&selected_server),
                 output::emphasized(env)
@@ -897,8 +949,63 @@ fn select_production_server_for_mapping(servers: &ServersToml) -> Result<String,
     .map_err(|e| format!("Failed to read selection: {}", e))
 }
 
+#[cfg(test)]
 fn format_prepare_deploy_section(env: &str) -> String {
     format!("Preparing deployment for {}", output::emphasized(env))
+}
+
+fn format_deploy_overview_lines(
+    app_name: &str,
+    env: &str,
+    target_count: usize,
+    primary_target_and_server: Option<(&str, &ServerEntry)>,
+) -> Vec<String> {
+    let mut rows = vec![format!("{:<10}: {}", "App", app_name)];
+
+    match primary_target_and_server {
+        Some((target_name, server)) => {
+            rows.push(format!("{:<10}: {}", "Target", target_name));
+            rows.push(format!(
+                "{:<10}: tako@{}:{}",
+                "Host", server.host, server.port
+            ));
+        }
+        None => {
+            let target_label = if target_count == 1 {
+                "1 server".to_string()
+            } else {
+                format!("{target_count} servers")
+            };
+            rows.push(format!("{:<10}: {}", "Target", target_label));
+        }
+    }
+
+    format_box_lines(&format!("Deploy ({})", env), &rows)
+}
+
+fn format_box_lines(title: &str, rows: &[String]) -> Vec<String> {
+    let top_prefix = format!("─ {} ", title);
+    let max_row_width = rows
+        .iter()
+        .map(|row| row.chars().count())
+        .max()
+        .unwrap_or(0);
+    let inner_width = std::cmp::max(max_row_width + 2, top_prefix.chars().count());
+    let row_width = inner_width.saturating_sub(2);
+
+    let mut lines = Vec::with_capacity(rows.len() + 2);
+    lines.push(format!(
+        "┌{}{}┐",
+        top_prefix,
+        "─".repeat(inner_width.saturating_sub(top_prefix.chars().count()))
+    ));
+
+    for row in rows {
+        lines.push(format!("│ {:<row_width$} │", row, row_width = row_width));
+    }
+
+    lines.push(format!("└{}┘", "─".repeat(inner_width)));
+    lines
 }
 
 fn format_build_stages_summary_for_output(
@@ -1052,18 +1159,11 @@ fn format_server_deploy_target(name: &str, entry: &ServerEntry) -> String {
 }
 
 fn format_server_deploy_success(name: &str, entry: &ServerEntry) -> String {
-    format!(
-        "{} deployed successfully",
-        format_server_deploy_target(name, entry)
-    )
+    format_server_deploy_target(name, entry)
 }
 
 fn format_server_deploy_failure(name: &str, entry: &ServerEntry, error: &str) -> String {
-    format!(
-        "{} deploy failed: {}",
-        format_server_deploy_target(name, entry),
-        error
-    )
+    format!("{}: {}", format_server_deploy_target(name, entry), error)
 }
 
 fn format_server_mapping_option(name: &str, entry: &ServerEntry) -> String {
@@ -2132,7 +2232,9 @@ async fn build_target_artifacts(
             })
             .map_err(|e| format!("Failed to render runtime version spinner: {e}"))??
         } else {
-            output::step(&runtime_probe_label);
+            if output::is_verbose() {
+                output::muted(&runtime_probe_label);
+            }
             if use_docker_build {
                 resolve_runtime_version_with_docker_probe(
                     &workspace,
@@ -2166,7 +2268,7 @@ async fn build_target_artifacts(
 
         match load_valid_cached_artifact(&cache_paths, &cache_key) {
             Ok(Some(cached)) => {
-                output::success(&format_artifact_cache_hit_message_for_output(
+                output::bullet(&format_artifact_cache_hit_message_for_output(
                     display_target_label,
                     &format_path_relative_to(project_dir, &cached.path),
                     &format_size(cached.size_bytes),
@@ -2204,7 +2306,7 @@ async fn build_target_artifacts(
                 })
                 .map_err(|e| format!("Failed to render artifact build spinner: {e}"))??;
             } else {
-                output::step(&build_label);
+                output::bullet(&build_label);
                 run_target_build(
                     &workspace,
                     app_subdir,
@@ -2221,7 +2323,7 @@ async fn build_target_artifacts(
                 runtime_tool,
                 &runtime_version,
             )?;
-            output::success(&format_build_completed_message(display_target_label));
+            output::bullet(&format_build_completed_message(display_target_label));
 
             let prepare_label = format_prepare_artifact_message(display_target_label);
             if use_local_build_spinners {
@@ -2240,7 +2342,7 @@ async fn build_target_artifacts(
                 })
                 .map_err(|e| format!("Failed to render artifact preparation spinner: {e}"))?
             } else {
-                output::step(&prepare_label);
+                output::bullet(&prepare_label);
                 package_target_artifact(
                     &workspace,
                     app_subdir,
@@ -2257,7 +2359,7 @@ async fn build_target_artifacts(
         let _ = std::fs::remove_dir_all(&workspace);
         let artifact_size = build_result?;
 
-        output::success(&format_artifact_ready_message_for_output(
+        output::bullet(&format_artifact_ready_message_for_output(
             display_target_label,
             &format_path_relative_to(project_dir, &cache_paths.artifact_path),
             &format_size(artifact_size),
@@ -3048,7 +3150,9 @@ where
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
         result.map_err(Into::into)
     } else {
-        output::step(label);
+        if output::is_verbose() {
+            output::muted(label);
+        }
         work.await.map_err(Into::into)
     }
 }
@@ -4128,12 +4232,44 @@ name = "test-app"
         };
         assert_eq!(
             format_server_deploy_success("prod", &server),
-            "prod (tako@example.com:2222) deployed successfully"
+            "prod (tako@example.com:2222)"
         );
         assert_eq!(
             format_server_deploy_failure("prod", &server, "boom"),
-            "prod (tako@example.com:2222) deploy failed: boom"
+            "prod (tako@example.com:2222): boom"
         );
+    }
+
+    #[test]
+    fn deploy_overview_lines_include_primary_target_host_when_single_server() {
+        let server = ServerEntry {
+            host: "localhost".to_string(),
+            port: 2222,
+            description: None,
+        };
+        let lines =
+            format_deploy_overview_lines("bun", "production", 1, Some(("testbed", &server)));
+        assert_eq!(lines.len(), 5);
+        assert!(lines[0].starts_with("┌─ Deploy (production)"));
+        assert!(lines[1].contains("App"));
+        assert!(lines[1].contains("bun"));
+        assert!(lines[2].contains("Target"));
+        assert!(lines[2].contains("testbed"));
+        assert!(lines[3].contains("Host"));
+        assert!(lines[3].contains("tako@localhost:2222"));
+        assert!(lines[4].starts_with("└"));
+    }
+
+    #[test]
+    fn deploy_overview_lines_include_server_count_for_multi_target() {
+        let lines = format_deploy_overview_lines("bun", "staging", 3, None);
+        assert_eq!(lines.len(), 4);
+        assert!(lines[0].starts_with("┌─ Deploy (staging)"));
+        assert!(lines[1].contains("App"));
+        assert!(lines[1].contains("bun"));
+        assert!(lines[2].contains("Target"));
+        assert!(lines[2].contains("3 servers"));
+        assert!(lines[3].starts_with("└"));
     }
 
     #[test]

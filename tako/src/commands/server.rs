@@ -613,22 +613,33 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    output::section("Servers");
     print_servers_table(&servers);
     Ok(())
 }
 
 fn print_servers_table(servers: &crate::config::ServersToml) {
-    println!("{:<20} {:<30} {:<6} DESCRIPTION", "NAME", "HOST", "PORT");
-    println!("{}", "-".repeat(92));
+    println!(
+        "{}",
+        output::brand_muted(format!(
+            "{:<20} {:<30} {:<6} DESCRIPTION",
+            "NAME", "HOST", "PORT"
+        ))
+        .bold()
+    );
+    println!("{}", output::brand_muted("-".repeat(92)));
 
     for name in servers.names() {
         if let Some(entry) = servers.get(name) {
             println!(
-                "{:<20} {:<30} {:<6} {}",
-                name,
-                entry.host,
-                entry.port,
-                entry.description.as_deref().unwrap_or("")
+                "{}",
+                output::brand_fg(format!(
+                    "{:<20} {:<30} {:<6} {}",
+                    name,
+                    entry.host,
+                    entry.port,
+                    entry.description.as_deref().unwrap_or("")
+                ))
             );
         }
     }

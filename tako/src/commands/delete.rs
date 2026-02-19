@@ -148,7 +148,7 @@ async fn run_async(
                 output::with_spinner_async(label, delete_from_server(server, &app_name)).await?;
             match result {
                 Ok(()) => {
-                    output::success(&format_server_delete_success_for_output(
+                    output::bullet(&format_server_delete_success_for_output(
                         server_name,
                         server,
                         output::is_verbose(),
@@ -183,10 +183,30 @@ async fn run_async(
             handles.push(handle);
         }
 
-        for handle in handles {
-            match handle.await {
+        let delete_results = if interactive && handles.len() > 1 {
+            output::with_spinner_async(
+                format!("Deleting from {} servers...", handles.len()),
+                async {
+                    let mut results = Vec::new();
+                    for handle in handles {
+                        results.push(handle.await);
+                    }
+                    results
+                },
+            )
+            .await?
+        } else {
+            let mut results = Vec::new();
+            for handle in handles {
+                results.push(handle.await);
+            }
+            results
+        };
+
+        for result in delete_results {
+            match result {
                 Ok((server_name, server, Ok(()))) => {
-                    output::success(&format_server_delete_success_for_output(
+                    output::bullet(&format_server_delete_success_for_output(
                         &server_name,
                         &server,
                         output::is_verbose(),
@@ -207,15 +227,18 @@ async fn run_async(
         }
     }
 
-    output::section("Summary");
     if errors.is_empty() {
-        output::success(&format!(
+        output::success("Delete");
+        output::section("Summary");
+        output::info(&format!(
             "Deleted {} from {}",
             output::emphasized(&app_name),
             output::emphasized(&env)
         ));
         Ok(())
     } else {
+        output::error("Delete");
+        output::section("Summary");
         output::warning(&format_delete_summary_warning(success_count, total_servers));
         for err in &errors {
             output::error(err);
@@ -992,10 +1015,7 @@ mod tests {
     #[test]
     fn format_delete_confirm_hint_uses_app_and_single_server() {
         let hint = format_delete_confirm_hint("bun-example", &[String::from("prod-1")]);
-        assert_eq!(
-            hint,
-            "This removes application 'bun-example' from 'prod-1'."
-        );
+        assert_eq!(hint, "This removes application bun-example from prod-1.");
     }
 
     #[test]
@@ -1006,7 +1026,7 @@ mod tests {
         );
         assert_eq!(
             hint,
-            "This removes application 'bun-example' from 'prod-1', 'prod-2'."
+            "This removes application bun-example from prod-1, prod-2."
         );
     }
 
@@ -1015,7 +1035,7 @@ mod tests {
         let prompt = format_delete_confirm_prompt("bun-example", "production", 2);
         assert_eq!(
             prompt,
-            "Please confirm you want to remove application 'bun-example' from 'production' on 2 server(s)."
+            "Please confirm you want to remove application bun-example from production on 2 server(s)."
         );
     }
 

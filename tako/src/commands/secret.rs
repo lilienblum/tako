@@ -415,11 +415,11 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
 
             match sync_result {
                 Ok(()) => {
-                    output::success(&format!("Synced {}", output::emphasized(&server_name)));
+                    output::bullet(&format!("Synced {}", output::emphasized(&server_name)));
                     success_count += 1;
                 }
                 Err(e) => {
-                    output::error(&format!("FAILED: {} ({})", e, server_name));
+                    output::error(&format!("{} ({})", e, server_name));
                     error_count += 1;
                 }
             }
@@ -427,11 +427,15 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
     }
 
     if error_count == 0 {
-        output::success(&format!(
+        output::success("Sync");
+        output::section("Summary");
+        output::info(&format!(
             "Synced secrets to {} server(s) successfully.",
             success_count
         ));
     } else {
+        output::error("Sync");
+        output::section("Summary");
         output::warning(&format!(
             "Synced to {} server(s), {} failed.",
             success_count, error_count

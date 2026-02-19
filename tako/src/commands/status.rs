@@ -73,7 +73,10 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_global_status(servers: &ServersToml) -> Result<(), Box<dyn std::error::Error>> {
     if servers.is_empty() {
         output::warning("No servers configured.");
-        output::muted("Run 'tako servers add --name <name> <host>' to add one.");
+        output::muted(&format!(
+            "Run {} to add one.",
+            output::emphasized("tako servers add --name <name> <host>")
+        ));
         return Ok(());
     }
 

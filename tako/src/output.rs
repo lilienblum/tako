@@ -116,8 +116,16 @@ pub fn section(title: &str) {
     println!("{}", brand_accent(title).bold());
 }
 
+pub fn info(message: &str) {
+    println!("{}", brand_fg(message));
+}
+
 pub fn step(message: &str) {
-    println!("{} {}", brand_secondary("•").bold(), brand_fg(message));
+    info(message);
+}
+
+pub fn bullet(message: &str) {
+    println!("  {} {}", brand_secondary("•").bold(), brand_fg(message));
 }
 
 pub fn success(message: &str) {
@@ -142,13 +150,13 @@ pub fn muted(message: &str) {
 
 pub fn emphasized(value: &str) -> String {
     if cfg!(test) {
-        format!("'{}'", value)
+        value.to_string()
     } else if std::io::stdout().is_terminal() && colors_enabled() {
         // Use italic on/off (3/23) instead of a full reset so surrounding styles
         // (like dim hints) stay active after emphasized text.
         format!("\x1b[3m{}\x1b[23m", value)
     } else {
-        format!("'{}'", value)
+        value.to_string()
     }
 }
 
@@ -359,8 +367,8 @@ mod tests {
     }
 
     #[test]
-    fn emphasized_falls_back_to_quoted_text_in_non_tty_context() {
-        assert_eq!(emphasized("production"), "'production'");
+    fn emphasized_falls_back_to_plain_text_in_non_tty_context() {
+        assert_eq!(emphasized("production"), "production");
     }
 
     #[test]
