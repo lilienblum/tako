@@ -1115,8 +1115,8 @@ mod tests {
         pf_conf_with_forwarding_hook, pfctl_args, pfctl_shell_command, port_from_listen,
         preferred_public_url, replay_and_follow_logs, resolve_dev_preset_ref,
         resolve_effective_dev_build_adapter, restart_required_for_requested_listen,
-        selected_public_url_port, should_linger_after_disconnect, tcp_probe,
-        wait_for_localhost_tcp_port_open,
+        selected_public_url_port, should_drop_child_log_line, should_linger_after_disconnect,
+        tcp_probe, trim_child_log_message, wait_for_localhost_tcp_port_open,
     };
     use crate::build::BuildAdapter;
     use crate::config::TakoToml;
@@ -1384,6 +1384,33 @@ mod tests {
         let (level, message) = child_log_level_and_message(LogLevel::Info, "debugger attached");
         assert!(matches!(level, LogLevel::Info));
         assert_eq!(message, "debugger attached");
+    }
+
+    #[test]
+    fn child_log_filter_drops_shell_command_echo_lines() {
+        assert!(should_drop_child_log_line("$ vite dev"));
+        assert!(should_drop_child_log_line("  $ bun run dev  "));
+        assert!(should_drop_child_log_line(""));
+    }
+
+    #[test]
+    fn child_log_filter_keeps_non_command_messages() {
+        assert!(!should_drop_child_log_line("warning: low disk"));
+        assert!(!should_drop_child_log_line("$5 price update"));
+        assert!(!should_drop_child_log_line("$$$"));
+    }
+
+    #[test]
+    fn child_log_message_trim_keeps_leading_alignment_and_removes_trailing_whitespace() {
+        assert_eq!(
+            trim_child_log_message("  VITE v7 ready   "),
+            Some("  VITE v7 ready".to_string())
+        );
+    }
+
+    #[test]
+    fn child_log_message_trim_drops_whitespace_only_lines() {
+        assert_eq!(trim_child_log_message("   "), None);
     }
 
     #[test]
@@ -4430,13 +4457,44 @@ fn child_log_level_and_message(default_level: LogLevel, line: &str) -> (LogLevel
     prefixed_child_log_level_and_message(line).unwrap_or((default_level, line.to_string()))
 }
 
+fn should_drop_child_log_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return true;
+    }
+    let Some(rest) = trimmed.strip_prefix("$ ") else {
+        return false;
+    };
+    rest.chars()
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '/' || ch == '@')
+}
+
+fn trim_child_log_message(message: &str) -> Option<String> {
+    let trimmed_end = message.trim_end();
+    if trimmed_end.trim().is_empty() {
+        None
+    } else {
+        Some(trimmed_end.to_string())
+    }
+}
+
 async fn read_child_lines<R>(r: R, log_tx: mpsc::Sender<ScopedLog>, scope: String, level: LogLevel)
 where
     R: tokio::io::AsyncRead + Unpin,
 {
     let mut lines = tokio::io::BufReader::new(r).lines();
     while let Ok(Some(line)) = lines.next_line().await {
+        let Some(line) = trim_child_log_message(&line) else {
+            continue;
+        };
+        if should_drop_child_log_line(&line) {
+            continue;
+        }
         let (line_level, line_message) = child_log_level_and_message(level.clone(), &line);
+        let Some(line_message) = trim_child_log_message(&line_message) else {
+            continue;
+        };
         let _ = log_tx
             .send(ScopedLog::at(line_level, scope.clone(), line_message))
             .await;

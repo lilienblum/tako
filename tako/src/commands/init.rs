@@ -4,11 +4,10 @@ use std::path::Path;
 
 use crate::app::resolve_app_name;
 use crate::build::{
-    BuildAdapter, PresetFamily, detect_build_adapter, load_available_family_presets,
+    BuildAdapter, FamilyPresetDefinition, PresetFamily, detect_build_adapter,
+    load_available_family_preset_definitions,
 };
 use crate::output;
-
-const EMBEDDED_JS_FAMILY_PRESETS_CONTENT: &str = include_str!("../../../presets/js.toml");
 
 pub fn run(force: bool, runtime_override: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
@@ -27,10 +26,11 @@ pub fn run(force: bool, runtime_override: Option<&str>) -> Result<(), Box<dyn st
 
     let detected_adapter = detect_build_adapter(&project_dir);
     let adapter = select_adapter_for_init(detected_adapter, runtime_override)?;
-    let selected_preset = select_preset_for_adapter(adapter)?;
+    let family_presets = fetch_family_presets_for_adapter(adapter)?;
+    let selected_preset = select_preset_for_adapter(adapter, &family_presets)?;
     let preset_default_main = selected_preset
         .as_deref()
-        .and_then(|preset| embedded_preset_default_main(preset, adapter));
+        .and_then(|preset| preset_default_main(preset, adapter, &family_presets));
     let selected_preset_for_toml = selected_preset
         .as_deref()
         .filter(|preset| *preset != adapter.default_preset())
@@ -198,35 +198,33 @@ fn infer_default_main_entrypoint(project_dir: &Path, adapter: BuildAdapter) -> S
     "index.ts".to_string()
 }
 
-fn parse_family_preset_default_main(content: &str, preset_name: &str) -> Option<String> {
-    let parsed: toml::Value = toml::from_str(content).ok()?;
-    let preset = parsed.get(preset_name)?.as_table()?;
-    let main = preset.get("main")?.as_str()?.trim();
-    if main.is_empty() {
-        None
-    } else {
-        Some(main.to_string())
-    }
-}
-
-fn embedded_preset_default_main(preset_ref: &str, adapter: BuildAdapter) -> Option<String> {
+fn preset_default_main(
+    preset_ref: &str,
+    adapter: BuildAdapter,
+    family_presets: &[FamilyPresetDefinition],
+) -> Option<String> {
     match preset_ref {
-        "bun" => adapter.embedded_preset_default_main(),
-        "tanstack-start" => {
-            parse_family_preset_default_main(EMBEDDED_JS_FAMILY_PRESETS_CONTENT, "tanstack-start")
-        }
-        "node" | "deno" => adapter.embedded_preset_default_main(),
-        _ => None,
+        "bun" | "node" | "deno" => adapter.embedded_preset_default_main(),
+        _ => family_presets
+            .iter()
+            .find(|preset| preset.name == preset_ref)
+            .and_then(|preset| preset.main.clone()),
     }
 }
 
-fn select_preset_for_adapter(adapter: BuildAdapter) -> std::io::Result<Option<String>> {
+fn select_preset_for_adapter(
+    adapter: BuildAdapter,
+    family_presets: &[FamilyPresetDefinition],
+) -> std::io::Result<Option<String>> {
     if !output::is_interactive() {
         return Ok(Some(adapter.default_preset().to_string()));
     }
 
-    let family_presets = fetch_family_presets_for_adapter(adapter)?;
-    let Some(options) = build_preset_selection_options(adapter, &family_presets) else {
+    let family_preset_names: Vec<String> = family_presets
+        .iter()
+        .map(|preset| preset.name.clone())
+        .collect();
+    let Some(options) = build_preset_selection_options(adapter, &family_preset_names) else {
         return Ok(Some(adapter.default_preset().to_string()));
     };
 
@@ -237,7 +235,13 @@ fn select_preset_for_adapter(adapter: BuildAdapter) -> std::io::Result<Option<St
     )
 }
 
-fn fetch_family_presets_for_adapter(adapter: BuildAdapter) -> std::io::Result<Vec<String>> {
+fn fetch_family_presets_for_adapter(
+    adapter: BuildAdapter,
+) -> std::io::Result<Vec<FamilyPresetDefinition>> {
+    if !output::is_interactive() {
+        return Ok(Vec::new());
+    }
+
     let family = adapter.preset_family();
     if family == PresetFamily::Unknown {
         return Ok(Vec::new());
@@ -247,11 +251,11 @@ fn fetch_family_presets_for_adapter(adapter: BuildAdapter) -> std::io::Result<Ve
         std::io::Error::other(format!("Failed to initialize preset fetch runtime: {e}"))
     })?;
     let fetched = output::with_spinner("Fetching presets...", || {
-        runtime.block_on(load_available_family_presets(family))
+        runtime.block_on(load_available_family_preset_definitions(family))
     })?;
 
     match fetched {
-        Ok(presets) => Ok(normalize_family_preset_names(adapter, presets)),
+        Ok(presets) => Ok(normalize_family_preset_definitions(adapter, presets)),
         Err(err) => {
             output::warning(&format!(
                 "Failed to fetch presets ({}). Using {} base preset.",
@@ -263,18 +267,27 @@ fn fetch_family_presets_for_adapter(adapter: BuildAdapter) -> std::io::Result<Ve
     }
 }
 
-fn normalize_family_preset_names(adapter: BuildAdapter, preset_names: Vec<String>) -> Vec<String> {
+fn normalize_family_preset_definitions(
+    adapter: BuildAdapter,
+    preset_definitions: Vec<FamilyPresetDefinition>,
+) -> Vec<FamilyPresetDefinition> {
     let base = adapter.default_preset();
     let mut normalized = Vec::new();
-    for preset_name in preset_names {
-        let trimmed = preset_name.trim();
+    for preset in preset_definitions {
+        let trimmed = preset.name.trim();
         if trimmed.is_empty() || trimmed == base {
             continue;
         }
-        if normalized.iter().any(|existing| existing == trimmed) {
+        if normalized
+            .iter()
+            .any(|existing: &FamilyPresetDefinition| existing.name == trimmed)
+        {
             continue;
         }
-        normalized.push(trimmed.to_string());
+        normalized.push(FamilyPresetDefinition {
+            name: trimmed.to_string(),
+            main: preset.main,
+        });
     }
     normalized
 }
@@ -419,10 +432,10 @@ route = "{production_route}"
 #[cfg(test)]
 mod tests {
     use super::{
-        build_preset_selection_options, embedded_preset_default_main, generate_template,
-        infer_default_main_entrypoint, normalize_family_preset_names, select_adapter_for_init,
+        build_preset_selection_options, generate_template, infer_default_main_entrypoint,
+        normalize_family_preset_definitions, preset_default_main, select_adapter_for_init,
     };
-    use crate::build::BuildAdapter;
+    use crate::build::{BuildAdapter, FamilyPresetDefinition};
     use tempfile::TempDir;
 
     #[test]
@@ -664,34 +677,62 @@ mod tests {
     #[test]
     fn embedded_bun_preset_default_main_is_set() {
         assert_eq!(
-            embedded_preset_default_main("bun", BuildAdapter::Bun),
+            preset_default_main("bun", BuildAdapter::Bun, &[]),
             Some("src/index.ts".to_string())
         );
     }
 
     #[test]
     fn embedded_bun_tanstack_start_preset_default_main_is_set() {
+        let presets = vec![FamilyPresetDefinition {
+            name: "tanstack-start".to_string(),
+            main: Some("dist/server/tako-entry.mjs".to_string()),
+        }];
         assert_eq!(
-            embedded_preset_default_main("tanstack-start", BuildAdapter::Bun),
+            preset_default_main("tanstack-start", BuildAdapter::Bun, &presets),
             Some("dist/server/tako-entry.mjs".to_string())
         );
     }
 
     #[test]
     fn normalize_family_preset_names_excludes_base_and_deduplicates() {
-        let names = normalize_family_preset_names(
+        let names = normalize_family_preset_definitions(
             BuildAdapter::Bun,
             vec![
-                "".to_string(),
-                "bun".to_string(),
-                " tanstack-start ".to_string(),
-                "tanstack-start".to_string(),
-                "custom".to_string(),
+                FamilyPresetDefinition {
+                    name: "".to_string(),
+                    main: None,
+                },
+                FamilyPresetDefinition {
+                    name: "bun".to_string(),
+                    main: None,
+                },
+                FamilyPresetDefinition {
+                    name: " tanstack-start ".to_string(),
+                    main: Some("dist/server/tako-entry.mjs".to_string()),
+                },
+                FamilyPresetDefinition {
+                    name: "tanstack-start".to_string(),
+                    main: Some("dist/server/ignored.mjs".to_string()),
+                },
+                FamilyPresetDefinition {
+                    name: "custom".to_string(),
+                    main: None,
+                },
             ],
         );
         assert_eq!(
             names,
-            vec!["tanstack-start".to_string(), "custom".to_string()]
+            vec![
+                FamilyPresetDefinition {
+                    name: "tanstack-start".to_string(),
+                    main: Some("dist/server/tako-entry.mjs".to_string()),
+                },
+                FamilyPresetDefinition {
+                    name: "custom".to_string(),
+                    main: None,
+                },
+            ]
         );
     }
 

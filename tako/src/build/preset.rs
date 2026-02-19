@@ -13,7 +13,6 @@ pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const EMBEDDED_PRESET_REPO: &str = "embedded";
 const EMBEDDED_JS_FAMILY_PRESETS_PATH: &str = "presets/js.toml";
-const EMBEDDED_JS_FAMILY_PRESETS_CONTENT: &str = include_str!("../../../presets/js.toml");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -21,6 +20,12 @@ pub enum PresetReference {
         name: String,
         commit: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FamilyPresetDefinition {
+    pub name: String,
+    pub main: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -268,9 +273,18 @@ pub async fn load_build_preset(
     if let Some(locked) = read_locked_preset(project_dir)?
         && locked.preset_ref == preset_ref
     {
-        let content = load_content_for_resolved_source(&locked).await?;
-        let preset = parse_resolved_preset_from_content(&parsed_ref, &locked.path, &content)?;
-        return Ok((preset, locked));
+        match load_content_for_resolved_source(&locked).await {
+            Ok(content) => {
+                let preset =
+                    parse_resolved_preset_from_content(&parsed_ref, &locked.path, &content)?;
+                return Ok((preset, locked));
+            }
+            Err(err) if locked.repo == EMBEDDED_PRESET_REPO => {
+                // Older locks could point to embedded family manifests. Refetch from the official repo.
+                let _ = err;
+            }
+            Err(err) => return Err(err),
+        }
     }
 
     let (alias, commit_override) = match &parsed_ref {
@@ -323,13 +337,7 @@ fn official_alias_to_path(alias: &str) -> String {
 }
 
 fn embedded_official_preset_content(path: &str) -> Option<&'static str> {
-    if let Some(content) = builtin_base_preset_content_for_path(path) {
-        return Some(content);
-    }
-    match path {
-        EMBEDDED_JS_FAMILY_PRESETS_PATH => Some(EMBEDDED_JS_FAMILY_PRESETS_CONTENT),
-        _ => None,
-    }
+    builtin_base_preset_content_for_path(path)
 }
 
 fn official_family_manifest_path(family: PresetFamily) -> Option<&'static str> {
@@ -339,7 +347,10 @@ fn official_family_manifest_path(family: PresetFamily) -> Option<&'static str> {
     }
 }
 
-fn parse_family_manifest_preset_names(path: &str, content: &str) -> Result<Vec<String>, String> {
+fn parse_family_manifest_preset_definitions(
+    path: &str,
+    content: &str,
+) -> Result<Vec<FamilyPresetDefinition>, String> {
     let parsed: toml::Value = toml::from_str(content)
         .map_err(|e| format!("Failed to parse preset family manifest '{}': {e}", path))?;
     let manifest = parsed.as_table().ok_or_else(|| {
@@ -349,20 +360,51 @@ fn parse_family_manifest_preset_names(path: &str, content: &str) -> Result<Vec<S
         )
     })?;
 
-    let mut names = Vec::new();
+    let mut definitions = Vec::new();
     for (name, value) in manifest {
-        if !value.is_table() {
+        let Some(preset_table) = value.as_table() else {
             continue;
-        }
+        };
         let trimmed = name.trim();
         if trimmed.is_empty() {
             continue;
         }
-        names.push(trimmed.to_string());
+        let main = preset_table
+            .get("main")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        definitions.push(FamilyPresetDefinition {
+            name: trimmed.to_string(),
+            main,
+        });
     }
-    names.sort();
-    names.dedup();
-    Ok(names)
+    definitions.sort_by(|left, right| left.name.cmp(&right.name));
+    definitions.dedup_by(|left, right| left.name == right.name);
+    Ok(definitions)
+}
+
+fn parse_family_manifest_preset_names(path: &str, content: &str) -> Result<Vec<String>, String> {
+    Ok(parse_family_manifest_preset_definitions(path, content)?
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect())
+}
+
+pub async fn load_available_family_preset_definitions(
+    family: PresetFamily,
+) -> Result<Vec<FamilyPresetDefinition>, String> {
+    let Some(path) = official_family_manifest_path(family) else {
+        return Err(format!(
+            "Preset family '{}' is not supported for preset listing.",
+            family.id()
+        ));
+    };
+
+    let (_commit, content) =
+        fetch_preset_content_from_default_branch(OFFICIAL_PRESET_REPO, path).await?;
+    parse_family_manifest_preset_definitions(path, &content)
 }
 
 pub async fn load_available_family_presets(family: PresetFamily) -> Result<Vec<String>, String> {
@@ -372,18 +414,8 @@ pub async fn load_available_family_presets(family: PresetFamily) -> Result<Vec<S
             family.id()
         ));
     };
-
-    let content = match fetch_preset_content_from_default_branch(OFFICIAL_PRESET_REPO, path).await {
-        Ok((_commit, content)) => content,
-        Err(default_branch_error) => {
-            if let Some(content) = embedded_official_preset_content(path) {
-                content.to_string()
-            } else {
-                return Err(default_branch_error);
-            }
-        }
-    };
-
+    let (_commit, content) =
+        fetch_preset_content_from_default_branch(OFFICIAL_PRESET_REPO, path).await?;
     parse_family_manifest_preset_names(path, &content)
 }
 
@@ -906,11 +938,11 @@ mod tests {
     }
 
     #[test]
-    fn embedded_official_preset_content_supports_base_and_variant_paths() {
+    fn embedded_official_preset_content_supports_only_base_paths() {
         assert!(embedded_official_preset_content("presets/bun/bun.toml").is_some());
         assert!(embedded_official_preset_content("presets/node/node.toml").is_some());
         assert!(embedded_official_preset_content("presets/deno/deno.toml").is_some());
-        assert!(embedded_official_preset_content("presets/js.toml").is_some());
+        assert!(embedded_official_preset_content("presets/js.toml").is_none());
     }
 
     #[test]
@@ -929,6 +961,34 @@ main = "a.ts"
         )
         .unwrap();
         assert_eq!(names, vec!["alpha".to_string(), "zeta".to_string()]);
+    }
+
+    #[test]
+    fn parse_family_manifest_preset_definitions_reads_optional_main() {
+        let definitions = parse_family_manifest_preset_definitions(
+            "presets/js.toml",
+            r#"
+[tanstack-start]
+main = "dist/server/tako-entry.mjs"
+
+[no-main]
+foo = "bar"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            definitions,
+            vec![
+                FamilyPresetDefinition {
+                    name: "no-main".to_string(),
+                    main: None,
+                },
+                FamilyPresetDefinition {
+                    name: "tanstack-start".to_string(),
+                    main: Some("dist/server/tako-entry.mjs".to_string()),
+                },
+            ]
+        );
     }
 
     #[test]
@@ -952,8 +1012,13 @@ main = "a.ts"
 
     #[test]
     fn embedded_bun_tanstack_start_preset_parses() {
-        let content = embedded_official_preset_content("presets/js.toml")
-            .expect("embedded bun-tanstack-start preset should exist");
+        let content = r#"
+[tanstack-start]
+main = "dist/server/tako-entry.mjs"
+
+[tanstack-start.build]
+assets = ["dist/client"]
+"#;
         let preset =
             parse_official_alias_preset_content("js/tanstack-start", "presets/js.toml", content)
                 .unwrap();
