@@ -77,6 +77,7 @@ runtime = "bun"
   - Runtime family preset definitions live in `presets/<family>.toml` (for example `presets/js.toml`), where each preset is a section (`[tanstack-start]`, etc.).
   - Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`dev`, `install`, `start`, `[build].install`, `[build].build`).
   - Runtime base presets also provide default build filters/targets (`[build].exclude`, `[build].targets`, `[build].container`) and default `assets`.
+  - JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds run locally by default unless a preset explicitly sets `container = true`.
   - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated).
   - Preset `[build].targets` and `[build].container` override runtime defaults when set (including explicit empty arrays or explicit `container` values).
   - Preset `[build].assets` override runtime-base `assets` when set.
@@ -88,8 +89,10 @@ runtime = "bun"
     - `true`: Docker target builds
     - `false`: local host target builds
     - unset: defaults to Docker only when `[build].targets` is non-empty
+    - built-in JS base presets set `container = false` explicitly
   - Docker builds reuse target-scoped dependency cache volumes (mise + runtime cache mounts) while keeping build containers ephemeral.
   - Runtime version is resolved via `mise exec -- <tool> --version` when local `mise` is available, then falls back to `mise.toml`, then `latest`.
+  - During local builds, stage commands run through `mise exec -- sh -lc ...` when `mise` is available.
   - Deploy artifact cache keys include resolved preset source/commit, runtime tool/version, build mode (Docker/local), and `build.include` / `build.exclude` / `build.assets` / `build.stages`; changing these inputs invalidates cache and triggers rebuild for affected targets.
   - Bun runtime dependencies are installed on server from the uploaded release (`bun install --production`).
   - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.

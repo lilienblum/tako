@@ -36,10 +36,10 @@ Operational behavior highlights:
 - `tako deploy` packages source files from the app's source root (git root when available; otherwise app directory), filtered by `.gitignore`.
 - `tako deploy` always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/` from source bundles.
 - `tako deploy` resolves preset from top-level `preset` when set, otherwise falls back to adapter base preset from top-level `runtime` (when set) or adapter detection (`unknown` falls back to `bun`); unpinned official aliases are fetched from `master` on each resolve and the resolved source metadata is written to `.tako/build.lock.json`.
-- `tako deploy` builds per-target artifacts locally before upload, using Docker only when preset `[build].container` (or deprecated `[build].docker`) resolves to `true`.
+- `tako deploy` builds per-target artifacts locally before upload, using Docker only when preset `[build].container` resolves to `true`; built-in JS base presets (`bun`, `node`, `deno`) default to local build mode (`container = false`) unless explicitly overridden.
 - Container builds stay ephemeral; dependency downloads are reused via per-target Docker cache volumes keyed by target label and builder image.
 - `tako deploy` caches target artifacts in `.tako/artifacts` and reuses verified cache hits when build inputs are unchanged; invalid cache entries are rebuilt automatically.
-- Local runtime version resolution is mise-aware: Tako probes `mise exec -- <tool> --version` when `mise` is installed, then falls back to `mise.toml` and `latest`.
+- Local runtime version resolution is mise-aware: Tako probes `mise exec -- <tool> --version` when `mise` is installed, then falls back to `mise.toml` and `latest`; local build stage commands also run through `mise exec -- sh -lc ...` when `mise` is available.
 - `tako deploy` merges build assets (preset assets + `build.assets`) into app `public/` after target build, in listed order.
 - `tako deploy` writes `app.json` in the deployed app directory and `tako-server` uses it to resolve the runtime start command.
 - `tako servers add` captures per-server target metadata (`arch`, `libc`) during SSH checks and stores it in `~/.tako/config.toml` under `[server_targets.<name>]`.

@@ -1113,7 +1113,7 @@ assets = ["dist/client"]
                 "linux-aarch64-musl".to_string(),
             ]
         );
-        assert!(preset.build.container);
+        assert!(!preset.build.container);
         assert_eq!(preset.assets, vec!["dist/client".to_string()]);
     }
 
@@ -1142,6 +1142,28 @@ build = "custom-build"
             Some("custom-build-install")
         );
         assert_eq!(preset.build.build.as_deref(), Some("custom-build"));
+    }
+
+    #[test]
+    fn apply_adapter_base_runtime_defaults_uses_local_builds_for_node() {
+        let raw = r#"
+name = "custom-node"
+"#;
+        let mut preset = parse_preset(raw).unwrap();
+        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Node).unwrap();
+
+        assert!(!preset.build.container);
+    }
+
+    #[test]
+    fn apply_adapter_base_runtime_defaults_uses_local_builds_for_deno() {
+        let raw = r#"
+name = "custom-deno"
+"#;
+        let mut preset = parse_preset(raw).unwrap();
+        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Deno).unwrap();
+
+        assert!(!preset.build.container);
     }
 
     #[test]

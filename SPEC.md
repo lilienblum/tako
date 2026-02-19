@@ -118,6 +118,7 @@ env = "production"
 - Bun `tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and adds `[build].assets = ["dist/client"]`.
 - Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`dev`, `install`, `start`, `[build].install`, `[build].build`).
 - Runtime base presets also provide default build filters/targets (`[build].exclude`, `[build].targets`, `[build].container`) and default `assets`.
+- JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds run locally by default unless a preset explicitly sets `container = true`.
 - Preset `[build].exclude` entries are appended to runtime-base excludes (base-first, deduplicated).
 - Preset `[build].targets` and `[build].container` override runtime defaults when set (including explicit empty arrays or explicit `container` values).
 - Preset `[build].assets` override runtime-base `assets` when set.
@@ -132,6 +133,7 @@ env = "production"
   - `true`: build each target artifact in Docker.
   - `false`: run build commands on the local host workspace for each target.
   - when unset, default is `true` if `[build].targets` is non-empty, otherwise `false`.
+  - built-in JS base presets set `container = false` explicitly.
 - App-level custom build stages can be declared in `tako.toml` under `[[build.stages]]`:
   - `name` (optional display label)
   - `working_dir` (optional, relative to app root; absolute paths and `..` are rejected)
@@ -144,6 +146,7 @@ env = "production"
 - Docker build containers are ephemeral; dependency caches are persisted with target-scoped Docker volumes keyed by cache kind + target label + builder image (mise cache: `/var/cache/tako/mise`, Bun cache: `/var/cache/tako/bun/install/cache`).
 - Runtime version resolution is mise-aware:
   - local builds try `mise exec -- <tool> --version` from app workspace when `mise` is installed.
+  - local build stage commands run through `mise exec -- sh -lc ...` when `mise` is installed.
   - if local mise probing is unavailable/fails, deploy falls back to reading `mise.toml` (`[tools]` in app then workspace), then `latest`.
   - Docker target builds bootstrap `mise` in-container and probe with `mise exec -- <tool> --version`.
   - deploy writes the resolved runtime tool version into release `mise.toml` before packaging.
@@ -657,6 +660,7 @@ Deploy flow helpers:
    - Build on local host workspace when `[build].container = false`.
    - When `container` is unset, default to Docker only when `[build].targets` is non-empty.
    - Run build commands in fixed order: preset stage first (`[build].install`, then `[build].build`), then app `[[build.stages]]` in declaration order.
+   - For local builds, when `mise` is available, run stage commands through `mise exec -- sh -lc ...`.
    - Merge configured assets into app `public/`.
    - Verify resolved runtime `main` exists in the built app directory.
    - Materialize release `mise.toml` in app dir with resolved runtime tool version for server runtime parity.
@@ -690,6 +694,7 @@ Deploy flow helpers:
 - Runtime prep/start on server comes from preset top-level `install` and `start`.
 - During container builds, deploy reuses target-scoped dependency cache volumes (mise and runtime-specific cache mounts such as Bun), keyed by cache kind, target label, and builder image.
 - During local builds, deploy resolves runtime version by asking `mise` directly (`mise exec -- <tool> --version`) when available, then falls back to `mise.toml` and finally `latest`.
+- During local builds, deploy runs stage commands through `mise exec -- sh -lc ...` when `mise` is available.
 - Artifact include precedence: `build.include` -> `**/*`.
 - Artifact exclude list: preset `[build].exclude` plus `build.exclude`.
 - Asset roots are preset `[build].assets` plus app `build.assets` (deduplicated), merged into app `public/` after container build with ordered overwrite.

@@ -89,9 +89,11 @@ Important deployment behavior:
 - Deploy always builds artifacts locally (Docker or local host based on preset build mode); servers do not run app build steps during deploy.
 - Docker builds reuse per-target dependency cache volumes (mise + runtime cache mounts) keyed by cache kind + target label + builder image while still creating fresh build containers each deploy.
 - Runtime version resolution is mise-aware: Tako tries `mise exec -- <tool> --version` when local `mise` is available (and in Docker build contexts), then falls back to `mise.toml`, then `latest`; deploy writes release `mise.toml` so server runtime matches build runtime.
+- During local builds, when `mise` is available, stage commands run through `mise exec -- sh -lc ...`.
 - Preset runtime fields use top-level `main`/`install`/`start` keys (legacy preset `[deploy]` is not supported).
 - Top-level `preset` in `tako.toml` must be runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `js/tanstack-start` are rejected and `github:` refs are not supported.
 - Runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`.
+- JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set.
 - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.
 - Preset `[[build.stages]]` is not supported; app-level custom stages are configured in `tako.toml` under `[[build.stages]]`.
 - Per target build order is fixed: preset `[build].install`/`[build].build` first, then app `[[build.stages]]` in declaration order.

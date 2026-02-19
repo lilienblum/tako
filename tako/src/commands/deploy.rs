@@ -1968,14 +1968,68 @@ fn run_target_build(
             &stage_commands,
         )?;
     } else {
-        run_local_build(workspace, app_subdir, target_build, custom_stages)?;
+        run_local_build(
+            workspace,
+            app_subdir,
+            runtime_tool,
+            target_build,
+            custom_stages,
+        )?;
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalShellRunner {
+    Direct,
+    Mise,
+}
+
+fn detect_local_shell_runner() -> LocalShellRunner {
+    #[cfg(test)]
+    {
+        return LocalShellRunner::Direct;
+    }
+
+    #[cfg(not(test))]
+    {
+        let status = std::process::Command::new("mise")
+            .arg("--version")
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        if status.map(|value| value.success()).unwrap_or(false) {
+            LocalShellRunner::Mise
+        } else {
+            LocalShellRunner::Direct
+        }
+    }
+}
+
+fn local_shell_command_program_and_args(
+    runner: LocalShellRunner,
+    command: &str,
+) -> (&'static str, Vec<String>) {
+    match runner {
+        LocalShellRunner::Direct => ("sh", vec!["-lc".to_string(), command.to_string()]),
+        LocalShellRunner::Mise => (
+            "mise",
+            vec![
+                "exec".to_string(),
+                "--".to_string(),
+                "sh".to_string(),
+                "-lc".to_string(),
+                command.to_string(),
+            ],
+        ),
+    }
 }
 
 fn run_local_build(
     workspace: &Path,
     app_subdir: &str,
+    runtime_tool: &str,
     target_build: &crate::build::BuildPresetTarget,
     custom_stages: &[BuildStage],
 ) -> Result<(), String> {
@@ -1989,6 +2043,26 @@ fn run_local_build(
 
     let app_subdir_value = app_subdir.replace('\\', "/");
     let app_dir_value = app_dir.to_string_lossy().to_string();
+    let shell_runner = detect_local_shell_runner();
+    if shell_runner == LocalShellRunner::Mise {
+        let _ = std::process::Command::new("mise")
+            .arg("install")
+            .current_dir(&app_dir)
+            .env("TAKO_APP_SUBDIR", &app_subdir_value)
+            .env("TAKO_APP_DIR", &app_dir_value)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+        let _ = std::process::Command::new("mise")
+            .args(["exec", "--", runtime_tool, "--version"])
+            .current_dir(&app_dir)
+            .env("TAKO_APP_SUBDIR", &app_subdir_value)
+            .env("TAKO_APP_DIR", &app_dir_value)
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    }
+
     let has_preset_stage = target_build
         .install
         .as_deref()
@@ -2011,8 +2085,9 @@ fn run_local_build(
 
     let run_shell =
         |cwd: &Path, command: &str, phase: &str, stage_label: &str| -> Result<(), String> {
-            let output = std::process::Command::new("sh")
-                .args(["-lc", command])
+            let (program, args) = local_shell_command_program_and_args(shell_runner, command);
+            let output = std::process::Command::new(program)
+                .args(args)
                 .current_dir(cwd)
                 .env("TAKO_APP_SUBDIR", &app_subdir_value)
                 .env("TAKO_APP_DIR", &app_dir_value)
@@ -4515,12 +4590,28 @@ name = "test-app"
             },
         ];
 
-        run_local_build(&workspace, "apps/web", &target_build, &stages).unwrap();
+        run_local_build(&workspace, "apps/web", "bun", &target_build, &stages).unwrap();
         let order = std::fs::read_to_string(app_dir.join("order.log")).unwrap();
         assert_eq!(
             order,
             "preset-install\npreset-run\nstage-2-run\nstage-3-install\nstage-3-run\n"
         );
+    }
+
+    #[test]
+    fn local_shell_command_wrapper_uses_sh_when_mise_is_unavailable() {
+        let (program, args) =
+            local_shell_command_program_and_args(LocalShellRunner::Direct, "printf 'hello'");
+        assert_eq!(program, "sh");
+        assert_eq!(args, vec!["-lc", "printf 'hello'"]);
+    }
+
+    #[test]
+    fn local_shell_command_wrapper_uses_mise_exec_when_available() {
+        let (program, args) =
+            local_shell_command_program_and_args(LocalShellRunner::Mise, "printf 'hello'");
+        assert_eq!(program, "mise");
+        assert_eq!(args, vec!["exec", "--", "sh", "-lc", "printf 'hello'"]);
     }
 
     #[test]
@@ -4541,7 +4632,8 @@ name = "test-app"
             run: "true".to_string(),
         }];
 
-        let err = run_local_build(&workspace, "apps/web", &target_build, &stages).unwrap_err();
+        let err =
+            run_local_build(&workspace, "apps/web", "bun", &target_build, &stages).unwrap_err();
         assert!(err.contains("stage 2"));
         assert!(err.contains("working directory"));
     }

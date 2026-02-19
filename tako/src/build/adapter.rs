@@ -68,6 +68,7 @@ else
 fi
 '''
 targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
+container = false
 "#;
 
 const BUILTIN_NODE_PRESET_CONTENT: &str = r#"main = "index.js"
@@ -118,6 +119,7 @@ else
 fi
 '''
 targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
+container = false
 "#;
 
 const BUILTIN_DENO_PRESET_CONTENT: &str = r#"main = "main.ts"
@@ -155,6 +157,7 @@ fi
 '''
 build = "true"
 targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
+container = false
 "#;
 
 pub fn builtin_base_preset_content_for_alias(alias: &str) -> Option<&'static str> {
