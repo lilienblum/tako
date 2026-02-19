@@ -138,6 +138,8 @@ Wildcard and path routes are supported, for example:
 - `example.com/api/*`
 - `*.example.com/admin/*`
 
+Exact path routes normalize trailing slash, so `example.com/api` and `example.com/api/` are equivalent.
+
 ## Health and Instance Lifecycle
 
 Tako uses active HTTP probing as the source of truth for instance health.

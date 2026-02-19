@@ -4,5 +4,6 @@ import viteReact from "@vitejs/plugin-react";
 import { takoVitePlugin } from "tako.sh/vite";
 
 export default defineConfig({
-  plugins: [tanstackStart({ srcDirectory: "src" }), viteReact(), takoVitePlugin()],
+  base: "/tanstack-start/",
+  plugins: [tanstackStart(), viteReact(), takoVitePlugin()],
 });

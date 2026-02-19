@@ -174,6 +174,7 @@ Each target server should have:
 - Exceptions on HTTP: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status`.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.
 - Requests without internal host are routed to apps normally.
+- Exact path route matches normalize trailing slash (`example.com/api` and `example.com/api/` are equivalent).
 - Private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) get self-signed certs during deploy; public hostnames use ACME.
 
 ## Post-Deploy Verification

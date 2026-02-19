@@ -146,6 +146,7 @@ route = "api.example.com"
 - Empty route sets are rejected for non-development environments. There is no implicit catch-all routing mode.
 - Routes must include a hostname (path-only routes are invalid).
 - `example.com` and `example.com/*` are equivalent and both match all paths on `example.com`.
+- Exact path routes normalize trailing slash: `example.com/api` and `example.com/api/` are equivalent (both match `/api` and `/api/`).
 - Public route hostnames use ACME certificates; private/local hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) use self-signed certs generated during deploy.
 - Path route examples:
   - `example.com/api/*` matches `/api`, `/api/`, and `/api/...`

@@ -26,4 +26,8 @@ After build:
 ## Notes
 
 - `vite.config.ts` wires TanStack Start and `tako.sh/vite`.
+- This example is configured for subpath deploy at `/tanstack-start`:
+  - router `basepath = "/tanstack-start"`
+  - Vite `base = "/tanstack-start/"`
+  - production route `tako-testbed.orb.local/tanstack-start/*`
 - Deploy writes archive `app.json` as runtime manifest with the resolved `main`.

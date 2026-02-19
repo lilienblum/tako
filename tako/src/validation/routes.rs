@@ -209,8 +209,16 @@ fn path_matches(pattern: &str, path: &str) -> bool {
         path.starts_with(prefix)
     } else {
         // Exact match
-        pattern == path
+        normalize_exact_path(pattern) == normalize_exact_path(path)
     }
+}
+
+fn normalize_exact_path(path: &str) -> &str {
+    if path == "/" {
+        return "/";
+    }
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() { "/" } else { trimmed }
 }
 
 /// Returns true if two route patterns could both match the same request.
@@ -378,6 +386,16 @@ mod tests {
     fn test_route_matches_handles_exact_and_path_wildcards() {
         assert!(route_matches("api.example.com", "api.example.com", "/"));
         assert!(!route_matches("api.example.com", "www.example.com", "/"));
+        assert!(route_matches(
+            "api.example.com/v1",
+            "api.example.com",
+            "/v1/"
+        ));
+        assert!(route_matches(
+            "api.example.com/v1/",
+            "api.example.com",
+            "/v1"
+        ));
 
         assert!(route_matches(
             "api.example.com/v1/*",
@@ -437,6 +455,7 @@ mod tests {
     fn test_routes_overlap_path_specificity() {
         assert!(routes_overlap("example.com/api/*", "example.com/api/v1/*"));
         assert!(!routes_overlap("example.com/api/*", "example.com/admin/*"));
+        assert!(routes_overlap("example.com/api", "example.com/api/"));
     }
 
     #[test]

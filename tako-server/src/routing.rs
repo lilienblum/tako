@@ -156,7 +156,7 @@ fn route_specificity(pattern: &str) -> (u8, usize, u8) {
                 let prefix = &p[..p.len().saturating_sub(1)];
                 (prefix.len(), 0)
             } else {
-                (p.len(), 1)
+                (normalize_exact_path(p).len(), 1)
             }
         }
     };
@@ -191,8 +191,16 @@ fn path_matches(pattern: &str, path: &str) -> bool {
         let prefix = &pattern[..pattern.len().saturating_sub(1)];
         path.starts_with(prefix)
     } else {
-        pattern == path
+        normalize_exact_path(pattern) == normalize_exact_path(path)
     }
+}
+
+fn normalize_exact_path(path: &str) -> &str {
+    if path == "/" {
+        return "/";
+    }
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() { "/" } else { trimmed }
 }
 
 #[cfg(test)]
@@ -384,7 +392,9 @@ mod tests {
     #[test]
     fn test_path_exact_match() {
         assert!(path_matches("/api/users", "/api/users"));
-        assert!(!path_matches("/api/users", "/api/users/"));
+        assert!(path_matches("/api/users", "/api/users/"));
+        assert!(path_matches("/api/users/", "/api/users"));
+        assert!(path_matches("/api/users/", "/api/users/"));
         assert!(!path_matches("/api/users", "/api/users/123"));
     }
 
@@ -620,14 +630,24 @@ mod tests {
     #[test]
     fn test_trailing_slash_in_path() {
         let routes = vec![route("app", "example.com/api")];
-        // Exact path match - trailing slash is different
+        // Exact path routes normalize trailing slash, so /api and /api/ are equivalent.
         assert_eq!(
             select_app_for_request(&routes, "example.com", "/api"),
             Some("app".to_string())
         );
         assert_eq!(
             select_app_for_request(&routes, "example.com", "/api/"),
-            None
+            Some("app".to_string())
+        );
+
+        let routes_with_slash = vec![route("app", "example.com/api/")];
+        assert_eq!(
+            select_app_for_request(&routes_with_slash, "example.com", "/api"),
+            Some("app".to_string())
+        );
+        assert_eq!(
+            select_app_for_request(&routes_with_slash, "example.com", "/api/"),
+            Some("app".to_string())
         );
     }
 

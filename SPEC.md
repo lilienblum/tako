@@ -853,6 +853,7 @@ Apps specify routes at environment level (not per-server). Routes support:
 **Validation rules:**
 
 - Routes must include hostname (path-only routes invalid: `"/api/*"` ❌)
+- Exact path routes normalize trailing slash (`example.com/api` and `example.com/api/` are equivalent)
 - Each `[envs.{env}]` can have either `route` or `routes`, not both
 - `[envs.{env}]` accepts only route keys (`route`/`routes`); env vars belong in `[vars]` / `[vars.{env}]`
 - Each non-development environment must define `route` or `routes`
