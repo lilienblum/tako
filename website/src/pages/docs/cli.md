@@ -91,7 +91,7 @@ Notes:
   - If `HOST` is provided, `--name` is required.
   - `--port` defaults to `22`.
   - By default, tests SSH connection before adding and connects as user `tako`.
-  - With SSH checks enabled, Tako detects and stores server target metadata (`arch`, `libc`), used for deploy target matching.
+  - With SSH checks enabled, Tako detects and stores server target metadata (`arch`, `libc`) in that server's `[[servers]]` entry, used for deploy target matching.
   - `--no-test` skips SSH checks and target detection.
 - `tako servers rm` aliases: `remove`, `delete`.
 - `tako servers ls` alias: `list`.

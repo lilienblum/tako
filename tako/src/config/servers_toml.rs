@@ -134,6 +134,12 @@ impl ServersToml {
 
         let mut config = ServersToml::default();
 
+        if raw.get("server_targets").is_some() {
+            return Err(ConfigError::Validation(
+                "Global server config no longer supports [server_targets.<name>]. Set `arch` and `libc` directly inside each [[servers]] entry.".to_string(),
+            ));
+        }
+
         if let Some(servers_array) = raw.get("servers")
             && let Some(array) = servers_array.as_array()
         {
@@ -167,6 +173,27 @@ impl ServersToml {
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
+                let arch_field = server_value.get("arch");
+                let libc_field = server_value.get("libc");
+                let arch = match arch_field {
+                    Some(value) => Some(value.as_str().ok_or_else(|| {
+                        ConfigError::Validation(format!(
+                            "Server '{}' field 'arch' must be a string",
+                            name
+                        ))
+                    })?),
+                    None => None,
+                };
+                let libc = match libc_field {
+                    Some(value) => Some(value.as_str().ok_or_else(|| {
+                        ConfigError::Validation(format!(
+                            "Server '{}' field 'libc' must be a string",
+                            name
+                        ))
+                    })?),
+                    None => None,
+                };
+
                 let entry = ServerEntry {
                     host: host.to_string(),
                     port,
@@ -184,33 +211,25 @@ impl ServersToml {
                 }
 
                 config.servers.insert(name.to_string(), entry);
-            }
-        }
 
-        if let Some(targets_table) = raw.get("server_targets")
-            && let Some(table) = targets_table.as_table()
-        {
-            for (name, value) in table {
-                let arch = value.get("arch").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ConfigError::Validation(format!(
-                        "server_targets.{} must include string field 'arch'",
-                        name
-                    ))
-                })?;
-                let libc = value.get("libc").and_then(|v| v.as_str()).ok_or_else(|| {
-                    ConfigError::Validation(format!(
-                        "server_targets.{} must include string field 'libc'",
-                        name
-                    ))
-                })?;
-
-                config.server_targets.insert(
-                    name.to_string(),
-                    ServerTarget {
-                        arch: arch.to_string(),
-                        libc: libc.to_string(),
-                    },
-                );
+                match (arch, libc) {
+                    (Some(arch), Some(libc)) => {
+                        let normalized = ServerTarget::normalized(arch, libc).map_err(|e| {
+                            ConfigError::Validation(format!(
+                                "Invalid target metadata for server '{}': {}",
+                                name, e
+                            ))
+                        })?;
+                        config.server_targets.insert(name.to_string(), normalized);
+                    }
+                    (None, None) => {}
+                    _ => {
+                        return Err(ConfigError::Validation(format!(
+                            "Server '{}' must set both `arch` and `libc` together inside [[servers]]",
+                            name
+                        )));
+                    }
+                }
             }
         }
 
@@ -308,6 +327,10 @@ impl ServersToml {
                     toml::Value::String(description.clone()),
                 );
             }
+            if let Some(target) = self.server_targets.get(name) {
+                table.insert("arch".to_string(), toml::Value::String(target.arch.clone()));
+                table.insert("libc".to_string(), toml::Value::String(target.libc.clone()));
+            }
             servers_array.push(toml::Value::Table(table));
         }
 
@@ -316,31 +339,7 @@ impl ServersToml {
         } else {
             root.insert("servers".to_string(), toml::Value::Array(servers_array));
         }
-
-        if self.server_targets.is_empty() {
-            root.remove("server_targets");
-        } else {
-            let mut target_names: Vec<&str> =
-                self.server_targets.keys().map(|k| k.as_str()).collect();
-            target_names.sort_unstable();
-
-            let mut targets_table = toml::map::Map::new();
-            for name in target_names {
-                let target = self.server_targets.get(name).ok_or_else(|| {
-                    ConfigError::Validation(format!("Missing target metadata for '{}'", name))
-                })?;
-
-                let mut target_table = toml::map::Map::new();
-                target_table.insert("arch".to_string(), toml::Value::String(target.arch.clone()));
-                target_table.insert("libc".to_string(), toml::Value::String(target.libc.clone()));
-                targets_table.insert(name.to_string(), toml::Value::Table(target_table));
-            }
-
-            root.insert(
-                "server_targets".to_string(),
-                toml::Value::Table(targets_table),
-            );
-        }
+        root.remove("server_targets");
 
         let content = toml::to_string_pretty(&doc)?;
         fs::write(path, content).map_err(|e| ConfigError::FileWrite(path.to_path_buf(), e))?;
@@ -568,13 +567,11 @@ port = 2222
     }
 
     #[test]
-    fn test_parse_server_targets_table() {
+    fn test_parse_server_entry_target_fields() {
         let toml = r#"
 [[servers]]
 name = "la"
 host = "1.2.3.4"
-
-[server_targets.la]
 arch = "x86_64"
 libc = "glibc"
 "#;
@@ -582,6 +579,18 @@ libc = "glibc"
         let target = config.get_target("la").unwrap();
         assert_eq!(target.arch, "x86_64");
         assert_eq!(target.libc, "glibc");
+    }
+
+    #[test]
+    fn test_parse_rejects_partial_server_target_fields() {
+        let toml = r#"
+[[servers]]
+name = "la"
+host = "1.2.3.4"
+arch = "x86_64"
+"#;
+        let err = ServersToml::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("both `arch` and `libc`"));
     }
 
     #[test]
@@ -611,14 +620,14 @@ libc = "glibc"
     }
 
     #[test]
-    fn test_parse_rejects_target_for_unknown_server() {
+    fn test_parse_rejects_legacy_server_targets_table() {
         let toml = r#"
 [server_targets.ghost]
 arch = "x86_64"
 libc = "glibc"
 "#;
         let err = ServersToml::parse(toml).unwrap_err();
-        assert!(err.to_string().contains("unknown server"));
+        assert!(err.to_string().contains("no longer supports [server_targets"));
     }
 
     #[test]
@@ -975,6 +984,10 @@ name = "la"
             .unwrap();
 
         config.save_to_file(&path).unwrap();
+        let written = fs::read_to_string(&path).unwrap();
+        assert!(written.contains("arch = \"x86_64\""));
+        assert!(written.contains("libc = \"glibc\""));
+        assert!(!written.contains("[server_targets."));
 
         let loaded = ServersToml::load_from_file(&path).unwrap();
         assert_eq!(loaded.len(), 2);

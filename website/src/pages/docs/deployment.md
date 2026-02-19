@@ -107,7 +107,7 @@ Each target server should have:
 ### Global server inventory (`~/.tako/config.toml`)
 
 - Defines named servers (`host`, `port`, optional `description`).
-- Stores detected per-server build target metadata under `[server_targets.<name>]` (`arch`, `libc`).
+- Stores detected per-server build target metadata (`arch`, `libc`) directly in each `[[servers]]` entry.
 - Managed via `tako servers ...` commands.
 - Deploy requires target metadata for every selected server and fails early if it is missing/invalid.
 - Deploy does not probe target metadata at deploy-time; re-add affected servers to refresh metadata.

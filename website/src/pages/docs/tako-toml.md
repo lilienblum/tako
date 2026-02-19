@@ -177,7 +177,7 @@ idle_timeout = 300
 
 - `env` is required.
 - `instances`, `port`, and `idle_timeout` are optional overrides.
-- `arch`/`libc` are not configured in `tako.toml`; Tako detects and stores them in global server config (`~/.tako/config.toml`) when adding servers.
+- `arch`/`libc` are not configured in `tako.toml`; Tako detects and stores them in each matching `[[servers]]` entry in global server config (`~/.tako/config.toml`) when adding servers.
 
 ## Variable Merge Order
 

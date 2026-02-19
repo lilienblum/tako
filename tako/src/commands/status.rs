@@ -551,7 +551,7 @@ fn format_server_status_details(status: Option<&ServerStatusResult>) -> [String;
 }
 
 fn format_deployed_app_heading(app: &GlobalAppStatusResult) -> String {
-    format!("{} ({})", app.app_name, app.env_name)
+    format!("{} (env: {})", app.app_name, app.env_name)
 }
 
 fn display_server_version(version: &str) -> String {
@@ -928,7 +928,7 @@ mod tests {
 
         assert_eq!(
             format_deployed_app_heading(&app),
-            "bun-example (production)"
+            "bun-example (env: production)"
         );
     }
 

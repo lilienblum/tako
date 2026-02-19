@@ -1,5 +1,4 @@
 runtime = "bun"
-main = "index.ts"
 
 [envs.production]
 route = "bun-e2e.example.com"

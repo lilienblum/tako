@@ -2,7 +2,7 @@ runtime = "bun"
 preset = "tanstack-start"
 
 [envs.production]
-route = "tako-bun-server.orb.local/tanstack-start"
+route = "tako-testbed.orb.local/tanstack-start"
 
-[servers.tako-server]
+[servers.testbed]
 env = "production"

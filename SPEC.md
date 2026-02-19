@@ -180,22 +180,18 @@ Global user-level settings and server inventory (user's home directory, NOT in p
 name = "la"
 host = "1.2.3.4"
 port = 22                 # Optional, defaults to 22
+arch = "x86_64"
+libc = "glibc"
 
 [[servers]]
 name = "nyc"
 host = "5.6.7.8"
-
-[server_targets.la]
-arch = "x86_64"
-libc = "glibc"
-
-[server_targets.nyc]
 arch = "aarch64"
 libc = "musl"
 ```
 
 `[[servers]]` entries are managed by `tako servers add/rm/ls`. All names and hosts must be globally unique.
-Detected server build target metadata is stored under `[server_targets.<name>]` (`arch`, `libc`).
+Detected server build target metadata is stored directly in each `[[servers]]` entry (`arch`, `libc`).
 
 **SSH authentication:**
 
@@ -499,7 +495,7 @@ Add server to global `~/.tako/config.toml` (`[[servers]]`).
 
 Tests SSH connection before adding. Connects as the `tako` user.
 
-During SSH checks, `tako servers add` also detects and stores target metadata (`arch`, `libc`) in `~/.tako/config.toml` under `[server_targets.<name>]`.
+During SSH checks, `tako servers add` also detects and stores target metadata (`arch`, `libc`) in the matching `[[servers]]` entry in `~/.tako/config.toml`.
 
 If `--no-test` is used, SSH checks and target detection are skipped; deploy later fails for that server until target metadata is captured by re-adding the server with SSH checks enabled.
 
@@ -703,7 +699,7 @@ Deploy flow helpers:
 - Artifact cache keys include runtime tool + resolved runtime version + Docker/local mode to avoid cross-target and cross-runtime cache contamination.
 - Final `app.json` is written in the deployed app directory and contains runtime `main` used by `tako-server`.
 - Deploy does not write a release `.env` file; runtime environment is provided through the `deploy` command payload and applied by `tako-server` when spawning instances.
-- Deploy requires valid `[server_targets.<name>]` metadata for each selected server (`arch` and `libc`).
+- Deploy requires valid `arch` and `libc` metadata in each selected `[[servers]]` entry.
 - Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
 - Deploy pre-validation still fails when target environment is missing secret keys used by other environments.
 - Deploy pre-validation warns (but does not fail) when target environment has extra secret keys not present in other secret environments.
