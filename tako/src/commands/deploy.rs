@@ -402,10 +402,11 @@ async fn run_async(
         should_use_docker_build(&build_preset),
         &build_preset,
     );
-    output::success(&format_server_targets_summary(
-        &server_targets,
-        use_unified_js_target_process,
-    ));
+    if let Some(server_targets_summary) =
+        format_server_targets_summary(&server_targets, use_unified_js_target_process)
+    {
+        output::success(&server_targets_summary);
+    }
 
     let artifacts_by_target = build_target_artifacts(
         &project_dir,
@@ -1381,9 +1382,9 @@ fn format_server_target_metadata_error(missing: &[String], invalid: &[String]) -
 fn format_server_targets_summary(
     server_targets: &[(String, ServerTarget)],
     use_unified_target_process: bool,
-) -> String {
+) -> Option<String> {
     if use_unified_target_process {
-        return "Server targets: shared local JS build".to_string();
+        return None;
     }
     let mut labels = server_targets
         .iter()
@@ -1391,7 +1392,7 @@ fn format_server_targets_summary(
         .collect::<Vec<_>>();
     labels.sort();
     labels.dedup();
-    format!("Server targets: {}", labels.join(", "))
+    Some(format!("Server targets: {}", labels.join(", ")))
 }
 
 fn has_target_specific_build_commands(preset: &BuildPreset) -> bool {
@@ -3870,12 +3871,12 @@ name = "test-app"
 
         assert_eq!(
             summary,
-            "Server targets: linux-aarch64-musl, linux-x86_64-glibc"
+            Some("Server targets: linux-aarch64-musl, linux-x86_64-glibc".to_string())
         );
     }
 
     #[test]
-    fn format_server_targets_summary_uses_shared_label_for_unified_mode() {
+    fn format_server_targets_summary_hides_line_for_unified_mode() {
         let summary = format_server_targets_summary(
             &[(
                 "a".to_string(),
@@ -3887,7 +3888,7 @@ name = "test-app"
             true,
         );
 
-        assert_eq!(summary, "Server targets: shared local JS build");
+        assert_eq!(summary, None);
     }
 
     #[test]
