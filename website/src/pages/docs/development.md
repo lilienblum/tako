@@ -95,7 +95,7 @@ Deploy e2e uses Docker/SSH and is opt-in:
 - `just e2e e2e/fixtures/js/tanstack-start`
 
 Deploy e2e exercises artifact-cache behavior too: first deploy builds target artifacts, then unchanged redeploy reuses verified cached artifacts from `.tako/artifacts/`.
-When top-level `preset` is omitted, dev/deploy choose adapter base preset from top-level `runtime` when set, otherwise adapter detection (`unknown` falls back to `bun`). When set, top-level `preset` is runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `bun/tanstack-start` are rejected.
+When top-level `preset` is omitted, dev/deploy choose adapter base preset from top-level `runtime` when set, otherwise adapter detection (`unknown` falls back to `bun`). When set, top-level `preset` is runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `js/tanstack-start` are rejected, and `github:` refs are not supported.
 When preset build mode resolves to container (`[build].container`), containerized builds reuse per-target Docker dependency cache volumes (prefix `tako-build-cache-`) across deploy runs.
 Preset artifact filters use preset `[build].exclude`; runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`. Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while `[build].targets` and `[build].container` override when set (legacy preset `[deploy]`, `[dev]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported).
 Preset `[[build.stages]]` is not supported; app-level custom stages are configured in `tako.toml` under `[[build.stages]]`.

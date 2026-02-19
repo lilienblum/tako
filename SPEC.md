@@ -111,17 +111,17 @@ env = "production"
 - `preset` supports:
   - runtime-local aliases: `tanstack-start` (resolved under selected runtime, e.g. `runtime = "bun"`)
   - pinned runtime-local aliases: `tanstack-start@<commit-hash>`
-  - GitHub references: `github:<owner>/<repo>/<path>.toml[@<commit-hash>]`
-- namespaced preset aliases in `tako.toml` (for example `bun/tanstack-start`) are rejected; choose runtime via top-level `runtime` and keep `preset` runtime-local.
+- namespaced preset aliases in `tako.toml` (for example `js/tanstack-start`) are rejected; choose runtime via top-level `runtime` and keep `preset` runtime-local.
+- `github:` preset references are not supported in `tako.toml`.
 - Adapter base presets (`bun`, `node`, `deno`) are built into the CLI (not loaded from workspace preset files).
-- File-based presets remain for named variants under `presets/<adapter>/<name>.toml` (for example `presets/bun/tanstack-start.toml`).
-- Bun `tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and adds `assets = ["dist/client"]`.
+- Runtime family preset definitions live in `presets/<family>.toml` (for example `presets/js.toml`), where each preset is a section (`[tanstack-start]`, etc.).
+- Bun `tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and adds `[build].assets = ["dist/client"]`.
 - Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`dev`, `install`, `start`, `[build].install`, `[build].build`).
 - Runtime base presets also provide default build filters/targets (`[build].exclude`, `[build].targets`, `[build].container`) and default `assets`.
 - Preset `[build].exclude` entries are appended to runtime-base excludes (base-first, deduplicated).
 - Preset `[build].targets` and `[build].container` override runtime defaults when set (including explicit empty arrays or explicit `container` values).
-- Preset `assets` override runtime-base `assets` when set.
-- Build preset TOML supports optional top-level `name` (fallback: preset file name), top-level `main` (default app entrypoint), top-level `assets`, and `[build]` (`exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false`). Presets can still override runtime lifecycle fields (`dev`, `install`, `start`, `[build].install`, `[build].build`) when needed. Legacy preset `[dev]`, `[deploy]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported.
+- Preset `[build].assets` override runtime-base `assets` when set.
+- Build preset TOML supports optional top-level `name` (fallback: preset section name), top-level `main` (default app entrypoint), and `[build]` (`assets`, `exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false`). Presets can still override runtime lifecycle fields (`dev`, `install`, `start`, `[build].install`, `[build].build`) when needed. Legacy preset top-level `assets`, `[dev]`, `[deploy]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported.
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for reproducible preset fetches on later deploys.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Source bundle filtering uses `.gitignore`.
@@ -155,7 +155,7 @@ env = "production"
   - fallback `**/*`
 - Artifact exclude patterns are preset `[build].exclude` plus app `build.exclude`.
 - For Bun deploys, default preset excludes `node_modules`; `tako-server` installs dependencies on server (`bun install --production`, plus `--frozen-lockfile` when Bun lockfile is present).
-- Asset roots are preset `assets` plus `build.assets` (deduplicated), then merged into app `public/` after container build in listed order (later entries overwrite earlier ones).
+- Asset roots are preset `[build].assets` plus app `build.assets` (deduplicated), then merged into app `public/` after container build in listed order (later entries overwrite earlier ones).
 
 **Instance behavior:**
 
@@ -292,10 +292,12 @@ Template behavior:
 - Prompts for required app `name` (default from directory-derived app name).
 - Prompts for required production route (`[envs.production].route`) with default `{name}.example.com`.
 - Detects adapter (`bun`, `node`, `deno`, fallback `unknown`) and prompts for runtime selection unless `--runtime` is provided.
+- In interactive mode, init fetches runtime-family preset names from official family manifest files (`presets/<family>.toml`) and shows `Fetching presets...` while loading.
 - For built-in base adapters, init defaults to:
   - Bun: `bun`
   - Node: `node`
   - Deno: `deno`
+- If no family presets are available after fetch, init skips preset selection and uses the runtime base preset.
 - When "custom preset reference" is selected, init leaves top-level `preset` unset (commented) but still writes top-level `runtime`.
 - For `main`, init behavior is:
   - if adapter inference finds an entrypoint and it differs from preset default `main`, write it as top-level `main`;
@@ -688,7 +690,7 @@ Deploy flow helpers:
 - During local builds, deploy resolves runtime version by asking proto directly (`proto run <tool> -- --version`) when available, then falls back to `.prototools` and finally `latest`.
 - Artifact include precedence: `build.include` -> `**/*`.
 - Artifact exclude list: preset `[build].exclude` plus `build.exclude`.
-- Asset roots are preset `assets` plus `build.assets` (deduplicated), merged into app `public/` after container build with ordered overwrite.
+- Asset roots are preset `[build].assets` plus app `build.assets` (deduplicated), merged into app `public/` after container build with ordered overwrite.
 - Target artifacts are cached locally by deterministic key and reused across deploys when build inputs are unchanged.
 - Cached artifacts are validated by checksum/size before reuse; invalid cache entries are rebuilt automatically.
 - Artifact cache keys include runtime tool + resolved runtime version + Docker/local mode to avoid cross-target and cross-runtime cache contamination.

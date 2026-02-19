@@ -3015,13 +3015,14 @@ mod tests {
     fn resolve_build_preset_ref_prefers_tako_toml_override() {
         let temp = TempDir::new().unwrap();
         let config = TakoToml {
-            preset: Some("github:owner/repo/presets/bun.toml@abc1234".to_string()),
+            runtime: Some("bun".to_string()),
+            preset: Some("tanstack-start@abc1234".to_string()),
             ..Default::default()
         };
 
         assert_eq!(
             resolve_build_preset_ref(temp.path(), &config).unwrap(),
-            "github:owner/repo/presets/bun.toml@abc1234"
+            "js/tanstack-start@abc1234"
         );
     }
 
@@ -3036,7 +3037,7 @@ mod tests {
 
         assert_eq!(
             resolve_build_preset_ref(temp.path(), &config).unwrap(),
-            "bun/tanstack-start"
+            "js/tanstack-start"
         );
     }
 

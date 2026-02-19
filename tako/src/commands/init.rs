@@ -3,11 +3,12 @@ use std::fs;
 use std::path::Path;
 
 use crate::app::resolve_app_name;
-use crate::build::{BuildAdapter, detect_build_adapter};
+use crate::build::{
+    BuildAdapter, PresetFamily, detect_build_adapter, load_available_family_presets,
+};
 use crate::output;
 
-const EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT: &str =
-    include_str!("../../../presets/bun/tanstack-start.toml");
+const EMBEDDED_JS_FAMILY_PRESETS_CONTENT: &str = include_str!("../../../presets/js.toml");
 
 pub fn run(force: bool, runtime_override: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
@@ -197,9 +198,10 @@ fn infer_default_main_entrypoint(project_dir: &Path, adapter: BuildAdapter) -> S
     "index.ts".to_string()
 }
 
-fn parse_preset_default_main(content: &str) -> Option<String> {
+fn parse_family_preset_default_main(content: &str, preset_name: &str) -> Option<String> {
     let parsed: toml::Value = toml::from_str(content).ok()?;
-    let main = parsed.get("main")?.as_str()?.trim();
+    let preset = parsed.get(preset_name)?.as_table()?;
+    let main = preset.get("main")?.as_str()?.trim();
     if main.is_empty() {
         None
     } else {
@@ -210,7 +212,9 @@ fn parse_preset_default_main(content: &str) -> Option<String> {
 fn embedded_preset_default_main(preset_ref: &str, adapter: BuildAdapter) -> Option<String> {
     match preset_ref {
         "bun" => adapter.embedded_preset_default_main(),
-        "tanstack-start" => parse_preset_default_main(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT),
+        "tanstack-start" => {
+            parse_family_preset_default_main(EMBEDDED_JS_FAMILY_PRESETS_CONTENT, "tanstack-start")
+        }
         "node" | "deno" => adapter.embedded_preset_default_main(),
         _ => None,
     }
@@ -221,35 +225,80 @@ fn select_preset_for_adapter(adapter: BuildAdapter) -> std::io::Result<Option<St
         return Ok(Some(adapter.default_preset().to_string()));
     }
 
-    let mut options: Vec<(String, Option<String>)> = Vec::new();
-    match adapter {
-        BuildAdapter::Bun => {
-            options.push(("bun (base preset)".to_string(), Some("bun".to_string())));
-            options.push((
-                "tanstack-start".to_string(),
-                Some("tanstack-start".to_string()),
-            ));
-        }
-        BuildAdapter::Node => {
-            options.push(("node (base preset)".to_string(), Some("node".to_string())));
-        }
-        BuildAdapter::Deno => {
-            options.push(("deno (base preset)".to_string(), Some("deno".to_string())));
-        }
-        BuildAdapter::Unknown => {
-            options.push(("bun (base preset)".to_string(), Some("bun".to_string())));
-        }
-    }
-    options.push((
-        "Custom preset reference (leave unset for now)".to_string(),
-        None,
-    ));
+    let family_presets = fetch_family_presets_for_adapter(adapter)?;
+    let Some(options) = build_preset_selection_options(adapter, &family_presets) else {
+        return Ok(Some(adapter.default_preset().to_string()));
+    };
 
     output::select(
         "Build preset (`preset` in tako.toml)",
         Some("Choose a built-in preset or leave it unset and add your own later."),
         options,
     )
+}
+
+fn fetch_family_presets_for_adapter(adapter: BuildAdapter) -> std::io::Result<Vec<String>> {
+    let family = adapter.preset_family();
+    if family == PresetFamily::Unknown {
+        return Ok(Vec::new());
+    }
+
+    let runtime = tokio::runtime::Runtime::new().map_err(|e| {
+        std::io::Error::other(format!("Failed to initialize preset fetch runtime: {e}"))
+    })?;
+    let fetched = output::with_spinner("Fetching presets...", || {
+        runtime.block_on(load_available_family_presets(family))
+    })?;
+
+    match fetched {
+        Ok(presets) => Ok(normalize_family_preset_names(adapter, presets)),
+        Err(err) => {
+            output::warning(&format!(
+                "Failed to fetch presets ({}). Using {} base preset.",
+                err,
+                adapter.default_preset()
+            ));
+            Ok(Vec::new())
+        }
+    }
+}
+
+fn normalize_family_preset_names(adapter: BuildAdapter, preset_names: Vec<String>) -> Vec<String> {
+    let base = adapter.default_preset();
+    let mut normalized = Vec::new();
+    for preset_name in preset_names {
+        let trimmed = preset_name.trim();
+        if trimmed.is_empty() || trimmed == base {
+            continue;
+        }
+        if normalized.iter().any(|existing| existing == trimmed) {
+            continue;
+        }
+        normalized.push(trimmed.to_string());
+    }
+    normalized
+}
+
+fn build_preset_selection_options(
+    adapter: BuildAdapter,
+    family_presets: &[String],
+) -> Option<Vec<(String, Option<String>)>> {
+    if family_presets.is_empty() {
+        return None;
+    }
+
+    let mut options: Vec<(String, Option<String>)> = Vec::with_capacity(family_presets.len() + 2);
+    let base = adapter.default_preset().to_string();
+    options.push((format!("{} (base preset)", base), Some(base.clone())));
+    for preset in family_presets {
+        options.push((preset.clone(), Some(preset.clone())));
+    }
+    options.push((
+        "Custom preset reference (leave unset for now)".to_string(),
+        None,
+    ));
+
+    Some(options)
 }
 
 fn generate_template(
@@ -370,8 +419,8 @@ route = "{production_route}"
 #[cfg(test)]
 mod tests {
     use super::{
-        embedded_preset_default_main, generate_template, infer_default_main_entrypoint,
-        select_adapter_for_init,
+        build_preset_selection_options, embedded_preset_default_main, generate_template,
+        infer_default_main_entrypoint, normalize_family_preset_names, select_adapter_for_init,
     };
     use crate::build::BuildAdapter;
     use tempfile::TempDir;
@@ -609,7 +658,7 @@ mod tests {
             Some("tanstack-start"),
         );
         assert!(rendered.contains("preset = \"tanstack-start\""));
-        assert!(!rendered.contains("preset = \"bun/tanstack-start\""));
+        assert!(!rendered.contains("preset = \"js/tanstack-start\""));
     }
 
     #[test]
@@ -625,6 +674,63 @@ mod tests {
         assert_eq!(
             embedded_preset_default_main("tanstack-start", BuildAdapter::Bun),
             Some("dist/server/tako-entry.mjs".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_family_preset_names_excludes_base_and_deduplicates() {
+        let names = normalize_family_preset_names(
+            BuildAdapter::Bun,
+            vec![
+                "".to_string(),
+                "bun".to_string(),
+                " tanstack-start ".to_string(),
+                "tanstack-start".to_string(),
+                "custom".to_string(),
+            ],
+        );
+        assert_eq!(
+            names,
+            vec!["tanstack-start".to_string(), "custom".to_string()]
+        );
+    }
+
+    #[test]
+    fn build_preset_selection_options_returns_none_when_no_family_presets_found() {
+        let options = build_preset_selection_options(BuildAdapter::Bun, &[]);
+        assert!(options.is_none());
+    }
+
+    #[test]
+    fn build_preset_selection_options_includes_base_variants_and_custom_mode() {
+        let options = build_preset_selection_options(
+            BuildAdapter::Node,
+            &["tanstack-start".to_string(), "next-start".to_string()],
+        )
+        .expect("options should be available");
+
+        assert_eq!(options.len(), 4);
+        assert_eq!(
+            options[0],
+            ("node (base preset)".to_string(), Some("node".to_string()))
+        );
+        assert_eq!(
+            options[1],
+            (
+                "tanstack-start".to_string(),
+                Some("tanstack-start".to_string())
+            )
+        );
+        assert_eq!(
+            options[2],
+            ("next-start".to_string(), Some("next-start".to_string()))
+        );
+        assert_eq!(
+            options[3],
+            (
+                "Custom preset reference (leave unset for now)".to_string(),
+                None
+            )
         );
     }
 

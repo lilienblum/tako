@@ -1,2 +1,0 @@
-main = "dist/server/tako-entry.mjs"
-assets = ["dist/client"]

@@ -25,6 +25,8 @@ Instructions for AI agents working on the Tako codebase.
    - `website/src/pages/docs/deployment.md`
    - `website/src/pages/docs/development.md`
 
+8. **Keep preset family files canonical** - Define family presets in `presets/<family>.toml` (for example `presets/js.toml`). Do not add legacy per-preset files under `presets/<family>/<name>.toml`.
+
 ## Project Structure
 
 **Rust Crates:**
@@ -132,9 +134,10 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
    - `website/src/pages/docs/cli.md`
    - `website/src/pages/docs/deployment.md`
    - `website/src/pages/docs/development.md`
-4. Update affected README.md files if setup/usage/run commands changed
-5. Close or update the related issue/task entry
-6. Keep implementation details OUT of SPEC.md (focus on what users see/do)
+4. If preset definitions changed, update the relevant `presets/<family>.toml` file and ensure no legacy per-preset files are introduced.
+5. Update affected README.md files if setup/usage/run commands changed
+6. Close or update the related issue/task entry
+7. Keep implementation details OUT of SPEC.md (focus on what users see/do)
 
 ### Example Changes
 

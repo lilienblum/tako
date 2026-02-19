@@ -16,7 +16,7 @@ pub struct TakoToml {
     /// Build runtime override used for default preset selection when `preset` is omitted.
     pub runtime: Option<String>,
 
-    /// Build preset reference (for example: "tanstack-start", "tanstack-start@<commit-hash>", or "github:owner/repo/path.toml@<sha>").
+    /// Build preset reference (for example: "tanstack-start" or "tanstack-start@<commit-hash>").
     pub preset: Option<String>,
 
     /// Build settings for deploy artifact generation.
@@ -298,7 +298,19 @@ impl TakoToml {
         }
         if let Some(preset) = &self.preset {
             let trimmed = preset.trim();
-            if !trimmed.is_empty() && !trimmed.starts_with("github:") && trimmed.contains('/') {
+            if trimmed.starts_with("github:") {
+                return Err(ConfigError::Validation(
+                    "github preset references are not supported; use official aliases only."
+                        .to_string(),
+                ));
+            }
+            if trimmed.contains(':') {
+                return Err(ConfigError::Validation(
+                    "preset must be an official alias (for example `tanstack-start`); ':' references are not supported."
+                        .to_string(),
+                ));
+            }
+            if !trimmed.is_empty() && trimmed.contains('/') {
                 return Err(ConfigError::Validation(
                     "preset must not include runtime namespace; set top-level `runtime` and use a local preset name (for example `preset = \"tanstack-start\"`).".to_string(),
                 ));
@@ -1468,13 +1480,34 @@ runtime = "python"
     #[test]
     fn test_validate_preset_rejects_namespaced_alias_in_tako_toml() {
         let raw = r#"
-preset = "bun/tanstack-start"
+preset = "js/tanstack-start"
 "#;
         let err = TakoToml::parse(raw).unwrap_err();
         assert!(
             err.to_string()
                 .contains("preset must not include runtime namespace")
         );
+    }
+
+    #[test]
+    fn test_validate_preset_rejects_github_reference() {
+        let raw = r#"
+preset = "github:owner/repo/presets/custom.toml"
+"#;
+        let err = TakoToml::parse(raw).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("github preset references are not supported")
+        );
+    }
+
+    #[test]
+    fn test_validate_preset_rejects_colon_references() {
+        let raw = r#"
+preset = "custom:tanstack-start"
+"#;
+        let err = TakoToml::parse(raw).unwrap_err();
+        assert!(err.to_string().contains("':' references are not supported"));
     }
 
     #[test]

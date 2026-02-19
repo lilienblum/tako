@@ -5,6 +5,21 @@ pub const BUILTIN_BUN_PRESET_PATH: &str = "presets/bun/bun.toml";
 pub const BUILTIN_NODE_PRESET_PATH: &str = "presets/node/node.toml";
 pub const BUILTIN_DENO_PRESET_PATH: &str = "presets/deno/deno.toml";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PresetFamily {
+    Js,
+    Unknown,
+}
+
+impl PresetFamily {
+    pub fn id(self) -> &'static str {
+        match self {
+            PresetFamily::Js => "js",
+            PresetFamily::Unknown => "unknown",
+        }
+    }
+}
+
 const BUILTIN_BUN_PRESET_CONTENT: &str = r#"main = "src/index.ts"
 dev = ["bun", "run", "dev"]
 install = '''
@@ -149,6 +164,13 @@ impl BuildAdapter {
         }
     }
 
+    pub fn preset_family(self) -> PresetFamily {
+        match self {
+            BuildAdapter::Bun | BuildAdapter::Node | BuildAdapter::Deno => PresetFamily::Js,
+            BuildAdapter::Unknown => PresetFamily::Unknown,
+        }
+    }
+
     pub fn infer_main_entrypoint(self, project_dir: &Path) -> Option<String> {
         match self {
             BuildAdapter::Bun | BuildAdapter::Node => infer_javascript_main_entrypoint(project_dir),
@@ -266,7 +288,7 @@ fn parse_embedded_preset_default_main(content: &str) -> Option<String> {
 mod tests {
     use super::{
         BUILTIN_BUN_PRESET_PATH, BUILTIN_DENO_PRESET_PATH, BUILTIN_NODE_PRESET_PATH, BuildAdapter,
-        builtin_base_preset_content_for_alias, builtin_base_preset_content_for_path,
+        PresetFamily, builtin_base_preset_content_for_alias, builtin_base_preset_content_for_path,
         detect_build_adapter,
     };
     use tempfile::TempDir;
@@ -363,5 +385,14 @@ mod tests {
         assert_eq!(BuildAdapter::from_id("node"), Some(BuildAdapter::Node));
         assert_eq!(BuildAdapter::from_id("deno"), Some(BuildAdapter::Deno));
         assert_eq!(BuildAdapter::from_id("python"), None);
+    }
+
+    #[test]
+    fn build_adapter_maps_to_preset_family() {
+        assert_eq!(BuildAdapter::Bun.preset_family(), PresetFamily::Js);
+        assert_eq!(BuildAdapter::Node.preset_family(), PresetFamily::Js);
+        assert_eq!(BuildAdapter::Deno.preset_family(), PresetFamily::Js);
+        assert_eq!(BuildAdapter::Unknown.preset_family(), PresetFamily::Unknown);
+        assert_eq!(PresetFamily::Js.id(), "js");
     }
 }

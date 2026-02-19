@@ -29,7 +29,7 @@ Directory selection is command-scoped:
 
 ## Top-Level Commands
 
-- `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` (recommended unique per server), production `route`, runtime, and preset selection).
+- `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` (recommended unique per server), production `route`, runtime, and preset selection when family presets are available).
 - `tako help`: show all commands with brief descriptions.
 - `tako upgrade`: upgrade local CLI using the hosted installer.
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
@@ -99,7 +99,7 @@ Notes:
 
 Deploy note:
 
-- `tako deploy` resolves preset from top-level `preset` or adapter default (top-level `runtime` override, otherwise detected adapter). `preset` in `tako.toml` must be runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `bun/tanstack-start` are rejected. Deploy builds target artifacts locally (Docker or local based on preset `[build].container`) in fixed order: preset stage first, then app `[[build.stages]]`, reuses locally cached verified artifacts on cache hits, then uploads those artifacts to servers.
+- `tako deploy` resolves preset from top-level `preset` or adapter default (top-level `runtime` override, otherwise detected adapter). `preset` in `tako.toml` must be runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `js/tanstack-start` are rejected and `github:` refs are not supported. Deploy builds target artifacts locally (Docker or local based on preset `[build].container`) in fixed order: preset stage first, then app `[[build.stages]]`, reuses locally cached verified artifacts on cache hits, then uploads those artifacts to servers.
 - `tako deploy`/`tako dev`/`tako logs`/`tako secrets sync` resolve app identity from top-level `name` when set, otherwise from sanitized project directory name.
 - Preset artifact filters come from preset `[build].exclude` plus app `[build].exclude` (`include` is app-level `[build].include` only).
 - Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is unsupported).
@@ -169,7 +169,7 @@ Initialize in current directory:
 tako init
 ```
 
-`tako init` prompts for app name and production route, prompts for runtime (top-level `runtime`), offers built-in adapter presets plus a custom option, and only prompts for `main` when neither adapter inference nor preset default provides it.
+`tako init` prompts for app name and production route, prompts for runtime (top-level `runtime`), fetches family presets (`Fetching presets...`) and offers base runtime preset + fetched family presets + a custom option; when no family presets are available it skips preset selection and uses the runtime base preset. It only prompts for `main` when neither adapter inference nor preset default provides it.
 
 Run local app with non-interactive output:
 

@@ -1,16 +1,16 @@
-# Preset template example.
+# Preset family template example for presets/js.toml.
 # Preset reference docs: https://tako.sh/docs/presets
-# Use in `tako.toml` as: preset = "github:username/my-presets/custom-preset.toml"
-# For official preset contributions, use `presets/<runtime>/<name>.toml`.
+# Use in `tako.toml` as a runtime-local alias (for example `preset = "my-preset"` with `runtime = "bun"`).
 
+[my-preset]
 # Optional default runtime entrypoint.
 # Used when app `tako.toml` omits top-level `main`.
 # main = "dist/server/tako-entry.mjs"
 
+[my-preset.build]
 # Optional static assets merged into runtime public directory during packaging.
 # assets = ["dist/client"]
 
-[build]
 # Optional artifact excludes (gitignore-style, relative to workspace root).
 # Added on top of runtime-base defaults (for example node_modules exclusion).
 # exclude = ["dist/**/*.map"]

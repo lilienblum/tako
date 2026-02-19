@@ -354,11 +354,6 @@ fn resolve_dev_start_command(preset: &BuildPreset, main: &str) -> Result<Vec<Str
 fn infer_preset_name_from_ref(preset_ref: &str) -> String {
     match parse_preset_reference(preset_ref) {
         Ok(PresetReference::OfficialAlias { name, .. }) => name,
-        Ok(PresetReference::Github { path, .. }) => Path::new(&path)
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| "preset".to_string()),
         Err(_) => "preset".to_string(),
     }
 }
@@ -1163,7 +1158,7 @@ mod tests {
 
         assert_eq!(
             resolve_dev_preset_ref(temp.path(), &cfg).unwrap(),
-            "bun/tanstack-start"
+            "js/tanstack-start"
         );
     }
 

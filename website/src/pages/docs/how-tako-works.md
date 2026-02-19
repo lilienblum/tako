@@ -89,7 +89,7 @@ Important deployment behavior:
 - Docker builds reuse per-target dependency cache volumes (proto + runtime cache mounts) keyed by cache kind + target label + builder image while still creating fresh build containers each deploy.
 - Runtime version resolution is proto-first: Tako tries `proto run <tool> -- --version` (local and Docker contexts), then falls back to `.prototools`, then `latest`; deploy writes release `.prototools` so server runtime matches build runtime.
 - Preset runtime fields use top-level `main`/`install`/`start` keys (legacy preset `[deploy]` is not supported).
-- Top-level `preset` in `tako.toml` must be runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `bun/tanstack-start` are rejected.
+- Top-level `preset` in `tako.toml` must be runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `js/tanstack-start` are rejected and `github:` refs are not supported.
 - Runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`.
 - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.
 - Preset `[[build.stages]]` is not supported; app-level custom stages are configured in `tako.toml` under `[[build.stages]]`.

@@ -6,25 +6,19 @@ use serde::{Deserialize, Serialize};
 
 use crate::build::adapter::{
     BUILTIN_BUN_PRESET_PATH, BUILTIN_DENO_PRESET_PATH, BUILTIN_NODE_PRESET_PATH, BuildAdapter,
-    builtin_base_preset_content_for_alias, builtin_base_preset_content_for_path,
+    PresetFamily, builtin_base_preset_content_for_alias, builtin_base_preset_content_for_path,
 };
 
 pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const EMBEDDED_PRESET_REPO: &str = "embedded";
-const EMBEDDED_BUN_TANSTACK_START_PRESET_PATH: &str = "presets/bun/tanstack-start.toml";
-const EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT: &str =
-    include_str!("../../../presets/bun/tanstack-start.toml");
+const EMBEDDED_JS_FAMILY_PRESETS_PATH: &str = "presets/js.toml";
+const EMBEDDED_JS_FAMILY_PRESETS_CONTENT: &str = include_str!("../../../presets/js.toml");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
     OfficialAlias {
         name: String,
-        commit: Option<String>,
-    },
-    Github {
-        repo: String,
-        path: String,
         commit: Option<String>,
     },
 }
@@ -104,14 +98,14 @@ struct BuildPresetRaw {
     install: Option<String>,
     #[serde(default)]
     start: Vec<String>,
-    #[serde(default)]
-    assets: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct BuildPresetRawBuild {
     #[serde(default)]
     exclude: Vec<String>,
+    #[serde(default)]
+    assets: Vec<String>,
     #[serde(default)]
     install: Option<String>,
     #[serde(default)]
@@ -142,13 +136,9 @@ pub fn parse_preset_reference(value: &str) -> Result<PresetReference, String> {
         return Err("preset cannot be empty".to_string());
     }
 
-    if let Some(rest) = trimmed.strip_prefix("github:") {
-        return parse_github_reference(trimmed, rest);
-    }
-
     if trimmed.contains(':') {
         return Err(format!(
-            "Invalid preset reference '{}'. Use an official alias like 'bun', 'bun/tanstack-start', or 'bun/tanstack-start@<commit-hash>', or github:<owner>/<repo>/<path>.toml[@<commit-hash>].",
+            "Invalid preset reference '{}'. GitHub preset references are not supported. Use an official alias like 'bun', 'js/tanstack-start', or 'js/tanstack-start@<commit-hash>'.",
             trimmed
         ));
     }
@@ -185,17 +175,15 @@ pub fn qualify_runtime_local_preset_ref(
     if trimmed.is_empty() {
         return Err("preset cannot be empty".to_string());
     }
-    if trimmed.starts_with("github:") {
-        return Ok(trimmed.to_string());
-    }
     if trimmed.contains('/') {
         return Err(
-            "preset must not include runtime namespace (for example `bun/rails`); set top-level `runtime` and use local preset name only."
+            "preset must not include namespace (for example `js/tanstack-start`); set top-level `runtime` and use local preset name only."
                 .to_string(),
         );
     }
 
-    if runtime == BuildAdapter::Unknown {
+    let preset_family = runtime.preset_family();
+    if preset_family == PresetFamily::Unknown {
         return Err(format!(
             "Cannot resolve preset '{}' without a known runtime. Set top-level `runtime` explicitly.",
             trimmed
@@ -216,8 +204,8 @@ pub fn qualify_runtime_local_preset_ref(
     };
 
     Ok(match commit {
-        Some(commit) => format!("{}/{}@{}", runtime.id(), name, commit),
-        None => format!("{}/{}", runtime.id(), name),
+        Some(commit) => format!("{}/{}@{}", preset_family.id(), name, commit),
+        None => format!("{}/{}", preset_family.id(), name),
     })
 }
 
@@ -255,49 +243,6 @@ fn validate_official_alias(raw_value: &str, alias: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn parse_github_reference(raw_value: &str, rest: &str) -> Result<PresetReference, String> {
-    let (location, commit) = match rest.rsplit_once('@') {
-        Some((lhs, rhs)) => (lhs, Some(rhs.trim().to_string())),
-        None => (rest, None),
-    };
-    if let Some(commit) = &commit
-        && commit.is_empty()
-    {
-        return Err(format!(
-            "Invalid preset reference '{}': commit hash cannot be empty after '@'.",
-            raw_value
-        ));
-    }
-    if let Some(commit) = &commit {
-        validate_commit_hash(raw_value, commit)?;
-    }
-
-    let mut parts = location.split('/');
-    let owner = parts.next().unwrap_or_default();
-    let repo = parts.next().unwrap_or_default();
-    let path_parts: Vec<&str> = parts.collect();
-
-    if owner.is_empty() || repo.is_empty() || path_parts.is_empty() {
-        return Err(format!(
-            "Invalid preset reference '{}'. Expected github:<owner>/<repo>/<path>.toml[@<commit>].",
-            raw_value
-        ));
-    }
-    let path = path_parts.join("/");
-    if !path.ends_with(".toml") {
-        return Err(format!(
-            "Invalid preset reference '{}': path must end with .toml.",
-            raw_value
-        ));
-    }
-
-    Ok(PresetReference::Github {
-        repo: format!("{owner}/{repo}"),
-        path,
-        commit,
-    })
-}
-
 fn validate_commit_hash(raw_value: &str, commit: &str) -> Result<(), String> {
     if commit.len() < 7 || commit.len() > 64 {
         return Err(format!(
@@ -324,54 +269,37 @@ pub async fn load_build_preset(
         && locked.preset_ref == preset_ref
     {
         let content = load_content_for_resolved_source(&locked).await?;
-        let inferred_name = infer_preset_name_from_path(&locked.path)?;
-        let preset = parse_and_validate_preset(&content, &inferred_name)?;
+        let preset = parse_resolved_preset_from_content(&parsed_ref, &locked.path, &content)?;
         return Ok((preset, locked));
     }
 
-    let (repo, path, commit, content) = match parsed_ref {
-        PresetReference::OfficialAlias { name, commit } => {
-            let path = official_alias_to_path(&name);
-            if let Some(commit) = commit {
-                let content =
-                    fetch_preset_content_by_commit(OFFICIAL_PRESET_REPO, &path, &commit).await?;
-                (OFFICIAL_PRESET_REPO.to_string(), path, commit, content)
-            } else {
-                match fetch_preset_content_from_default_branch(OFFICIAL_PRESET_REPO, &path).await {
-                    Ok((resolved_commit, content)) => (
-                        OFFICIAL_PRESET_REPO.to_string(),
-                        path,
-                        resolved_commit,
-                        content,
-                    ),
-                    Err(default_branch_error) => {
-                        if let Some(content) = embedded_official_preset_content(&path) {
-                            (
-                                EMBEDDED_PRESET_REPO.to_string(),
-                                path,
-                                embedded_content_hash(content),
-                                content.to_string(),
-                            )
-                        } else {
-                            return Err(default_branch_error);
-                        }
-                    }
-                }
+    let (alias, commit_override) = match &parsed_ref {
+        PresetReference::OfficialAlias { name, commit } => (name.as_str(), commit.clone()),
+    };
+    let path = official_alias_to_path(alias);
+    let (repo, commit, content) = if let Some(commit) = commit_override {
+        let content = fetch_preset_content_by_commit(OFFICIAL_PRESET_REPO, &path, &commit).await?;
+        (OFFICIAL_PRESET_REPO.to_string(), commit, content)
+    } else {
+        match fetch_preset_content_from_default_branch(OFFICIAL_PRESET_REPO, &path).await {
+            Ok((resolved_commit, content)) => {
+                (OFFICIAL_PRESET_REPO.to_string(), resolved_commit, content)
             }
-        }
-        PresetReference::Github { repo, path, commit } => {
-            if let Some(commit) = commit {
-                let content = fetch_preset_content_by_commit(&repo, &path, &commit).await?;
-                (repo, path, commit, content)
-            } else {
-                let fetched = fetch_preset_content_from_default_branch(&repo, &path).await?;
-                (repo, path, fetched.0, fetched.1)
+            Err(default_branch_error) => {
+                if let Some(content) = embedded_official_preset_content(&path) {
+                    (
+                        EMBEDDED_PRESET_REPO.to_string(),
+                        embedded_content_hash(content),
+                        content.to_string(),
+                    )
+                } else {
+                    return Err(default_branch_error);
+                }
             }
         }
     };
 
-    let inferred_name = infer_preset_name_from_path(&path)?;
-    let preset = parse_and_validate_preset(&content, &inferred_name)?;
+    let preset = parse_resolved_preset_from_content(&parsed_ref, &path, &content)?;
     let resolved = ResolvedPresetSource {
         preset_ref: preset_ref.to_string(),
         repo,
@@ -387,7 +315,10 @@ fn official_alias_to_path(alias: &str) -> String {
         "bun" => BUILTIN_BUN_PRESET_PATH.to_string(),
         "node" => BUILTIN_NODE_PRESET_PATH.to_string(),
         "deno" => BUILTIN_DENO_PRESET_PATH.to_string(),
-        _ => format!("presets/{alias}.toml"),
+        _ => match alias.split_once('/') {
+            Some((family, _)) => format!("presets/{family}.toml"),
+            None => format!("presets/{alias}.toml"),
+        },
     }
 }
 
@@ -396,9 +327,118 @@ fn embedded_official_preset_content(path: &str) -> Option<&'static str> {
         return Some(content);
     }
     match path {
-        EMBEDDED_BUN_TANSTACK_START_PRESET_PATH => Some(EMBEDDED_BUN_TANSTACK_START_PRESET_CONTENT),
+        EMBEDDED_JS_FAMILY_PRESETS_PATH => Some(EMBEDDED_JS_FAMILY_PRESETS_CONTENT),
         _ => None,
     }
+}
+
+fn official_family_manifest_path(family: PresetFamily) -> Option<&'static str> {
+    match family {
+        PresetFamily::Js => Some(EMBEDDED_JS_FAMILY_PRESETS_PATH),
+        PresetFamily::Unknown => None,
+    }
+}
+
+fn parse_family_manifest_preset_names(path: &str, content: &str) -> Result<Vec<String>, String> {
+    let parsed: toml::Value = toml::from_str(content)
+        .map_err(|e| format!("Failed to parse preset family manifest '{}': {e}", path))?;
+    let manifest = parsed.as_table().ok_or_else(|| {
+        format!(
+            "Preset family manifest '{}' must be a TOML table with [preset-name] sections.",
+            path
+        )
+    })?;
+
+    let mut names = Vec::new();
+    for (name, value) in manifest {
+        if !value.is_table() {
+            continue;
+        }
+        let trimmed = name.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        names.push(trimmed.to_string());
+    }
+    names.sort();
+    names.dedup();
+    Ok(names)
+}
+
+pub async fn load_available_family_presets(family: PresetFamily) -> Result<Vec<String>, String> {
+    let Some(path) = official_family_manifest_path(family) else {
+        return Err(format!(
+            "Preset family '{}' is not supported for preset listing.",
+            family.id()
+        ));
+    };
+
+    let content = match fetch_preset_content_from_default_branch(OFFICIAL_PRESET_REPO, path).await {
+        Ok((_commit, content)) => content,
+        Err(default_branch_error) => {
+            if let Some(content) = embedded_official_preset_content(path) {
+                content.to_string()
+            } else {
+                return Err(default_branch_error);
+            }
+        }
+    };
+
+    parse_family_manifest_preset_names(path, &content)
+}
+
+fn parse_resolved_preset_from_content(
+    parsed_ref: &PresetReference,
+    path: &str,
+    content: &str,
+) -> Result<BuildPreset, String> {
+    match parsed_ref {
+        PresetReference::OfficialAlias { name, .. } => {
+            parse_official_alias_preset_content(name, path, content)
+        }
+    }
+}
+
+fn parse_official_alias_preset_content(
+    alias: &str,
+    path: &str,
+    content: &str,
+) -> Result<BuildPreset, String> {
+    if let Some((_family, preset_name)) = alias.split_once('/') {
+        return parse_family_preset_content(path, content, preset_name);
+    }
+    parse_and_validate_preset(content, alias)
+}
+
+fn parse_family_preset_content(
+    path: &str,
+    content: &str,
+    preset_name: &str,
+) -> Result<BuildPreset, String> {
+    let parsed: toml::Value = toml::from_str(content)
+        .map_err(|e| format!("Failed to parse preset family manifest '{}': {e}", path))?;
+    let manifest = parsed.as_table().ok_or_else(|| {
+        format!(
+            "Preset family manifest '{}' must be a TOML table with [preset-name] sections.",
+            path
+        )
+    })?;
+    let preset = manifest
+        .get(preset_name)
+        .ok_or_else(|| format!("Preset '{}' was not found in '{}'.", preset_name, path))?;
+    let preset_table = preset.as_table().ok_or_else(|| {
+        format!(
+            "Preset '{}' in '{}' must be a table section ([{}]).",
+            preset_name, path, preset_name
+        )
+    })?;
+    let preset_content = toml::to_string(preset_table).map_err(|e| {
+        format!(
+            "Failed to parse preset '{}' in '{}': {}",
+            preset_name, path, e
+        )
+    })?;
+    parse_and_validate_preset(&preset_content, preset_name)
 }
 
 fn embedded_content_hash(content: &str) -> String {
@@ -448,6 +488,11 @@ pub fn parse_and_validate_preset(
     if value.get("exclude").is_some() {
         return Err(
             "Build preset no longer supports top-level exclude. Use [build].exclude.".to_string(),
+        );
+    }
+    if value.get("assets").is_some() {
+        return Err(
+            "Build preset no longer supports top-level assets. Use [build].assets.".to_string(),
         );
     }
     if value.get("builder_image").is_some() {
@@ -558,7 +603,7 @@ pub fn parse_and_validate_preset(
         start: raw.start,
         targets: std::collections::HashMap::new(),
         target_defaults: BuildPresetTargetDefaults::default(),
-        assets: raw.assets,
+        assets: raw.build.assets,
     };
 
     Ok(preset)
@@ -631,23 +676,12 @@ pub fn infer_adapter_from_preset_reference(preset_ref: &str) -> BuildAdapter {
         PresetReference::OfficialAlias { name, .. } => {
             infer_adapter_from_official_alias_name(&name)
         }
-        PresetReference::Github { .. } => BuildAdapter::Unknown,
     }
 }
 
 fn infer_adapter_from_official_alias_name(alias: &str) -> BuildAdapter {
     let family_or_name = alias.split('/').next().unwrap_or(alias);
     BuildAdapter::from_id(family_or_name).unwrap_or(BuildAdapter::Unknown)
-}
-
-fn infer_preset_name_from_path(path: &str) -> Result<String, String> {
-    Path::new(path)
-        .file_stem()
-        .and_then(|stem| stem.to_str())
-        .map(str::trim)
-        .filter(|stem| !stem.is_empty())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| format!("Failed to infer preset name from path '{}'.", path))
 }
 
 fn parse_build_target_labels(raw_targets: Option<toml::Value>) -> Result<Vec<String>, String> {
@@ -826,11 +860,11 @@ mod tests {
 
     #[test]
     fn parse_preset_reference_accepts_namespaced_official_alias() {
-        let parsed = parse_preset_reference("bun/tanstack-start").unwrap();
+        let parsed = parse_preset_reference("js/tanstack-start").unwrap();
         assert_eq!(
             parsed,
             PresetReference::OfficialAlias {
-                name: "bun/tanstack-start".to_string(),
+                name: "js/tanstack-start".to_string(),
                 commit: None,
             }
         );
@@ -838,40 +872,12 @@ mod tests {
 
     #[test]
     fn parse_preset_reference_accepts_namespaced_official_alias_with_commit() {
-        let parsed = parse_preset_reference("bun/tanstack-start@abc1234").unwrap();
+        let parsed = parse_preset_reference("js/tanstack-start@abc1234").unwrap();
         assert_eq!(
             parsed,
             PresetReference::OfficialAlias {
-                name: "bun/tanstack-start".to_string(),
+                name: "js/tanstack-start".to_string(),
                 commit: Some("abc1234".to_string()),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_preset_reference_accepts_github_with_commit() {
-        let parsed =
-            parse_preset_reference("github:my-user/tako/presets/presets/bun.toml@abc123def456")
-                .unwrap();
-        assert_eq!(
-            parsed,
-            PresetReference::Github {
-                repo: "my-user/tako".to_string(),
-                path: "presets/presets/bun.toml".to_string(),
-                commit: Some("abc123def456".to_string()),
-            }
-        );
-    }
-
-    #[test]
-    fn parse_preset_reference_accepts_github_without_commit() {
-        let parsed = parse_preset_reference("github:my-user/tako/presets/bun.toml").unwrap();
-        assert_eq!(
-            parsed,
-            PresetReference::Github {
-                repo: "my-user/tako".to_string(),
-                path: "presets/bun.toml".to_string(),
-                commit: None,
             }
         );
     }
@@ -881,11 +887,10 @@ mod tests {
         assert!(parse_preset_reference("").is_err());
         assert!(parse_preset_reference("github:owner/repo").is_err());
         assert!(parse_preset_reference("github:owner/repo/path.jsonc").is_err());
-        assert!(parse_preset_reference("github:owner/repo/path.json").is_err());
-        assert!(parse_preset_reference("github:owner/repo/path.yaml").is_err());
+        assert!(parse_preset_reference("github:owner/repo/path.toml").is_err());
         assert!(parse_preset_reference("bun/abc12345/extra").is_err());
         assert!(parse_preset_reference("bun@").is_err());
-        assert!(parse_preset_reference("bun/tanstack-start@").is_err());
+        assert!(parse_preset_reference("js/tanstack-start@").is_err());
         assert!(parse_preset_reference("Bun").is_err());
     }
 
@@ -893,8 +898,8 @@ mod tests {
     fn official_alias_to_path_maps_family_layout() {
         assert_eq!(official_alias_to_path("bun"), "presets/bun/bun.toml");
         assert_eq!(
-            official_alias_to_path("bun/tanstack-start"),
-            "presets/bun/tanstack-start.toml"
+            official_alias_to_path("js/tanstack-start"),
+            "presets/js.toml"
         );
         assert_eq!(official_alias_to_path("node"), "presets/node/node.toml");
         assert_eq!(official_alias_to_path("deno"), "presets/deno/deno.toml");
@@ -905,7 +910,34 @@ mod tests {
         assert!(embedded_official_preset_content("presets/bun/bun.toml").is_some());
         assert!(embedded_official_preset_content("presets/node/node.toml").is_some());
         assert!(embedded_official_preset_content("presets/deno/deno.toml").is_some());
-        assert!(embedded_official_preset_content("presets/bun/tanstack-start.toml").is_some());
+        assert!(embedded_official_preset_content("presets/js.toml").is_some());
+    }
+
+    #[test]
+    fn parse_family_manifest_preset_names_collects_sorted_sections() {
+        let names = parse_family_manifest_preset_names(
+            "presets/js.toml",
+            r#"
+[zeta]
+main = "z.ts"
+
+foo = "bar"
+
+[alpha]
+main = "a.ts"
+"#,
+        )
+        .unwrap();
+        assert_eq!(names, vec!["alpha".to_string(), "zeta".to_string()]);
+    }
+
+    #[test]
+    fn load_available_family_presets_rejects_unknown_family() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let err = runtime
+            .block_on(load_available_family_presets(PresetFamily::Unknown))
+            .unwrap_err();
+        assert!(err.contains("not supported"));
     }
 
     #[test]
@@ -920,9 +952,11 @@ mod tests {
 
     #[test]
     fn embedded_bun_tanstack_start_preset_parses() {
-        let content = embedded_official_preset_content("presets/bun/tanstack-start.toml")
+        let content = embedded_official_preset_content("presets/js.toml")
             .expect("embedded bun-tanstack-start preset should exist");
-        let preset = parse_and_validate_preset(content, "tanstack-start").unwrap();
+        let preset =
+            parse_official_alias_preset_content("js/tanstack-start", "presets/js.toml", content)
+                .unwrap();
         assert_eq!(preset.name, "tanstack-start");
         assert_eq!(preset.main.as_deref(), Some("dist/server/tako-entry.mjs"));
         assert_eq!(preset.assets, vec!["dist/client"]);
@@ -935,8 +969,8 @@ mod tests {
             BuildAdapter::Bun
         );
         assert_eq!(
-            infer_adapter_from_preset_reference("bun/tanstack-start"),
-            BuildAdapter::Bun
+            infer_adapter_from_preset_reference("js/tanstack-start"),
+            BuildAdapter::Unknown
         );
         assert_eq!(
             infer_adapter_from_preset_reference("node"),
@@ -961,6 +995,8 @@ mod tests {
         let raw = r#"
 name = "tanstack-start"
 main = "dist/server/tako-entry.mjs"
+
+[build]
 assets = ["dist/client"]
 "#;
         let mut preset = parse_preset(raw).unwrap();
@@ -983,6 +1019,7 @@ assets = ["dist/client"]
             ]
         );
         assert!(preset.build.container);
+        assert_eq!(preset.assets, vec!["dist/client".to_string()]);
     }
 
     #[test]
@@ -1016,9 +1053,9 @@ build = "custom-build"
     fn apply_adapter_base_runtime_defaults_keeps_explicit_target_and_container_overrides() {
         let raw = r#"
 name = "custom-bun"
-assets = ["dist/client"]
 
 [build]
+assets = ["dist/client"]
 exclude = []
 targets = []
 container = false
@@ -1035,9 +1072,9 @@ container = false
     fn apply_adapter_base_runtime_defaults_appends_variant_excludes_to_base() {
         let raw = r#"
 name = "custom-bun"
-assets = ["dist/client"]
 
 [build]
+assets = ["dist/client"]
 exclude = ["dist/**/*.map", "node_modules/"]
 "#;
         let mut preset = parse_preset(raw).unwrap();
@@ -1123,6 +1160,19 @@ install = "bun install"
 "#;
         let err = parse_preset(raw).unwrap_err();
         assert!(err.contains("top-level exclude"));
+    }
+
+    #[test]
+    fn parse_and_validate_preset_rejects_top_level_assets() {
+        let raw = r#"
+name = "bun"
+assets = ["dist/client"]
+
+[build]
+install = "bun install"
+"#;
+        let err = parse_preset(raw).unwrap_err();
+        assert!(err.contains("top-level assets"));
     }
 
     #[test]
@@ -1225,6 +1275,18 @@ targets = ["linux-x86_64-glibc", "linux-aarch64-musl"]
                 "linux-aarch64-musl".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn parse_and_validate_preset_accepts_build_assets() {
+        let raw = r#"
+name = "tanstack-start"
+
+[build]
+assets = ["dist/client"]
+"#;
+        let preset = parse_preset(raw).unwrap();
+        assert_eq!(preset.assets, vec!["dist/client".to_string()]);
     }
 
     #[test]

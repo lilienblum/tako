@@ -22,7 +22,7 @@ runtime = "bun"
 route = "my-app.example.com"
 ```
 
-`tako init` prompts for `name` and `[envs.production].route`, then prompts for runtime (top-level `runtime`, with `--runtime` flag) and offers built-in adapter presets plus a custom option. Top-level `preset` is written only when a non-base preset is selected (for base runtime preset or custom mode, it remains unset/commented). It only writes `main` when adapter inference finds an entrypoint that differs from the selected preset default.
+`tako init` prompts for `name` and `[envs.production].route`, then prompts for runtime (top-level `runtime`, with `--runtime` flag). In interactive mode it fetches runtime-family presets (shows `Fetching presets...`) and offers base runtime preset + fetched family presets + a custom option; if no family presets are available, it skips preset selection and uses the runtime base preset. Top-level `preset` is written only when a non-base preset is selected (for base runtime preset or custom mode, it remains unset/commented). It only writes `main` when adapter inference finds an entrypoint that differs from the selected preset default.
 
 `name` is optional. If omitted, Tako uses a sanitized project directory name.
 Setting `name` is recommended for stable identity: keep it unique per server. Renaming it later creates a new app identity/path, so remove the old deployment manually when needed.
@@ -59,8 +59,8 @@ runtime = "bun"
 - `preset`: optional runtime-local build preset override. If omitted, deploy/dev use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`). Supports:
   - runtime-local aliases: `tanstack-start` (resolved under selected `runtime`)
   - pinned runtime-local aliases: `tanstack-start@<commit-hash>`
-  - GitHub refs: `github:<owner>/<repo>/<path>.toml[@<commit-hash>]`
-  - Namespaced aliases in `tako.toml` (for example `bun/tanstack-start`) are rejected.
+  - Namespaced aliases in `tako.toml` (for example `js/tanstack-start`) are rejected.
+  - `github:` preset refs are not supported.
   - Full schema/examples: [`Presets`](/docs/presets)
 - `[build]`: deploy artifact build config.
   - `include`: optional artifact include globs (`**/*` is used when unset).
@@ -74,14 +74,14 @@ runtime = "bun"
     - `run` (required command)
   - Stage execution order per target is fixed: preset stage first (`[build].install`, `[build].build`), then `[[build.stages]]` in declaration order.
   - Adapter base presets (`bun`, `node`, `deno`) are built into the CLI (not loaded from workspace preset files).
-  - File-based presets remain for named variants under `presets/<adapter>/<name>.toml` (for example `presets/bun/tanstack-start.toml`).
+  - Runtime family preset definitions live in `presets/<family>.toml` (for example `presets/js.toml`), where each preset is a section (`[tanstack-start]`, etc.).
   - Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`dev`, `install`, `start`, `[build].install`, `[build].build`).
   - Runtime base presets also provide default build filters/targets (`[build].exclude`, `[build].targets`, `[build].container`) and default `assets`.
   - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated).
   - Preset `[build].targets` and `[build].container` override runtime defaults when set (including explicit empty arrays or explicit `container` values).
-  - Preset `assets` override runtime-base `assets` when set.
-  - Build preset files support optional top-level `name`, top-level `main`, top-level `assets`, and preset `[build]` keys (`exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container`). Presets can still override runtime lifecycle fields when needed. Preset `[[build.stages]]`, legacy preset `[dev]`, `[deploy]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported.
-  - Bun `tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and `assets = ["dist/client"]`.
+  - Preset `[build].assets` override runtime-base `assets` when set.
+  - Build preset files support optional top-level `name`, top-level `main`, and preset `[build]` keys (`assets`, `exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container`). Presets can still override runtime lifecycle fields when needed. Preset top-level `assets`, preset `[[build.stages]]`, legacy preset `[dev]`, `[deploy]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported.
+  - Bun `tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and `[build].assets = ["dist/client"]`.
   - Deploy writes lock metadata to `.tako/build.lock.json` so the resolved preset commit stays reproducible across deploys.
   - Deploy build mode is controlled by preset `[build].container`.
     - `true`: Docker target builds
