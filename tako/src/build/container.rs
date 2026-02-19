@@ -214,7 +214,7 @@ fn build_container_script(
             "export BUN_INSTALL_CACHE_DIR={}",
             shell_single_quote(BUN_INSTALL_CACHE_PATH)
         ),
-        "if command -v apk >/dev/null 2>&1; then apk add --no-cache bash ca-certificates curl git gzip unzip xz; elif command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends bash ca-certificates curl git gzip unzip xz-utils; rm -rf /var/lib/apt/lists/*; else echo \"Unsupported builder image: expected apk or apt-get\" >&2; exit 1; fi".to_string(),
+        "if command -v apk >/dev/null 2>&1; then apk add --no-cache bash ca-certificates curl git gzip libgcc libstdc++ unzip xz; elif command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends bash ca-certificates curl git gzip libgcc-s1 libstdc++6 unzip xz-utils; rm -rf /var/lib/apt/lists/*; else echo \"Unsupported builder image: expected apk or apt-get\" >&2; exit 1; fi".to_string(),
         "if ! command -v mise >/dev/null 2>&1; then installer=\"$(mktemp)\"; curl -fsSL https://mise.run -o \"$installer\"; chmod +x \"$installer\"; sh \"$installer\"; rm -f \"$installer\"; fi".to_string(),
         "if ! command -v mise >/dev/null 2>&1; then echo \"Failed to install mise in build container\" >&2; exit 1; fi".to_string(),
         format!(
@@ -226,6 +226,9 @@ fn build_container_script(
             "if [ ! -f /workspace/mise.toml ]; then printf '[tools]\\n%s = \"latest\"\\n' {} > /workspace/mise.toml; fi",
             shell_single_quote(runtime_tool)
         ),
+        "cd /workspace && mise trust /workspace/mise.toml".to_string(),
+        "if [ -f \"$TAKO_APP_DIR/mise.toml\" ]; then mise trust \"$TAKO_APP_DIR/mise.toml\"; fi"
+            .to_string(),
         "cd /workspace && mise install".to_string(),
         format!(
             "cd {} && mise exec -- {} --version > {}",
@@ -466,6 +469,19 @@ mod tests {
     }
 
     #[test]
+    fn container_script_trusts_workspace_mise_config_before_install() {
+        let script = build_container_script("apps/web", "bun", Some("bun install"), None, &[])
+            .expect("container script");
+        let trust_index = script
+            .find("cd /workspace && mise trust /workspace/mise.toml")
+            .expect("trust command");
+        let install_index = script
+            .find("cd /workspace && mise install")
+            .expect("install command");
+        assert!(trust_index < install_index);
+    }
+
+    #[test]
     fn docker_create_args_include_platform_image_and_shell_script() {
         let args = build_docker_create_args("linux/amd64", "oven/bun:1.2", "echo hello", &[]);
         assert_eq!(args[0], "create");
@@ -528,6 +544,14 @@ mod tests {
             script
                 .contains("if [ ! -f /workspace/mise.toml ]; then printf '[tools]\\n%s = \"latest\"\\n' 'bun' > /workspace/mise.toml; fi")
         );
+    }
+
+    #[test]
+    fn container_script_installs_runtime_libraries_for_toolchain_binaries() {
+        let script =
+            build_container_script("apps/web", "bun", Some("bun install"), None, &[]).unwrap();
+        assert!(script.contains("apk add --no-cache bash ca-certificates curl git gzip libgcc libstdc++ unzip xz"));
+        assert!(script.contains("apt-get install -y --no-install-recommends bash ca-certificates curl git gzip libgcc-s1 libstdc++6 unzip xz-utils"));
     }
 
     #[test]

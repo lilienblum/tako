@@ -8,7 +8,16 @@ ENV MISE_INSTALL_PATH=${MISE_INSTALL_PATH}
 ENV PATH="/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 RUN set -eux; \
-    apk add --no-cache bash ca-certificates curl git gzip unzip xz; \
+    apk add --no-cache \
+        bash \
+        ca-certificates \
+        curl \
+        git \
+        gzip \
+        libgcc \
+        libstdc++ \
+        unzip \
+        xz; \
     if ! command -v mise >/dev/null 2>&1; then \
         if apk add --no-cache mise >/dev/null 2>&1; then \
             :; \
