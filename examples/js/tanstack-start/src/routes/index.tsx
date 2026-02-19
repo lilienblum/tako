@@ -5,5 +5,5 @@ export const Route = createFileRoute("/")({
 });
 
 function Home() {
-  return <h1>Tako app</h1>;
+  return <h1>Tanstack Start example for tako</h1>;
 }

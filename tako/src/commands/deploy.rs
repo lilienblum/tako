@@ -41,6 +41,7 @@ struct DeployConfig {
     main: String,
     deploy_install: Option<String>,
     deploy_start: Vec<String>,
+    use_unified_target_process: bool,
 }
 
 #[derive(Clone)]
@@ -80,6 +81,7 @@ const LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS: usize = 90;
 const LOCAL_BUILD_WORKSPACE_RELATIVE_DIR: &str = ".tako/build-workspaces";
 const RUNTIME_VERSION_OUTPUT_FILE: &str = ".tako-runtime-version";
 const MISE_TOML_FILE: &str = "mise.toml";
+const UNIFIED_JS_CACHE_TARGET_LABEL: &str = "shared-local-js";
 
 #[derive(serde::Serialize)]
 struct ArtifactCacheKeyInput<'a> {
@@ -123,6 +125,14 @@ struct ArtifactCachePaths {
 struct CachedArtifact {
     path: PathBuf,
     size_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ArtifactBuildGroup {
+    build_target_label: String,
+    cache_target_label: String,
+    target_labels: Vec<String>,
+    display_target_label: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -389,7 +399,15 @@ async fn run_async(
     let server_targets = resolve_deploy_server_targets(&servers, &server_names)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     output::success(&format_servers_summary(&server_names));
-    output::success(&format_server_targets_summary(&server_targets));
+    let use_unified_js_target_process = should_use_unified_js_target_process(
+        &runtime_tool,
+        should_use_docker_build(&build_preset),
+        &build_preset,
+    );
+    output::success(&format_server_targets_summary(
+        &server_targets,
+        use_unified_js_target_process,
+    ));
 
     let artifacts_by_target = build_target_artifacts(
         &project_dir,
@@ -401,6 +419,7 @@ async fn run_async(
         &app_subdir,
         &build_preset.name,
         &runtime_tool,
+        use_unified_js_target_process,
         &manifest_main,
         &server_targets,
         &build_preset,
@@ -427,6 +446,7 @@ async fn run_async(
         main: manifest_main,
         deploy_install: build_preset.install.clone(),
         deploy_start: build_preset.start.clone(),
+        use_unified_target_process: use_unified_js_target_process,
     });
     let target_by_server: HashMap<String, ServerTarget> = server_targets.into_iter().collect();
 
@@ -862,12 +882,81 @@ fn format_prepare_deploy_section(env: &str) -> String {
     format!("Preparing deployment for {}", output::emphasized(env))
 }
 
-fn format_build_completed_message(target_label: &str) -> String {
-    format!("Build completed for {}", target_label)
+fn format_build_stages_summary(stage_summary: &[String], target_label: Option<&str>) -> String {
+    match target_label {
+        Some(label) => format!("Build stages for {}: {}", label, stage_summary.join(" -> ")),
+        None => format!("Build stages: {}", stage_summary.join(" -> ")),
+    }
 }
 
-fn format_prepare_artifact_message(target_label: &str) -> String {
-    format!("Preparing artifact for {}...", target_label)
+fn format_build_artifact_message(target_label: Option<&str>) -> String {
+    match target_label {
+        Some(label) => format!("Building artifact for {}...", label),
+        None => "Building artifact...".to_string(),
+    }
+}
+
+fn format_build_completed_message(target_label: Option<&str>) -> String {
+    match target_label {
+        Some(label) => format!("Build completed for {}", label),
+        None => "Build completed".to_string(),
+    }
+}
+
+fn format_prepare_artifact_message(target_label: Option<&str>) -> String {
+    match target_label {
+        Some(label) => format!("Preparing artifact for {}...", label),
+        None => "Preparing artifact...".to_string(),
+    }
+}
+
+fn format_artifact_cache_hit_message(
+    target_label: Option<&str>,
+    artifact_path: &str,
+    artifact_size: &str,
+) -> String {
+    match target_label {
+        Some(label) => format!(
+            "Artifact cache hit for {}: {} ({})",
+            label, artifact_path, artifact_size
+        ),
+        None => format!("Artifact cache hit: {} ({})", artifact_path, artifact_size),
+    }
+}
+
+fn format_artifact_cache_invalid_message(target_label: Option<&str>, error: &str) -> String {
+    match target_label {
+        Some(label) => format!(
+            "Artifact cache entry for {} is invalid ({}); rebuilding.",
+            label, error
+        ),
+        None => format!("Artifact cache entry is invalid ({}); rebuilding.", error),
+    }
+}
+
+fn format_artifact_ready_message(
+    target_label: Option<&str>,
+    artifact_path: &str,
+    artifact_size: &str,
+) -> String {
+    match target_label {
+        Some(label) => format!(
+            "Artifact ready for {}: {} ({})",
+            label, artifact_path, artifact_size
+        ),
+        None => format!("Artifact ready: {} ({})", artifact_path, artifact_size),
+    }
+}
+
+fn format_deploy_main_message(
+    main: &str,
+    target_label: &str,
+    use_unified_target_process: bool,
+) -> String {
+    if use_unified_target_process {
+        return format!("Deploy main: {}", main);
+    }
+    format!("Deploy main: {} (artifact target: {})", main, target_label)
 }
 
 fn format_parallel_deploy_step(server_count: usize) -> String {
@@ -1242,7 +1331,13 @@ fn format_server_target_metadata_error(missing: &[String], invalid: &[String]) -
     )
 }
 
-fn format_server_targets_summary(server_targets: &[(String, ServerTarget)]) -> String {
+fn format_server_targets_summary(
+    server_targets: &[(String, ServerTarget)],
+    use_unified_target_process: bool,
+) -> String {
+    if use_unified_target_process {
+        return "Server targets: shared local JS build".to_string();
+    }
     let mut labels = server_targets
         .iter()
         .map(|(_, target)| target.label())
@@ -1250,6 +1345,20 @@ fn format_server_targets_summary(server_targets: &[(String, ServerTarget)]) -> S
     labels.sort();
     labels.dedup();
     format!("Server targets: {}", labels.join(", "))
+}
+
+fn has_target_specific_build_commands(preset: &BuildPreset) -> bool {
+    !preset.targets.is_empty()
+}
+
+fn should_use_unified_js_target_process(
+    runtime_tool: &str,
+    use_docker_build: bool,
+    preset: &BuildPreset,
+) -> bool {
+    !use_docker_build
+        && matches!(runtime_tool, "bun" | "node" | "deno")
+        && !has_target_specific_build_commands(preset)
 }
 
 fn shorten_commit(commit: &str) -> &str {
@@ -1321,6 +1430,45 @@ fn resolve_build_target(
 
 fn should_use_docker_build(preset: &BuildPreset) -> bool {
     preset.build.container
+}
+
+fn build_artifact_target_groups(
+    server_targets: &[(String, ServerTarget)],
+    use_unified_target_process: bool,
+) -> Vec<ArtifactBuildGroup> {
+    let unique_targets: Vec<String> = server_targets
+        .iter()
+        .map(|(_, target)| target.label())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    if unique_targets.is_empty() {
+        return Vec::new();
+    }
+
+    if use_unified_target_process {
+        let build_target_label = unique_targets
+            .first()
+            .expect("unique targets cannot be empty")
+            .clone();
+        return vec![ArtifactBuildGroup {
+            build_target_label,
+            cache_target_label: UNIFIED_JS_CACHE_TARGET_LABEL.to_string(),
+            target_labels: unique_targets,
+            display_target_label: None,
+        }];
+    }
+
+    unique_targets
+        .into_iter()
+        .map(|label| ArtifactBuildGroup {
+            build_target_label: label.clone(),
+            cache_target_label: label.clone(),
+            target_labels: vec![label.clone()],
+            display_target_label: Some(label),
+        })
+        .collect()
 }
 
 fn resolve_build_adapter(
@@ -1772,6 +1920,7 @@ async fn build_target_artifacts(
     app_subdir: &str,
     runtime_name: &str,
     runtime_tool: &str,
+    use_unified_target_process: bool,
     main: &str,
     server_targets: &[(String, ServerTarget)],
     preset: &BuildPreset,
@@ -1781,27 +1930,27 @@ async fn build_target_artifacts(
     exclude_patterns: &[String],
     asset_roots: &[String],
 ) -> Result<HashMap<String, PathBuf>, String> {
-    let unique_targets: BTreeSet<String> = server_targets
-        .iter()
-        .map(|(_, target)| target.label())
-        .collect();
+    let target_groups = build_artifact_target_groups(server_targets, use_unified_target_process);
     let use_docker_build = should_use_docker_build(preset);
     let mut artifacts = HashMap::new();
 
-    for target_label in unique_targets {
-        let target_build = resolve_build_target(preset, &target_label)?;
+    for target_group in target_groups {
+        let build_target_label = target_group.build_target_label;
+        let cache_target_label = target_group.cache_target_label;
+        let display_target_label = target_group.display_target_label.as_deref();
+        let target_build = resolve_build_target(preset, &build_target_label)?;
         let use_local_build_spinners = should_use_local_build_spinners(output::is_interactive());
         let stage_summary = summarize_build_stages(&target_build, custom_stages);
         if !stage_summary.is_empty() {
-            output::muted(&format!(
-                "Build stages for {}: {}",
-                target_label,
-                stage_summary.join(" -> ")
+            output::muted(&format_build_stages_summary(
+                &stage_summary,
+                display_target_label,
             ));
         }
         std::fs::create_dir_all(build_workspace_root)
             .map_err(|e| format!("Failed to create {}: {e}", build_workspace_root.display()))?;
-        let workspace = build_workspace_root.join(format!("work-{}-{}", version, target_label));
+        let workspace =
+            build_workspace_root.join(format!("work-{}-{}", version, build_target_label));
         if workspace.exists() {
             std::fs::remove_dir_all(&workspace)
                 .map_err(|e| format!("Failed to clear {}: {e}", workspace.display()))?;
@@ -1809,17 +1958,17 @@ async fn build_target_artifacts(
         std::fs::create_dir_all(&workspace)
             .map_err(|e| format!("Failed to create {}: {e}", workspace.display()))?;
         BuildExecutor::extract_archive(source_archive_path, &workspace).map_err(|e| {
-            format!(
-                "Failed to extract source archive for {}: {}",
-                target_label, e
-            )
+            match display_target_label {
+                Some(label) => format!("Failed to extract source archive for {}: {}", label, e),
+                None => format!("Failed to extract source archive: {}", e),
+            }
         })?;
 
         let runtime_version = if use_docker_build {
             resolve_runtime_version_with_docker_probe(
                 &workspace,
                 app_subdir,
-                &target_label,
+                &build_target_label,
                 runtime_tool,
                 &target_build,
             )?
@@ -1833,7 +1982,7 @@ async fn build_target_artifacts(
             runtime_tool,
             &runtime_version,
             use_docker_build,
-            &target_label,
+            &cache_target_label,
             preset_source,
             &target_build,
             custom_stages,
@@ -1842,39 +1991,40 @@ async fn build_target_artifacts(
             asset_roots,
             app_subdir,
         )?;
-        let cache_paths = artifact_cache_paths(cache_dir, &target_label, &cache_key);
+        let cache_paths = artifact_cache_paths(cache_dir, &cache_target_label, &cache_key);
         let _cache_lock = acquire_artifact_cache_lock(&cache_paths.lock_path)?;
 
         match load_valid_cached_artifact(&cache_paths, &cache_key) {
             Ok(Some(cached)) => {
-                output::success(&format!(
-                    "Artifact cache hit for {}: {} ({})",
-                    target_label,
-                    format_path_relative_to(project_dir, &cached.path),
-                    format_size(cached.size_bytes)
+                output::success(&format_artifact_cache_hit_message(
+                    display_target_label,
+                    &format_path_relative_to(project_dir, &cached.path),
+                    &format_size(cached.size_bytes),
                 ));
-                artifacts.insert(target_label, cached.path);
+                for target_label in &target_group.target_labels {
+                    artifacts.insert(target_label.clone(), cached.path.clone());
+                }
                 let _ = std::fs::remove_dir_all(&workspace);
                 continue;
             }
             Ok(None) => {}
             Err(error) => {
-                output::warning(&format!(
-                    "Artifact cache entry for {} is invalid ({}); rebuilding.",
-                    target_label, error
+                output::warning(&format_artifact_cache_invalid_message(
+                    display_target_label,
+                    &error,
                 ));
                 remove_cached_artifact_files(&cache_paths);
             }
         }
 
         let build_result = (|| -> Result<u64, String> {
-            let build_label = format!("Building artifact for {}...", target_label);
+            let build_label = format_build_artifact_message(display_target_label);
             if use_local_build_spinners {
                 output::with_spinner(build_label.as_str(), || {
                     run_target_build(
                         &workspace,
                         app_subdir,
-                        &target_label,
+                        &build_target_label,
                         runtime_tool,
                         use_docker_build,
                         &target_build,
@@ -1887,7 +2037,7 @@ async fn build_target_artifacts(
                 run_target_build(
                     &workspace,
                     app_subdir,
-                    &target_label,
+                    &build_target_label,
                     runtime_tool,
                     use_docker_build,
                     &target_build,
@@ -1900,9 +2050,9 @@ async fn build_target_artifacts(
                 runtime_tool,
                 &runtime_version,
             )?;
-            output::success(&format_build_completed_message(&target_label));
+            output::success(&format_build_completed_message(display_target_label));
 
-            let prepare_label = format_prepare_artifact_message(&target_label);
+            let prepare_label = format_prepare_artifact_message(display_target_label);
             if use_local_build_spinners {
                 output::with_spinner(prepare_label.as_str(), || {
                     package_target_artifact(
@@ -1914,7 +2064,7 @@ async fn build_target_artifacts(
                         &cache_paths,
                         &cache_key,
                         main,
-                        &target_label,
+                        &build_target_label,
                     )
                 })
                 .map_err(|e| format!("Failed to render artifact preparation spinner: {e}"))?
@@ -1929,20 +2079,21 @@ async fn build_target_artifacts(
                     &cache_paths,
                     &cache_key,
                     main,
-                    &target_label,
+                    &build_target_label,
                 )
             }
         })();
         let _ = std::fs::remove_dir_all(&workspace);
         let artifact_size = build_result?;
 
-        output::success(&format!(
-            "Artifact ready for {}: {} ({})",
-            target_label,
-            format_path_relative_to(project_dir, &cache_paths.artifact_path),
-            format_size(artifact_size)
+        output::success(&format_artifact_ready_message(
+            display_target_label,
+            &format_path_relative_to(project_dir, &cache_paths.artifact_path),
+            &format_size(artifact_size),
         ));
-        artifacts.insert(target_label, cache_paths.artifact_path.clone());
+        for target_label in &target_group.target_labels {
+            artifacts.insert(target_label.clone(), cache_paths.artifact_path.clone());
+        }
     }
 
     Ok(artifacts)
@@ -2925,9 +3076,10 @@ async fn deploy_to_server(
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         })
         .await?;
-        output::muted(&format!(
-            "Deploy main: {} (artifact target: {})",
-            resolved_main, target_label
+        output::muted(&format_deploy_main_message(
+            &resolved_main,
+            target_label,
+            config.use_unified_target_process,
         ));
 
         // Send deploy command to tako-server.
@@ -3563,6 +3715,7 @@ name = "test-app"
             main: "index.ts".to_string(),
             deploy_install: Some("bun install --production --frozen-lockfile".to_string()),
             deploy_start: vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()],
+            use_unified_target_process: false,
         };
         assert_eq!(cfg.release_dir(), "/opt/tako/apps/my-app/releases/v1");
         assert_eq!(
@@ -3641,7 +3794,90 @@ name = "test-app"
 
     #[test]
     fn format_server_targets_summary_deduplicates_target_labels() {
-        let summary = format_server_targets_summary(&[
+        let summary = format_server_targets_summary(
+            &[
+                (
+                    "a".to_string(),
+                    ServerTarget {
+                        arch: "x86_64".to_string(),
+                        libc: "glibc".to_string(),
+                    },
+                ),
+                (
+                    "b".to_string(),
+                    ServerTarget {
+                        arch: "x86_64".to_string(),
+                        libc: "glibc".to_string(),
+                    },
+                ),
+                (
+                    "c".to_string(),
+                    ServerTarget {
+                        arch: "aarch64".to_string(),
+                        libc: "musl".to_string(),
+                    },
+                ),
+            ],
+            false,
+        );
+
+        assert_eq!(
+            summary,
+            "Server targets: linux-aarch64-musl, linux-x86_64-glibc"
+        );
+    }
+
+    #[test]
+    fn format_server_targets_summary_uses_shared_label_for_unified_mode() {
+        let summary = format_server_targets_summary(
+            &[(
+                "a".to_string(),
+                ServerTarget {
+                    arch: "aarch64".to_string(),
+                    libc: "musl".to_string(),
+                },
+            )],
+            true,
+        );
+
+        assert_eq!(summary, "Server targets: shared local JS build");
+    }
+
+    #[test]
+    fn should_use_unified_js_target_process_only_for_local_non_overridden_js_builds() {
+        let mut preset = BuildPreset {
+            name: "bun".to_string(),
+            main: None,
+            builder_image: None,
+            build: crate::build::BuildPresetBuild::default(),
+            dev: vec![],
+            install: None,
+            start: vec![],
+            targets: HashMap::new(),
+            target_defaults: crate::build::BuildPresetTargetDefaults::default(),
+            assets: vec![],
+        };
+
+        assert!(should_use_unified_js_target_process("bun", false, &preset));
+        assert!(should_use_unified_js_target_process("node", false, &preset));
+        assert!(should_use_unified_js_target_process("deno", false, &preset));
+        assert!(!should_use_unified_js_target_process("go", false, &preset));
+        assert!(!should_use_unified_js_target_process("bun", true, &preset));
+
+        preset.targets.insert(
+            "linux-x86_64-glibc".to_string(),
+            crate::build::BuildPresetTarget {
+                builder_image: None,
+                install: Some("bun install".to_string()),
+                build: Some("bun run build".to_string()),
+            },
+        );
+        assert!(!should_use_unified_js_target_process("bun", false, &preset));
+    }
+
+    #[test]
+    fn build_artifact_target_groups_unifies_targets_when_requested() {
+        let server_targets = vec![
             (
                 "a".to_string(),
                 ServerTarget {
@@ -3652,22 +3888,63 @@ name = "test-app"
             (
                 "b".to_string(),
                 ServerTarget {
+                    arch: "aarch64".to_string(),
+                    libc: "musl".to_string(),
+                },
+            ),
+        ];
+
+        let groups = build_artifact_target_groups(&server_targets, true);
+        assert_eq!(
+            groups,
+            vec![ArtifactBuildGroup {
+                build_target_label: "linux-aarch64-musl".to_string(),
+                cache_target_label: UNIFIED_JS_CACHE_TARGET_LABEL.to_string(),
+                target_labels: vec![
+                    "linux-aarch64-musl".to_string(),
+                    "linux-x86_64-glibc".to_string()
+                ],
+                display_target_label: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn build_artifact_target_groups_keeps_per_target_groups_when_not_unified() {
+        let server_targets = vec![
+            (
+                "a".to_string(),
+                ServerTarget {
                     arch: "x86_64".to_string(),
                     libc: "glibc".to_string(),
                 },
             ),
             (
-                "c".to_string(),
+                "b".to_string(),
                 ServerTarget {
                     arch: "aarch64".to_string(),
                     libc: "musl".to_string(),
                 },
             ),
-        ]);
+        ];
 
+        let groups = build_artifact_target_groups(&server_targets, false);
         assert_eq!(
-            summary,
-            "Server targets: linux-aarch64-musl, linux-x86_64-glibc"
+            groups,
+            vec![
+                ArtifactBuildGroup {
+                    build_target_label: "linux-aarch64-musl".to_string(),
+                    cache_target_label: "linux-aarch64-musl".to_string(),
+                    target_labels: vec!["linux-aarch64-musl".to_string()],
+                    display_target_label: Some("linux-aarch64-musl".to_string()),
+                },
+                ArtifactBuildGroup {
+                    build_target_label: "linux-x86_64-glibc".to_string(),
+                    cache_target_label: "linux-x86_64-glibc".to_string(),
+                    target_labels: vec!["linux-x86_64-glibc".to_string()],
+                    display_target_label: Some("linux-x86_64-glibc".to_string()),
+                },
+            ]
         );
     }
 
@@ -3693,14 +3970,36 @@ name = "test-app"
     }
 
     #[test]
+    fn format_deploy_main_message_omits_target_for_unified_process() {
+        assert_eq!(
+            format_deploy_main_message("dist/server/tako-entry.mjs", "linux-aarch64-musl", true),
+            "Deploy main: dist/server/tako-entry.mjs"
+        );
+        assert_eq!(
+            format_deploy_main_message("dist/server/tako-entry.mjs", "linux-aarch64-musl", false),
+            "Deploy main: dist/server/tako-entry.mjs (artifact target: linux-aarch64-musl)"
+        );
+    }
+
+    #[test]
     fn artifact_progress_helpers_render_build_and_packaging_steps() {
         assert_eq!(
-            format_build_completed_message("linux-aarch64-musl"),
+            format_build_completed_message(Some("linux-aarch64-musl")),
             "Build completed for linux-aarch64-musl"
         );
         assert_eq!(
-            format_prepare_artifact_message("linux-aarch64-musl"),
+            format_prepare_artifact_message(Some("linux-aarch64-musl")),
             "Preparing artifact for linux-aarch64-musl..."
+        );
+    }
+
+    #[test]
+    fn artifact_progress_helpers_render_shared_messages_without_target_label() {
+        assert_eq!(format_build_artifact_message(None), "Building artifact...");
+        assert_eq!(format_build_completed_message(None), "Build completed");
+        assert_eq!(
+            format_prepare_artifact_message(None),
+            "Preparing artifact..."
         );
     }
 
