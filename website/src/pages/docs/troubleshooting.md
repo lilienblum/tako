@@ -15,7 +15,9 @@ Use this when things feel weird and you want a clean, repeatable response path.
 
 1. Run `tako servers status` (remote state snapshot).
 2. Run `tako logs --env <environment>` (live logs across mapped servers).
-3. Reproduce once and note if failure is local-only, one-host-only, or all hosts.
+3. Run `tako releases ls --env <environment>` (confirm what is currently deployed and what rollback targets exist).
+4. Reproduce once and note if failure is local-only, one-host-only, or all hosts.
+4. Re-run the failing command with `--verbose` to capture technical detail when needed.
 
 This quickly separates config errors from host/runtime failures.
 
@@ -59,6 +61,7 @@ When `tako deploy` reports mixed success:
    - writable `/opt/tako`
    - management socket reachable (`/var/run/tako/tako.sock`)
 4. Re-run deploy after fixing host-level issues.
+5. If you need fast mitigation, run `tako releases rollback <release-id> --env <environment>` after confirming target release history.
 
 Expected deploy behavior:
 

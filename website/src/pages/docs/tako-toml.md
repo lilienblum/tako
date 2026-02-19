@@ -22,7 +22,7 @@ runtime = "bun"
 route = "my-app.example.com"
 ```
 
-`tako init` prompts for `name` and `[envs.production].route`, then prompts for runtime (top-level `runtime`, with `--runtime` flag). In interactive mode it fetches runtime-family presets (shows `Fetching presets...`) and offers base runtime preset + fetched family presets + a custom option; if no family presets are available, it skips preset selection and uses the runtime base preset. Top-level `preset` is written only when a non-base preset is selected (for base runtime preset or custom mode, it remains unset/commented). It only writes `main` when adapter inference finds an entrypoint that differs from the selected preset default.
+`tako init` prompts for `name` and `[envs.production].route`, then prompts for runtime (top-level `runtime`, with `--runtime` flag). In interactive mode it fetches runtime-family presets (shows `Fetching presets...`) and offers base runtime preset + fetched family presets + a custom option; if no family presets are available, it skips preset selection and uses the runtime base preset. Top-level `preset` is written only when a non-base preset is selected (for base runtime preset or custom mode, it remains unset/commented). It only writes `main` when adapter inference finds an entrypoint that differs from the selected preset default. The detailed init "Detected" summary is shown in verbose mode.
 
 `name` is optional. If omitted, Tako uses a sanitized project directory name.
 Setting `name` is recommended for stable identity: keep it unique per server. Renaming it later creates a new app identity/path, so remove the old deployment manually when needed.
@@ -56,6 +56,7 @@ runtime = "bun"
   - For JS runtimes (`bun`, `node`, `deno`), when preset `main` is `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`), Tako resolves in this order: existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`.
   - If neither `tako.toml main` nor preset `main` is set, deploy/dev fail.
   - During deploy artifact prep, Tako verifies this resolved path exists in the post-build app directory and fails if it is missing.
+  - Final runtime `app.json` written during deploy can also include release metadata (`commit_message`, `git_dirty`) for `tako releases ls`.
 - `runtime`: optional adapter override (`bun`, `node`, `deno`) used when selecting the default base preset.
 - `preset`: optional runtime-local build preset override. If omitted, deploy/dev use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`). Supports:
   - runtime-local aliases: `tanstack-start` (resolved under selected `runtime`)

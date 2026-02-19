@@ -9,6 +9,8 @@ current: development
 
 This guide covers local development with Tako: trusted HTTPS, `.tako.local` URLs, and what `tako dev` is doing behind the scenes.
 
+CLI output follows shared conventions: concise by default, technical detail with `--verbose`, and spinner progress for long interactive steps.
+
 ## Overview
 
 - `tako dev` is a **client** that talks to a background daemon: `tako-dev-server`.
@@ -49,6 +51,7 @@ Useful commands:
 - `tako dev` (starts the interactive dashboard by default)
 - `tako dev --no-tui` (disable the dashboard)
 - `tako dev <DIR>` (run as if invoked from another project directory)
+- `tako releases ls --env <environment>` (inspect remote release history after deploys)
 
 Default URL:
 

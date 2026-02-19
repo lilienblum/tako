@@ -138,10 +138,12 @@ async fn set_secret(name: &str, env: &str) -> Result<(), Box<dyn std::error::Err
         ));
     }
 
-    output::muted(&format!(
-        "Note: Run {} to push secrets to servers.",
-        output::emphasized("tako secrets sync")
-    ));
+    if output::is_verbose() {
+        output::muted(&format!(
+            "Note: Run {} to push secrets to servers.",
+            output::emphasized("tako secrets sync")
+        ));
+    }
 
     Ok(())
 }
@@ -204,10 +206,12 @@ async fn remove_secret(name: &str, env: Option<&str>) -> Result<(), Box<dyn std:
 
     secrets.save_to_dir(&project_dir)?;
 
-    output::muted(&format!(
-        "Note: Run {} to update servers.",
-        output::emphasized("tako secrets sync")
-    ));
+    if output::is_verbose() {
+        output::muted(&format!(
+            "Note: Run {} to update servers.",
+            output::emphasized("tako secrets sync")
+        ));
+    }
 
     Ok(())
 }

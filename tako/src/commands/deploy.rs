@@ -41,6 +41,8 @@ struct DeployConfig {
     main: String,
     deploy_install: Option<String>,
     deploy_start: Vec<String>,
+    git_commit_message: Option<String>,
+    git_dirty: Option<bool>,
     use_unified_target_process: bool,
 }
 
@@ -277,18 +279,20 @@ async fn run_async(
         LOCAL_ARTIFACT_CACHE_KEEP_SOURCE_ARCHIVES,
         LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS,
     ) {
-        Ok(summary) if summary.total_removed() > 0 => output::muted(&format!(
-            "Local artifact cache cleanup: removed {} old source archive(s), {} old artifact(s), {} stale metadata file(s)",
-            summary.removed_source_archives,
-            summary.removed_target_artifacts,
-            summary.removed_target_metadata
-        )),
+        Ok(summary) if summary.total_removed() > 0 && output::is_verbose() => {
+            output::muted(&format!(
+                "Local artifact cache cleanup: removed {} old source archive(s), {} old artifact(s), {} stale metadata file(s)",
+                summary.removed_source_archives,
+                summary.removed_target_artifacts,
+                summary.removed_target_metadata
+            ))
+        }
         Ok(_) => {}
         Err(error) => output::warning(&format!("Local artifact cache cleanup skipped: {}", error)),
     }
     let build_workspace_root = project_dir.join(LOCAL_BUILD_WORKSPACE_RELATIVE_DIR);
     match cleanup_local_build_workspaces(&build_workspace_root) {
-        Ok(removed) if removed > 0 => output::muted(&format!(
+        Ok(removed) if removed > 0 && output::is_verbose() => output::muted(&format!(
             "Local build workspace cleanup: removed {} workspace(s)",
             removed
         )),
@@ -299,14 +303,20 @@ async fn run_async(
     let source_root = source_bundle_root(&project_dir);
     let app_subdir = resolve_app_subdir(&source_root, &project_dir)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::step(&format!("Source root: {}", source_root.display()));
-    if !app_subdir.is_empty() {
-        output::step(&format!("App directory: {}", app_subdir));
+    if output::is_verbose() {
+        output::step(&format!("Source root: {}", source_root.display()));
+        if !app_subdir.is_empty() {
+            output::step(&format!("App directory: {}", app_subdir));
+        }
     }
 
     // Generate version string
     let (version, source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)?;
-    output::step(&format!("Version: {}", version));
+    let git_commit_message = resolve_git_commit_message(&source_root);
+    let git_dirty = executor.is_git_dirty().ok();
+    if output::is_verbose() {
+        output::step(&format!("Version: {}", version));
+    }
 
     let preset_ref = resolve_build_preset_ref(&project_dir, &tako_config)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -321,11 +331,15 @@ async fn run_async(
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::success(&format!(
-        "Build preset: {} @ {}",
-        resolved_preset.preset_ref,
-        shorten_commit(&resolved_preset.commit)
-    ));
+    if output::is_verbose() {
+        output::success(&format!(
+            "Build preset: {} @ {}",
+            resolved_preset.preset_ref,
+            shorten_commit(&resolved_preset.commit)
+        ));
+    } else {
+        output::success(&format!("Build preset: {}", resolved_preset.preset_ref));
+    }
     output::success(&format_runtime_summary(&build_preset.name, None));
     let runtime_tool = resolve_runtime_tool_for_mise(&build_preset.name, &build_preset)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -337,15 +351,17 @@ async fn run_async(
         build_preset.main.as_deref(),
     )
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::success(&format_entry_point_summary(
-        &project_dir.join(&manifest_main),
-    ));
+    if output::is_verbose() {
+        output::success(&format_entry_point_summary(
+            &project_dir.join(&manifest_main),
+        ));
+    }
 
     let manifest = build_deploy_archive_manifest(
         &app_name,
         &env,
         &version,
-        &build_preset.name,
+        runtime_adapter.id(),
         &manifest_main,
         tako_config.get_merged_vars(&env),
         HashMap::new(),
@@ -370,10 +386,10 @@ async fn run_async(
     })?
     .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
-    output::success(&format!(
-        "Source archive created: {} ({})",
-        format_path_relative_to(&project_dir, &source_archive_path),
-        format_size(source_archive_size)
+    output::success(&format_source_archive_created_message(
+        &format_path_relative_to(&project_dir, &source_archive_path),
+        &format_size(source_archive_size),
+        output::is_verbose(),
     ));
 
     let include_patterns = build_artifact_include_patterns(&tako_config);
@@ -402,10 +418,12 @@ async fn run_async(
         should_use_docker_build(&build_preset),
         &build_preset,
     );
-    if let Some(server_targets_summary) =
-        format_server_targets_summary(&server_targets, use_unified_js_target_process)
-    {
-        output::success(&server_targets_summary);
+    if output::is_verbose() {
+        if let Some(server_targets_summary) =
+            format_server_targets_summary(&server_targets, use_unified_js_target_process)
+        {
+            output::success(&server_targets_summary);
+        }
     }
 
     let artifacts_by_target = build_target_artifacts(
@@ -441,10 +459,12 @@ async fn run_async(
         routes,
         env_vars: deploy_env_vars,
         app_subdir,
-        runtime: build_preset.name.clone(),
+        runtime: runtime_adapter.id().to_string(),
         main: manifest_main,
         deploy_install: build_preset.install.clone(),
         deploy_start: build_preset.start.clone(),
+        git_commit_message,
+        git_dirty,
         use_unified_target_process: use_unified_js_target_process,
     });
     let target_by_server: HashMap<String, ServerTarget> = server_targets.into_iter().collect();
@@ -881,10 +901,43 @@ fn format_prepare_deploy_section(env: &str) -> String {
     format!("Preparing deployment for {}", output::emphasized(env))
 }
 
+fn format_build_stages_summary_for_output(
+    stage_summary: &[String],
+    target_label: Option<&str>,
+    verbose: bool,
+) -> Option<String> {
+    if !verbose || stage_summary.is_empty() {
+        return None;
+    }
+    Some(format_build_stages_summary(stage_summary, target_label))
+}
+
 fn format_build_stages_summary(stage_summary: &[String], target_label: Option<&str>) -> String {
     match target_label {
         Some(label) => format!("Build stages for {}: {}", label, stage_summary.join(" -> ")),
         None => format!("Build stages: {}", stage_summary.join(" -> ")),
+    }
+}
+
+fn format_runtime_probe_message(target_label: Option<&str>) -> String {
+    match target_label {
+        Some(label) => format!("Resolving runtime version for {}...", label),
+        None => "Resolving runtime version...".to_string(),
+    }
+}
+
+fn format_source_archive_created_message(
+    artifact_path: &str,
+    artifact_size: &str,
+    verbose: bool,
+) -> String {
+    if verbose {
+        format!(
+            "Source archive created: {} ({})",
+            artifact_path, artifact_size
+        )
+    } else {
+        "Source archive created".to_string()
     }
 }
 
@@ -923,6 +976,22 @@ fn format_artifact_cache_hit_message(
     }
 }
 
+fn format_artifact_cache_hit_message_for_output(
+    target_label: Option<&str>,
+    artifact_path: &str,
+    artifact_size: &str,
+    verbose: bool,
+) -> String {
+    if verbose {
+        return format_artifact_cache_hit_message(target_label, artifact_path, artifact_size);
+    }
+
+    match target_label {
+        Some(label) => format!("Artifact cache hit for {}", label),
+        None => "Artifact cache hit".to_string(),
+    }
+}
+
 fn format_artifact_cache_invalid_message(target_label: Option<&str>, error: &str) -> String {
     match target_label {
         Some(label) => format!(
@@ -944,6 +1013,22 @@ fn format_artifact_ready_message(
             label, artifact_path, artifact_size
         ),
         None => format!("Artifact ready: {} ({})", artifact_path, artifact_size),
+    }
+}
+
+fn format_artifact_ready_message_for_output(
+    target_label: Option<&str>,
+    artifact_path: &str,
+    artifact_size: &str,
+    verbose: bool,
+) -> String {
+    if verbose {
+        return format_artifact_ready_message(target_label, artifact_path, artifact_size);
+    }
+
+    match target_label {
+        Some(label) => format!("Artifact ready for {}", label),
+        None => "Artifact ready".to_string(),
     }
 }
 
@@ -1094,6 +1179,23 @@ fn resolve_deploy_version_and_source_hash(
     let source_hash = executor.compute_source_hash(source_root)?;
     let version = executor.generate_version(Some(&source_hash))?;
     Ok((version, source_hash))
+}
+
+fn resolve_git_commit_message(source_root: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["log", "-1", "--pretty=%s"])
+        .current_dir(source_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let message = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    if message.is_empty() {
+        None
+    } else {
+        Some(message)
+    }
 }
 
 fn archive_app_manifest_path(app_subdir: &str) -> String {
@@ -1989,11 +2091,12 @@ async fn build_target_artifacts(
         let target_build = resolve_build_target(preset, &build_target_label)?;
         let use_local_build_spinners = should_use_local_build_spinners(output::is_interactive());
         let stage_summary = summarize_build_stages(&target_build, custom_stages);
-        if !stage_summary.is_empty() {
-            output::muted(&format_build_stages_summary(
-                &stage_summary,
-                display_target_label,
-            ));
+        if let Some(stage_summary_message) = format_build_stages_summary_for_output(
+            &stage_summary,
+            display_target_label,
+            output::is_verbose(),
+        ) {
+            output::muted(&stage_summary_message);
         }
         std::fs::create_dir_all(build_workspace_root)
             .map_err(|e| format!("Failed to create {}: {e}", build_workspace_root.display()))?;
@@ -2012,16 +2115,35 @@ async fn build_target_artifacts(
             }
         })?;
 
-        let runtime_version = if use_docker_build {
-            resolve_runtime_version_with_docker_probe(
-                &workspace,
-                app_subdir,
-                &build_target_label,
-                runtime_tool,
-                &target_build,
-            )?
+        let runtime_probe_label = format_runtime_probe_message(display_target_label);
+        let runtime_version = if use_local_build_spinners {
+            output::with_spinner(runtime_probe_label.as_str(), || {
+                if use_docker_build {
+                    resolve_runtime_version_with_docker_probe(
+                        &workspace,
+                        app_subdir,
+                        &build_target_label,
+                        runtime_tool,
+                        &target_build,
+                    )
+                } else {
+                    resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool)
+                }
+            })
+            .map_err(|e| format!("Failed to render runtime version spinner: {e}"))??
         } else {
-            resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool)?
+            output::step(&runtime_probe_label);
+            if use_docker_build {
+                resolve_runtime_version_with_docker_probe(
+                    &workspace,
+                    app_subdir,
+                    &build_target_label,
+                    runtime_tool,
+                    &target_build,
+                )?
+            } else {
+                resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool)?
+            }
         };
 
         let cache_key = build_artifact_cache_key(
@@ -2044,10 +2166,11 @@ async fn build_target_artifacts(
 
         match load_valid_cached_artifact(&cache_paths, &cache_key) {
             Ok(Some(cached)) => {
-                output::success(&format_artifact_cache_hit_message(
+                output::success(&format_artifact_cache_hit_message_for_output(
                     display_target_label,
                     &format_path_relative_to(project_dir, &cached.path),
                     &format_size(cached.size_bytes),
+                    output::is_verbose(),
                 ));
                 for target_label in &target_group.target_labels {
                     artifacts.insert(target_label.clone(), cached.path.clone());
@@ -2134,10 +2257,11 @@ async fn build_target_artifacts(
         let _ = std::fs::remove_dir_all(&workspace);
         let artifact_size = build_result?;
 
-        output::success(&format_artifact_ready_message(
+        output::success(&format_artifact_ready_message_for_output(
             display_target_label,
             &format_path_relative_to(project_dir, &cache_paths.artifact_path),
             &format_size(artifact_size),
+            output::is_verbose(),
         ));
         for target_label in &target_group.target_labels {
             artifacts.insert(target_label.clone(), cache_paths.artifact_path.clone());
@@ -2228,7 +2352,7 @@ fn local_shell_command_program_and_args(
 fn run_local_build(
     workspace: &Path,
     app_subdir: &str,
-    runtime_tool: &str,
+    _runtime_tool: &str,
     target_build: &crate::build::BuildPresetTarget,
     custom_stages: &[BuildStage],
 ) -> Result<(), String> {
@@ -2243,24 +2367,6 @@ fn run_local_build(
     let app_subdir_value = app_subdir.replace('\\', "/");
     let app_dir_value = app_dir.to_string_lossy().to_string();
     let shell_runner = detect_local_shell_runner();
-    if shell_runner == LocalShellRunner::Mise {
-        let _ = std::process::Command::new("mise")
-            .arg("install")
-            .current_dir(&app_dir)
-            .env("TAKO_APP_SUBDIR", &app_subdir_value)
-            .env("TAKO_APP_DIR", &app_dir_value)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        let _ = std::process::Command::new("mise")
-            .args(["exec", "--", runtime_tool, "--version"])
-            .current_dir(&app_dir)
-            .env("TAKO_APP_SUBDIR", &app_subdir_value)
-            .env("TAKO_APP_DIR", &app_dir_value)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    }
 
     let has_preset_stage = target_build
         .install
@@ -2290,6 +2396,7 @@ fn run_local_build(
                 .current_dir(cwd)
                 .env("TAKO_APP_SUBDIR", &app_subdir_value)
                 .env("TAKO_APP_DIR", &app_dir_value)
+                .stdin(std::process::Stdio::null())
                 .output()
                 .map_err(|e| format!("Failed to run local {stage_label} {phase} command: {e}"))?;
             if output.status.success() {
@@ -2533,6 +2640,15 @@ fn resolve_runtime_version_from_workspace(
     Ok(spec.unwrap_or_else(|| "latest".to_string()))
 }
 
+fn local_mise_runtime_probe_command(app_dir: &Path, runtime_tool: &str) -> String {
+    let app_dir_str = app_dir.to_string_lossy().to_string();
+    format!(
+        "cd {} && if ! command -v mise >/dev/null 2>&1; then exit 127; fi; mise exec -- {} --version",
+        shell_single_quote(&app_dir_str),
+        shell_single_quote(runtime_tool)
+    )
+}
+
 fn resolve_runtime_version_with_local_mise(
     workspace: &Path,
     app_dir: &Path,
@@ -2548,16 +2664,13 @@ fn resolve_runtime_version_with_local_mise(
 
     #[cfg(not(test))]
     {
-        let app_dir_str = app_dir.to_string_lossy().to_string();
         let workspace_str = workspace.to_string_lossy().to_string();
-        let command = format!(
-            "cd {} && if ! command -v mise >/dev/null 2>&1; then exit 127; fi; mise install >/dev/null 2>&1 || true; mise exec -- {} --version",
-            shell_single_quote(&app_dir_str),
-            shell_single_quote(runtime_tool)
-        );
+        let command = local_mise_runtime_probe_command(app_dir, runtime_tool);
         let output = std::process::Command::new("sh")
             .args(["-lc", &command])
             .current_dir(workspace)
+            .env("MISE_YES", "1")
+            .stdin(std::process::Stdio::null())
             .output()
             .map_err(|e| {
                 format!(
@@ -3114,6 +3227,8 @@ async fn deploy_to_server(
                 "main": main,
                 "install": config.deploy_install.clone(),
                 "start": config.deploy_start.clone(),
+                "commit_message": config.git_commit_message.clone(),
+                "git_dirty": config.git_dirty,
             }))
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
             let encoded =
@@ -3124,11 +3239,13 @@ async fn deploy_to_server(
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         })
         .await?;
-        output::muted(&format_deploy_main_message(
-            &resolved_main,
-            target_label,
-            config.use_unified_target_process,
-        ));
+        if output::is_verbose() {
+            output::muted(&format_deploy_main_message(
+                &resolved_main,
+                target_label,
+                config.use_unified_target_process,
+            ));
+        }
 
         // Send deploy command to tako-server.
         let cmd = Command::Deploy {
@@ -3763,6 +3880,8 @@ name = "test-app"
             main: "index.ts".to_string(),
             deploy_install: Some("bun install --production --frozen-lockfile".to_string()),
             deploy_start: vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()],
+            git_commit_message: Some("feat: add endpoint".to_string()),
+            git_dirty: Some(false),
             use_unified_target_process: false,
         };
         assert_eq!(cfg.release_dir(), "/opt/tako/apps/my-app/releases/v1");
@@ -4959,6 +5078,47 @@ name = "test-app"
             local_shell_command_program_and_args(LocalShellRunner::Mise, "printf 'hello'");
         assert_eq!(program, "mise");
         assert_eq!(args, vec!["exec", "--", "sh", "-lc", "printf 'hello'"]);
+    }
+
+    #[test]
+    fn build_stage_summary_output_is_hidden_in_concise_mode() {
+        let summary = vec!["stage 1 (preset)".to_string()];
+        assert_eq!(
+            format_build_stages_summary_for_output(&summary, None, false),
+            None
+        );
+    }
+
+    #[test]
+    fn build_stage_summary_output_is_shown_in_verbose_mode() {
+        let summary = vec!["stage 1 (preset)".to_string(), "stage 2".to_string()];
+        assert_eq!(
+            format_build_stages_summary_for_output(&summary, Some("linux-x86_64-glibc"), true),
+            Some("Build stages for linux-x86_64-glibc: stage 1 (preset) -> stage 2".to_string())
+        );
+    }
+
+    #[test]
+    fn source_archive_message_is_compact_in_concise_mode() {
+        assert_eq!(
+            format_source_archive_created_message(".tako/artifacts/app.tar.gz", "10 KB", false),
+            "Source archive created"
+        );
+    }
+
+    #[test]
+    fn source_archive_message_includes_path_and_size_in_verbose_mode() {
+        assert_eq!(
+            format_source_archive_created_message(".tako/artifacts/app.tar.gz", "10 KB", true),
+            "Source archive created: .tako/artifacts/app.tar.gz (10 KB)"
+        );
+    }
+
+    #[test]
+    fn local_mise_runtime_probe_command_skips_hidden_install() {
+        let command = local_mise_runtime_probe_command(Path::new("/tmp/app"), "bun");
+        assert!(command.contains("mise exec -- 'bun' --version"));
+        assert!(!command.contains("mise install"));
     }
 
     #[test]

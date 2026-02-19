@@ -83,21 +83,23 @@ pub fn run(force: bool, runtime_override: Option<&str>) -> Result<(), Box<dyn st
 
     output::success("Created tako.toml");
 
-    output::section("Detected");
-    output::step(&format!("Runtime: {}", adapter.id()));
-    if let Some(preset_ref) = selected_preset_for_toml.as_deref() {
-        output::step(&format!("Preset: {}", preset_ref));
-    } else if selected_preset.as_deref() == Some(adapter.default_preset()) {
-        output::step("Preset: runtime default (omitted in tako.toml)");
-    } else {
-        output::step("Preset: custom (unset in tako.toml)");
-    }
-    output::step(&format!("App name: {}", app_name.trim()));
-    output::step(&format!("Production route: {}", production_route.trim()));
-    if let Some(main) = main.as_deref() {
-        output::step(&format!("Main: {}", main.trim()));
-    } else if let Some(main) = preset_default_main.as_deref() {
-        output::step(&format!("Main: {} (from preset)", main));
+    if should_render_init_detected_section(output::is_verbose()) {
+        output::section("Detected");
+        output::step(&format!("Runtime: {}", adapter.id()));
+        if let Some(preset_ref) = selected_preset_for_toml.as_deref() {
+            output::step(&format!("Preset: {}", preset_ref));
+        } else if selected_preset.as_deref() == Some(adapter.default_preset()) {
+            output::step("Preset: runtime default (omitted in tako.toml)");
+        } else {
+            output::step("Preset: custom (unset in tako.toml)");
+        }
+        output::step(&format!("App name: {}", app_name.trim()));
+        output::step(&format!("Production route: {}", production_route.trim()));
+        if let Some(main) = main.as_deref() {
+            output::step(&format!("Main: {}", main.trim()));
+        } else if let Some(main) = preset_default_main.as_deref() {
+            output::step(&format!("Main: {} (from preset)", main));
+        }
     }
 
     output::section("Next Steps");
@@ -116,6 +118,10 @@ pub fn run(force: bool, runtime_override: Option<&str>) -> Result<(), Box<dyn st
     ));
 
     Ok(())
+}
+
+fn should_render_init_detected_section(verbose: bool) -> bool {
+    verbose
 }
 
 fn select_adapter_for_init(
@@ -434,6 +440,7 @@ mod tests {
     use super::{
         build_preset_selection_options, generate_template, infer_default_main_entrypoint,
         normalize_family_preset_definitions, preset_default_main, select_adapter_for_init,
+        should_render_init_detected_section,
     };
     use crate::build::{BuildAdapter, FamilyPresetDefinition};
     use tempfile::TempDir;
@@ -795,5 +802,15 @@ mod tests {
             select_adapter_for_init(BuildAdapter::Unknown, None).unwrap(),
             BuildAdapter::Bun
         );
+    }
+
+    #[test]
+    fn init_detected_section_is_hidden_in_default_output() {
+        assert!(!should_render_init_detected_section(false));
+    }
+
+    #[test]
+    fn init_detected_section_is_shown_in_verbose_output() {
+        assert!(should_render_init_detected_section(true));
     }
 }

@@ -20,6 +20,12 @@ Global flags:
 - `--version`: print version and exit.
 - `-v`, `--verbose`: enable verbose output.
 
+CLI output conventions:
+
+- default output is concise and user-focused
+- `--verbose` adds technical detail (paths, target metadata, per-host transport context)
+- in interactive terminals, long-running steps show spinner progress
+
 Directory selection is command-scoped:
 
 - `tako init [DIR]`
@@ -29,16 +35,40 @@ Directory selection is command-scoped:
 
 ## Top-Level Commands
 
-- `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` (recommended unique per server), production `route`, runtime, and preset selection when family presets are available).
+- `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` (recommended unique per server), production `route`, runtime, and preset selection when family presets are available); detailed "Detected" summary is shown in verbose mode.
 - `tako help`: show all commands with brief descriptions.
-- `tako upgrade`: upgrade local CLI using the hosted installer.
+- `tako upgrade`: upgrade local CLI using the hosted installer (shows installer spinner progress in interactive terminals).
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
 - `tako dev [--tui | --no-tui] [DIR]`: run local development mode.
 - `tako doctor`: print local dev diagnostics (DNS, socket, listener, leases, and local forwarding preflight checks).
 - `tako deploy [--env <ENV>] [-y|--yes] [DIR]`: build and deploy app.
-- `tako delete [--env <ENV>] [-y|--yes] [DIR]`: delete deployed app.
+- `tako releases <subcommand>`: list release history and roll back to a previous release.
+- `tako delete [--env <ENV>] [-y|--yes] [DIR]`: delete deployed app (single-server interactive deletes show spinner progress; multi-server deletes use line-based status).
 - `tako servers <subcommand>`: manage server inventory and server runtime actions.
 - `tako secrets <subcommand>`: manage project secrets and keys.
+
+## `releases` Subcommands
+
+`tako releases ls`:
+
+```bash
+tako releases ls [--env <ENV>]
+```
+
+`tako releases rollback`:
+
+```bash
+tako releases rollback <RELEASE_ID> [--env <ENV>] [-y|--yes]
+```
+
+Notes:
+
+- `tako releases ls` shows release/build history for the current app across mapped servers in the selected environment.
+- Release output is sorted newest-first and prints per release in two lines:
+  - line 1: release/build id + deployed timestamp (plus `(xh ago)` hint when deployed within 24h)
+  - line 2: commit message + cleanliness marker (`[clean]`, `[dirty]`, `[unknown]`)
+- `tako releases rollback` reuses current routes/env/secrets/scaling config and rolls app runtime back to the target release id using normal rolling-update behavior.
+- In interactive terminals, rollback to `production` prompts for confirmation unless `--yes` is provided.
 
 ## `servers` Subcommands
 
@@ -171,7 +201,7 @@ Initialize in current directory:
 tako init
 ```
 
-`tako init` prompts for app name and production route, prompts for runtime (top-level `runtime`), fetches family presets (`Fetching presets...`) and offers base runtime preset + fetched family presets + a custom option; when no family presets are available it skips preset selection and uses the runtime base preset. It only prompts for `main` when neither adapter inference nor preset default provides it.
+`tako init` prompts for app name and production route, prompts for runtime (top-level `runtime`), fetches family presets (`Fetching presets...`) and offers base runtime preset + fetched family presets + a custom option; when no family presets are available it skips preset selection and uses the runtime base preset. It only prompts for `main` when neither adapter inference nor preset default provides it. The detailed "Detected" block is shown with `--verbose`.
 
 Run local app with non-interactive output:
 
@@ -189,6 +219,18 @@ Remove production app:
 
 ```bash
 tako delete --env production
+```
+
+List release history for staging:
+
+```bash
+tako releases ls --env staging
+```
+
+Roll back to a previous release:
+
+```bash
+tako releases rollback abc1234 --env production --yes
 ```
 
 Add a server and verify SSH:

@@ -19,6 +19,8 @@ tako deploy [--env <environment>]
 
 What happens during deploy:
 
+- CLI output is concise by default; use `--verbose` for detailed technical progress.
+- In interactive terminals, long-running deploy steps use spinner progress indicators.
 - Deploy packages source files into a versioned source archive, then builds target-specific artifacts locally.
 - Source bundle root is resolved in this order: git root, current app directory.
 - Source filtering uses `.gitignore`.
@@ -101,6 +103,10 @@ Each target server should have:
 - Local artifact cache key includes source hash, target label, resolved preset source/commit, runtime tool/version, Docker/local mode, preset build commands, app `[[build.stages]]`, include/exclude patterns, asset roots, and app subdirectory.
 - `assets` are copied into app `public/` after container build (later entries overwrite earlier ones).
 - Final `app.json` is written in app directory after resolving runtime `main`.
+- Final `app.json` also carries optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
+- Runtime startup on `tako-server` uses release `app.json`:
+  - if `start` is present, that command is used (`{main}` placeholders are expanded)
+  - if `start` is missing, runtime fallback is used (`bun` wrapper, `node <main>`, or `deno run --allow-net --allow-env --allow-read <main>`)
 - Runtime `main` resolution order:
   1. `main` from `tako.toml`
   2. for JS runtimes (`bun`, `node`, `deno`) when preset `main` is `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`): existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`
@@ -125,7 +131,7 @@ Each target server should have:
 6. Create release and shared directories.
 7. Upload and extract archive into `/opt/tako/apps/<app>/releases/<version>/`.
 8. Link shared directories (for example `logs`).
-9. Resolve runtime `main`, write final app `app.json`.
+9. Resolve runtime `main`, write final app `app.json` (including optional commit metadata).
 10. Send deploy command to `tako-server` including merged environment (`TAKO_BUILD`, runtime vars, user vars, decrypted secrets); `tako-server` runs runtime prep (Bun dependency install) before rolling update.
 11. Update `current` symlink after server accepts deploy.
 12. Clean old release directories.
@@ -162,6 +168,8 @@ Each target server should have:
 
 - Use `tako servers status` to inspect deployed app state and per-server service/connectivity state.
 - Use `tako logs --env <environment>` to stream remote logs.
+- Use `tako releases ls --env <environment>` to inspect release/build history before deciding on rollback.
+- Use `tako releases rollback <release-id> --env <environment>` to roll back to a previous release id using normal rolling-update behavior.
 - HTTP requests are redirected to HTTPS by default (307 with `Cache-Control: no-store`).
 - Exceptions on HTTP: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status`.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.

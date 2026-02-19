@@ -9,10 +9,16 @@ current: how-tako-works
 
 Tako has two main paths:
 
-- Management path: commands like `tako dev`, `tako deploy`, `tako logs`, and `tako servers ...`.
+- Management path: commands like `tako dev`, `tako deploy`, `tako releases ...`, `tako logs`, and `tako servers ...`.
 - Traffic path: real HTTP/HTTPS requests flowing to your app instances.
 
 This split keeps day-to-day operations predictable: commands change state, routing serves traffic.
+
+CLI output conventions across commands:
+
+- default output is concise for humans
+- `--verbose` enables detailed technical progress
+- interactive long-running steps use spinner progress indicators
 
 ## Components and Roles
 
@@ -100,6 +106,7 @@ Important deployment behavior:
 - Per target build order is fixed: preset `[build].install`/`[build].build` first, then app `[[build.stages]]` in declaration order.
 - Artifact filters use project `[build].include` (optional), plus effective preset `[build].exclude` and project `[build].exclude`.
 - Bun deploys exclude `node_modules` by default and install release dependencies on server before startup (`bun install --production`).
+- Final runtime `app.json` written on server includes optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
 - Target artifacts are cached in `.tako/artifacts/` and reused across deploys when source/preset/target/build inputs are unchanged.
 - Cached artifacts are checksum-verified; invalid cached entries are rebuilt automatically.
 - Before packaging each target artifact, deploy verifies the resolved `main` exists in the post-build app directory.
@@ -181,6 +188,7 @@ Typical remote layout:
 
 - `tako servers status`: snapshot of server/app state across configured servers.
 - `tako logs --env <env>`: live logs across mapped servers for an environment.
+- `tako releases ls` / `tako releases rollback`: inspect release history and roll back to a previous release id.
 - `tako secrets ...`: encrypted secret management and sync to runtime.
 - `tako servers restart|reload|upgrade`: runtime lifecycle operations for remote `tako-server`.
 

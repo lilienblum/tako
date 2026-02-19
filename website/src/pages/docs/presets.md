@@ -9,6 +9,8 @@ current: presets
 
 Presets define build/runtime defaults for `tako dev` and `tako deploy`.
 
+CLI output follows shared conventions: concise by default, technical detail with `--verbose`, and spinner progress for long interactive steps.
+
 ## Set A Preset In `tako.toml`
 
 ```toml
@@ -62,6 +64,7 @@ JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`,
 When preset build mode resolves to container, default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 Preset `build.exclude` adds extra patterns on top of runtime-base excludes (base-first, deduplicated), while preset `build.assets` replace runtime-base assets when set.
 JS runtime base presets use `mise` when available for local install/build steps, but do not require it; deploy `start` commands run through `mise` so server runtime follows packaged `mise.toml`.
+At runtime, `tako-server` prefers release `app.json` `start` command when present; runtime fallback applies only when `start` is missing.
 
 ### Supported Keys
 

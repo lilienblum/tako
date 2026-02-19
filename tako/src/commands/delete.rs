@@ -63,7 +63,7 @@ async fn run_async(
                     validate_project_delete_env("production", tako_config)
                         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
                 } else {
-                    let deployments = discover_remote_deployments(&servers).await?;
+                    let deployments = discover_remote_deployments_with_progress(&servers).await?;
                     let options = app_env_options(&deployments, Some(&app_name));
                     if options.is_empty() {
                         return Err(format!(
@@ -79,7 +79,7 @@ async fn run_async(
 
         (app_name, env)
     } else {
-        let deployments = discover_remote_deployments(&servers).await?;
+        let deployments = discover_remote_deployments_with_progress(&servers).await?;
         if deployments.is_empty() {
             return Err("No deployed apps found on configured servers.".into());
         }
@@ -134,41 +134,76 @@ async fn run_async(
         output::emphasized(&env)
     ));
 
-    let mut handles = Vec::new();
-    for server_name in &server_names {
-        let Some(server) = servers.get(server_name) else {
-            return Err(format_server_not_found_error(server_name).into());
-        };
-
-        let server_name = server_name.clone();
-        let server = server.clone();
-        let app_name = app_name.clone();
-        let handle = tokio::spawn(async move {
-            let result = delete_from_server(&server, &app_name).await;
-            (server_name, server, result)
-        });
-        handles.push(handle);
-    }
-
     let total_servers = server_names.len();
     let mut success_count = 0usize;
     let mut errors = Vec::new();
+    let use_per_server_spinner = should_use_per_server_delete_spinner(total_servers, interactive);
+    if use_per_server_spinner {
+        for server_name in &server_names {
+            let Some(server) = servers.get(server_name) else {
+                return Err(format_server_not_found_error(server_name).into());
+            };
+            let label = format!("Deleting from {}...", output::emphasized(server_name));
+            let result =
+                output::with_spinner_async(label, delete_from_server(server, &app_name)).await?;
+            match result {
+                Ok(()) => {
+                    output::success(&format_server_delete_success_for_output(
+                        server_name,
+                        server,
+                        output::is_verbose(),
+                    ));
+                    success_count += 1;
+                }
+                Err(e) => {
+                    output::error(&format_server_delete_failure_for_output(
+                        server_name,
+                        server,
+                        &e.to_string(),
+                        output::is_verbose(),
+                    ));
+                    errors.push(format!("{}: {}", server_name, e));
+                }
+            }
+        }
+    } else {
+        let mut handles = Vec::new();
+        for server_name in &server_names {
+            let Some(server) = servers.get(server_name) else {
+                return Err(format_server_not_found_error(server_name).into());
+            };
 
-    for handle in handles {
-        match handle.await {
-            Ok((server_name, server, Ok(()))) => {
-                output::success(&format_server_delete_success(&server_name, &server));
-                success_count += 1;
+            let server_name = server_name.clone();
+            let server = server.clone();
+            let app_name = app_name.clone();
+            let handle = tokio::spawn(async move {
+                let result = delete_from_server(&server, &app_name).await;
+                (server_name, server, result)
+            });
+            handles.push(handle);
+        }
+
+        for handle in handles {
+            match handle.await {
+                Ok((server_name, server, Ok(()))) => {
+                    output::success(&format_server_delete_success_for_output(
+                        &server_name,
+                        &server,
+                        output::is_verbose(),
+                    ));
+                    success_count += 1;
+                }
+                Ok((server_name, server, Err(e))) => {
+                    output::error(&format_server_delete_failure_for_output(
+                        &server_name,
+                        &server,
+                        &e.to_string(),
+                        output::is_verbose(),
+                    ));
+                    errors.push(format!("{}: {}", server_name, e));
+                }
+                Err(e) => errors.push(format!("Task panic: {}", e)),
             }
-            Ok((server_name, server, Err(e))) => {
-                output::error(&format_server_delete_failure(
-                    &server_name,
-                    &server,
-                    &e.to_string(),
-                ));
-                errors.push(format!("{}: {}", server_name, e));
-            }
-            Err(e) => errors.push(format!("Task panic: {}", e)),
         }
     }
 
@@ -244,6 +279,22 @@ async fn discover_remote_deployments(
     all.sort();
     all.dedup();
     Ok(all)
+}
+
+async fn discover_remote_deployments_with_progress(
+    servers: &ServersToml,
+) -> Result<Vec<RemoteDeployment>, Box<dyn std::error::Error>> {
+    if output::is_interactive() {
+        let deployments = output::with_spinner_async("Discovering deployed apps...", async {
+            discover_remote_deployments(servers)
+                .await
+                .map_err(|e| e.to_string())
+        })
+        .await?
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        return Ok(deployments);
+    }
+    discover_remote_deployments(servers).await
 }
 
 async fn discover_server_deployments(
@@ -593,6 +644,10 @@ fn should_confirm_delete(assume_yes: bool, interactive: bool) -> bool {
     !assume_yes && interactive
 }
 
+fn should_use_per_server_delete_spinner(server_count: usize, interactive: bool) -> bool {
+    interactive && server_count == 1
+}
+
 async fn delete_from_server(
     server: &ServerEntry,
     app_name: &str,
@@ -686,12 +741,35 @@ fn format_server_delete_success(name: &str, entry: &ServerEntry) -> String {
     )
 }
 
+fn format_server_delete_success_for_output(
+    name: &str,
+    entry: &ServerEntry,
+    verbose: bool,
+) -> String {
+    if verbose {
+        return format_server_delete_success(name, entry);
+    }
+    format!("{name} deleted")
+}
+
 fn format_server_delete_failure(name: &str, entry: &ServerEntry, error: &str) -> String {
     format!(
         "{} delete failed: {}",
         format_server_delete_target(name, entry),
         error
     )
+}
+
+fn format_server_delete_failure_for_output(
+    name: &str,
+    entry: &ServerEntry,
+    error: &str,
+    verbose: bool,
+) -> String {
+    if verbose {
+        return format_server_delete_failure(name, entry, error);
+    }
+    format!("{name} delete failed: {error}")
 }
 
 fn format_server_not_found_error(server_name: &str) -> String {
@@ -758,6 +836,34 @@ mod tests {
 
         let app = resolve_app_for_env_without_project(&deployments, "production", false).unwrap();
         assert_eq!(app, "web");
+    }
+
+    #[test]
+    fn should_use_per_server_delete_spinner_only_for_single_interactive_target() {
+        assert!(should_use_per_server_delete_spinner(1, true));
+        assert!(!should_use_per_server_delete_spinner(2, true));
+        assert!(!should_use_per_server_delete_spinner(1, false));
+    }
+
+    #[test]
+    fn server_delete_success_message_is_compact_by_default() {
+        let entry = server_entry("example.com");
+        let message = format_server_delete_success_for_output("prod", &entry, false);
+        assert_eq!(message, "prod deleted");
+    }
+
+    #[test]
+    fn server_delete_success_message_includes_target_in_verbose_mode() {
+        let entry = server_entry("example.com");
+        let message = format_server_delete_success_for_output("prod", &entry, true);
+        assert_eq!(message, "prod (tako@example.com:22) deleted successfully");
+    }
+
+    #[test]
+    fn server_delete_failure_message_is_compact_by_default() {
+        let entry = server_entry("example.com");
+        let message = format_server_delete_failure_for_output("prod", &entry, "boom", false);
+        assert_eq!(message, "prod delete failed: boom");
     }
 
     #[test]

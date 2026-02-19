@@ -34,24 +34,34 @@ impl Downloader {
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let install_url = resolve_install_url();
     output::section("Upgrade");
-    output::step(&format!(
-        "Installing latest tako CLI from {}",
-        output::emphasized(&install_url)
+    output::step(&format_upgrade_start_message(
+        &install_url,
+        output::is_verbose(),
     ));
 
     let downloader = select_downloader(command_exists("curl"), command_exists("wget"))
         .map_err(|e| format!("{e}. Install curl or wget and retry."))?;
 
-    run_installer(downloader, &install_url)?;
+    output::with_spinner("Running installer...", || {
+        run_installer(downloader, &install_url)
+    })?
+    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     output::success("Upgrade complete");
     Ok(())
 }
 
-fn run_installer(
-    downloader: Downloader,
-    install_url: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn format_upgrade_start_message(install_url: &str, verbose: bool) -> String {
+    if verbose {
+        return format!(
+            "Installing latest tako CLI from {}",
+            output::emphasized(install_url)
+        );
+    }
+    "Installing latest tako CLI".to_string()
+}
+
+fn run_installer(downloader: Downloader, install_url: &str) -> Result<(), String> {
     let mut download = Command::new(downloader.binary());
     downloader.apply_args(&mut download, install_url);
     let mut download = download
@@ -62,7 +72,7 @@ fn run_installer(
         .map_err(|e| format!("failed to start {}: {}", downloader.binary(), e))?;
 
     let Some(download_stdout) = download.stdout.take() else {
-        return Err("failed to capture installer download output".into());
+        return Err("failed to capture installer download output".to_string());
     };
 
     let mut install = Command::new("sh")
@@ -80,10 +90,10 @@ fn run_installer(
         .map_err(|e| format!("failed waiting for {}: {}", downloader.binary(), e))?;
 
     if !download_status.success() {
-        return Err(format!("failed to download installer from {}", install_url).into());
+        return Err(format!("failed to download installer from {}", install_url));
     }
     if !install_status.success() {
-        return Err("installer script exited with a non-zero status".into());
+        return Err("installer script exited with a non-zero status".to_string());
     }
 
     Ok(())
@@ -159,5 +169,18 @@ mod tests {
     fn select_downloader_errors_when_none_available() {
         let err = select_downloader(false, false).unwrap_err();
         assert!(err.contains("no installer downloader available"));
+    }
+
+    #[test]
+    fn format_upgrade_start_message_is_compact_by_default() {
+        let message = format_upgrade_start_message("https://tako.sh/install", false);
+        assert_eq!(message, "Installing latest tako CLI");
+    }
+
+    #[test]
+    fn format_upgrade_start_message_includes_url_in_verbose_mode() {
+        let message = format_upgrade_start_message("https://tako.sh/install", true);
+        assert!(message.contains("Installing latest tako CLI from"));
+        assert!(message.contains("tako.sh/install"));
     }
 }

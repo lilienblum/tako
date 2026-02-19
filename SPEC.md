@@ -261,6 +261,12 @@ tako upgrade
 - `--version`: Print version and exit.
 - `-v, --verbose`: Show verbose output (enables detailed command output and info logs).
 
+CLI output conventions:
+
+- Default output is concise and user-focused.
+- `--verbose` enables detailed technical progress (for example resolved paths, target metadata, and per-host transport details).
+- In interactive terminals, long-running command steps show spinner progress indicators; parallel multi-server operations may use line-based status output to avoid overlapping spinners.
+
 Directory selection is command-scoped:
 
 - `tako init [DIR]`
@@ -299,6 +305,7 @@ Template behavior:
   - Bun: `bun`
   - Node: `node`
   - Deno: `deno`
+- Init prints the full "Detected" summary block only in verbose mode; default output keeps setup concise and action-oriented.
 - If no family presets are available after fetch, init skips preset selection and uses the runtime base preset.
 - When "custom preset reference" is selected, init leaves top-level `preset` unset (commented) but still writes top-level `runtime`.
 - For `main`, init behavior is:
@@ -321,6 +328,7 @@ Upgrade the local `tako` CLI binary to the latest available release.
 
 - Downloads and runs the same hosted installer script used by `curl -fsSL https://tako.sh/install | sh`
 - Requires either `curl` or `wget` on the local machine
+- Shows a spinner while installer execution is running in interactive terminals.
 
 ### tako dev [--tui|--no-tui] [DIR]
 
@@ -701,6 +709,7 @@ Deploy flow helpers:
 - Cached artifacts are validated by checksum/size before reuse; invalid cache entries are rebuilt automatically.
 - Artifact cache keys include runtime tool + resolved runtime version + Docker/local mode to avoid cross-target and cross-runtime cache contamination.
 - Final `app.json` is written in the deployed app directory and contains runtime `main` used by `tako-server`.
+- Final `app.json` also includes optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
 - Deploy does not write a release `.env` file; runtime environment is provided through the `deploy` command payload and applied by `tako-server` when spawning instances.
 - Deploy requires valid `arch` and `libc` metadata in each selected `[[servers]]` entry.
 - Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
@@ -730,10 +739,14 @@ When deploying with `instances = 0`, rolling deploy starts one warm instance for
 
 **App start command (current):**
 
-- tako-server currently only supports Bun apps.
 - Release `app.json` is required for app startup.
-- For `runtime = "bun"`, tako-server resolves `node_modules/tako.sh/src/wrapper.ts` by searching the app directory and its parent directories, then starts the app as `bun run <resolved-wrapper-path> <app.json.main>`.
-  - If no wrapper file is found, warm-instance startup fails with an explicit missing-wrapper error.
+- If release `app.json` includes non-empty `start`, tako-server uses that command (expanding `{main}` placeholders).
+- If `start` is missing/empty, tako-server falls back by runtime:
+  - `bun`: resolve `node_modules/tako.sh/src/wrapper.ts` from app dir or parent dirs, then run `bun run <resolved-wrapper-path> <app.json.main>`
+    - if wrapper is missing, warm-instance startup fails with an explicit missing-wrapper error
+  - `node`: run `node <app.json.main>`
+  - `deno`: run `deno run --allow-net --allow-env --allow-read <app.json.main>`
+- Unknown runtime values in `app.json` are rejected with an explicit unsupported-runtime error.
 
 **Partial failure:** If some servers fail while others succeed, deployment continues. Failures are reported at the end.
 
@@ -753,6 +766,30 @@ When deploying with `instances = 0`, rolling deploy starts one warm instance for
   - multiple servers in `~/.tako/config.toml` `[[servers]]` (interactive terminal) → prompt to select one and persist `[servers.<name>] env = "production"` in `tako.toml`
 - If no servers exist in `~/.tako/config.toml` `[[servers]]` → fail with hint to run `tako servers add <host>`
 - Otherwise, require explicit `[servers.*]` mapping in tako.toml
+
+### tako releases ls [--env {environment}]
+
+List release/build history for the current app across mapped environment servers.
+
+- Environment defaults to `production`.
+- Environment must exist in `tako.toml` (`[envs.<name>]`).
+- Server targeting follows `[servers.*]` mappings for the selected environment (with the same single-server production fallback as deploy when exactly one global server exists).
+- Output is release-centric and sorted newest-first:
+  - line 1: release/build id + deployed timestamp
+    - when deployed within 24 hours, append a muted relative hint in parentheses (for example `3h ago`)
+  - line 2: commit message + cleanliness marker (`[clean]`, `[dirty]`, or `[unknown]`)
+- `[current]` marks the release currently pointed to by server `current` symlink.
+- Commit metadata (`commit_message`, `git_dirty`) comes from release `app.json` when available; older releases may show `[unknown]` or `(no commit message)`.
+
+### tako releases rollback {release-id} [--env {environment}] [--yes|-y]
+
+Roll back the current app/environment to a previously deployed release/build id.
+
+- Environment defaults to `production`.
+- In interactive terminals, rollback to `production` requires explicit confirmation unless `--yes` (or `-y`) is provided.
+- Rollback is executed per mapped server in parallel.
+- tako-server performs rollback by reusing current app routes/env/secrets/scaling config and switching runtime path/version to the target release, then running the standard rolling-update flow.
+- Partial failures are reported per server; successful servers remain rolled back.
 
 ### tako delete [--env {environment}] [--yes|-y] [DIR]
 
@@ -784,6 +821,10 @@ Delete confirmation:
 3. Remove `/opt/tako/apps/{app-name}` from disk.
 
 Delete runs across target servers in parallel. If some servers fail while others succeed, all errors are reported and the command exits with failure.
+
+- For single-server interactive deletes, Tako shows a spinner for the server delete action.
+- For multi-server deletes, Tako keeps line-based per-server completion/failure output.
+- Default per-server delete result lines are compact; verbose mode includes full SSH target labels (`name (tako@host:port)`).
 
 Delete is idempotent for absent app runtime state (safe to re-run for cleanup).
 
@@ -982,7 +1023,9 @@ Response:
       "on_demand_cold_start",
       "idle_scale_to_zero",
       "upgrade_mode_control",
-      "server_runtime_info"
+      "server_runtime_info",
+      "release_history",
+      "rollback"
     ]
   }
 }
@@ -1027,6 +1070,18 @@ Response:
 
 ```json
 { "command": "routes" }
+```
+
+- `list_releases` (returns release/build history for an app):
+
+```json
+{ "command": "list_releases", "app": "my-app" }
+```
+
+- `rollback` (roll back an app to a previous release/build id):
+
+```json
+{ "command": "rollback", "app": "my-app", "version": "abc1234" }
 ```
 
 - `delete` (remove runtime state/routes for an app):
