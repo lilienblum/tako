@@ -404,6 +404,7 @@ Start (or attach to) a local development session for the current app, backed by 
   - On macOS, `tako dev` automatically tries to enable scoped local forwarding when missing (one-time sudo prompt):
     - `127.77.0.1:443 -> 127.0.0.1:47831`
     - `127.77.0.1:80 -> 127.0.0.1:47830` (HTTP redirect to HTTPS)
+  - If forwarding later appears inactive, `tako dev` explains why it is re-requesting sudo before repair (missing pf rules, runtime forwarding reset after reboot/pf reset, or conflicting local listeners on `127.0.0.1:80/443`).
   - On macOS, Tako always requires this forwarding and always advertises `https://{app}.tako.local/` (no explicit port).
   - After applying or repairing local forwarding, Tako retries loopback 80/443 reachability and fails startup if those endpoints remain unreachable.
   - On macOS, Tako probes HTTPS for the app host via loopback and fails startup if that probe does not succeed.

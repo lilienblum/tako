@@ -735,6 +735,17 @@ fn apply_local_80_443_forwarding(
     if repairing {
         crate::output::warning("Local 80/443 forwarding looks inactive.");
         crate::output::muted("Re-applying local pf rules (sudo)...");
+        for line in forwarding_repair_diagnostic_lines(
+            public_port,
+            has_pf_https_forwarding(public_port),
+            has_pf_http_redirect_forwarding(),
+            loopback_tcp_port_open(443, LOOPBACK_PORT_PROBE_TIMEOUT_MS),
+            loopback_tcp_port_open(80, LOOPBACK_PORT_PROBE_TIMEOUT_MS),
+            localhost_tcp_port_open(443, LOOPBACK_PORT_PROBE_TIMEOUT_MS),
+            localhost_tcp_port_open(80, LOOPBACK_PORT_PROBE_TIMEOUT_MS),
+        ) {
+            crate::output::muted(&line);
+        }
     } else {
         crate::output::warning("Sudo password required.");
         crate::output::muted("One-time sudo required to enable local HTTPS forwarding (80/443).");
@@ -813,6 +824,66 @@ fn has_local_80_443_forwarding(_public_port: u16) -> bool {
     false
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn forwarding_repair_diagnostic_lines(
+    public_port: u16,
+    https_pf_ok: bool,
+    http_pf_ok: bool,
+    https_loopback_ok: bool,
+    http_loopback_ok: bool,
+    localhost_443_open: bool,
+    localhost_80_open: bool,
+) -> Vec<String> {
+    let mut lines = vec!["Checking why sudo is needed now:".to_string()];
+
+    if !https_pf_ok {
+        lines.push(format!(
+            "pf rule is missing for {DEV_LOOPBACK_ADDR}:443 -> 127.0.0.1:{public_port} in {PF_FORWARDING_ANCHOR_FILE}."
+        ));
+    }
+    if !http_pf_ok {
+        lines.push(format!(
+            "pf rule is missing for {DEV_LOOPBACK_ADDR}:80 -> 127.0.0.1:{LOCAL_HTTP_REDIRECT_PORT} in {PF_FORWARDING_ANCHOR_FILE}."
+        ));
+    }
+
+    if https_pf_ok && http_pf_ok && (!https_loopback_ok || !http_loopback_ok) {
+        lines.push(
+            "pf rules are present on disk but forwarding is inactive at runtime (common after reboot or pf reset).".to_string(),
+        );
+    } else {
+        if !https_loopback_ok {
+            lines.push(format!(
+                "TCP probe to {DEV_LOOPBACK_ADDR}:443 is unreachable."
+            ));
+        }
+        if !http_loopback_ok {
+            lines.push(format!(
+                "TCP probe to {DEV_LOOPBACK_ADDR}:80 is unreachable."
+            ));
+        }
+    }
+
+    if localhost_443_open && localhost_80_open {
+        lines.push(
+            "127.0.0.1:80/443 already has a listener; local services can interfere with forwarding."
+                .to_string(),
+        );
+    } else if localhost_443_open {
+        lines.push(
+            "127.0.0.1:443 already has a listener; it may interfere with local HTTPS forwarding."
+                .to_string(),
+        );
+    } else if localhost_80_open {
+        lines.push(
+            "127.0.0.1:80 already has a listener; it may interfere with local HTTP redirect forwarding."
+                .to_string(),
+        );
+    }
+
+    lines
+}
+
 fn tcp_port_open(ip: &str, port: u16, timeout_ms: u64) -> bool {
     let Ok(ipv4) = ip.parse::<Ipv4Addr>() else {
         return false;
@@ -821,7 +892,7 @@ fn tcp_port_open(ip: &str, port: u16, timeout_ms: u64) -> bool {
     std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).is_ok()
 }
 
-#[cfg(test)]
+#[cfg(any(target_os = "macos", test))]
 fn localhost_tcp_port_open(port: u16, timeout_ms: u64) -> bool {
     tcp_port_open("127.0.0.1", port, timeout_ms)
 }
@@ -1109,7 +1180,8 @@ mod tests {
         dev_startup_lines, doctor_dev_server_lines, doctor_dev_server_unavailable_lines,
         doctor_local_forwarding_preflight_lines, ensure_dev_server_tls_material_for_home,
         ensure_local_80_443_forwarding, ensure_local_dns_resolver_configured,
-        host_and_port_from_url, is_dev_server_unavailable_error_message, listed_apps_contain_app,
+        forwarding_repair_diagnostic_lines, host_and_port_from_url,
+        is_dev_server_unavailable_error_message, listed_apps_contain_app,
         local_dns_resolver_contents, local_https_probe_error, parse_local_dns_resolver,
         parse_stored_log_line, pf_anchor_maps_loopback_port, pf_conf_forwarding_hook_block,
         pf_conf_with_forwarding_hook, pfctl_args, pfctl_shell_command, port_from_listen,
@@ -1744,6 +1816,49 @@ mod tests {
             lines
                 .iter()
                 .any(|line| line.contains("tcp 127.77.0.1:80 (ok)"))
+        );
+    }
+
+    #[test]
+    fn forwarding_repair_diagnostics_explain_runtime_reset_when_rules_exist() {
+        let lines =
+            forwarding_repair_diagnostic_lines(47831, true, true, false, false, false, false);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("why sudo is needed now"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("rules are present on disk but forwarding is inactive"))
+        );
+        assert!(lines.iter().any(|line| line.contains("reboot")));
+    }
+
+    #[test]
+    fn forwarding_repair_diagnostics_explain_missing_anchor_rules() {
+        let lines =
+            forwarding_repair_diagnostic_lines(47831, false, true, false, false, false, false);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("pf rule is missing for 127.77.0.1:443"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("/etc/pf.anchors/tako"))
+        );
+    }
+
+    #[test]
+    fn forwarding_repair_diagnostics_warn_about_existing_local_listeners() {
+        let lines = forwarding_repair_diagnostic_lines(47831, true, true, false, false, true, true);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("127.0.0.1:80/443 already has a listener"))
         );
     }
 

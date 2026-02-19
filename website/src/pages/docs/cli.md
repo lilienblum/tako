@@ -34,7 +34,7 @@ Directory selection is command-scoped:
 - `tako upgrade`: upgrade local CLI using the hosted installer.
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
 - `tako dev [--tui | --no-tui] [DIR]`: run local development mode.
-- `tako doctor`: print local dev diagnostics (DNS, socket, listener, leases).
+- `tako doctor`: print local dev diagnostics (DNS, socket, listener, leases, and local forwarding preflight checks).
 - `tako deploy [--env <ENV>] [-y|--yes] [DIR]`: build and deploy app.
 - `tako delete [--env <ENV>] [-y|--yes] [DIR]`: delete deployed app.
 - `tako servers <subcommand>`: manage server inventory and server runtime actions.

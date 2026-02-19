@@ -40,6 +40,7 @@ Important local behavior:
 - `tako dev` uses fixed HTTPS port `127.0.0.1:47831`.
 - On macOS, Tako configures local forwarding and split DNS so you can use `https://{app}.tako.local/` without port suffix.
 - On first trust/setup flow, elevated access may be required for local CA trust + forwarding setup.
+- If `tako dev` says local forwarding looks inactive, read the diagnostics printed right before sudo: they call out missing pf rules, runtime pf reset (common after reboot), or local listeners on `127.0.0.1:80/443`.
 
 Config-related local failures:
 

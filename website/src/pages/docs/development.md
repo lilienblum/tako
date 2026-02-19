@@ -86,6 +86,7 @@ If your browser still complains about certs:
 - `tako-dev-server` listens on fixed local HTTPS port `47831`.
 - On macOS, Tako uses scoped local forwarding so public dev URLs can use `:443` (no explicit port in the URL).
 - Binding `:443` requires elevated privileges, so Tako requests one-time setup when needed.
+- If forwarding later looks inactive, `tako dev` can ask again and now prints the detected reason before sudo (missing pf rules, runtime reset after reboot/pf reset, or local listeners on `127.0.0.1:80/443`).
 
 ## Running Slow E2E Tests
 

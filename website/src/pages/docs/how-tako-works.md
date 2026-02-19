@@ -59,6 +59,7 @@ macOS local networking behavior:
 
 - Tako sets up local forwarding so public URLs stay on default ports (`:443` and `:80` redirect behavior).
 - On first setup/trust flow, elevated access may be required to install/trust the local CA and configure forwarding.
+- If forwarding later appears inactive, `tako dev` prints the detected reason before prompting again (missing pf rules, runtime reset after reboot/pf reset, or local listeners on `127.0.0.1:80/443`).
 
 Session and idle behavior:
 
