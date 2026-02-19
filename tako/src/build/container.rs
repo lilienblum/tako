@@ -8,6 +8,8 @@ use super::BuildPresetTarget;
 const BUN_INSTALL_CACHE_PATH: &str = "/var/cache/tako/bun/install/cache";
 const MISE_DATA_DIR_PATH: &str = "/var/cache/tako/mise";
 const CACHE_VOLUME_PREFIX: &str = "tako-build-cache";
+const DEFAULT_BUILDER_IMAGE_GLIBC: &str = "ghcr.io/lilienblum/tako-builder-glibc:v1";
+const DEFAULT_BUILDER_IMAGE_MUSL: &str = "ghcr.io/lilienblum/tako-builder-musl:v1";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ContainerCacheMount {
@@ -407,8 +409,8 @@ fn default_builder_image_for_target_label(target_label: &str) -> Result<&'static
         ));
     };
     match libc {
-        "glibc" => Ok("debian:bookworm-slim"),
-        "musl" => Ok("alpine:3.20"),
+        "glibc" => Ok(DEFAULT_BUILDER_IMAGE_GLIBC),
+        "musl" => Ok(DEFAULT_BUILDER_IMAGE_MUSL),
         other => Err(format!(
             "Unsupported target libc '{}': supported values are glibc and musl",
             other
@@ -442,11 +444,11 @@ mod tests {
     fn default_builder_image_mapping_supports_target_libc() {
         assert_eq!(
             default_builder_image_for_target_label("linux-x86_64-glibc").unwrap(),
-            "debian:bookworm-slim"
+            DEFAULT_BUILDER_IMAGE_GLIBC
         );
         assert_eq!(
             default_builder_image_for_target_label("linux-aarch64-musl").unwrap(),
-            "alpine:3.20"
+            DEFAULT_BUILDER_IMAGE_MUSL
         );
     }
 

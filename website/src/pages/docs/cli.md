@@ -105,6 +105,7 @@ Deploy note:
 - Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is unsupported).
 - During artifact prep, deploy verifies resolved `main` exists in the post-build app directory and fails if missing.
 - Containerized deploy builds reuse per-target dependency cache volumes (mise + runtime cache mounts, keyed by cache kind + target + builder image) while keeping build containers ephemeral.
+- Containerized deploy builds default to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - During local builds, when `mise` is available, stage commands run through `mise exec -- sh -lc ...`.
 - Bun release dependencies are installed on server before rollout (`bun install --production`).
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.

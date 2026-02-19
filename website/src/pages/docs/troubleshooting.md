@@ -78,6 +78,7 @@ Expected deploy behavior:
 - `Local artifact build failed`:
   - Symptom: deploy fails during artifact build before upload.
   - Fix: check preset resolution (explicit top-level runtime-local `preset` or adapter default from top-level `runtime`/detection), app `[[build.stages]]`, and target build logs. Namespaced aliases in `tako.toml` (for example `js/tanstack-start`) are rejected, and `github:` refs are not supported. Build order is preset stage first (`[build].install`/`[build].build`), then app `[[build.stages]]`. JS runtime base presets (`bun`, `node`, `deno`) default to local build mode (`container = false`) unless explicitly set to `true`; if preset build mode resolves to container (`[build].container`), also confirm Docker is available locally.
+  - If using container builds, confirm Docker can pull default builder images for your targets: `ghcr.io/lilienblum/tako-builder-musl:v1` (`*-musl`) and `ghcr.io/lilienblum/tako-builder-glibc:v1` (`*-glibc`).
   - If preset parsing fails, ensure preset artifact filters use `[build].exclude` and runtime/dev commands use top-level `main`/`install`/`start`/`dev` (legacy `[deploy]`, `[dev]`, `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are rejected).
   - Note: containerized builds cache dependencies in Docker volumes prefixed `tako-build-cache-`; if needed, remove stale volumes and redeploy.
 - `Deploy entrypoint missing after build`:

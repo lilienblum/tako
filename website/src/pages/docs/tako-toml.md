@@ -92,6 +92,7 @@ runtime = "bun"
     - unset: defaults to Docker only when `[build].targets` is non-empty
     - built-in JS base presets set `container = false` explicitly
   - Docker builds reuse target-scoped dependency cache volumes (mise + runtime cache mounts) while keeping build containers ephemeral.
+  - Default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
   - Runtime version is resolved via `mise exec -- <tool> --version` when local `mise` is available, then falls back to `mise.toml`, then `latest`.
   - During local builds, stage commands run through `mise exec -- sh -lc ...` when `mise` is available.
   - Deploy artifact cache keys include resolved preset source/commit, runtime tool/version, build mode (Docker/local), and `build.include` / `build.exclude` / `build.assets` / `build.stages`; changing these inputs invalidates cache and triggers rebuild for affected targets.

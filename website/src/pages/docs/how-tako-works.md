@@ -88,6 +88,7 @@ Important deployment behavior:
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
 - Deploy always builds artifacts locally (Docker or local host based on preset build mode); servers do not run app build steps during deploy.
 - Docker builds reuse per-target dependency cache volumes (mise + runtime cache mounts) keyed by cache kind + target label + builder image while still creating fresh build containers each deploy.
+- Default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - Runtime version resolution is mise-aware: Tako tries `mise exec -- <tool> --version` when local `mise` is available (and in Docker build contexts), then falls back to `mise.toml`, then `latest`; deploy writes release `mise.toml` so server runtime matches build runtime.
 - During local builds, when `mise` is available, stage commands run through `mise exec -- sh -lc ...`.
 - Preset runtime fields use top-level `main`/`install`/`start` keys (legacy preset `[deploy]` is not supported).

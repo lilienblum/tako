@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 
-FROM alpine:3.20
+FROM alpine:3.23
 
 ARG MISE_INSTALL_PATH=/usr/local/bin/mise
 

@@ -38,6 +38,7 @@ Operational behavior highlights:
 - `tako deploy` resolves preset from top-level `preset` when set, otherwise falls back to adapter base preset from top-level `runtime` (when set) or adapter detection (`unknown` falls back to `bun`); unpinned official aliases are fetched from `master` on each resolve and the resolved source metadata is written to `.tako/build.lock.json`.
 - `tako deploy` builds per-target artifacts locally before upload, using Docker only when preset `[build].container` resolves to `true`; built-in JS base presets (`bun`, `node`, `deno`) default to local build mode (`container = false`) unless explicitly overridden.
 - Container builds stay ephemeral; dependency downloads are reused via per-target Docker cache volumes keyed by target label and builder image.
+- Containerized deploy builds default to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - `tako deploy` caches target artifacts in `.tako/artifacts` and reuses verified cache hits when build inputs are unchanged; invalid cache entries are rebuilt automatically.
 - Local runtime version resolution is mise-aware: Tako probes `mise exec -- <tool> --version` when `mise` is installed, then falls back to `mise.toml` and `latest`; local build stage commands also run through `mise exec -- sh -lc ...` when `mise` is available.
 - `tako deploy` merges build assets (preset assets + `build.assets`) into app `public/` after target build, in listed order.

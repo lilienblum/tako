@@ -29,6 +29,7 @@ What happens during deploy:
 - For each required server target (`arch`/`libc`), Tako runs preset install/build first, then app `[[build.stages]]` (if configured), and packages a target artifact tarball (Docker/local based on preset `[build].container`; built-in JS base presets default to local mode with `container = false`).
 - Before packaging each target artifact, Tako verifies the resolved deploy `main` file exists in the post-build app directory.
 - Docker build containers stay ephemeral, but dependency downloads are reused from per-target Docker cache volumes keyed by cache kind + target label + builder image.
+- Default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - Target artifacts are cached locally in `.tako/artifacts/` using a deterministic build-input key.
 - On cache hit, deploy reuses the verified artifact; on cache mismatch/corruption, deploy rebuilds that target artifact automatically.
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
@@ -94,6 +95,7 @@ Each target server should have:
 - Artifact include precedence is `build.include` then `**/*`; artifact excludes are effective preset `[build].exclude` plus `build.exclude`.
 - For each server target label, Tako runs build commands in fixed order: preset `[build].install` + `[build].build` first, then app `[[build.stages]]` in declaration order (Docker/local mode from preset `[build].container`; when unset, generic preset parser defaults to Docker only when `[build].targets` is non-empty).
 - Containerized deploy builds reuse per-target dependency cache volumes (mise + runtime cache mounts) while still creating fresh build containers.
+- Containerized deploy builds default to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - Runtime version is resolved with `mise` when available (`mise exec -- <tool> --version`), with fallback to `mise.toml`, then `latest`.
 - During local builds, stage commands run through `mise exec -- sh -lc ...` when `mise` is available.
 - Local artifact cache key includes source hash, target label, resolved preset source/commit, runtime tool/version, Docker/local mode, preset build commands, app `[[build.stages]]`, include/exclude patterns, asset roots, and app subdirectory.

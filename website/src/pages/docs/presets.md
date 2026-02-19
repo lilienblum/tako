@@ -59,6 +59,7 @@ main = "dist/server/tako-entry.mjs" # Optional default app entry
 
 Runtime base presets (`bun`, `node`, `deno`) provide default lifecycle commands (`dev`, `install`, `start`, `[build].install`, `[build].build`), default build filters/targets, and default `assets`.
 JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set.
+When preset build mode resolves to container, default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 Preset `build.exclude` adds extra patterns on top of runtime-base excludes (base-first, deduplicated), while preset `build.assets` replace runtime-base assets when set.
 JS runtime base presets use `mise` when available for local install/build steps, but do not require it; deploy `start` commands run through `mise` so server runtime follows packaged `mise.toml`.
 

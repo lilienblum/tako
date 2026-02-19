@@ -145,6 +145,7 @@ env = "production"
   - stage 1: preset `[build].install` then preset `[build].build` (when present)
   - stage 2+: app `[[build.stages]]` in declaration order (`install` then `run` per stage)
 - Docker build containers are ephemeral; dependency caches are persisted with target-scoped Docker volumes keyed by cache kind + target label + builder image (mise cache: `/var/cache/tako/mise`, Bun cache: `/var/cache/tako/bun/install/cache`).
+- Default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - Runtime version resolution is mise-aware:
   - local builds try `mise exec -- <tool> --version` from app workspace when `mise` is installed.
   - local build stage commands run through `mise exec -- sh -lc ...` when `mise` is installed.
@@ -690,6 +691,7 @@ Deploy flow helpers:
 - Build logic runs in fixed order per target: preset `[build].install`/`[build].build` stage first, then app `[[build.stages]]` from `tako.toml`.
 - Runtime prep/start on server comes from preset top-level `install` and `start`.
 - During container builds, deploy reuses target-scoped dependency cache volumes (mise and runtime-specific cache mounts such as Bun), keyed by cache kind, target label, and builder image.
+- During container builds, deploy defaults to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - During local builds, deploy resolves runtime version by asking `mise` directly (`mise exec -- <tool> --version`) when available, then falls back to `mise.toml` and finally `latest`.
 - During local builds, deploy runs stage commands through `mise exec -- sh -lc ...` when `mise` is available.
 - Artifact include precedence: `build.include` -> `**/*`.
