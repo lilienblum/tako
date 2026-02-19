@@ -15,12 +15,21 @@ struct ContainerCacheMount {
     container_path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct BuildStageCommand {
+    pub name: Option<String>,
+    pub working_dir: Option<String>,
+    pub install: Option<String>,
+    pub run: String,
+}
+
 pub fn run_container_build(
     workspace_dir: &Path,
     app_subdir: &str,
     target_label: &str,
     runtime_tool: &str,
     target: &BuildPresetTarget,
+    stages: &[BuildStageCommand],
 ) -> Result<(), String> {
     let image = target
         .builder_image
@@ -35,6 +44,7 @@ pub fn run_container_build(
         runtime_tool,
         target.install.as_deref(),
         target.build.as_deref(),
+        stages,
     )?;
     let cache_mounts = dependency_cache_mounts(target_label, runtime_tool, &image);
     let workspace = workspace_dir.canonicalize().map_err(|e| {
@@ -174,8 +184,17 @@ fn build_container_script(
     runtime_tool: &str,
     install_command: Option<&str>,
     build_command: Option<&str>,
+    stages: &[BuildStageCommand],
 ) -> Result<String, String> {
     let (app_subdir_value, app_dir) = resolve_app_dir(app_subdir)?;
+    let has_preset_commands = install_command
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some()
+        || build_command
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_some();
     let mut lines = vec![
         "set -eu".to_string(),
         "(set -o pipefail >/dev/null 2>&1) || true".to_string(),
@@ -221,11 +240,50 @@ fn build_container_script(
         lines.push(format!("cd {} && {}", shell_single_quote(&app_dir), build));
     }
 
-    if lines.len() == 14 {
-        return Err("Build preset did not define install or build commands".to_string());
+    let has_custom_stages = !stages.is_empty();
+    for stage in stages {
+        let stage_dir = stage_command_working_dir(&app_dir, stage.working_dir.as_deref())?;
+        if let Some(install) = stage
+            .install
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            lines.push(format!(
+                "cd {} && {}",
+                shell_single_quote(&stage_dir),
+                install
+            ));
+        }
+        let run = stage.run.trim();
+        if run.is_empty() {
+            return Err("Build stage run command cannot be empty".to_string());
+        }
+        lines.push(format!("cd {} && {}", shell_single_quote(&stage_dir), run));
+    }
+
+    if !has_preset_commands && !has_custom_stages {
+        return Err(
+            "Build preset did not define install/build commands and no build stages were configured"
+                .to_string(),
+        );
     }
 
     Ok(lines.join(" && "))
+}
+
+fn stage_command_working_dir(app_dir: &str, working_dir: Option<&str>) -> Result<String, String> {
+    let Some(working_dir) = working_dir.map(str::trim).filter(|s| !s.is_empty()) else {
+        return Ok(app_dir.to_string());
+    };
+    let normalized = working_dir.replace('\\', "/");
+    if normalized.starts_with('/') || normalized.contains("..") {
+        return Err(format!(
+            "Invalid build stage working_dir for container build: {}",
+            working_dir
+        ));
+    }
+    Ok(format!("{}/{}", app_dir, normalized))
 }
 
 fn resolve_app_dir(app_subdir: &str) -> Result<(String, String), String> {
@@ -393,6 +451,7 @@ mod tests {
             "bun",
             Some("bun install --frozen-lockfile"),
             Some("bun run build"),
+            &[],
         )
         .unwrap();
         assert!(script.contains("export TAKO_APP_SUBDIR='apps/web'"));
@@ -454,16 +513,63 @@ mod tests {
 
     #[test]
     fn container_script_rejects_empty_commands() {
-        let err = build_container_script("", "bun", None, None).unwrap_err();
-        assert!(err.contains("did not define install or build commands"));
+        let err = build_container_script("", "bun", None, None, &[]).unwrap_err();
+        assert!(err.contains("no build stages were configured"));
     }
 
     #[test]
     fn container_script_bootstraps_latest_runtime_when_no_prototools_exists() {
-        let script = build_container_script("apps/web", "bun", Some("bun install"), None).unwrap();
+        let script =
+            build_container_script("apps/web", "bun", Some("bun install"), None, &[]).unwrap();
         assert!(
             script
                 .contains("if [ ! -f /workspace/.prototools ]; then printf '%s = \"latest\"\\n' 'bun' > /workspace/.prototools; fi")
         );
+    }
+
+    #[test]
+    fn container_script_runs_custom_stages_after_preset_build() {
+        let script = build_container_script(
+            "apps/web",
+            "bun",
+            Some("bun install"),
+            Some("bun run build"),
+            &[BuildStageCommand {
+                name: Some("frontend-assets".to_string()),
+                working_dir: Some("frontend".to_string()),
+                install: Some("bun install".to_string()),
+                run: "bun run build".to_string(),
+            }],
+        )
+        .unwrap();
+        let preset_index = script
+            .find("cd '/workspace/apps/web' && bun run build")
+            .expect("preset build command");
+        let stage_install_index = script
+            .find("cd '/workspace/apps/web/frontend' && bun install")
+            .expect("stage install command");
+        let stage_run_index = script
+            .find("cd '/workspace/apps/web/frontend' && bun run build")
+            .expect("stage run command");
+        assert!(preset_index < stage_install_index);
+        assert!(stage_install_index < stage_run_index);
+    }
+
+    #[test]
+    fn container_script_accepts_custom_stages_without_preset_commands() {
+        let script = build_container_script(
+            "apps/web",
+            "bun",
+            None,
+            None,
+            &[BuildStageCommand {
+                name: None,
+                working_dir: None,
+                install: None,
+                run: "bun run build".to_string(),
+            }],
+        )
+        .unwrap();
+        assert!(script.contains("cd '/workspace/apps/web' && bun run build"));
     }
 }

@@ -498,6 +498,15 @@ pub fn parse_and_validate_preset(
     }
     if value
         .get("build")
+        .and_then(|build| build.get("stages"))
+        .is_some()
+    {
+        return Err(
+            "Build preset does not support [build].stages. Define custom stages in app tako.toml under [[build.stages]].".to_string(),
+        );
+    }
+    if value
+        .get("build")
         .and_then(|build| build.get("docker"))
         .is_some()
     {
@@ -1262,6 +1271,22 @@ builder_image = "oven/bun:1.2"
 "#;
         let err = parse_preset(raw).unwrap_err();
         assert!(err.contains("[build].targets must be an array"));
+    }
+
+    #[test]
+    fn parse_and_validate_preset_rejects_build_stages() {
+        let raw = r#"
+name = "bun"
+
+[build]
+install = "bun install"
+build = "bun run build"
+
+[[build.stages]]
+run = "bun run build"
+"#;
+        let err = parse_preset(raw).unwrap_err();
+        assert!(err.contains("does not support [build].stages"));
     }
 
     #[test]

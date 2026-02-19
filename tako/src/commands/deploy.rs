@@ -7,13 +7,13 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::app::resolve_app_name;
 use crate::build::{
-    BuildAdapter, BuildCache, BuildError, BuildExecutor, BuildPreset, ResolvedPresetSource,
-    apply_adapter_base_runtime_defaults, compute_file_hash, create_filtered_archive_with_prefix,
-    infer_adapter_from_preset_reference, load_build_preset, qualify_runtime_local_preset_ref,
-    run_container_build,
+    BuildAdapter, BuildCache, BuildError, BuildExecutor, BuildPreset, BuildStageCommand,
+    ResolvedPresetSource, apply_adapter_base_runtime_defaults, compute_file_hash,
+    create_filtered_archive_with_prefix, infer_adapter_from_preset_reference, load_build_preset,
+    qualify_runtime_local_preset_ref, run_container_build,
 };
 use crate::commands::server;
-use crate::config::{SecretsStore, ServerEntry, ServerTarget, ServersToml, TakoToml};
+use crate::config::{BuildStage, SecretsStore, ServerEntry, ServerTarget, ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::{SshClient, SshConfig, SshError, upload_via_scp};
 use crate::validation::{
@@ -98,6 +98,7 @@ struct ArtifactCacheKeyInput<'a> {
     use_docker: bool,
     install: Option<&'a str>,
     build: Option<&'a str>,
+    custom_stages: &'a [BuildStage],
     include_patterns: &'a [String],
     exclude_patterns: &'a [String],
     asset_roots: &'a [String],
@@ -404,6 +405,7 @@ async fn run_async(
         &server_targets,
         &build_preset,
         &resolved_preset,
+        &tako_config.build.stages,
         &include_patterns,
         &exclude_patterns,
         &asset_roots,
@@ -1389,6 +1391,7 @@ fn build_artifact_cache_key(
     target_label: &str,
     preset_source: &ResolvedPresetSource,
     target_build: &crate::build::BuildPresetTarget,
+    custom_stages: &[BuildStage],
     include_patterns: &[String],
     exclude_patterns: &[String],
     asset_roots: &[String],
@@ -1412,6 +1415,7 @@ fn build_artifact_cache_key(
         use_docker,
         install: target_build.install.as_deref(),
         build: target_build.build.as_deref(),
+        custom_stages,
         include_patterns,
         exclude_patterns,
         asset_roots,
@@ -1752,6 +1756,7 @@ async fn build_target_artifacts(
     server_targets: &[(String, ServerTarget)],
     preset: &BuildPreset,
     preset_source: &ResolvedPresetSource,
+    custom_stages: &[BuildStage],
     include_patterns: &[String],
     exclude_patterns: &[String],
     asset_roots: &[String],
@@ -1766,6 +1771,14 @@ async fn build_target_artifacts(
     for target_label in unique_targets {
         let target_build = resolve_build_target(preset, &target_label)?;
         let use_local_build_spinners = should_use_local_build_spinners(output::is_interactive());
+        let stage_summary = summarize_build_stages(&target_build, custom_stages);
+        if !stage_summary.is_empty() {
+            output::muted(&format!(
+                "Build stages for {}: {}",
+                target_label,
+                stage_summary.join(" -> ")
+            ));
+        }
         std::fs::create_dir_all(build_workspace_root)
             .map_err(|e| format!("Failed to create {}: {e}", build_workspace_root.display()))?;
         let workspace = build_workspace_root.join(format!("work-{}-{}", version, target_label));
@@ -1803,6 +1816,7 @@ async fn build_target_artifacts(
             &target_label,
             preset_source,
             &target_build,
+            custom_stages,
             include_patterns,
             exclude_patterns,
             asset_roots,
@@ -1844,6 +1858,7 @@ async fn build_target_artifacts(
                         runtime_tool,
                         use_docker_build,
                         &target_build,
+                        custom_stages,
                     )
                 })
                 .map_err(|e| format!("Failed to render artifact build spinner: {e}"))??;
@@ -1856,6 +1871,7 @@ async fn build_target_artifacts(
                     runtime_tool,
                     use_docker_build,
                     &target_build,
+                    custom_stages,
                 )?;
             }
             materialize_runtime_tool_version(
@@ -1919,17 +1935,20 @@ fn run_target_build(
     runtime_tool: &str,
     use_docker_build: bool,
     target_build: &crate::build::BuildPresetTarget,
+    custom_stages: &[BuildStage],
 ) -> Result<(), String> {
     if use_docker_build {
+        let stage_commands = container_stage_commands(custom_stages);
         run_container_build(
             workspace,
             app_subdir,
             target_label,
             runtime_tool,
             target_build,
+            &stage_commands,
         )?;
     } else {
-        run_local_build(workspace, app_subdir, target_build)?;
+        run_local_build(workspace, app_subdir, target_build, custom_stages)?;
     }
     Ok(())
 }
@@ -1938,6 +1957,7 @@ fn run_local_build(
     workspace: &Path,
     app_subdir: &str,
     target_build: &crate::build::BuildPresetTarget,
+    custom_stages: &[BuildStage],
 ) -> Result<(), String> {
     let app_dir = workspace_app_dir(workspace, app_subdir);
     if !app_dir.is_dir() {
@@ -1949,33 +1969,54 @@ fn run_local_build(
 
     let app_subdir_value = app_subdir.replace('\\', "/");
     let app_dir_value = app_dir.to_string_lossy().to_string();
-    let mut executed = false;
+    let has_preset_stage = target_build
+        .install
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .is_some()
+        || target_build
+            .build
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_some();
+    if !has_preset_stage && custom_stages.is_empty() {
+        return Err(
+            "Build preset did not define install/build commands and no build stages were configured"
+                .to_string(),
+        );
+    }
+    let mut stage_number = if has_preset_stage { 2usize } else { 1usize };
 
-    let run_shell = |cwd: &Path, command: &str, phase: &str| -> Result<(), String> {
-        let output = std::process::Command::new("sh")
-            .args(["-lc", command])
-            .current_dir(cwd)
-            .env("TAKO_APP_SUBDIR", &app_subdir_value)
-            .env("TAKO_APP_DIR", &app_dir_value)
-            .output()
-            .map_err(|e| format!("Failed to run local {phase} command: {e}"))?;
-        if output.status.success() {
-            return Ok(());
-        }
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let detail = if stderr.is_empty() { stdout } else { stderr };
-        Err(format!("Local {phase} command failed: {detail}"))
-    };
+    let run_shell =
+        |cwd: &Path, command: &str, phase: &str, stage_label: &str| -> Result<(), String> {
+            let output = std::process::Command::new("sh")
+                .args(["-lc", command])
+                .current_dir(cwd)
+                .env("TAKO_APP_SUBDIR", &app_subdir_value)
+                .env("TAKO_APP_DIR", &app_dir_value)
+                .output()
+                .map_err(|e| format!("Failed to run local {stage_label} {phase} command: {e}"))?;
+            if output.status.success() {
+                return Ok(());
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let detail = if stderr.is_empty() { stdout } else { stderr };
+            Err(format!(
+                "Local {stage_label} {phase} command failed: {detail}"
+            ))
+        };
 
+    let preset_stage_label = "stage 1 (preset)";
     if let Some(install) = target_build
         .install
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        executed = true;
-        run_shell(workspace, install, "install")?;
+        run_shell(workspace, install, "install", preset_stage_label)?;
     }
     if let Some(build) = target_build
         .build
@@ -1983,14 +2024,100 @@ fn run_local_build(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        executed = true;
-        run_shell(&app_dir, build, "build")?;
+        run_shell(&app_dir, build, "run", preset_stage_label)?;
     }
-    if !executed {
-        return Err("Build preset did not define install or build commands".to_string());
+
+    for stage in custom_stages {
+        let stage_label = format_stage_label(stage_number, stage.name.as_deref());
+        let stage_cwd = resolve_stage_working_dir_for_local_build(
+            &app_dir,
+            stage.working_dir.as_deref(),
+            &stage_label,
+        )?;
+        if let Some(install) = stage
+            .install
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            run_shell(&stage_cwd, install, "install", &stage_label)?;
+        }
+        let run_command = stage.run.trim();
+        if run_command.is_empty() {
+            return Err(format!("Local {stage_label} run command is empty"));
+        }
+        run_shell(&stage_cwd, run_command, "run", &stage_label)?;
+        stage_number += 1;
     }
 
     Ok(())
+}
+
+fn container_stage_commands(stages: &[BuildStage]) -> Vec<BuildStageCommand> {
+    stages
+        .iter()
+        .map(|stage| BuildStageCommand {
+            name: stage.name.clone(),
+            working_dir: stage.working_dir.clone(),
+            install: stage.install.clone(),
+            run: stage.run.clone(),
+        })
+        .collect()
+}
+
+fn format_stage_label(stage_number: usize, stage_name: Option<&str>) -> String {
+    match stage_name.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(name) => format!("stage {stage_number} ({name})"),
+        None => format!("stage {stage_number}"),
+    }
+}
+
+fn summarize_build_stages(
+    target_build: &crate::build::BuildPresetTarget,
+    custom_stages: &[BuildStage],
+) -> Vec<String> {
+    let mut labels = Vec::new();
+    let has_preset_stage = target_build
+        .install
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .is_some()
+        || target_build
+            .build
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_some();
+    if has_preset_stage {
+        labels.push("stage 1 (preset)".to_string());
+    }
+
+    let mut stage_number = if has_preset_stage { 2 } else { 1 };
+    for stage in custom_stages {
+        labels.push(format_stage_label(stage_number, stage.name.as_deref()));
+        stage_number += 1;
+    }
+    labels
+}
+
+fn resolve_stage_working_dir_for_local_build(
+    app_dir: &Path,
+    working_dir: Option<&str>,
+    stage_label: &str,
+) -> Result<PathBuf, String> {
+    let Some(working_dir) = working_dir.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(app_dir.to_path_buf());
+    };
+    let stage_dir = app_dir.join(working_dir);
+    if !stage_dir.is_dir() {
+        return Err(format!(
+            "Local {stage_label} working directory '{}' was not found at '{}'",
+            working_dir,
+            stage_dir.display()
+        ));
+    }
+    Ok(stage_dir)
 }
 
 fn materialize_runtime_tool_version(
@@ -2068,6 +2195,7 @@ fn resolve_runtime_version_with_docker_probe(
         target_label,
         runtime_tool,
         &probe_target,
+        &[],
     )?;
     read_runtime_version_output(workspace, app_subdir, runtime_tool)
 }
@@ -3787,6 +3915,7 @@ name = "test-app"
         let include_patterns = vec!["**/*".to_string()];
         let exclude_patterns: Vec<String> = vec![];
         let asset_roots = vec!["public".to_string()];
+        let custom_stages: Vec<crate::config::BuildStage> = vec![];
 
         let baseline = build_artifact_cache_key(
             "source-hash-a",
@@ -3797,6 +3926,7 @@ name = "test-app"
             "linux-x86_64-glibc",
             &resolved,
             &target,
+            &custom_stages,
             &include_patterns,
             &exclude_patterns,
             &asset_roots,
@@ -3813,6 +3943,7 @@ name = "test-app"
             "linux-x86_64-glibc",
             &resolved,
             &target,
+            &custom_stages,
             &include_patterns,
             &exclude_patterns,
             &asset_roots,
@@ -3830,6 +3961,7 @@ name = "test-app"
             "linux-x86_64-glibc",
             &resolved,
             &target,
+            &custom_stages,
             &include_patterns,
             &exclude_patterns,
             &asset_roots,
@@ -3847,6 +3979,7 @@ name = "test-app"
             "linux-aarch64-glibc",
             &resolved,
             &target,
+            &custom_stages,
             &include_patterns,
             &exclude_patterns,
             &asset_roots,
@@ -3864,6 +3997,7 @@ name = "test-app"
             "linux-x86_64-glibc",
             &resolved,
             &target,
+            &custom_stages,
             &include_patterns,
             &exclude_patterns,
             &asset_roots,
@@ -3883,6 +4017,7 @@ name = "test-app"
             "linux-x86_64-glibc",
             &changed_preset,
             &target,
+            &custom_stages,
             &include_patterns,
             &exclude_patterns,
             &asset_roots,
@@ -3902,6 +4037,7 @@ name = "test-app"
             "linux-x86_64-glibc",
             &resolved,
             &changed_build_target,
+            &custom_stages,
             &include_patterns,
             &exclude_patterns,
             &asset_roots,
@@ -3919,6 +4055,7 @@ name = "test-app"
             "linux-x86_64-glibc",
             &resolved,
             &target,
+            &custom_stages,
             &["dist/**".to_string()],
             &exclude_patterns,
             &asset_roots,
@@ -3926,6 +4063,29 @@ name = "test-app"
         )
         .unwrap();
         assert_ne!(baseline, changed_include);
+
+        let changed_stages = build_artifact_cache_key(
+            "source-hash-a",
+            "bun",
+            "bun",
+            "1.3.9",
+            true,
+            "linux-x86_64-glibc",
+            &resolved,
+            &target,
+            &[crate::config::BuildStage {
+                name: None,
+                working_dir: None,
+                install: None,
+                run: "bun run build".to_string(),
+            }],
+            &include_patterns,
+            &exclude_patterns,
+            &asset_roots,
+            "apps/web",
+        )
+        .unwrap();
+        assert_ne!(baseline, changed_stages);
     }
 
     #[test]
@@ -4078,6 +4238,7 @@ name = "test-app"
                 include: vec![],
                 exclude: vec![],
                 assets: vec!["dist/client".to_string(), "assets/shared".to_string()],
+                stages: vec![],
             },
             ..Default::default()
         };
@@ -4099,6 +4260,7 @@ name = "test-app"
                 include: vec!["custom/**".to_string()],
                 exclude: vec![],
                 assets: vec![],
+                stages: vec![],
             },
             ..Default::default()
         };
@@ -4161,6 +4323,96 @@ name = "test-app"
             ..local_preset
         };
         assert!(should_use_docker_build(&container_preset));
+    }
+
+    #[test]
+    fn summarize_build_stages_includes_preset_then_custom_stages() {
+        let target_build = crate::build::BuildPresetTarget {
+            builder_image: None,
+            install: Some("bun install".to_string()),
+            build: Some("bun run build".to_string()),
+        };
+        let custom = vec![
+            crate::config::BuildStage {
+                name: None,
+                working_dir: None,
+                install: None,
+                run: "bun run build".to_string(),
+            },
+            crate::config::BuildStage {
+                name: Some("frontend-assets".to_string()),
+                working_dir: Some("frontend".to_string()),
+                install: None,
+                run: "bun run build".to_string(),
+            },
+        ];
+        assert_eq!(
+            summarize_build_stages(&target_build, &custom),
+            vec![
+                "stage 1 (preset)".to_string(),
+                "stage 2".to_string(),
+                "stage 3 (frontend-assets)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn run_local_build_executes_preset_then_custom_stages() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+        std::fs::create_dir_all(app_dir.join("frontend")).unwrap();
+        let target_build = crate::build::BuildPresetTarget {
+            builder_image: None,
+            install: Some("printf 'preset-install\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string()),
+            build: Some("printf 'preset-run\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string()),
+        };
+        let stages = vec![
+            crate::config::BuildStage {
+                name: None,
+                working_dir: None,
+                install: None,
+                run: "printf 'stage-2-run\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string(),
+            },
+            crate::config::BuildStage {
+                name: Some("frontend-assets".to_string()),
+                working_dir: Some("frontend".to_string()),
+                install: Some(
+                    "printf 'stage-3-install\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string(),
+                ),
+                run: "printf 'stage-3-run\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string(),
+            },
+        ];
+
+        run_local_build(&workspace, "apps/web", &target_build, &stages).unwrap();
+        let order = std::fs::read_to_string(app_dir.join("order.log")).unwrap();
+        assert_eq!(
+            order,
+            "preset-install\npreset-run\nstage-2-run\nstage-3-install\nstage-3-run\n"
+        );
+    }
+
+    #[test]
+    fn run_local_build_errors_when_stage_working_dir_is_missing() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        let target_build = crate::build::BuildPresetTarget {
+            builder_image: None,
+            install: None,
+            build: Some("true".to_string()),
+        };
+        let stages = vec![crate::config::BuildStage {
+            name: None,
+            working_dir: Some("frontend".to_string()),
+            install: None,
+            run: "true".to_string(),
+        }];
+
+        let err = run_local_build(&workspace, "apps/web", &target_build, &stages).unwrap_err();
+        assert!(err.contains("stage 2"));
+        assert!(err.contains("working directory"));
     }
 
     #[test]

@@ -41,6 +41,11 @@ runtime = "bun"
 # include = ["dist/**", ".output/**"]
 # exclude = ["**/*.map"]
 # assets = ["dist/client", "assets/shared"]
+# [[build.stages]]
+# name = "frontend-assets"
+# working_dir = "frontend"
+# install = "bun install"
+# run = "bun run build"
 ```
 
 - `name`: optional stable app identifier used in deploy paths and local dev hostnames.
@@ -61,6 +66,13 @@ runtime = "bun"
   - `include`: optional artifact include globs (`**/*` is used when unset).
   - `exclude`: optional artifact exclude globs (appended to preset excludes).
   - `assets`: optional project-relative directories merged into app `public/` after build (later entries overwrite earlier files on conflicts).
+  - `stages`: optional app-level custom build stages (`[[build.stages]]`) that run after preset build commands.
+  - `[[build.stages]]` fields:
+    - `name` (optional display label in deploy output)
+    - `working_dir` (optional app-relative directory for stage commands; absolute paths and `..` are rejected)
+    - `install` (optional command run before `run`)
+    - `run` (required command)
+  - Stage execution order per target is fixed: preset stage first (`[build].install`, `[build].build`), then `[[build.stages]]` in declaration order.
   - Adapter base presets (`bun`, `node`, `deno`) are built into the CLI (not loaded from workspace preset files).
   - File-based presets remain for named variants under `presets/<adapter>/<name>.toml` (for example `presets/bun/tanstack-start.toml`).
   - Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`dev`, `install`, `start`, `[build].install`, `[build].build`).
@@ -68,7 +80,7 @@ runtime = "bun"
   - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated).
   - Preset `[build].targets` and `[build].container` override runtime defaults when set (including explicit empty arrays or explicit `container` values).
   - Preset `assets` override runtime-base `assets` when set.
-  - Build preset files support optional top-level `name`, top-level `main`, top-level `assets`, and preset `[build]` keys (`exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container`). Presets can still override runtime lifecycle fields when needed. Legacy preset `[dev]`, `[deploy]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported.
+  - Build preset files support optional top-level `name`, top-level `main`, top-level `assets`, and preset `[build]` keys (`exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container`). Presets can still override runtime lifecycle fields when needed. Preset `[[build.stages]]`, legacy preset `[dev]`, `[deploy]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported.
   - Bun `tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and `assets = ["dist/client"]`.
   - Deploy writes lock metadata to `.tako/build.lock.json` so the resolved preset commit stays reproducible across deploys.
   - Deploy build mode is controlled by preset `[build].container`.
@@ -77,7 +89,7 @@ runtime = "bun"
     - unset: defaults to Docker only when `[build].targets` is non-empty
   - Docker builds reuse target-scoped dependency cache volumes (proto + runtime cache mounts) while keeping build containers ephemeral.
   - Runtime version is resolved via `proto run <tool> -- --version` when available, then falls back to `.prototools`, then `latest`.
-  - Deploy artifact cache keys include resolved preset source/commit, runtime tool/version, build mode (Docker/local), and `build.include` / `build.exclude` / `build.assets`; changing these inputs invalidates cache and triggers rebuild for affected targets.
+  - Deploy artifact cache keys include resolved preset source/commit, runtime tool/version, build mode (Docker/local), and `build.include` / `build.exclude` / `build.assets` / `build.stages`; changing these inputs invalidates cache and triggers rebuild for affected targets.
   - Bun runtime dependencies are installed on server from the uploaded release (`bun install --production`).
   - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
 - Legacy top-level `build = "..."` and top-level `assets = [...]` are not supported.

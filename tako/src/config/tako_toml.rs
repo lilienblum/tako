@@ -61,6 +61,29 @@ pub struct BuildConfig {
     /// Additional asset directories merged into app public/ after container build.
     #[serde(default)]
     pub assets: Vec<String>,
+
+    /// Optional post-preset custom build stages.
+    #[serde(default)]
+    pub stages: Vec<BuildStage>,
+}
+
+/// Custom app-level build stage from [[build.stages]].
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct BuildStage {
+    /// Optional display label.
+    #[serde(default)]
+    pub name: Option<String>,
+
+    /// Optional working directory relative to app directory.
+    #[serde(default)]
+    pub working_dir: Option<String>,
+
+    /// Optional preparatory command run before `run`.
+    #[serde(default)]
+    pub install: Option<String>,
+
+    /// Required stage command.
+    pub run: String,
 }
 
 /// Environment configuration from [envs.*]
@@ -303,6 +326,9 @@ impl TakoToml {
         }
         for asset_path in &self.build.assets {
             validate_asset_path(asset_path)?;
+        }
+        for (index, stage) in self.build.stages.iter().enumerate() {
+            validate_build_stage(stage, index)?;
         }
 
         // Validate each environment
@@ -549,12 +575,102 @@ fn parse_build_config(raw: &toml::Value) -> Result<BuildConfig> {
     let include = parse_string_array(&table_value, "include")?.unwrap_or_default();
     let exclude = parse_string_array(&table_value, "exclude")?.unwrap_or_default();
     let assets = parse_string_array(&table_value, "assets")?.unwrap_or_default();
+    let stages = parse_build_stages(table)?;
 
     Ok(BuildConfig {
         include,
         exclude,
         assets,
+        stages,
     })
+}
+
+fn parse_build_stages(table: &toml::value::Table) -> Result<Vec<BuildStage>> {
+    let Some(value) = table.get("stages") else {
+        return Ok(Vec::new());
+    };
+    let Some(stages) = value.as_array() else {
+        return Err(ConfigError::Validation(
+            "'build.stages' must be an array of tables ([[build.stages]])".to_string(),
+        ));
+    };
+
+    let mut parsed = Vec::with_capacity(stages.len());
+    for (index, stage_value) in stages.iter().enumerate() {
+        let Some(stage_table) = stage_value.as_table() else {
+            return Err(ConfigError::Validation(format!(
+                "'build.stages[{index}]' must be a table"
+            )));
+        };
+
+        for key in stage_table.keys() {
+            if !matches!(key.as_str(), "name" | "working_dir" | "install" | "run") {
+                return Err(ConfigError::Validation(format!(
+                    "Unknown key 'build.stages[{index}].{key}'"
+                )));
+            }
+        }
+
+        let name = parse_build_stage_optional_string(stage_table, index, "name")?;
+        let working_dir = parse_build_stage_optional_string(stage_table, index, "working_dir")?;
+        let install = parse_build_stage_optional_string(stage_table, index, "install")?;
+        let run = parse_build_stage_required_string(stage_table, index, "run")?;
+
+        parsed.push(BuildStage {
+            name,
+            working_dir,
+            install,
+            run,
+        });
+    }
+
+    Ok(parsed)
+}
+
+fn parse_build_stage_optional_string(
+    stage_table: &toml::value::Table,
+    index: usize,
+    key: &str,
+) -> Result<Option<String>> {
+    let Some(value) = stage_table.get(key) else {
+        return Ok(None);
+    };
+    let Some(value) = value.as_str() else {
+        return Err(ConfigError::Validation(format!(
+            "'build.stages[{index}].{key}' must be a string"
+        )));
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "'build.stages[{index}].{key}' cannot be empty"
+        )));
+    }
+    Ok(Some(trimmed.to_string()))
+}
+
+fn parse_build_stage_required_string(
+    stage_table: &toml::value::Table,
+    index: usize,
+    key: &str,
+) -> Result<String> {
+    let Some(value) = stage_table.get(key) else {
+        return Err(ConfigError::Validation(format!(
+            "'build.stages[{index}].{key}' is required"
+        )));
+    };
+    let Some(value) = value.as_str() else {
+        return Err(ConfigError::Validation(format!(
+            "'build.stages[{index}].{key}' must be a string"
+        )));
+    };
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "'build.stages[{index}].{key}' cannot be empty"
+        )));
+    }
+    Ok(trimmed.to_string())
 }
 
 fn parse_string_array(raw: &toml::Value, key: &str) -> Result<Option<Vec<String>>> {
@@ -631,6 +747,42 @@ fn validate_asset_path(asset_path: &str) -> Result<()> {
         )));
     }
 
+    Ok(())
+}
+
+fn validate_build_stage(stage: &BuildStage, index: usize) -> Result<()> {
+    if let Some(working_dir) = &stage.working_dir {
+        validate_build_stage_working_dir(working_dir, index)?;
+    }
+    if stage.run.trim().is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "'build.stages[{index}].run' cannot be empty"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_build_stage_working_dir(working_dir: &str, index: usize) -> Result<()> {
+    let trimmed = working_dir.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "'build.stages[{index}].working_dir' cannot be empty"
+        )));
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(ConfigError::Validation(format!(
+            "'build.stages[{index}].working_dir' must be relative to app root"
+        )));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ConfigError::Validation(format!(
+            "'build.stages[{index}].working_dir' must not contain '..'"
+        )));
+    }
     Ok(())
 }
 
@@ -818,6 +970,93 @@ assets = ["public-assets", "shared/images"]
             config.build.assets,
             vec!["public-assets".to_string(), "shared/images".to_string()]
         );
+        assert!(config.build.stages.is_empty());
+    }
+
+    #[test]
+    fn test_parse_build_stages() {
+        let toml = r#"
+[build]
+[[build.stages]]
+run = "bun run build"
+
+[[build.stages]]
+name = "frontend-assets"
+working_dir = "frontend"
+install = "bun install"
+run = "bun run build"
+"#;
+        let config = TakoToml::parse(toml).unwrap();
+        assert_eq!(config.build.stages.len(), 2);
+        assert_eq!(config.build.stages[0].name, None);
+        assert_eq!(config.build.stages[0].working_dir, None);
+        assert_eq!(config.build.stages[0].install, None);
+        assert_eq!(config.build.stages[0].run, "bun run build");
+        assert_eq!(
+            config.build.stages[1],
+            BuildStage {
+                name: Some("frontend-assets".to_string()),
+                working_dir: Some("frontend".to_string()),
+                install: Some("bun install".to_string()),
+                run: "bun run build".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_build_stages_requires_run() {
+        let toml = r#"
+[build]
+[[build.stages]]
+name = "frontend-assets"
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'build.stages[0].run' is required")
+        );
+    }
+
+    #[test]
+    fn test_parse_build_stages_rejects_empty_run() {
+        let toml = r#"
+[build]
+[[build.stages]]
+run = "   "
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'build.stages[0].run' cannot be empty")
+        );
+    }
+
+    #[test]
+    fn test_parse_build_stages_rejects_non_table_entries() {
+        let toml = r#"
+[build]
+stages = ["bun run build"]
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'build.stages[0]' must be a table")
+        );
+    }
+
+    #[test]
+    fn test_parse_build_stages_rejects_unknown_keys() {
+        let toml = r#"
+[build]
+[[build.stages]]
+command = "bun run build"
+run = "bun run build"
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown key 'build.stages[0].command'")
+        );
     }
 
     #[test]
@@ -997,6 +1236,10 @@ preset = "bun"
 include = ["dist/**"]
 exclude = ["**/*.map"]
 assets = ["public", ".output/public"]
+[[build.stages]]
+name = "frontend-assets"
+working_dir = "frontend"
+run = "bun run build"
 
 [vars]
 LOG_LEVEL = "info"
@@ -1021,6 +1264,16 @@ port = 80
         assert_eq!(
             config.build.assets,
             vec!["public".to_string(), ".output/public".to_string()]
+        );
+        assert_eq!(config.build.stages.len(), 1);
+        assert_eq!(
+            config.build.stages[0],
+            BuildStage {
+                name: Some("frontend-assets".to_string()),
+                working_dir: Some("frontend".to_string()),
+                install: None,
+                run: "bun run build".to_string(),
+            }
         );
         assert_eq!(config.vars.get("LOG_LEVEL"), Some(&"info".to_string()));
 
@@ -1164,6 +1417,33 @@ exclude = ["../secret/**"]
         assert!(
             err.to_string()
                 .contains("build.exclude entry '../secret/**' must not contain '..'")
+        );
+    }
+
+    #[test]
+    fn test_validate_build_stage_working_dir_rejects_invalid_paths() {
+        let absolute = r#"
+[build]
+[[build.stages]]
+working_dir = "/tmp"
+run = "bun run build"
+"#;
+        let err = TakoToml::parse(absolute).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'build.stages[0].working_dir' must be relative to app root")
+        );
+
+        let parent = r#"
+[build]
+[[build.stages]]
+working_dir = "../frontend"
+run = "bun run build"
+"#;
+        let err = TakoToml::parse(parent).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'build.stages[0].working_dir' must not contain '..'")
         );
     }
 

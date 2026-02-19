@@ -303,6 +303,11 @@ name = "{app_name}"
 # include = ["dist/**", ".output/**"]
 # exclude = ["**/*.map"]
 # assets = ["public", ".output/public"]
+# [[build.stages]]
+# name = "frontend-assets"
+# working_dir = "frontend"
+# install = "bun install"
+# run = "bun run build"
 
 # Global environment variables applied to every environment.
 # [vars]

@@ -50,6 +50,11 @@ runtime = "bun"           # Optional override; defaults to detected adapter
 # include = ["dist/**", ".output/**"]
 # exclude = ["**/*.map"]
 # assets = ["dist/client", "assets/shared"]
+# [[build.stages]]
+# name = "frontend-assets"
+# working_dir = "frontend"
+# install = "bun install"
+# run = "bun run build"
 
 [vars]
 LOG_LEVEL = "info"        # Base variables (all environments)
@@ -126,13 +131,22 @@ env = "production"
   - `true`: build each target artifact in Docker.
   - `false`: run build commands on the local host workspace for each target.
   - when unset, default is `true` if `[build].targets` is non-empty, otherwise `false`.
+- App-level custom build stages can be declared in `tako.toml` under `[[build.stages]]`:
+  - `name` (optional display label)
+  - `working_dir` (optional, relative to app root; absolute paths and `..` are rejected)
+  - `install` (optional command run before `run`)
+  - `run` (required command)
+- Build presets do not support `[[build.stages]]`; custom stages are configured only in app `tako.toml`.
+- Per-target build execution order is fixed:
+  - stage 1: preset `[build].install` then preset `[build].build` (when present)
+  - stage 2+: app `[[build.stages]]` in declaration order (`install` then `run` per stage)
 - Docker build containers are ephemeral; dependency caches are persisted with target-scoped Docker volumes keyed by cache kind + target label + builder image (proto cache: `/var/cache/tako/proto`, Bun cache: `/var/cache/tako/bun/install/cache`).
 - Runtime version resolution is proto-driven:
   - local builds try `proto install --yes` + `proto run <tool> -- --version` from app workspace first.
   - if local proto probing is unavailable/fails, deploy falls back to reading `.prototools` (app then workspace), then `latest`.
   - Docker target builds bootstrap `proto` in-container and probe with `proto run <tool> -- --version`.
   - deploy writes the resolved runtime tool version into release `.prototools` before packaging.
-- Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, target build commands/image, include/exclude patterns, asset roots, and app subdirectory.
+- Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, target build commands/image, app custom build stages, include/exclude patterns, asset roots, and app subdirectory.
 - Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
 - After each target build (and asset merge), deploy verifies the resolved runtime `main` file exists in the build workspace before artifact packaging; missing files fail deploy with an explicit error.
 - On every deploy, local artifact cache is pruned automatically (best-effort): keep 30 most recent source archives (`*-source.tar.gz`), keep 90 most recent target artifacts (`artifact-cache-*.tar.gz`), and remove orphan target metadata files.
@@ -268,7 +282,7 @@ Template behavior:
   - top-level `runtime`
   - top-level `preset` only when a non-base preset is selected (for base adapter presets and custom mode, it remains commented/unset)
 - Includes commented examples/explanations for all supported `tako.toml` options:
-  - `name`, `main`, top-level `runtime`/`preset`, and `[build]` (`include`, `exclude`, `assets`)
+  - `name`, `main`, top-level `runtime`/`preset`, and `[build]` (`include`, `exclude`, `assets`, `[[build.stages]]`)
   - `[vars]`
   - `[vars.<env>]`
   - `[envs.<env>]` route declarations (`route`/`routes`)
@@ -638,6 +652,7 @@ Deploy flow helpers:
    - Build in Docker when preset `[build].container = true`.
    - Build on local host workspace when `[build].container = false`.
    - When `container` is unset, default to Docker only when `[build].targets` is non-empty.
+   - Run build commands in fixed order: preset stage first (`[build].install`, then `[build].build`), then app `[[build.stages]]` in declaration order.
    - Merge configured assets into app `public/`.
    - Verify resolved runtime `main` exists in the built app directory.
    - Materialize release `.prototools` in app dir with resolved runtime tool version for server runtime parity.
@@ -667,7 +682,7 @@ Deploy flow helpers:
 - These paths are always excluded from archive payload: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
 - Deploy always builds target-specific artifacts locally (Docker when preset build mode resolves to container, local host otherwise); servers receive prebuilt artifacts and do not run app build steps during deploy.
 - For Bun runtime, `tako-server` runs dependency install for the release before starting/rolling instances.
-- Build logic comes from resolved preset `[build].install` and `[build].build` commands.
+- Build logic runs in fixed order per target: preset `[build].install`/`[build].build` stage first, then app `[[build.stages]]` from `tako.toml`.
 - Runtime prep/start on server comes from preset top-level `install` and `start`.
 - During container builds, deploy reuses target-scoped dependency cache volumes (proto and runtime-specific cache mounts such as Bun), keyed by cache kind, target label, and builder image.
 - During local builds, deploy resolves runtime version by asking proto directly (`proto run <tool> -- --version`) when available, then falls back to `.prototools` and finally `latest`.
