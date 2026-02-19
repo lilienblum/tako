@@ -10,7 +10,8 @@ use crate::build::adapter::{
 };
 
 pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
-const OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
+const FALLBACK_OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
+const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const EMBEDDED_PRESET_REPO: &str = "embedded";
 const EMBEDDED_JS_FAMILY_PRESETS_PATH: &str = "presets/js.toml";
 
@@ -264,6 +265,42 @@ fn validate_commit_hash(raw_value: &str, commit: &str) -> Result<(), String> {
     Ok(())
 }
 
+fn parse_github_repo_slug(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let without_prefix = if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("http://github.com/") {
+        rest
+    } else if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
+        rest
+    } else {
+        trimmed
+    };
+
+    let mut parts = without_prefix.trim_matches('/').split('/');
+    let owner = parts.next()?.trim();
+    let repo = parts.next()?.trim();
+    if owner.is_empty() || repo.is_empty() {
+        return None;
+    }
+
+    let normalized_repo = repo.strip_suffix(".git").unwrap_or(repo).trim();
+    if normalized_repo.is_empty() {
+        return None;
+    }
+
+    Some(format!("{owner}/{normalized_repo}"))
+}
+
+fn official_preset_repo() -> String {
+    parse_github_repo_slug(PACKAGE_REPOSITORY_URL)
+        .unwrap_or_else(|| FALLBACK_OFFICIAL_PRESET_REPO.to_string())
+}
+
 pub async fn load_build_preset(
     project_dir: &Path,
     preset_ref: &str,
@@ -291,14 +328,13 @@ pub async fn load_build_preset(
         PresetReference::OfficialAlias { name, commit } => (name.as_str(), commit.clone()),
     };
     let path = official_alias_to_path(alias);
+    let official_repo = official_preset_repo();
     let (repo, commit, content) = if let Some(commit) = commit_override {
-        let content = fetch_preset_content_by_commit(OFFICIAL_PRESET_REPO, &path, &commit).await?;
-        (OFFICIAL_PRESET_REPO.to_string(), commit, content)
+        let content = fetch_preset_content_by_commit(&official_repo, &path, &commit).await?;
+        (official_repo.clone(), commit, content)
     } else {
-        match fetch_preset_content_from_default_branch(OFFICIAL_PRESET_REPO, &path).await {
-            Ok((resolved_commit, content)) => {
-                (OFFICIAL_PRESET_REPO.to_string(), resolved_commit, content)
-            }
+        match fetch_preset_content_from_default_branch(&official_repo, &path).await {
+            Ok((resolved_commit, content)) => (official_repo.clone(), resolved_commit, content),
             Err(default_branch_error) => {
                 if let Some(content) = embedded_official_preset_content(&path) {
                     (
@@ -402,8 +438,8 @@ pub async fn load_available_family_preset_definitions(
         ));
     };
 
-    let (_commit, content) =
-        fetch_preset_content_from_default_branch(OFFICIAL_PRESET_REPO, path).await?;
+    let official_repo = official_preset_repo();
+    let (_commit, content) = fetch_preset_content_from_default_branch(&official_repo, path).await?;
     parse_family_manifest_preset_definitions(path, &content)
 }
 
@@ -414,8 +450,8 @@ pub async fn load_available_family_presets(family: PresetFamily) -> Result<Vec<S
             family.id()
         ));
     };
-    let (_commit, content) =
-        fetch_preset_content_from_default_branch(OFFICIAL_PRESET_REPO, path).await?;
+    let official_repo = official_preset_repo();
+    let (_commit, content) = fetch_preset_content_from_default_branch(&official_repo, path).await?;
     parse_family_manifest_preset_names(path, &content)
 }
 
@@ -864,6 +900,38 @@ mod tests {
 
     fn parse_preset(raw: &str) -> Result<BuildPreset, String> {
         parse_and_validate_preset(raw, "bun")
+    }
+
+    #[test]
+    fn parse_github_repo_slug_accepts_https_ssh_and_slug_formats() {
+        assert_eq!(
+            parse_github_repo_slug("https://github.com/lilienblum/tako"),
+            Some("lilienblum/tako".to_string())
+        );
+        assert_eq!(
+            parse_github_repo_slug("git@github.com:lilienblum/tako.git"),
+            Some("lilienblum/tako".to_string())
+        );
+        assert_eq!(
+            parse_github_repo_slug("lilienblum/tako"),
+            Some("lilienblum/tako".to_string())
+        );
+    }
+
+    #[test]
+    fn parse_github_repo_slug_rejects_invalid_values() {
+        assert_eq!(parse_github_repo_slug(""), None);
+        assert_eq!(parse_github_repo_slug("lilienblum"), None);
+        assert_eq!(
+            parse_github_repo_slug("https://example.com/lilienblum/tako"),
+            None
+        );
+    }
+
+    #[test]
+    fn official_preset_repo_uses_package_repository_slug() {
+        let expected = parse_github_repo_slug(PACKAGE_REPOSITORY_URL).unwrap();
+        assert_eq!(official_preset_repo(), expected);
     }
 
     #[test]
