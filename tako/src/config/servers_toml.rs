@@ -627,7 +627,10 @@ arch = "x86_64"
 libc = "glibc"
 "#;
         let err = ServersToml::parse(toml).unwrap_err();
-        assert!(err.to_string().contains("no longer supports [server_targets"));
+        assert!(
+            err.to_string()
+                .contains("no longer supports [server_targets")
+        );
     }
 
     #[test]
