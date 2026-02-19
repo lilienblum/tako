@@ -46,6 +46,12 @@ pub enum Command {
     /// List all apps
     List,
 
+    /// List release/build history for an app
+    ListReleases { app: String },
+
+    /// Roll back an app to a previously deployed release/build
+    Rollback { app: String, version: String },
+
     /// List all configured routes (all apps)
     Routes,
 
@@ -228,6 +234,25 @@ pub struct ListResponse {
     pub apps: Vec<AppStatus>,
 }
 
+/// Release/build metadata for an app.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReleaseInfo {
+    pub version: String,
+    pub current: bool,
+    pub deployed_at_unix_secs: Option<i64>,
+    #[serde(default)]
+    pub commit_message: Option<String>,
+    #[serde(default)]
+    pub git_dirty: Option<bool>,
+}
+
+/// Response payload for `list_releases`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListReleasesResponse {
+    pub app: String,
+    pub releases: Vec<ReleaseInfo>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +348,28 @@ mod tests {
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains(r#""command":"exit_upgrading""#));
         assert!(json.contains(r#""owner":"controller-a""#));
+    }
+
+    #[test]
+    fn test_list_releases_command_serialization() {
+        let cmd = Command::ListReleases {
+            app: "my-app".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""command":"list_releases""#));
+        assert!(json.contains(r#""app":"my-app""#));
+    }
+
+    #[test]
+    fn test_rollback_command_serialization() {
+        let cmd = Command::Rollback {
+            app: "my-app".to_string(),
+            version: "abc1234".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""command":"rollback""#));
+        assert!(json.contains(r#""app":"my-app""#));
+        assert!(json.contains(r#""version":"abc1234""#));
     }
 
     #[test]

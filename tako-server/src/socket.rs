@@ -194,6 +194,29 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_list_releases_command() {
+        let json = r#"{"command":"list_releases","app":"my-app"}"#;
+        let cmd: Command = serde_json::from_str(json).unwrap();
+        match cmd {
+            Command::ListReleases { app } => assert_eq!(app, "my-app"),
+            _ => panic!("Expected ListReleases command"),
+        }
+    }
+
+    #[test]
+    fn test_parse_rollback_command() {
+        let json = r#"{"command":"rollback","app":"my-app","version":"abc1234"}"#;
+        let cmd: Command = serde_json::from_str(json).unwrap();
+        match cmd {
+            Command::Rollback { app, version } => {
+                assert_eq!(app, "my-app");
+                assert_eq!(version, "abc1234");
+            }
+            _ => panic!("Expected Rollback command"),
+        }
+    }
+
+    #[test]
     fn test_parse_enter_upgrading_command() {
         let json = r#"{"command":"enter_upgrading","owner":"controller-a"}"#;
         let cmd: Command = serde_json::from_str(json).unwrap();

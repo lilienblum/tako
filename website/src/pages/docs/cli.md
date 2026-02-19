@@ -65,7 +65,7 @@ Notes:
 
 - `tako releases ls` shows release/build history for the current app across mapped servers in the selected environment.
 - Release output is sorted newest-first and prints per release in two lines:
-  - line 1: release/build id + deployed timestamp (plus `(xh ago)` hint when deployed within 24h)
+  - line 1: release/build id + deployed timestamp (plus `{xh ago}` hint when deployed within 24h)
   - line 2: commit message + cleanliness marker (`[clean]`, `[dirty]`, `[unknown]`)
 - `tako releases rollback` reuses current routes/env/secrets/scaling config and rolls app runtime back to the target release id using normal rolling-update behavior.
 - In interactive terminals, rollback to `production` prompts for confirmation unless `--yes` is provided.

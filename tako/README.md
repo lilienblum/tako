@@ -8,6 +8,7 @@ Rust crate for the `tako` CLI and `tako-dev-server` local daemon binaries.
 - Local development flow (`tako dev`, `tako doctor`).
 - Local development daemon runtime (`tako-dev-server`).
 - Deployment orchestration (`tako deploy`).
+- Release history and rollback (`tako releases ls`, `tako releases rollback`).
 - Remote operational commands (`logs`, `delete`, `servers`, `secrets`).
 - Config loading/validation, runtime detection, and SSH interactions.
 
@@ -23,6 +24,7 @@ Primary subcommands:
 - `secrets`
 - `upgrade`
 - `deploy`
+- `releases`
 - `delete`
 
 Use `cargo run -p tako --bin tako -- --help` for current flags and subcommand help.
@@ -43,6 +45,8 @@ Operational behavior highlights:
 - Local runtime version resolution is mise-aware: Tako probes `mise exec -- <tool> --version` when `mise` is installed, then falls back to `mise.toml` and `latest`; local build stage commands also run through `mise exec -- sh -lc ...` when `mise` is available.
 - `tako deploy` merges build assets (preset assets + `build.assets`) into app `public/` after target build, in listed order.
 - `tako deploy` writes `app.json` in the deployed app directory and `tako-server` uses it to resolve the runtime start command.
+- `tako releases ls` shows release/build history for the current app and environment with commit metadata when available.
+- `tako releases rollback <release-id>` rolls target servers back to a previous release id using the normal rolling-update path.
 - `tako servers add` captures per-server target metadata (`arch`, `libc`) during SSH checks and stores it in `~/.tako/config.toml` under `[server_targets.<name>]`.
 - `tako deploy` requires valid target metadata for each selected server and does not probe targets during deploy.
 - `tako deploy` validates startup even for `instances = 0` (on-demand) by briefly starting one instance; deploy fails if startup health checks fail.

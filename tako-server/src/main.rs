@@ -35,7 +35,10 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
-use tako_core::{HelloResponse, PROTOCOL_VERSION, ServerRuntimeInfo, UpgradeMode};
+use tako_core::{
+    HelloResponse, ListReleasesResponse, PROTOCOL_VERSION, ReleaseInfo, ServerRuntimeInfo,
+    UpgradeMode,
+};
 use tokio::process::Command as TokioCommand;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
@@ -338,6 +341,8 @@ impl ServerState {
                         "idle_scale_to_zero".to_string(),
                         "upgrade_mode_control".to_string(),
                         "server_runtime_info".to_string(),
+                        "release_history".to_string(),
+                        "rollback".to_string(),
                     ],
                 };
 
@@ -379,7 +384,14 @@ impl ServerState {
             }
             Command::Status { app } => self.get_status(&app).await,
             Command::List => self.list_apps().await,
+            Command::ListReleases { app } => self.list_releases(&app).await,
             Command::Routes => self.list_routes().await,
+            Command::Rollback { app, version } => {
+                if let Some(resp) = self.reject_mutating_when_upgrading("rollback").await {
+                    return resp;
+                }
+                self.rollback_app(&app, &version).await
+            }
             Command::Reload { app } => {
                 if let Some(resp) = self.reject_mutating_when_upgrading("reload").await {
                     return resp;
@@ -738,6 +750,69 @@ impl ServerState {
         Response::ok(serde_json::json!({ "apps": apps }))
     }
 
+    async fn list_releases(&self, app_name: &str) -> Response {
+        let app = match self.app_manager.get_app(app_name) {
+            Some(app) => app,
+            None => return Response::error(format!("App not found: {}", app_name)),
+        };
+        let config = app.config.read().clone();
+
+        let app_root = self.runtime.data_dir.join("apps").join(app_name);
+        let releases_root = app_root.join("releases");
+        let app_subdir = infer_release_app_subdir(&app_root, &config.version, &config.path);
+        let current_version = current_release_version(&app_root);
+
+        let mut releases = Vec::new();
+        let entries = match std::fs::read_dir(&releases_root) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Response::ok(ListReleasesResponse {
+                    app: app_name.to_string(),
+                    releases,
+                });
+            }
+            Err(error) => {
+                return Response::error(format!(
+                    "Failed to read releases directory '{}': {}",
+                    releases_root.display(),
+                    error
+                ));
+            }
+        };
+
+        for entry in entries.flatten() {
+            let release_root = entry.path();
+            if !release_root.is_dir() {
+                continue;
+            }
+
+            let Some(version) = entry.file_name().to_str().map(|value| value.to_string()) else {
+                continue;
+            };
+
+            let manifest_path = release_manifest_path(&release_root, app_subdir.as_deref());
+            let (commit_message, git_dirty) = read_release_manifest_metadata(&manifest_path);
+            releases.push(ReleaseInfo {
+                current: current_version.as_deref() == Some(version.as_str()),
+                deployed_at_unix_secs: directory_modified_unix_secs(&release_root),
+                version,
+                commit_message,
+                git_dirty,
+            });
+        }
+
+        releases.sort_by(|a, b| {
+            b.deployed_at_unix_secs
+                .cmp(&a.deployed_at_unix_secs)
+                .then_with(|| b.version.cmp(&a.version))
+        });
+
+        Response::ok(ListReleasesResponse {
+            app: app_name.to_string(),
+            releases,
+        })
+    }
+
     async fn list_routes(&self) -> Response {
         let route_table = self.routes.read().await;
         let routes: Vec<serde_json::Value> = self
@@ -750,6 +825,48 @@ impl ServerState {
             })
             .collect();
         Response::ok(serde_json::json!({ "routes": routes }))
+    }
+
+    async fn rollback_app(&self, app_name: &str, version: &str) -> Response {
+        let app = match self.app_manager.get_app(app_name) {
+            Some(app) => app,
+            None => return Response::error(format!("App not found: {}", app_name)),
+        };
+        let config = app.config.read().clone();
+
+        let app_root = self.runtime.data_dir.join("apps").join(app_name);
+        let app_subdir = infer_release_app_subdir(&app_root, &config.version, &config.path);
+        let target_path = rollback_release_path(&app_root, version, app_subdir.as_deref());
+
+        if !target_path.is_dir() {
+            return Response::error(format!(
+                "Release '{}' not found for app '{}'",
+                version, app_name
+            ));
+        }
+
+        let routes = {
+            let route_table = self.routes.read().await;
+            route_table.routes_for_app(app_name)
+        };
+        if routes.is_empty() {
+            return Response::error(format!(
+                "Cannot rollback '{}': no routes are configured",
+                app_name
+            ));
+        }
+
+        let idle_timeout = u32::try_from(config.idle_timeout.as_secs()).unwrap_or(u32::MAX);
+        self.deploy_app(
+            app_name,
+            version,
+            &target_path.to_string_lossy(),
+            routes,
+            config.env.clone(),
+            config.min_instances as u8,
+            idle_timeout,
+        )
+        .await
     }
 
     async fn reload_app(&self, app_name: &str) -> Response {
@@ -1013,6 +1130,66 @@ fn collect_running_build_statuses(app: &App) -> Vec<BuildStatus> {
     }
 
     builds
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct ReleaseManifestMetadata {
+    #[serde(default)]
+    commit_message: Option<String>,
+    #[serde(default)]
+    git_dirty: Option<bool>,
+}
+
+fn current_release_version(app_root: &Path) -> Option<String> {
+    let current_link = app_root.join("current");
+    let target = std::fs::read_link(current_link).ok()?;
+    target.file_name()?.to_str().map(|value| value.to_string())
+}
+
+fn infer_release_app_subdir(
+    app_root: &Path,
+    current_version: &str,
+    current_path: &Path,
+) -> Option<PathBuf> {
+    let current_release_root = app_root.join("releases").join(current_version);
+    let rel = current_path.strip_prefix(current_release_root).ok()?;
+    if rel.as_os_str().is_empty() {
+        None
+    } else {
+        Some(rel.to_path_buf())
+    }
+}
+
+fn rollback_release_path(app_root: &Path, version: &str, app_subdir: Option<&Path>) -> PathBuf {
+    let release_root = app_root.join("releases").join(version);
+    match app_subdir {
+        Some(subdir) => release_root.join(subdir),
+        None => release_root,
+    }
+}
+
+fn release_manifest_path(release_root: &Path, app_subdir: Option<&Path>) -> PathBuf {
+    let app_dir = match app_subdir {
+        Some(subdir) => release_root.join(subdir),
+        None => release_root.to_path_buf(),
+    };
+    app_dir.join("app.json")
+}
+
+fn read_release_manifest_metadata(path: &Path) -> (Option<String>, Option<bool>) {
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return (None, None);
+    };
+    let Ok(parsed) = serde_json::from_str::<ReleaseManifestMetadata>(&raw) else {
+        return (None, None);
+    };
+    (parsed.commit_message, parsed.git_dirty)
+}
+
+fn directory_modified_unix_secs(path: &Path) -> Option<i64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let unix = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    i64::try_from(unix.as_secs()).ok()
 }
 
 fn derive_build_state(instances: &[InstanceStatus]) -> AppState {

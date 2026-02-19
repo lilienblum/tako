@@ -76,6 +76,15 @@ fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String
                 manifest.main,
             ]))
         }
+        "node" => Ok(Some(vec!["node".to_string(), manifest.main])),
+        "deno" => Ok(Some(vec![
+            "deno".to_string(),
+            "run".to_string(),
+            "--allow-net".to_string(),
+            "--allow-env".to_string(),
+            "--allow-read".to_string(),
+            manifest.main,
+        ])),
         other => Err(format!(
             "unsupported runtime '{}' in deploy manifest {}",
             other,
@@ -168,11 +177,47 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"node","main":"server/index.js"}"#,
+            r#"{"runtime":"python","main":"server/index.js"}"#,
         )
         .unwrap();
         let err = command_for_release_dir(dir.path()).unwrap_err();
         assert!(err.contains("unsupported runtime"));
+    }
+
+    #[test]
+    fn falls_back_to_node_runtime_command_when_start_is_missing() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"node","main":"server/index.mjs"}"#,
+        )
+        .unwrap();
+
+        let cmd = command_for_release_dir(dir.path()).unwrap();
+        assert_eq!(cmd, vec!["node", "server/index.mjs"]);
+    }
+
+    #[test]
+    fn falls_back_to_deno_runtime_command_when_start_is_missing() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"deno","main":"server/main.ts"}"#,
+        )
+        .unwrap();
+
+        let cmd = command_for_release_dir(dir.path()).unwrap();
+        assert_eq!(
+            cmd,
+            vec![
+                "deno",
+                "run",
+                "--allow-net",
+                "--allow-env",
+                "--allow-read",
+                "server/main.ts",
+            ]
+        );
     }
 
     #[test]
