@@ -22,6 +22,12 @@ pub struct RouteTable {
     compiled: Vec<CompiledRouteEntry>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SelectedRoute {
+    pub app: String,
+    pub path: Option<String>,
+}
+
 impl RouteTable {
     pub fn set_app_routes(&mut self, app: String, routes: Vec<String>) {
         self.app_routes.insert(app, routes);
@@ -38,7 +44,12 @@ impl RouteTable {
     }
 
     pub fn select(&self, host: &str, path: &str) -> Option<String> {
-        select_app_for_request_compiled(&self.compiled, host, path)
+        self.select_with_route(host, path)
+            .map(|selected| selected.app)
+    }
+
+    pub fn select_with_route(&self, host: &str, path: &str) -> Option<SelectedRoute> {
+        select_route_for_request_compiled(&self.compiled, host, path)
     }
 
     fn rebuild(&mut self) {
@@ -86,6 +97,14 @@ pub fn select_app_for_request_compiled(
     host: &str,
     path: &str,
 ) -> Option<String> {
+    select_route_for_request_compiled(routes, host, path).map(|selected| selected.app)
+}
+
+pub fn select_route_for_request_compiled(
+    routes: &[CompiledRouteEntry],
+    host: &str,
+    path: &str,
+) -> Option<SelectedRoute> {
     for entry in routes {
         if !hostname_matches(&entry.host, host) {
             continue;
@@ -95,7 +114,10 @@ pub fn select_app_for_request_compiled(
         {
             continue;
         }
-        return Some(entry.app.clone());
+        return Some(SelectedRoute {
+            app: entry.app.clone(),
+            path: entry.path.clone(),
+        });
     }
     None
 }
@@ -673,5 +695,20 @@ mod tests {
             Some("app".to_string())
         );
         assert_eq!(select_app_for_request(&routes, "example.com", "/api"), None);
+    }
+
+    #[test]
+    fn test_route_table_select_with_route_returns_matched_path_pattern() {
+        let mut table = RouteTable::default();
+        table.set_app_routes(
+            "web".to_string(),
+            vec!["example.com/tanstack-start/*".to_string()],
+        );
+
+        let matched = table
+            .select_with_route("example.com", "/tanstack-start/assets/main.js")
+            .expect("expected matching route");
+        assert_eq!(matched.app, "web");
+        assert_eq!(matched.path, Some("/tanstack-start/*".to_string()));
     }
 }

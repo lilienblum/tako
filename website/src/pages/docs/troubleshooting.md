@@ -17,7 +17,7 @@ Use this when things feel weird and you want a clean, repeatable response path.
 2. Run `tako logs --env <environment>` (live logs across mapped servers).
 3. Run `tako releases ls --env <environment>` (confirm what is currently deployed and what rollback targets exist).
 4. Reproduce once and note if failure is local-only, one-host-only, or all hosts.
-4. Re-run the failing command with `--verbose` to capture technical detail when needed.
+5. Re-run the failing command with `--verbose` to capture technical detail when needed.
 
 This quickly separates config errors from host/runtime failures.
 
@@ -110,6 +110,9 @@ Expected deploy behavior:
 - `Route mismatch / wrong app`:
   - Verify env route config in [`tako.toml` reference](/docs/tako-toml).
   - Ensure environment has valid `route` or `routes` values.
+- `Path-route static asset 404`:
+  - Confirm the asset file exists under the deployed app `public/` directory.
+  - For path-prefixed routes (for example `example.com/app/*`), use URLs under that prefix; Tako will also try prefix-stripped static lookup.
 - `HTTPS 502 / TLS handshake failure on private domains (for example `\*.local`)`:
   - Verify deploy completed after upgrading `tako-server` (private-domain cert generation happens at deploy time).
   - Check cert files exist on host under `/opt/tako/certs/<route-host>/fullchain.pem` and `privkey.pem`.

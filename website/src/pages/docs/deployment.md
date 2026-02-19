@@ -175,6 +175,7 @@ Each target server should have:
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.
 - Requests without internal host are routed to apps normally.
 - Exact path route matches normalize trailing slash (`example.com/api` and `example.com/api/` are equivalent).
+- Static asset requests (file-extension paths) are served from the deployed app `public/` directory when present, including path-prefixed routes via prefix-stripped static lookup.
 - Private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) get self-signed certs during deploy; public hostnames use ACME.
 
 ## Post-Deploy Verification

@@ -776,7 +776,7 @@ List release/build history for the current app across mapped environment servers
 - Server targeting follows `[servers.*]` mappings for the selected environment (with the same single-server production fallback as deploy when exactly one global server exists).
 - Output is release-centric and sorted newest-first:
   - line 1: release/build id + deployed timestamp
-    - when deployed within 24 hours, append a muted relative hint in parentheses (for example `3h ago`)
+    - when deployed within 24 hours, append a muted relative hint in braces (for example `{3h ago}`)
   - line 2: commit message + cleanliness marker (`[clean]`, `[dirty]`, or `[unknown]`)
 - `[current]` marks the release currently pointed to by server `current` symlink.
 - Commit metadata (`commit_message`, `git_dirty`) comes from release `app.json` when available; older releases may show `[unknown]` or `(no commit message)`.
@@ -866,6 +866,8 @@ Apps specify routes at environment level (not per-server). Routes support:
 
 - Each app specifies its routes
 - Requests matched to most specific route (exact > wildcard, longer path > shorter)
+- For static asset requests (paths with a file extension), `tako-server` serves files directly from the deployed app `public/` directory when present.
+- For path-prefixed routes (for example `example.com/app/*`), static asset lookup also tries the prefix-stripped path (for example `/app/assets/main.js` -> `/assets/main.js`) so public assets work on subpaths.
 - Conflict detection during deploy prevents overlapping routes
 - Requests without a matching route return `404`
 

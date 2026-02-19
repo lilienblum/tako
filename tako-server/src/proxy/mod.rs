@@ -143,6 +143,80 @@ impl TakoProxy {
         self.routes.write().await.remove_app_routes(app_name);
     }
 
+    async fn try_serve_static_asset(
+        &self,
+        session: &mut Session,
+        app_name: &str,
+        request_path: &str,
+        matched_route_path: Option<&str>,
+    ) -> Result<bool> {
+        let method = session.req_header().method.as_str().to_string();
+        if method != "GET" && method != "HEAD" {
+            return Ok(false);
+        }
+
+        let Some(app) = self.lb.app_manager().get_app(app_name) else {
+            return Ok(false);
+        };
+        let app_root = app.config.read().path.clone();
+        let static_server =
+            AppStaticServer::new(app_name.to_string(), app_root, StaticConfig::default());
+        if !static_server.is_available() {
+            return Ok(false);
+        }
+
+        for lookup_path in static_lookup_paths(request_path, matched_route_path) {
+            match static_server.resolve(&lookup_path) {
+                Ok(file) => {
+                    let mut header = ResponseHeader::build(200, None)?;
+                    header.insert_header("Content-Type", &file.content_type)?;
+                    header.insert_header("Content-Length", file.size.to_string())?;
+                    header.insert_header("Cache-Control", &file.cache_control)?;
+                    header.insert_header("ETag", &file.etag)?;
+                    session
+                        .write_response_header(Box::new(header), false)
+                        .await?;
+
+                    if method == "HEAD" {
+                        session.write_response_body(None, true).await?;
+                        return Ok(true);
+                    }
+
+                    let body = match file.read_contents() {
+                        Ok(contents) => contents,
+                        Err(StaticFileError::Io(_)) => {
+                            let body = "Static asset read failed";
+                            let mut header = ResponseHeader::build(500, None)?;
+                            insert_body_headers(&mut header, "text/plain", body)?;
+                            session
+                                .write_response_header(Box::new(header), false)
+                                .await?;
+                            session.write_response_body(Some(body.into()), true).await?;
+                            return Ok(true);
+                        }
+                        Err(_) => continue,
+                    };
+                    session.write_response_body(Some(body.into()), true).await?;
+                    return Ok(true);
+                }
+                Err(StaticFileError::NotFound(_)) => {}
+                Err(StaticFileError::PathTraversal(_)) | Err(StaticFileError::InvalidPath(_)) => {
+                    let body = "Bad Request";
+                    let mut header = ResponseHeader::build(400, None)?;
+                    insert_body_headers(&mut header, "text/plain", body)?;
+                    session
+                        .write_response_header(Box::new(header), false)
+                        .await?;
+                    session.write_response_body(Some(body.into()), true).await?;
+                    return Ok(true);
+                }
+                Err(StaticFileError::Io(_)) => {}
+            }
+        }
+
+        Ok(false)
+    }
+
     /// Generate server status for internal `tako.internal/status` endpoint
     fn get_server_status(&self) -> ServerStatus {
         let app_manager = self.lb.app_manager();
@@ -239,6 +313,7 @@ fn derive_build_state(instances: &[InstanceStatus]) -> AppState {
 pub struct RequestCtx {
     backend: Option<Backend>,
     is_https: bool,
+    matched_route_path: Option<String>,
     /// Set if this is an ACME challenge response
     acme_response: Option<String>,
 }
@@ -307,12 +382,13 @@ impl ProxyHttp for TakoProxy {
         RequestCtx {
             backend: None,
             is_https: false,
+            matched_route_path: None,
             acme_response: None,
         }
     }
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
-        let path = session.req_header().uri.path();
+        let path = session.req_header().uri.path().to_string();
         let host = session
             .req_header()
             .headers
@@ -320,18 +396,18 @@ impl ProxyHttp for TakoProxy {
             .and_then(|h| h.to_str().ok())
             .unwrap_or("");
         let hostname = host.split(':').next().unwrap_or(host);
-        let internal_status_request = is_internal_status_request(hostname, path);
+        let internal_status_request = is_internal_status_request(hostname, &path);
 
         // Handle ACME HTTP-01 challenges
         if let Some(ref handler) = self.challenge_handler
-            && handler.is_challenge_request(path)
+            && handler.is_challenge_request(&path)
         {
-            if let Some(response) = handler.handle_challenge(path) {
-                tracing::info!(path = path, "Serving ACME challenge response");
+            if let Some(response) = handler.handle_challenge(&path) {
+                tracing::info!(path = %path, "Serving ACME challenge response");
                 ctx.acme_response = Some(response);
                 return Ok(true); // Skip upstream, we'll handle in response
             } else {
-                tracing::warn!(path = path, "ACME challenge token not found");
+                tracing::warn!(path = %path, "ACME challenge token not found");
                 // Return 404 for unknown challenge tokens
                 let body = "Token not found";
                 let mut header = ResponseHeader::build(404, None)?;
@@ -414,8 +490,8 @@ impl ProxyHttp for TakoProxy {
         }
 
         // Route request to app based on host/path
-        let app_name = match self.routes.read().await.select(hostname, path) {
-            Some(app) => app,
+        let route_match = match self.routes.read().await.select_with_route(hostname, &path) {
+            Some(route_match) => route_match,
             None => {
                 let body = "Not Found";
                 let mut header = ResponseHeader::build(404, None)?;
@@ -427,6 +503,21 @@ impl ProxyHttp for TakoProxy {
                 return Ok(true);
             }
         };
+        let app_name = route_match.app;
+        ctx.matched_route_path = route_match.path;
+
+        if path_looks_like_static_asset(&path)
+            && self
+                .try_serve_static_asset(
+                    session,
+                    &app_name,
+                    &path,
+                    ctx.matched_route_path.as_deref(),
+                )
+                .await?
+        {
+            return Ok(true);
+        }
 
         // Try to get a healthy backend. For on-demand apps (instances=0), this
         // waits for cold start readiness (up to the configured startup timeout).
@@ -693,6 +784,48 @@ fn insert_body_headers(header: &mut ResponseHeader, content_type: &str, body: &s
     header.insert_header("Content-Type", content_type)?;
     header.insert_header("Content-Length", body.as_bytes().len().to_string())?;
     Ok(())
+}
+
+fn path_looks_like_static_asset(path: &str) -> bool {
+    let final_segment = path.rsplit('/').next().unwrap_or("");
+    final_segment.contains('.') && !final_segment.ends_with('.')
+}
+
+fn static_lookup_paths(request_path: &str, matched_route_path: Option<&str>) -> Vec<String> {
+    let mut candidates = vec![request_path.to_string()];
+    if let Some(route_path) = matched_route_path
+        && let Some(stripped) = strip_route_prefix_for_static_lookup(request_path, route_path)
+        && stripped != request_path
+    {
+        candidates.push(stripped);
+    }
+    candidates
+}
+
+fn strip_route_prefix_for_static_lookup(request_path: &str, route_path: &str) -> Option<String> {
+    let prefix = if let Some(p) = route_path.strip_suffix("/*") {
+        p
+    } else if let Some(p) = route_path.strip_suffix('*') {
+        p
+    } else {
+        route_path
+    };
+
+    if request_path == prefix {
+        return Some("/".to_string());
+    }
+
+    let Some(stripped) = request_path.strip_prefix(prefix) else {
+        return None;
+    };
+    if stripped.is_empty() {
+        return Some("/".to_string());
+    }
+    if stripped.starts_with('/') {
+        Some(stripped.to_string())
+    } else {
+        Some(format!("/{}", stripped))
+    }
 }
 
 /// TLS configuration for the proxy
@@ -1035,6 +1168,7 @@ mod tests {
         let ctx = proxy.new_ctx();
         assert!(ctx.backend.is_none());
         assert!(!ctx.is_https);
+        assert!(ctx.matched_route_path.is_none());
         assert!(ctx.acme_response.is_none());
     }
 
@@ -1292,6 +1426,43 @@ mod tests {
                 .get("Content-Length")
                 .and_then(|v| v.to_str().ok()),
             Some("3")
+        );
+    }
+
+    #[test]
+    fn test_path_looks_like_static_asset() {
+        assert!(path_looks_like_static_asset("/assets/main.js"));
+        assert!(path_looks_like_static_asset("/img/logo.123abc.svg"));
+        assert!(!path_looks_like_static_asset("/"));
+        assert!(!path_looks_like_static_asset("/dashboard/settings"));
+        assert!(!path_looks_like_static_asset("/assets/main"));
+    }
+
+    #[test]
+    fn test_strip_route_prefix_for_static_lookup_with_path_wildcard() {
+        let stripped = strip_route_prefix_for_static_lookup(
+            "/tanstack-start/assets/main.js",
+            "/tanstack-start/*",
+        );
+        assert_eq!(stripped, Some("/assets/main.js".to_string()));
+    }
+
+    #[test]
+    fn test_strip_route_prefix_for_static_lookup_with_prefix_star() {
+        let stripped = strip_route_prefix_for_static_lookup("/apiv2/app.js", "/api*");
+        assert_eq!(stripped, Some("/v2/app.js".to_string()));
+    }
+
+    #[test]
+    fn test_static_lookup_paths_includes_prefix_stripped_candidate() {
+        let candidates =
+            static_lookup_paths("/tanstack-start/assets/main.js", Some("/tanstack-start/*"));
+        assert_eq!(
+            candidates,
+            vec![
+                "/tanstack-start/assets/main.js".to_string(),
+                "/assets/main.js".to_string()
+            ]
         );
     }
 

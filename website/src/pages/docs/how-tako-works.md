@@ -128,8 +128,9 @@ Remote request path:
 1. Request lands on `tako-server` (`:80`/`:443` by default).
 2. Router matches host/path against deployed app routes.
 3. Most specific match wins (exact host/path before broader wildcard patterns).
-4. Request is proxied to a healthy instance.
-5. If nothing matches, request returns `404`.
+4. For static asset requests (paths with a file extension), Tako serves matching files directly from the deployed app `public/` directory when present. For path-prefixed routes, it also tries a prefix-stripped static lookup.
+5. Otherwise request is proxied to a healthy instance.
+6. If nothing matches, request returns `404`.
 
 Wildcard and path routes are supported, for example:
 
