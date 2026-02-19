@@ -12,6 +12,7 @@ use crate::build::adapter::{
 pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const FALLBACK_OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
+const OFFICIAL_PRESET_BRANCH: &str = "master";
 const EMBEDDED_PRESET_REPO: &str = "embedded";
 const EMBEDDED_JS_FAMILY_PRESETS_PATH: &str = "presets/js.toml";
 
@@ -307,23 +308,6 @@ pub async fn load_build_preset(
 ) -> Result<(BuildPreset, ResolvedPresetSource), String> {
     let parsed_ref = parse_preset_reference(preset_ref)?;
 
-    if let Some(locked) = read_locked_preset(project_dir)?
-        && locked.preset_ref == preset_ref
-    {
-        match load_content_for_resolved_source(&locked).await {
-            Ok(content) => {
-                let preset =
-                    parse_resolved_preset_from_content(&parsed_ref, &locked.path, &content)?;
-                return Ok((preset, locked));
-            }
-            Err(err) if locked.repo == EMBEDDED_PRESET_REPO => {
-                // Older locks could point to embedded family manifests. Refetch from the official repo.
-                let _ = err;
-            }
-            Err(err) => return Err(err),
-        }
-    }
-
     let (alias, commit_override) = match &parsed_ref {
         PresetReference::OfficialAlias { name, commit } => (name.as_str(), commit.clone()),
     };
@@ -333,7 +317,7 @@ pub async fn load_build_preset(
         let content = fetch_preset_content_by_commit(&official_repo, &path, &commit).await?;
         (official_repo.clone(), commit, content)
     } else {
-        match fetch_preset_content_from_default_branch(&official_repo, &path).await {
+        match fetch_preset_content_from_master_branch(&official_repo, &path).await {
             Ok((resolved_commit, content)) => (official_repo.clone(), resolved_commit, content),
             Err(default_branch_error) => {
                 if let Some(content) = embedded_official_preset_content(&path) {
@@ -439,7 +423,7 @@ pub async fn load_available_family_preset_definitions(
     };
 
     let official_repo = official_preset_repo();
-    let (_commit, content) = fetch_preset_content_from_default_branch(&official_repo, path).await?;
+    let (_commit, content) = fetch_preset_content_from_master_branch(&official_repo, path).await?;
     parse_family_manifest_preset_definitions(path, &content)
 }
 
@@ -451,7 +435,7 @@ pub async fn load_available_family_presets(family: PresetFamily) -> Result<Vec<S
         ));
     };
     let official_repo = official_preset_repo();
-    let (_commit, content) = fetch_preset_content_from_default_branch(&official_repo, path).await?;
+    let (_commit, content) = fetch_preset_content_from_master_branch(&official_repo, path).await?;
     parse_family_manifest_preset_names(path, &content)
 }
 
@@ -515,19 +499,6 @@ fn embedded_content_hash(content: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(content.as_bytes());
     hex::encode(hasher.finalize())
-}
-
-async fn load_content_for_resolved_source(source: &ResolvedPresetSource) -> Result<String, String> {
-    if source.repo == EMBEDDED_PRESET_REPO {
-        let content = embedded_official_preset_content(&source.path).ok_or_else(|| {
-            format!(
-                "Embedded preset '{}' referenced in build lock is not available.",
-                source.path
-            )
-        })?;
-        return Ok(content.to_string());
-    }
-    fetch_preset_content_by_commit(&source.repo, &source.path, &source.commit).await
 }
 
 pub fn parse_and_validate_preset(
@@ -785,6 +756,7 @@ fn resolve_container_build_toggle(
     Ok(!target_labels.is_empty())
 }
 
+#[cfg(test)]
 fn read_locked_preset(project_dir: &Path) -> Result<Option<ResolvedPresetSource>, String> {
     let lock_path = project_dir.join(BUILD_LOCK_RELATIVE_PATH);
     if !lock_path.exists() {
@@ -825,67 +797,58 @@ async fn fetch_preset_content_by_commit(
         .header("User-Agent", "tako-cli")
         .send()
         .await
-        .map_err(|e| format!("Failed to fetch build preset: {e}"))?;
+        .map_err(|_e| "Failed to fetch preset".to_string())?;
     if !response.status().is_success() {
-        return Err(format!(
-            "Failed to fetch build preset at commit {}: HTTP {}",
-            commit,
-            response.status()
-        ));
+        return Err("Failed to fetch preset".to_string());
     }
     response
         .text()
         .await
-        .map_err(|e| format!("Failed to read build preset response body: {e}"))
+        .map_err(|_e| "Failed to fetch preset".to_string())
 }
 
-async fn fetch_preset_content_from_default_branch(
+async fn fetch_preset_content_from_master_branch(
     repo: &str,
     path: &str,
 ) -> Result<(String, String), String> {
     let Some((owner, repository)) = repo.split_once('/') else {
-        return Err(format!(
-            "Invalid preset repo '{}': expected owner/repo",
-            repo
-        ));
+        return Err("Failed to fetch preset".to_string());
     };
-    let url = format!("https://api.github.com/repos/{owner}/{repository}/contents/{path}");
+    let url = format!(
+        "https://api.github.com/repos/{owner}/{repository}/contents/{path}?ref={OFFICIAL_PRESET_BRANCH}"
+    );
     let client = reqwest::Client::new();
     let response = client
         .get(url)
         .header("User-Agent", "tako-cli")
         .send()
         .await
-        .map_err(|e| format!("Failed to resolve build preset from GitHub: {e}"))?;
+        .map_err(|_e| "Failed to fetch preset".to_string())?;
     if !response.status().is_success() {
-        return Err(format!(
-            "Failed to resolve build preset '{}': HTTP {}",
-            path,
-            response.status()
-        ));
+        return Err("Failed to fetch preset".to_string());
     }
     let raw = response
         .text()
         .await
-        .map_err(|e| format!("Failed to read build preset resolution response: {e}"))?;
+        .map_err(|_e| "Failed to fetch preset".to_string())?;
     let json: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| format!("Invalid GitHub contents response: {e}"))?;
+        serde_json::from_str(&raw).map_err(|_e| "Failed to fetch preset".to_string())?;
 
     let sha = json
         .get("sha")
         .and_then(|v| v.as_str())
         .map(ToOwned::to_owned)
-        .ok_or_else(|| "GitHub response missing preset sha".to_string())?;
+        .ok_or_else(|| "Failed to fetch preset".to_string())?;
     let content_b64 = json
         .get("content")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "GitHub response missing preset content".to_string())?;
+        .ok_or_else(|| "Failed to fetch preset".to_string())?;
     let normalized = content_b64.replace('\n', "");
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(normalized)
-        .map_err(|e| format!("Failed to decode preset content from GitHub: {e}"))?;
+        .map_err(|_e| "Failed to fetch preset".to_string())?;
     let content = String::from_utf8(bytes)
-        .map_err(|e| format!("Build preset content is not valid UTF-8: {e}"))?;
+        .map_err(|_e| "Failed to fetch preset".to_string())?;
     Ok((sha, content))
 }
 
@@ -1556,5 +1519,37 @@ install = "bun install"
         let loaded = read_locked_preset(temp.path()).unwrap().unwrap();
         assert_eq!(loaded, resolved);
         assert!(lock_file_path(temp.path()).exists());
+    }
+
+    #[test]
+    fn load_build_preset_ignores_locked_commit_for_unpinned_alias() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let locked = ResolvedPresetSource {
+            preset_ref: "bun".to_string(),
+            repo: "tako-sh/presets".to_string(),
+            path: "presets/bun/bun.toml".to_string(),
+            commit: "0000000000000000000000000000000000000000".to_string(),
+        };
+        write_locked_preset(temp.path(), &locked).unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (_preset, resolved) = runtime
+            .block_on(load_build_preset(temp.path(), "bun"))
+            .unwrap();
+
+        assert_eq!(resolved.preset_ref, "bun");
+        assert_ne!(resolved.commit, locked.commit);
+    }
+
+    #[test]
+    fn fetch_preset_content_from_master_branch_returns_generic_fetch_error() {
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let err = runtime
+            .block_on(fetch_preset_content_from_master_branch(
+                "invalid-repo-slug",
+                "presets/js.toml",
+            ))
+            .unwrap_err();
+        assert_eq!(err, "Failed to fetch preset");
     }
 }

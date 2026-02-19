@@ -23,6 +23,8 @@ preset = "tanstack-start"
 - Pinned refs:
   - `tanstack-start@<commit-hash>`
 
+Unpinned official aliases are fetched from the `master` branch on each resolve.
+
 Namespaced aliases in `tako.toml` (for example `js/tanstack-start`) are rejected; choose runtime with top-level `runtime` and keep `preset` runtime-local.
 
 ## Official Preset Layout
