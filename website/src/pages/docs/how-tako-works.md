@@ -195,7 +195,8 @@ Typical remote layout:
 - `tako servers status`: snapshot of server/app state across configured servers.
 - `tako logs --env <env>`: live logs across mapped servers for an environment.
 - `tako releases ls` / `tako releases rollback`: inspect release history and roll back to a previous release id.
-- `tako upgrade`: upgrade local CLI and (by default) refresh + handoff-upgrade remote servers.
+- `tako upgrade`: upgrade local CLI installation only.
+- `tako servers upgrade <name>`: refresh installer-managed server artifacts and perform single-host candidate handoff upgrade.
 - `tako secrets ...`: encrypted secret management and sync to runtime.
 - `tako servers restart|reload|upgrade`: runtime lifecycle operations for remote `tako-server`.
 

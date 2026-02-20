@@ -325,71 +325,19 @@ mod tests {
     #[test]
     fn upgrade_command_parses() {
         let cli = Cli::try_parse_from(["tako", "upgrade"]).unwrap();
-        let Some(Commands::Upgrade {
-            cli_only,
-            servers_only,
-            servers,
-        }) = cli.command
-        else {
+        let Some(Commands::Upgrade) = cli.command else {
             panic!("expected Upgrade");
         };
-        assert!(!cli_only);
-        assert!(!servers_only);
-        assert!(servers.is_empty());
     }
 
     #[test]
-    fn upgrade_command_parses_cli_only() {
-        let cli = Cli::try_parse_from(["tako", "upgrade", "--cli-only"]).unwrap();
-        let Some(Commands::Upgrade { cli_only, .. }) = cli.command else {
-            panic!("expected Upgrade");
-        };
-        assert!(cli_only);
-    }
-
-    #[test]
-    fn upgrade_command_parses_servers_only_with_targets() {
-        let cli = Cli::try_parse_from([
-            "tako",
-            "upgrade",
-            "--servers-only",
-            "--server",
-            "prod",
-            "--server",
-            "staging",
-        ])
-        .unwrap();
-        let Some(Commands::Upgrade {
-            servers_only,
-            servers,
-            ..
-        }) = cli.command
-        else {
-            panic!("expected Upgrade");
-        };
-        assert!(servers_only);
-        assert_eq!(servers, vec!["prod".to_string(), "staging".to_string()]);
-    }
-
-    #[test]
-    fn upgrade_command_rejects_conflicting_scope_flags() {
-        let result = Cli::try_parse_from(["tako", "upgrade", "--cli-only", "--servers-only"]);
+    fn upgrade_command_rejects_removed_scope_flags() {
+        let result = Cli::try_parse_from(["tako", "upgrade", "--servers-only"]);
         match result {
             Ok(_) => panic!("expected parse failure"),
             Err(err) => assert!(
-                err.to_string().contains("cannot be used with"),
-                "unexpected error: {err}"
-            ),
-        }
-    }
-
-    #[test]
-    fn upgrade_command_rejects_server_target_with_cli_only() {
-        let result = Cli::try_parse_from(["tako", "upgrade", "--cli-only", "--server", "prod"]);
-        match result {
-            Ok(_) => panic!("expected parse failure"),
-            Err(err) => assert!(
-                err.to_string().contains("cannot be used with"),
+                err.to_string()
+                    .contains("unexpected argument '--servers-only'"),
                 "unexpected error: {err}"
             ),
         }
@@ -483,20 +431,8 @@ pub enum Commands {
     #[command(subcommand)]
     Releases(releases::ReleaseCommands),
 
-    /// Upgrade local CLI and/or remote servers
-    Upgrade {
-        /// Upgrade only the local CLI
-        #[arg(long, conflicts_with = "servers_only")]
-        cli_only: bool,
-
-        /// Upgrade only remote servers
-        #[arg(long, conflicts_with = "cli_only")]
-        servers_only: bool,
-
-        /// Limit remote upgrade to specific server name(s)
-        #[arg(long = "server", conflicts_with = "cli_only")]
-        servers: Vec<String>,
-    },
+    /// Upgrade the local tako CLI to the latest version
+    Upgrade,
 
     /// Deploy to an environment
     Deploy {
@@ -572,15 +508,7 @@ impl Cli {
             Commands::Servers(cmd) => server::run(cmd),
             Commands::Secrets(cmd) => secret::run(cmd),
             Commands::Releases(cmd) => releases::run(cmd),
-            Commands::Upgrade {
-                cli_only,
-                servers_only,
-                servers,
-            } => upgrade::run(upgrade::UpgradeArgs {
-                cli_only,
-                servers_only,
-                servers,
-            }),
+            Commands::Upgrade => upgrade::run(),
             Commands::Deploy { env, yes, dir } => {
                 if let Some(dir) = dir {
                     std::env::set_current_dir(dir)?;

@@ -37,7 +37,7 @@ Directory selection is command-scoped:
 
 - `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` (recommended unique per server), production `route`, runtime, and preset selection when family presets are available); detailed "Detected" summary is shown in verbose mode.
 - `tako help`: show all commands with brief descriptions.
-- `tako upgrade [--cli-only|--servers-only] [--server <NAME> ...]`: unified local+remote upgrade flow (CLI first, then remote servers by default).
+- `tako upgrade`: upgrade local CLI installation.
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
 - `tako dev [--tui | --no-tui] [DIR]`: run local development mode.
 - `tako doctor`: print local dev diagnostics (DNS, socket, listener, leases, and local forwarding preflight checks).
@@ -50,20 +50,15 @@ Directory selection is command-scoped:
 ## `upgrade`
 
 ```bash
-tako upgrade [--cli-only|--servers-only] [--server <NAME> ...]
+tako upgrade
 ```
 
 Notes:
 
-- default behavior upgrades local CLI, then upgrades all configured remote servers.
-- `--cli-only` upgrades only the local CLI.
-- `--servers-only` upgrades only remote servers.
-- `--server` can be repeated to limit remote upgrades to selected configured hosts.
 - local CLI upgrade strategy is install-aware:
   - Homebrew installs use `brew upgrade tako`
   - Cargo installs under `~/.cargo/bin/tako` use `cargo install tako --locked`
   - fallback uses hosted installer script (`https://tako.sh/install`) via `curl`/`wget`
-- remote server upgrades run an installer refresh helper (`sudo -n /usr/local/bin/tako-server-upgrade`) and then run the candidate handoff flow (`tako servers upgrade <NAME>`), using systemd restart when available and manual primary restart fallback on non-systemd hosts.
 
 ## `releases` Subcommands
 
@@ -143,6 +138,7 @@ Notes:
   - `--no-test` skips SSH checks and target detection.
 - `tako servers rm` aliases: `remove`, `delete`.
 - `tako servers ls` alias: `list`.
+- `tako servers upgrade <NAME>` refreshes server install artifacts via `sudo /usr/local/bin/tako-server-upgrade`, then performs single-host candidate handoff (systemd restart when available, manual primary restart fallback otherwise).
 - `tako servers status` prints a single global deployment/runtime snapshot across configured servers.
 
 Deploy note:

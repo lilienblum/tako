@@ -248,24 +248,13 @@ cargo install tako
 
 `cargo install tako` installs both `tako` and `tako-dev-server` binaries from the same package/version.
 
-Upgrade local CLI and remote servers:
+Upgrade local CLI:
 
 ```bash
 tako upgrade
 ```
 
-Default `tako upgrade` behavior:
-
-- Upgrades local CLI first.
-- Then upgrades remote `tako-server` on configured hosts (`~/.tako/config.toml`), including:
-  - install refresh (`sudo /usr/local/bin/tako-server-upgrade`) to pick up binary + installer-managed dependencies
-  - zero-downtime handoff (`tako servers upgrade` flow) to promote refreshed binary through candidate overlap
-
-Flags:
-
-- `--cli-only`: only local CLI upgrade
-- `--servers-only`: only remote server upgrades
-- `--server <name>` (repeatable): limit remote upgrades to selected configured servers
+`tako upgrade` upgrades only the local CLI installation.
 
 ### Global options
 
@@ -335,22 +324,13 @@ Show all commands with brief descriptions.
 
 ### tako upgrade
 
-Unified upgrade command for local CLI and remote server runtime.
+Upgrade the local `tako` CLI binary to the latest available release.
 
 CLI upgrade strategy:
 
 - Homebrew install detection: runs `brew upgrade tako`
 - Cargo install detection (`~/.cargo/bin/tako`): runs `cargo install tako --locked`
 - Default/fallback: downloads and runs hosted installer (`https://tako.sh/install`) via `curl`/`wget`
-
-Remote server upgrade strategy (default all configured servers, or selected via `--server`):
-
-- Connect over SSH as `tako`
-- Require/install-refresh helper `/usr/local/bin/tako-server-upgrade`
-- Run `sudo -n /usr/local/bin/tako-server-upgrade` (installer refresh without immediate restart)
-- Run `tako servers upgrade <name>` handoff flow to restart/promote with candidate overlap (systemd restart when available; manual primary restart fallback on non-systemd hosts)
-
-`--cli-only` disables remote upgrades; `--servers-only` skips local CLI upgrade.
 
 ### tako dev [--tui|--no-tui] [DIR]
 
@@ -574,20 +554,23 @@ Upgrade mode transitions are guarded by a durable single-owner upgrade lock in S
 
 Single-host upgrade handoff with a temporary candidate process:
 
-1. CLI acquires the durable upgrade lock (`enter_upgrading`) and sets server mode to `upgrading`.
-2. CLI reads active runtime settings (`server_info`) from the management socket.
-3. CLI starts a temporary candidate `tako-server` process on a temporary socket path (for example `/var/run/tako/tako-upgrade-<owner>.sock`) with the same HTTP/HTTPS listener ports.
-4. Candidate startup uses an instance port offset (`--instance-port-offset 10000`) so candidate-managed app instances avoid local port collisions with the active server during overlap.
-5. CLI waits until the candidate answers protocol `hello` on the temporary socket.
-6. CLI restarts the primary runtime:
+1. CLI verifies `tako-server` is active on the host.
+2. CLI refreshes server install artifacts via `sudo -n /usr/local/bin/tako-server-upgrade` (installer refresh mode; no immediate primary restart).
+3. CLI acquires the durable upgrade lock (`enter_upgrading`) and sets server mode to `upgrading`.
+4. CLI reads active runtime settings (`server_info`) from the management socket.
+5. CLI starts a temporary candidate `tako-server` process on a temporary socket path (for example `/var/run/tako/tako-upgrade-<owner>.sock`) with the same HTTP/HTTPS listener ports.
+6. Candidate startup uses an instance port offset (`--instance-port-offset 10000`) so candidate-managed app instances avoid local port collisions with the active server during overlap.
+7. CLI waits until the candidate answers protocol `hello` on the temporary socket.
+8. CLI restarts the primary runtime:
    - systemd hosts: `systemctl restart tako-server` (inherits graceful stop behavior: `KillMode=control-group`, `TimeoutStopSec=30min`)
    - non-systemd hosts: CLI performs manual restart (TERM primary process matched by socket marker, waits for primary socket to go offline, starts new primary process with the active socket and original instance-port offset)
-7. CLI waits for the primary management socket to become healthy again.
-8. CLI stops the temporary candidate process and releases upgrade mode (`exit_upgrading`).
+9. CLI waits for the primary management socket to become healthy again.
+10. CLI stops the temporary candidate process and releases upgrade mode (`exit_upgrading`).
 
-On failure, CLI performs best-effort cleanup: stop candidate (if started) and release upgrade mode once primary is reachable.
+Failure behavior:
 
-Top-level `tako upgrade` uses this handoff after running remote install refresh (`sudo /usr/local/bin/tako-server-upgrade`) on each target host.
+- If failure happens before primary restart attempt, CLI performs best-effort cleanup (stop candidate if started, then exit upgrade mode).
+- If primary restart was attempted but primary did not become ready, CLI preserves the running candidate process to avoid dropping traffic and warns that upgrade mode may remain enabled until primary recovers.
 
 ### tako servers reload {server-name}
 

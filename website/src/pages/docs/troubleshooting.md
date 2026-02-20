@@ -94,10 +94,10 @@ Expected deploy behavior:
   - Symptom: `install-server` exits after reporting mise install failure.
   - Fix: install `mise` manually on the host ([mise install docs](https://mise.jdx.dev/getting-started.html)), ensure `mise` is on `PATH`, then rerun installer (or set `TAKO_INSTALL_MISE=0` to skip installer-managed mise setup).
 - `Remote upgrade helper missing`:
-  - Symptom: `tako upgrade` reports missing `/usr/local/bin/tako-server-upgrade`.
-  - Fix: run `curl -fsSL https://tako.sh/install-server | sh` as root on that host once to install helper and sudoers entry, then retry `tako upgrade`.
+  - Symptom: `tako servers upgrade <name>` reports missing `/usr/local/bin/tako-server-upgrade`.
+  - Fix: run `curl -fsSL https://tako.sh/install-server | sh` as root on that host once to install helper and sudoers entry, then retry `tako servers upgrade <name>`.
 - `Remote upgrade helper permission denied`:
-  - Symptom: `tako upgrade` reports sudo permission failure while running `/usr/local/bin/tako-server-upgrade`.
+  - Symptom: `tako servers upgrade <name>` reports sudo permission failure while running `/usr/local/bin/tako-server-upgrade`.
   - Fix: rerun the server installer as root to refresh `/etc/sudoers.d/tako`, then retry.
 - `Bun dependency install failed`:
   - Symptom: server responds with `Invalid app release: Bun dependency install failed ...`.

@@ -7,6 +7,7 @@ use tako_core::ServerRuntimeInfo;
 const UPGRADE_INSTANCE_PORT_OFFSET: u16 = 10_000;
 const UPGRADE_SOCKET_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const UPGRADE_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const REMOTE_UPGRADE_HELPER: &str = "/usr/local/bin/tako-server-upgrade";
 
 #[derive(Subcommand)]
 pub enum ServerCommands {
@@ -847,6 +848,50 @@ fn systemd_restart_probe_command() -> &'static str {
     "(command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] && systemctl show-environment >/dev/null 2>&1 && echo yes) || echo no"
 }
 
+fn remote_upgrade_helper_command() -> String {
+    format!("sudo -n {}", shell_single_quote(REMOTE_UPGRADE_HELPER))
+}
+
+fn format_missing_remote_helper_message() -> String {
+    format!(
+        "Remote upgrade helper '{}' is missing. Run `curl -fsSL https://tako.sh/install-server | sh` as root on that host once, then retry.",
+        REMOTE_UPGRADE_HELPER
+    )
+}
+
+fn first_non_empty_line(value: &str) -> Option<&str> {
+    value.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
+fn format_remote_helper_failure(output: &crate::ssh::CommandOutput) -> String {
+    let combined = output.combined();
+    let message = first_non_empty_line(combined.trim()).unwrap_or("remote installer helper failed");
+    let lower = message.to_ascii_lowercase();
+
+    if lower.contains("command not found") || lower.contains("no such file") {
+        return format_missing_remote_helper_message();
+    }
+
+    if lower.contains("password") || lower.contains("not allowed") || lower.contains("sorry") {
+        return format!(
+            "Remote user does not have permission to run '{}'. Re-run `curl -fsSL https://tako.sh/install-server | sh` as root to install/update sudoers policy.",
+            REMOTE_UPGRADE_HELPER
+        );
+    }
+
+    format!(
+        "Remote installer helper failed with exit code {}: {}",
+        output.exit_code, message
+    )
+}
+
+fn should_keep_candidate_running_on_error(
+    primary_restart_attempted: bool,
+    primary_ready: bool,
+) -> bool {
+    primary_restart_attempted && !primary_ready
+}
+
 fn parse_candidate_pid(stdout: &str) -> Option<u32> {
     stdout
         .lines()
@@ -973,6 +1018,17 @@ async fn restart_primary_service_for_upgrade(
     Ok(())
 }
 
+async fn remote_upgrade_helper_available(
+    ssh: &crate::ssh::SshClient,
+) -> Result<bool, crate::ssh::SshError> {
+    let cmd = format!(
+        "test -x {} && echo yes || echo no",
+        shell_single_quote(REMOTE_UPGRADE_HELPER)
+    );
+    let output = ssh.exec(&cmd).await?;
+    Ok(output.stdout.trim() == "yes")
+}
+
 pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::ServersToml;
     use crate::ssh::{SshClient, SshConfig};
@@ -994,6 +1050,9 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
     let owner = build_upgrade_owner(name);
     let mut upgrade_mode_entered = false;
     let mut candidate_pid: Option<u32> = None;
+    let mut candidate_socket_for_cleanup: Option<String> = None;
+    let mut primary_restart_attempted = false;
+    let mut primary_ready = false;
 
     let upgrade_result: Result<(), String> = async {
         let status = ssh
@@ -1006,6 +1065,31 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
                 status
             ));
         }
+
+        let helper_available = output::with_spinner_async(
+            "Checking remote upgrade helper...",
+            remote_upgrade_helper_available(&ssh),
+        )
+        .await
+        .map_err(|e| format!("Failed to check remote upgrade helper: {}", e))?
+        .map_err(|e| format!("Failed to check remote upgrade helper: {}", e))?;
+        if !helper_available {
+            return Err(format_missing_remote_helper_message());
+        }
+
+        // Refresh the installer-managed binary/dependencies first so the next primary start
+        // uses the same path that initial host provisioning uses.
+        let refresh_output = output::with_spinner_async(
+            "Refreshing remote server install...",
+            ssh.exec(&remote_upgrade_helper_command()),
+        )
+        .await
+        .map_err(|e| format!("Failed to run remote installer helper: {}", e))?
+        .map_err(|e| format!("Failed to run remote installer helper: {}", e))?;
+        if !refresh_output.success() {
+            return Err(format_remote_helper_failure(&refresh_output));
+        }
+        output::success("Server install refreshed");
 
         output::step(&format!("Upgrade owner: {}", owner));
 
@@ -1026,6 +1110,7 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
                 .map_err(|e| format!("Failed to read runtime config: {}", e))?;
 
         let candidate_socket = candidate_socket_path(&active_info.socket, &owner);
+        candidate_socket_for_cleanup = Some(candidate_socket.clone());
         let start_cmd = build_candidate_start_command(&active_info, &candidate_socket, &owner);
 
         let start_output = output::with_spinner_async(
@@ -1056,6 +1141,7 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
         .map_err(|e| format!("Candidate readiness check failed: {}", e))?;
         output::success("Candidate is ready");
 
+        primary_restart_attempted = true;
         restart_primary_service_for_upgrade(&mut ssh, &active_info, &owner).await?;
 
         let _ = output::with_spinner_async(
@@ -1065,6 +1151,7 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
         .await
         .map_err(|e| format!("Primary readiness check failed: {}", e))?
         .map_err(|e| format!("Primary readiness check failed: {}", e))?;
+        primary_ready = true;
         output::success("Primary service is ready");
 
         if let Some(pid) = candidate_pid.take() {
@@ -1084,12 +1171,33 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
     .await;
 
     if upgrade_result.is_err() {
+        let keep_candidate =
+            should_keep_candidate_running_on_error(primary_restart_attempted, primary_ready);
+
         if let Some(pid) = candidate_pid.take() {
-            let _ = ssh.exec(&format!("kill {} 2>/dev/null || true", pid)).await;
+            if keep_candidate {
+                // After primary restart has been attempted, keep the ready candidate online to
+                // avoid traffic loss while operators recover the primary runtime.
+                output::warning(&format!(
+                    "Primary is not ready after restart; keeping candidate pid {} running to preserve traffic.",
+                    pid
+                ));
+                if let Some(candidate_socket) = candidate_socket_for_cleanup.as_deref() {
+                    output::muted(&format!("Candidate socket: {}", candidate_socket));
+                }
+            } else {
+                let _ = ssh.exec(&format!("kill {} 2>/dev/null || true", pid)).await;
+            }
         }
         if upgrade_mode_entered {
-            let _ = wait_for_primary_ready(&mut ssh, Duration::from_secs(30)).await;
-            let _ = ssh.tako_exit_upgrading(&owner).await;
+            if keep_candidate {
+                output::warning(
+                    "Upgrade mode may remain enabled until the primary runtime is healthy again.",
+                );
+            } else {
+                let _ = wait_for_primary_ready(&mut ssh, Duration::from_secs(30)).await;
+                let _ = ssh.tako_exit_upgrading(&owner).await;
+            }
         }
     }
 
@@ -1213,6 +1321,32 @@ mod tests {
         assert!(cmd.contains("command -v systemctl"));
         assert!(cmd.contains("/run/systemd/system"));
         assert!(cmd.contains("echo yes"));
+    }
+
+    #[test]
+    fn candidate_is_preserved_only_after_primary_restart_attempt_without_readiness() {
+        assert!(!should_keep_candidate_running_on_error(false, false));
+        assert!(!should_keep_candidate_running_on_error(false, true));
+        assert!(should_keep_candidate_running_on_error(true, false));
+        assert!(!should_keep_candidate_running_on_error(true, true));
+    }
+
+    #[test]
+    fn missing_remote_helper_message_points_to_install_server_script() {
+        let message = format_missing_remote_helper_message();
+        assert!(message.contains("tako-server-upgrade"));
+        assert!(message.contains("install-server"));
+    }
+
+    #[test]
+    fn remote_helper_failure_reports_permission_issue() {
+        let output = crate::ssh::CommandOutput {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: "sudo: a password is required".to_string(),
+        };
+        let message = format_remote_helper_failure(&output);
+        assert!(message.contains("does not have permission"));
     }
 
     #[test]

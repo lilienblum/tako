@@ -58,7 +58,7 @@ Each target server should have:
 - SSH access as the configured deployment user (typically `tako`).
 - `tako-server` installed and running.
 - `tako-server` installed via the hosted installer (or equivalent) for the host target; installer resolves `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>`.
-- installer-provided helper `/usr/local/bin/tako-server-upgrade` present and sudo-enabled for user `tako` (used by `tako upgrade` remote refresh flow).
+- installer-provided helper `/usr/local/bin/tako-server-upgrade` present and sudo-enabled for user `tako` (used by `tako servers upgrade <name>` refresh flow).
 - `mise` installed on host (`install-server` attempts distro package manager first, then upstream installer fallback).
 - `nc` (netcat), `tar`, `base64`, and standard shell tools (`mkdir`, `find`, `stat`).
 - Writable runtime paths under `/opt/tako` and socket access at `/var/run/tako/tako.sock`.
@@ -171,7 +171,7 @@ Each target server should have:
 - Use `tako logs --env <environment>` to stream remote logs.
 - Use `tako releases ls --env <environment>` to inspect release/build history before deciding on rollback.
 - Use `tako releases rollback <release-id> --env <environment>` to roll back to a previous release id using normal rolling-update behavior.
-- `tako upgrade` remote flow refreshes installer-managed packages/binary with `sudo /usr/local/bin/tako-server-upgrade` (install-only mode, no immediate restart), then performs candidate handoff restart (systemd restart when available, manual primary restart fallback on non-systemd hosts).
+- `tako servers upgrade <name>` refreshes installer-managed packages/binary with `sudo /usr/local/bin/tako-server-upgrade` (install-only mode, no immediate primary restart), then performs candidate handoff restart (systemd restart when available, manual primary restart fallback on non-systemd hosts).
 - HTTP requests are redirected to HTTPS by default (307 with `Cache-Control: no-store`).
 - Exceptions on HTTP: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status`.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.
