@@ -13,6 +13,7 @@ use dashmap::DashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -188,6 +189,9 @@ impl LoadBalancer {
             app_name: app_name.to_string(),
             instance_id: instance.id,
             addr: format!("127.0.0.1:{}", instance.port),
+            socket_path: instance
+                .socket_path()
+                .filter(|path| Path::new(path).exists()),
         })
     }
 
@@ -221,6 +225,8 @@ pub struct Backend {
     pub instance_id: u32,
     /// Address to connect to (e.g., "127.0.0.1:3000")
     pub addr: String,
+    /// Optional Unix socket path for upstream proxying
+    pub socket_path: Option<String>,
 }
 
 impl Backend {
@@ -230,6 +236,10 @@ impl Backend {
         let host = parts.first().copied().unwrap_or("127.0.0.1");
         let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(3000);
         (host, port)
+    }
+
+    pub fn socket_path(&self) -> Option<&str> {
+        self.socket_path.as_deref()
     }
 }
 
@@ -330,6 +340,7 @@ mod tests {
             app_name: "test".to_string(),
             instance_id: 1,
             addr: "127.0.0.1:3000".to_string(),
+            socket_path: None,
         };
 
         let (host, port) = backend.host_port();
@@ -360,6 +371,40 @@ mod tests {
         let backend = lb.get_backend("my-app").unwrap();
         assert_eq!(backend.app_name, "my-app");
         assert_eq!(backend.addr, "127.0.0.1:4000");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_global_load_balancer_prefers_unix_socket_backend_when_available() {
+        use std::os::unix::net::UnixListener;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let manager = Arc::new(AppManager::new());
+        let lb = LoadBalancer::new(manager.clone());
+
+        let config = AppConfig {
+            name: "my-app".to_string(),
+            base_port: 4000,
+            app_socket_dir: temp.path().to_path_buf(),
+            ..Default::default()
+        };
+        let app = manager.register_app(config);
+
+        let instance = app.allocate_instance();
+        instance.set_pid(42_424);
+        let socket_path = instance
+            .socket_path()
+            .expect("instance should resolve socket path with pid");
+        let Ok(_listener) = UnixListener::bind(&socket_path) else {
+            return;
+        };
+        instance.set_state(InstanceState::Healthy);
+
+        lb.register_app(app);
+
+        let backend = lb.get_backend("my-app").unwrap();
+        assert_eq!(backend.socket_path(), Some(socket_path.as_str()));
     }
 
     #[test]

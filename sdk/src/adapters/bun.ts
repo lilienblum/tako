@@ -23,6 +23,7 @@ import { Tako } from "../tako";
 import type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 import { ServerConnection } from "../connection";
 import { handleTakoEndpoint } from "../endpoints";
+import { resolveAppSocketPath } from "../socket-path";
 
 // Re-export core classes
 export { Tako } from "../tako";
@@ -59,6 +60,7 @@ export function serve(
   const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";
   const TAKO_INSTANCE = parseInt(process.env.TAKO_INSTANCE || "1", 10);
   const TAKO_APP_SOCKET = process.env.TAKO_APP_SOCKET;
+  const appSocketPath = resolveAppSocketPath(TAKO_APP_SOCKET);
 
   const DEFAULT_TAKO_SOCKET = "/var/run/tako/tako.sock";
   const serverSocketPath = TAKO_SOCKET || DEFAULT_TAKO_SOCKET;
@@ -104,13 +106,13 @@ export function serve(
   };
 
   // Start server
-  if (TAKO_APP_SOCKET) {
+  if (appSocketPath) {
     // Production: Unix socket
     Bun.serve({
-      unix: TAKO_APP_SOCKET,
+      unix: appSocketPath,
       fetch: wrappedFetch,
     });
-    console.log(`[tako.sh] Bun server listening on ${TAKO_APP_SOCKET}`);
+    console.log(`[tako.sh] Bun server listening on ${appSocketPath}`);
   } else {
     // Development: TCP
     Bun.serve({
@@ -123,13 +125,13 @@ export function serve(
   status = "healthy";
 
   // Connect to tako-server in production
-  if (TAKO_APP_SOCKET) {
+  if (appSocketPath) {
     const connection = new ServerConnection(
       serverSocketPath,
       "app",
       TAKO_VERSION,
       TAKO_INSTANCE,
-      TAKO_APP_SOCKET,
+      appSocketPath,
       takoOptions,
     );
 

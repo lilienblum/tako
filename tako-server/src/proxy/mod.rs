@@ -735,6 +735,17 @@ impl ProxyHttp for TakoProxy {
             .clone()
             .ok_or_else(|| Error::new(ErrorType::ConnectNoRoute))?;
 
+        #[cfg(unix)]
+        if let Some(socket_path) = backend.socket_path() {
+            let peer = HttpPeer::new_uds(socket_path, false, String::new()).map_err(|e| {
+                Error::explain(
+                    ErrorType::ConnectNoRoute,
+                    format!("Invalid upstream unix socket '{}': {}", socket_path, e),
+                )
+            })?;
+            return Ok(Box::new(peer));
+        }
+
         let (host, port) = backend.host_port();
         let peer = HttpPeer::new((host.to_string(), port), false, String::new());
         Ok(Box::new(peer))

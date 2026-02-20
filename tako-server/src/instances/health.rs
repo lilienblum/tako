@@ -110,20 +110,17 @@ impl HealthChecker {
                 config.health_check_path.clone(),
             )
         };
-        let health_url = format!("http://127.0.0.1:{}{}", instance.port, health_path);
         let instance_key = format!("{}:{}", app.name(), instance.id);
 
         // Perform HTTP probe
-        let probe_success = match self
-            .client
-            .get(&health_url)
-            .header(reqwest::header::HOST, health_host)
-            .send()
-            .await
-        {
-            Ok(resp) => resp.status().is_success(),
-            Err(_) => false,
-        };
+        let probe_success = probe_instance_health(
+            &self.client,
+            instance,
+            &health_host,
+            &health_path,
+            self.config.probe_timeout,
+        )
+        .await;
 
         if probe_success {
             // Reset failure count and record heartbeat
@@ -157,7 +154,6 @@ impl HealthChecker {
                 app = %app.name(),
                 instance = instance.id,
                 failures = failure_count,
-                url = %health_url,
                 "Health check failed"
             );
 
@@ -220,6 +216,84 @@ impl HealthChecker {
         let key = format!("{}:{}", app_name, instance_id);
         self.failure_counts.remove(&key);
     }
+}
+
+async fn probe_instance_health(
+    client: &reqwest::Client,
+    instance: &Instance,
+    health_host: &str,
+    health_path: &str,
+    probe_timeout: Duration,
+) -> bool {
+    #[cfg(unix)]
+    if let Some(socket_path) = instance.socket_path() {
+        match probe_unix_socket(&socket_path, health_host, health_path, probe_timeout).await {
+            Ok(true) => return true,
+            Ok(false) | Err(_) => {}
+        }
+    }
+
+    let health_url = format!("http://127.0.0.1:{}{}", instance.port, health_path);
+    match client
+        .get(&health_url)
+        .header(reqwest::header::HOST, health_host)
+        .send()
+        .await
+    {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+#[cfg(unix)]
+async fn probe_unix_socket(
+    socket_path: &str,
+    health_host: &str,
+    health_path: &str,
+    probe_timeout: Duration,
+) -> Result<bool, std::io::Error> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::time::timeout;
+
+    let mut socket =
+        match timeout(probe_timeout, tokio::net::UnixStream::connect(socket_path)).await {
+            Ok(result) => result?,
+            Err(_) => return Ok(false),
+        };
+    let request =
+        format!("GET {health_path} HTTP/1.1\r\nHost: {health_host}\r\nConnection: close\r\n\r\n");
+    match timeout(probe_timeout, socket.write_all(request.as_bytes())).await {
+        Ok(result) => result?,
+        Err(_) => return Ok(false),
+    }
+
+    let mut response_buf = [0_u8; 2048];
+    let bytes_read = match timeout(probe_timeout, socket.read(&mut response_buf)).await {
+        Ok(result) => result?,
+        Err(_) => return Ok(false),
+    };
+    if bytes_read == 0 {
+        return Ok(false);
+    }
+
+    let response = String::from_utf8_lossy(&response_buf[..bytes_read]);
+    let status_line = response.lines().next().unwrap_or_default();
+    Ok(http_status_is_success(status_line))
+}
+
+fn http_status_is_success(status_line: &str) -> bool {
+    let mut parts = status_line.split_whitespace();
+    let Some(http_version) = parts.next() else {
+        return false;
+    };
+    if !http_version.starts_with("HTTP/") {
+        return false;
+    }
+    parts
+        .next()
+        .and_then(|code| code.parse::<u16>().ok())
+        .map(|code| (200..300).contains(&code))
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -371,6 +445,93 @@ mod tests {
 
         let app = Arc::new(App::new(config, tx));
         let instance = app.allocate_instance();
+        instance.set_state(InstanceState::Ready);
+
+        let (ev_tx, _ev_rx) = mpsc::channel(16);
+        let checker = HealthChecker::new(
+            HealthConfig {
+                check_interval: Duration::from_millis(25),
+                probe_timeout: Duration::from_millis(200),
+                ..Default::default()
+            },
+            ev_tx,
+        );
+
+        let app_task = tokio::spawn(async move {
+            checker.monitor_app(app).await;
+        });
+
+        let wait = async {
+            loop {
+                if instance.state() == InstanceState::Healthy {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        };
+
+        timeout(Duration::from_secs(1), wait)
+            .await
+            .expect("instance never became healthy");
+
+        app_task.abort();
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_probe_marks_ready_instance_healthy_over_unix_socket() {
+        use std::os::unix::net::UnixListener as StdUnixListener;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let pid = std::process::id();
+        let socket_path = temp.path().join(format!("tako-app-test-app-{pid}.sock"));
+        let Ok(listener) = StdUnixListener::bind(&socket_path) else {
+            return;
+        };
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::UnixListener::from_std(listener).unwrap();
+
+        tokio::spawn(async move {
+            loop {
+                let (mut sock, _) = match listener.accept().await {
+                    Ok(v) => v,
+                    Err(_) => break,
+                };
+                let mut request_buf = [0_u8; 2048];
+                let n = match tokio::io::AsyncReadExt::read(&mut sock, &mut request_buf).await {
+                    Ok(v) if v > 0 => v,
+                    _ => continue,
+                };
+                let request = String::from_utf8_lossy(&request_buf[..n]);
+                let is_internal_status = request.starts_with("GET /status ")
+                    && request
+                        .lines()
+                        .any(|line| line.eq_ignore_ascii_case("host: tako.internal"));
+
+                let response = if is_internal_status {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
+                } else {
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found".as_slice()
+                };
+                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response).await;
+            }
+        });
+
+        let (tx, _rx) = mpsc::channel(16);
+        let mut config = AppConfig {
+            name: "test-app".to_string(),
+            base_port: 31_001,
+            app_socket_dir: temp.path().to_path_buf(),
+            min_instances: 1,
+            ..Default::default()
+        };
+        config.health_check_path = "/status".to_string();
+        config.health_check_host = "tako.internal".to_string();
+
+        let app = Arc::new(App::new(config, tx));
+        let instance = app.allocate_instance();
+        instance.set_pid(pid);
         instance.set_state(InstanceState::Ready);
 
         let (ev_tx, _ev_rx) = mpsc::channel(16);

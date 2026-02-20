@@ -40,6 +40,13 @@ impl Spawner {
         // Build environment
         let mut env = config.env.clone();
         env.insert("PORT".to_string(), instance.port.to_string());
+        env.insert("TAKO_INSTANCE".to_string(), instance.id.to_string());
+        if let Some(socket_template) = instance.socket_template() {
+            env.insert("TAKO_APP_SOCKET".to_string(), socket_template.to_string());
+        }
+        if !config.tako_socket_path.is_empty() {
+            env.insert("TAKO_SOCKET".to_string(), config.tako_socket_path.clone());
+        }
         env.entry("NODE_ENV".to_string())
             .or_insert_with(|| "production".to_string());
 
@@ -66,15 +73,17 @@ impl Spawner {
             .await;
 
         // Wait for ready
-        let health_url = format!(
-            "http://127.0.0.1:{}{}",
-            instance.port, config.health_check_path
-        );
+        let health_check_path = config.health_check_path.clone();
         let health_host = config.health_check_host.clone();
 
         match timeout(
             config.startup_timeout,
-            self.wait_for_ready(&health_url, &health_host, instance.clone()),
+            self.wait_for_ready(
+                &health_check_path,
+                &health_host,
+                Duration::from_secs(5),
+                instance.clone(),
+            ),
         )
         .await
         {
@@ -112,8 +121,9 @@ impl Spawner {
     /// Wait for instance to become ready
     async fn wait_for_ready(
         &self,
-        health_url: &str,
+        health_path: &str,
         health_host: &str,
+        probe_timeout: Duration,
         instance: Arc<Instance>,
     ) -> Result<(), InstanceError> {
         let mut interval = tokio::time::interval(Duration::from_millis(100));
@@ -129,32 +139,14 @@ impl Spawner {
             }
 
             // Try health check
-            match self
-                .client
-                .get(health_url)
-                .header(reqwest::header::HOST, health_host)
-                .send()
+            if self
+                .probe_health(&instance, health_path, health_host, probe_timeout)
                 .await
             {
-                Ok(resp) if resp.status().is_success() => {
-                    instance.set_state(InstanceState::Ready);
-                    return Ok(());
-                }
-                Ok(resp) => {
-                    tracing::debug!(
-                        attempt = attempts,
-                        status = %resp.status(),
-                        "Health check returned non-success status"
-                    );
-                }
-                Err(e) => {
-                    tracing::debug!(
-                        attempt = attempts,
-                        error = %e,
-                        "Health check failed"
-                    );
-                }
+                instance.set_state(InstanceState::Ready);
+                return Ok(());
             }
+            tracing::debug!(attempt = attempts, "Health check failed");
 
             attempts += 1;
             if attempts > 300 {
@@ -175,8 +167,39 @@ impl Spawner {
                 config.health_check_host.clone(),
             )
         };
-        let health_url = format!("http://127.0.0.1:{}{}", instance.port, health_check_path);
 
+        self.probe_health(
+            instance,
+            &health_check_path,
+            &health_check_host,
+            Duration::from_secs(5),
+        )
+        .await
+    }
+
+    async fn probe_health(
+        &self,
+        instance: &Instance,
+        health_check_path: &str,
+        health_check_host: &str,
+        probe_timeout: Duration,
+    ) -> bool {
+        #[cfg(unix)]
+        if let Some(socket_path) = instance.socket_path() {
+            match probe_unix_socket(
+                &socket_path,
+                health_check_path,
+                health_check_host,
+                probe_timeout,
+            )
+            .await
+            {
+                Ok(true) => return true,
+                Ok(false) | Err(_) => {}
+            }
+        }
+
+        let health_url = format!("http://127.0.0.1:{}{}", instance.port, health_check_path);
         match self
             .client
             .get(&health_url)
@@ -188,6 +211,57 @@ impl Spawner {
             Err(_) => false,
         }
     }
+}
+
+#[cfg(unix)]
+async fn probe_unix_socket(
+    socket_path: &str,
+    health_check_path: &str,
+    health_check_host: &str,
+    probe_timeout: Duration,
+) -> Result<bool, std::io::Error> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut socket =
+        match timeout(probe_timeout, tokio::net::UnixStream::connect(socket_path)).await {
+            Ok(result) => result?,
+            Err(_) => return Ok(false),
+        };
+    let request = format!(
+        "GET {health_check_path} HTTP/1.1\r\nHost: {health_check_host}\r\nConnection: close\r\n\r\n"
+    );
+    match timeout(probe_timeout, socket.write_all(request.as_bytes())).await {
+        Ok(result) => result?,
+        Err(_) => return Ok(false),
+    }
+
+    let mut response_buf = [0_u8; 2048];
+    let bytes_read = match timeout(probe_timeout, socket.read(&mut response_buf)).await {
+        Ok(result) => result?,
+        Err(_) => return Ok(false),
+    };
+    if bytes_read == 0 {
+        return Ok(false);
+    }
+
+    let response = String::from_utf8_lossy(&response_buf[..bytes_read]);
+    let status_line = response.lines().next().unwrap_or_default();
+    Ok(http_status_is_success(status_line))
+}
+
+fn http_status_is_success(status_line: &str) -> bool {
+    let mut parts = status_line.split_whitespace();
+    let Some(http_version) = parts.next() else {
+        return false;
+    };
+    if !http_version.starts_with("HTTP/") {
+        return false;
+    }
+    parts
+        .next()
+        .and_then(|code| code.parse::<u16>().ok())
+        .map(|code| (200..300).contains(&code))
+        .unwrap_or(false)
 }
 
 async fn startup_exit_detail(instance: Arc<Instance>) -> String {
@@ -319,6 +393,59 @@ mod tests {
         };
         let app = App::new(config, instance_tx);
         let instance = app.allocate_instance();
+
+        let spawner = Spawner::new();
+        assert!(spawner.health_check(&app, &instance).await);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn health_check_uses_unix_socket_when_available() {
+        use std::os::unix::net::UnixListener as StdUnixListener;
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let pid = std::process::id();
+        let socket_path = temp.path().join(format!("tako-app-test-app-{pid}.sock"));
+        let Ok(listener) = StdUnixListener::bind(&socket_path) else {
+            return;
+        };
+        listener.set_nonblocking(true).unwrap();
+        let listener = tokio::net::UnixListener::from_std(listener).unwrap();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request_buf = [0_u8; 2048];
+            let n = tokio::io::AsyncReadExt::read(&mut socket, &mut request_buf)
+                .await
+                .expect("read request");
+            let request = String::from_utf8_lossy(&request_buf[..n]);
+            let is_internal_status = request.starts_with("GET /status ")
+                && request
+                    .lines()
+                    .any(|line| line.eq_ignore_ascii_case("host: tako.internal"));
+
+            let response = if is_internal_status {
+                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
+            } else {
+                b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found".as_slice()
+            };
+
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response).await;
+        });
+
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let config = AppConfig {
+            name: "test-app".to_string(),
+            base_port: 31_000,
+            app_socket_dir: temp.path().to_path_buf(),
+            health_check_path: "/status".to_string(),
+            health_check_host: "tako.internal".to_string(),
+            ..Default::default()
+        };
+        let app = App::new(config, instance_tx);
+        let instance = app.allocate_instance();
+        instance.set_pid(pid);
 
         let spawner = Spawner::new();
         assert!(spawner.health_check(&app, &instance).await);

@@ -129,6 +129,39 @@ impl ServerRuntimeConfig {
             instance_port_offset: self.instance_port_offset,
         }
     }
+
+    fn app_socket_dir(&self) -> PathBuf {
+        app_socket_dir_for_management_socket(&self.socket)
+    }
+}
+
+fn app_socket_dir_for_management_socket(socket_path: &str) -> PathBuf {
+    let socket_path = Path::new(socket_path);
+    let Some(parent) = socket_path.parent() else {
+        return PathBuf::from("/var/run");
+    };
+
+    if parent.file_name().is_some_and(|name| name == "tako")
+        && let Some(grandparent) = parent.parent()
+    {
+        return grandparent.to_path_buf();
+    }
+
+    parent.to_path_buf()
+}
+
+fn app_socket_cleanup_dirs(socket_path: &str) -> Vec<PathBuf> {
+    let mut dirs = vec![
+        app_socket_dir_for_management_socket(socket_path),
+        PathBuf::from("/var/run"),
+        PathBuf::from("/var/run/tako"),
+    ];
+    if let Some(parent) = Path::new(socket_path).parent() {
+        dirs.push(parent.to_path_buf());
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
 }
 
 /// Server state shared across components
@@ -278,6 +311,8 @@ impl ServerState {
             let should_start = config.min_instances > 0;
             config.base_port =
                 self.select_runtime_base_port(config.base_port, config.max_instances);
+            config.app_socket_dir = self.runtime.app_socket_dir();
+            config.tako_socket_path = self.runtime.socket.clone();
 
             let app = self.app_manager.register_app(config.clone());
             self.load_balancer.register_app(app.clone());
@@ -491,6 +526,8 @@ impl ServerState {
                 config.env = env.clone();
                 config.min_instances = instances as u32;
                 config.idle_timeout = Duration::from_secs(idle_timeout as u64);
+                config.app_socket_dir = self.runtime.app_socket_dir();
+                config.tako_socket_path = self.runtime.socket.clone();
                 config.command = match command_for_release_dir(&config.cwd) {
                     Ok(cmd) => cmd,
                     Err(e) => {
@@ -516,6 +553,8 @@ impl ServerState {
                     min_instances: instances as u32,
                     max_instances: 4,
                     base_port: self.allocate_port_range(),
+                    app_socket_dir: self.runtime.app_socket_dir(),
+                    tako_socket_path: self.runtime.socket.clone(),
                     idle_timeout: Duration::from_secs(idle_timeout as u64),
                     ..Default::default()
                 };
@@ -1752,14 +1791,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // During rolling updates multiple instances can be alive concurrently; we only remove sockets
     // whose PID no longer exists.
     {
-        use std::path::Path;
-        let dirs = [Path::new("/var/run"), Path::new("/var/run/tako")];
+        let dirs = app_socket_cleanup_dirs(&socket);
         for d in &dirs {
             app_socket_cleanup::cleanup_stale_app_sockets(d);
         }
 
         rt.spawn(async move {
-            let dirs = [Path::new("/var/run"), Path::new("/var/run/tako")];
             let mut ticker = tokio::time::interval(Duration::from_secs(30));
             loop {
                 ticker.tick().await;

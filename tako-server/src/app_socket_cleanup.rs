@@ -68,10 +68,37 @@ fn pid_exists(pid: u32) -> bool {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use tempfile::TempDir;
 
     #[test]
     fn parses_pid_from_socket_name() {
         let p = PathBuf::from("/var/run/tako-app-my-app-12345.sock");
         assert_eq!(pid_from_socket_name(&p), Some(12345));
+    }
+
+    #[test]
+    fn removes_stale_socket_files_when_pid_is_gone() {
+        let temp = TempDir::new().unwrap();
+        let stale = temp.path().join("tako-app-my-app-999999.sock");
+        std::fs::write(&stale, b"stale").unwrap();
+
+        cleanup_stale_app_sockets(temp.path());
+        assert!(!stale.exists(), "stale socket should be removed");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn keeps_active_socket_when_pid_is_alive() {
+        use std::os::unix::net::UnixListener;
+
+        let temp = TempDir::new().unwrap();
+        let pid = std::process::id();
+        let active = temp.path().join(format!("tako-app-my-app-{pid}.sock"));
+        let Ok(_listener) = UnixListener::bind(&active) else {
+            return;
+        };
+
+        cleanup_stale_app_sockets(temp.path());
+        assert!(active.exists(), "active socket should not be removed");
     }
 }

@@ -255,7 +255,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let monitor = IdleMonitor::new(IdleConfig::default(), tx);
 
-        let instance = Instance::new(1, 3000, "v1".to_string());
+        let instance = Instance::new(1, 3000, "v1".to_string(), None);
         instance.set_state(InstanceState::Healthy);
 
         // Can't stop if at min_instances

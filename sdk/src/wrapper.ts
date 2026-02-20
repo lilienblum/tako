@@ -14,6 +14,7 @@
 
 import { ServerConnection } from "./connection";
 import { handleTakoEndpoint } from "./endpoints";
+import { resolveAppSocketPath } from "./socket-path";
 import { Tako } from "./tako";
 import type { FetchFunction, TakoStatus, TakoOptions } from "./types";
 import { isAbsolute, resolve } from "node:path";
@@ -24,6 +25,7 @@ const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";
 const TAKO_INSTANCE = parseInt(process.env.TAKO_INSTANCE || "1", 10);
 const TAKO_SOCKET = process.env.TAKO_SOCKET;
 const TAKO_APP_SOCKET = process.env.TAKO_APP_SOCKET;
+const appSocketPath = resolveAppSocketPath(TAKO_APP_SOCKET);
 
 const DEFAULT_TAKO_SOCKET = "/var/run/tako/tako.sock";
 const serverSocketPath = TAKO_SOCKET || DEFAULT_TAKO_SOCKET;
@@ -81,16 +83,16 @@ async function createAppServer(userFetch: FetchFunction, options: TakoOptions): 
   };
 
   // Start Unix socket server or TCP server depending on mode
-  if (TAKO_APP_SOCKET) {
+  if (appSocketPath) {
     // Production mode: Unix socket
-    console.log(`Starting Unix socket server at ${TAKO_APP_SOCKET}`);
+    console.log(`Starting Unix socket server at ${appSocketPath}`);
 
     const server = Bun.serve({
-      unix: TAKO_APP_SOCKET,
+      unix: appSocketPath,
       fetch: handleRequest,
     });
 
-    console.log(`Application listening on ${TAKO_APP_SOCKET}`);
+    console.log(`Application listening on ${appSocketPath}`);
   } else {
     // Dev mode or fallback: TCP
     const port = parseInt(process.env.PORT || "3000", 10);
@@ -111,7 +113,7 @@ async function createAppServer(userFetch: FetchFunction, options: TakoOptions): 
  * Connect to tako-server (production mode only)
  */
 export async function connectToServer(options: TakoOptions): Promise<void> {
-  if (!TAKO_APP_SOCKET) {
+  if (!appSocketPath) {
     return;
   }
 
@@ -122,7 +124,7 @@ export async function connectToServer(options: TakoOptions): Promise<void> {
     "app",
     TAKO_VERSION,
     TAKO_INSTANCE,
-    TAKO_APP_SOCKET,
+    appSocketPath,
     options,
   );
 

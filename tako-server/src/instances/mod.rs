@@ -22,6 +22,7 @@ use tokio::process::Child;
 use tokio::sync::mpsc;
 
 pub const INTERNAL_STATUS_HOST: &str = "tako.internal";
+const APP_SOCKET_PID_TOKEN: &str = "{pid}";
 
 /// Configuration for an app
 #[derive(Debug, Clone)]
@@ -44,6 +45,10 @@ pub struct AppConfig {
     pub max_instances: u32,
     /// Port to bind (will be passed as PORT env var)
     pub base_port: u16,
+    /// Directory used for per-instance Unix sockets
+    pub app_socket_dir: PathBuf,
+    /// tako-server management socket path (for `TAKO_SOCKET`)
+    pub tako_socket_path: String,
     /// Health check path
     pub health_check_path: String,
     /// Health check host header
@@ -68,6 +73,8 @@ impl Default for AppConfig {
             min_instances: 1,
             max_instances: 4,
             base_port: 3000,
+            app_socket_dir: PathBuf::from("/var/run"),
+            tako_socket_path: "/var/run/tako/tako.sock".to_string(),
             health_check_path: "/status".to_string(),
             health_check_host: INTERNAL_STATUS_HOST.to_string(),
             health_check_interval: crate::defaults::HEALTH_CHECK_INTERVAL,
@@ -85,6 +92,8 @@ pub struct Instance {
     pub port: u16,
     /// Build version this instance was launched from
     build_version: String,
+    /// Optional socket template (for example `/var/run/tako-app-demo-{pid}.sock`)
+    socket_template: Option<String>,
     /// Process handle
     process: RwLock<Option<Child>>,
     /// Process ID
@@ -105,11 +114,12 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn new(id: u32, port: u16, build_version: String) -> Self {
+    pub fn new(id: u32, port: u16, build_version: String, socket_template: Option<String>) -> Self {
         Self {
             id,
             port,
             build_version,
+            socket_template,
             process: RwLock::new(None),
             pid: AtomicU32::new(0),
             state: RwLock::new(InstanceState::Starting),
@@ -136,6 +146,20 @@ impl Instance {
 
     pub fn build_version(&self) -> &str {
         &self.build_version
+    }
+
+    pub fn socket_template(&self) -> Option<&str> {
+        self.socket_template.as_deref()
+    }
+
+    /// Resolve per-instance socket path using the current PID when needed.
+    pub fn socket_path(&self) -> Option<String> {
+        let template = self.socket_template.as_ref()?;
+        if template.contains(APP_SOCKET_PID_TOKEN) {
+            let pid = self.pid()?;
+            return Some(template.replace(APP_SOCKET_PID_TOKEN, &pid.to_string()));
+        }
+        Some(template.clone())
     }
 
     pub fn set_pid(&self, pid: u32) {
@@ -337,7 +361,26 @@ impl App {
         let id = self.next_instance_id.fetch_add(1, Ordering::Relaxed);
         let config = self.config.read();
         let port = config.base_port + (id - 1) as u16;
-        let instance = Arc::new(Instance::new(id, port, config.version.clone()));
+        let socket_template = if cfg!(unix) {
+            Some(
+                config
+                    .app_socket_dir
+                    .join(format!(
+                        "tako-app-{}-{APP_SOCKET_PID_TOKEN}.sock",
+                        config.name
+                    ))
+                    .to_string_lossy()
+                    .to_string(),
+            )
+        } else {
+            None
+        };
+        let instance = Arc::new(Instance::new(
+            id,
+            port,
+            config.version.clone(),
+            socket_template,
+        ));
         self.instances.insert(id, instance.clone());
         instance
     }
@@ -473,7 +516,7 @@ mod tests {
 
     #[test]
     fn test_instance_state_transitions() {
-        let instance = Instance::new(1, 3000, "v1".to_string());
+        let instance = Instance::new(1, 3000, "v1".to_string(), None);
         assert_eq!(instance.state(), InstanceState::Starting);
 
         instance.set_state(InstanceState::Ready);
@@ -485,7 +528,7 @@ mod tests {
 
     #[test]
     fn test_instance_request_tracking() {
-        let instance = Instance::new(1, 3000, "v1".to_string());
+        let instance = Instance::new(1, 3000, "v1".to_string(), None);
         assert_eq!(instance.requests_total(), 0);
 
         instance.request_started();
@@ -505,6 +548,7 @@ mod tests {
             name: "test-app".to_string(),
             version: "v1".to_string(),
             base_port: 3000,
+            app_socket_dir: PathBuf::from("/tmp"),
             ..Default::default()
         };
         let app = App::new(config, tx);
@@ -520,6 +564,10 @@ mod tests {
         let i3 = app.allocate_instance();
         assert_eq!(i3.id, 3);
         assert_eq!(i3.port, 3002);
+        assert_eq!(
+            i3.socket_template(),
+            Some("/tmp/tako-app-test-app-{pid}.sock")
+        );
     }
 
     #[test]
@@ -529,6 +577,7 @@ mod tests {
             name: "test-app".to_string(),
             version: "v1".to_string(),
             base_port: 3000,
+            app_socket_dir: PathBuf::from("/tmp"),
             ..Default::default()
         };
         let app = App::new(config, tx);
@@ -542,6 +591,22 @@ mod tests {
 
         let v2_instance = app.allocate_instance();
         assert_eq!(v2_instance.build_version(), "v2");
+    }
+
+    #[test]
+    fn test_instance_socket_path_resolves_pid_placeholder() {
+        let instance = Instance::new(
+            1,
+            3000,
+            "v1".to_string(),
+            Some("/tmp/tako-app-test-app-{pid}.sock".to_string()),
+        );
+        assert_eq!(instance.socket_path(), None);
+        instance.set_pid(4242);
+        assert_eq!(
+            instance.socket_path().as_deref(),
+            Some("/tmp/tako-app-test-app-4242.sock")
+        );
     }
 
     #[test]
