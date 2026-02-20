@@ -171,7 +171,7 @@ Each target server should have:
 - Use `tako logs --env <environment>` to stream remote logs.
 - Use `tako releases ls --env <environment>` to inspect release/build history before deciding on rollback.
 - Use `tako releases rollback <release-id> --env <environment>` to roll back to a previous release id using normal rolling-update behavior.
-- `tako upgrade` remote flow refreshes installer-managed packages/binary with `sudo /usr/local/bin/tako-server-upgrade` (install-only mode, no immediate restart), then performs candidate handoff restart.
+- `tako upgrade` remote flow refreshes installer-managed packages/binary with `sudo /usr/local/bin/tako-server-upgrade` (install-only mode, no immediate restart), then performs candidate handoff restart (systemd restart when available, manual primary restart fallback on non-systemd hosts).
 - HTTP requests are redirected to HTTPS by default (307 with `Cache-Control: no-store`).
 - Exceptions on HTTP: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status`.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.

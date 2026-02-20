@@ -733,17 +733,25 @@ fn candidate_log_path(data_dir: &str, owner: &str) -> String {
         .to_string()
 }
 
-fn build_candidate_start_command(
-    info: &ServerRuntimeInfo,
-    candidate_socket: &str,
-    owner: &str,
-) -> String {
-    let log_file = candidate_log_path(&info.data_dir, owner);
+fn primary_log_path(data_dir: &str, owner: &str) -> String {
+    Path::new(data_dir)
+        .join("upgrade-logs")
+        .join(format!("primary-{owner}.log"))
+        .to_string_lossy()
+        .to_string()
+}
 
+fn build_server_start_command(
+    info: &ServerRuntimeInfo,
+    socket_path: &str,
+    log_file: &str,
+    instance_port_offset: u16,
+    remove_socket_file: bool,
+) -> String {
     let mut args: Vec<String> = vec![
         "/usr/local/bin/tako-server".to_string(),
         "--socket".to_string(),
-        candidate_socket.to_string(),
+        socket_path.to_string(),
         "--data-dir".to_string(),
         info.data_dir.clone(),
         "--port".to_string(),
@@ -753,7 +761,7 @@ fn build_candidate_start_command(
         "--renewal-interval-hours".to_string(),
         info.renewal_interval_hours.to_string(),
         "--instance-port-offset".to_string(),
-        UPGRADE_INSTANCE_PORT_OFFSET.to_string(),
+        instance_port_offset.to_string(),
     ];
 
     if info.no_acme {
@@ -774,8 +782,14 @@ fn build_candidate_start_command(
         .collect::<Vec<_>>()
         .join(" ");
 
+    let remove_socket_prefix = if remove_socket_file {
+        format!("rm -f {} && ", shell_single_quote(socket_path))
+    } else {
+        String::new()
+    };
+
     format!(
-        "mkdir -p {} && nohup {} > {} 2>&1 & echo $!",
+        "mkdir -p {} && {}nohup {} > {} 2>&1 & echo $!",
         shell_single_quote(
             Path::new(&log_file)
                 .parent()
@@ -783,9 +797,54 @@ fn build_candidate_start_command(
                 .to_string_lossy()
                 .as_ref()
         ),
+        remove_socket_prefix,
         cmd,
         shell_single_quote(&log_file)
     )
+}
+
+fn build_candidate_start_command(
+    info: &ServerRuntimeInfo,
+    candidate_socket: &str,
+    owner: &str,
+) -> String {
+    build_server_start_command(
+        info,
+        candidate_socket,
+        &candidate_log_path(&info.data_dir, owner),
+        UPGRADE_INSTANCE_PORT_OFFSET,
+        false,
+    )
+}
+
+fn build_primary_start_command(info: &ServerRuntimeInfo, owner: &str) -> String {
+    build_server_start_command(
+        info,
+        &info.socket,
+        &primary_log_path(&info.data_dir, owner),
+        info.instance_port_offset,
+        true,
+    )
+}
+
+fn build_stop_primary_command(socket_path: &str) -> String {
+    let marker = format!("--socket {}", socket_path);
+    format!(
+        "pattern={} && \
+if command -v pkill >/dev/null 2>&1; then pkill -TERM -f \"$pattern\" 2>/dev/null || true; fi && \
+if command -v pgrep >/dev/null 2>&1; then \
+  pids=$(pgrep -f \"$pattern\" 2>/dev/null || true); \
+  if [ -n \"$pids\" ]; then kill -TERM $pids 2>/dev/null || true; fi; \
+else \
+  pids=$(ps -eo pid,args | grep -F -- \"$pattern\" | grep -v grep | awk '{{print $1}}'); \
+  if [ -n \"$pids\" ]; then kill -TERM $pids 2>/dev/null || true; fi; \
+fi",
+        shell_single_quote(&marker),
+    )
+}
+
+fn systemd_restart_probe_command() -> &'static str {
+    "(command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] && systemctl show-environment >/dev/null 2>&1 && echo yes) || echo no"
 }
 
 fn parse_candidate_pid(stdout: &str) -> Option<u32> {
@@ -837,6 +896,81 @@ async fn wait_for_primary_ready(
         "timed out waiting for primary service after restart: {}",
         last_err
     ))
+}
+
+async fn wait_for_primary_socket_offline(
+    ssh: &crate::ssh::SshClient,
+    socket_path: &str,
+    timeout: Duration,
+) -> Result<(), String> {
+    let start = std::time::Instant::now();
+    while start.elapsed() < timeout {
+        match ssh.tako_hello_on_socket(socket_path).await {
+            Ok(()) => {
+                tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
+            }
+            Err(_) => return Ok(()),
+        }
+    }
+
+    Err(format!(
+        "timed out waiting for primary process to stop on {}",
+        socket_path
+    ))
+}
+
+async fn systemd_restart_available(ssh: &crate::ssh::SshClient) -> Result<bool, String> {
+    let output = ssh
+        .exec(systemd_restart_probe_command())
+        .await
+        .map_err(|e| format!("Failed to probe service manager: {}", e))?;
+    Ok(output.stdout.trim() == "yes")
+}
+
+async fn restart_primary_service_for_upgrade(
+    ssh: &mut crate::ssh::SshClient,
+    active_info: &ServerRuntimeInfo,
+    owner: &str,
+) -> Result<(), String> {
+    if systemd_restart_available(ssh).await? {
+        output::with_spinner_async("Restarting primary service...", ssh.tako_restart())
+            .await
+            .map_err(|e| format!("Restart failed: {}", e))?
+            .map_err(|e| format!("Restart failed: {}", e))?;
+        return Ok(());
+    }
+
+    output::warning("systemd not detected; using manual primary process restart");
+
+    let stop_cmd = build_stop_primary_command(&active_info.socket);
+    output::with_spinner_async("Stopping primary process...", ssh.exec_checked(&stop_cmd))
+        .await
+        .map_err(|e| format!("Manual stop failed: {}", e))?
+        .map_err(|e| format!("Manual stop failed: {}", e))?;
+
+    output::with_spinner_async(
+        "Waiting for primary process to stop...",
+        wait_for_primary_socket_offline(ssh, &active_info.socket, UPGRADE_SOCKET_WAIT_TIMEOUT),
+    )
+    .await
+    .map_err(|e| format!("Manual stop readiness check failed: {}", e))?
+    .map_err(|e| format!("Manual stop readiness check failed: {}", e))?;
+
+    let start_cmd = build_primary_start_command(active_info, owner);
+    let start_output =
+        output::with_spinner_async("Starting primary process...", ssh.exec_checked(&start_cmd))
+            .await
+            .map_err(|e| format!("Manual start failed: {}", e))?
+            .map_err(|e| format!("Manual start failed: {}", e))?;
+    let pid = parse_candidate_pid(&start_output.stdout).ok_or_else(|| {
+        format!(
+            "Could not parse primary PID from output: {}",
+            start_output.stdout.trim()
+        )
+    })?;
+    output::step(&format!("Primary pid {}", pid));
+
+    Ok(())
 }
 
 pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -922,10 +1056,7 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
         .map_err(|e| format!("Candidate readiness check failed: {}", e))?;
         output::success("Candidate is ready");
 
-        output::with_spinner_async("Restarting primary service...", ssh.tako_restart())
-            .await
-            .map_err(|e| format!("Restart failed: {}", e))?
-            .map_err(|e| format!("Restart failed: {}", e))?;
+        restart_primary_service_for_upgrade(&mut ssh, &active_info, &owner).await?;
 
         let _ = output::with_spinner_async(
             "Waiting for primary service readiness...",
@@ -1046,6 +1177,42 @@ mod tests {
         assert!(cmd.contains("--instance-port-offset"));
         assert!(cmd.contains("10000"));
         assert!(cmd.contains("/var/run/tako/tako-next.sock"));
+    }
+
+    #[test]
+    fn primary_start_command_uses_primary_socket_and_current_offset() {
+        let info = ServerRuntimeInfo {
+            mode: tako_core::UpgradeMode::Normal,
+            socket: "/var/run/tako/tako.sock".to_string(),
+            data_dir: "/opt/tako".to_string(),
+            http_port: 80,
+            https_port: 443,
+            no_acme: true,
+            acme_staging: false,
+            acme_email: None,
+            renewal_interval_hours: 12,
+            instance_port_offset: 0,
+        };
+        let cmd = build_primary_start_command(&info, "owner");
+        assert!(cmd.contains("rm -f '/var/run/tako/tako.sock'"));
+        assert!(cmd.contains("/var/run/tako/tako.sock"));
+        assert!(cmd.contains("--instance-port-offset"));
+        assert!(cmd.contains("'0'"));
+    }
+
+    #[test]
+    fn stop_primary_command_targets_socket_marker() {
+        let cmd = build_stop_primary_command("/var/run/tako/tako.sock");
+        assert!(cmd.contains("pattern='--socket /var/run/tako/tako.sock'"));
+        assert!(cmd.contains("pkill -TERM -f"));
+    }
+
+    #[test]
+    fn systemd_restart_probe_command_checks_runtime_path_and_systemctl() {
+        let cmd = systemd_restart_probe_command();
+        assert!(cmd.contains("command -v systemctl"));
+        assert!(cmd.contains("/run/systemd/system"));
+        assert!(cmd.contains("echo yes"));
     }
 
     #[test]

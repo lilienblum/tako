@@ -348,7 +348,7 @@ Remote server upgrade strategy (default all configured servers, or selected via 
 - Connect over SSH as `tako`
 - Require/install-refresh helper `/usr/local/bin/tako-server-upgrade`
 - Run `sudo -n /usr/local/bin/tako-server-upgrade` (installer refresh without immediate restart)
-- Run `tako servers upgrade <name>` handoff flow to restart/promote with candidate overlap
+- Run `tako servers upgrade <name>` handoff flow to restart/promote with candidate overlap (systemd restart when available; manual primary restart fallback on non-systemd hosts)
 
 `--cli-only` disables remote upgrades; `--servers-only` skips local CLI upgrade.
 
@@ -579,7 +579,9 @@ Single-host upgrade handoff with a temporary candidate process:
 3. CLI starts a temporary candidate `tako-server` process on a temporary socket path (for example `/var/run/tako/tako-upgrade-<owner>.sock`) with the same HTTP/HTTPS listener ports.
 4. Candidate startup uses an instance port offset (`--instance-port-offset 10000`) so candidate-managed app instances avoid local port collisions with the active server during overlap.
 5. CLI waits until the candidate answers protocol `hello` on the temporary socket.
-6. CLI restarts the primary systemd service (inherits graceful stop behavior: `KillMode=control-group`, `TimeoutStopSec=30min`).
+6. CLI restarts the primary runtime:
+   - systemd hosts: `systemctl restart tako-server` (inherits graceful stop behavior: `KillMode=control-group`, `TimeoutStopSec=30min`)
+   - non-systemd hosts: CLI performs manual restart (TERM primary process matched by socket marker, waits for primary socket to go offline, starts new primary process with the active socket and original instance-port offset)
 7. CLI waits for the primary management socket to become healthy again.
 8. CLI stops the temporary candidate process and releases upgrade mode (`exit_upgrading`).
 

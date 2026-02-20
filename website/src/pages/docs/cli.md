@@ -63,7 +63,7 @@ Notes:
   - Homebrew installs use `brew upgrade tako`
   - Cargo installs under `~/.cargo/bin/tako` use `cargo install tako --locked`
   - fallback uses hosted installer script (`https://tako.sh/install`) via `curl`/`wget`
-- remote server upgrades run an installer refresh helper (`sudo -n /usr/local/bin/tako-server-upgrade`) and then run the candidate handoff flow (`tako servers upgrade <NAME>`).
+- remote server upgrades run an installer refresh helper (`sudo -n /usr/local/bin/tako-server-upgrade`) and then run the candidate handoff flow (`tako servers upgrade <NAME>`), using systemd restart when available and manual primary restart fallback on non-systemd hosts.
 
 ## `releases` Subcommands
 

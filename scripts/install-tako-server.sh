@@ -123,6 +123,27 @@ EOF
   chmod 0755 /usr/local/bin/tako-server-upgrade
 }
 
+install_sudoers_rules() {
+  if ! need_cmd sudo; then
+    return
+  fi
+
+  systemctl_path="$(command -v systemctl || true)"
+  journalctl_path="$(command -v journalctl || true)"
+
+  if [ -n "$systemctl_path" ] && [ -n "$journalctl_path" ]; then
+    cat > /etc/sudoers.d/tako <<EOF
+$TAKO_USER ALL=(root) NOPASSWD: $systemctl_path reload tako-server, $systemctl_path restart tako-server, $systemctl_path is-active tako-server, $systemctl_path status tako-server, $journalctl_path -u tako-server *, /usr/local/bin/tako-server-upgrade
+EOF
+  else
+    cat > /etc/sudoers.d/tako <<EOF
+$TAKO_USER ALL=(root) NOPASSWD: /usr/local/bin/tako-server-upgrade
+EOF
+  fi
+
+  chmod 440 /etc/sudoers.d/tako
+}
+
 maybe_prompt_ssh_pubkey() {
   if [ -n "${TAKO_SSH_PUBKEY:-}" ]; then
     return
@@ -486,6 +507,7 @@ fi
 mkdir -p "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")"
 chown -R "$TAKO_USER":"$TAKO_USER" "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")" 2>/dev/null || true
 install_upgrade_helper
+install_sudoers_rules
 
 maybe_prompt_ssh_pubkey
 
@@ -513,15 +535,6 @@ else
 fi
 
 if systemd_is_usable; then
-  systemctl_path="$(command -v systemctl || true)"
-  journalctl_path="$(command -v journalctl || true)"
-  if [ -n "$systemctl_path" ] && [ -n "$journalctl_path" ]; then
-    cat > /etc/sudoers.d/tako <<EOF
-$TAKO_USER ALL=(root) NOPASSWD: $systemctl_path reload tako-server, $systemctl_path restart tako-server, $systemctl_path is-active tako-server, $systemctl_path status tako-server, $journalctl_path -u tako-server *, /usr/local/bin/tako-server-upgrade
-EOF
-    chmod 440 /etc/sudoers.d/tako
-  fi
-
   cat > /etc/systemd/system/tako-server.service <<EOF
 [Unit]
 Description=Tako Server
