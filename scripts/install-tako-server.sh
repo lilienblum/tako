@@ -23,6 +23,7 @@ set -eu
 #   TAKO_INSTALL_MISE       default: 1 (set 0/false to skip mise install)
 #   TAKO_MISE_VERSION       optional mise version for installer (default: latest)
 #   TAKO_MISE_BIN           default: /usr/local/bin/mise
+#   TAKO_RESTART_SERVICE    default: 1 (set 0/false for install-only refresh; no service restart)
 
 if [ "$(id -u)" -ne 0 ]; then
   echo "error: run as root (use sudo)" >&2
@@ -41,6 +42,7 @@ TAKO_DOWNLOAD_BASE_URL="${TAKO_DOWNLOAD_BASE_URL:-https://github.com/lilienblum/
 TAKO_INSTALL_MISE="${TAKO_INSTALL_MISE:-1}"
 TAKO_MISE_VERSION="${TAKO_MISE_VERSION:-}"
 TAKO_MISE_BIN="${TAKO_MISE_BIN:-/usr/local/bin/mise}"
+TAKO_RESTART_SERVICE="${TAKO_RESTART_SERVICE:-1}"
 PATH="/root/.local/bin:$PATH"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
@@ -84,6 +86,41 @@ ensure_privileged_bind_capability() {
   fi
 
   echo "warning: setcap not found; non-systemd/manual runs on :80/:443 may require root." >&2
+}
+
+install_upgrade_helper() {
+  cat > /usr/local/bin/tako-server-upgrade <<EOF
+#!/bin/sh
+set -eu
+
+if [ "\$(id -u)" -ne 0 ]; then
+  echo "error: run as root (use sudo)" >&2
+  exit 1
+fi
+
+run_installer() {
+  TAKO_USER='$TAKO_USER' \\
+  TAKO_HOME='$TAKO_HOME' \\
+  TAKO_SOCKET='$TAKO_SOCKET' \\
+  TAKO_INSTALL_MISE='$TAKO_INSTALL_MISE' \\
+  TAKO_MISE_VERSION='$TAKO_MISE_VERSION' \\
+  TAKO_MISE_BIN='$TAKO_MISE_BIN' \\
+  TAKO_DOWNLOAD_BASE_URL='$TAKO_DOWNLOAD_BASE_URL' \\
+  TAKO_SERVER_URL='${TAKO_SERVER_URL:-}' \\
+  TAKO_RESTART_SERVICE=0 \\
+  sh
+}
+
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL https://tako.sh/install-server | run_installer
+elif command -v wget >/dev/null 2>&1; then
+  wget -qO- https://tako.sh/install-server | run_installer
+else
+  echo "error: missing downloader (need curl or wget)" >&2
+  exit 1
+fi
+EOF
+  chmod 0755 /usr/local/bin/tako-server-upgrade
 }
 
 maybe_prompt_ssh_pubkey() {
@@ -448,6 +485,7 @@ fi
 
 mkdir -p "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")"
 chown -R "$TAKO_USER":"$TAKO_USER" "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")" 2>/dev/null || true
+install_upgrade_helper
 
 maybe_prompt_ssh_pubkey
 
@@ -479,7 +517,7 @@ if systemd_is_usable; then
   journalctl_path="$(command -v journalctl || true)"
   if [ -n "$systemctl_path" ] && [ -n "$journalctl_path" ]; then
     cat > /etc/sudoers.d/tako <<EOF
-$TAKO_USER ALL=(root) NOPASSWD: $systemctl_path reload tako-server, $systemctl_path restart tako-server, $systemctl_path is-active tako-server, $systemctl_path status tako-server, $journalctl_path -u tako-server *
+$TAKO_USER ALL=(root) NOPASSWD: $systemctl_path reload tako-server, $systemctl_path restart tako-server, $systemctl_path is-active tako-server, $systemctl_path status tako-server, $journalctl_path -u tako-server *, /usr/local/bin/tako-server-upgrade
 EOF
     chmod 440 /etc/sudoers.d/tako
   fi
@@ -509,12 +547,17 @@ WantedBy=multi-user.target
 EOF
 
   systemctl daemon-reload
-  systemctl enable --now tako-server
-  systemctl --no-pager status tako-server || true
-  if ! systemctl is-active --quiet tako-server; then
-    echo "error: tako-server failed to start. Recent logs:" >&2
-    journalctl -u tako-server --no-pager -n 60 >&2 || true
-    exit 1
+  if is_enabled "$TAKO_RESTART_SERVICE"; then
+    systemctl enable --now tako-server
+    systemctl --no-pager status tako-server || true
+    if ! systemctl is-active --quiet tako-server; then
+      echo "error: tako-server failed to start. Recent logs:" >&2
+      journalctl -u tako-server --no-pager -n 60 >&2 || true
+      exit 1
+    fi
+  else
+    systemctl enable tako-server >/dev/null 2>&1 || true
+    echo "OK install refreshed without restarting tako-server (TAKO_RESTART_SERVICE=0)"
   fi
 else
   echo "warning: systemd not found; start tako-server manually:" >&2

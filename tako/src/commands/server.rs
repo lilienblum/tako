@@ -839,7 +839,7 @@ async fn wait_for_primary_ready(
     ))
 }
 
-async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::ServersToml;
     use crate::ssh::{SshClient, SshConfig};
 

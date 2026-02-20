@@ -248,13 +248,24 @@ cargo install tako
 
 `cargo install tako` installs both `tako` and `tako-dev-server` binaries from the same package/version.
 
-Upgrade the local CLI to the latest version:
+Upgrade local CLI and remote servers:
 
 ```bash
 tako upgrade
 ```
 
-`tako upgrade` uses the hosted installer script at `https://tako.sh/install`.
+Default `tako upgrade` behavior:
+
+- Upgrades local CLI first.
+- Then upgrades remote `tako-server` on configured hosts (`~/.tako/config.toml`), including:
+  - install refresh (`sudo /usr/local/bin/tako-server-upgrade`) to pick up binary + installer-managed dependencies
+  - zero-downtime handoff (`tako servers upgrade` flow) to promote refreshed binary through candidate overlap
+
+Flags:
+
+- `--cli-only`: only local CLI upgrade
+- `--servers-only`: only remote server upgrades
+- `--server <name>` (repeatable): limit remote upgrades to selected configured servers
 
 ### Global options
 
@@ -324,11 +335,22 @@ Show all commands with brief descriptions.
 
 ### tako upgrade
 
-Upgrade the local `tako` CLI binary to the latest available release.
+Unified upgrade command for local CLI and remote server runtime.
 
-- Downloads and runs the same hosted installer script used by `curl -fsSL https://tako.sh/install | sh`
-- Requires either `curl` or `wget` on the local machine
-- Shows a spinner while installer execution is running in interactive terminals.
+CLI upgrade strategy:
+
+- Homebrew install detection: runs `brew upgrade tako`
+- Cargo install detection (`~/.cargo/bin/tako`): runs `cargo install tako --locked`
+- Default/fallback: downloads and runs hosted installer (`https://tako.sh/install`) via `curl`/`wget`
+
+Remote server upgrade strategy (default all configured servers, or selected via `--server`):
+
+- Connect over SSH as `tako`
+- Require/install-refresh helper `/usr/local/bin/tako-server-upgrade`
+- Run `sudo -n /usr/local/bin/tako-server-upgrade` (installer refresh without immediate restart)
+- Run `tako servers upgrade <name>` handoff flow to restart/promote with candidate overlap
+
+`--cli-only` disables remote upgrades; `--servers-only` skips local CLI upgrade.
 
 ### tako dev [--tui|--no-tui] [DIR]
 
@@ -562,6 +584,8 @@ Single-host upgrade handoff with a temporary candidate process:
 8. CLI stops the temporary candidate process and releases upgrade mode (`exit_upgrading`).
 
 On failure, CLI performs best-effort cleanup: stop candidate (if started) and release upgrade mode once primary is reachable.
+
+Top-level `tako upgrade` uses this handoff after running remote install refresh (`sudo /usr/local/bin/tako-server-upgrade`) on each target host.
 
 ### tako servers reload {server-name}
 
@@ -911,8 +935,10 @@ Installer SSH key behavior:
 - Installer ensures `nc` (netcat) is available so CLI management commands can talk to `/var/run/tako/tako.sock`.
 - Installer installs `mise` on the server (package-manager first; fallback to upstream installer when distro packages are unavailable).
 - Installer attempts to grant `CAP_NET_BIND_SERVICE` to `/usr/local/bin/tako-server` via `setcap` so non-systemd/manual runs can still bind `:80/:443` as a non-root user (warns when `setcap` is unavailable or fails).
+- Installer creates root-owned helper `/usr/local/bin/tako-server-upgrade` and grants `tako` sudo access to run it; helper re-runs hosted `install-server` with install-refresh mode (`TAKO_RESTART_SERVICE=0`) for remote package/binary updates.
 - Installer configures systemd with `KillMode=control-group` and `TimeoutStopSec=30min`, so restart/stop waits up to 30 minutes for graceful app shutdown across all service child processes before forced termination.
-- When systemd is available, installer verifies `tako-server` is active after `enable --now`; if startup fails, installer exits non-zero and prints recent service logs.
+- `TAKO_RESTART_SERVICE=0` runs installer in install-refresh mode (no immediate systemd restart).
+- When systemd is available and restart mode is enabled, installer verifies `tako-server` is active after `enable --now`; if startup fails, installer exits non-zero and prints recent service logs.
 
 Reference script in this repo: `scripts/install-tako-server.sh` (source for `/install-server`, alias `/server-install`).
 

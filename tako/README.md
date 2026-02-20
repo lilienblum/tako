@@ -31,6 +31,7 @@ Use `cargo run -p tako --bin tako -- --help` for current flags and subcommand he
 
 Operational behavior highlights:
 
+- `tako upgrade` upgrades local CLI and (by default) configured remote servers; use `--cli-only`, `--servers-only`, and repeatable `--server <name>` to scope behavior.
 - `tako servers status` prints one global snapshot and exits.
 - `tako servers upgrade <name>` performs a single-host upgrade handoff using a temporary candidate process and the server-side upgrade lock/mode.
 - Status output shows separate lines for concurrently running builds of the same app.
@@ -47,7 +48,7 @@ Operational behavior highlights:
 - `tako deploy` writes `app.json` in the deployed app directory and `tako-server` uses it to resolve the runtime start command.
 - `tako releases ls` shows release/build history for the current app and environment with commit metadata when available.
 - `tako releases rollback <release-id>` rolls target servers back to a previous release id using the normal rolling-update path.
-- `tako servers add` captures per-server target metadata (`arch`, `libc`) during SSH checks and stores it in `~/.tako/config.toml` under `[server_targets.<name>]`.
+- `tako servers add` captures per-server target metadata (`arch`, `libc`) during SSH checks and stores it directly in each `[[servers]]` entry in `~/.tako/config.toml`.
 - `tako deploy` requires valid target metadata for each selected server and does not probe targets during deploy.
 - `tako deploy` validates startup even for `instances = 0` (on-demand) by briefly starting one instance; deploy fails if startup health checks fail.
 
