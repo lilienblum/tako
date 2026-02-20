@@ -49,7 +49,7 @@ Tako is built to make local development smooth and production deploys boring (th
 
 - Built with Rust to be fast, reliable, and memory-safe.
 - Minimal resource footprint is a core principle.
-- Built on [Pingora](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/), Cloudflare's Rust proxy library that powers Cloudflare and is known for high performance.
+- Built on [Pingora](https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/), Cloudflare's Rust proxy library (Apache-2.0) that powers Cloudflare and is known for high performance.
 
 ## Ok, So Where Do I Sign?
 

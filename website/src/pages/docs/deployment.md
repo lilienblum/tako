@@ -173,6 +173,9 @@ Each target server should have:
 - HTTP requests are redirected to HTTPS by default (307 with `Cache-Control: no-store`).
 - Exceptions on HTTP: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status`.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.
+- Edge proxy response caching is enabled for proxied `GET`/`HEAD` requests (websocket upgrades excluded).
+- Cache admission follows response `Cache-Control` / `Expires` headers with no implicit TTL defaults.
+- Cache keys are host + URI, with in-memory LRU limits of 256 MiB total and 8 MiB max per cached response body.
 - Requests without internal host are routed to apps normally.
 - Exact path route matches normalize trailing slash (`example.com/api` and `example.com/api/` are equivalent).
 - Static asset requests (file-extension paths) are served from the deployed app `public/` directory when present, including path-prefixed routes via prefix-stripped static lookup.

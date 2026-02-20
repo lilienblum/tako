@@ -26,6 +26,7 @@ async-trait = "0.1"
 pingora-core = { version = "0.7", default-features = false, features = ["openssl"] }
 pingora-proxy = { version = "0.7", default-features = false, features = ["openssl"] }
 pingora-http = "0.7"
+pingora-cache = "0.7"
 openssl = "0.10"
 thiserror = "2.0"
 dashmap = "6.1"

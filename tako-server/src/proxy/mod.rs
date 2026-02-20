@@ -19,6 +19,11 @@ use crate::tls::{
     create_sni_callbacks,
 };
 use async_trait::async_trait;
+use pingora_cache::cache_control::CacheControl;
+use pingora_cache::eviction::simple_lru;
+use pingora_cache::filters::{request_cacheable, resp_cacheable};
+use pingora_cache::lock::{CacheKeyLockImpl, CacheLock};
+use pingora_cache::{CacheKey, CacheMetaDefaults, MemCache, RespCacheable};
 use pingora_core::listeners::TcpSocketOptions;
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::prelude::*;
@@ -27,7 +32,8 @@ use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::{ProxyHttp, Session};
 use serde::Serialize;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
+use std::time::Duration;
 use tokio::sync::RwLock;
 
 /// Server status response for internal `tako.internal/status` endpoint
@@ -56,6 +62,52 @@ pub struct ProxyConfig {
     pub cert_dir: PathBuf,
     /// Whether to redirect HTTP to HTTPS
     pub redirect_http_to_https: bool,
+    /// Optional upstream response cache configuration
+    pub response_cache: Option<ResponseCacheConfig>,
+}
+
+/// Upstream response cache configuration
+#[derive(Debug, Clone)]
+pub struct ResponseCacheConfig {
+    /// Total cache capacity tracked by the LRU eviction manager
+    pub max_size_bytes: usize,
+    /// Maximum cacheable response body size per object
+    pub max_file_size_bytes: usize,
+    /// Cache lock timeout to collapse concurrent misses for the same key
+    pub lock_timeout: Duration,
+}
+
+impl Default for ResponseCacheConfig {
+    fn default() -> Self {
+        Self {
+            max_size_bytes: 256 * 1024 * 1024,    // 256 MiB
+            max_file_size_bytes: 8 * 1024 * 1024, // 8 MiB
+            lock_timeout: Duration::from_secs(5),
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ResponseCacheRuntime {
+    storage: &'static MemCache,
+    eviction: &'static simple_lru::Manager,
+    cache_lock: &'static CacheKeyLockImpl,
+    max_file_size_bytes: usize,
+}
+
+impl ResponseCacheRuntime {
+    fn new(config: &ResponseCacheConfig) -> Self {
+        let storage = Box::leak(Box::new(MemCache::new()));
+        let eviction = Box::leak(Box::new(simple_lru::Manager::new(config.max_size_bytes)));
+        let cache_lock = Box::leak(Box::new(CacheLock::new(config.lock_timeout)));
+        let cache_lock: &'static CacheKeyLockImpl = cache_lock;
+        Self {
+            storage,
+            eviction,
+            cache_lock,
+            max_file_size_bytes: config.max_file_size_bytes,
+        }
+    }
 }
 
 impl Default for ProxyConfig {
@@ -67,6 +119,7 @@ impl Default for ProxyConfig {
             dev_mode: false,
             cert_dir: PathBuf::from("/opt/tako/certs"),
             redirect_http_to_https: true,
+            response_cache: Some(ResponseCacheConfig::default()),
         }
     }
 }
@@ -81,6 +134,7 @@ impl ProxyConfig {
             dev_mode: true,
             cert_dir: PathBuf::from("./data/certs"),
             redirect_http_to_https: true,
+            response_cache: Some(ResponseCacheConfig::default()),
         }
     }
 }
@@ -98,6 +152,8 @@ pub struct TakoProxy {
 
     /// Cold start coordinator for on-demand apps
     cold_start: Arc<ColdStartManager>,
+    /// Shared upstream response cache runtime (optional)
+    response_cache: Option<ResponseCacheRuntime>,
 }
 
 impl TakoProxy {
@@ -107,12 +163,17 @@ impl TakoProxy {
         config: ProxyConfig,
         cold_start: Arc<ColdStartManager>,
     ) -> Self {
+        let response_cache = config
+            .response_cache
+            .as_ref()
+            .map(ResponseCacheRuntime::new);
         Self {
             lb,
             routes,
             config,
             challenge_handler: None,
             cold_start,
+            response_cache,
         }
     }
 
@@ -124,12 +185,17 @@ impl TakoProxy {
         tokens: ChallengeTokens,
         cold_start: Arc<ColdStartManager>,
     ) -> Self {
+        let response_cache = config
+            .response_cache
+            .as_ref()
+            .map(ResponseCacheRuntime::new);
         Self {
             lb,
             routes,
             config,
             challenge_handler: Some(ChallengeHandler::new(tokens)),
             cold_start,
+            response_cache,
         }
     }
 
@@ -573,6 +639,58 @@ impl ProxyHttp for TakoProxy {
         Ok(false)
     }
 
+    fn request_cache_filter(&self, session: &mut Session, _ctx: &mut Self::CTX) -> Result<()> {
+        let Some(cache) = self.response_cache else {
+            return Ok(());
+        };
+
+        if !request_is_proxy_cacheable(session.req_header()) {
+            return Ok(());
+        }
+
+        session.cache.enable(
+            cache.storage,
+            Some(cache.eviction),
+            None,
+            Some(cache.cache_lock),
+            None,
+        );
+        session
+            .cache
+            .set_max_file_size_bytes(cache.max_file_size_bytes);
+
+        Ok(())
+    }
+
+    fn cache_key_callback(&self, session: &Session, _ctx: &mut Self::CTX) -> Result<CacheKey> {
+        let host = session
+            .req_header()
+            .headers
+            .get("host")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("");
+        Ok(build_proxy_cache_key(
+            host,
+            &session.req_header().uri.to_string(),
+        ))
+    }
+
+    fn response_cache_filter(
+        &self,
+        session: &Session,
+        resp: &ResponseHeader,
+        _ctx: &mut Self::CTX,
+    ) -> Result<RespCacheable> {
+        if self.response_cache.is_none() {
+            return Ok(RespCacheable::Uncacheable(
+                pingora_cache::NoCacheReason::Custom("proxy_cache_disabled"),
+            ));
+        }
+
+        let authorization_present = session.req_header().headers.contains_key("authorization");
+        Ok(response_cacheability(resp, authorization_present))
+    }
+
     async fn upstream_peer(
         &self,
         session: &mut Session,
@@ -784,6 +902,34 @@ fn insert_body_headers(header: &mut ResponseHeader, content_type: &str, body: &s
     header.insert_header("Content-Type", content_type)?;
     header.insert_header("Content-Length", body.as_bytes().len().to_string())?;
     Ok(())
+}
+
+fn request_is_proxy_cacheable(request: &RequestHeader) -> bool {
+    request_cacheable(request) && !request.headers.contains_key("upgrade")
+}
+
+fn build_proxy_cache_key(host: &str, uri: &str) -> CacheKey {
+    CacheKey::new(
+        host.trim().to_ascii_lowercase(),
+        uri.as_bytes().to_vec(),
+        "",
+    )
+}
+
+fn response_cache_defaults() -> &'static CacheMetaDefaults {
+    static DEFAULTS: OnceLock<CacheMetaDefaults> = OnceLock::new();
+    DEFAULTS.get_or_init(|| CacheMetaDefaults::new(|_| None, 0, 0))
+}
+
+fn response_cacheability(resp: &ResponseHeader, authorization_present: bool) -> RespCacheable {
+    let response_for_cache = resp.clone();
+    let cache_control = CacheControl::from_resp_headers(&response_for_cache);
+    resp_cacheable(
+        cache_control.as_ref(),
+        response_for_cache,
+        authorization_present,
+        response_cache_defaults(),
+    )
 }
 
 fn path_looks_like_static_asset(path: &str) -> bool {
@@ -1194,6 +1340,7 @@ mod tests {
         assert!(config.enable_https);
         assert!(!config.dev_mode);
         assert!(config.redirect_http_to_https);
+        assert!(config.response_cache.is_some());
     }
 
     #[test]
@@ -1204,6 +1351,7 @@ mod tests {
         assert!(config.enable_https);
         assert!(config.dev_mode);
         assert!(config.redirect_http_to_https);
+        assert!(config.response_cache.is_some());
     }
 
     #[test]
@@ -1291,6 +1439,66 @@ mod tests {
             Some("for=192.0.2.60;proto=https;by=203.0.113.43")
         ));
         assert!(!should_redirect_http_request(true, true));
+    }
+
+    #[test]
+    fn request_is_cacheable_for_get_and_head_without_upgrade() {
+        let get = RequestHeader::build("GET", b"/assets/app.js", None).expect("build request");
+        let head = RequestHeader::build("HEAD", b"/assets/app.js", None).expect("build request");
+
+        assert!(request_is_proxy_cacheable(&get));
+        assert!(request_is_proxy_cacheable(&head));
+    }
+
+    #[test]
+    fn request_is_not_cacheable_for_upgrade_or_non_get_head_methods() {
+        let mut post =
+            RequestHeader::build("POST", b"/assets/app.js", None).expect("build request");
+        let mut get_upgrade = RequestHeader::build("GET", b"/socket", None).expect("build request");
+        get_upgrade
+            .insert_header("Upgrade", "websocket")
+            .expect("insert upgrade");
+        post.insert_header("Content-Type", "application/json")
+            .expect("insert content type");
+
+        assert!(!request_is_proxy_cacheable(&post));
+        assert!(!request_is_proxy_cacheable(&get_upgrade));
+    }
+
+    #[test]
+    fn cache_key_includes_host_and_uri() {
+        let a = build_proxy_cache_key("app-a.example.com", "/assets/app.js?v=1");
+        let b = build_proxy_cache_key("app-b.example.com", "/assets/app.js?v=1");
+        let c = build_proxy_cache_key("app-a.example.com", "/assets/app.js?v=2");
+
+        assert_ne!(a.to_compact().primary, b.to_compact().primary);
+        assert_ne!(a.to_compact().primary, c.to_compact().primary);
+    }
+
+    #[test]
+    fn response_cacheability_requires_explicit_cache_directives() {
+        let mut without_directive =
+            ResponseHeader::build(200, Some(1)).expect("build response header");
+        without_directive
+            .insert_header("Content-Type", "text/plain")
+            .expect("insert content type");
+
+        let mut with_max_age = ResponseHeader::build(200, Some(2)).expect("build response header");
+        with_max_age
+            .insert_header("Content-Type", "text/plain")
+            .expect("insert content type");
+        with_max_age
+            .insert_header("Cache-Control", "public, max-age=60")
+            .expect("insert cache control");
+
+        assert!(matches!(
+            response_cacheability(&without_directive, false),
+            pingora_cache::RespCacheable::Uncacheable(_)
+        ));
+        assert!(matches!(
+            response_cacheability(&with_max_age, false),
+            pingora_cache::RespCacheable::Cacheable(_)
+        ));
     }
 
     #[test]

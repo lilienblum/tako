@@ -927,6 +927,10 @@ Reference script in this repo: `scripts/install-tako-server.sh` (source for `/in
 - HTTP requests redirect to HTTPS (`307`, non-cacheable) by default.
 - Exceptions: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status` stay on HTTP.
 - Forwarded requests for private/local hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing, so local forwarding setups do not enter redirect loops.
+- Upstream response caching is enabled at the edge proxy for `GET`/`HEAD` requests (websocket upgrades are excluded).
+- Cache admission follows response headers (`Cache-Control` / `Expires`) with no implicit TTL defaults; responses without explicit cache directives are not stored.
+- Cache key includes request host + URI so different route hosts are isolated.
+- Proxy cache storage is in-memory with bounded LRU eviction (256 MiB total, 8 MiB per cached response body).
 - No application path namespace is reserved at the edge proxy. Non-internal-host requests are routed to apps.
 
 **Optional `/opt/tako/server-config.toml`:**

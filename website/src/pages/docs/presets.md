@@ -65,6 +65,7 @@ When preset build mode resolves to container, default Docker builder images are 
 Preset `build.exclude` adds extra patterns on top of runtime-base excludes (base-first, deduplicated), while preset `build.assets` replace runtime-base assets when set.
 JS runtime base presets use `mise` when available for local install/build steps, but do not require it; deploy `start` commands run through `mise` so server runtime follows packaged `mise.toml`.
 At runtime, `tako-server` prefers release `app.json` `start` command when present; runtime fallback applies only when `start` is missing.
+At runtime, edge proxy response caching stores proxied `GET`/`HEAD` responses only when app responses explicitly set cache directives (`Cache-Control` / `Expires`).
 
 ### Supported Keys
 

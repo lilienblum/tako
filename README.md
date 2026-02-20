@@ -111,4 +111,4 @@ Component-focused docs:
 
 ## License
 
-MIT
+Tako source code is licensed under MIT (`/LICENSE`).

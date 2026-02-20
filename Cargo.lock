@@ -5081,6 +5081,7 @@ dependencies = [
  "libc",
  "openssl",
  "parking_lot",
+ "pingora-cache",
  "pingora-core",
  "pingora-http",
  "pingora-proxy",

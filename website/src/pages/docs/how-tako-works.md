@@ -168,6 +168,9 @@ Remote TLS behavior:
 - `/.well-known/acme-challenge/*` remains on HTTP for ACME.
 - Internal `Host: tako.internal` + `/status` stays on HTTP.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.
+- Edge proxy response caching is enabled for proxied `GET`/`HEAD` requests (websocket upgrades excluded).
+- Cache admission follows response `Cache-Control` / `Expires` headers with no implicit TTL defaults.
+- Cache keys are host + URI, and cache storage is in-memory LRU (256 MiB total, 8 MiB max response body per object).
 - Non-internal-host requests are routed to apps normally (no reserved `/_tako/*` edge namespace).
 
 Certificate behavior:

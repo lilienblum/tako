@@ -101,6 +101,10 @@ Expected deploy behavior:
   - Expected: Tako verifies cached artifact checksum/size and automatically rebuilds if cache is invalid.
   - Expected: each deploy also prunes local `.tako/artifacts/` cache (best-effort), keeping 30 newest source archives and 90 newest target artifacts, and removing orphan target metadata files.
   - Fix: if needed, remove local cache directory `.tako/artifacts/` and redeploy.
+- `Unexpected edge response cache behavior`:
+  - Symptom: stale app response appears on repeated `GET`/`HEAD` requests.
+  - Expected: edge proxy caches only when response `Cache-Control` / `Expires` headers explicitly allow it.
+  - Fix: for dynamic/user-specific responses, send `Cache-Control: no-store` (or stricter private/no-cache directives) from the app.
 - `504 App startup timed out`:
   - Symptom: on-demand app (`instances = 0`) was scaled to zero and did not become healthy within startup timeout (30s default).
   - Fix: check startup logs and health probe readiness.

@@ -112,6 +112,7 @@ Hosted server install resolves Linux host `arch` + `libc` and downloads matching
 Hosted server install also installs `mise` (package-manager first, with upstream installer fallback when distro packages are unavailable).
 Each deploy also prunes local `.tako/artifacts/` cache (best-effort), keeping 30 newest source archives and 90 newest target artifacts, and removing orphan target metadata files.
 When deploy targets private/local route hostnames (for example `*.local`), `tako-server` generates self-signed certs for those routes during deploy instead of ACME issuance.
+Remote edge proxy response caching stores proxied `GET`/`HEAD` responses only when response `Cache-Control` / `Expires` headers explicitly allow caching.
 
 Name resolution for `.tako.local` is done via local split DNS:
 

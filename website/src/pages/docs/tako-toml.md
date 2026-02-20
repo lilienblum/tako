@@ -149,6 +149,7 @@ route = "api.example.com"
 - Exact path routes normalize trailing slash: `example.com/api` and `example.com/api/` are equivalent (both match `/api` and `/api/`).
 - Static asset requests (paths with file extensions) are served from the deployed app `public/` directory when present; for path-prefixed routes (`example.com/app/*`), static lookup also tries the prefix-stripped path.
 - Public route hostnames use ACME certificates; private/local hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) use self-signed certs generated during deploy.
+- Edge proxy response caching applies to proxied `GET`/`HEAD` requests when response `Cache-Control`/`Expires` headers explicitly allow caching (no implicit TTL defaults).
 - Path route examples:
   - `example.com/api/*` matches `/api`, `/api/`, and `/api/...`
   - `example.com/admin/*` matches `/admin`, `/admin/`, and `/admin/...`

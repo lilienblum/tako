@@ -140,6 +140,7 @@ Deploy note:
 - Bun release dependencies are installed on server before rollout (`bun install --production`).
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
 - For private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`), deploy provisions self-signed certs on the server instead of ACME.
+- Remote edge proxy caching stores proxied `GET`/`HEAD` responses only when response `Cache-Control`/`Expires` headers explicitly allow caching (no implicit TTL defaults).
 
 ## `secrets` Subcommands
 

@@ -1779,6 +1779,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dev_mode,
         cert_dir,
         redirect_http_to_https: true,
+        response_cache: Some(proxy::ResponseCacheConfig::default()),
     };
 
     // Start Pingora proxy
