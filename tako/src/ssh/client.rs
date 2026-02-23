@@ -523,22 +523,6 @@ impl SshClient {
             .collect())
     }
 
-    /// Send a signal to tako-server (via unix socket or systemctl)
-    pub async fn tako_reload(&self, app: Option<&str>) -> SshResult<()> {
-        let cmd = match app {
-            Some(app_name) => {
-                let payload = serde_json::to_string(&Command::Reload {
-                    app: app_name.to_string(),
-                })
-                .map_err(|e| SshError::CommandFailed(e.to_string()))?;
-                Self::socket_request_command(&payload)
-            }
-            None => "sudo systemctl reload tako-server".to_string(),
-        };
-        self.exec_checked(&cmd).await?;
-        Ok(())
-    }
-
     /// Restart tako-server
     pub async fn tako_restart(&self) -> SshResult<()> {
         self.exec_checked("sudo systemctl restart tako-server")

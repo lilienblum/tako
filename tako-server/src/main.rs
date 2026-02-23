@@ -427,12 +427,6 @@ impl ServerState {
                 }
                 self.rollback_app(&app, &version).await
             }
-            Command::Reload { app } => {
-                if let Some(resp) = self.reject_mutating_when_upgrading("reload").await {
-                    return resp;
-                }
-                self.reload_app(&app).await
-            }
             Command::UpdateSecrets { app, secrets } => {
                 if let Some(resp) = self.reject_mutating_when_upgrading("update-secrets").await {
                     return resp;
@@ -906,79 +900,6 @@ impl ServerState {
             idle_timeout,
         )
         .await
-    }
-
-    async fn reload_app(&self, app_name: &str) -> Response {
-        tracing::info!(app = app_name, "Reloading app with rolling restart");
-
-        let app = match self.app_manager.get_app(app_name) {
-            Some(app) => app,
-            None => return Response::error(format!("App not found: {}", app_name)),
-        };
-
-        // Check if app is running - if not, just start it
-        if app.get_instances().is_empty() {
-            tracing::info!(app = app_name, "App has no instances, starting fresh");
-            match self.app_manager.start_app(app_name).await {
-                Ok(()) => {
-                    app.set_state(AppState::Running);
-                    return Response::ok(serde_json::json!({
-                        "status": "started",
-                        "app": app_name,
-                        "note": "App was not running, started fresh"
-                    }));
-                }
-                Err(e) => {
-                    app.set_state(AppState::Error);
-                    return Response::error(format!("Start failed: {}", e));
-                }
-            }
-        }
-
-        // Mark app as deploying during rolling update
-        let previous_state = app.state();
-        app.set_state(AppState::Deploying);
-
-        // Get current config for rolling update
-        let config = app.config.read().clone();
-
-        // Create rolling updater with default config
-        let rolling_config = RollingUpdateConfig::default();
-        let updater = RollingUpdater::new(self.app_manager.spawner().clone(), rolling_config);
-
-        // Perform rolling update
-        let target_new_instances =
-            target_new_instances_for_build(config.min_instances, app.get_instances().len());
-        match updater.update(&app, config, target_new_instances).await {
-            Ok(result) => {
-                if result.success {
-                    app.set_state(AppState::Running);
-                    Response::ok(serde_json::json!({
-                        "status": "reloaded",
-                        "app": app_name,
-                        "new_instances": result.new_instances,
-                        "old_instances": result.old_instances,
-                        "rolled_back": false
-                    }))
-                } else {
-                    // Rollback occurred
-                    app.set_state(previous_state);
-                    Response::error(
-                        serde_json::json!({
-                            "status": "rollback",
-                            "app": app_name,
-                            "error": result.error,
-                            "rolled_back": true
-                        })
-                        .to_string(),
-                    )
-                }
-            }
-            Err(e) => {
-                app.set_state(AppState::Error);
-                Response::error(format!("Rolling update failed: {}", e))
-            }
-        }
     }
 
     async fn update_secrets(

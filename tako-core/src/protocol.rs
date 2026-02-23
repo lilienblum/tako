@@ -55,9 +55,6 @@ pub enum Command {
     /// List all configured routes (all apps)
     Routes,
 
-    /// Reload configuration
-    Reload { app: String },
-
     /// Update secrets for an app
     UpdateSecrets {
         app: String,

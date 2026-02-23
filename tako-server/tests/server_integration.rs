@@ -437,34 +437,6 @@ mod health_check {
     }
 }
 
-mod rolling_update {
-    use super::*;
-
-    #[test]
-    fn test_reload_missing_app_returns_error() {
-        if !require_localhost_bind() {
-            return;
-        }
-
-        let server = TestServer::start();
-
-        let response =
-            server.send_command(&serde_json::json!({ "command": "reload", "app": "missing" }));
-        assert_eq!(
-            response.get("status").and_then(|s| s.as_str()),
-            Some("error")
-        );
-
-        let message = response
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or_default();
-        assert!(
-            message.contains("App not found"),
-            "expected app not found error, got: {response}"
-        );
-    }
-}
 
 mod protocol {
 

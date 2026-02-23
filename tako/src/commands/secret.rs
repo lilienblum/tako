@@ -624,10 +624,6 @@ async fn sync_to_server(
         return Err(format!("tako-server error (update-secrets): {response}").into());
     }
 
-    // Try to reload, but don't fail if app isn't running.
-    let reload_cmd = build_reload_command(app_name)?;
-    let _ = ssh.tako_command(&reload_cmd).await;
-
     ssh.disconnect().await?;
 
     Ok(())
@@ -642,15 +638,6 @@ fn build_update_secrets_command(
         secrets: secrets.clone(),
     })
     .map_err(|e| format!("Failed to serialize update-secrets command: {e}").into())
-}
-
-fn build_reload_command(
-    app_name: &str,
-) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
-    serde_json::to_string(&Command::Reload {
-        app: app_name.to_string(),
-    })
-    .map_err(|e| format!("Failed to serialize reload command: {e}").into())
 }
 
 fn tako_response_has_error(response: &str) -> bool {

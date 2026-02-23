@@ -56,12 +56,6 @@ pub enum ServerCommands {
         name: String,
     },
 
-    /// Reload configuration on a server
-    Reload {
-        /// Server name
-        name: String,
-    },
-
     /// Show global deployment status across configured servers
     Status,
 }
@@ -101,7 +95,6 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
         ServerCommands::Ls => list_servers().await,
         ServerCommands::Restart { name } => restart_server(&name).await,
         ServerCommands::Upgrade { name } => upgrade_server(&name).await,
-        ServerCommands::Reload { name } => reload_server(&name).await,
         ServerCommands::Status => crate::commands::status::run().await,
     }
 }
@@ -1203,44 +1196,6 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
 
     let _ = ssh.disconnect().await;
     upgrade_result.map_err(|e| e.into())
-}
-
-async fn reload_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::config::ServersToml;
-    use crate::ssh::{SshClient, SshConfig};
-
-    let servers = ServersToml::load()?;
-
-    let server = servers
-        .get(name)
-        .ok_or_else(|| format!("Server '{}' not found.", name))?;
-
-    let ssh_config = SshConfig::from_server(&server.host, server.port);
-    let mut ssh = SshClient::new(ssh_config);
-    let connect_result = output::with_spinner_async(
-        format!("Connecting to {}", output::emphasized(name)),
-        ssh.connect(),
-    )
-    .await?;
-    connect_result?;
-
-    let reload_result =
-        output::with_spinner_async("Reloading configuration...", ssh.tako_reload(None)).await?;
-
-    match reload_result {
-        Ok(()) => {
-            output::success("Configuration reloaded");
-        }
-        Err(e) => {
-            output::error(&format!("Reload failed: {}", e));
-            ssh.disconnect().await?;
-            return Err(format!("Failed to reload configuration: {}", e).into());
-        }
-    }
-
-    ssh.disconnect().await?;
-
-    Ok(())
 }
 
 #[cfg(test)]
