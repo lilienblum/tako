@@ -56,8 +56,7 @@
     "build:index": "bun build ./src/index.ts --outdir ./dist --target bun",
     "build:adapters": "bun build ./src/adapters/bun.ts ./src/adapters/node.ts ./src/adapters/deno.ts --outdir ./dist --target bun",
     "build:vite": "bun build ./src/vite.ts --outdir ./dist --target node",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/bun": "catalog:dev",
