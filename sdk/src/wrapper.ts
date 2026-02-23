@@ -4,31 +4,24 @@
  * This is the internal wrapper that Tako uses to run user apps.
  * It handles:
  * - Unix socket server creation
- * - Connection to tako-server
- * - Ready/heartbeat signals
  * - Internal status endpoint (Host: tako.internal, Path: /status)
  * - Graceful shutdown
  *
  * Users don't interact with this directly - it's used by tako dev and tako-server.
  */
 
-import { ServerConnection } from "./connection";
 import { handleTakoEndpoint } from "./endpoints";
 import { resolveAppSocketPath } from "./socket-path";
 import { Tako } from "./tako";
-import type { FetchFunction, TakoStatus, TakoOptions } from "./types";
+import type { FetchFunction, TakoStatus } from "./types";
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 // Environment variables set by tako
 const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";
 const TAKO_INSTANCE = parseInt(process.env.TAKO_INSTANCE || "1", 10);
-const TAKO_SOCKET = process.env.TAKO_SOCKET;
 const TAKO_APP_SOCKET = process.env.TAKO_APP_SOCKET;
 const appSocketPath = resolveAppSocketPath(TAKO_APP_SOCKET);
-
-const DEFAULT_TAKO_SOCKET = "/var/run/tako/tako.sock";
-const serverSocketPath = TAKO_SOCKET || DEFAULT_TAKO_SOCKET;
 
 // Track startup time for uptime calculation
 const startedAt = Date.now();
@@ -53,7 +46,7 @@ function getStatus(): TakoStatus {
 /**
  * Create the app server
  */
-async function createAppServer(userFetch: FetchFunction, options: TakoOptions): Promise<void> {
+async function createAppServer(userFetch: FetchFunction): Promise<void> {
   // Build environment object from process.env
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -87,7 +80,7 @@ async function createAppServer(userFetch: FetchFunction, options: TakoOptions): 
     // Production mode: Unix socket
     console.log(`Starting Unix socket server at ${appSocketPath}`);
 
-    const server = Bun.serve({
+    Bun.serve({
       unix: appSocketPath,
       fetch: handleRequest,
     });
@@ -97,7 +90,7 @@ async function createAppServer(userFetch: FetchFunction, options: TakoOptions): 
     // Dev mode or fallback: TCP
     const port = parseInt(process.env.PORT || "3000", 10);
 
-    const server = Bun.serve({
+    Bun.serve({
       port,
       fetch: handleRequest,
     });
@@ -107,50 +100,6 @@ async function createAppServer(userFetch: FetchFunction, options: TakoOptions): 
 
   // Mark as healthy once server is listening
   currentStatus = "healthy";
-}
-
-/**
- * Connect to tako-server (production mode only)
- */
-export async function connectToServer(options: TakoOptions): Promise<void> {
-  if (!appSocketPath) {
-    return;
-  }
-
-  console.log(`Connecting to tako-server at ${serverSocketPath}`);
-
-  const connection = new ServerConnection(
-    serverSocketPath,
-    "app",
-    TAKO_VERSION,
-    TAKO_INSTANCE,
-    appSocketPath,
-    options,
-  );
-
-  try {
-    const ack = await connection.connect();
-    console.log(`Server acknowledged: ${ack.message}`);
-
-    // Start heartbeat
-    connection.startHeartbeat();
-
-    // Handle process signals
-    process.on("SIGTERM", () => {
-      console.log("Received SIGTERM");
-      currentStatus = "draining";
-      // Connection will handle shutdown
-    });
-
-    process.on("SIGINT", () => {
-      console.log("Received SIGINT");
-      connection.close();
-      process.exit(0);
-    });
-  } catch (err) {
-    console.error("Failed to connect to server:", err);
-    // Continue running anyway - server might be unavailable temporarily
-  }
 }
 
 /**
@@ -186,15 +135,11 @@ export async function run(userAppPath: string): Promise<void> {
     process.exit(1);
   }
 
-  // Get options from Tako instance if it exists
-  const takoInstance = Tako.getInstance();
-  const options: TakoOptions = takoInstance?.getOptions() || {};
+  // Get options from Tako instance if it exists (reserved for future use)
+  Tako.getInstance();
 
   // Create the app server
-  await createAppServer(userFetch, options);
-
-  // Connect to tako-server (production only)
-  await connectToServer(options);
+  await createAppServer(userFetch);
 
   console.log("Wrapper initialized successfully");
 }

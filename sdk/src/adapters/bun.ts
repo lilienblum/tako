@@ -7,12 +7,6 @@
  * ```typescript
  * import { Tako } from 'tako.sh/bun';
  *
- * const tako = new Tako({
- *   onConfigReload: (secrets) => {
- *     console.log('Config reloaded:', secrets);
- *   }
- * });
- *
  * export default function fetch(request: Request, env: Record<string, string>) {
  *   return new Response("Hello from Bun!");
  * }
@@ -21,7 +15,6 @@
 
 import { Tako } from "../tako";
 import type { TakoOptions, TakoStatus, FetchHandler } from "../types";
-import { ServerConnection } from "../connection";
 import { handleTakoEndpoint } from "../endpoints";
 import { resolveAppSocketPath } from "../socket-path";
 
@@ -41,7 +34,6 @@ function resolveFetch(handler: FetchHandler) {
  *
  * This wraps Bun.serve() with Tako functionality including:
  * - Internal status endpoint on Host `tako.internal` + `/status`
- * - Automatic heartbeat to tako-server
  * - Graceful shutdown handling
  */
 export function serve(
@@ -52,18 +44,13 @@ export function serve(
   },
 ): void {
   const port = options?.port ?? parseInt(process.env.PORT || "3000", 10);
-  const takoOptions = options?.tako ?? {};
   const userFetch = resolveFetch(handler);
 
   // Environment variables set by tako
-  const TAKO_SOCKET = process.env.TAKO_SOCKET;
   const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";
   const TAKO_INSTANCE = parseInt(process.env.TAKO_INSTANCE || "1", 10);
   const TAKO_APP_SOCKET = process.env.TAKO_APP_SOCKET;
   const appSocketPath = resolveAppSocketPath(TAKO_APP_SOCKET);
-
-  const DEFAULT_TAKO_SOCKET = "/var/run/tako/tako.sock";
-  const serverSocketPath = TAKO_SOCKET || DEFAULT_TAKO_SOCKET;
 
   const startedAt = Date.now();
   let status: TakoStatus["status"] = "starting";
@@ -124,27 +111,8 @@ export function serve(
 
   status = "healthy";
 
-  // Connect to tako-server in production
+  // Handle shutdown
   if (appSocketPath) {
-    const connection = new ServerConnection(
-      serverSocketPath,
-      "app",
-      TAKO_VERSION,
-      TAKO_INSTANCE,
-      appSocketPath,
-      takoOptions,
-    );
-
-    connection
-      .connect()
-      .then(() => {
-        connection.startHeartbeat();
-      })
-      .catch((err) => {
-        console.error("[tako.sh] Failed to connect to tako-server:", err);
-      });
-
-    // Handle shutdown
     process.on("SIGTERM", () => {
       status = "draining";
     });

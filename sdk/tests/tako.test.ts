@@ -21,12 +21,6 @@ describe("Tako", () => {
     expect(tako.getOptions()).toEqual({});
   });
 
-  test("creates instance with onConfigReload handler", () => {
-    const handler = () => {};
-    const tako = new Tako({ onConfigReload: handler });
-    expect(tako.getOptions().onConfigReload).toBe(handler);
-  });
-
   test("stores as singleton", () => {
     const tako = new Tako();
     expect(Tako.getInstance()).toBe(tako);
@@ -37,19 +31,6 @@ describe("Tako", () => {
     const tako2 = new Tako();
     expect(Tako.getInstance()).toBe(tako2);
     expect(Tako.getInstance()).not.toBe(tako1);
-  });
-
-  test("onConfigReload method returns this for chaining", () => {
-    const tako = new Tako();
-    const result = tako.onConfigReload(() => {});
-    expect(result).toBe(tako);
-  });
-
-  test("onConfigReload updates options", () => {
-    const tako = new Tako();
-    const handler = () => {};
-    tako.onConfigReload(handler);
-    expect(tako.getOptions().onConfigReload).toBe(handler);
   });
 
   describe("getEnv", () => {

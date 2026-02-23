@@ -44,9 +44,6 @@ impl Spawner {
         if let Some(socket_template) = instance.socket_template() {
             env.insert("TAKO_APP_SOCKET".to_string(), socket_template.to_string());
         }
-        if !config.tako_socket_path.is_empty() {
-            env.insert("TAKO_SOCKET".to_string(), config.tako_socket_path.clone());
-        }
         env.entry("NODE_ENV".to_string())
             .or_insert_with(|| "production".to_string());
 

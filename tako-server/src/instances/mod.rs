@@ -47,8 +47,6 @@ pub struct AppConfig {
     pub base_port: u16,
     /// Directory used for per-instance Unix sockets
     pub app_socket_dir: PathBuf,
-    /// tako-server management socket path (for `TAKO_SOCKET`)
-    pub tako_socket_path: String,
     /// Health check path
     pub health_check_path: String,
     /// Health check host header
@@ -74,7 +72,6 @@ impl Default for AppConfig {
             max_instances: 4,
             base_port: 3000,
             app_socket_dir: PathBuf::from("/var/run"),
-            tako_socket_path: "/var/run/tako/tako.sock".to_string(),
             health_check_path: "/status".to_string(),
             health_check_host: INTERNAL_STATUS_HOST.to_string(),
             health_check_interval: crate::defaults::HEALTH_CHECK_INTERVAL,

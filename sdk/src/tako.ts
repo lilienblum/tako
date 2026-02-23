@@ -13,13 +13,6 @@ import type { TakoOptions } from "./types";
  * ```typescript
  * import { Tako } from 'tako.sh';
  *
- * const tako = new Tako({
- *   onConfigReload: (secrets) => {
- *     // Reconnect to database with new credentials
- *     database.reconnect(secrets.DATABASE_URL);
- *   }
- * });
- *
  * export default {
  *   fetch(request, env) {
  *     return new Response("Hello!");
@@ -50,14 +43,6 @@ export class Tako {
    */
   getOptions(): TakoOptions {
     return this.options;
-  }
-
-  /**
-   * Register a config reload handler
-   */
-  onConfigReload(handler: (secrets: Record<string, string>) => void | Promise<void>): this {
-    this.options.onConfigReload = handler;
-    return this;
   }
 
   /**

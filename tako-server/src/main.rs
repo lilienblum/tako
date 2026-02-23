@@ -312,7 +312,6 @@ impl ServerState {
             config.base_port =
                 self.select_runtime_base_port(config.base_port, config.max_instances);
             config.app_socket_dir = self.runtime.app_socket_dir();
-            config.tako_socket_path = self.runtime.socket.clone();
 
             let app = self.app_manager.register_app(config.clone());
             self.load_balancer.register_app(app.clone());
@@ -521,7 +520,6 @@ impl ServerState {
                 config.min_instances = instances as u32;
                 config.idle_timeout = Duration::from_secs(idle_timeout as u64);
                 config.app_socket_dir = self.runtime.app_socket_dir();
-                config.tako_socket_path = self.runtime.socket.clone();
                 config.command = match command_for_release_dir(&config.cwd) {
                     Ok(cmd) => cmd,
                     Err(e) => {
@@ -548,7 +546,6 @@ impl ServerState {
                     max_instances: 4,
                     base_port: self.allocate_port_range(),
                     app_socket_dir: self.runtime.app_socket_dir(),
-                    tako_socket_path: self.runtime.socket.clone(),
                     idle_timeout: Duration::from_secs(idle_timeout as u64),
                     ..Default::default()
                 };

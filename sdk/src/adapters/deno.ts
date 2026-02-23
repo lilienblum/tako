@@ -5,13 +5,7 @@
  *
  * @example
  * ```typescript
- * import { Tako, serve } from 'tako.sh/deno';
- *
- * const tako = new Tako({
- *   onConfigReload: (secrets) => {
- *     console.log('Config reloaded:', secrets);
- *   }
- * });
+ * import { serve } from 'tako.sh/deno';
  *
  * serve((request: Request) => {
  *   return new Response("Hello from Deno!");

@@ -6,14 +6,8 @@
  *
  * @example
  * ```typescript
- * import { Tako, createMiddleware } from 'tako.sh/node';
+ * import { createMiddleware } from 'tako.sh/node';
  * import express from 'express';
- *
- * const tako = new Tako({
- *   onConfigReload: (secrets) => {
- *     console.log('Config reloaded:', secrets);
- *   }
- * });
  *
  * const app = express();
  * app.use(createMiddleware());
