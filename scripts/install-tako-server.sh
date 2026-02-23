@@ -88,7 +88,7 @@ ensure_privileged_bind_capability() {
   echo "warning: setcap not found; non-systemd/manual runs on :80/:443 may require root." >&2
 }
 
-if ! systemd_is_usable; then
+if is_enabled "$TAKO_RESTART_SERVICE" && ! systemd_is_usable; then
   echo "error: systemd is required for tako-server" >&2
   exit 1
 fi
