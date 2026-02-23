@@ -48,7 +48,6 @@ fn resolve_app_user() -> Option<(u32, u32)> {
 }
 
 impl Spawner {
-
     /// Spawn a new instance
     pub async fn spawn(&self, app: &App, instance: Arc<Instance>) -> Result<(), InstanceError> {
         let config = app.config.read().clone();
@@ -85,7 +84,6 @@ impl Spawner {
 
         #[cfg(unix)]
         if let Some((uid, gid)) = self.app_user {
-            use std::os::unix::process::CommandExt;
             child_cmd.uid(uid);
             child_cmd.gid(gid);
         }

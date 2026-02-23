@@ -530,6 +530,14 @@ impl SshClient {
         Ok(())
     }
 
+    /// Send SIGHUP to tako-server via systemd reload for zero-downtime binary swap.
+    /// Requires the connecting user to have sudo access for systemctl reload.
+    pub async fn tako_reload(&self) -> SshResult<()> {
+        self.exec_checked("sudo systemctl reload tako-server")
+            .await?;
+        Ok(())
+    }
+
     /// Get tako-server status
     pub async fn tako_status(&self) -> SshResult<String> {
         // Prefer probing the management unix socket directly. This works on

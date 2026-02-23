@@ -9,7 +9,7 @@
 //! - reload: Reload configuration
 
 use std::future::Future;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::net::{UnixListener, UnixStream};
 
 use tako_socket::serve_jsonl_connection;
@@ -19,26 +19,42 @@ pub use tako_core::{
     AppState, AppStatus, BuildStatus, Command, InstanceState, InstanceStatus, Response,
 };
 
-/// Management socket server
+/// Management socket server.
+///
+/// Binds a pid-specific socket (`tako-{pid}.sock`) and atomically swaps a
+/// stable symlink (the configured `path`) to point at it. This allows the new
+/// server process to take over the symlink before the old one drains, giving
+/// zero-downtime management socket handoff during reload.
 pub struct SocketServer {
-    path: String,
+    /// The stable symlink path that CLI clients connect to (e.g. tako.sock)
+    symlink_path: PathBuf,
+    /// The pid-specific actual socket path (e.g. tako-12345.sock)
+    actual_path: PathBuf,
 }
 
-fn prepare_socket_path(path: &Path) -> Result<(), std::io::Error> {
-    if path.exists() {
-        std::fs::remove_file(path)?;
+impl Drop for SocketServer {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.actual_path);
     }
-
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    Ok(())
 }
 
 impl SocketServer {
     pub fn new(path: impl Into<String>) -> Self {
-        Self { path: path.into() }
+        let symlink_path = PathBuf::from(path.into());
+        let dir = symlink_path
+            .parent()
+            .unwrap_or_else(|| Path::new("/var/run/tako"));
+        let pid = std::process::id();
+        let actual_path = dir.join(format!("tako-{pid}.sock"));
+        Self {
+            symlink_path,
+            actual_path,
+        }
+    }
+
+    /// The stable symlink path (used as the configured socket path by callers)
+    pub fn symlink_path(&self) -> &Path {
+        &self.symlink_path
     }
 
     /// Start listening for commands
@@ -47,11 +63,30 @@ impl SocketServer {
         F: Fn(Command) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Response> + Send + 'static,
     {
-        let path = Path::new(&self.path);
-        prepare_socket_path(path)?;
+        // Remove stale pid-specific socket file if present
+        let _ = std::fs::remove_file(&self.actual_path);
 
-        let listener = UnixListener::bind(&self.path)?;
-        tracing::info!("Management socket listening on {}", self.path);
+        if let Some(parent) = self.actual_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+
+        let listener = UnixListener::bind(&self.actual_path)?;
+
+        // Atomically swap symlink: write to a temp path then rename over the target.
+        // rename(2) is atomic so clients see either the old or new target, never nothing.
+        #[cfg(unix)]
+        {
+            let temp_link = self.symlink_path.with_extension("tmp");
+            let _ = std::fs::remove_file(&temp_link);
+            std::os::unix::fs::symlink(&self.actual_path, &temp_link)?;
+            std::fs::rename(&temp_link, &self.symlink_path)?;
+        }
+
+        tracing::info!(
+            actual = %self.actual_path.display(),
+            symlink = %self.symlink_path.display(),
+            "Management socket listening"
+        );
 
         let handler = std::sync::Arc::new(handler);
 
@@ -259,23 +294,15 @@ mod tests {
     }
 
     #[test]
-    fn test_prepare_socket_path_removes_stale_file_and_creates_parent() {
+    #[cfg(unix)]
+    fn test_socket_server_new_sets_pid_specific_actual_path() {
         let temp = TempDir::new().unwrap();
-        let socket_path = temp.path().join("nested").join("tako.sock");
-        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
-        std::fs::write(&socket_path, b"stale").unwrap();
-
-        prepare_socket_path(&socket_path).unwrap();
-
-        assert!(socket_path.parent().unwrap().exists());
-        assert!(!socket_path.exists(), "stale socket file should be removed");
-    }
-
-    #[test]
-    fn test_prepare_socket_path_without_parent_is_ok() {
-        let path = std::path::PathBuf::from("tako.sock");
-        prepare_socket_path(&path).unwrap();
-        assert!(!path.exists());
+        let symlink = temp.path().join("tako.sock");
+        let server = SocketServer::new(symlink.to_string_lossy().to_string());
+        let pid = std::process::id();
+        let expected_actual = temp.path().join(format!("tako-{pid}.sock"));
+        assert_eq!(server.actual_path, expected_actual);
+        assert_eq!(server.symlink_path, symlink);
     }
 
     #[tokio::test]
@@ -298,7 +325,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_run_replaces_stale_socket_file() {
+    #[cfg(unix)]
+    async fn test_run_creates_pid_socket_and_symlink() {
         let temp = TempDir::new().unwrap();
         let probe_path = temp.path().join("probe.sock");
         if std::os::unix::net::UnixListener::bind(&probe_path).is_err() {
@@ -306,11 +334,12 @@ mod tests {
         }
         let _ = std::fs::remove_file(&probe_path);
 
-        let socket_path = temp.path().join("sockdir").join("tako.sock");
-        std::fs::create_dir_all(socket_path.parent().unwrap()).unwrap();
-        std::fs::write(&socket_path, b"stale-file").unwrap();
+        let symlink_path = temp.path().join("sockdir").join("tako.sock");
+        std::fs::create_dir_all(symlink_path.parent().unwrap()).unwrap();
+        // Write a stale file where the symlink will go — it must be atomically replaced
+        std::fs::write(&symlink_path, b"stale-file").unwrap();
 
-        let path_str = socket_path.to_string_lossy().to_string();
+        let path_str = symlink_path.to_string_lossy().to_string();
         let server = SocketServer::new(path_str.clone());
         let server_task = tokio::spawn(async move {
             let _ = server
@@ -323,9 +352,10 @@ mod tests {
                 .await;
         });
 
+        // Wait until the symlink resolves to a connectable socket
         let mut ready = false;
         for _ in 0..100 {
-            if let Ok(meta) = std::fs::metadata(&socket_path)
+            if let Ok(meta) = std::fs::metadata(&symlink_path)
                 && meta.file_type().is_socket()
             {
                 ready = true;
@@ -333,7 +363,21 @@ mod tests {
             }
             sleep(Duration::from_millis(20)).await;
         }
-        assert!(ready, "socket was not created at {}", socket_path.display());
+        assert!(
+            ready,
+            "socket was not reachable via symlink {}",
+            symlink_path.display()
+        );
+
+        // Confirm the stable path is now a symlink (not a plain socket file)
+        assert!(
+            std::fs::symlink_metadata(&symlink_path)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "expected symlink at {}",
+            symlink_path.display()
+        );
 
         let mut client = UnixStream::connect(&path_str).await.unwrap();
         client.write_all(br#"{"command":"list"}"#).await.unwrap();

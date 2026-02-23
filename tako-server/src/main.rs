@@ -555,10 +555,8 @@ impl ServerState {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(
-                Path::new(path),
-                std::fs::Permissions::from_mode(0o750),
-            );
+            let _ =
+                std::fs::set_permissions(Path::new(path), std::fs::Permissions::from_mode(0o750));
         }
 
         // Read non-secret env vars from app.json in the release dir
@@ -1538,6 +1536,36 @@ fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
+/// Notify systemd that the server is ready (READY=1) and claim the main PID.
+/// Also sends SIGUSR1 to the parent process (if any) so the old server starts draining
+/// during a zero-downtime reload.
+fn sd_notify_ready() {
+    #[cfg(unix)]
+    {
+        // sd_notify via NOTIFY_SOCKET
+        if let Ok(socket_path) = std::env::var("NOTIFY_SOCKET") {
+            use std::os::unix::net::UnixDatagram;
+            if let Ok(sock) = UnixDatagram::unbound() {
+                let pid = std::process::id();
+                let msg = format!("READY=1\nMAINPID={pid}\n");
+                // Abstract sockets have a leading '@' which maps to '\0'
+                let path = if socket_path.starts_with('@') {
+                    format!("\0{}", &socket_path[1..])
+                } else {
+                    socket_path
+                };
+                let _ = sock.send_to(msg.as_bytes(), path);
+            }
+        }
+
+        // Signal parent to start draining (zero-downtime reload handoff)
+        let ppid = unsafe { libc::getppid() };
+        if ppid > 1 {
+            unsafe { libc::kill(ppid, libc::SIGUSR1) };
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     install_rustls_crypto_provider();
 
@@ -1842,6 +1870,42 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!("HTTPS enabled on port {}", args.tls_port);
     }
 
+    // Register SIGHUP and SIGUSR1 handlers before starting the proxy.
+    // SIGHUP  → spawn a new server process for zero-downtime reload.
+    // SIGUSR1 → new process is ready; send SIGTERM to self so Pingora drains gracefully.
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sighup = signal(SignalKind::hangup())
+            .expect("Failed to register SIGHUP handler");
+        rt.spawn(async move {
+            sighup.recv().await;
+            tracing::info!("SIGHUP received — spawning new server process for zero-downtime reload");
+            let exe = match std::env::current_exe() {
+                Ok(p) => p,
+                Err(e) => {
+                    tracing::error!("Failed to get current exe: {e}");
+                    return;
+                }
+            };
+            let args: Vec<String> = std::env::args().skip(1).collect();
+            match std::process::Command::new(&exe).args(&args).spawn() {
+                Ok(child) => tracing::info!(pid = child.id(), "New server process spawned"),
+                Err(e) => tracing::error!("Failed to spawn new server: {e}"),
+            }
+        });
+
+        let mut sigusr1 = signal(SignalKind::user_defined1())
+            .expect("Failed to register SIGUSR1 handler");
+        rt.spawn(async move {
+            sigusr1.recv().await;
+            tracing::info!("SIGUSR1 received — new process ready, starting graceful drain");
+            // Send SIGTERM to ourselves; Pingora's SIGTERM handler drains and exits.
+            unsafe { libc::kill(libc::getpid(), libc::SIGTERM) };
+        });
+    }
+
     let server = proxy::build_server_with_acme(
         state.load_balancer.clone(),
         state.routes(),
@@ -1851,7 +1915,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         state.cold_start(),
     )?;
 
-    // Run the server (this blocks)
+    // Notify systemd that the server is ready and claim the main PID.
+    // This also signals the parent process (old server during reload) to start draining.
+    sd_notify_ready();
+
+    // Run the server (this blocks until SIGTERM triggers graceful shutdown)
     server.run_forever();
 
     #[allow(unreachable_code)]

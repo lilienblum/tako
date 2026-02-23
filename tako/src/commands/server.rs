@@ -1,13 +1,10 @@
 use crate::output;
 use clap::Subcommand;
-use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tako_core::ServerRuntimeInfo;
 
-const UPGRADE_INSTANCE_PORT_OFFSET: u16 = 10_000;
 const UPGRADE_SOCKET_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const UPGRADE_POLL_INTERVAL: Duration = Duration::from_millis(500);
-const REMOTE_UPGRADE_HELPER: &str = "/usr/local/bin/tako-server-upgrade";
 
 #[derive(Subcommand)]
 pub enum ServerCommands {
@@ -694,10 +691,6 @@ async fn restart_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
 fn build_upgrade_owner(server_name: &str) -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -709,209 +702,27 @@ fn build_upgrade_owner(server_name: &str) -> String {
         .collect()
 }
 
-fn candidate_socket_path(active_socket: &str, owner: &str) -> String {
-    let parent = Path::new(active_socket)
-        .parent()
-        .unwrap_or_else(|| Path::new("/var/run/tako"));
-    parent
-        .join(format!("tako-{owner}.sock"))
-        .to_string_lossy()
-        .to_string()
-}
-
-fn candidate_log_path(data_dir: &str, owner: &str) -> String {
-    Path::new(data_dir)
-        .join("upgrade-logs")
-        .join(format!("candidate-{owner}.log"))
-        .to_string_lossy()
-        .to_string()
-}
-
-fn primary_log_path(data_dir: &str, owner: &str) -> String {
-    Path::new(data_dir)
-        .join("upgrade-logs")
-        .join(format!("primary-{owner}.log"))
-        .to_string_lossy()
-        .to_string()
-}
-
-fn build_server_start_command(
-    info: &ServerRuntimeInfo,
-    socket_path: &str,
-    log_file: &str,
-    instance_port_offset: u16,
-    remove_socket_file: bool,
-) -> String {
-    let mut args: Vec<String> = vec![
-        "/usr/local/bin/tako-server".to_string(),
-        "--socket".to_string(),
-        socket_path.to_string(),
-        "--data-dir".to_string(),
-        info.data_dir.clone(),
-        "--port".to_string(),
-        info.http_port.to_string(),
-        "--tls-port".to_string(),
-        info.https_port.to_string(),
-        "--renewal-interval-hours".to_string(),
-        info.renewal_interval_hours.to_string(),
-        "--instance-port-offset".to_string(),
-        instance_port_offset.to_string(),
-    ];
-
-    if info.no_acme {
-        args.push("--no-acme".to_string());
-    } else {
-        if info.acme_staging {
-            args.push("--acme-staging".to_string());
-        }
-        if let Some(email) = &info.acme_email {
-            args.push("--acme-email".to_string());
-            args.push(email.clone());
-        }
-    }
-
-    let cmd = args
-        .into_iter()
-        .map(|arg| shell_single_quote(&arg))
-        .collect::<Vec<_>>()
-        .join(" ");
-
-    let remove_socket_prefix = if remove_socket_file {
-        format!("rm -f {} && ", shell_single_quote(socket_path))
-    } else {
-        String::new()
-    };
-
-    format!(
-        "mkdir -p {} && {}nohup {} > {} 2>&1 & echo $!",
-        shell_single_quote(
-            Path::new(&log_file)
-                .parent()
-                .unwrap_or_else(|| Path::new("/tmp"))
-                .to_string_lossy()
-                .as_ref()
-        ),
-        remove_socket_prefix,
-        cmd,
-        shell_single_quote(&log_file)
-    )
-}
-
-fn build_candidate_start_command(
-    info: &ServerRuntimeInfo,
-    candidate_socket: &str,
-    owner: &str,
-) -> String {
-    build_server_start_command(
-        info,
-        candidate_socket,
-        &candidate_log_path(&info.data_dir, owner),
-        UPGRADE_INSTANCE_PORT_OFFSET,
-        false,
-    )
-}
-
-fn build_primary_start_command(info: &ServerRuntimeInfo, owner: &str) -> String {
-    build_server_start_command(
-        info,
-        &info.socket,
-        &primary_log_path(&info.data_dir, owner),
-        info.instance_port_offset,
-        true,
-    )
-}
-
-fn build_stop_primary_command(socket_path: &str) -> String {
-    let marker = format!("--socket {}", socket_path);
-    format!(
-        "pattern={} && \
-if command -v pkill >/dev/null 2>&1; then pkill -TERM -f \"$pattern\" 2>/dev/null || true; fi && \
-if command -v pgrep >/dev/null 2>&1; then \
-  pids=$(pgrep -f \"$pattern\" 2>/dev/null || true); \
-  if [ -n \"$pids\" ]; then kill -TERM $pids 2>/dev/null || true; fi; \
-else \
-  pids=$(ps -eo pid,args | grep -F -- \"$pattern\" | grep -v grep | awk '{{print $1}}'); \
-  if [ -n \"$pids\" ]; then kill -TERM $pids 2>/dev/null || true; fi; \
-fi",
-        shell_single_quote(&marker),
-    )
-}
-
-fn systemd_restart_probe_command() -> &'static str {
-    "(command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ] && systemctl show-environment >/dev/null 2>&1 && echo yes) || echo no"
-}
-
-fn remote_upgrade_helper_command() -> String {
-    format!("sudo -n {}", shell_single_quote(REMOTE_UPGRADE_HELPER))
-}
-
-fn format_missing_remote_helper_message() -> String {
-    format!(
-        "Remote upgrade helper '{}' is missing. Run `curl -fsSL https://tako.sh/install-server | sh` as root on that host once, then retry.",
-        REMOTE_UPGRADE_HELPER
-    )
-}
-
 fn first_non_empty_line(value: &str) -> Option<&str> {
     value.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
-fn format_remote_helper_failure(output: &crate::ssh::CommandOutput) -> String {
+fn remote_installer_command() -> String {
+    // Run the tako-server installer as root; the connecting operator must have sudo.
+    "sudo sh -c 'curl -fsSL https://tako.sh/install-server | TAKO_RESTART_SERVICE=0 sh'".to_string()
+}
+
+fn format_installer_failure(output: &crate::ssh::CommandOutput) -> String {
     let combined = output.combined();
-    let message = first_non_empty_line(combined.trim()).unwrap_or("remote installer helper failed");
+    let message =
+        first_non_empty_line(combined.trim()).unwrap_or("remote installer failed");
     let lower = message.to_ascii_lowercase();
-
-    if lower.contains("command not found") || lower.contains("no such file") {
-        return format_missing_remote_helper_message();
-    }
-
     if lower.contains("password") || lower.contains("not allowed") || lower.contains("sorry") {
-        return format!(
-            "Remote user does not have permission to run '{}'. Re-run `curl -fsSL https://tako.sh/install-server | sh` as root to install/update sudoers policy.",
-            REMOTE_UPGRADE_HELPER
-        );
+        return "Remote user does not have sudo access. Ensure the connecting SSH user can run 'sudo sh' on the server.".to_string();
     }
-
     format!(
-        "Remote installer helper failed with exit code {}: {}",
+        "Remote installer failed with exit code {}: {}",
         output.exit_code, message
     )
-}
-
-fn should_keep_candidate_running_on_error(
-    primary_restart_attempted: bool,
-    primary_ready: bool,
-) -> bool {
-    primary_restart_attempted && !primary_ready
-}
-
-fn parse_candidate_pid(stdout: &str) -> Option<u32> {
-    stdout
-        .lines()
-        .map(str::trim)
-        .find_map(|line| line.parse::<u32>().ok())
-}
-
-async fn wait_for_candidate_socket_ready(
-    ssh: &crate::ssh::SshClient,
-    socket_path: &str,
-    timeout: Duration,
-) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    let mut last_err = String::new();
-    while start.elapsed() < timeout {
-        match ssh.tako_hello_on_socket(socket_path).await {
-            Ok(()) => return Ok(()),
-            Err(e) => {
-                last_err = e.to_string();
-                tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
-            }
-        }
-    }
-    Err(format!(
-        "timed out waiting for candidate socket {}: {}",
-        socket_path, last_err
-    ))
 }
 
 async fn wait_for_primary_ready(
@@ -936,92 +747,6 @@ async fn wait_for_primary_ready(
     ))
 }
 
-async fn wait_for_primary_socket_offline(
-    ssh: &crate::ssh::SshClient,
-    socket_path: &str,
-    timeout: Duration,
-) -> Result<(), String> {
-    let start = std::time::Instant::now();
-    while start.elapsed() < timeout {
-        match ssh.tako_hello_on_socket(socket_path).await {
-            Ok(()) => {
-                tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
-            }
-            Err(_) => return Ok(()),
-        }
-    }
-
-    Err(format!(
-        "timed out waiting for primary process to stop on {}",
-        socket_path
-    ))
-}
-
-async fn systemd_restart_available(ssh: &crate::ssh::SshClient) -> Result<bool, String> {
-    let output = ssh
-        .exec(systemd_restart_probe_command())
-        .await
-        .map_err(|e| format!("Failed to probe service manager: {}", e))?;
-    Ok(output.stdout.trim() == "yes")
-}
-
-async fn restart_primary_service_for_upgrade(
-    ssh: &mut crate::ssh::SshClient,
-    active_info: &ServerRuntimeInfo,
-    owner: &str,
-) -> Result<(), String> {
-    if systemd_restart_available(ssh).await? {
-        output::with_spinner_async("Restarting primary service...", ssh.tako_restart())
-            .await
-            .map_err(|e| format!("Restart failed: {}", e))?
-            .map_err(|e| format!("Restart failed: {}", e))?;
-        return Ok(());
-    }
-
-    output::warning("systemd not detected; using manual primary process restart");
-
-    let stop_cmd = build_stop_primary_command(&active_info.socket);
-    output::with_spinner_async("Stopping primary process...", ssh.exec_checked(&stop_cmd))
-        .await
-        .map_err(|e| format!("Manual stop failed: {}", e))?
-        .map_err(|e| format!("Manual stop failed: {}", e))?;
-
-    output::with_spinner_async(
-        "Waiting for primary process to stop...",
-        wait_for_primary_socket_offline(ssh, &active_info.socket, UPGRADE_SOCKET_WAIT_TIMEOUT),
-    )
-    .await
-    .map_err(|e| format!("Manual stop readiness check failed: {}", e))?
-    .map_err(|e| format!("Manual stop readiness check failed: {}", e))?;
-
-    let start_cmd = build_primary_start_command(active_info, owner);
-    let start_output =
-        output::with_spinner_async("Starting primary process...", ssh.exec_checked(&start_cmd))
-            .await
-            .map_err(|e| format!("Manual start failed: {}", e))?
-            .map_err(|e| format!("Manual start failed: {}", e))?;
-    let pid = parse_candidate_pid(&start_output.stdout).ok_or_else(|| {
-        format!(
-            "Could not parse primary PID from output: {}",
-            start_output.stdout.trim()
-        )
-    })?;
-    output::step(&format!("Primary pid {}", pid));
-
-    Ok(())
-}
-
-async fn remote_upgrade_helper_available(
-    ssh: &crate::ssh::SshClient,
-) -> Result<bool, crate::ssh::SshError> {
-    let cmd = format!(
-        "test -x {} && echo yes || echo no",
-        shell_single_quote(REMOTE_UPGRADE_HELPER)
-    );
-    let output = ssh.exec(&cmd).await?;
-    Ok(output.stdout.trim() == "yes")
-}
-
 pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::ServersToml;
     use crate::ssh::{SshClient, SshConfig};
@@ -1042,10 +767,6 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
 
     let owner = build_upgrade_owner(name);
     let mut upgrade_mode_entered = false;
-    let mut candidate_pid: Option<u32> = None;
-    let mut candidate_socket_for_cleanup: Option<String> = None;
-    let mut primary_restart_attempted = false;
-    let mut primary_ready = false;
 
     let upgrade_result: Result<(), String> = async {
         let status = ssh
@@ -1054,37 +775,23 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
             .map_err(|e| format!("Failed to query tako-server status: {}", e))?;
         if status != "active" {
             return Err(format!(
-                "tako-server must be active before upgrade handoff (status: {}).",
+                "tako-server must be active before upgrade (status: {}).",
                 status
             ));
         }
 
-        let helper_available = output::with_spinner_async(
-            "Checking remote upgrade helper...",
-            remote_upgrade_helper_available(&ssh),
+        // Install/update binary without restarting the service
+        let install_output = output::with_spinner_async(
+            "Installing updated tako-server binary...",
+            ssh.exec(&remote_installer_command()),
         )
         .await
-        .map_err(|e| format!("Failed to check remote upgrade helper: {}", e))?
-        .map_err(|e| format!("Failed to check remote upgrade helper: {}", e))?;
-        if !helper_available {
-            return Err(format_missing_remote_helper_message());
+        .map_err(|e| format!("Failed to run installer: {}", e))?
+        .map_err(|e| format!("Failed to run installer: {}", e))?;
+        if !install_output.success() {
+            return Err(format_installer_failure(&install_output));
         }
-
-        // Refresh the installer-managed binary/dependencies first so the next primary start
-        // uses the same path that initial host provisioning uses.
-        let refresh_output = output::with_spinner_async(
-            "Refreshing remote server install...",
-            ssh.exec(&remote_upgrade_helper_command()),
-        )
-        .await
-        .map_err(|e| format!("Failed to run remote installer helper: {}", e))?
-        .map_err(|e| format!("Failed to run remote installer helper: {}", e))?;
-        if !refresh_output.success() {
-            return Err(format_remote_helper_failure(&refresh_output));
-        }
-        output::success("Server install refreshed");
-
-        output::step(&format!("Upgrade owner: {}", owner));
+        output::success("Binary updated");
 
         output::with_spinner_async(
             "Entering upgrading mode...",
@@ -1096,102 +803,45 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
         upgrade_mode_entered = true;
         output::success("Upgrading mode enabled");
 
+        // Trigger zero-downtime reload: SIGHUP → new binary spawns → SIGUSR1 → old drains
+        output::with_spinner_async("Reloading tako-server (zero-downtime)...", ssh.tako_reload())
+            .await
+            .map_err(|e| format!("Reload failed: {}", e))?
+            .map_err(|e| format!("Reload failed: {}", e))?;
+
+        // Wait for the new process to bind the management socket
         let active_info =
             output::with_spinner_async("Reading active runtime config...", ssh.tako_server_info())
                 .await
                 .map_err(|e| format!("Failed to read runtime config: {}", e))?
                 .map_err(|e| format!("Failed to read runtime config: {}", e))?;
 
-        let candidate_socket = candidate_socket_path(&active_info.socket, &owner);
-        candidate_socket_for_cleanup = Some(candidate_socket.clone());
-        let start_cmd = build_candidate_start_command(&active_info, &candidate_socket, &owner);
-
-        let start_output = output::with_spinner_async(
-            "Starting candidate server...",
-            ssh.exec_checked(&start_cmd),
-        )
-        .await
-        .map_err(|e| format!("Failed to start candidate server: {}", e))?
-        .map_err(|e| format!("Failed to start candidate server: {}", e))?;
-        let pid = parse_candidate_pid(&start_output.stdout).ok_or_else(|| {
-            format!(
-                "Could not parse candidate PID from output: {}",
-                start_output.stdout.trim()
-            )
-        })?;
-        candidate_pid = Some(pid);
-        output::step(&format!(
-            "Candidate socket: {} (pid {})",
-            candidate_socket, pid
-        ));
-
         output::with_spinner_async(
-            "Waiting for candidate readiness...",
-            wait_for_candidate_socket_ready(&ssh, &candidate_socket, UPGRADE_SOCKET_WAIT_TIMEOUT),
-        )
-        .await
-        .map_err(|e| format!("Candidate readiness check failed: {}", e))?
-        .map_err(|e| format!("Candidate readiness check failed: {}", e))?;
-        output::success("Candidate is ready");
-
-        primary_restart_attempted = true;
-        restart_primary_service_for_upgrade(&mut ssh, &active_info, &owner).await?;
-
-        let _ = output::with_spinner_async(
-            "Waiting for primary service readiness...",
+            "Waiting for new server to be ready...",
             wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT),
         )
         .await
-        .map_err(|e| format!("Primary readiness check failed: {}", e))?
-        .map_err(|e| format!("Primary readiness check failed: {}", e))?;
-        primary_ready = true;
-        output::success("Primary service is ready");
-
-        if let Some(pid) = candidate_pid.take() {
-            let _ = ssh.exec(&format!("kill {} 2>/dev/null || true", pid)).await;
-            output::step(&format!("Stopped candidate pid {}", pid));
-        }
+        .map_err(|e| format!("Readiness check failed: {}", e))?
+        .map_err(|e| format!("Readiness check failed: {}", e))?;
+        output::success(&format!(
+            "New server is ready (socket: {})",
+            active_info.socket
+        ));
 
         output::with_spinner_async("Exiting upgrading mode...", ssh.tako_exit_upgrading(&owner))
             .await
             .map_err(|e| format!("Failed to exit upgrading mode: {}", e))?
             .map_err(|e| format!("Failed to exit upgrading mode: {}", e))?;
         upgrade_mode_entered = false;
-        output::success("Upgrade handoff complete");
+        output::success("Upgrade complete");
 
         Ok(())
     }
     .await;
 
-    if upgrade_result.is_err() {
-        let keep_candidate =
-            should_keep_candidate_running_on_error(primary_restart_attempted, primary_ready);
-
-        if let Some(pid) = candidate_pid.take() {
-            if keep_candidate {
-                // After primary restart has been attempted, keep the ready candidate online to
-                // avoid traffic loss while operators recover the primary runtime.
-                output::warning(&format!(
-                    "Primary is not ready after restart; keeping candidate pid {} running to preserve traffic.",
-                    pid
-                ));
-                if let Some(candidate_socket) = candidate_socket_for_cleanup.as_deref() {
-                    output::muted(&format!("Candidate socket: {}", candidate_socket));
-                }
-            } else {
-                let _ = ssh.exec(&format!("kill {} 2>/dev/null || true", pid)).await;
-            }
-        }
-        if upgrade_mode_entered {
-            if keep_candidate {
-                output::warning(
-                    "Upgrade mode may remain enabled until the primary runtime is healthy again.",
-                );
-            } else {
-                let _ = wait_for_primary_ready(&mut ssh, Duration::from_secs(30)).await;
-                let _ = ssh.tako_exit_upgrading(&owner).await;
-            }
-        }
+    if upgrade_result.is_err() && upgrade_mode_entered {
+        let _ = wait_for_primary_ready(&mut ssh, Duration::from_secs(30)).await;
+        let _ = ssh.tako_exit_upgrading(&owner).await;
     }
 
     let _ = ssh.disconnect().await;
@@ -1203,105 +853,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn candidate_socket_path_keeps_runtime_directory() {
-        let socket = candidate_socket_path("/var/run/tako/tako.sock", "upgrade-owner");
-        assert_eq!(socket, "/var/run/tako/tako-upgrade-owner.sock");
-    }
-
-    #[test]
     fn build_upgrade_owner_is_shell_safe() {
         let owner = build_upgrade_owner("prod-1");
         assert!(owner.contains("upgrade-prod-1-"));
         assert!(owner.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
-    }
-
-    #[test]
-    fn parse_candidate_pid_reads_first_numeric_line() {
-        assert_eq!(parse_candidate_pid("12345\n"), Some(12345));
-        assert_eq!(parse_candidate_pid("not-a-pid\n"), None);
-        assert_eq!(parse_candidate_pid("note\n6789\n"), Some(6789));
-    }
-
-    #[test]
-    fn candidate_start_command_includes_offset_and_socket() {
-        let info = ServerRuntimeInfo {
-            mode: tako_core::UpgradeMode::Normal,
-            socket: "/var/run/tako/tako.sock".to_string(),
-            data_dir: "/opt/tako".to_string(),
-            http_port: 80,
-            https_port: 443,
-            no_acme: true,
-            acme_staging: false,
-            acme_email: None,
-            renewal_interval_hours: 12,
-            instance_port_offset: 0,
-        };
-        let cmd = build_candidate_start_command(&info, "/var/run/tako/tako-next.sock", "owner");
-        assert!(cmd.contains("--instance-port-offset"));
-        assert!(cmd.contains("10000"));
-        assert!(cmd.contains("/var/run/tako/tako-next.sock"));
-    }
-
-    #[test]
-    fn primary_start_command_uses_primary_socket_and_current_offset() {
-        let info = ServerRuntimeInfo {
-            mode: tako_core::UpgradeMode::Normal,
-            socket: "/var/run/tako/tako.sock".to_string(),
-            data_dir: "/opt/tako".to_string(),
-            http_port: 80,
-            https_port: 443,
-            no_acme: true,
-            acme_staging: false,
-            acme_email: None,
-            renewal_interval_hours: 12,
-            instance_port_offset: 0,
-        };
-        let cmd = build_primary_start_command(&info, "owner");
-        assert!(cmd.contains("rm -f '/var/run/tako/tako.sock'"));
-        assert!(cmd.contains("/var/run/tako/tako.sock"));
-        assert!(cmd.contains("--instance-port-offset"));
-        assert!(cmd.contains("'0'"));
-    }
-
-    #[test]
-    fn stop_primary_command_targets_socket_marker() {
-        let cmd = build_stop_primary_command("/var/run/tako/tako.sock");
-        assert!(cmd.contains("pattern='--socket /var/run/tako/tako.sock'"));
-        assert!(cmd.contains("pkill -TERM -f"));
-    }
-
-    #[test]
-    fn systemd_restart_probe_command_checks_runtime_path_and_systemctl() {
-        let cmd = systemd_restart_probe_command();
-        assert!(cmd.contains("command -v systemctl"));
-        assert!(cmd.contains("/run/systemd/system"));
-        assert!(cmd.contains("echo yes"));
-    }
-
-    #[test]
-    fn candidate_is_preserved_only_after_primary_restart_attempt_without_readiness() {
-        assert!(!should_keep_candidate_running_on_error(false, false));
-        assert!(!should_keep_candidate_running_on_error(false, true));
-        assert!(should_keep_candidate_running_on_error(true, false));
-        assert!(!should_keep_candidate_running_on_error(true, true));
-    }
-
-    #[test]
-    fn missing_remote_helper_message_points_to_install_server_script() {
-        let message = format_missing_remote_helper_message();
-        assert!(message.contains("tako-server-upgrade"));
-        assert!(message.contains("install-server"));
-    }
-
-    #[test]
-    fn remote_helper_failure_reports_permission_issue() {
-        let output = crate::ssh::CommandOutput {
-            exit_code: 1,
-            stdout: String::new(),
-            stderr: "sudo: a password is required".to_string(),
-        };
-        let message = format_remote_helper_failure(&output);
-        assert!(message.contains("does not have permission"));
     }
 
     #[test]
