@@ -116,7 +116,7 @@ mod tests {
                 version,
                 path,
                 routes,
-                env,
+                secrets,
                 instances,
                 idle_timeout,
             } => {
@@ -124,7 +124,7 @@ mod tests {
                 assert_eq!(version, "1.0.0");
                 assert!(path.contains("releases"));
                 assert_eq!(routes.len(), 2);
-                assert!(env.is_empty());
+                assert!(secrets.is_empty());
                 assert_eq!(instances, 0);
                 assert_eq!(idle_timeout, 300);
             }

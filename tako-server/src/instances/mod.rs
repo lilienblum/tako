@@ -37,8 +37,10 @@ pub struct AppConfig {
     pub command: Vec<String>,
     /// Working directory
     pub cwd: PathBuf,
-    /// Environment variables
-    pub env: HashMap<String, String>,
+    /// Non-secret environment variables (read from app.json in release dir)
+    pub env_vars: HashMap<String, String>,
+    /// Secret environment variables (read from per-app secrets.json)
+    pub secrets: HashMap<String, String>,
     /// Minimum instances (0 = on-demand)
     pub min_instances: u32,
     /// Maximum instances
@@ -67,7 +69,8 @@ impl Default for AppConfig {
             path: PathBuf::new(),
             command: vec![],
             cwd: PathBuf::new(),
-            env: HashMap::new(),
+            env_vars: HashMap::new(),
+            secrets: HashMap::new(),
             min_instances: 1,
             max_instances: 4,
             base_port: 3000,

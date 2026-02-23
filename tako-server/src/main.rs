@@ -15,7 +15,7 @@ mod socket;
 mod state_store;
 mod tls;
 
-use crate::app_command::command_for_release_dir;
+use crate::app_command::{command_for_release_dir, env_vars_from_release_dir};
 use crate::instances::{
     App, AppConfig, AppManager, HealthChecker, HealthConfig, InstanceEvent, RollingUpdateConfig,
     RollingUpdater, target_new_instances_for_build,
@@ -164,6 +164,38 @@ fn app_socket_cleanup_dirs(socket_path: &str) -> Vec<PathBuf> {
     dirs
 }
 
+fn secrets_file_path(data_dir: &Path, app_name: &str) -> PathBuf {
+    data_dir.join("apps").join(app_name).join("secrets.json")
+}
+
+fn read_secrets_file(path: &Path) -> Result<HashMap<String, String>, String> {
+    if !path.exists() {
+        return Ok(HashMap::new());
+    }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("read secrets {}: {}", path.display(), e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("parse secrets {}: {}", path.display(), e))
+}
+
+fn write_secrets_file(path: &Path, secrets: &HashMap<String, String>) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("create dir {}: {}", parent.display(), e))?;
+    }
+    let content = serde_json::to_string_pretty(secrets)
+        .map_err(|e| format!("serialize secrets: {}", e))?;
+    std::fs::write(path, content.as_bytes())
+        .map_err(|e| format!("write secrets {}: {}", path.display(), e))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .map_err(|e| format!("chmod {}: {}", path.display(), e))?;
+    }
+    Ok(())
+}
+
 /// Server state shared across components
 pub struct ServerState {
     /// App manager
@@ -174,9 +206,6 @@ pub struct ServerState {
     cert_manager: Arc<CertManager>,
     /// ACME client (optional)
     acme_client: Option<Arc<AcmeClient>>,
-    /// App launch environment (app_name -> env vars)
-    secrets: RwLock<HashMap<String, HashMap<String, String>>>,
-
     /// Route table (app_name -> route patterns)
     routes: Arc<RwLock<RouteTable>>,
 
@@ -225,7 +254,6 @@ impl ServerState {
             load_balancer,
             cert_manager,
             acme_client,
-            secrets: RwLock::new(HashMap::new()),
             routes: Arc::new(RwLock::new(RouteTable::default())),
             deploy_locks: RwLock::new(HashMap::new()),
             cold_start: Arc::new(ColdStartManager::new(ColdStartConfig::default())),
@@ -313,17 +341,25 @@ impl ServerState {
                 self.select_runtime_base_port(config.base_port, config.max_instances);
             config.app_socket_dir = self.runtime.app_socket_dir();
 
+            // Populate env from files (SQLite no longer stores env)
+            config.env_vars = env_vars_from_release_dir(&config.path).unwrap_or_else(|e| {
+                tracing::warn!(app = %app_name, "Failed to read env vars from app.json: {}", e);
+                HashMap::new()
+            });
+            config.secrets = read_secrets_file(
+                &secrets_file_path(&self.runtime.data_dir, &app_name),
+            )
+            .unwrap_or_else(|e| {
+                tracing::warn!(app = %app_name, "Failed to read secrets file: {}", e);
+                HashMap::new()
+            });
+
             let app = self.app_manager.register_app(config.clone());
             self.load_balancer.register_app(app.clone());
 
             {
                 let mut route_table = self.routes.write().await;
                 route_table.set_app_routes(app_name.clone(), routes);
-            }
-
-            {
-                let mut secrets = self.secrets.write().await;
-                secrets.insert(app_name.clone(), config.env.clone());
             }
 
             if should_start {
@@ -394,14 +430,14 @@ impl ServerState {
                 version,
                 path,
                 routes,
-                env,
+                secrets,
                 instances,
                 idle_timeout,
             } => {
                 if let Some(resp) = self.reject_mutating_when_upgrading("deploy").await {
                     return resp;
                 }
-                self.deploy_app(&app, &version, &path, routes, env, instances, idle_timeout)
+                self.deploy_app(&app, &version, &path, routes, secrets, instances, idle_timeout)
                     .await
             }
             Command::Stop { app } => {
@@ -472,7 +508,7 @@ impl ServerState {
         version: &str,
         path: &str,
         routes: Vec<String>,
-        env: HashMap<String, String>,
+        secrets: HashMap<String, String>,
         instances: u8,
         idle_timeout: u32,
     ) -> Response {
@@ -498,14 +534,20 @@ impl ServerState {
             }
         };
 
-        if let Err(error) = prepare_release_runtime(Path::new(path), &env).await {
+        if let Err(error) = prepare_release_runtime(Path::new(path), &HashMap::new()).await {
             return Response::error(format!("Invalid app release: {}", error));
         }
 
-        {
-            // Deploy carries the full launch environment (vars + secrets) for this release.
-            let mut secrets = self.secrets.write().await;
-            secrets.insert(app_name.to_string(), env.clone());
+        // Read non-secret env vars from app.json in the release dir
+        let env_vars = env_vars_from_release_dir(Path::new(path)).unwrap_or_else(|e| {
+            tracing::warn!(app = app_name, "Failed to read env vars from app.json: {}", e);
+            HashMap::new()
+        });
+
+        // Write secrets to per-app file (0600 permissions)
+        let secrets_path = secrets_file_path(&self.runtime.data_dir, app_name);
+        if let Err(e) = write_secrets_file(&secrets_path, &secrets) {
+            return Response::error(format!("Failed to write secrets: {}", e));
         }
 
         // Get or create app
@@ -516,7 +558,8 @@ impl ServerState {
                 config.version = version.to_string();
                 config.path = PathBuf::from(path);
                 config.cwd = PathBuf::from(path);
-                config.env = env.clone();
+                config.env_vars = env_vars;
+                config.secrets = secrets;
                 config.min_instances = instances as u32;
                 config.idle_timeout = Duration::from_secs(idle_timeout as u64);
                 config.app_socket_dir = self.runtime.app_socket_dir();
@@ -541,7 +584,8 @@ impl ServerState {
                             return Response::error(format!("Invalid app release: {}", e));
                         }
                     },
-                    env,
+                    env_vars,
+                    secrets,
                     min_instances: instances as u32,
                     max_instances: 4,
                     base_port: self.allocate_port_range(),
@@ -711,11 +755,6 @@ impl ServerState {
         {
             let mut route_table = self.routes.write().await;
             route_table.remove_app_routes(app_name);
-        }
-
-        {
-            let mut secrets = self.secrets.write().await;
-            secrets.remove(app_name);
         }
 
         {
@@ -892,7 +931,7 @@ impl ServerState {
             version,
             &target_path.to_string_lossy(),
             routes,
-            config.env.clone(),
+            config.secrets.clone(),
             config.min_instances as u8,
             idle_timeout,
         )
@@ -906,27 +945,55 @@ impl ServerState {
     ) -> Response {
         tracing::info!(app = app_name, "Updating secrets");
 
-        // Store secrets
-        {
-            let mut secrets = self.secrets.write().await;
-            secrets.insert(app_name.to_string(), new_secrets.clone());
+        // Write secrets to per-app file (0600 permissions)
+        let path = secrets_file_path(&self.runtime.data_dir, app_name);
+        if let Err(e) = write_secrets_file(&path, &new_secrets) {
+            return Response::error(format!("Failed to write secrets: {}", e));
         }
 
-        // If app exists, update its config
+        // Update app config and auto-restart running instances to apply new secrets
         if let Some(app) = self.app_manager.get_app(app_name) {
             let mut config = app.config.read().clone();
-            config.env.extend(new_secrets);
-            app.update_config(config);
+            config.secrets = new_secrets;
+            app.update_config(config.clone());
             self.persist_app_state(app_name).await;
 
-            // Note: Running instances still have old secrets
-            // User should call reload to apply new secrets
+            if !app.get_instances().is_empty() {
+                let previous_state = app.state();
+                app.set_state(AppState::Deploying);
+                let rolling_config = RollingUpdateConfig::default();
+                let updater =
+                    RollingUpdater::new(self.app_manager.spawner().clone(), rolling_config);
+                let target =
+                    target_new_instances_for_build(config.min_instances, app.get_instances().len());
+                match updater.update(&app, config, target).await {
+                    Ok(result) if result.success => {
+                        app.set_state(AppState::Running);
+                        return Response::ok(serde_json::json!({
+                            "status": "updated",
+                            "app": app_name,
+                            "restarted": true
+                        }));
+                    }
+                    Ok(result) => {
+                        app.set_state(previous_state);
+                        return Response::error(format!(
+                            "Rolling restart failed: {:?}",
+                            result.error
+                        ));
+                    }
+                    Err(e) => {
+                        app.set_state(AppState::Error);
+                        return Response::error(format!("Rolling restart failed: {}", e));
+                    }
+                }
+            }
         }
 
         Response::ok(serde_json::json!({
             "status": "updated",
             "app": app_name,
-            "note": "Call reload to apply secrets to running instances"
+            "restarted": false
         }))
     }
 
@@ -1492,6 +1559,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create data directory
     let data_dir = PathBuf::from(&data_dir_str);
     std::fs::create_dir_all(&data_dir)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&data_dir, std::fs::Permissions::from_mode(0o700));
+    }
 
     // Create socket parent directory (for debug/local usage)
     if let Some(parent) = PathBuf::from(&socket).parent() {
@@ -1960,8 +2032,9 @@ async fn replace_instance_if_needed(
 mod tests {
     use super::{
         ServerRuntimeConfig, ServerState, bun_install_args_for_release, handle_idle_event,
-        install_rustls_crypto_provider, prepare_release_runtime, resolve_release_runtime,
-        should_use_self_signed_route_cert, validate_deploy_routes,
+        install_rustls_crypto_provider, prepare_release_runtime, read_secrets_file,
+        resolve_release_runtime, secrets_file_path, should_use_self_signed_route_cert,
+        validate_deploy_routes, write_secrets_file,
     };
     use crate::instances::AppConfig;
     use crate::socket::{AppState, Command, InstanceState, Response};
@@ -1973,6 +2046,40 @@ mod tests {
     use std::time::Duration;
     use tako_core::UpgradeMode;
     use tempfile::TempDir;
+
+    #[test]
+    #[cfg(unix)]
+    fn secrets_file_write_sets_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("secrets.json");
+        let mut secrets = HashMap::new();
+        secrets.insert("API_KEY".to_string(), "secret123".to_string());
+        write_secrets_file(&path, &secrets).unwrap();
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+        assert_eq!(mode & 0o777, 0o600, "secrets file must be mode 0600");
+    }
+
+    #[test]
+    fn secrets_file_read_write_round_trip() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("secrets.json");
+        let mut secrets = HashMap::new();
+        secrets.insert("API_KEY".to_string(), "secret123".to_string());
+        secrets.insert("DB_URL".to_string(), "postgres://db".to_string());
+        write_secrets_file(&path, &secrets).unwrap();
+        let loaded = read_secrets_file(&path).unwrap();
+        assert_eq!(loaded.get("API_KEY"), Some(&"secret123".to_string()));
+        assert_eq!(loaded.get("DB_URL"), Some(&"postgres://db".to_string()));
+    }
+
+    #[test]
+    fn secrets_file_read_returns_empty_when_missing() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("nonexistent.json");
+        let loaded = read_secrets_file(&path).unwrap();
+        assert!(loaded.is_empty());
+    }
 
     #[test]
     fn install_rustls_crypto_provider_is_idempotent() {
@@ -2458,8 +2565,16 @@ exit 1
             .join("v1");
         std::fs::create_dir_all(&release_dir).unwrap();
 
-        let mut env = HashMap::new();
-        env.insert("DATABASE_URL".to_string(), "postgres://db".to_string());
+        let app_secrets: HashMap<String, String> =
+            [("DATABASE_URL".to_string(), "postgres://db".to_string())]
+                .into_iter()
+                .collect();
+        write_secrets_file(
+            &secrets_file_path(temp.path(), "my-app"),
+            &app_secrets,
+        )
+        .unwrap();
+
         let app = state_a.app_manager.register_app(AppConfig {
             name: "my-app".to_string(),
             version: "v1".to_string(),
@@ -2470,7 +2585,6 @@ exit 1
                 "-lc".to_string(),
                 "sleep 600".to_string(),
             ],
-            env: env.clone(),
             min_instances: 0,
             max_instances: 4,
             base_port: 4200,
@@ -2487,10 +2601,6 @@ exit 1
                     "example.com/api/*".to_string(),
                 ],
             );
-        }
-        {
-            let mut secrets = state_a.secrets.write().await;
-            secrets.insert("my-app".to_string(), env);
         }
         state_a.persist_app_state("my-app").await;
         drop(state_a);
@@ -2509,8 +2619,7 @@ exit 1
                 "example.com/api/*".to_string()
             ]
         );
-        let secrets = state_b.secrets.read().await;
-        let restored_secrets = secrets.get("my-app").expect("secrets restored");
+        let restored_secrets = restored.config.read().secrets.clone();
         assert_eq!(
             restored_secrets.get("DATABASE_URL"),
             Some(&"postgres://db".to_string())
@@ -2659,7 +2768,7 @@ exit 1
                 version: "v1".to_string(),
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["broken.localhost".to_string()],
-                env: HashMap::new(),
+                secrets: HashMap::new(),
                 instances: 0,
                 idle_timeout: 300,
             })
@@ -2774,7 +2883,7 @@ PY
                 version: "v1".to_string(),
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["warm.localhost".to_string()],
-                env,
+                secrets: env,
                 instances: 0,
                 idle_timeout: 300,
             })

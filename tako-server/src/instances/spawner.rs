@@ -37,8 +37,9 @@ impl Spawner {
             "Spawning instance"
         );
 
-        // Build environment
-        let mut env = config.env.clone();
+        // Build environment: merge non-secret vars with secrets (secrets take precedence)
+        let mut env = config.env_vars.clone();
+        env.extend(config.secrets.iter().map(|(k, v)| (k.clone(), v.clone())));
         env.insert("PORT".to_string(), instance.port.to_string());
         env.insert("TAKO_INSTANCE".to_string(), instance.id.to_string());
         if let Some(socket_template) = instance.socket_template() {

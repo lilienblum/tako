@@ -437,7 +437,6 @@ mod health_check {
     }
 }
 
-
 mod protocol {
 
     #[test]

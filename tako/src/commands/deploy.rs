@@ -404,7 +404,7 @@ async fn run_async(
         HashMap::new(),
         secrets.get_env(&env),
     );
-    let deploy_env_vars = build_deploy_command_env_vars(&manifest, secrets.get_env(&env));
+    let deploy_secrets = build_deploy_secrets(secrets.get_env(&env));
 
     // Create source archive used as input for target-specific builds.
     let source_archive_path = cache.cache_dir().join(format!("{}-source.tar.gz", version));
@@ -489,7 +489,7 @@ async fn run_async(
         version: version.clone(),
         remote_base: format!("/opt/tako/apps/{}", app_name),
         routes: routes.clone(),
-        env_vars: deploy_env_vars,
+        env_vars: deploy_secrets,
         app_subdir,
         runtime: runtime_adapter.id().to_string(),
         main: manifest_main,
@@ -1438,38 +1438,31 @@ fn build_deploy_archive_manifest(
         .unwrap_or_default();
     secret_names.sort();
 
+    let mut env_vars = build_manifest_env_vars(
+        app_env_vars,
+        runtime_env_vars,
+        environment,
+        runtime_name,
+    );
+    // TAKO_BUILD is a non-secret env var derived from the version.
+    // It's stored in app.json so the server can read it without the CLI.
+    env_vars.insert("TAKO_BUILD".to_string(), version.to_string());
+
     DeployArchiveManifest {
         app_name: app_name.to_string(),
         environment: environment.to_string(),
         version: version.to_string(),
         runtime: runtime_name.to_string(),
         main: main.to_string(),
-        env_vars: build_manifest_env_vars(
-            app_env_vars,
-            runtime_env_vars,
-            environment,
-            runtime_name,
-        ),
+        env_vars,
         secret_names,
     }
 }
 
-fn build_deploy_command_env_vars(
-    manifest: &DeployArchiveManifest,
+fn build_deploy_secrets(
     env_secrets: Option<&HashMap<String, String>>,
 ) -> HashMap<String, String> {
-    let mut env_vars: HashMap<String, String> = manifest
-        .env_vars
-        .iter()
-        .map(|(key, value)| (key.clone(), value.clone()))
-        .collect();
-    env_vars.insert("TAKO_BUILD".to_string(), manifest.version.clone());
-    if let Some(secrets) = env_secrets {
-        for (key, value) in secrets {
-            env_vars.insert(key.clone(), value.clone());
-        }
-    }
-    env_vars
+    env_secrets.cloned().unwrap_or_default()
 }
 
 fn build_manifest_env_vars(
@@ -3417,7 +3410,7 @@ async fn deploy_to_server(
             version: config.version.clone(),
             path: release_app_dir.clone(),
             routes: config.routes.clone(),
-            env: config.env_vars.clone(),
+            secrets: config.env_vars.clone(),
             instances,
             idle_timeout,
         };
@@ -4449,29 +4442,39 @@ name = "test-app"
     }
 
     #[test]
-    fn build_deploy_command_env_vars_merges_manifest_build_and_secrets() {
-        let manifest = DeployArchiveManifest {
-            app_name: "my-app".to_string(),
-            environment: "production".to_string(),
-            version: "v123".to_string(),
-            runtime: "bun".to_string(),
-            main: "server/index.ts".to_string(),
-            env_vars: BTreeMap::from([
-                ("A_KEY".to_string(), "a".to_string()),
-                ("TAKO_ENV".to_string(), "production".to_string()),
-            ]),
-            secret_names: vec!["API_KEY".to_string(), "PATH_HINT".to_string()],
-        };
+    fn build_deploy_secrets_returns_only_secrets() {
         let mut secrets = HashMap::new();
         secrets.insert("API_KEY".to_string(), r#"ab\"cd"#.to_string());
         secrets.insert("PATH_HINT".to_string(), r#"C:\tmp\bin"#.to_string());
 
-        let env = build_deploy_command_env_vars(&manifest, Some(&secrets));
-        assert_eq!(env.get("TAKO_BUILD"), Some(&"v123".to_string()));
-        assert_eq!(env.get("A_KEY"), Some(&"a".to_string()));
-        assert_eq!(env.get("TAKO_ENV"), Some(&"production".to_string()));
-        assert_eq!(env.get("API_KEY"), Some(&r#"ab\"cd"#.to_string()));
-        assert_eq!(env.get("PATH_HINT"), Some(&r#"C:\tmp\bin"#.to_string()));
+        let result = build_deploy_secrets(Some(&secrets));
+        assert_eq!(result.get("API_KEY"), Some(&r#"ab\"cd"#.to_string()));
+        assert_eq!(result.get("PATH_HINT"), Some(&r#"C:\tmp\bin"#.to_string()));
+        // Non-secret env vars (TAKO_BUILD, TAKO_ENV) are NOT in the result
+        assert_eq!(result.get("TAKO_BUILD"), None);
+        assert_eq!(result.get("TAKO_ENV"), None);
+    }
+
+    #[test]
+    fn build_deploy_archive_manifest_includes_tako_build_in_env_vars() {
+        let manifest = build_deploy_archive_manifest(
+            "my-app",
+            "production",
+            "v123",
+            "bun",
+            "server/index.ts",
+            HashMap::new(),
+            HashMap::new(),
+            None,
+        );
+        assert_eq!(
+            manifest.env_vars.get("TAKO_BUILD"),
+            Some(&"v123".to_string())
+        );
+        assert_eq!(
+            manifest.env_vars.get("TAKO_ENV"),
+            Some(&"production".to_string())
+        );
     }
 
     #[test]
@@ -5774,6 +5777,7 @@ name = "test-app"
                 "A_KEY".to_string(),
                 "BUN_ENV".to_string(),
                 "NODE_ENV".to_string(),
+                "TAKO_BUILD".to_string(),
                 "TAKO_ENV".to_string(),
                 "Z_KEY".to_string()
             ]

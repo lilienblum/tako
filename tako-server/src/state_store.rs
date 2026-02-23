@@ -1,5 +1,4 @@
 use crate::instances::AppConfig;
-use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_void};
 use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
@@ -7,7 +6,7 @@ use std::ptr::{self, null_mut};
 use std::time::Duration;
 use tako_core::UpgradeMode;
 
-pub const CURRENT_SCHEMA_VERSION: i32 = 1;
+pub const CURRENT_SCHEMA_VERSION: i32 = 2;
 
 const SQLITE_OK: c_int = 0;
 const SQLITE_ROW: c_int = 100;
@@ -288,15 +287,14 @@ impl SqliteStateStore {
         let result = (|| {
             let mut stmt = conn.prepare(
                 "INSERT INTO apps (
-                    name, version, path, cwd, command_json, env_json,
+                    name, version, path, cwd, command_json,
                     min_instances, max_instances, base_port, idle_timeout_secs
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
                  ON CONFLICT(name) DO UPDATE SET
                     version = excluded.version,
                     path = excluded.path,
                     cwd = excluded.cwd,
                     command_json = excluded.command_json,
-                    env_json = excluded.env_json,
                     min_instances = excluded.min_instances,
                     max_instances = excluded.max_instances,
                     base_port = excluded.base_port,
@@ -308,14 +306,11 @@ impl SqliteStateStore {
             stmt.bind_text(4, config.cwd.to_string_lossy().as_ref())?;
             let command_json = serde_json::to_string(&config.command)
                 .map_err(|e| StateStoreError::InvalidData(format!("serialize command: {e}")))?;
-            let env_json = serde_json::to_string(&config.env)
-                .map_err(|e| StateStoreError::InvalidData(format!("serialize env: {e}")))?;
             stmt.bind_text(5, &command_json)?;
-            stmt.bind_text(6, &env_json)?;
-            stmt.bind_int64(7, config.min_instances as i64)?;
-            stmt.bind_int64(8, config.max_instances as i64)?;
-            stmt.bind_int64(9, i64::from(config.base_port))?;
-            stmt.bind_int64(10, config.idle_timeout.as_secs() as i64)?;
+            stmt.bind_int64(6, config.min_instances as i64)?;
+            stmt.bind_int64(7, config.max_instances as i64)?;
+            stmt.bind_int64(8, i64::from(config.base_port))?;
+            stmt.bind_int64(9, config.idle_timeout.as_secs() as i64)?;
             stmt.execute_done()?;
 
             let mut clear_routes = conn.prepare("DELETE FROM app_routes WHERE app_name = ?1;")?;
@@ -355,7 +350,7 @@ impl SqliteStateStore {
 
         let mut stmt = conn.prepare(
             "SELECT
-                name, version, path, cwd, command_json, env_json,
+                name, version, path, cwd, command_json,
                 min_instances, max_instances, base_port, idle_timeout_secs
              FROM apps
              ORDER BY name;",
@@ -368,16 +363,13 @@ impl SqliteStateStore {
             let path = PathBuf::from(stmt.column_text(2)?);
             let cwd = PathBuf::from(stmt.column_text(3)?);
             let command_json = stmt.column_text(4)?;
-            let env_json = stmt.column_text(5)?;
-            let min_instances = to_u32(stmt.column_int64(6)?, "min_instances")?;
-            let max_instances = to_u32(stmt.column_int64(7)?, "max_instances")?;
-            let base_port = to_u16(stmt.column_int64(8)?, "base_port")?;
-            let idle_timeout_secs = to_u64(stmt.column_int64(9)?, "idle_timeout_secs")?;
+            let min_instances = to_u32(stmt.column_int64(5)?, "min_instances")?;
+            let max_instances = to_u32(stmt.column_int64(6)?, "max_instances")?;
+            let base_port = to_u16(stmt.column_int64(7)?, "base_port")?;
+            let idle_timeout_secs = to_u64(stmt.column_int64(8)?, "idle_timeout_secs")?;
 
             let command: Vec<String> = serde_json::from_str(&command_json)
                 .map_err(|e| StateStoreError::InvalidData(format!("deserialize command: {e}")))?;
-            let env: HashMap<String, String> = serde_json::from_str(&env_json)
-                .map_err(|e| StateStoreError::InvalidData(format!("deserialize env: {e}")))?;
 
             let mut routes_stmt =
                 conn.prepare("SELECT route FROM app_routes WHERE app_name = ?1 ORDER BY route;")?;
@@ -387,13 +379,13 @@ impl SqliteStateStore {
                 routes.push(routes_stmt.column_text(0)?);
             }
 
+            // env_vars and secrets are loaded from files by the caller after restore
             let config = AppConfig {
                 name,
                 version,
                 path,
                 command,
                 cwd,
-                env,
                 min_instances,
                 max_instances,
                 base_port,
@@ -508,6 +500,56 @@ impl SqliteStateStore {
                     conn.exec(&format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"))?;
                     self.upsert_schema_meta(conn)?;
                 }
+                1 => {
+                    // v1 → v2: drop env_json column from apps table.
+                    // SQLite older than 3.35 doesn't support DROP COLUMN, so recreate the table.
+                    // v1 schema also lacks schema_meta and supporting tables; create them now.
+                    conn.exec(
+                        "CREATE TABLE IF NOT EXISTS schema_meta (
+                            id INTEGER PRIMARY KEY CHECK(id = 1),
+                            schema_version INTEGER NOT NULL,
+                            min_binary_version TEXT NOT NULL,
+                            created_by TEXT NOT NULL
+                        );",
+                    )?;
+                    conn.exec(
+                        "CREATE TABLE IF NOT EXISTS app_routes (
+                            app_name TEXT NOT NULL,
+                            route TEXT NOT NULL,
+                            PRIMARY KEY (app_name, route),
+                            FOREIGN KEY(app_name) REFERENCES apps(name) ON DELETE CASCADE
+                        );",
+                    )?;
+                    conn.exec(
+                        "CREATE TABLE IF NOT EXISTS server_state (
+                            id INTEGER PRIMARY KEY CHECK(id = 1),
+                            server_mode TEXT NOT NULL
+                        );",
+                    )?;
+                    conn.exec(
+                        "CREATE TABLE apps_v2 (
+                            name TEXT PRIMARY KEY,
+                            version TEXT NOT NULL,
+                            path TEXT NOT NULL,
+                            cwd TEXT NOT NULL,
+                            command_json TEXT NOT NULL,
+                            min_instances INTEGER NOT NULL,
+                            max_instances INTEGER NOT NULL,
+                            base_port INTEGER NOT NULL,
+                            idle_timeout_secs INTEGER NOT NULL
+                        );",
+                    )?;
+                    conn.exec(
+                        "INSERT INTO apps_v2
+                            SELECT name, version, path, cwd, command_json,
+                                   min_instances, max_instances, base_port, idle_timeout_secs
+                         FROM apps;",
+                    )?;
+                    conn.exec("DROP TABLE apps;")?;
+                    conn.exec("ALTER TABLE apps_v2 RENAME TO apps;")?;
+                    conn.exec(&format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"))?;
+                    self.upsert_schema_meta(conn)?;
+                }
                 CURRENT_SCHEMA_VERSION => {}
                 other => return Err(StateStoreError::UnsupportedSchemaVersion { found: other }),
             }
@@ -540,7 +582,6 @@ impl SqliteStateStore {
                 path TEXT NOT NULL,
                 cwd TEXT NOT NULL,
                 command_json TEXT NOT NULL,
-                env_json TEXT NOT NULL,
                 min_instances INTEGER NOT NULL,
                 max_instances INTEGER NOT NULL,
                 base_port INTEGER NOT NULL,
@@ -680,16 +721,12 @@ mod tests {
     }
 
     fn sample_config() -> AppConfig {
-        let mut env = HashMap::new();
-        env.insert("DATABASE_URL".to_string(), "postgres://db".to_string());
-
         AppConfig {
             name: "my-app".to_string(),
             version: "v1".to_string(),
             path: PathBuf::from("/opt/tako/apps/my-app/releases/v1"),
             cwd: PathBuf::from("/opt/tako/apps/my-app/releases/v1"),
             command: vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()],
-            env,
             min_instances: 2,
             max_instances: 4,
             base_port: 4100,
@@ -763,10 +800,9 @@ mod tests {
             app.config.command,
             vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()]
         );
-        assert_eq!(
-            app.config.env.get("DATABASE_URL"),
-            Some(&"postgres://db".to_string())
-        );
+        // env_vars and secrets are no longer stored in SQLite; loaded from files after restore
+        assert!(app.config.env_vars.is_empty());
+        assert!(app.config.secrets.is_empty());
         assert_eq!(app.config.min_instances, 2);
         assert_eq!(app.config.max_instances, 4);
         assert_eq!(app.config.base_port, 4100);
@@ -838,5 +874,46 @@ mod tests {
         assert!(!store.release_upgrade_lock("controller-b").unwrap());
         assert!(store.release_upgrade_lock("controller-a").unwrap());
         assert!(store.try_acquire_upgrade_lock("controller-b").unwrap());
+    }
+
+    #[test]
+    fn migrates_v1_schema_to_v2_dropping_env_json() {
+        let (_temp, store) = temp_store();
+        // Bootstrap a v1 schema with env_json column
+        let conn = store.open_connection().unwrap();
+        conn.exec(
+            "CREATE TABLE IF NOT EXISTS apps (
+                name TEXT PRIMARY KEY,
+                version TEXT NOT NULL,
+                path TEXT NOT NULL,
+                cwd TEXT NOT NULL,
+                command_json TEXT NOT NULL,
+                env_json TEXT NOT NULL,
+                min_instances INTEGER NOT NULL,
+                max_instances INTEGER NOT NULL,
+                base_port INTEGER NOT NULL,
+                idle_timeout_secs INTEGER NOT NULL
+            );",
+        )
+        .unwrap();
+        conn.exec(
+            "INSERT INTO apps VALUES ('my-app','v1','/opt/tako','/opt/tako','[\"bun\",\"index.ts\"]','{\"KEY\":\"val\"}',1,4,3000,300);",
+        )
+        .unwrap();
+        conn.exec("PRAGMA user_version = 1;").unwrap();
+        drop(conn);
+
+        // Running init() should migrate to v2
+        store.init().unwrap();
+
+        // Verify schema version bumped
+        let conn = store.open_connection().unwrap();
+        assert_eq!(conn.query_user_version().unwrap(), CURRENT_SCHEMA_VERSION);
+
+        // App data preserved (env_json dropped, not panic)
+        let apps = store.load_apps().unwrap();
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].config.name, "my-app");
+        assert!(apps[0].config.env_vars.is_empty());
     }
 }

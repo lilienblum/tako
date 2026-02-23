@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 const BUN_WRAPPER_RELATIVE_PATH: &str = "node_modules/tako.sh/src/wrapper.ts";
@@ -8,6 +9,28 @@ struct DeployArchiveManifest {
     main: String,
     #[serde(default)]
     start: Option<Vec<String>>,
+}
+
+/// Minimal manifest fields needed to read env vars for the app process.
+#[derive(serde::Deserialize)]
+struct AppEnvManifest {
+    #[serde(default)]
+    env_vars: HashMap<String, String>,
+}
+
+/// Read non-secret environment variables from the `app.json` deploy manifest.
+///
+/// Returns an empty map if the file is missing or the `env_vars` field is absent.
+pub fn env_vars_from_release_dir(release_dir: &Path) -> Result<HashMap<String, String>, String> {
+    let manifest_path = release_dir.join("app.json");
+    if !manifest_path.exists() {
+        return Ok(HashMap::new());
+    }
+    let content = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("read {}: {}", manifest_path.display(), e))?;
+    let manifest: AppEnvManifest = serde_json::from_str(&content)
+        .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
+    Ok(manifest.env_vars)
 }
 
 /// Determine the command to launch an app from its release directory.
@@ -112,6 +135,46 @@ fn resolve_bun_wrapper_path(release_dir: &Path) -> String {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn env_vars_from_release_dir_reads_env_vars_field() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","env_vars":{"NODE_ENV":"production","TAKO_BUILD":"v1"}}"#,
+        )
+        .unwrap();
+        let vars = env_vars_from_release_dir(dir.path()).unwrap();
+        assert_eq!(vars.get("NODE_ENV"), Some(&"production".to_string()));
+        assert_eq!(vars.get("TAKO_BUILD"), Some(&"v1".to_string()));
+    }
+
+    #[test]
+    fn env_vars_from_release_dir_returns_empty_when_field_missing() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts"}"#,
+        )
+        .unwrap();
+        let vars = env_vars_from_release_dir(dir.path()).unwrap();
+        assert!(vars.is_empty());
+    }
+
+    #[test]
+    fn env_vars_from_release_dir_returns_empty_when_manifest_missing() {
+        let dir = TempDir::new().unwrap();
+        let vars = env_vars_from_release_dir(dir.path()).unwrap();
+        assert!(vars.is_empty());
+    }
+
+    #[test]
+    fn env_vars_from_release_dir_errors_on_invalid_json() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("app.json"), r#"not json"#).unwrap();
+        let err = env_vars_from_release_dir(dir.path()).unwrap_err();
+        assert!(err.contains("parse"));
+    }
 
     #[test]
     fn uses_manifest_main_when_present() {
