@@ -186,9 +186,9 @@ Certificate behavior:
 Typical remote layout:
 
 - `/opt/tako/apps/{app}/current` -> active release symlink
-- `/opt/tako/apps/{app}/releases/{version}/` -> release content
+- `/opt/tako/apps/{app}/releases/{version}/` -> release content (includes `app.json` with env vars and `secrets.json` with secrets at 0600)
 - `/opt/tako/apps/{app}/shared/` -> shared app data (for example logs)
-- `/var/run/tako/tako.sock` -> management socket
+- `/var/run/tako/tako.sock` -> symlink to active management socket (`tako-{pid}.sock`)
 
 ## Operational Commands in Context
 
@@ -196,8 +196,8 @@ Typical remote layout:
 - `tako logs --env <env>`: live logs across mapped servers for an environment.
 - `tako releases ls` / `tako releases rollback`: inspect release history and roll back to a previous release id.
 - `tako upgrade`: upgrade local CLI installation only.
-- `tako servers upgrade <name>`: refresh installer-managed server artifacts and perform single-host candidate handoff upgrade.
+- `tako servers upgrade <name>`: install updated server binary and perform in-place reload via systemd (SIGHUP).
 - `tako secrets ...`: encrypted secret management and sync to runtime.
-- `tako servers restart|reload|upgrade`: runtime lifecycle operations for remote `tako-server`.
+- `tako servers restart|upgrade`: runtime lifecycle operations for remote `tako-server`.
 
 Use this page as the mental model, then use [CLI Reference](/docs/cli) for command details.

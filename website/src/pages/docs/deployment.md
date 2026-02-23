@@ -36,7 +36,7 @@ What happens during deploy:
 - On cache hit, deploy reuses the verified artifact; on cache mismatch/corruption, deploy rebuilds that target artifact automatically.
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
 - Deploys run to all target servers in parallel.
-- On each server, Tako writes final `app.json`, sends merged env/secrets in deploy command payload, performs runtime prep (Bun dependency install), and performs rolling update from the uploaded target artifact.
+- On each server, Tako writes final `app.json` (with env vars) and per-app `secrets.json` (with secrets, 0600 permissions), sends the secrets payload in the deploy command, performs runtime prep (Bun dependency install), and performs rolling update from the uploaded target artifact.
 - Each server is handled independently, so partial success is possible.
 
 ## Pre-Deploy Checklist
@@ -58,7 +58,7 @@ Each target server should have:
 - SSH access as the configured deployment user (typically `tako`).
 - `tako-server` installed and running.
 - `tako-server` installed via the hosted installer (or equivalent) for the host target; installer resolves `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>`.
-- installer-provided helper `/usr/local/bin/tako-server-upgrade` present and sudo-enabled for user `tako` (used by `tako servers upgrade <name>` refresh flow).
+- systemd present and active (required by the installer and by `tako servers upgrade`).
 - `mise` installed on host (`install-server` attempts distro package manager first, then upstream installer fallback).
 - `nc` (netcat), `tar`, `base64`, and standard shell tools (`mkdir`, `find`, `stat`).
 - Writable runtime paths under `/opt/tako` and socket access at `/var/run/tako/tako.sock`.
@@ -133,7 +133,7 @@ Each target server should have:
 7. Upload and extract archive into `/opt/tako/apps/<app>/releases/<version>/`.
 8. Link shared directories (for example `logs`).
 9. Resolve runtime `main`, write final app `app.json` (including optional commit metadata).
-10. Send deploy command to `tako-server` including merged environment (`TAKO_BUILD`, runtime vars, user vars, decrypted secrets); `tako-server` runs runtime prep (Bun dependency install) before rolling update.
+10. Send deploy command to `tako-server` including the decrypted secrets payload; env vars are written to `app.json` in the release directory and secrets to a per-app `secrets.json` (0600); `tako-server` runs runtime prep (Bun dependency install) before rolling update.
 11. Update `current` symlink after server accepts deploy.
 12. Clean old release directories.
 
@@ -171,7 +171,7 @@ Each target server should have:
 - Use `tako logs --env <environment>` to stream remote logs.
 - Use `tako releases ls --env <environment>` to inspect release/build history before deciding on rollback.
 - Use `tako releases rollback <release-id> --env <environment>` to roll back to a previous release id using normal rolling-update behavior.
-- `tako servers upgrade <name>` refreshes installer-managed packages/binary with `sudo /usr/local/bin/tako-server-upgrade` (install-only mode, no immediate primary restart), then performs candidate handoff restart (systemd restart when available, manual primary restart fallback on non-systemd hosts).
+- `tako servers upgrade <name>` installs the updated server binary then performs an in-place reload via `systemctl reload tako-server` (SIGHUP). Systemd is required.
 - HTTP requests are redirected to HTTPS by default (307 with `Cache-Control: no-store`).
 - Exceptions on HTTP: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status`.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.

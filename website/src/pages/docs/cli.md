@@ -109,12 +109,6 @@ tako servers ls
 tako servers restart <NAME>
 ```
 
-`tako servers reload`:
-
-```bash
-tako servers reload <NAME>
-```
-
 `tako servers upgrade`:
 
 ```bash
@@ -138,7 +132,7 @@ Notes:
   - `--no-test` skips SSH checks and target detection.
 - `tako servers rm` aliases: `remove`, `delete`.
 - `tako servers ls` alias: `list`.
-- `tako servers upgrade <NAME>` refreshes server install artifacts via `sudo /usr/local/bin/tako-server-upgrade`, then performs single-host candidate handoff (systemd restart when available, manual primary restart fallback otherwise).
+- `tako servers upgrade <NAME>` installs the updated server binary on the host, then performs an in-place reload via `systemctl reload tako-server` (SIGHUP). Systemd is required.
 - `tako servers status` prints a single global deployment/runtime snapshot across configured servers.
 
 Deploy note:
@@ -205,7 +199,7 @@ Notes:
 - `tako secrets sync`:
   - with `--env`: syncs only that environment.
   - without `--env`: syncs all environments declared in `tako.toml`.
-  - syncs via `tako-server` management commands (`update_secrets` + best-effort `reload`), not remote `.env` file writes.
+  - syncs via `tako-server` management command `update_secrets`; app instances restart automatically when secrets change. Does not write remote `.env` files.
 - `tako secrets key import/export` default to `production` when `--env` is omitted.
 
 ## Common Examples

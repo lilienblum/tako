@@ -131,7 +131,6 @@ These are the environment variables Tako components read and/or set.
 | `NODE_ENV`        | app             | Node convention env                              | `development` / `production`      | Set by runtime adapter.                                             |
 | `BUN_ENV`         | app             | Bun convention env                               | `development` / `production`      | Set by runtime adapter.                                             |
 | `TAKO_BUILD`      | app             | Deployed build id                                | string                            | Sent by `tako deploy` in deploy payload; injected by `tako-server`. |
-| `TAKO_SOCKET`     | app / `tako.sh` | Unix socket path for connecting to `tako-server` | default `/var/run/tako/tako.sock` | Used by SDK integrations when app-server communication is enabled.  |
 | `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on        | path string                       | Set by `tako-server` when using socket-based proxying.              |
 | `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one)    | string                            | Optional; separate from `TAKO_BUILD`.                               |
 | `TAKO_INSTANCE`   | app / `tako.sh` | Instance ordinal                                 | integer string                    | Allocated by `tako-server`.                                         |

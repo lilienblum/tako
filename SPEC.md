@@ -545,38 +545,28 @@ Use for: binary updates, major configuration changes, system recovery.
 
 Systemd-managed servers use `KillMode=control-group` and a 30-minute stop timeout for restart/stop operations, allowing all app processes in the service cgroup time to handle graceful shutdown before systemd force-kills remaining processes.
 
-`tako-server` persists app runtime registration (app config, routes, and server-side env/secrets map) in SQLite under the data directory and restores it on startup so app routing/config survives process restarts and crashes.
+`tako-server` persists app runtime registration (app config and routes) in SQLite under the data directory and restores it on startup so app routing/config survives process restarts and crashes. Env vars are stored in `app.json` in the release directory; secrets are stored in a per-app `secrets.json` file (0600 permissions) rather than in SQLite.
 
-During single-host upgrade orchestration, `tako-server` may enter an internal `upgrading` server mode that temporarily rejects mutating management commands (`deploy`, `stop`, `delete`, `reload`, `update-secrets`) until the upgrade window ends.
+During single-host upgrade orchestration, `tako-server` may enter an internal `upgrading` server mode that temporarily rejects mutating management commands (`deploy`, `stop`, `delete`, `update-secrets`) until the upgrade window ends.
 Upgrade mode transitions are guarded by a durable single-owner upgrade lock in SQLite so only one upgrade controller can hold the upgrade window at a time.
 
 ### tako servers upgrade {server-name}
 
-Single-host upgrade handoff with a temporary candidate process:
+Single-host in-place upgrade via systemd reload:
 
 1. CLI verifies `tako-server` is active on the host.
-2. CLI refreshes server install artifacts via `sudo -n /usr/local/bin/tako-server-upgrade` (installer refresh mode; no immediate primary restart).
+2. CLI installs the new server binary on the host.
 3. CLI acquires the durable upgrade lock (`enter_upgrading`) and sets server mode to `upgrading`.
-4. CLI reads active runtime settings (`server_info`) from the management socket.
-5. CLI starts a temporary candidate `tako-server` process on a temporary socket path (for example `/var/run/tako/tako-upgrade-<owner>.sock`) with the same HTTP/HTTPS listener ports.
-6. Candidate startup uses an instance port offset (`--instance-port-offset 10000`) so candidate-managed app instances avoid local port collisions with the active server during overlap.
-7. CLI waits until the candidate answers protocol `hello` on the temporary socket.
-8. CLI restarts the primary runtime:
-   - systemd hosts: `systemctl restart tako-server` (inherits graceful stop behavior: `KillMode=control-group`, `TimeoutStopSec=30min`)
-   - non-systemd hosts: CLI performs manual restart (TERM primary process matched by socket marker, waits for primary socket to go offline, starts new primary process with the active socket and original instance-port offset)
-9. CLI waits for the primary management socket to become healthy again.
-10. CLI stops the temporary candidate process and releases upgrade mode (`exit_upgrading`).
+4. CLI signals the primary service with `systemctl reload tako-server` (sends SIGHUP), which triggers a graceful in-place reload.
+5. CLI waits for the primary management socket to report ready.
+6. CLI releases upgrade mode (`exit_upgrading`).
+
+Systemd is required for `tako servers upgrade`. Non-systemd hosts are not supported.
 
 Failure behavior:
 
-- If failure happens before primary restart attempt, CLI performs best-effort cleanup (stop candidate if started, then exit upgrade mode).
-- If primary restart was attempted but primary did not become ready, CLI preserves the running candidate process to avoid dropping traffic and warns that upgrade mode may remain enabled until primary recovers.
-
-### tako servers reload {server-name}
-
-Reload configuration (secrets) for all apps without restarting.
-
-Apps must implement `onConfigReload` handler in SDK to handle this.
+- If failure happens before the reload signal, CLI performs best-effort cleanup (exits upgrade mode).
+- If the reload was sent but the socket did not become ready within the timeout, CLI warns that upgrade mode may remain enabled until the primary recovers.
 
 ### tako secrets set [--env {environment}] {name}
 
@@ -617,7 +607,7 @@ Sync flow helpers:
 
 - For `production`, if no `[servers.*]` env mapping exists but exactly one global server exists, sync offers to target that server.
 - If no servers are configured and the terminal is interactive, sync offers to run the add-server wizard.
-- Sync sends `update_secrets` (and best-effort `reload`) to `tako-server`; it does not write remote `.env` files.
+- Sync sends `update_secrets` to `tako-server`; it does not write remote `.env` files. App instances restart automatically when secrets are updated via `UpdateSecrets`.
 
 ### tako secrets key import [--env {environment}]
 
@@ -898,12 +888,14 @@ Apps specify routes at environment level (not per-server). Routes support:
 
 Manual for v1. Users run a server setup script (or equivalent manual steps) to:
 
-1. Create a dedicated `tako` OS user for SSH and running `tako-server`
+1. Create two dedicated OS users for process isolation: `tako` for SSH access and running `tako-server`, and `tako-app` for spawned app processes
 2. Install `tako-server` to `/usr/local/bin/tako-server`
-3. Install and enable a system service (systemd when available)
+3. Install and enable a systemd service (systemd is required)
 4. Create and permissions required directories:
    - Data dir: `/opt/tako`
    - Socket dir: `/var/run/tako`
+
+The two-user model provides security isolation: `tako-server` runs as `tako` and spawns app processes as `tako-app`, so app processes cannot access the server's management socket or credentials.
 
 Recommended: run the hosted installer script on the server (as root):
 
@@ -919,11 +911,10 @@ Installer SSH key behavior:
 - Installer detects host target (`arch` + `libc`) and downloads matching artifact name `tako-server-linux-{arch}-{libc}` (supported: `x86_64`/`aarch64` with `glibc`/`musl`).
 - Installer ensures `nc` (netcat) is available so CLI management commands can talk to `/var/run/tako/tako.sock`.
 - Installer installs `mise` on the server (package-manager first; fallback to upstream installer when distro packages are unavailable).
-- Installer attempts to grant `CAP_NET_BIND_SERVICE` to `/usr/local/bin/tako-server` via `setcap` so non-systemd/manual runs can still bind `:80/:443` as a non-root user (warns when `setcap` is unavailable or fails).
-- Installer creates root-owned helper `/usr/local/bin/tako-server-upgrade` and grants `tako` sudo access to run it; helper re-runs hosted `install-server` with install-refresh mode (`TAKO_RESTART_SERVICE=0`) for remote package/binary updates.
+- Installer creates both `tako` and `tako-app` OS users for two-user process isolation.
+- Installer requires systemd; non-systemd hosts are not supported.
 - Installer configures systemd with `KillMode=control-group` and `TimeoutStopSec=30min`, so restart/stop waits up to 30 minutes for graceful app shutdown across all service child processes before forced termination.
-- `TAKO_RESTART_SERVICE=0` runs installer in install-refresh mode (no immediate systemd restart).
-- When systemd is available and restart mode is enabled, installer verifies `tako-server` is active after `enable --now`; if startup fails, installer exits non-zero and prints recent service logs.
+- Installer verifies `tako-server` is active after `enable --now`; if startup fails, installer exits non-zero and prints recent service logs.
 
 Reference script in this repo: `scripts/install-tako-server.sh` (source for `/install-server`, alias `/server-install`).
 
@@ -958,10 +949,8 @@ email = "admin@example.com"
 
 ### Zero-Downtime Operation
 
-- HTTP and HTTPS listeners are created with `SO_REUSEPORT` so a temporary candidate process can bind the same external ports during single-host upgrade overlap.
-- During `tako servers upgrade`, CLI uses a temporary management socket (`tako-<owner>.sock`) for candidate readiness checks.
-- Candidate app instances use an instance port offset (`--instance-port-offset`) to avoid local app-port collisions with active instances.
-- Primary service remains systemd-owned; the candidate is temporary and is stopped after primary service promotion.
+- `tako servers upgrade` performs an in-place upgrade via `systemctl reload tako-server` (SIGHUP), with no temporary candidate process or port overlap required.
+- Management socket uses a symlink-based path: the active server creates a PID-specific socket (`tako-{pid}.sock`) and atomically updates the `tako.sock` symlink on ready, so clients always connect to the current process.
 - Restart/stop still honor graceful shutdown semantics from systemd (`KillMode=control-group`, `TimeoutStopSec=30min`).
 
 ### Directory Structure
@@ -993,9 +982,9 @@ email = "admin@example.com"
 
 **tako-server socket:**
 
-- Primary path: `/var/run/tako/tako.sock`
-- Temporary upgrade candidate path pattern: `/var/run/tako/tako-<owner>.sock`
-- Used by: CLI for deploy/reload/delete/status/routes commands, apps for status/heartbeat
+- Symlink path: `/var/run/tako/tako.sock` (always points to the active server socket)
+- PID-specific socket path: `/var/run/tako/tako-{pid}.sock` (created by active server; symlink updated atomically on ready)
+- Used by: CLI for deploy/delete/status/routes commands, apps for status/heartbeat
 
 **App instance sockets:**
 
@@ -1013,10 +1002,9 @@ email = "admin@example.com"
 | `BUN_ENV`         | app             | Bun convention env                                                         | Set by runtime adapter (`development` or `production`).                                       |
 | `TAKO_BUILD`      | app             | Deployed build/version identifier                                          | Included in deploy command payload and injected by `tako-server` at process spawn.            |
 | `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on (if using socket-based proxying) | path string or unset                                                                          |
-| `TAKO_SOCKET`     | app / `tako.sh` | Unix socket path for connecting to `tako-server`                           | default `/var/run/tako/tako.sock`                                                             |
 | `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one)                              | string                                                                                        |
 | `TAKO_INSTANCE`   | app / `tako.sh` | Instance identifier                                                        | integer string                                                                                |
-| _user-defined_    | app             | User config vars/secrets                                                   | From `[vars]` and `[vars.*]` plus decrypted secrets in deploy command payload.                |
+| _user-defined_    | app             | User config vars/secrets                                                   | From `app.json` in the release dir (env vars) and per-app `secrets.json` (0600, secrets).    |
 
 ### Messages (JSON over Unix Socket)
 
@@ -1065,7 +1053,7 @@ Response:
 { "command": "exit_upgrading", "owner": "upgrade-prod-..." }
 ```
 
-- `deploy` (includes route patterns and launch env for routing/runtime):
+- `deploy` (includes route patterns and secrets payload; env vars are read from `app.json` in the release dir):
 
 ```json
 {
@@ -1074,10 +1062,9 @@ Response:
   "version": "1.0.0",
   "path": "/opt/tako/apps/my-app/releases/1.0.0",
   "routes": ["api.example.com", "*.example.com/admin/*"],
-  "env": {
-    "TAKO_ENV": "production",
-    "TAKO_BUILD": "1.0.0",
-    "NODE_ENV": "production"
+  "secrets": {
+    "DATABASE_URL": "...",
+    "API_KEY": "..."
   },
   "instances": 0,
   "idle_timeout": 300
