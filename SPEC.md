@@ -1004,7 +1004,7 @@ email = "admin@example.com"
 | `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on (if using socket-based proxying) | path string or unset                                                                          |
 | `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one)                              | string                                                                                        |
 | `TAKO_INSTANCE`   | app / `tako.sh` | Instance identifier                                                        | integer string                                                                                |
-| _user-defined_    | app             | User config vars/secrets                                                   | From `app.json` in the release dir (env vars) and per-app `secrets.json` (0600, secrets).    |
+| _user-defined_    | app             | User config vars/secrets                                                   | From `app.json` in the release dir (env vars) and per-app `secrets.json` (0600, secrets).     |
 
 ### Messages (JSON over Unix Socket)
 

@@ -713,8 +713,7 @@ fn remote_installer_command() -> String {
 
 fn format_installer_failure(output: &crate::ssh::CommandOutput) -> String {
     let combined = output.combined();
-    let message =
-        first_non_empty_line(combined.trim()).unwrap_or("remote installer failed");
+    let message = first_non_empty_line(combined.trim()).unwrap_or("remote installer failed");
     let lower = message.to_ascii_lowercase();
     if lower.contains("password") || lower.contains("not allowed") || lower.contains("sorry") {
         return "Remote user does not have sudo access. Ensure the connecting SSH user can run 'sudo sh' on the server.".to_string();
@@ -804,10 +803,13 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
         output::success("Upgrading mode enabled");
 
         // Trigger zero-downtime reload: SIGHUP → new binary spawns → SIGUSR1 → old drains
-        output::with_spinner_async("Reloading tako-server (zero-downtime)...", ssh.tako_reload())
-            .await
-            .map_err(|e| format!("Reload failed: {}", e))?
-            .map_err(|e| format!("Reload failed: {}", e))?;
+        output::with_spinner_async(
+            "Reloading tako-server (zero-downtime)...",
+            ssh.tako_reload(),
+        )
+        .await
+        .map_err(|e| format!("Reload failed: {}", e))?
+        .map_err(|e| format!("Reload failed: {}", e))?;
 
         // Wait for the new process to bind the management socket
         let active_info =

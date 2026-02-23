@@ -1875,13 +1875,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // SIGUSR1 → new process is ready; send SIGTERM to self so Pingora drains gracefully.
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
 
-        let mut sighup = signal(SignalKind::hangup())
-            .expect("Failed to register SIGHUP handler");
+        let mut sighup = signal(SignalKind::hangup()).expect("Failed to register SIGHUP handler");
         rt.spawn(async move {
             sighup.recv().await;
-            tracing::info!("SIGHUP received — spawning new server process for zero-downtime reload");
+            tracing::info!(
+                "SIGHUP received — spawning new server process for zero-downtime reload"
+            );
             let exe = match std::env::current_exe() {
                 Ok(p) => p,
                 Err(e) => {
@@ -1896,8 +1897,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         });
 
-        let mut sigusr1 = signal(SignalKind::user_defined1())
-            .expect("Failed to register SIGUSR1 handler");
+        let mut sigusr1 =
+            signal(SignalKind::user_defined1()).expect("Failed to register SIGUSR1 handler");
         rt.spawn(async move {
             sigusr1.recv().await;
             tracing::info!("SIGUSR1 received — new process ready, starting graceful drain");

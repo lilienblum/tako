@@ -1438,12 +1438,8 @@ fn build_deploy_archive_manifest(
         .unwrap_or_default();
     secret_names.sort();
 
-    let mut env_vars = build_manifest_env_vars(
-        app_env_vars,
-        runtime_env_vars,
-        environment,
-        runtime_name,
-    );
+    let mut env_vars =
+        build_manifest_env_vars(app_env_vars, runtime_env_vars, environment, runtime_name);
     // TAKO_BUILD is a non-secret env var derived from the version.
     // It's stored in app.json so the server can read it without the CLI.
     env_vars.insert("TAKO_BUILD".to_string(), version.to_string());
@@ -1459,9 +1455,7 @@ fn build_deploy_archive_manifest(
     }
 }
 
-fn build_deploy_secrets(
-    env_secrets: Option<&HashMap<String, String>>,
-) -> HashMap<String, String> {
+fn build_deploy_secrets(env_secrets: Option<&HashMap<String, String>>) -> HashMap<String, String> {
     env_secrets.cloned().unwrap_or_default()
 }
 
