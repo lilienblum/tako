@@ -11,6 +11,9 @@ use tokio::time::timeout;
 pub struct Spawner {
     /// HTTP client for health checks
     client: reqwest::Client,
+    /// UID/GID of the `tako-app` user for process isolation (Unix only)
+    #[cfg(unix)]
+    app_user: Option<(u32, u32)>,
 }
 
 impl Spawner {
@@ -21,8 +24,30 @@ impl Spawner {
                 .timeout(Duration::from_secs(5))
                 .build()
                 .expect("Failed to build HTTP client"),
+            #[cfg(unix)]
+            app_user: resolve_app_user(),
         }
     }
+}
+
+#[cfg(unix)]
+fn resolve_app_user() -> Option<(u32, u32)> {
+    use std::ffi::CString;
+    let name = CString::new("tako-app").ok()?;
+    // SAFETY: getpwnam is thread-safe when not modifying the passwd db.
+    // The pointer is valid until the next call to getpwnam on this thread.
+    let pw = unsafe { libc::getpwnam(name.as_ptr()) };
+    if pw.is_null() {
+        tracing::debug!("tako-app user not found; app processes will run as current user");
+        return None;
+    }
+    let uid = unsafe { (*pw).pw_uid };
+    let gid = unsafe { (*pw).pw_gid };
+    tracing::info!(uid, gid, "Resolved tako-app user for app process isolation");
+    Some((uid, gid))
+}
+
+impl Spawner {
 
     /// Spawn a new instance
     pub async fn spawn(&self, app: &App, instance: Arc<Instance>) -> Result<(), InstanceError> {
@@ -49,14 +74,23 @@ impl Spawner {
             .or_insert_with(|| "production".to_string());
 
         // Spawn process
-        let child = Command::new(&config.command[0])
+        let mut child_cmd = Command::new(&config.command[0]);
+        child_cmd
             .args(&config.command[1..])
             .current_dir(&config.cwd)
             .envs(env)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+
+        #[cfg(unix)]
+        if let Some((uid, gid)) = self.app_user {
+            use std::os::unix::process::CommandExt;
+            child_cmd.uid(uid);
+            child_cmd.gid(gid);
+        }
+
+        let child = child_cmd.spawn()?;
 
         instance.set_process(child);
         instance.set_state(InstanceState::Starting);
@@ -321,6 +355,19 @@ mod tests {
     fn test_spawner_creation() {
         let spawner = Spawner::new();
         // Just verify it creates without panic
+        drop(spawner);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn resolve_app_user_returns_none_gracefully_for_missing_user() {
+        use std::ffi::CString;
+        let name = CString::new("this-user-definitely-does-not-exist-tako-test").unwrap();
+        let pw = unsafe { libc::getpwnam(name.as_ptr()) };
+        assert!(pw.is_null(), "expected nonexistent user to return null");
+        // resolve_app_user looks up "tako-app"; on dev machines it won't exist.
+        // Calling Spawner::new() must not panic regardless.
+        let spawner = Spawner::new();
         drop(spawner);
     }
 

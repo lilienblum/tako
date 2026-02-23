@@ -88,61 +88,11 @@ ensure_privileged_bind_capability() {
   echo "warning: setcap not found; non-systemd/manual runs on :80/:443 may require root." >&2
 }
 
-install_upgrade_helper() {
-  cat > /usr/local/bin/tako-server-upgrade <<EOF
-#!/bin/sh
-set -eu
-
-if [ "\$(id -u)" -ne 0 ]; then
-  echo "error: run as root (use sudo)" >&2
+if ! systemd_is_usable; then
+  echo "error: systemd is required for tako-server" >&2
   exit 1
 fi
 
-run_installer() {
-  TAKO_USER='$TAKO_USER' \\
-  TAKO_HOME='$TAKO_HOME' \\
-  TAKO_SOCKET='$TAKO_SOCKET' \\
-  TAKO_INSTALL_MISE='$TAKO_INSTALL_MISE' \\
-  TAKO_MISE_VERSION='$TAKO_MISE_VERSION' \\
-  TAKO_MISE_BIN='$TAKO_MISE_BIN' \\
-  TAKO_DOWNLOAD_BASE_URL='$TAKO_DOWNLOAD_BASE_URL' \\
-  TAKO_SERVER_URL='${TAKO_SERVER_URL:-}' \\
-  TAKO_RESTART_SERVICE=0 \\
-  sh
-}
-
-if command -v curl >/dev/null 2>&1; then
-  curl -fsSL https://tako.sh/install-server | run_installer
-elif command -v wget >/dev/null 2>&1; then
-  wget -qO- https://tako.sh/install-server | run_installer
-else
-  echo "error: missing downloader (need curl or wget)" >&2
-  exit 1
-fi
-EOF
-  chmod 0755 /usr/local/bin/tako-server-upgrade
-}
-
-install_sudoers_rules() {
-  if ! need_cmd sudo; then
-    return
-  fi
-
-  systemctl_path="$(command -v systemctl || true)"
-  journalctl_path="$(command -v journalctl || true)"
-
-  if [ -n "$systemctl_path" ] && [ -n "$journalctl_path" ]; then
-    cat > /etc/sudoers.d/tako <<EOF
-$TAKO_USER ALL=(root) NOPASSWD: $systemctl_path reload tako-server, $systemctl_path restart tako-server, $systemctl_path is-active tako-server, $systemctl_path status tako-server, $journalctl_path -u tako-server *, /usr/local/bin/tako-server-upgrade
-EOF
-  else
-    cat > /etc/sudoers.d/tako <<EOF
-$TAKO_USER ALL=(root) NOPASSWD: /usr/local/bin/tako-server-upgrade
-EOF
-  fi
-
-  chmod 440 /etc/sudoers.d/tako
-}
 
 maybe_prompt_ssh_pubkey() {
   if [ -n "${TAKO_SSH_PUBKEY:-}" ]; then
@@ -504,10 +454,28 @@ if ! id -u "$TAKO_USER" >/dev/null 2>&1; then
   fi
 fi
 
+# Create `tako-app` user for app process isolation (no shell, in tako group).
+if ! id -u "tako-app" >/dev/null 2>&1; then
+  if need_cmd useradd; then
+    useradd --system --no-create-home --shell /usr/sbin/nologin --gid "$TAKO_USER" "tako-app" 2>/dev/null || \
+      useradd --system --no-create-home --shell /sbin/nologin --gid "$TAKO_USER" "tako-app"
+  elif need_cmd adduser; then
+    adduser -S -D -H -s /sbin/nologin -G "$TAKO_USER" "tako-app"
+  fi
+fi
+
+# Remove previous sudo/upgrade helper if present.
+rm -f /etc/sudoers.d/tako /usr/local/bin/tako-server-upgrade
+
 mkdir -p "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")"
 chown -R "$TAKO_USER":"$TAKO_USER" "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")" 2>/dev/null || true
-install_upgrade_helper
-install_sudoers_rules
+chmod 0700 "$TAKO_HOME"
+chmod 0700 "$(dirname "$TAKO_SOCKET")"
+
+# App socket directory writable by both tako and tako-app (group-shared).
+mkdir -p /var/run/tako-app
+chown "$TAKO_USER":"$TAKO_USER" /var/run/tako-app
+chmod 0770 /var/run/tako-app
 
 maybe_prompt_ssh_pubkey
 
@@ -534,49 +502,44 @@ else
   echo "warning: configure ~/.ssh/authorized_keys manually or rerun installer with TAKO_SSH_PUBKEY." >&2
 fi
 
-if systemd_is_usable; then
-  cat > /etc/systemd/system/tako-server.service <<EOF
+cat > /etc/systemd/system/tako-server.service <<EOF
 [Unit]
 Description=Tako Server
 After=network.target
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=all
 User=$TAKO_USER
 Group=$TAKO_USER
 NoNewPrivileges=true
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID
 ExecStart=/usr/local/bin/tako-server --socket $TAKO_SOCKET --data-dir $TAKO_HOME
+ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
 RestartSec=1
-KillMode=control-group
+KillMode=mixed
 TimeoutStopSec=30min
 RuntimeDirectory=tako
-RuntimeDirectoryMode=0755
+RuntimeDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
-  systemctl daemon-reload
-  if is_enabled "$TAKO_RESTART_SERVICE"; then
-    systemctl enable --now tako-server
-    systemctl --no-pager status tako-server || true
-    if ! systemctl is-active --quiet tako-server; then
-      echo "error: tako-server failed to start. Recent logs:" >&2
-      journalctl -u tako-server --no-pager -n 60 >&2 || true
-      exit 1
-    fi
-  else
-    systemctl enable tako-server >/dev/null 2>&1 || true
-    echo "OK install refreshed without restarting tako-server (TAKO_RESTART_SERVICE=0)"
+systemctl daemon-reload
+if is_enabled "$TAKO_RESTART_SERVICE"; then
+  systemctl enable --now tako-server
+  systemctl --no-pager status tako-server || true
+  if ! systemctl is-active --quiet tako-server; then
+    echo "error: tako-server failed to start. Recent logs:" >&2
+    journalctl -u tako-server --no-pager -n 60 >&2 || true
+    exit 1
   fi
 else
-  echo "warning: systemd not found; start tako-server manually:" >&2
-  echo "  sudo -u $TAKO_USER /usr/local/bin/tako-server --socket $TAKO_SOCKET --data-dir $TAKO_HOME" >&2
-  echo "  (if bind permission fails on :80/:443, install setcap/libcap or run as root)" >&2
-  echo "  /usr/local/bin/tako-server --socket $TAKO_SOCKET --data-dir $TAKO_HOME" >&2
+  systemctl enable tako-server >/dev/null 2>&1 || true
+  echo "OK install refreshed without restarting tako-server (TAKO_RESTART_SERVICE=0)"
 fi
 
 echo "OK installed tako-server"

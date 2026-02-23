@@ -131,7 +131,14 @@ impl ServerRuntimeConfig {
     }
 
     fn app_socket_dir(&self) -> PathBuf {
-        app_socket_dir_for_management_socket(&self.socket)
+        // Prefer /var/run/tako-app (production) for isolation; fall back to
+        // a directory derived from the management socket path (dev/local runs).
+        let preferred = PathBuf::from("/var/run/tako-app");
+        if preferred.exists() {
+            preferred
+        } else {
+            app_socket_dir_for_management_socket(&self.socket)
+        }
     }
 }
 
@@ -174,8 +181,7 @@ fn read_secrets_file(path: &Path) -> Result<HashMap<String, String>, String> {
     }
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("read secrets {}: {}", path.display(), e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("parse secrets {}: {}", path.display(), e))
+    serde_json::from_str(&content).map_err(|e| format!("parse secrets {}: {}", path.display(), e))
 }
 
 fn write_secrets_file(path: &Path, secrets: &HashMap<String, String>) -> Result<(), String> {
@@ -183,8 +189,8 @@ fn write_secrets_file(path: &Path, secrets: &HashMap<String, String>) -> Result<
         std::fs::create_dir_all(parent)
             .map_err(|e| format!("create dir {}: {}", parent.display(), e))?;
     }
-    let content = serde_json::to_string_pretty(secrets)
-        .map_err(|e| format!("serialize secrets: {}", e))?;
+    let content =
+        serde_json::to_string_pretty(secrets).map_err(|e| format!("serialize secrets: {}", e))?;
     std::fs::write(path, content.as_bytes())
         .map_err(|e| format!("write secrets {}: {}", path.display(), e))?;
     #[cfg(unix)]
@@ -346,13 +352,12 @@ impl ServerState {
                 tracing::warn!(app = %app_name, "Failed to read env vars from app.json: {}", e);
                 HashMap::new()
             });
-            config.secrets = read_secrets_file(
-                &secrets_file_path(&self.runtime.data_dir, &app_name),
-            )
-            .unwrap_or_else(|e| {
-                tracing::warn!(app = %app_name, "Failed to read secrets file: {}", e);
-                HashMap::new()
-            });
+            config.secrets =
+                read_secrets_file(&secrets_file_path(&self.runtime.data_dir, &app_name))
+                    .unwrap_or_else(|e| {
+                        tracing::warn!(app = %app_name, "Failed to read secrets file: {}", e);
+                        HashMap::new()
+                    });
 
             let app = self.app_manager.register_app(config.clone());
             self.load_balancer.register_app(app.clone());
@@ -437,8 +442,16 @@ impl ServerState {
                 if let Some(resp) = self.reject_mutating_when_upgrading("deploy").await {
                     return resp;
                 }
-                self.deploy_app(&app, &version, &path, routes, secrets, instances, idle_timeout)
-                    .await
+                self.deploy_app(
+                    &app,
+                    &version,
+                    &path,
+                    routes,
+                    secrets,
+                    instances,
+                    idle_timeout,
+                )
+                .await
             }
             Command::Stop { app } => {
                 if let Some(resp) = self.reject_mutating_when_upgrading("stop").await {
@@ -538,9 +551,23 @@ impl ServerState {
             return Response::error(format!("Invalid app release: {}", error));
         }
 
+        // Allow tako-app (in tako group) to read the release directory
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                Path::new(path),
+                std::fs::Permissions::from_mode(0o750),
+            );
+        }
+
         // Read non-secret env vars from app.json in the release dir
         let env_vars = env_vars_from_release_dir(Path::new(path)).unwrap_or_else(|e| {
-            tracing::warn!(app = app_name, "Failed to read env vars from app.json: {}", e);
+            tracing::warn!(
+                app = app_name,
+                "Failed to read env vars from app.json: {}",
+                e
+            );
             HashMap::new()
         });
 
@@ -2569,11 +2596,7 @@ exit 1
             [("DATABASE_URL".to_string(), "postgres://db".to_string())]
                 .into_iter()
                 .collect();
-        write_secrets_file(
-            &secrets_file_path(temp.path(), "my-app"),
-            &app_secrets,
-        )
-        .unwrap();
+        write_secrets_file(&secrets_file_path(temp.path(), "my-app"), &app_secrets).unwrap();
 
         let app = state_a.app_manager.register_app(AppConfig {
             name: "my-app".to_string(),
