@@ -24,7 +24,7 @@ Tako is built to make local development smooth and production deploys boring (th
 ## What Tako Does Well
 
 - Rolling deploys with health-based traffic shifts, no babysitting required.
-- Automatic server updates with zero downtime, so you do not have to manage upgrade handoffs manually.
+- Zero-downtime server updates — one command and tako handles the handoff.
 - Built-in load balancer. Scales down to `0`, scales up as far as you need.
 - Was it `3000`? `5000`? Or `8081`? With Tako, local setup is portless on `https://*.tako.local`.
 - Remote production routes are HTTPS by default (HTTP redirects to HTTPS).
