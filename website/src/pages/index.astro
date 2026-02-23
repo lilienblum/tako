@@ -321,20 +321,22 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   .btn {
-    border: 2px solid rgba(47, 42, 68, 0.26);
+    border: 1px solid var(--line);
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.86);
+    background: rgba(255, 255, 255, 0.8);
     color: var(--ink);
-    padding: 9px 16px;
+    padding: 7px 14px;
     font-family: "Nunito", sans-serif;
     font-size: 16px;
     font-weight: 600;
+    line-height: 1;
     text-decoration: none;
     cursor: pointer;
   }
 
   .btn:hover {
     transform: translateY(-1px);
+    background: rgba(232, 135, 131, 0.18);
   }
 
   .btn.primary {
@@ -543,6 +545,7 @@ import CopyButton from "../components/CopyButton.astro";
     padding: 14px;
     text-decoration: none;
     color: var(--ink);
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
   }
 
   .link-card strong {
@@ -561,10 +564,10 @@ import CopyButton from "../components/CopyButton.astro";
     margin-top: 6px;
   }
 
-  .link-card:nth-child(1) { transform: rotate(-1.3deg); }
-  .link-card:nth-child(2) { transform: rotate(0.6deg); }
-  .link-card:nth-child(3) { transform: rotate(-0.7deg); }
-  .link-card:hover { transform: translateY(-2px) rotate(-0.2deg); }
+  .link-card:nth-child(1) { border-top: 3px solid rgba(232, 135, 131, 0.55); }
+  .link-card:nth-child(2) { border-top: 3px solid rgba(155, 196, 182, 0.65); }
+  .link-card:nth-child(3) { border-top: 3px solid rgba(158, 201, 255, 0.65); }
+  .link-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(47, 42, 68, 0.12); }
 
   @keyframes drift {
     0%,
@@ -1095,20 +1098,22 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   .btn {
-    border: 2px solid rgba(47, 42, 68, 0.26);
+    border: 1px solid var(--line);
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.86);
+    background: rgba(255, 255, 255, 0.8);
     color: var(--ink);
-    padding: 9px 16px;
+    padding: 7px 14px;
     font-family: "Nunito", sans-serif;
     font-size: 16px;
     font-weight: 600;
+    line-height: 1;
     text-decoration: none;
     cursor: pointer;
   }
 
   .btn:hover {
     transform: translateY(-1px);
+    background: rgba(232, 135, 131, 0.18);
   }
 
   .btn.primary {
@@ -1317,6 +1322,7 @@ import CopyButton from "../components/CopyButton.astro";
     padding: 14px;
     text-decoration: none;
     color: var(--ink);
+    transition: transform 0.18s ease, box-shadow 0.18s ease;
   }
 
   .link-card strong {
@@ -1335,10 +1341,10 @@ import CopyButton from "../components/CopyButton.astro";
     margin-top: 6px;
   }
 
-  .link-card:nth-child(1) { transform: rotate(-1.3deg); }
-  .link-card:nth-child(2) { transform: rotate(0.6deg); }
-  .link-card:nth-child(3) { transform: rotate(-0.7deg); }
-  .link-card:hover { transform: translateY(-2px) rotate(-0.2deg); }
+  .link-card:nth-child(1) { border-top: 3px solid rgba(232, 135, 131, 0.55); }
+  .link-card:nth-child(2) { border-top: 3px solid rgba(155, 196, 182, 0.65); }
+  .link-card:nth-child(3) { border-top: 3px solid rgba(158, 201, 255, 0.65); }
+  .link-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(47, 42, 68, 0.12); }
 
   @keyframes drift {
     0%,
