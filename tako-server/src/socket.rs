@@ -6,7 +6,8 @@
 //! - delete: Delete an app from runtime state
 //! - status: Get app status
 //! - list: List all apps
-//! - reload: Reload configuration
+//! - update_secrets: Update an app's secrets and apply by rolling restart
+//! - server_info/enter_upgrading/exit_upgrading: Upgrade orchestration primitives
 
 use std::future::Future;
 use std::path::{Path, PathBuf};

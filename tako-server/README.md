@@ -14,12 +14,13 @@ Rust crate for the remote Tako runtime and proxy.
 - Serve management commands over Unix socket.
 - Report per-build runtime status (multiple concurrently running builds during rollout).
 - Validate on-demand (`instances = 0`) deploy startup before finalizing idle state.
-- Persist app runtime registration (config/routes/env) to SQLite and restore it on restart.
+- Persist app runtime registration (config/routes + release metadata) to SQLite and restore it on restart.
+- Read non-secret env vars from release `app.json` and secrets from per-app `secrets.json` (0600) under the data directory.
 - Persist server upgrade mode in SQLite and reject mutating commands while upgrading.
 - Use a single-owner durable upgrade lock so only one upgrade controller can enter upgrading mode at a time.
 - Expose `server_info`, `enter_upgrading`, and `exit_upgrading` management commands for upgrade orchestration.
-- Enable `SO_REUSEPORT` listeners for HTTP/HTTPS so temporary upgrade candidates can bind alongside the active process.
-- Support `--instance-port-offset` for temporary candidate processes to avoid app-port collisions during overlap.
+- Enable zero-downtime reload handoff with SIGHUP child spawn, `SO_REUSEPORT` listener overlap, and pid-specific management sockets (`tako-{pid}.sock`) behind stable symlink `tako.sock`.
+- Support `--instance-port-offset` to shift preferred instance port ranges when overlapping server processes are running.
 
 Routing policy notes:
 

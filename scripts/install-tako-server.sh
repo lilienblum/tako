@@ -9,7 +9,7 @@ set -eu
 # What it does:
 # - downloads and installs `tako-server`
 # - creates OS user `tako`
-# - configures a systemd service (when available)
+# - configures a systemd service (required for normal install/start)
 #
 # Optional env vars:
 #   TAKO_USER               default: tako

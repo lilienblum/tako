@@ -33,7 +33,7 @@ Operational behavior highlights:
 
 - `tako upgrade` upgrades only the local CLI (install-aware: Homebrew, Cargo, or hosted installer fallback).
 - `tako servers status` prints one global snapshot and exits.
-- `tako servers upgrade <name>` refreshes installer-managed server artifacts via `/usr/local/bin/tako-server-upgrade`, then performs a single-host candidate handoff using the server-side upgrade lock/mode.
+- `tako servers upgrade <name>` runs the remote installer in refresh mode (`TAKO_RESTART_SERVICE=0`) to update `/usr/local/bin/tako-server`, enters server upgrade mode, triggers `sudo systemctl reload tako-server` (SIGHUP), waits for readiness, then exits upgrade mode.
 - Status output shows separate lines for concurrently running builds of the same app.
 - App heading lines show `app (environment) state`; build/version is shown on the nested `build:` line.
 - `tako deploy` packages source files from the app's source root (git root when available; otherwise app directory), filtered by `.gitignore`.
