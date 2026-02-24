@@ -707,8 +707,9 @@ fn first_non_empty_line(value: &str) -> Option<&str> {
 }
 
 fn remote_installer_command() -> String {
-    // Run the tako-server installer as root; the connecting operator must have sudo.
-    "sudo sh -c 'curl -fsSL https://tako.sh/install-server | TAKO_RESTART_SERVICE=0 sh'".to_string()
+    // Download installer to a temp file before execution (avoid direct pipe-to-shell).
+    // The connecting operator must have sudo access on the host.
+    "sudo sh -c 'set -eu; installer=$(mktemp); trap \"rm -f $installer\" EXIT; curl -fsSL https://tako.sh/install-server -o \"$installer\"; TAKO_RESTART_SERVICE=0 sh \"$installer\"'".to_string()
 }
 
 fn format_installer_failure(output: &crate::ssh::CommandOutput) -> String {
@@ -716,7 +717,7 @@ fn format_installer_failure(output: &crate::ssh::CommandOutput) -> String {
     let message = first_non_empty_line(combined.trim()).unwrap_or("remote installer failed");
     let lower = message.to_ascii_lowercase();
     if lower.contains("password") || lower.contains("not allowed") || lower.contains("sorry") {
-        return "Remote user does not have sudo access. Ensure the connecting SSH user can run 'sudo sh' on the server.".to_string();
+        return "Remote user does not have sudo access. Ensure the connecting SSH user can run 'sudo sh -c ...' on the server.".to_string();
     }
     format!(
         "Remote installer failed with exit code {}: {}",
@@ -885,5 +886,13 @@ mod tests {
     fn parse_detected_libc_rejects_unknown_values() {
         let err = parse_detected_libc("uclibc\n").unwrap_err();
         assert!(err.contains("Unsupported server libc"));
+    }
+
+    #[test]
+    fn remote_installer_command_downloads_script_before_execution() {
+        let command = remote_installer_command();
+        assert!(command.contains("curl -fsSL https://tako.sh/install-server -o"));
+        assert!(command.contains("TAKO_RESTART_SERVICE=0 sh \"$installer\""));
+        assert!(!command.contains("| TAKO_RESTART_SERVICE=0 sh"));
     }
 }

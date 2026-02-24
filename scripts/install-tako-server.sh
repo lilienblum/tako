@@ -433,7 +433,15 @@ if [ -n "$expected_sha" ]; then
     exit 1
   fi
 else
-  echo "warning: could not fetch SHA256 ($sha_url); skipping integrity check" >&2
+  case "$sha_url" in
+    file://*)
+      echo "warning: local SHA256 file not found ($sha_url); skipping integrity check" >&2
+      ;;
+    *)
+      echo "error: could not fetch SHA256 ($sha_url); aborting install" >&2
+      exit 1
+      ;;
+  esac
 fi
 
 install -m 0755 "$tmp" /usr/local/bin/tako-server
