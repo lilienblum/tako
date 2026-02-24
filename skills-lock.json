@@ -10,6 +10,11 @@
       "source": "apollographql/skills",
       "sourceType": "github",
       "computedHash": "ba11ae333ab71e30dd83de34d5f5cfa23ed3ee782618215f7fb69b749d63762d"
+    },
+    "typescript-advanced-types": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "computedHash": "a03a83996ae9d2f4dd6d4db08899d61761c7d5351bce4c695d20a21197742a36"
     }
   }
 }
