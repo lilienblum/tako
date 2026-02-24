@@ -888,14 +888,12 @@ Apps specify routes at environment level (not per-server). Routes support:
 
 Manual for v1. Users run a server setup script (or equivalent manual steps) to:
 
-1. Create two dedicated OS users for process isolation: `tako` for SSH access and running `tako-server`, and `tako-app` for spawned app processes
+1. Create dedicated OS users: `tako` for SSH access and running `tako-server` (plus `tako-app` for optional privileged process-separation setups)
 2. Install `tako-server` to `/usr/local/bin/tako-server`
 3. Install and enable a systemd service (systemd is required)
 4. Create and permissions required directories:
    - Data dir: `/opt/tako`
    - Socket dir: `/var/run/tako`
-
-The two-user model provides security isolation: `tako-server` runs as `tako` and spawns app processes as `tako-app`, so app processes cannot access the server's management socket or credentials.
 
 Recommended: run the hosted installer script on the server (as root):
 
@@ -908,10 +906,12 @@ Installer SSH key behavior:
 - If `TAKO_SSH_PUBKEY` is set, installer uses it and skips prompting.
 - If unset and running interactively, installer prompts for a public key to authorize for user `tako`.
 - If unset and non-interactive, installer continues without key setup and prints a warning.
+- CLI SSH connections require host key verification against `~/.ssh/known_hosts` (or configured SSH keys directory); unknown/changed host keys are rejected.
 - Installer detects host target (`arch` + `libc`) and downloads matching artifact name `tako-server-linux-{arch}-{libc}` (supported: `x86_64`/`aarch64` with `glibc`/`musl`).
 - Installer ensures `nc` (netcat) is available so CLI management commands can talk to `/var/run/tako/tako.sock`.
 - Installer installs `mise` on the server (package-manager first; fallback to upstream installer when distro packages are unavailable).
-- Installer creates both `tako` and `tako-app` OS users for two-user process isolation.
+- Installer creates both `tako` and `tako-app` OS users.
+- Installer configures systemd capabilities to `CAP_NET_BIND_SERVICE` only.
 - Installer requires systemd; non-systemd hosts are not supported.
 - Installer configures systemd with `KillMode=control-group` and `TimeoutStopSec=30min`, so restart/stop waits up to 30 minutes for graceful app shutdown across all service child processes before forced termination.
 - Installer verifies `tako-server` is active after `enable --now`; if startup fails, installer exits non-zero and prints recent service logs.
@@ -927,13 +927,13 @@ Reference script in this repo: `scripts/install-tako-server.sh` (source for `/in
 - ACME: Production Let's Encrypt
 - Renewal: Every 12 hours
 - HTTP requests redirect to HTTPS (`307`, non-cacheable) by default.
-- Exceptions: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status` stay on HTTP.
+- Exception: `/.well-known/acme-challenge/*` stays on HTTP.
 - Forwarded requests for private/local hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing, so local forwarding setups do not enter redirect loops.
 - Upstream response caching is enabled at the edge proxy for `GET`/`HEAD` requests (websocket upgrades are excluded).
 - Cache admission follows response headers (`Cache-Control` / `Expires`) with no implicit TTL defaults; responses without explicit cache directives are not stored.
 - Cache key includes request host + URI so different route hosts are isolated.
 - Proxy cache storage is in-memory with bounded LRU eviction (256 MiB total, 8 MiB per cached response body).
-- No application path namespace is reserved at the edge proxy. Non-internal-host requests are routed to apps.
+- No application path namespace is reserved at the edge proxy. Requests are routed strictly by configured routes.
 
 **Optional `/opt/tako/server-config.toml`:**
 
@@ -1071,6 +1071,12 @@ Response:
 }
 ```
 
+Server-side validation on `deploy` and app-scoped commands:
+
+- `app` must be a normalized app id (`[a-z][a-z0-9-]{0,62}` with no trailing `-`).
+- `version` must be a simple release id (letters/digits/`.-_`, no path separators).
+- `path` must resolve under `<data-dir>/apps/<app>/releases/`.
+
 - `routes` (returns app → routes mapping used for conflict detection/debugging):
 
 ```json
@@ -1107,48 +1113,34 @@ Response:
 Active HTTP probing is the source of truth for instance health:
 
 - **Probe interval**: 1 second by default (configurable)
-- **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako.internal`
+- **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako-internal`
 - **Unhealthy threshold**: 2 consecutive failures → mark unhealthy, remove from load balancer
 - **Dead threshold**: 5 consecutive failures → mark stopped, kill process
 - **Recovery**: Single successful probe resets failure count and restores to healthy
 
-#### Internal Status Endpoint
+#### Internal Probe Contract
 
-Tako-server exposes a host-gated status endpoint for health monitoring:
+Tako-server performs health checks against the deployed app process:
 
 ```
 GET /status
-Host: tako.internal
+Host: tako-internal
 ```
 
-Response (200 if healthy, 503 if unhealthy):
+Expected response:
 
 ```json
 {
-  "healthy": true,
-  "apps": [
-    {
-      "name": "my-app",
-      "version": "v1.2.3",
-      "state": "running",
-      "last_error": null,
-      "instances": [
-        {
-          "id": 1,
-          "state": "healthy",
-          "port": 3000,
-          "pid": 12345,
-          "uptime_secs": 3600,
-          "requests_total": 50000
-        }
-      ]
-    }
-  ]
+  "status": "healthy",
+  "app": "dashboard",
+  "version": "abc1234",
+  "instance_id": 1,
+  "pid": 12345,
+  "uptime_seconds": 3600
 }
 ```
 
-Requests that do not use internal host `tako.internal` are routed to apps normally.
-The internal status endpoint is accessible on both HTTP and HTTPS, bypasses routing, and is not redirected.
+The SDK wrappers implement this endpoint automatically. The edge proxy does not reserve or bypass `Host: tako-internal` routes.
 
 ## TLS/SSL Certificates
 
@@ -1244,12 +1236,12 @@ import { takoVitePlugin } from "tako.sh/vite";
 
 - Fetch handler adapters for Bun/Node/Deno runtimes
 - Unix socket serving when `TAKO_APP_SOCKET` is set (TCP fallback in dev/local)
-- Internal status endpoint (`Host: tako.internal` + `/status`)
+- Internal status endpoint (`Host: tako-internal` + `/status`)
 - Graceful shutdown handling
 
 ### Built-in Endpoints
 
-**`GET /status` with `Host: tako.internal`**
+**`GET /status` with `Host: tako-internal`**
 
 ```json
 {

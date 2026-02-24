@@ -56,6 +56,7 @@ Before you ship, do a quick sanity pass:
 Each target server should have:
 
 - SSH access as the configured deployment user (typically `tako`).
+- Local SSH `known_hosts` entry for each target host (unknown/changed host keys are rejected).
 - `tako-server` installed and running.
 - `tako-server` installed via the hosted installer (or equivalent) for the host target; installer resolves `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>`.
 - systemd present and active (required by the installer and by `tako servers upgrade`).
@@ -173,12 +174,12 @@ Each target server should have:
 - Use `tako releases rollback <release-id> --env <environment>` to roll back to a previous release id using normal rolling-update behavior.
 - `tako servers upgrade <name>` installs the updated server binary then performs an in-place reload via `systemctl reload tako-server` (SIGHUP). Systemd is required.
 - HTTP requests are redirected to HTTPS by default (307 with `Cache-Control: no-store`).
-- Exceptions on HTTP: `/.well-known/acme-challenge/*` and internal `Host: tako.internal` + `/status`.
+- Exception on HTTP: `/.well-known/acme-challenge/*`.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.
 - Edge proxy response caching is enabled for proxied `GET`/`HEAD` requests (websocket upgrades excluded).
 - Cache admission follows response `Cache-Control` / `Expires` headers with no implicit TTL defaults.
 - Cache keys are host + URI, with in-memory LRU limits of 256 MiB total and 8 MiB max per cached response body.
-- Requests without internal host are routed to apps normally.
+- Requests are routed strictly by configured routes.
 - Exact path route matches normalize trailing slash (`example.com/api` and `example.com/api/` are equivalent).
 - Static asset requests (file-extension paths) are served from the deployed app `public/` directory when present, including path-prefixed routes via prefix-stripped static lookup.
 - Private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) get self-signed certs during deploy; public hostnames use ACME.

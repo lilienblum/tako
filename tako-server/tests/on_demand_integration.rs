@@ -5,8 +5,6 @@ use std::time::Duration;
 
 use support::{TestServer, bun_ok, can_bind_local_ports, wait_for, write_bun_app};
 
-use tempfile::TempDir;
-
 #[test]
 fn on_demand_cold_start_and_idle_scale_to_zero() {
     if !bun_ok() {
@@ -37,8 +35,12 @@ fn on_demand_cold_start_and_idle_scale_to_zero() {
 
 fn run_on_demand_case() -> Result<(), String> {
     let server = TestServer::start();
-    let temp = TempDir::new().map_err(|e| e.to_string())?;
-    let app_dir = temp.path().join("app");
+    let app_dir = server
+        .data_dir()
+        .join("apps")
+        .join("test-app")
+        .join("releases")
+        .join("v1");
     fs::create_dir_all(&app_dir).map_err(|e| e.to_string())?;
     write_bun_app(&app_dir, "hello");
 
@@ -158,8 +160,12 @@ fn on_demand_startup_failure_does_not_hang() {
     }
 
     let server = TestServer::start();
-    let temp = TempDir::new().expect("create temp dir");
-    let app_dir = temp.path().join("app");
+    let app_dir = server
+        .data_dir()
+        .join("apps")
+        .join("failing-app")
+        .join("releases")
+        .join("v1");
     fs::create_dir_all(&app_dir).expect("create app dir");
     fs::create_dir_all(app_dir.join("src")).expect("create src dir");
     fs::write(

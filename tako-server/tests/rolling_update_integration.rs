@@ -5,8 +5,6 @@ use std::time::Duration;
 
 use support::{TestServer, bun_ok, can_bind_local_ports, wait_for, write_bun_app};
 
-use tempfile::TempDir;
-
 #[test]
 fn rolling_update_deploy_updates_version_and_serves_new_code() {
     if !bun_ok() {
@@ -17,11 +15,22 @@ fn rolling_update_deploy_updates_version_and_serves_new_code() {
     }
 
     let server = TestServer::start();
-    let temp = TempDir::new().unwrap();
-    let app_dir = temp.path().join("app");
-    fs::create_dir_all(&app_dir).unwrap();
+    let app_dir_v1 = server
+        .data_dir()
+        .join("apps")
+        .join("test-app")
+        .join("releases")
+        .join("v1");
+    let app_dir_v2 = server
+        .data_dir()
+        .join("apps")
+        .join("test-app")
+        .join("releases")
+        .join("v2");
+    fs::create_dir_all(&app_dir_v1).unwrap();
+    fs::create_dir_all(&app_dir_v2).unwrap();
 
-    write_bun_app(&app_dir, "v1");
+    write_bun_app(&app_dir_v1, "v1");
 
     let host = "test.localhost";
 
@@ -29,7 +38,7 @@ fn rolling_update_deploy_updates_version_and_serves_new_code() {
         "command": "deploy",
         "app": "test-app",
         "version": "v1",
-        "path": app_dir.to_string_lossy(),
+        "path": app_dir_v1.to_string_lossy(),
         "routes": [host],
         "instances": 1,
         "idle_timeout": 300,
@@ -56,13 +65,13 @@ fn rolling_update_deploy_updates_version_and_serves_new_code() {
     );
 
     // Deploy v2 (rolling update).
-    write_bun_app(&app_dir, "v2");
+    write_bun_app(&app_dir_v2, "v2");
 
     let resp = server.send_command(&serde_json::json!({
         "command": "deploy",
         "app": "test-app",
         "version": "v2",
-        "path": app_dir.to_string_lossy(),
+        "path": app_dir_v2.to_string_lossy(),
         "routes": [host],
         "instances": 1,
         "idle_timeout": 300,

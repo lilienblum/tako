@@ -439,6 +439,12 @@ impl ServerState {
                 instances,
                 idle_timeout,
             } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
+                if let Err(msg) = validate_release_version(&version) {
+                    return Response::error(msg);
+                }
                 if let Some(resp) = self.reject_mutating_when_upgrading("deploy").await {
                     return resp;
                 }
@@ -454,28 +460,53 @@ impl ServerState {
                 .await
             }
             Command::Stop { app } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
                 if let Some(resp) = self.reject_mutating_when_upgrading("stop").await {
                     return resp;
                 }
                 self.stop_app(&app).await
             }
             Command::Delete { app } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
                 if let Some(resp) = self.reject_mutating_when_upgrading("delete").await {
                     return resp;
                 }
                 self.delete_app(&app).await
             }
-            Command::Status { app } => self.get_status(&app).await,
+            Command::Status { app } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
+                self.get_status(&app).await
+            }
             Command::List => self.list_apps().await,
-            Command::ListReleases { app } => self.list_releases(&app).await,
+            Command::ListReleases { app } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
+                self.list_releases(&app).await
+            }
             Command::Routes => self.list_routes().await,
             Command::Rollback { app, version } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
+                if let Err(msg) = validate_release_version(&version) {
+                    return Response::error(msg);
+                }
                 if let Some(resp) = self.reject_mutating_when_upgrading("rollback").await {
                     return resp;
                 }
                 self.rollback_app(&app, &version).await
             }
             Command::UpdateSecrets { app, secrets } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
                 if let Some(resp) = self.reject_mutating_when_upgrading("update-secrets").await {
                     return resp;
                 }
@@ -527,9 +558,20 @@ impl ServerState {
     ) -> Response {
         tracing::info!(app = app_name, version = version, "Deploying app");
 
+        if let Err(msg) = validate_app_name(app_name) {
+            return Response::error(msg);
+        }
+        if let Err(msg) = validate_release_version(version) {
+            return Response::error(msg);
+        }
         if let Err(msg) = validate_deploy_routes(&routes) {
             return Response::error(msg);
         }
+        let release_path =
+            match validate_release_path_for_app(&self.runtime.data_dir, app_name, path) {
+                Ok(value) => value,
+                Err(msg) => return Response::error(msg),
+            };
 
         // Acquire deploy lock for this app (non-blocking check)
         let lock = self.get_deploy_lock(app_name).await;
@@ -547,7 +589,7 @@ impl ServerState {
             }
         };
 
-        if let Err(error) = prepare_release_runtime(Path::new(path), &HashMap::new()).await {
+        if let Err(error) = prepare_release_runtime(&release_path, &HashMap::new()).await {
             return Response::error(format!("Invalid app release: {}", error));
         }
 
@@ -555,12 +597,11 @@ impl ServerState {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ =
-                std::fs::set_permissions(Path::new(path), std::fs::Permissions::from_mode(0o750));
+            let _ = std::fs::set_permissions(&release_path, std::fs::Permissions::from_mode(0o750));
         }
 
         // Read non-secret env vars from app.json in the release dir
-        let env_vars = env_vars_from_release_dir(Path::new(path)).unwrap_or_else(|e| {
+        let env_vars = env_vars_from_release_dir(&release_path).unwrap_or_else(|e| {
             tracing::warn!(
                 app = app_name,
                 "Failed to read env vars from app.json: {}",
@@ -581,8 +622,8 @@ impl ServerState {
                 // Update existing app config. We'll perform a rolling update if instances are running.
                 let mut config = existing.config.read().clone();
                 config.version = version.to_string();
-                config.path = PathBuf::from(path);
-                config.cwd = PathBuf::from(path);
+                config.path = release_path.clone();
+                config.cwd = release_path.clone();
                 config.env_vars = env_vars;
                 config.secrets = secrets;
                 config.min_instances = instances as u32;
@@ -601,9 +642,9 @@ impl ServerState {
                 let config = AppConfig {
                     name: app_name.to_string(),
                     version: version.to_string(),
-                    path: PathBuf::from(path),
-                    cwd: PathBuf::from(path),
-                    command: match command_for_release_dir(Path::new(path)) {
+                    path: release_path.clone(),
+                    cwd: release_path.clone(),
+                    command: match command_for_release_dir(&release_path) {
                         Ok(cmd) => cmd,
                         Err(e) => {
                             return Response::error(format!("Invalid app release: {}", e));
@@ -1487,6 +1528,87 @@ fn should_use_self_signed_route_cert(domain: &str) -> bool {
     is_private_local_hostname(domain)
 }
 
+fn validate_app_name(app_name: &str) -> Result<(), String> {
+    if app_name.is_empty() {
+        return Err("Invalid app name: must not be empty".to_string());
+    }
+    if app_name.len() > 63 {
+        return Err("Invalid app name: must be 63 characters or fewer".to_string());
+    }
+    if !app_name
+        .chars()
+        .next()
+        .map(|c| c.is_ascii_lowercase())
+        .unwrap_or(false)
+    {
+        return Err("Invalid app name: must start with a lowercase letter".to_string());
+    }
+    if app_name.ends_with('-') {
+        return Err("Invalid app name: must not end with '-'".to_string());
+    }
+    if !app_name
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+    {
+        return Err(
+            "Invalid app name: only lowercase letters, digits, and '-' are allowed".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_release_version(version: &str) -> Result<(), String> {
+    if version.is_empty() {
+        return Err("Invalid release version: must not be empty".to_string());
+    }
+    if version.len() > 128 {
+        return Err("Invalid release version: must be 128 characters or fewer".to_string());
+    }
+    if version == "." || version == ".." {
+        return Err("Invalid release version: '.' and '..' are not allowed".to_string());
+    }
+    if version.contains('/') || version.contains('\\') {
+        return Err("Invalid release version: path separators are not allowed".to_string());
+    }
+    if !version
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
+    {
+        return Err(
+            "Invalid release version: only letters, digits, '.', '_' and '-' are allowed"
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_release_path_for_app(
+    data_dir: &Path,
+    app_name: &str,
+    path: &str,
+) -> Result<PathBuf, String> {
+    let release_path = std::fs::canonicalize(Path::new(path))
+        .map_err(|e| format!("Invalid release path: {} ({})", path, e))?;
+    if !release_path.is_dir() {
+        return Err(format!(
+            "Invalid release path: '{}' must be an existing directory",
+            release_path.display()
+        ));
+    }
+
+    let expected_root = data_dir.join("apps").join(app_name).join("releases");
+    let expected_root = std::fs::canonicalize(&expected_root).unwrap_or(expected_root);
+    if !release_path.starts_with(&expected_root) {
+        return Err(format!(
+            "Invalid release path: '{}' must stay under '{}'",
+            release_path.display(),
+            expected_root.display()
+        ));
+    }
+
+    Ok(release_path)
+}
+
 fn validate_deploy_routes(routes: &[String]) -> Result<(), String> {
     if routes.is_empty() {
         return Err("Deploy rejected: app must define at least one route".to_string());
@@ -2198,6 +2320,104 @@ mod tests {
         assert!(err.contains("non-empty"));
     }
 
+    #[tokio::test]
+    async fn deploy_rejects_invalid_app_name() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+
+        let response = state
+            .handle_command(Command::Deploy {
+                app: "../escape".to_string(),
+                version: "v1".to_string(),
+                path: temp.path().to_string_lossy().to_string(),
+                routes: vec!["api.example.com".to_string()],
+                secrets: HashMap::new(),
+                instances: 1,
+                idle_timeout: 300,
+            })
+            .await;
+
+        let Response::Error { message } = response else {
+            panic!("expected invalid app name to be rejected");
+        };
+        assert!(message.contains("Invalid app name"), "got: {message}");
+    }
+
+    #[tokio::test]
+    async fn deploy_rejects_release_path_outside_managed_root() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+
+        let outside_release = temp.path().join("outside-release");
+        std::fs::create_dir_all(&outside_release).unwrap();
+
+        let response = state
+            .handle_command(Command::Deploy {
+                app: "demo-app".to_string(),
+                version: "v1".to_string(),
+                path: outside_release.to_string_lossy().to_string(),
+                routes: vec!["api.example.com".to_string()],
+                secrets: HashMap::new(),
+                instances: 1,
+                idle_timeout: 300,
+            })
+            .await;
+
+        let Response::Error { message } = response else {
+            panic!("expected out-of-root deploy path to be rejected");
+        };
+        assert!(
+            message.contains("Invalid release path"),
+            "expected path validation error, got: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn deploy_rejects_invalid_release_version() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+
+        let release_dir = temp
+            .path()
+            .join("apps")
+            .join("demo-app")
+            .join("releases")
+            .join("v1");
+        std::fs::create_dir_all(&release_dir).unwrap();
+
+        let response = state
+            .handle_command(Command::Deploy {
+                app: "demo-app".to_string(),
+                version: "../v1".to_string(),
+                path: release_dir.to_string_lossy().to_string(),
+                routes: vec!["api.example.com".to_string()],
+                secrets: HashMap::new(),
+                instances: 1,
+                idle_timeout: 300,
+            })
+            .await;
+
+        let Response::Error { message } = response else {
+            panic!("expected invalid release version to be rejected");
+        };
+        assert!(
+            message.contains("Invalid release version"),
+            "got: {message}"
+        );
+    }
+
     #[test]
     fn private_route_domains_prefer_self_signed_certs() {
         assert!(should_use_self_signed_route_cert(
@@ -2495,6 +2715,27 @@ exit 1
             .await;
         assert!(matches!(response, Response::Ok { .. }));
         assert!(state.app_manager.get_app("missing-app").is_none());
+    }
+
+    #[tokio::test]
+    async fn delete_command_rejects_invalid_app_name() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+
+        let response = state
+            .handle_command(Command::Delete {
+                app: "../bad".to_string(),
+            })
+            .await;
+
+        let Response::Error { message } = response else {
+            panic!("expected invalid app name to be rejected");
+        };
+        assert!(message.contains("Invalid app name"), "got: {message}");
     }
 
     #[tokio::test]

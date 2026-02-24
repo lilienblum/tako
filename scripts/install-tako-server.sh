@@ -462,7 +462,7 @@ if ! id -u "$TAKO_USER" >/dev/null 2>&1; then
   fi
 fi
 
-# Create `tako-app` user for app process isolation (no shell, in tako group).
+# Create optional `tako-app` user (used by privileged process-separation setups).
 if ! id -u "tako-app" >/dev/null 2>&1; then
   if need_cmd useradd; then
     useradd --system --no-create-home --shell /usr/sbin/nologin --gid "$TAKO_USER" "tako-app" 2>/dev/null || \
@@ -521,8 +521,8 @@ NotifyAccess=all
 User=$TAKO_USER
 Group=$TAKO_USER
 NoNewPrivileges=true
-AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 ExecStart=/usr/local/bin/tako-server --socket $TAKO_SOCKET --data-dir $TAKO_HOME
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always

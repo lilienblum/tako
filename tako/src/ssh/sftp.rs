@@ -280,11 +280,13 @@ pub async fn upload_via_scp(
 
     let remote_target = format!("tako@{}:{}", remote_host, remote_path);
     let identity_file = find_ssh_identity_file(keys_dir);
+    let known_hosts_file = keys_dir.join("known_hosts");
     let args = build_scp_args(
         local_path,
         remote_port,
         &remote_target,
         identity_file.as_deref(),
+        &known_hosts_file,
     );
 
     let output = Command::new("scp").args(args).output().await?;
@@ -316,12 +318,15 @@ fn build_scp_args(
     remote_port: u16,
     remote_target: &str,
     identity_file: Option<&Path>,
+    known_hosts_file: &Path,
 ) -> Vec<OsString> {
     let mut args = vec![
         OsString::from("-P"),
         OsString::from(remote_port.to_string()),
         OsString::from("-o"),
-        OsString::from("StrictHostKeyChecking=no"),
+        OsString::from("StrictHostKeyChecking=yes"),
+        OsString::from("-o"),
+        OsString::from(format!("UserKnownHostsFile={}", known_hosts_file.display())),
         OsString::from("-o"),
         OsString::from("BatchMode=yes"),
     ];
@@ -375,11 +380,13 @@ mod tests {
     fn includes_identity_args_when_identity_file_is_present() {
         let local = Path::new("/tmp/archive.tar.gz");
         let identity = Path::new("/tmp/.ssh/id_ed25519");
+        let known_hosts = Path::new("/tmp/.ssh/known_hosts");
         let args = build_scp_args(
             local,
             22,
             "tako@server1:/remote/release.tar.gz",
             Some(identity),
+            known_hosts,
         );
 
         let args_as_strings: Vec<String> = args
@@ -390,12 +397,21 @@ mod tests {
         assert!(args_as_strings.contains(&"-i".to_string()));
         assert!(args_as_strings.contains(&"/tmp/.ssh/id_ed25519".to_string()));
         assert!(args_as_strings.contains(&"IdentitiesOnly=yes".to_string()));
+        assert!(args_as_strings.contains(&"StrictHostKeyChecking=yes".to_string()));
+        assert!(args_as_strings.contains(&"UserKnownHostsFile=/tmp/.ssh/known_hosts".to_string()));
     }
 
     #[test]
     fn omits_identity_args_when_identity_file_is_absent() {
         let local = Path::new("/tmp/archive.tar.gz");
-        let args = build_scp_args(local, 22, "tako@server1:/remote/release.tar.gz", None);
+        let known_hosts = Path::new("/tmp/.ssh/known_hosts");
+        let args = build_scp_args(
+            local,
+            22,
+            "tako@server1:/remote/release.tar.gz",
+            None,
+            known_hosts,
+        );
 
         let args_as_strings: Vec<String> = args
             .iter()
@@ -404,5 +420,7 @@ mod tests {
 
         assert!(!args_as_strings.contains(&"-i".to_string()));
         assert!(!args_as_strings.contains(&"IdentitiesOnly=yes".to_string()));
+        assert!(args_as_strings.contains(&"StrictHostKeyChecking=yes".to_string()));
+        assert!(args_as_strings.contains(&"UserKnownHostsFile=/tmp/.ssh/known_hosts".to_string()));
     }
 }

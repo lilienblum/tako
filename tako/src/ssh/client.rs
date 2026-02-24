@@ -2,7 +2,9 @@
 
 use super::error::{SshError, SshResult};
 use russh::client::{self, Config, Handle, Handler};
-use russh::keys::{Algorithm, PrivateKeyWithHashAlg, PublicKey, load_secret_key};
+use russh::keys::{
+    Algorithm, PrivateKeyWithHashAlg, PublicKey, check_known_hosts_path, load_secret_key,
+};
 use russh::{ChannelMsg, Disconnect};
 use std::future::Future;
 use std::io::IsTerminal;
@@ -43,6 +45,11 @@ impl SshConfig {
                 .join(".ssh")
         })
     }
+
+    /// Get the known_hosts file path.
+    pub fn known_hosts_file(&self) -> PathBuf {
+        self.keys_directory().join("known_hosts")
+    }
 }
 
 /// Output from a command execution
@@ -76,8 +83,12 @@ impl CommandOutput {
 
 /// Handler for SSH client events
 pub struct SshHandler {
-    /// Whether to accept any host key (for known hosts we'd verify)
-    accept_any_host_key: bool,
+    /// Expected host name
+    host: String,
+    /// Expected host port
+    port: u16,
+    /// Path to known_hosts file
+    known_hosts_path: PathBuf,
 }
 
 impl Handler for SshHandler {
@@ -85,12 +96,27 @@ impl Handler for SshHandler {
 
     fn check_server_key(
         &mut self,
-        _server_public_key: &PublicKey,
+        server_public_key: &PublicKey,
     ) -> impl Future<Output = std::result::Result<bool, Self::Error>> + Send {
-        // In production, we should verify against known_hosts
-        // For now, accept all keys (like ssh -o StrictHostKeyChecking=no)
-        let accept = self.accept_any_host_key;
-        async move { Ok(accept) }
+        let host = self.host.clone();
+        let port = self.port;
+        let known_hosts_path = self.known_hosts_path.clone();
+        let known_hosts_display = known_hosts_path.display().to_string();
+        let verification =
+            check_known_hosts_path(&host, port, server_public_key, &known_hosts_path)
+                .map_err(|error| error.to_string());
+
+        async move {
+            match verification {
+                Ok(true) => Ok(true),
+                Ok(false) => Err(SshError::HostKeyVerification {
+                    host: format!("{host}:{port} (not found in {known_hosts_display})"),
+                }),
+                Err(error) => Err(SshError::HostKeyVerification {
+                    host: format!("{host}:{port} ({error})"),
+                }),
+            }
+        }
     }
 }
 
@@ -147,13 +173,21 @@ impl SshClient {
             ..Default::default()
         };
 
+        let known_hosts_path = self.config.known_hosts_file();
         let handler = SshHandler {
-            accept_any_host_key: true,
+            host: self.config.host.clone(),
+            port: self.config.port,
+            known_hosts_path: known_hosts_path.clone(),
         };
 
         let addr = format!("{}:{}", self.config.host, self.config.port);
 
-        tracing::debug!(host = %self.config.host, port = self.config.port, "Connecting to SSH server");
+        tracing::debug!(
+            host = %self.config.host,
+            port = self.config.port,
+            known_hosts = %known_hosts_path.display(),
+            "Connecting to SSH server"
+        );
 
         let mut handle = tokio::time::timeout(self.config.timeout, async {
             client::connect(Arc::new(ssh_config), addr, handler).await
@@ -330,6 +364,11 @@ impl SshClient {
 
     /// Execute a command on the remote server
     pub async fn exec(&self, command: &str) -> SshResult<CommandOutput> {
+        self.exec_with_stdin(command, &[]).await
+    }
+
+    /// Execute a command on the remote server while providing stdin bytes.
+    async fn exec_with_stdin(&self, command: &str, stdin: &[u8]) -> SshResult<CommandOutput> {
         let handle = self.handle.as_ref().ok_or(SshError::NotConnected)?;
 
         tracing::debug!(command = %command, "Executing remote command");
@@ -343,6 +382,17 @@ impl SshClient {
             .exec(true, command)
             .await
             .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+
+        if !stdin.is_empty() {
+            channel
+                .data(stdin)
+                .await
+                .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+            channel
+                .eof()
+                .await
+                .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+        }
 
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
@@ -385,7 +435,15 @@ impl SshClient {
 
     /// Execute a command and return error if it fails
     pub async fn exec_checked(&self, command: &str) -> SshResult<CommandOutput> {
-        let output = self.exec(command).await?;
+        self.exec_checked_with_stdin(command, &[]).await
+    }
+
+    async fn exec_checked_with_stdin(
+        &self,
+        command: &str,
+        stdin: &[u8],
+    ) -> SshResult<CommandOutput> {
+        let output = self.exec_with_stdin(command, stdin).await?;
 
         if !output.success() {
             return Err(SshError::NonZeroExit {
@@ -564,24 +622,23 @@ impl SshClient {
     }
 
     async fn tako_command_raw(&self, json_command: &str) -> SshResult<String> {
+        let mut payload = String::with_capacity(json_command.len() + 1);
+        payload.push_str(json_command);
+        payload.push('\n');
         let output = self
-            .exec_checked(&Self::socket_request_command(json_command))
+            .exec_checked_with_stdin(&Self::socket_request_command(), payload.as_bytes())
             .await?;
         Self::extract_socket_stdout(output)
     }
 
-    fn socket_request_command(json_command: &str) -> String {
+    fn socket_request_command() -> String {
         // `nc` implementations can keep the connection open after writing stdin.
         // Read one JSONL line and terminate the pipeline deterministically.
-        Self::socket_request_command_on_path("/var/run/tako/tako.sock", json_command)
+        Self::socket_request_command_on_path("/var/run/tako/tako.sock")
     }
 
-    fn socket_request_command_on_path(socket_path: &str, json_command: &str) -> String {
-        format!(
-            "printf '%s\\n' '{}' | nc -U '{}' | head -n 1",
-            json_command.replace("'", "'\\''"),
-            socket_path.replace("'", "'\\''")
-        )
+    fn socket_request_command_on_path(socket_path: &str) -> String {
+        format!("nc -U '{}' | head -n 1", socket_path.replace("'", "'\\''"))
     }
 
     fn extract_socket_stdout(output: CommandOutput) -> SshResult<String> {
@@ -716,11 +773,14 @@ impl SshClient {
         socket_path: &str,
         json_command: &str,
     ) -> SshResult<String> {
+        let mut payload = String::with_capacity(json_command.len() + 1);
+        payload.push_str(json_command);
+        payload.push('\n');
         let output = self
-            .exec_checked(&Self::socket_request_command_on_path(
-                socket_path,
-                json_command,
-            ))
+            .exec_checked_with_stdin(
+                &Self::socket_request_command_on_path(socket_path),
+                payload.as_bytes(),
+            )
             .await?;
         Self::extract_socket_stdout(output)
     }
@@ -919,19 +979,16 @@ l4QMs5cmnWfrM0GQ==\n\
     }
 
     #[test]
-    fn socket_request_command_reads_one_line_and_escapes_payload() {
-        let command = SshClient::socket_request_command("{\"k\":\"it's\"}");
+    fn socket_request_command_reads_one_line() {
+        let command = SshClient::socket_request_command();
         assert!(command.contains("| head -n 1"));
-        assert!(command.contains("it'\\''s"));
-        assert!(command.starts_with("printf '%s\\n'"));
+        assert!(command.contains("nc -U '/var/run/tako/tako.sock'"));
+        assert!(!command.contains("printf '%s\\n'"));
     }
 
     #[test]
     fn socket_request_command_on_path_uses_custom_socket() {
-        let command = SshClient::socket_request_command_on_path(
-            "/tmp/tako-next.sock",
-            "{\"command\":\"list\"}",
-        );
+        let command = SshClient::socket_request_command_on_path("/tmp/tako-next.sock");
         assert!(command.contains("nc -U '/tmp/tako-next.sock'"));
         assert!(command.contains("| head -n 1"));
     }
@@ -1023,6 +1080,7 @@ l4QMs5cmnWfrM0GQ==\n\
 
         let mut rng = russh::keys::ssh_key::rand_core::OsRng;
         let host_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("host key");
+        let host_public_key = host_key.public_key().clone();
 
         let server_config = russh::server::Config {
             auth_rejection_time: Duration::from_millis(0),
@@ -1037,6 +1095,14 @@ l4QMs5cmnWfrM0GQ==\n\
             return;
         };
         let port = listener.local_addr().expect("local addr").port();
+        let known_hosts_path = keys_dir.path().join("known_hosts");
+        russh::keys::known_hosts::learn_known_hosts_path(
+            "127.0.0.1",
+            port,
+            &host_public_key,
+            &known_hosts_path,
+        )
+        .expect("write known_hosts entry");
 
         let mut server = TestServer { allowed_key };
         let server_task = tokio::spawn(async move {
@@ -1179,6 +1245,7 @@ l4QMs5cmnWfrM0GQ==\n\
         // Start an SSH server that accepts only the agent-loaded public key.
         let mut rng = russh::keys::ssh_key::rand_core::OsRng;
         let host_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("host key");
+        let host_public_key = host_key.public_key().clone();
 
         let server_config = russh::server::Config {
             auth_rejection_time: Duration::from_millis(0),
@@ -1213,6 +1280,14 @@ l4QMs5cmnWfrM0GQ==\n\
 
         // Ensure we don't find any key files on disk.
         let keys_dir = TempDir::new().expect("temp keys dir");
+        let known_hosts_path = keys_dir.path().join("known_hosts");
+        russh::keys::known_hosts::learn_known_hosts_path(
+            "127.0.0.1",
+            port,
+            &host_public_key,
+            &known_hosts_path,
+        )
+        .expect("write known_hosts entry");
         let mut ssh_config = SshConfig::from_server("127.0.0.1", port);
         ssh_config.timeout = Duration::from_secs(5);
         ssh_config.keys_dir = Some(keys_dir.path().to_path_buf());

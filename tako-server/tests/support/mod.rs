@@ -75,7 +75,7 @@ pub struct TestServer {
     pub socket_path: PathBuf,
     pub http_port: u16,
     pub tls_port: u16,
-    _data_dir: TempDir,
+    data_dir: TempDir,
 }
 
 #[allow(dead_code)]
@@ -131,7 +131,7 @@ impl TestServer {
                     socket_path,
                     http_port,
                     tls_port,
-                    _data_dir: data_dir,
+                    data_dir,
                 };
             }
 
@@ -226,6 +226,10 @@ impl TestServer {
             Ok(response.status().as_u16())
         })
     }
+
+    pub fn data_dir(&self) -> &Path {
+        self.data_dir.path()
+    }
 }
 
 impl Drop for TestServer {
@@ -263,7 +267,7 @@ pub fn write_bun_app(app_dir: &Path, body: &str) {
   fetch(req) {{
     const url = new URL(req.url);
     const host = (req.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako.internal" && url.pathname === "/status") {{
+    if (host === "tako-internal" && url.pathname === "/status") {{
       return new Response(JSON.stringify({{ healthy: true }}), {{
         headers: {{ "content-type": "application/json" }},
       }});

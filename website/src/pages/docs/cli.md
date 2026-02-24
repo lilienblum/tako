@@ -128,6 +128,7 @@ Notes:
   - If `HOST` is provided, `--name` is required.
   - `--port` defaults to `22`.
   - By default, tests SSH connection before adding and connects as user `tako`.
+  - SSH host key must be present and match in local `~/.ssh/known_hosts` (or configured SSH keys dir).
   - With SSH checks enabled, Tako detects and stores server target metadata (`arch`, `libc`) in that server's `[[servers]]` entry, used for deploy target matching.
   - `--no-test` skips SSH checks and target detection.
 - `tako servers rm` aliases: `remove`, `delete`.

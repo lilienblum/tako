@@ -1,6 +1,7 @@
 //! Instance spawner - spawns and monitors app processes
 
-use super::{App, Instance, InstanceError, InstanceEvent, InstanceState};
+use super::{App, AppConfig, Instance, InstanceError, InstanceEvent, InstanceState};
+use std::collections::HashMap;
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
@@ -11,7 +12,7 @@ use tokio::time::timeout;
 pub struct Spawner {
     /// HTTP client for health checks
     client: reqwest::Client,
-    /// UID/GID of the `tako-app` user for process isolation (Unix only)
+    /// UID/GID of the `tako-app` user for process isolation when running privileged (Unix only)
     #[cfg(unix)]
     app_user: Option<(u32, u32)>,
 }
@@ -33,6 +34,14 @@ impl Spawner {
 #[cfg(unix)]
 fn resolve_app_user() -> Option<(u32, u32)> {
     use std::ffi::CString;
+    // Unprivileged service users cannot switch to another uid/gid without extra capabilities.
+    // In that case, run app processes as the current service user.
+    if unsafe { libc::geteuid() } != 0 {
+        tracing::debug!(
+            "Running as unprivileged user; app processes will run as current service user"
+        );
+        return None;
+    }
     let name = CString::new("tako-app").ok()?;
     // SAFETY: getpwnam is thread-safe when not modifying the passwd db.
     // The pointer is valid until the next call to getpwnam on this thread.
@@ -72,23 +81,12 @@ impl Spawner {
         env.entry("NODE_ENV".to_string())
             .or_insert_with(|| "production".to_string());
 
-        // Spawn process
-        let mut child_cmd = Command::new(&config.command[0]);
-        child_cmd
-            .args(&config.command[1..])
-            .current_dir(&config.cwd)
-            .envs(env)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true);
-
         #[cfg(unix)]
-        if let Some((uid, gid)) = self.app_user {
-            child_cmd.uid(uid);
-            child_cmd.gid(gid);
-        }
+        let app_user = self.app_user;
+        #[cfg(not(unix))]
+        let app_user = None;
 
-        let child = child_cmd.spawn()?;
+        let child = spawn_child_process(&config, &env, app_user)?;
 
         instance.set_process(child);
         instance.set_state(InstanceState::Starting);
@@ -240,6 +238,66 @@ impl Spawner {
             Ok(resp) => resp.status().is_success(),
             Err(_) => false,
         }
+    }
+}
+
+fn build_child_command(
+    config: &AppConfig,
+    env: &HashMap<String, String>,
+    app_user: Option<(u32, u32)>,
+    use_app_user: bool,
+) -> Command {
+    let mut child_cmd = Command::new(&config.command[0]);
+    child_cmd
+        .args(&config.command[1..])
+        .current_dir(&config.cwd)
+        .envs(env)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+
+    #[cfg(unix)]
+    if use_app_user && let Some((uid, gid)) = app_user {
+        child_cmd.uid(uid);
+        child_cmd.gid(gid);
+    }
+
+    child_cmd
+}
+
+fn should_retry_spawn_without_app_user(
+    error: &std::io::Error,
+    app_user: Option<(u32, u32)>,
+) -> bool {
+    #[cfg(unix)]
+    {
+        app_user.is_some() && error.kind() == std::io::ErrorKind::PermissionDenied
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = (error, app_user);
+        false
+    }
+}
+
+fn spawn_child_process(
+    config: &AppConfig,
+    env: &HashMap<String, String>,
+    app_user: Option<(u32, u32)>,
+) -> std::io::Result<tokio::process::Child> {
+    let mut child_cmd = build_child_command(config, env, app_user, true);
+    match child_cmd.spawn() {
+        Ok(child) => Ok(child),
+        Err(error) if should_retry_spawn_without_app_user(&error, app_user) => {
+            tracing::warn!(
+                error = %error,
+                "Failed to switch to tako-app user; retrying spawn as service user"
+            );
+            let mut fallback = build_child_command(config, env, app_user, false);
+            fallback.spawn()
+        }
+        Err(error) => Err(error),
     }
 }
 
@@ -398,6 +456,23 @@ mod tests {
         assert!(truncated.ends_with("..."));
     }
 
+    #[test]
+    #[cfg(unix)]
+    fn retries_spawn_without_app_user_only_for_permission_denied() {
+        let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+        let other = std::io::Error::from(std::io::ErrorKind::NotFound);
+
+        assert!(should_retry_spawn_without_app_user(
+            &denied,
+            Some((1001, 1001))
+        ));
+        assert!(!should_retry_spawn_without_app_user(&denied, None));
+        assert!(!should_retry_spawn_without_app_user(
+            &other,
+            Some((1001, 1001))
+        ));
+    }
+
     #[tokio::test]
     async fn health_check_uses_internal_status_host_and_path() {
         let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
@@ -415,7 +490,7 @@ mod tests {
             let is_internal_status = request.starts_with("GET /status ")
                 && request
                     .lines()
-                    .any(|line| line.eq_ignore_ascii_case("host: tako.internal"));
+                    .any(|line| line.eq_ignore_ascii_case("host: tako-internal"));
 
             let response = if is_internal_status {
                 b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
@@ -431,7 +506,7 @@ mod tests {
             name: "test-app".to_string(),
             base_port: port,
             health_check_path: "/status".to_string(),
-            health_check_host: "tako.internal".to_string(),
+            health_check_host: "tako-internal".to_string(),
             ..Default::default()
         };
         let app = App::new(config, instance_tx);
@@ -466,7 +541,7 @@ mod tests {
             let is_internal_status = request.starts_with("GET /status ")
                 && request
                     .lines()
-                    .any(|line| line.eq_ignore_ascii_case("host: tako.internal"));
+                    .any(|line| line.eq_ignore_ascii_case("host: tako-internal"));
 
             let response = if is_internal_status {
                 b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
@@ -483,7 +558,7 @@ mod tests {
             base_port: 31_000,
             app_socket_dir: temp.path().to_path_buf(),
             health_check_path: "/status".to_string(),
-            health_check_host: "tako.internal".to_string(),
+            health_check_host: "tako-internal".to_string(),
             ..Default::default()
         };
         let app = App::new(config, instance_tx);

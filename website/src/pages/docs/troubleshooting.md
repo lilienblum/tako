@@ -93,6 +93,9 @@ Expected deploy behavior:
 - `Installer failed to install mise`:
   - Symptom: `install-server` exits after reporting mise install failure.
   - Fix: install `mise` manually on the host ([mise install docs](https://mise.jdx.dev/getting-started.html)), ensure `mise` is on `PATH`, then rerun installer (or set `TAKO_INSTALL_MISE=0` to skip installer-managed mise setup).
+- `SSH host key verification failed`:
+  - Symptom: server commands fail with host key verification error.
+  - Fix: verify the host fingerprint out-of-band, then add/update the entry in local `~/.ssh/known_hosts` for that host/port.
 - `Bun dependency install failed`:
   - Symptom: server responds with `Invalid app release: Bun dependency install failed ...`.
   - Fix: ensure release dependencies are resolvable in production, and Bun lockfile (if present) matches packaged dependency specs.
