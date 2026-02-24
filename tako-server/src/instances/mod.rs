@@ -335,6 +335,35 @@ impl App {
             .collect()
     }
 
+    /// Count healthy instances without cloning them.
+    pub fn healthy_instance_count(&self) -> usize {
+        self.instances
+            .iter()
+            .filter(|entry| entry.value().state() == InstanceState::Healthy)
+            .count()
+    }
+
+    /// Get the Nth healthy instance.
+    pub fn get_nth_healthy_instance(&self, index: usize) -> Option<Arc<Instance>> {
+        self.instances
+            .iter()
+            .filter(|entry| entry.value().state() == InstanceState::Healthy)
+            .nth(index)
+            .map(|entry| entry.value().clone())
+    }
+
+    /// Pick the healthy instance with the lowest externally provided load value.
+    pub fn get_least_loaded_healthy_instance<F>(&self, mut load_for: F) -> Option<Arc<Instance>>
+    where
+        F: FnMut(u32) -> u64,
+    {
+        self.instances
+            .iter()
+            .filter(|entry| entry.value().state() == InstanceState::Healthy)
+            .min_by_key(|entry| load_for(entry.value().id))
+            .map(|entry| entry.value().clone())
+    }
+
     /// Get instance by ID
     pub fn get_instance(&self, id: u32) -> Option<Arc<Instance>> {
         self.instances.get(&id).map(|entry| entry.value().clone())

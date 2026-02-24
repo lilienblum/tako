@@ -165,7 +165,7 @@ port = 80
 idle_timeout = 300
 ```
 
-- `instances = 0` means on-demand instances. Deploy keeps one warm instance running; idle timeout can scale it to zero. Once at zero, first request waits for cold start readiness up to startup timeout (30s default), then returns `504 App startup timed out` if still not ready. If startup fails before readiness, it returns `502 App failed to start`.
+- `instances = 0` means on-demand instances. Deploy keeps one warm instance running; idle timeout can scale it to zero. Once at zero, first request waits for cold start readiness up to startup timeout (30s default), then returns `504 App startup timed out` if still not ready. If startup fails before readiness, it returns `502 App failed to start`. While startup is already in progress, requests queue up to 100 waiters per app by default; overflow returns `503 App startup queue is full` with `Retry-After: 1`.
 - `port` is the app upstream port.
 - `idle_timeout` is in seconds.
 

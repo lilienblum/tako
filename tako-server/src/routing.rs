@@ -228,6 +228,7 @@ fn normalize_exact_path(path: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     fn route(app: &str, pattern: &str) -> RouteEntry {
         RouteEntry {
@@ -338,6 +339,36 @@ mod tests {
         assert_eq!(
             table.select("api.example.com", "/"),
             Some("api".to_string())
+        );
+    }
+
+    #[test]
+    fn perf_smoke_compiled_route_selection_large_table() {
+        let route_count = 500usize;
+        let routes: Vec<RouteEntry> = (0..route_count)
+            .map(|idx| {
+                route(
+                    &format!("app-{idx}"),
+                    &format!("app-{idx}.example.com/api/*"),
+                )
+            })
+            .collect();
+        let compiled = compile_routes(&routes);
+        let hosts: Vec<String> = (0..route_count)
+            .map(|idx| format!("app-{idx}.example.com"))
+            .collect();
+        let expected_apps: Vec<String> = (0..route_count).map(|idx| format!("app-{idx}")).collect();
+
+        let start = Instant::now();
+        for iteration in 0..50_000usize {
+            let idx = iteration % route_count;
+            let selected = select_app_for_request_compiled(&compiled, &hosts[idx], "/api/ping");
+            assert_eq!(selected, Some(expected_apps[idx].clone()));
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "compiled route selection perf smoke threshold exceeded: {:?}",
+            start.elapsed()
         );
     }
 

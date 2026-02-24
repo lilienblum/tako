@@ -44,6 +44,8 @@ struct AppColdStart {
     started_at: Option<Instant>,
     /// Channel to notify waiters when ready
     ready_tx: Option<broadcast::Sender<bool>>,
+    /// Number of requests currently waiting for startup completion
+    queued_waiters: usize,
 }
 
 impl AppColdStart {
@@ -52,6 +54,7 @@ impl AppColdStart {
             state: ColdStartState::Idle,
             started_at: None,
             ready_tx: None,
+            queued_waiters: 0,
         }
     }
 }
@@ -66,6 +69,14 @@ pub struct ColdStartManager {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ColdStartBegin {
     pub leader: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WaitForReadyOutcome {
+    Ready,
+    Failed,
+    Timeout,
+    QueueFull,
 }
 
 impl ColdStartManager {
@@ -99,6 +110,7 @@ impl ColdStartManager {
                 cold_start.state = ColdStartState::Starting;
                 cold_start.started_at = Some(Instant::now());
                 cold_start.ready_tx = Some(tx);
+                cold_start.queued_waiters = 0;
                 ColdStartBegin { leader: true }
             }
             ColdStartState::Starting | ColdStartState::Ready => ColdStartBegin { leader: false },
@@ -108,25 +120,44 @@ impl ColdStartManager {
     /// Wait for a cold start to complete
     /// Returns true if instance is ready, false if failed/timeout
     pub async fn wait_for_ready(&self, app_name: &str) -> bool {
+        matches!(
+            self.wait_for_ready_outcome(app_name).await,
+            WaitForReadyOutcome::Ready
+        )
+    }
+
+    pub async fn wait_for_ready_outcome(&self, app_name: &str) -> WaitForReadyOutcome {
         let rx = {
-            let apps = self.apps.lock();
-            match apps.get(app_name) {
-                Some(cs) if cs.state == ColdStartState::Ready => return true,
+            let mut apps = self.apps.lock();
+            match apps.get_mut(app_name) {
+                Some(cs) if cs.state == ColdStartState::Ready => return WaitForReadyOutcome::Ready,
                 Some(cs) if cs.state == ColdStartState::Starting => {
+                    if cs.queued_waiters >= self.config.max_queued_requests {
+                        return WaitForReadyOutcome::QueueFull;
+                    }
+                    cs.queued_waiters += 1;
                     cs.ready_tx.as_ref().map(|tx| tx.subscribe())
                 }
-                _ => return false,
+                _ => return WaitForReadyOutcome::Failed,
             }
         };
 
-        if let Some(mut rx) = rx {
-            matches!(
-                tokio::time::timeout(self.config.startup_timeout, rx.recv()).await,
-                Ok(Ok(true))
-            )
+        let outcome = if let Some(mut rx) = rx {
+            match tokio::time::timeout(self.config.startup_timeout, rx.recv()).await {
+                Ok(Ok(true)) => WaitForReadyOutcome::Ready,
+                Ok(Ok(false)) | Ok(Err(_)) => WaitForReadyOutcome::Failed,
+                Err(_) => WaitForReadyOutcome::Timeout,
+            }
         } else {
-            false
+            WaitForReadyOutcome::Failed
+        };
+
+        let mut apps = self.apps.lock();
+        if let Some(cs) = apps.get_mut(app_name) {
+            cs.queued_waiters = cs.queued_waiters.saturating_sub(1);
         }
+
+        outcome
     }
 
     /// Mark cold start as complete (instance is ready)
@@ -182,6 +213,7 @@ pub enum InstanceResult {
 mod tests {
     use super::*;
     use std::sync::Arc;
+    use tokio::time::Duration;
 
     #[test]
     fn test_cold_start_config_defaults() {
@@ -267,5 +299,30 @@ mod tests {
 
         let result = manager.wait_for_ready("my-app").await;
         assert!(result);
+    }
+
+    #[tokio::test]
+    async fn test_wait_for_ready_outcome_returns_queue_full_when_limit_reached() {
+        let manager = Arc::new(ColdStartManager::new(ColdStartConfig {
+            startup_timeout: Duration::from_secs(1),
+            max_queued_requests: 1,
+        }));
+
+        manager.begin("my-app");
+
+        let manager_clone = manager.clone();
+        let first_waiter =
+            tokio::spawn(async move { manager_clone.wait_for_ready_outcome("my-app").await });
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        let second = manager.wait_for_ready_outcome("my-app").await;
+        assert_eq!(second, WaitForReadyOutcome::QueueFull);
+
+        manager.mark_failed("my-app");
+        assert_eq!(
+            first_waiter.await.expect("first waiter should complete"),
+            WaitForReadyOutcome::Failed
+        );
     }
 }

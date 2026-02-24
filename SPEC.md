@@ -168,6 +168,7 @@ env = "production"
 - `instances = 0`: On-demand with scale-to-zero. Deploy keeps one warm instance running so the app is immediately reachable after deploy. Instances are stopped after idle timeout.
   - Once scaled to zero, the next request triggers a cold start and waits for readiness up to startup timeout (default 30 seconds). If no healthy instance is ready before timeout, proxy returns `504 App startup timed out`.
   - If cold start setup fails before readiness, proxy returns `502 App failed to start`.
+  - While a cold start is already in progress, requests are queued up to 100 waiters per app (default). If the queue is full, proxy returns `503 App startup queue is full` with `Retry-After: 1`.
   - If warm-instance startup fails during deploy, deploy fails.
 - `instances = N` (N > 0): Always-on. Minimum N instances maintained, scales up on load, scales down after idle timeout.
 - `idle_timeout`: Applies per-instance (default 300s / 5 minutes)

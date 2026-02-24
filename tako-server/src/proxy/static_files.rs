@@ -111,6 +111,8 @@ pub struct AppStaticServer {
     app_name: String,
     /// Root directory for static files
     root: PathBuf,
+    /// Canonicalized root path for traversal checks
+    root_canonical: Option<PathBuf>,
     /// Configuration
     config: StaticConfig,
     /// MIME type map
@@ -120,10 +122,12 @@ pub struct AppStaticServer {
 impl AppStaticServer {
     pub fn new(app_name: String, app_root: PathBuf, config: StaticConfig) -> Self {
         let root = app_root.join(&config.public_dir);
+        let root_canonical = root.canonicalize().ok();
 
         Self {
             app_name,
             root,
+            root_canonical,
             config,
             mime_types: Self::default_mime_types(),
         }
@@ -215,7 +219,11 @@ impl AppStaticServer {
             .canonicalize()
             .map_err(|_| StaticFileError::NotFound(request_path.to_string()))?;
 
-        let root_canonical = self.root.canonicalize().map_err(StaticFileError::Io)?;
+        let root_canonical = self
+            .root_canonical
+            .clone()
+            .or_else(|| self.root.canonicalize().ok())
+            .ok_or_else(|| StaticFileError::NotFound(request_path.to_string()))?;
 
         if !canonical.starts_with(&root_canonical) {
             return Err(StaticFileError::PathTraversal(request_path.to_string()));

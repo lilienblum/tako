@@ -11,12 +11,13 @@ pub use static_files::*;
 
 use crate::lb::{Backend, LoadBalancer};
 use crate::routing::RouteTable;
-use crate::scaling::ColdStartManager;
+use crate::scaling::{ColdStartManager, WaitForReadyOutcome};
 use crate::tls::{
     CertInfo, CertManager, ChallengeHandler, ChallengeTokens, SelfSignedGenerator,
     create_sni_callbacks,
 };
 use async_trait::async_trait;
+use parking_lot::RwLock as SyncRwLock;
 use pingora_cache::cache_control::CacheControl;
 use pingora_cache::eviction::simple_lru;
 use pingora_cache::filters::{request_cacheable, resp_cacheable};
@@ -28,9 +29,11 @@ use pingora_core::prelude::*;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::{ProxyHttp, Session};
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
+use tokio::io::AsyncReadExt;
 use tokio::sync::RwLock;
 
 /// Proxy configuration
@@ -140,6 +143,8 @@ pub struct TakoProxy {
     cold_start: Arc<ColdStartManager>,
     /// Shared upstream response cache runtime (optional)
     response_cache: Option<ResponseCacheRuntime>,
+    /// Reused per-app static file server state for hot path requests
+    static_servers: SyncRwLock<HashMap<String, Arc<AppStaticServer>>>,
 }
 
 impl TakoProxy {
@@ -160,6 +165,7 @@ impl TakoProxy {
             challenge_handler: None,
             cold_start,
             response_cache,
+            static_servers: SyncRwLock::new(HashMap::new()),
         }
     }
 
@@ -182,6 +188,7 @@ impl TakoProxy {
             challenge_handler: Some(ChallengeHandler::new(tokens)),
             cold_start,
             response_cache,
+            static_servers: SyncRwLock::new(HashMap::new()),
         }
     }
 
@@ -193,6 +200,31 @@ impl TakoProxy {
     async fn load_balancer_cleanup(&self, app_name: &str) {
         self.lb.unregister_app(app_name);
         self.routes.write().await.remove_app_routes(app_name);
+        self.static_servers.write().remove(app_name);
+    }
+
+    fn static_server_for_app(&self, app_name: &str, app_root: &Path) -> Arc<AppStaticServer> {
+        let desired_root = app_root.join(&default_static_config().public_dir);
+        if let Some(existing) = self.static_servers.read().get(app_name)
+            && existing.root() == desired_root.as_path()
+        {
+            return existing.clone();
+        }
+
+        let mut servers = self.static_servers.write();
+        if let Some(existing) = servers.get(app_name)
+            && existing.root() == desired_root.as_path()
+        {
+            return existing.clone();
+        }
+
+        let server = Arc::new(AppStaticServer::new(
+            app_name.to_string(),
+            app_root.to_path_buf(),
+            default_static_config().clone(),
+        ));
+        servers.insert(app_name.to_string(), server.clone());
+        server
     }
 
     async fn try_serve_static_asset(
@@ -211,8 +243,7 @@ impl TakoProxy {
             return Ok(false);
         };
         let app_root = app.config.read().path.clone();
-        let static_server =
-            AppStaticServer::new(app_name.to_string(), app_root, StaticConfig::default());
+        let static_server = self.static_server_for_app(app_name, &app_root);
         if !static_server.is_available() {
             return Ok(false);
         }
@@ -220,6 +251,24 @@ impl TakoProxy {
         for lookup_path in static_lookup_paths(request_path, matched_route_path) {
             match static_server.resolve(&lookup_path) {
                 Ok(file) => {
+                    let mut file_handle = if method == "HEAD" {
+                        None
+                    } else {
+                        match tokio::fs::File::open(&file.path).await {
+                            Ok(opened) => Some(opened),
+                            Err(_) => {
+                                let body = "Static asset read failed";
+                                let mut header = ResponseHeader::build(500, None)?;
+                                insert_body_headers(&mut header, "text/plain", body)?;
+                                session
+                                    .write_response_header(Box::new(header), false)
+                                    .await?;
+                                session.write_response_body(Some(body.into()), true).await?;
+                                return Ok(true);
+                            }
+                        }
+                    };
+
                     let mut header = ResponseHeader::build(200, None)?;
                     header.insert_header("Content-Type", &file.content_type)?;
                     header.insert_header("Content-Length", file.size.to_string())?;
@@ -234,21 +283,10 @@ impl TakoProxy {
                         return Ok(true);
                     }
 
-                    let body = match file.read_contents() {
-                        Ok(contents) => contents,
-                        Err(StaticFileError::Io(_)) => {
-                            let body = "Static asset read failed";
-                            let mut header = ResponseHeader::build(500, None)?;
-                            insert_body_headers(&mut header, "text/plain", body)?;
-                            session
-                                .write_response_header(Box::new(header), false)
-                                .await?;
-                            session.write_response_body(Some(body.into()), true).await?;
-                            return Ok(true);
-                        }
-                        Err(_) => continue,
-                    };
-                    session.write_response_body(Some(body.into()), true).await?;
+                    let mut file_handle = file_handle
+                        .take()
+                        .expect("file handle is always present for non-HEAD static responses");
+                    stream_static_file(session, &mut file_handle, &file.path).await?;
                     return Ok(true);
                 }
                 Err(StaticFileError::NotFound(_)) => {}
@@ -283,6 +321,7 @@ enum BackendResolution {
     Ready(Backend),
     StartupTimeout,
     StartupFailed,
+    QueueFull,
     Unavailable,
     AppMissing,
 }
@@ -322,15 +361,15 @@ impl TakoProxy {
             });
         }
 
-        let ready = self.cold_start.wait_for_ready(app_name).await;
-        if ready && let Some(backend) = self.lb.get_backend(app_name) {
-            return BackendResolution::Ready(backend);
-        }
-
-        if self.cold_start.is_cold_starting(app_name) {
-            BackendResolution::StartupTimeout
-        } else {
-            BackendResolution::StartupFailed
+        match self.cold_start.wait_for_ready_outcome(app_name).await {
+            WaitForReadyOutcome::Ready => self
+                .lb
+                .get_backend(app_name)
+                .map(BackendResolution::Ready)
+                .unwrap_or(BackendResolution::StartupFailed),
+            WaitForReadyOutcome::Timeout => BackendResolution::StartupTimeout,
+            WaitForReadyOutcome::Failed => BackendResolution::StartupFailed,
+            WaitForReadyOutcome::QueueFull => BackendResolution::QueueFull,
         }
     }
 }
@@ -471,6 +510,17 @@ impl ProxyHttp for TakoProxy {
             BackendResolution::StartupFailed => {
                 let body = "App failed to start";
                 let mut header = ResponseHeader::build(502, None)?;
+                insert_body_headers(&mut header, "text/plain", body)?;
+                session
+                    .write_response_header(Box::new(header), false)
+                    .await?;
+                session.write_response_body(Some(body.into()), true).await?;
+                return Ok(true);
+            }
+            BackendResolution::QueueFull => {
+                let body = "App startup queue is full";
+                let mut header = ResponseHeader::build(503, None)?;
+                header.insert_header("Retry-After", "1")?;
                 insert_body_headers(&mut header, "text/plain", body)?;
                 session
                     .write_response_header(Box::new(header), false)
@@ -692,7 +742,7 @@ impl ProxyHttp for TakoProxy {
         let path = session.req_header().uri.path();
         let method = session.req_header().method.as_str();
 
-        tracing::info!(
+        tracing::debug!(
             host = host,
             method = method,
             path = path,
@@ -797,6 +847,11 @@ fn response_cache_defaults() -> &'static CacheMetaDefaults {
     DEFAULTS.get_or_init(|| CacheMetaDefaults::new(|_| None, 0, 0))
 }
 
+fn default_static_config() -> &'static StaticConfig {
+    static CONFIG: OnceLock<StaticConfig> = OnceLock::new();
+    CONFIG.get_or_init(StaticConfig::default)
+}
+
 fn response_cacheability(resp: &ResponseHeader, authorization_present: bool) -> RespCacheable {
     let response_for_cache = resp.clone();
     let cache_control = CacheControl::from_resp_headers(&response_for_cache);
@@ -806,6 +861,39 @@ fn response_cacheability(resp: &ResponseHeader, authorization_present: bool) -> 
         authorization_present,
         response_cache_defaults(),
     )
+}
+
+async fn stream_static_file(
+    session: &mut Session,
+    file: &mut tokio::fs::File,
+    path: &Path,
+) -> Result<()> {
+    const CHUNK_SIZE: usize = 64 * 1024;
+    let mut buffer = vec![0_u8; CHUNK_SIZE];
+
+    loop {
+        let bytes_read = file.read(&mut buffer).await.map_err(|e| {
+            Error::explain(
+                ErrorType::InternalError,
+                format!("Failed to read static asset {}: {}", path.display(), e),
+            )
+        })?;
+
+        if bytes_read == 0 {
+            session.write_response_body(None, true).await?;
+            break;
+        }
+
+        let is_last = bytes_read < CHUNK_SIZE;
+        session
+            .write_response_body(Some(buffer[..bytes_read].to_vec().into()), is_last)
+            .await?;
+        if is_last {
+            break;
+        }
+    }
+
+    Ok(())
 }
 
 fn path_looks_like_static_asset(path: &str) -> bool {
@@ -1625,6 +1713,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn resolve_backend_returns_queue_full_when_cold_start_queue_is_full() {
+        let manager = Arc::new(AppManager::new());
+        let lb = Arc::new(LoadBalancer::new(manager.clone()));
+        let app = manager.register_app(AppConfig {
+            name: "test-app".to_string(),
+            version: "v1".to_string(),
+            min_instances: 0,
+            ..Default::default()
+        });
+        lb.register_app(app);
+
+        let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
+        let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig {
+            startup_timeout: Duration::from_secs(1),
+            max_queued_requests: 1,
+        }));
+        let proxy = Arc::new(TakoProxy::new(
+            lb,
+            routes,
+            ProxyConfig::default(),
+            cold_start.clone(),
+        ));
+
+        cold_start.begin("test-app");
+
+        let proxy_clone = proxy.clone();
+        let first_request =
+            tokio::spawn(async move { proxy_clone.resolve_backend("test-app").await });
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        let second_request = proxy.resolve_backend("test-app").await;
+        assert!(matches!(second_request, BackendResolution::QueueFull));
+
+        cold_start.mark_failed("test-app");
+        let _ = first_request.await.expect("first request should complete");
+    }
+
+    #[tokio::test]
     async fn resolve_backend_returns_unavailable_for_non_on_demand_apps_without_backend() {
         let manager = Arc::new(AppManager::new());
         let lb = Arc::new(LoadBalancer::new(manager.clone()));
@@ -1678,6 +1805,37 @@ mod tests {
         let table = routes.read().await;
         assert!(table.routes_for_app("test-app").is_empty());
         assert_eq!(table.select("test.example.com", "/"), None);
+    }
+
+    #[test]
+    fn static_server_for_app_reuses_cached_server_for_same_root() {
+        let manager = Arc::new(AppManager::new());
+        let lb = Arc::new(LoadBalancer::new(manager));
+        let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
+        let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig::default()));
+        let proxy = TakoProxy::new(lb, routes, ProxyConfig::default(), cold_start);
+
+        let root = TempDir::new().unwrap();
+        let first = proxy.static_server_for_app("my-app", root.path());
+        let second = proxy.static_server_for_app("my-app", root.path());
+
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn static_server_for_app_replaces_cached_server_when_root_changes() {
+        let manager = Arc::new(AppManager::new());
+        let lb = Arc::new(LoadBalancer::new(manager));
+        let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
+        let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig::default()));
+        let proxy = TakoProxy::new(lb, routes, ProxyConfig::default(), cold_start);
+
+        let root_a = TempDir::new().unwrap();
+        let root_b = TempDir::new().unwrap();
+        let first = proxy.static_server_for_app("my-app", root_a.path());
+        let second = proxy.static_server_for_app("my-app", root_b.path());
+
+        assert!(!Arc::ptr_eq(&first, &second));
     }
 
     #[test]

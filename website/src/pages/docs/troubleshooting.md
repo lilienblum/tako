@@ -114,6 +114,9 @@ Expected deploy behavior:
 - `502 App failed to start`:
   - Symptom: cold start failed before the app reached ready/healthy state.
   - Fix: check runtime command, startup errors, and app dependencies.
+- `503 App startup queue is full`:
+  - Symptom: on-demand app (`instances = 0`) is currently cold-starting and concurrent startup waiters exceeded the queue limit (100 per app by default).
+  - Fix: retry shortly (proxy sends `Retry-After: 1`), or keep at least one warm instance (`instances > 0`) for bursty traffic.
 - `Route mismatch / wrong app`:
   - Verify env route config in [`tako.toml` reference](/docs/tako-toml).
   - Ensure environment has valid `route` or `routes` values.

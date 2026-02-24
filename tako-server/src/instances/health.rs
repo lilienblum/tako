@@ -21,6 +21,8 @@ pub struct HealthConfig {
     pub dead_threshold: u32,
     /// Timeout for individual health check requests
     pub probe_timeout: Duration,
+    /// Maximum concurrent probe tasks per app per cycle
+    pub max_probe_concurrency: usize,
 }
 
 impl Default for HealthConfig {
@@ -30,6 +32,7 @@ impl Default for HealthConfig {
             unhealthy_threshold: 2, // 2 failures = unhealthy
             dead_threshold: 5,      // 5 failures = dead
             probe_timeout: crate::defaults::HEALTH_PROBE_TIMEOUT,
+            max_probe_concurrency: 16,
         }
     }
 }
@@ -51,13 +54,14 @@ pub enum HealthEvent {
 use dashmap::DashMap;
 
 /// Health checker for monitoring instance health via HTTP probing
+#[derive(Clone)]
 pub struct HealthChecker {
     config: HealthConfig,
     event_tx: mpsc::Sender<HealthEvent>,
     /// HTTP client for health probes
     client: reqwest::Client,
     /// Consecutive failure counts per instance (app_name:instance_id -> count)
-    failure_counts: DashMap<String, u32>,
+    failure_counts: Arc<DashMap<String, u32>>,
 }
 
 impl HealthChecker {
@@ -72,8 +76,12 @@ impl HealthChecker {
             config,
             event_tx,
             client,
-            failure_counts: DashMap::new(),
+            failure_counts: Arc::new(DashMap::new()),
         }
+    }
+
+    fn effective_probe_concurrency(value: usize) -> usize {
+        value.max(1)
     }
 
     /// Start health check loop for an app
@@ -84,9 +92,25 @@ impl HealthChecker {
             check_interval.tick().await;
 
             let instances = app.get_instances();
+            let mut checks = tokio::task::JoinSet::new();
+            let concurrency = Self::effective_probe_concurrency(self.config.max_probe_concurrency);
+            let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
+
             for instance in instances {
-                self.check_instance(&app, &instance).await;
+                let permit = match semaphore.clone().acquire_owned().await {
+                    Ok(permit) => permit,
+                    Err(_) => break,
+                };
+
+                let checker = self.clone();
+                let app = app.clone();
+                checks.spawn(async move {
+                    checker.check_instance(&app, &instance).await;
+                    drop(permit);
+                });
             }
+
+            while checks.join_next().await.is_some() {}
         }
     }
 
@@ -323,6 +347,13 @@ mod tests {
         assert_eq!(config.unhealthy_threshold, 2);
         assert_eq!(config.dead_threshold, 5);
         assert_eq!(config.probe_timeout, crate::defaults::HEALTH_PROBE_TIMEOUT);
+        assert_eq!(config.max_probe_concurrency, 16);
+    }
+
+    #[test]
+    fn test_effective_probe_concurrency_never_zero() {
+        assert_eq!(HealthChecker::effective_probe_concurrency(0), 1);
+        assert_eq!(HealthChecker::effective_probe_concurrency(7), 7);
     }
 
     #[tokio::test]

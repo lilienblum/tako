@@ -154,7 +154,7 @@ Tako uses active HTTP probing as the source of truth for instance health.
 
 Instance mode by `instances`:
 
-- `instances = 0`: on-demand mode (scale-to-zero when idle). Deploy keeps one warm instance running, then idle timeout can scale it to zero. Once at zero, the next request waits for cold start readiness up to startup timeout (30s default); if still not ready, it returns `504 App startup timed out`. If startup fails early, it returns `502 App failed to start`.
+- `instances = 0`: on-demand mode (scale-to-zero when idle). Deploy keeps one warm instance running, then idle timeout can scale it to zero. Once at zero, the next request waits for cold start readiness up to startup timeout (30s default); if still not ready, it returns `504 App startup timed out`. If startup fails early, it returns `502 App failed to start`. While startup is already in progress, requests queue up to 100 waiters per app by default; overflow returns `503 App startup queue is full` with `Retry-After: 1`.
 - `instances > 0`: always-on baseline, with health-based rotation during deploy
 
 For on-demand deploys (`instances = 0`), deploy starts one warm instance; if warm startup fails, deploy fails.

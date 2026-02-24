@@ -13,7 +13,6 @@ use dashmap::DashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::net::IpAddr;
-use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -67,25 +66,20 @@ impl AppLoadBalancer {
 
     /// Get instance using round-robin
     fn round_robin(&self) -> Option<Arc<Instance>> {
-        let healthy = self.app.get_healthy_instances();
-        if healthy.is_empty() {
+        let healthy_count = self.app.healthy_instance_count();
+        if healthy_count == 0 {
             return None;
         }
 
-        let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % healthy.len();
-        healthy.get(idx).cloned()
+        let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % healthy_count;
+        self.app.get_nth_healthy_instance(idx)
     }
 
     /// Get instance with least active connections
     fn least_connections(&self) -> Option<Arc<Instance>> {
-        let healthy = self.app.get_healthy_instances();
-        if healthy.is_empty() {
-            return None;
-        }
-
-        healthy.into_iter().min_by_key(|instance| {
+        self.app.get_least_loaded_healthy_instance(|instance_id| {
             self.connections
-                .get(&instance.id)
+                .get(&instance_id)
                 .map(|c| c.load(Ordering::Relaxed))
                 .unwrap_or(0)
         })
@@ -97,8 +91,8 @@ impl AppLoadBalancer {
     /// (as long as the instance remains healthy). If no client IP is
     /// provided, falls back to round-robin.
     fn ip_hash(&self, client_ip: Option<IpAddr>) -> Option<Arc<Instance>> {
-        let healthy = self.app.get_healthy_instances();
-        if healthy.is_empty() {
+        let healthy_count = self.app.healthy_instance_count();
+        if healthy_count == 0 {
             return None;
         }
 
@@ -114,8 +108,8 @@ impl AppLoadBalancer {
         let hash = hasher.finish();
 
         // Use hash to select instance
-        let idx = (hash as usize) % healthy.len();
-        healthy.get(idx).cloned()
+        let idx = (hash as usize) % healthy_count;
+        self.app.get_nth_healthy_instance(idx)
     }
 
     /// Mark connection started
@@ -189,9 +183,7 @@ impl LoadBalancer {
             app_name: app_name.to_string(),
             instance_id: instance.id,
             addr: format!("127.0.0.1:{}", instance.port),
-            socket_path: instance
-                .socket_path()
-                .filter(|path| Path::new(path).exists()),
+            socket_path: instance.socket_path(),
         })
     }
 
@@ -405,6 +397,67 @@ mod tests {
 
         let backend = lb.get_backend("my-app").unwrap();
         assert_eq!(backend.socket_path(), Some(socket_path.as_str()));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_global_load_balancer_returns_unix_socket_path_without_fs_probe() {
+        use tempfile::TempDir;
+
+        let manager = Arc::new(AppManager::new());
+        let lb = LoadBalancer::new(manager.clone());
+
+        let app = manager.register_app(AppConfig {
+            name: "test-app".to_string(),
+            base_port: 3000,
+            app_socket_dir: TempDir::new().unwrap().path().to_path_buf(),
+            ..Default::default()
+        });
+        lb.register_app(app.clone());
+
+        let instance = app.allocate_instance();
+        instance.set_state(InstanceState::Healthy);
+        instance.set_pid(4242);
+        let expected_socket_path = instance
+            .socket_path()
+            .expect("instance should resolve socket path with pid");
+
+        let backend = lb
+            .get_backend("test-app")
+            .expect("backend should be selected");
+
+        assert_eq!(backend.socket_path(), Some(expected_socket_path.as_str()));
+    }
+
+    #[test]
+    fn perf_smoke_get_backend_hot_path() {
+        use std::time::{Duration, Instant};
+
+        let manager = Arc::new(AppManager::new());
+        let lb = LoadBalancer::new(manager.clone());
+
+        let app = manager.register_app(AppConfig {
+            name: "test-app".to_string(),
+            base_port: 3000,
+            ..Default::default()
+        });
+        lb.register_app(app.clone());
+
+        for _ in 0..8 {
+            let instance = app.allocate_instance();
+            instance.set_state(InstanceState::Healthy);
+        }
+
+        let start = Instant::now();
+        for _ in 0..50_000 {
+            let backend = lb.get_backend("test-app").expect("backend should exist");
+            lb.request_completed("test-app", backend.instance_id);
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(20),
+            "get_backend perf smoke threshold exceeded: {:?}",
+            start.elapsed()
+        );
     }
 
     #[test]

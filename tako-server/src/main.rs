@@ -44,6 +44,8 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
+const DEFAULT_SERVER_LOG_FILTER: &str = "warn";
+
 /// Tako Server - Application runtime and proxy
 #[derive(Parser)]
 #[command(name = "tako-server")]
@@ -1694,7 +1696,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new(DEFAULT_SERVER_LOG_FILTER)),
         )
         .with_target(false)
         .init();
@@ -2264,6 +2267,11 @@ mod tests {
     use std::time::Duration;
     use tako_core::UpgradeMode;
     use tempfile::TempDir;
+
+    #[test]
+    fn default_server_log_filter_is_warn() {
+        assert_eq!(super::DEFAULT_SERVER_LOG_FILTER, "warn");
+    }
 
     #[test]
     #[cfg(unix)]
