@@ -1095,28 +1095,12 @@ Response:
 { "command": "delete", "app": "my-app" }
 ```
 
-**App → tako-server:**
+**Instance communication model:**
 
-```json
-// Ready signal (on startup)
-{"type": "ready", "app": "dashboard", "version": "abc1234", "instance_id": 1, "pid": 12345, "socket_path": "/var/run/tako-app-dashboard-12345.sock", "timestamp": "..."}
-
-// Heartbeat (every 1 second)
-{"type": "heartbeat", "app": "dashboard", "instance_id": 1, "pid": 12345, "timestamp": "..."}
-
-// Shutdown acknowledgment
-{"type": "shutdown_ack", "app": "dashboard", "instance_id": 1, "pid": 12345, "drained": true, "timestamp": "..."}
-```
-
-**tako-server → App:**
-
-```json
-// Graceful shutdown
-{"type": "shutdown", "reason": "deploy", "drain_timeout_seconds": 30}
-
-// Config reload (secrets changed)
-{"type": "reload_config", "secrets": {"DATABASE_URL": "...", "API_KEY": "..."}}
-```
+- App processes do not connect to the management socket.
+- `tako-server` controls lifecycle directly (spawn/stop/rolling update) and determines readiness/health via active HTTP probing only.
+- App processes may receive `TAKO_APP_SOCKET` to bind a per-instance Unix socket for request traffic.
+- Secret updates are applied by writing per-app `secrets.json` and rolling restart; there is no app-facing `reload_config` protocol message.
 
 ### Health Checks
 
@@ -1258,20 +1242,10 @@ import { takoVitePlugin } from "tako.sh/vite";
 
 ### Feature Overview
 
-- Unix socket creation and management
-- Ready signal on startup
-- Heartbeat every 1 second
+- Fetch handler adapters for Bun/Node/Deno runtimes
+- Unix socket serving when `TAKO_APP_SOCKET` is set (TCP fallback in dev/local)
 - Internal status endpoint (`Host: tako.internal` + `/status`)
 - Graceful shutdown handling
-
-### Optional Features
-
-```typescript
-Tako.onConfigReload((newSecrets) => {
-  // Handle config changes (e.g., reconnect to database)
-  database.reconnect(newSecrets.DATABASE_URL);
-});
-```
 
 ### Built-in Endpoints
 
