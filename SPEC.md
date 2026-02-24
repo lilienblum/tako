@@ -1168,7 +1168,7 @@ Tako-server uses SNI (Server Name Indication) to select the appropriate certific
 2. Server looks up certificate for that hostname in CertManager
 3. If exact match found, use that certificate
 4. If no exact match, try wildcard fallback (e.g., `api.example.com` → `*.example.com`)
-5. If still no match, TLS handshake fails (prevents serving wrong certificate)
+5. If still no match, serve fallback default certificate so HTTPS can complete and routing can return normal HTTP status codes (for example `404` for unknown routes/hosts)
 
 This requires OpenSSL (not rustls) for callback support.
 
@@ -1177,6 +1177,7 @@ This requires OpenSSL (not rustls) for callback support.
 - ACME protocol (Let's Encrypt)
 - Automatic issuance for domains in app routes
 - For private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes such as `*.local`, `*.test`, `*.invalid`, `*.example`, `*.home.arpa`), Tako skips ACME and generates a self-signed certificate during deploy.
+- If no certificate exists yet for an SNI hostname, Tako serves a fallback self-signed default certificate so TLS handshakes still complete.
 - Automatic renewal 30 days before expiry
 - HTTP-01 challenge (port 80)
 - Zero-downtime renewal

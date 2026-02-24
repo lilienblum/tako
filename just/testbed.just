@@ -21,7 +21,7 @@ DOCKER_SSH_KEY_FILE := "local-dev/tmp/docker_ssh_key"
 # Docker Linux containers can reach the macOS host via this hostname.
 # If this doesn't resolve for you, try `host.docker.internal`.
 
-create-container:
+create:
     # Create a named testbed container with sshd for VPS-like installer behavior.
     docker rm -f {{ CONTAINER_NAME }} 2>/dev/null || true
     docker build --platform {{ DOCKER_PLATFORM }} -f docker/testbed.Dockerfile -t {{ IMAGE_NAME }} .
@@ -51,6 +51,14 @@ create-container:
                 /usr/local/bin/install-authorized-key && \
                 exec /usr/sbin/sshd -D -e \
             '
+    mkdir -p "$HOME/.ssh"
+    touch "$HOME/.ssh/known_hosts"
+    ssh-keygen -R "[localhost]:{{ DOCKER_SSH_PORT }}" >/dev/null 2>&1 || true
+    # Wait for sshd to be ready, then pin the host key for strict SSH verification.
+    for _ in 1 2 3 4 5; do \
+        ssh-keyscan -p {{ DOCKER_SSH_PORT }} localhost >> "$HOME/.ssh/known_hosts" 2>/dev/null && break; \
+        sleep 1; \
+    done
 
 install:
     # Install tako-server in the temporary Docker testbed server container.

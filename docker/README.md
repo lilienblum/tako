@@ -19,7 +19,7 @@ From repository root:
 
 ```bash
 just build::tako-server
-just testbed::create-container
+just testbed::create
 just testbed::install
 just release::builder-images
 ```

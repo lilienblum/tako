@@ -284,14 +284,23 @@ impl BuildExecutor {
 
         for (full_path, relative_path) in files {
             hasher.update(relative_path.to_string_lossy().as_bytes());
-            let mut file = std::fs::File::open(&full_path)?;
-            let mut buffer = [0u8; 8192];
-            loop {
-                let bytes_read = file.read(&mut buffer)?;
-                if bytes_read == 0 {
-                    break;
+            let metadata = std::fs::symlink_metadata(&full_path)?;
+            if metadata.file_type().is_symlink() {
+                // Source archives preserve symlinks; hash the link target so the source hash
+                // tracks symlink changes without following directory links.
+                let target = std::fs::read_link(&full_path)?;
+                hasher.update(b"symlink:");
+                hasher.update(target.to_string_lossy().as_bytes());
+            } else {
+                let mut file = std::fs::File::open(&full_path)?;
+                let mut buffer = [0u8; 8192];
+                loop {
+                    let bytes_read = file.read(&mut buffer)?;
+                    if bytes_read == 0 {
+                        break;
+                    }
+                    hasher.update(&buffer[..bytes_read]);
                 }
-                hasher.update(&buffer[..bytes_read]);
             }
         }
 
@@ -725,6 +734,23 @@ mod tests {
         BuildExecutor::extract_archive(&archive_path, &dest).unwrap();
         let metadata = fs::symlink_metadata(dest.join("app/linked-sdk")).unwrap();
         assert!(metadata.file_type().is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_compute_source_hash_supports_directory_symlinks() {
+        use std::os::unix::fs as unix_fs;
+
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        fs::create_dir_all(source.join("sdk")).unwrap();
+        fs::create_dir_all(source.join("app")).unwrap();
+        fs::write(source.join("sdk/index.js"), "ok").unwrap();
+        unix_fs::symlink("../sdk", source.join("app/linked-sdk")).unwrap();
+
+        let executor = BuildExecutor::new(&source);
+        let hash = executor.compute_source_hash(&source).unwrap();
+        assert!(!hash.is_empty());
     }
 
     #[test]

@@ -83,6 +83,7 @@ struct TestServer {
     socket_path: PathBuf,
     data_dir: TempDir,
     http_port: u16,
+    tls_port: u16,
 }
 
 const SERVER_START_RETRIES: usize = 5;
@@ -109,6 +110,7 @@ impl TestServer {
                         socket_path,
                         data_dir,
                         http_port,
+                        tls_port,
                     };
                 }
                 Err(error) => {
@@ -196,6 +198,34 @@ impl TestServer {
 
     fn data_dir(&self) -> &std::path::Path {
         self.data_dir.path()
+    }
+
+    fn https_status_with_host(&self, host: &str, path: &str) -> Result<u16, String> {
+        let url = format!("https://{}:{}{}", host, self.tls_port, path);
+        let resolve = std::net::SocketAddr::from(([127, 0, 0, 1], self.tls_port));
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| format!("runtime build failed: {e}"))?;
+
+        runtime.block_on(async move {
+            let client = reqwest::Client::builder()
+                .danger_accept_invalid_certs(true)
+                .resolve(host, resolve)
+                .connect_timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(10))
+                .build()
+                .map_err(|e| format!("https client error: {e}"))?;
+
+            let response = client
+                .get(url)
+                .send()
+                .await
+                .map_err(|e| format!("https request error: {e}"))?;
+
+            Ok(response.status().as_u16())
+        })
     }
 }
 
@@ -444,6 +474,19 @@ mod health_check {
             !response.contains("Location: https://"),
             "did not expect https redirect for orb.local forwarded request: {response}"
         );
+    }
+
+    #[test]
+    fn test_unknown_private_https_host_returns_404_instead_of_tls_handshake_failure() {
+        if !require_localhost_bind() {
+            return;
+        }
+
+        let server = TestServer::start();
+        let status = server
+            .https_status_with_host("tako-testbed.orb.local", "/404")
+            .expect("expected HTTPS request to complete");
+        assert_eq!(status, 404);
     }
 }
 

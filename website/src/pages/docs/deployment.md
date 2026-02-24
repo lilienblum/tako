@@ -183,6 +183,7 @@ Each target server should have:
 - Exact path route matches normalize trailing slash (`example.com/api` and `example.com/api/` are equivalent).
 - Static asset requests (file-extension paths) are served from the deployed app `public/` directory when present, including path-prefixed routes via prefix-stripped static lookup.
 - Private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) get self-signed certs during deploy; public hostnames use ACME.
+- If no certificate matches an SNI hostname yet, Tako serves a fallback self-signed default cert so HTTPS completes and unmatched hosts/routes return `404`.
 
 ## Post-Deploy Verification
 

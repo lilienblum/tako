@@ -43,9 +43,21 @@ impl SniCertResolver {
     }
 
     fn default_cert_info(&self) -> Option<CertInfo> {
-        self.cert_manager
+        let existing = self
+            .cert_manager
             .get_cert("default")
-            .or_else(|| self.cert_manager.list_certs().into_iter().next())
+            .or_else(|| self.cert_manager.list_certs().into_iter().next());
+        if existing.is_some() {
+            return existing;
+        }
+
+        match self.cert_manager.get_or_create_self_signed_cert("default") {
+            Ok(cert) => Some(cert),
+            Err(error) => {
+                tracing::warn!("Failed to create fallback TLS certificate: {}", error);
+                None
+            }
+        }
     }
 
     fn set_default_cert(&self, ssl: &mut SslRef, reason: &str) {
@@ -147,7 +159,7 @@ pub fn create_sni_callbacks(cert_manager: Arc<CertManager>) -> Box<dyn TlsAccept
 }
 
 fn should_allow_default_cert_fallback_for_unknown_sni() -> bool {
-    false
+    true
 }
 
 fn should_allow_default_cert_fallback_for_missing_sni() -> bool {
@@ -159,8 +171,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_cert_fallback_for_unknown_sni_is_disabled() {
-        assert!(!should_allow_default_cert_fallback_for_unknown_sni());
+    fn default_cert_fallback_for_unknown_sni_is_enabled() {
+        assert!(should_allow_default_cert_fallback_for_unknown_sni());
     }
 
     #[test]

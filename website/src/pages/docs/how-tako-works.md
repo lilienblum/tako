@@ -178,6 +178,7 @@ Certificate behavior:
 - Certs are selected by SNI.
 - ACME (Let's Encrypt) is used for issuance/renewal.
 - Private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) use deploy-time self-signed certs instead of ACME.
+- If no cert matches the SNI hostname yet, Tako serves a fallback self-signed default cert so HTTPS still completes and unmatched hosts/routes return normal HTTP status codes (for example `404`).
 - Renewal is automatic.
 - Wildcard routing is supported, but automated wildcard cert issuance via DNS-01 is not the default path.
 

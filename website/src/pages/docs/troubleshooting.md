@@ -126,10 +126,10 @@ Expected deploy behavior:
 - `Path-route static asset 404`:
   - Confirm the asset file exists under the deployed app `public/` directory.
   - For path-prefixed routes (for example `example.com/app/*`), use URLs under that prefix; Tako will also try prefix-stripped static lookup.
-- `HTTPS 502 / TLS handshake failure on private domains (for example `\*.local`)`:
-  - Verify deploy completed after upgrading `tako-server` (private-domain cert generation happens at deploy time).
-  - Check cert files exist on host under `/opt/tako/certs/<route-host>/fullchain.pem` and `privkey.pem`.
-  - Re-run deploy to regenerate self-signed certs for private/local routes.
+- `HTTPS 502 / TLS handshake failure`:
+  - Expected behavior: if no certificate matches an SNI hostname yet, Tako serves a fallback self-signed default cert and unmatched hosts/routes can still return `404`.
+  - Check cert files on host under `/opt/tako/certs/default/fullchain.pem` and `privkey.pem`.
+  - If route certs are missing for deployed private/local hosts, re-run deploy to regenerate self-signed route certs under `/opt/tako/certs/<route-host>/`.
 
 ## Config and State Edge Cases
 
