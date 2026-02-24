@@ -18,13 +18,20 @@ Internal Docker tooling for building and debugging Tako server artifacts.
 From repository root:
 
 ```bash
-just build::tako-server
+just build::tako-server-all
+just build::tako-server arm64 musl   # default testbed.Dockerfile container (Alpine on linux/arm64)
+just build::tako-server amd64 glibc
 just testbed::create
 just testbed::install
 just release::builder-images
 ```
 
-`just build::tako-server` builds release artifacts for all Linux target/libc combinations:
+`just build::tako-server` builds a single target and requires args:
+
+- `arch`: `amd64` or `arm64`
+- `libc`: `musl` or `glibc`
+
+Use `just build::tako-server-all` to build all Linux target/libc combinations:
 
 - `dist/tako-server-linux-x86_64-musl`
 - `dist/tako-server-linux-aarch64-musl`
