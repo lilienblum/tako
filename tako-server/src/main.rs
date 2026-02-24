@@ -1,6 +1,9 @@
 // This crate contains runtime components that are exercised indirectly in integration tests.
 #![allow(dead_code)]
 
+#[cfg(not(unix))]
+compile_error!("tako-server requires Unix (management and app routing use Unix sockets).");
+
 mod app_command;
 mod app_socket_cleanup;
 mod defaults;
@@ -45,6 +48,7 @@ use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
 const DEFAULT_SERVER_LOG_FILTER: &str = "warn";
+const SIGNAL_PARENT_ON_READY_ENV: &str = "TAKO_SIGNAL_PARENT_ON_READY";
 
 /// Tako Server - Application runtime and proxy
 #[derive(Parser)]
@@ -1660,9 +1664,16 @@ fn install_rustls_crypto_provider() {
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 }
 
+fn should_signal_parent_on_ready() -> bool {
+    matches!(
+        std::env::var(SIGNAL_PARENT_ON_READY_ENV).as_deref(),
+        Ok("1")
+    )
+}
+
 /// Notify systemd that the server is ready (READY=1) and claim the main PID.
-/// Also sends SIGUSR1 to the parent process (if any) so the old server starts draining
-/// during a zero-downtime reload.
+/// During a zero-downtime reload handoff, optionally sends SIGUSR1 to the parent process so the
+/// old server starts draining.
 fn sd_notify_ready() {
     #[cfg(unix)]
     {
@@ -1683,6 +1694,9 @@ fn sd_notify_ready() {
         }
 
         // Signal parent to start draining (zero-downtime reload handoff)
+        if !should_signal_parent_on_ready() {
+            return;
+        }
         let ppid = unsafe { libc::getppid() };
         if ppid > 1 {
             unsafe { libc::kill(ppid, libc::SIGUSR1) };
@@ -2002,8 +2016,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         use tokio::signal::unix::{SignalKind, signal};
 
-        let mut sighup = signal(SignalKind::hangup()).expect("Failed to register SIGHUP handler");
         rt.spawn(async move {
+            let mut sighup = match signal(SignalKind::hangup()) {
+                Ok(signal) => signal,
+                Err(err) => {
+                    tracing::error!("Failed to register SIGHUP handler: {err}");
+                    return;
+                }
+            };
             sighup.recv().await;
             tracing::info!(
                 "SIGHUP received — spawning new server process for zero-downtime reload"
@@ -2016,15 +2036,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
             let args: Vec<String> = std::env::args().skip(1).collect();
-            match std::process::Command::new(&exe).args(&args).spawn() {
+            match std::process::Command::new(&exe)
+                .args(&args)
+                .env(SIGNAL_PARENT_ON_READY_ENV, "1")
+                .spawn()
+            {
                 Ok(child) => tracing::info!(pid = child.id(), "New server process spawned"),
                 Err(e) => tracing::error!("Failed to spawn new server: {e}"),
             }
         });
 
-        let mut sigusr1 =
-            signal(SignalKind::user_defined1()).expect("Failed to register SIGUSR1 handler");
         rt.spawn(async move {
+            let mut sigusr1 = match signal(SignalKind::user_defined1()) {
+                Ok(signal) => signal,
+                Err(err) => {
+                    tracing::error!("Failed to register SIGUSR1 handler: {err}");
+                    return;
+                }
+            };
             sigusr1.recv().await;
             tracing::info!("SIGUSR1 received — new process ready, starting graceful drain");
             // Send SIGTERM to ourselves; Pingora's SIGTERM handler drains and exits.
@@ -2252,10 +2281,11 @@ async fn replace_instance_if_needed(
 #[cfg(test)]
 mod tests {
     use super::{
-        ServerRuntimeConfig, ServerState, bun_install_args_for_release, handle_idle_event,
-        install_rustls_crypto_provider, prepare_release_runtime, read_secrets_file,
-        resolve_release_runtime, secrets_file_path, should_use_self_signed_route_cert,
-        validate_deploy_routes, write_secrets_file,
+        SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, bun_install_args_for_release,
+        handle_idle_event, install_rustls_crypto_provider, prepare_release_runtime,
+        read_secrets_file, resolve_release_runtime, secrets_file_path,
+        should_signal_parent_on_ready, should_use_self_signed_route_cert, validate_deploy_routes,
+        write_secrets_file,
     };
     use crate::instances::AppConfig;
     use crate::socket::{AppState, Command, InstanceState, Response};
@@ -2263,7 +2293,7 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::process::{Command as StdCommand, Stdio};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
     use tako_core::UpgradeMode;
     use tempfile::TempDir;
@@ -2314,6 +2344,43 @@ mod tests {
 
         install_rustls_crypto_provider();
         assert!(rustls::crypto::CryptoProvider::get_default().is_some());
+    }
+
+    fn signal_parent_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    #[test]
+    fn should_signal_parent_on_ready_defaults_to_false() {
+        let _guard = signal_parent_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        unsafe {
+            std::env::remove_var(SIGNAL_PARENT_ON_READY_ENV);
+        }
+        assert!(!should_signal_parent_on_ready());
+    }
+
+    #[test]
+    fn should_signal_parent_on_ready_reads_env_toggle() {
+        let _guard = signal_parent_env_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        unsafe {
+            std::env::set_var(SIGNAL_PARENT_ON_READY_ENV, "1");
+        }
+        assert!(should_signal_parent_on_ready());
+
+        unsafe {
+            std::env::set_var(SIGNAL_PARENT_ON_READY_ENV, "0");
+        }
+        assert!(!should_signal_parent_on_ready());
+
+        unsafe {
+            std::env::remove_var(SIGNAL_PARENT_ON_READY_ENV);
+        }
     }
 
     #[test]
@@ -3145,18 +3212,27 @@ exit 1
             r#"#!/bin/sh
 python3 - <<'PY'
 import os
-from http.server import BaseHTTPRequestHandler, HTTPServer
+import socketserver
 
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain")
-        self.end_headers()
-        self.wfile.write(b"ok")
-    def log_message(self, fmt, *args):
-        return
+socket_path = (os.environ.get("TAKO_APP_SOCKET") or "").replace("{pid}", str(os.getpid()))
+if not socket_path:
+    raise SystemExit("TAKO_APP_SOCKET is required")
+if os.path.exists(socket_path):
+    os.remove(socket_path)
 
-HTTPServer(("127.0.0.1", int(os.environ.get("PORT", "3000"))), Handler).serve_forever()
+class Handler(socketserver.StreamRequestHandler):
+    def handle(self):
+        try:
+            _ = self.rfile.readline()
+            while True:
+                line = self.rfile.readline()
+                if not line or line in (b"\r\n", b"\n"):
+                    break
+            self.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+        except Exception:
+            return
+
+socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
 PY
 "#,
         )

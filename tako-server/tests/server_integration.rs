@@ -289,7 +289,7 @@ mod instance_management {
 
         let server = TestServer::start();
 
-        // Create a Bun app that serves requests on PORT.
+        // Create a Bun app that serves requests on TAKO_APP_SOCKET.
         let app_dir = server
             .data_dir()
             .join("apps")
@@ -316,8 +316,13 @@ mod instance_management {
         fs::write(
             app_dir.join("index.ts"),
             r#"
+const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
+if (!appSocket) {
+  throw new Error("TAKO_APP_SOCKET is required");
+}
+
 Bun.serve({
-  port: Number(process.env.PORT || 3000),
+  unix: appSocket,
   fetch(request) {
     const url = new URL(request.url);
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();

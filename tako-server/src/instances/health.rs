@@ -58,24 +58,15 @@ use dashmap::DashMap;
 pub struct HealthChecker {
     config: HealthConfig,
     event_tx: mpsc::Sender<HealthEvent>,
-    /// HTTP client for health probes
-    client: reqwest::Client,
     /// Consecutive failure counts per instance (app_name:instance_id -> count)
     failure_counts: Arc<DashMap<String, u32>>,
 }
 
 impl HealthChecker {
     pub fn new(config: HealthConfig, event_tx: mpsc::Sender<HealthEvent>) -> Self {
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .timeout(config.probe_timeout)
-            .build()
-            .expect("Failed to build HTTP client for health checks");
-
         Self {
             config,
             event_tx,
-            client,
             failure_counts: Arc::new(DashMap::new()),
         }
     }
@@ -138,7 +129,6 @@ impl HealthChecker {
 
         // Perform HTTP probe
         let probe_success = probe_instance_health(
-            &self.client,
             instance,
             &health_host,
             &health_path,
@@ -243,30 +233,18 @@ impl HealthChecker {
 }
 
 async fn probe_instance_health(
-    client: &reqwest::Client,
     instance: &Instance,
     health_host: &str,
     health_path: &str,
     probe_timeout: Duration,
 ) -> bool {
-    #[cfg(unix)]
-    if let Some(socket_path) = instance.socket_path() {
-        match probe_unix_socket(&socket_path, health_host, health_path, probe_timeout).await {
-            Ok(true) => return true,
-            Ok(false) | Err(_) => {}
-        }
-    }
-
-    let health_url = format!("http://127.0.0.1:{}{}", instance.port, health_path);
-    match client
-        .get(&health_url)
-        .header(reqwest::header::HOST, health_host)
-        .send()
-        .await
-    {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
-    }
+    let Some(socket_path) = instance.socket_path() else {
+        return false;
+    };
+    matches!(
+        probe_unix_socket(&socket_path, health_host, health_path, probe_timeout).await,
+        Ok(true)
+    )
 }
 
 #[cfg(unix)]
@@ -432,83 +410,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_probe_marks_ready_instance_healthy() {
-        let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
-            return;
-        };
-        let port = listener.local_addr().unwrap().port();
-
-        tokio::spawn(async move {
-            loop {
-                let (mut sock, _) = match listener.accept().await {
-                    Ok(v) => v,
-                    Err(_) => break,
-                };
-                let mut request_buf = [0_u8; 2048];
-                let n = match tokio::io::AsyncReadExt::read(&mut sock, &mut request_buf).await {
-                    Ok(v) if v > 0 => v,
-                    _ => continue,
-                };
-                let request = String::from_utf8_lossy(&request_buf[..n]);
-                let is_internal_status = request.starts_with("GET /status ")
-                    && request
-                        .lines()
-                        .any(|line| line.eq_ignore_ascii_case("host: tako-internal"));
-
-                let response = if is_internal_status {
-                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
-                } else {
-                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found".as_slice()
-                };
-                let _ = tokio::io::AsyncWriteExt::write_all(&mut sock, response).await;
-            }
-        });
-
-        let (tx, _rx) = mpsc::channel(16);
-        let mut config = AppConfig {
-            name: "test-app".to_string(),
-            base_port: port,
-            min_instances: 1,
-            ..Default::default()
-        };
-        config.health_check_path = "/status".to_string();
-        config.health_check_host = "tako-internal".to_string();
-
-        let app = Arc::new(App::new(config, tx));
-        let instance = app.allocate_instance();
-        instance.set_state(InstanceState::Ready);
-
-        let (ev_tx, _ev_rx) = mpsc::channel(16);
-        let checker = HealthChecker::new(
-            HealthConfig {
-                check_interval: Duration::from_millis(25),
-                probe_timeout: Duration::from_millis(200),
-                ..Default::default()
-            },
-            ev_tx,
-        );
-
-        let app_task = tokio::spawn(async move {
-            checker.monitor_app(app).await;
-        });
-
-        let wait = async {
-            loop {
-                if instance.state() == InstanceState::Healthy {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        };
-
-        timeout(Duration::from_secs(1), wait)
-            .await
-            .expect("instance never became healthy");
-
-        app_task.abort();
-    }
-
-    #[tokio::test]
     #[cfg(unix)]
     async fn test_probe_marks_ready_instance_healthy_over_unix_socket() {
         use std::os::unix::net::UnixListener as StdUnixListener;
@@ -593,5 +494,65 @@ mod tests {
             .expect("instance never became healthy");
 
         app_task.abort();
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn test_probe_does_not_fallback_to_tcp_when_unix_socket_path_is_configured() {
+        use tempfile::TempDir;
+
+        let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
+            return;
+        };
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            let accepted = tokio::time::timeout(Duration::from_secs(1), listener.accept())
+                .await
+                .is_ok();
+            let _ = accepted_tx.send(accepted);
+        });
+
+        let temp = TempDir::new().unwrap();
+        let (tx, _rx) = mpsc::channel(16);
+        let config = AppConfig {
+            name: "test-app".to_string(),
+            base_port: port,
+            app_socket_dir: temp.path().to_path_buf(),
+            min_instances: 1,
+            ..Default::default()
+        };
+        let app = App::new(config, tx);
+        let instance = app.allocate_instance();
+        assert_eq!(
+            instance.port, port,
+            "test precondition: expected listener port"
+        );
+        instance.set_pid(std::process::id());
+
+        let socket_path = instance
+            .socket_path()
+            .expect("instance should resolve socket path with pid");
+        assert!(
+            !std::path::Path::new(&socket_path).exists(),
+            "test precondition: unix socket should be absent"
+        );
+
+        let healthy = probe_instance_health(
+            &instance,
+            "tako-internal",
+            "/status",
+            Duration::from_millis(200),
+        )
+        .await;
+        assert!(!healthy);
+        let accepted = accepted_rx
+            .await
+            .expect("listener should report acceptance result");
+        assert!(
+            !accepted,
+            "tcp fallback should not be attempted when unix socket path is configured"
+        );
     }
 }

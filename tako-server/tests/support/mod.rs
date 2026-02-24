@@ -1,10 +1,12 @@
 use std::fs;
+use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener};
+use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -69,9 +71,45 @@ fn pick_port() -> u16 {
         .port()
 }
 
+fn test_server_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+struct ProcessTestLock {
+    file: std::fs::File,
+}
+
+impl ProcessTestLock {
+    fn acquire() -> Self {
+        let path = std::env::temp_dir().join("tako-server-tests.lock");
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(path)
+            .expect("open test lock file");
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
+        if rc != 0 {
+            let err = std::io::Error::last_os_error();
+            panic!("failed to acquire global test lock: {err}");
+        }
+        Self { file }
+    }
+}
+
+impl Drop for ProcessTestLock {
+    fn drop(&mut self) {
+        let _ = unsafe { libc::flock(self.file.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
 #[allow(dead_code)]
 pub struct TestServer {
     child: Option<Child>,
+    _process_lock: ProcessTestLock,
+    _lock: MutexGuard<'static, ()>,
     pub socket_path: PathBuf,
     pub http_port: u16,
     pub tls_port: u16,
@@ -92,6 +130,10 @@ fn test_http_runtime() -> &'static tokio::runtime::Runtime {
 #[allow(dead_code)]
 impl TestServer {
     pub fn start() -> Self {
+        let process_lock = ProcessTestLock::acquire();
+        let lock = test_server_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let data_dir = TempDir::new().unwrap();
         let socket_path = data_dir.path().join("tako.sock");
         let http_port = pick_port();
@@ -128,6 +170,8 @@ impl TestServer {
                 thread::sleep(Duration::from_millis(100));
                 return Self {
                     child: Some(child),
+                    _process_lock: process_lock,
+                    _lock: lock,
                     socket_path,
                     http_port,
                     tls_port,
@@ -262,8 +306,13 @@ pub fn write_bun_app(app_dir: &Path, body: &str) {
     fs::write(
         app_dir.join("src/index.ts"),
         format!(
-            r#"Bun.serve({{
-  port: Number(process.env.PORT),
+            r#"const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{{pid}}", String(process.pid));
+if (!appSocket) {{
+  throw new Error("TAKO_APP_SOCKET is required");
+}}
+
+Bun.serve({{
+  unix: appSocket,
   fetch(req) {{
     const url = new URL(req.url);
     const host = (req.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();

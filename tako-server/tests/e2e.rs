@@ -12,8 +12,9 @@ use std::net::{TcpListener, TcpStream};
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 fn workspace_root() -> PathBuf {
@@ -46,6 +47,21 @@ fn pick_unused_port() -> Option<u16> {
         .map(|addr| addr.port())
 }
 
+fn pick_unused_port_pair() -> Option<(u16, u16)> {
+    for _ in 0..32 {
+        let Some(http_port) = pick_unused_port() else {
+            continue;
+        };
+        let Some(https_port) = pick_unused_port() else {
+            continue;
+        };
+        if http_port != https_port {
+            return Some((http_port, https_port));
+        }
+    }
+    None
+}
+
 fn can_bind_localhost() -> bool {
     TcpListener::bind("127.0.0.1:0").is_ok()
 }
@@ -62,9 +78,25 @@ fn e2e_enabled() -> bool {
     std::env::var("TAKO_E2E").is_ok() && bun_available() && can_bind_localhost()
 }
 
+fn e2e_environment_lock() -> &'static Mutex<()> {
+    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+    LOCK.get_or_init(|| Mutex::new(()))
+}
+
+fn format_output_field(bytes: &[u8]) -> String {
+    let text = String::from_utf8_lossy(bytes);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        "(empty)".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 /// E2E test environment with tako-server running.
 struct E2EEnvironment {
     server_process: Option<Child>,
+    _test_lock: MutexGuard<'static, ()>,
     server_socket: PathBuf,
     http_port: u16,
     data_dir: TempDir,
@@ -72,11 +104,13 @@ struct E2EEnvironment {
 
 impl E2EEnvironment {
     fn new() -> Self {
+        let test_lock = e2e_environment_lock()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let data_dir = TempDir::new().unwrap();
         let server_socket = data_dir.path().join("tako.sock");
 
-        let http_port = pick_unused_port().unwrap_or(18080);
-        let https_port = pick_unused_port().unwrap_or(18443);
+        let (http_port, https_port) = pick_unused_port_pair().unwrap_or((18080, 18443));
 
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_tako-server"));
         cmd.arg("--socket")
@@ -94,8 +128,9 @@ impl E2EEnvironment {
         apply_coverage_env(&mut cmd);
         let server_process = cmd.spawn().expect("Failed to start tako-server");
 
-        let env = E2EEnvironment {
+        let mut env = E2EEnvironment {
             server_process: Some(server_process),
+            _test_lock: test_lock,
             server_socket,
             http_port,
             data_dir,
@@ -105,15 +140,46 @@ impl E2EEnvironment {
         env
     }
 
-    fn wait_for_ready(&self) {
-        for _ in 0..100 {
+    fn wait_for_ready(&mut self) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while Instant::now() < deadline {
             if self.server_socket.exists() {
                 thread::sleep(Duration::from_millis(200));
                 return;
             }
+
+            if let Some(status) = self
+                .server_process
+                .as_mut()
+                .and_then(|child| child.try_wait().ok())
+                .flatten()
+            {
+                self.panic_with_server_output(&format!(
+                    "Server exited before becoming ready (status: {})",
+                    status
+                ));
+            }
             thread::sleep(Duration::from_millis(100));
         }
-        panic!("Server did not become ready in time");
+
+        self.panic_with_server_output("Server did not become ready in time");
+    }
+
+    fn panic_with_server_output(&mut self, reason: &str) -> ! {
+        let details = if let Some(mut child) = self.server_process.take() {
+            let _ = child.kill();
+            match child.wait_with_output() {
+                Ok(output) => format!(
+                    "tako-server output\nstdout:\n{}\n\nstderr:\n{}",
+                    format_output_field(&output.stdout),
+                    format_output_field(&output.stderr)
+                ),
+                Err(err) => format!("failed to read tako-server output: {}", err),
+            }
+        } else {
+            "tako-server output unavailable: process handle already consumed".to_string()
+        };
+        panic!("{}\n{}", reason, details);
     }
 
     fn send_command(&self, command: &serde_json::Value) -> serde_json::Value {
@@ -238,6 +304,24 @@ fn deploy_command(
     })
 }
 
+mod harness {
+    use super::*;
+
+    #[test]
+    fn pick_unused_port_pair_returns_distinct_ports() {
+        if !can_bind_localhost() {
+            return;
+        }
+
+        let (http_port, https_port) =
+            pick_unused_port_pair().expect("should allocate a pair of localhost ports");
+        assert_ne!(
+            http_port, https_port,
+            "http and https ports must never be identical"
+        );
+    }
+}
+
 mod deploy_flow {
     use super::*;
 
@@ -253,8 +337,13 @@ mod deploy_flow {
             "hello-world",
             "v1",
             r#"
+const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
+if (!appSocket) {
+  throw new Error("TAKO_APP_SOCKET is required");
+}
+
 Bun.serve({
-  port: Number(process.env.PORT || 3000),
+  unix: appSocket,
   fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -308,8 +397,13 @@ mod routing {
             "app-a",
             "v1",
             r#"
+const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
+if (!appSocket) {
+  throw new Error("TAKO_APP_SOCKET is required");
+}
+
 Bun.serve({
-  port: Number(process.env.PORT || 3000),
+  unix: appSocket,
   fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -328,8 +422,13 @@ Bun.serve({
             "app-b",
             "v1",
             r#"
+const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
+if (!appSocket) {
+  throw new Error("TAKO_APP_SOCKET is required");
+}
+
 Bun.serve({
-  port: Number(process.env.PORT || 3000),
+  unix: appSocket,
   fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -400,8 +499,13 @@ mod rolling_updates {
             "versioned-app",
             "v1",
             r#"
+const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
+if (!appSocket) {
+  throw new Error("TAKO_APP_SOCKET is required");
+}
+
 Bun.serve({
-  port: Number(process.env.PORT || 3000),
+  unix: appSocket,
   fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname;
@@ -440,8 +544,13 @@ Bun.serve({
             "versioned-app",
             "v2",
             r#"
+const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
+if (!appSocket) {
+  throw new Error("TAKO_APP_SOCKET is required");
+}
+
 Bun.serve({
-  port: Number(process.env.PORT || 3000),
+  unix: appSocket,
   fetch(request) {
     const url = new URL(request.url);
     const path = url.pathname;

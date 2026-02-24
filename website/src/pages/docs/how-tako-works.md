@@ -147,6 +147,7 @@ Tako uses active HTTP probing as the source of truth for instance health.
 
 - Probe interval: 1s (default)
 - Probe target: `GET /status` with `Host: tako-internal`
+- Probe transport: Unix deploys probe via per-instance `TAKO_APP_SOCKET` path (no TCP fallback)
 - Failure handling:
   - consecutive failures mark instances unhealthy and remove them from balancing
   - deeper failure threshold marks instances stopped/killed

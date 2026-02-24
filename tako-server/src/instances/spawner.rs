@@ -10,8 +10,6 @@ use tokio::time::timeout;
 
 /// Spawns and monitors app instances
 pub struct Spawner {
-    /// HTTP client for health checks
-    client: reqwest::Client,
     /// UID/GID of the `tako-app` user for process isolation when running privileged (Unix only)
     #[cfg(unix)]
     app_user: Option<(u32, u32)>,
@@ -20,11 +18,6 @@ pub struct Spawner {
 impl Spawner {
     pub fn new() -> Self {
         Self {
-            client: reqwest::Client::builder()
-                .no_proxy()
-                .timeout(Duration::from_secs(5))
-                .build()
-                .expect("Failed to build HTTP client"),
             #[cfg(unix)]
             app_user: resolve_app_user(),
         }
@@ -70,21 +63,9 @@ impl Spawner {
             "Spawning instance"
         );
 
-        // Build environment: merge non-secret vars with secrets (secrets take precedence)
-        let mut env = config.env_vars.clone();
-        env.extend(config.secrets.iter().map(|(k, v)| (k.clone(), v.clone())));
-        env.insert("PORT".to_string(), instance.port.to_string());
-        env.insert("TAKO_INSTANCE".to_string(), instance.id.to_string());
-        if let Some(socket_template) = instance.socket_template() {
-            env.insert("TAKO_APP_SOCKET".to_string(), socket_template.to_string());
-        }
-        env.entry("NODE_ENV".to_string())
-            .or_insert_with(|| "production".to_string());
+        let env = build_instance_env(&config, &instance);
 
-        #[cfg(unix)]
         let app_user = self.app_user;
-        #[cfg(not(unix))]
-        let app_user = None;
 
         let child = spawn_child_process(&config, &env, app_user)?;
 
@@ -212,33 +193,41 @@ impl Spawner {
         health_check_host: &str,
         probe_timeout: Duration,
     ) -> bool {
-        #[cfg(unix)]
-        if let Some(socket_path) = instance.socket_path() {
-            match probe_unix_socket(
+        let Some(socket_path) = instance.socket_path() else {
+            return false;
+        };
+        matches!(
+            probe_unix_socket(
                 &socket_path,
                 health_check_path,
                 health_check_host,
                 probe_timeout,
             )
-            .await
-            {
-                Ok(true) => return true,
-                Ok(false) | Err(_) => {}
-            }
-        }
-
-        let health_url = format!("http://127.0.0.1:{}{}", instance.port, health_check_path);
-        match self
-            .client
-            .get(&health_url)
-            .header(reqwest::header::HOST, health_check_host)
-            .send()
-            .await
-        {
-            Ok(resp) => resp.status().is_success(),
-            Err(_) => false,
-        }
+            .await,
+            Ok(true)
+        )
     }
+}
+
+fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String, String> {
+    // Merge non-secret vars with secrets (secrets take precedence).
+    let mut env = config.env_vars.clone();
+    env.extend(config.secrets.iter().map(|(k, v)| (k.clone(), v.clone())));
+
+    env.insert("TAKO_INSTANCE".to_string(), instance.id.to_string());
+
+    #[cfg(unix)]
+    {
+        let socket_template = instance
+            .socket_template()
+            .expect("unix instances must provide a unix socket template");
+        env.insert("TAKO_APP_SOCKET".to_string(), socket_template.to_string());
+    }
+
+    env.entry("NODE_ENV".to_string())
+        .or_insert_with(|| "production".to_string());
+
+    env
 }
 
 fn build_child_command(
@@ -269,16 +258,7 @@ fn should_retry_spawn_without_app_user(
     error: &std::io::Error,
     app_user: Option<(u32, u32)>,
 ) -> bool {
-    #[cfg(unix)]
-    {
-        app_user.is_some() && error.kind() == std::io::ErrorKind::PermissionDenied
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = (error, app_user);
-        false
-    }
+    app_user.is_some() && error.kind() == std::io::ErrorKind::PermissionDenied
 }
 
 fn spawn_child_process(
@@ -473,47 +453,30 @@ mod tests {
         ));
     }
 
-    #[tokio::test]
-    async fn health_check_uses_internal_status_host_and_path() {
-        let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
-            return;
-        };
-        let port = listener.local_addr().unwrap().port();
-
-        tokio::spawn(async move {
-            let (mut socket, _) = listener.accept().await.expect("accept");
-            let mut request_buf = [0_u8; 2048];
-            let n = tokio::io::AsyncReadExt::read(&mut socket, &mut request_buf)
-                .await
-                .expect("read request");
-            let request = String::from_utf8_lossy(&request_buf[..n]);
-            let is_internal_status = request.starts_with("GET /status ")
-                && request
-                    .lines()
-                    .any(|line| line.eq_ignore_ascii_case("host: tako-internal"));
-
-            let response = if is_internal_status {
-                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
-            } else {
-                b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found".as_slice()
-            };
-
-            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response).await;
-        });
+    #[test]
+    #[cfg(unix)]
+    fn build_instance_env_uses_unix_socket_without_port_when_socket_template_exists() {
+        use std::collections::HashMap;
 
         let (instance_tx, _instance_rx) = mpsc::channel(4);
-        let config = AppConfig {
-            name: "test-app".to_string(),
-            base_port: port,
-            health_check_path: "/status".to_string(),
-            health_check_host: "tako-internal".to_string(),
-            ..Default::default()
-        };
-        let app = App::new(config, instance_tx);
+        let app = App::new(
+            AppConfig {
+                name: "test-app".to_string(),
+                env_vars: HashMap::from([("FOO".to_string(), "bar".to_string())]),
+                secrets: HashMap::from([("SECRET".to_string(), "shh".to_string())]),
+                ..Default::default()
+            },
+            instance_tx,
+        );
         let instance = app.allocate_instance();
 
-        let spawner = Spawner::new();
-        assert!(spawner.health_check(&app, &instance).await);
+        let env = build_instance_env(&app.config.read().clone(), &instance);
+        let expected_instance = instance.id.to_string();
+        assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
+        assert_eq!(env.get("SECRET").map(String::as_str), Some("shh"));
+        assert_eq!(env.get("TAKO_INSTANCE"), Some(&expected_instance));
+        assert!(env.contains_key("TAKO_APP_SOCKET"));
+        assert!(!env.contains_key("PORT"));
     }
 
     #[tokio::test]
@@ -567,5 +530,69 @@ mod tests {
 
         let spawner = Spawner::new();
         assert!(spawner.health_check(&app, &instance).await);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn health_check_does_not_fallback_to_tcp_when_unix_socket_path_is_configured() {
+        use tempfile::TempDir;
+
+        let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
+            return;
+        };
+        let port = listener.local_addr().unwrap().port();
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+
+        tokio::spawn(async move {
+            let accepted = tokio::time::timeout(Duration::from_secs(1), listener.accept())
+                .await
+                .is_ok();
+            let _ = accepted_tx.send(accepted);
+        });
+
+        let temp = TempDir::new().unwrap();
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let config = AppConfig {
+            name: "test-app".to_string(),
+            base_port: port,
+            app_socket_dir: temp.path().to_path_buf(),
+            health_check_path: "/status".to_string(),
+            health_check_host: "tako-internal".to_string(),
+            ..Default::default()
+        };
+        let app = App::new(config, instance_tx);
+        let instance = app.allocate_instance();
+        assert_eq!(
+            instance.port, port,
+            "test precondition: expected listener port"
+        );
+        instance.set_pid(std::process::id());
+
+        let socket_path = instance
+            .socket_path()
+            .expect("instance should resolve socket path with pid");
+        assert!(
+            !std::path::Path::new(&socket_path).exists(),
+            "test precondition: unix socket should be absent"
+        );
+
+        let spawner = Spawner::new();
+        assert!(
+            !spawner
+                .probe_health(
+                    &instance,
+                    "/status",
+                    "tako-internal",
+                    Duration::from_millis(200),
+                )
+                .await
+        );
+        let accepted = accepted_rx
+            .await
+            .expect("listener should report acceptance result");
+        assert!(
+            !accepted,
+            "tcp fallback should not be attempted when unix socket path is configured"
+        );
     }
 }

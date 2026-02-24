@@ -45,7 +45,7 @@ pub struct AppConfig {
     pub min_instances: u32,
     /// Maximum instances
     pub max_instances: u32,
-    /// Port to bind (will be passed as PORT env var)
+    /// Base port allocator for instance IDs and status metadata
     pub base_port: u16,
     /// Directory used for per-instance Unix sockets
     pub app_socket_dir: PathBuf,

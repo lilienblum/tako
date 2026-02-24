@@ -1005,20 +1005,21 @@ email = "admin@example.com"
 - Path: `/var/run/tako-app-{app-name}-{pid}.sock`
 - Created by app on startup
 - Used by: tako-server to proxy HTTP requests
+- Required on Unix deploys: instances must expose health/status and request traffic on this socket.
 
 ### Environment Variables for Apps
 
-| Name              | Used by         | Meaning                                                                    | Typical source                                                                                |
-| ----------------- | --------------- | -------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `PORT`            | app             | Listen port for HTTP server                                                | Set by `tako-server` when running app instances; set by `tako dev` for the local app process. |
-| `TAKO_ENV`        | app             | Environment name                                                           | Set during deploy manifest generation (`production`, `staging`, etc.).                        |
-| `NODE_ENV`        | app             | Node.js convention env                                                     | Set by runtime adapter / server (`development` or `production`).                              |
-| `BUN_ENV`         | app             | Bun convention env                                                         | Set by runtime adapter (`development` or `production`).                                       |
-| `TAKO_BUILD`      | app             | Deployed build/version identifier                                          | Included in deploy command payload and injected by `tako-server` at process spawn.            |
-| `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on (if using socket-based proxying) | path string or unset                                                                          |
-| `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one)                              | string                                                                                        |
-| `TAKO_INSTANCE`   | app / `tako.sh` | Instance identifier                                                        | integer string                                                                                |
-| _user-defined_    | app             | User config vars/secrets                                                   | From `app.json` in the release dir (env vars) and per-app `secrets.json` (0600, secrets).     |
+| Name              | Used by         | Meaning                                       | Typical source                                                                            |
+| ----------------- | --------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `PORT`            | app             | Listen port for HTTP server                   | Set by `tako dev` for the local app process.                                              |
+| `TAKO_ENV`        | app             | Environment name                              | Set during deploy manifest generation (`production`, `staging`, etc.).                    |
+| `NODE_ENV`        | app             | Node.js convention env                        | Set by runtime adapter / server (`development` or `production`).                          |
+| `BUN_ENV`         | app             | Bun convention env                            | Set by runtime adapter (`development` or `production`).                                   |
+| `TAKO_BUILD`      | app             | Deployed build/version identifier             | Included in deploy command payload and injected by `tako-server` at process spawn.        |
+| `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on     | path string on Unix deploys (with `{pid}` token); unset in local dev                      |
+| `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one) | string                                                                                    |
+| `TAKO_INSTANCE`   | app / `tako.sh` | Instance identifier                           | integer string                                                                            |
+| _user-defined_    | app             | User config vars/secrets                      | From `app.json` in the release dir (env vars) and per-app `secrets.json` (0600, secrets). |
 
 ### Messages (JSON over Unix Socket)
 
@@ -1119,7 +1120,7 @@ Server-side validation on `deploy` and app-scoped commands:
 
 - App processes do not connect to the management socket.
 - `tako-server` controls lifecycle directly (spawn/stop/rolling update) and determines readiness/health via active HTTP probing only.
-- App processes may receive `TAKO_APP_SOCKET` to bind a per-instance Unix socket for request traffic.
+- On Unix deploys, app processes receive `TAKO_APP_SOCKET` and must bind that per-instance Unix socket for request traffic.
 - Secret updates are applied by writing per-app `secrets.json` and rolling restart; there is no app-facing `reload_config` protocol message.
 
 ### Health Checks
@@ -1128,6 +1129,7 @@ Active HTTP probing is the source of truth for instance health:
 
 - **Probe interval**: 1 second by default (configurable)
 - **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako-internal`
+- **Transport**: On Unix deploys, probes use the instance Unix socket path from `TAKO_APP_SOCKET` (no TCP fallback).
 - **Unhealthy threshold**: 2 consecutive failures → mark unhealthy, remove from load balancer
 - **Dead threshold**: 5 consecutive failures → mark stopped, kill process
 - **Recovery**: Single successful probe resets failure count and restores to healthy
@@ -1249,7 +1251,7 @@ import { tako } from "tako.sh/vite";
 ### Feature Overview
 
 - Fetch handler adapters for Bun/Node/Deno runtimes
-- Unix socket serving when `TAKO_APP_SOCKET` is set (TCP fallback in dev/local)
+- Unix socket serving for deployed Unix apps via `TAKO_APP_SOCKET`; `tako dev` remains TCP (`PORT`)
 - Internal status endpoint (`Host: tako-internal` + `/status`)
 - Graceful shutdown handling
 

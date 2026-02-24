@@ -126,13 +126,13 @@ These are the environment variables Tako components read and/or set.
 
 | Name              | Used by         | Meaning                                       | Values / default             | Notes                                                               |
 | ----------------- | --------------- | --------------------------------------------- | ---------------------------- | ------------------------------------------------------------------- |
-| `PORT`            | app             | Listen port for HTTP server                   | number                       | Set by `tako dev` for local runs and by `tako-server` remotely.     |
+| `PORT`            | app             | Listen port for HTTP server                   | number                       | Set by `tako dev` for local runs.                                   |
 | `ENV`             | app             | Local development environment hint            | `development`                | Set by `tako dev` for local app process compatibility.              |
 | `TAKO_ENV`        | app             | Deployed environment name                     | `production`, `staging`, ... | Set during deploy manifest generation for remote runtime.           |
 | `NODE_ENV`        | app             | Node convention env                           | `development` / `production` | Set by runtime adapter.                                             |
 | `BUN_ENV`         | app             | Bun convention env                            | `development` / `production` | Set by runtime adapter.                                             |
 | `TAKO_BUILD`      | app             | Deployed build id                             | string                       | Sent by `tako deploy` in deploy payload; injected by `tako-server`. |
-| `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on     | path string                  | Set by `tako-server` when using socket-based proxying.              |
+| `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on     | path string                  | Set by `tako-server` on Unix deploys (includes `{pid}` token).      |
 | `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one) | string                       | Optional; separate from `TAKO_BUILD`.                               |
 | `TAKO_INSTANCE`   | app / `tako.sh` | Instance ordinal                              | integer string               | Allocated by `tako-server`.                                         |
 

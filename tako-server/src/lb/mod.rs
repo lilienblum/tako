@@ -182,7 +182,6 @@ impl LoadBalancer {
         Some(Backend {
             app_name: app_name.to_string(),
             instance_id: instance.id,
-            addr: format!("127.0.0.1:{}", instance.port),
             socket_path: instance.socket_path(),
         })
     }
@@ -215,21 +214,11 @@ pub struct Backend {
     pub app_name: String,
     /// Instance ID
     pub instance_id: u32,
-    /// Address to connect to (e.g., "127.0.0.1:3000")
-    pub addr: String,
     /// Optional Unix socket path for upstream proxying
     pub socket_path: Option<String>,
 }
 
 impl Backend {
-    /// Parse address into host and port
-    pub fn host_port(&self) -> (&str, u16) {
-        let parts: Vec<&str> = self.addr.split(':').collect();
-        let host = parts.first().copied().unwrap_or("127.0.0.1");
-        let port = parts.get(1).and_then(|p| p.parse().ok()).unwrap_or(3000);
-        (host, port)
-    }
-
     pub fn socket_path(&self) -> Option<&str> {
         self.socket_path.as_deref()
     }
@@ -327,20 +316,6 @@ mod tests {
     }
 
     #[test]
-    fn test_backend_host_port() {
-        let backend = Backend {
-            app_name: "test".to_string(),
-            instance_id: 1,
-            addr: "127.0.0.1:3000".to_string(),
-            socket_path: None,
-        };
-
-        let (host, port) = backend.host_port();
-        assert_eq!(host, "127.0.0.1");
-        assert_eq!(port, 3000);
-    }
-
-    #[test]
     fn test_global_load_balancer() {
         let manager = Arc::new(AppManager::new());
         let lb = LoadBalancer::new(manager.clone());
@@ -362,7 +337,8 @@ mod tests {
 
         let backend = lb.get_backend("my-app").unwrap();
         assert_eq!(backend.app_name, "my-app");
-        assert_eq!(backend.addr, "127.0.0.1:4000");
+        assert_eq!(backend.instance_id, instance.id);
+        assert_eq!(backend.socket_path(), None);
     }
 
     #[test]
@@ -401,7 +377,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn test_global_load_balancer_returns_unix_socket_path_without_fs_probe() {
+    fn test_global_load_balancer_keeps_unix_socket_path_even_when_path_does_not_exist() {
         use tempfile::TempDir;
 
         let manager = Arc::new(AppManager::new());
