@@ -56,7 +56,7 @@ export function setStatus(newStatus: TakoStatus["status"]): void {
  * Express/Connect-style middleware for Tako internal endpoints
  *
  * Handles:
- * - GET /status on Host `tako.internal` - Returns app status
+ * - GET /status on Host `tako-internal` - Returns app status
  */
 export function createMiddleware(): (
   req: {

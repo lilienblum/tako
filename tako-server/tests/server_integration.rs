@@ -290,7 +290,12 @@ mod instance_management {
         let server = TestServer::start();
 
         // Create a Bun app that serves requests on PORT.
-        let app_dir = server.data_dir().join("releases").join("test-app-v1");
+        let app_dir = server
+            .data_dir()
+            .join("apps")
+            .join("test-app")
+            .join("releases")
+            .join("v1");
         fs::create_dir_all(&app_dir).unwrap();
         fs::create_dir_all(app_dir.join("node_modules/tako.sh/src")).unwrap();
         fs::write(
@@ -316,7 +321,7 @@ Bun.serve({
   fetch(request) {
     const url = new URL(request.url);
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako.internal" && url.pathname === "/status") {
+    if (host === "tako-internal" && url.pathname === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -389,7 +394,7 @@ mod health_check {
     }
 
     #[test]
-    fn test_health_endpoint() {
+    fn test_internal_status_host_is_not_exposed_by_proxy() {
         if !require_localhost_bind() {
             return;
         }
@@ -397,16 +402,16 @@ mod health_check {
         let server = TestServer::start();
 
         let response = server
-            .http_get_with_host("tako.internal", "/status")
+            .http_get_with_host_and_headers(
+                "tako-internal",
+                "/status",
+                &[("X-Forwarded-Proto", "https")],
+            )
             .expect("status endpoint request should succeed");
 
         assert!(
-            response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200"),
-            "expected 200 response: {response}"
-        );
-        assert!(
-            response.contains("\"healthy\":true") || response.contains("\"healthy\": true"),
-            "expected healthy payload: {response}"
+            response.starts_with("HTTP/1.1 404") || response.starts_with("HTTP/1.0 404"),
+            "expected 404 response: {response}"
         );
     }
 

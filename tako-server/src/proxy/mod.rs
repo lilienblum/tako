@@ -3,7 +3,6 @@
 //! Routes incoming HTTP requests to app instances based on Host header.
 //! Supports TLS termination with automatic certificate management.
 //! Handles ACME HTTP-01 challenges for Let's Encrypt certificate issuance.
-//! Exposes internal host status endpoint (`tako.internal/status`) for health monitoring.
 
 mod static_files;
 
@@ -13,7 +12,6 @@ pub use static_files::*;
 use crate::lb::{Backend, LoadBalancer};
 use crate::routing::RouteTable;
 use crate::scaling::ColdStartManager;
-use crate::socket::{AppState, AppStatus, BuildStatus, InstanceState, InstanceStatus};
 use crate::tls::{
     CertInfo, CertManager, ChallengeHandler, ChallengeTokens, SelfSignedGenerator,
     create_sni_callbacks,
@@ -30,22 +28,10 @@ use pingora_core::prelude::*;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::{ProxyHttp, Session};
-use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::sync::RwLock;
-
-/// Server status response for internal `tako.internal/status` endpoint
-#[derive(Debug, Clone, Serialize)]
-pub struct ServerStatus {
-    /// Overall server health (healthy if at least one app has healthy instances)
-    pub healthy: bool,
-    /// List of all apps and their statuses
-    pub apps: Vec<AppStatus>,
-    /// Uptime in seconds (if available)
-    pub uptime_secs: Option<u64>,
-}
 
 /// Proxy configuration
 #[derive(Debug, Clone)]
@@ -282,97 +268,6 @@ impl TakoProxy {
 
         Ok(false)
     }
-
-    /// Generate server status for internal `tako.internal/status` endpoint
-    fn get_server_status(&self) -> ServerStatus {
-        let app_manager = self.lb.app_manager();
-        let app_names = app_manager.list_apps();
-
-        let mut apps = Vec::new();
-        let mut has_healthy = false;
-
-        for name in app_names {
-            if let Some(app) = app_manager.get_app(&name) {
-                let instances: Vec<InstanceStatus> =
-                    app.get_instances().iter().map(|i| i.status()).collect();
-
-                let healthy_count = instances
-                    .iter()
-                    .filter(|i| i.state == crate::socket::InstanceState::Healthy)
-                    .count();
-
-                if healthy_count > 0 {
-                    has_healthy = true;
-                }
-
-                apps.push(AppStatus {
-                    name: app.name(),
-                    version: app.version(),
-                    state: app.state(),
-                    instances,
-                    builds: collect_build_statuses(&app),
-                    last_error: app.last_error(),
-                });
-            }
-        }
-
-        ServerStatus {
-            healthy: has_healthy || apps.is_empty(), // Empty server is considered healthy
-            apps,
-            uptime_secs: None, // Could track server start time if needed
-        }
-    }
-}
-
-fn collect_build_statuses(app: &crate::instances::App) -> Vec<BuildStatus> {
-    let mut instances_by_build: std::collections::HashMap<String, Vec<InstanceStatus>> =
-        std::collections::HashMap::new();
-    for instance in app.get_instances() {
-        instances_by_build
-            .entry(instance.build_version().to_string())
-            .or_default()
-            .push(instance.status());
-    }
-
-    let mut builds: Vec<BuildStatus> = instances_by_build
-        .into_iter()
-        .map(|(version, instances)| BuildStatus {
-            state: derive_build_state(&instances),
-            version,
-            instances,
-        })
-        .collect();
-
-    let current_version = app.version();
-    builds.sort_by(|a, b| a.version.cmp(&b.version));
-    if let Some(index) = builds.iter().position(|b| b.version == current_version) {
-        let current = builds.remove(index);
-        builds.insert(0, current);
-    }
-
-    builds
-}
-
-fn derive_build_state(instances: &[InstanceStatus]) -> AppState {
-    if instances
-        .iter()
-        .any(|i| i.state == InstanceState::Healthy || i.state == InstanceState::Ready)
-    {
-        return AppState::Running;
-    }
-    if instances
-        .iter()
-        .any(|i| i.state == InstanceState::Starting || i.state == InstanceState::Draining)
-    {
-        return AppState::Deploying;
-    }
-    if instances
-        .iter()
-        .any(|i| i.state == InstanceState::Unhealthy)
-    {
-        return AppState::Error;
-    }
-    AppState::Stopped
 }
 
 /// Request context for tracking which backend is serving
@@ -462,7 +357,6 @@ impl ProxyHttp for TakoProxy {
             .and_then(|h| h.to_str().ok())
             .unwrap_or("");
         let hostname = host.split(':').next().unwrap_or(host);
-        let internal_status_request = is_internal_status_request(hostname, &path);
 
         // Handle ACME HTTP-01 challenges
         if let Some(ref handler) = self.challenge_handler
@@ -486,34 +380,9 @@ impl ProxyHttp for TakoProxy {
             }
         }
 
-        // Handle internal status endpoint for health monitoring
-        if internal_status_request {
-            let status = self.get_server_status();
-            let status_code = if status.healthy { 200 } else { 503 };
-
-            let body = serde_json::to_string_pretty(&status).unwrap_or_else(|_| {
-                r#"{"healthy":false,"apps":[],"error":"serialization failed"}"#.to_string()
-            });
-
-            let mut header = ResponseHeader::build(status_code, None)?;
-            insert_body_headers(&mut header, "application/json", &body)?;
-            header.insert_header("Cache-Control", "no-cache, no-store")?;
-            session
-                .write_response_header(Box::new(header), false)
-                .await?;
-            session.write_response_body(Some(body.into()), true).await?;
-
-            tracing::debug!(
-                healthy = status.healthy,
-                app_count = status.apps.len(),
-                "Served internal status endpoint"
-            );
-            return Ok(true);
-        }
-
         // Handle HTTP to HTTPS redirect.
-        // Allow ACME challenges and internal status endpoint on HTTP.
-        if !path.starts_with("/.well-known/acme-challenge/") && !internal_status_request {
+        // Allow ACME challenges on HTTP.
+        if !path.starts_with("/.well-known/acme-challenge/") {
             let transport_https = session
                 .digest()
                 .map(|d| d.ssl_digest.is_some())
@@ -903,10 +772,6 @@ fn forwarded_header_has_proto(value: &str) -> bool {
             key.eq_ignore_ascii_case("proto") && !parsed.is_empty()
         })
     })
-}
-
-fn is_internal_status_request(hostname: &str, path: &str) -> bool {
-    hostname.eq_ignore_ascii_case(crate::instances::INTERNAL_STATUS_HOST) && path == "/status"
 }
 
 fn insert_body_headers(header: &mut ResponseHeader, content_type: &str, body: &str) -> Result<()> {
@@ -1594,22 +1459,6 @@ mod tests {
         ));
         assert!(!forwarded_header_proto_is_https(
             "for=192.0.2.60;proto=http"
-        ));
-    }
-
-    #[test]
-    fn test_is_internal_status_request_matches_expected_host_and_path() {
-        assert!(is_internal_status_request("tako.internal", "/status"));
-        assert!(is_internal_status_request("TAKO.INTERNAL", "/status"));
-    }
-
-    #[test]
-    fn test_is_internal_status_request_rejects_non_internal_targets() {
-        assert!(!is_internal_status_request("example.com", "/status"));
-        assert!(!is_internal_status_request("tako.internal", "/"));
-        assert!(!is_internal_status_request(
-            "tako.internal",
-            "/_tako/status"
         ));
     }
 

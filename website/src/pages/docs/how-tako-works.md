@@ -146,7 +146,7 @@ Exact path routes normalize trailing slash, so `example.com/api` and `example.co
 Tako uses active HTTP probing as the source of truth for instance health.
 
 - Probe interval: 1s (default)
-- Probe target: `GET /status` with `Host: tako.internal`
+- Probe target: `GET /status` with `Host: tako-internal`
 - Failure handling:
   - consecutive failures mark instances unhealthy and remove them from balancing
   - deeper failure threshold marks instances stopped/killed
@@ -166,12 +166,11 @@ Remote TLS behavior:
 - HTTPS is default for remote app routes.
 - HTTP requests redirect to HTTPS by default (307 with `Cache-Control: no-store`).
 - `/.well-known/acme-challenge/*` remains on HTTP for ACME.
-- Internal `Host: tako.internal` + `/status` stays on HTTP.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.
 - Edge proxy response caching is enabled for proxied `GET`/`HEAD` requests (websocket upgrades excluded).
 - Cache admission follows response `Cache-Control` / `Expires` headers with no implicit TTL defaults.
 - Cache keys are host + URI, and cache storage is in-memory LRU (256 MiB total, 8 MiB max response body per object).
-- Non-internal-host requests are routed to apps normally (no reserved `/_tako/*` edge namespace).
+- Requests are routed strictly by configured routes (no reserved `/_tako/*` edge namespace).
 
 Certificate behavior:
 

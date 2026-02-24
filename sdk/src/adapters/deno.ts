@@ -65,7 +65,7 @@ export function getStatus(): TakoStatus {
  * Create a Tako-wrapped Deno server
  *
  * This wraps Deno.serve() with Tako functionality including:
- * - Internal status endpoint on Host `tako.internal` + `/status`
+ * - Internal status endpoint on Host `tako-internal` + `/status`
  * - Graceful shutdown handling
  */
 export function serve(

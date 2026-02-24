@@ -155,8 +155,14 @@ impl E2EEnvironment {
         response
     }
 
-    fn create_test_app(&self, name: &str, code: &str) -> PathBuf {
-        let app_dir = self.data_dir.path().join("apps").join(name);
+    fn create_test_app(&self, app: &str, version: &str, code: &str) -> PathBuf {
+        let app_dir = self
+            .data_dir
+            .path()
+            .join("apps")
+            .join(app)
+            .join("releases")
+            .join(version);
         fs::create_dir_all(&app_dir).unwrap();
         fs::create_dir_all(app_dir.join("node_modules/tako.sh/src")).unwrap();
 
@@ -164,7 +170,7 @@ impl E2EEnvironment {
             app_dir.join("package.json"),
             format!(
                 r#"{{"name":"{}","scripts":{{"dev":"bun run index.ts"}}}}"#,
-                name
+                app
             ),
         )
         .unwrap();
@@ -245,6 +251,7 @@ mod deploy_flow {
 
         let app_dir = env.create_test_app(
             "hello-world",
+            "v1",
             r#"
 Bun.serve({
   port: Number(process.env.PORT || 3000),
@@ -252,7 +259,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako.internal" && path === "/status") {
+    if (host === "tako-internal" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -299,6 +306,7 @@ mod routing {
 
         let app_a = env.create_test_app(
             "app-a",
+            "v1",
             r#"
 Bun.serve({
   port: Number(process.env.PORT || 3000),
@@ -306,7 +314,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako.internal" && path === "/status") {
+    if (host === "tako-internal" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -318,6 +326,7 @@ Bun.serve({
         );
         let app_b = env.create_test_app(
             "app-b",
+            "v1",
             r#"
 Bun.serve({
   port: Number(process.env.PORT || 3000),
@@ -325,7 +334,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako.internal" && path === "/status") {
+    if (host === "tako-internal" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -388,7 +397,8 @@ mod rolling_updates {
         let env = E2EEnvironment::new();
 
         let v1_dir = env.create_test_app(
-            "versioned-app-v1",
+            "versioned-app",
+            "v1",
             r#"
 Bun.serve({
   port: Number(process.env.PORT || 3000),
@@ -396,7 +406,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako.internal" && path === "/status") {
+    if (host === "tako-internal" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -427,7 +437,8 @@ Bun.serve({
         );
 
         let v2_dir = env.create_test_app(
-            "versioned-app-v2",
+            "versioned-app",
+            "v2",
             r#"
 Bun.serve({
   port: Number(process.env.PORT || 3000),
@@ -435,7 +446,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako.internal" && path === "/status") {
+    if (host === "tako-internal" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });

@@ -1,6 +1,6 @@
 //! Health checker - monitors instance health via HTTP probing
 //!
-//! Performs active HTTP health checks to internal host `tako.internal` at `/status` on each
+//! Performs active HTTP health checks to internal host `tako-internal` at `/status` on each
 //! instance.
 //! This replaces passive heartbeat-only detection with active probing.
 
@@ -422,7 +422,7 @@ mod tests {
                 let is_internal_status = request.starts_with("GET /status ")
                     && request
                         .lines()
-                        .any(|line| line.eq_ignore_ascii_case("host: tako.internal"));
+                        .any(|line| line.eq_ignore_ascii_case("host: tako-internal"));
 
                 let response = if is_internal_status {
                     b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
@@ -441,7 +441,7 @@ mod tests {
             ..Default::default()
         };
         config.health_check_path = "/status".to_string();
-        config.health_check_host = "tako.internal".to_string();
+        config.health_check_host = "tako-internal".to_string();
 
         let app = Arc::new(App::new(config, tx));
         let instance = app.allocate_instance();
@@ -507,7 +507,7 @@ mod tests {
                 let is_internal_status = request.starts_with("GET /status ")
                     && request
                         .lines()
-                        .any(|line| line.eq_ignore_ascii_case("host: tako.internal"));
+                        .any(|line| line.eq_ignore_ascii_case("host: tako-internal"));
 
                 let response = if is_internal_status {
                     b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
@@ -527,7 +527,7 @@ mod tests {
             ..Default::default()
         };
         config.health_check_path = "/status".to_string();
-        config.health_check_host = "tako.internal".to_string();
+        config.health_check_host = "tako-internal".to_string();
 
         let app = Arc::new(App::new(config, tx));
         let instance = app.allocate_instance();

@@ -4,7 +4,7 @@
  * This is the internal wrapper that Tako uses to run user apps.
  * It handles:
  * - Unix socket server creation
- * - Internal status endpoint (Host: tako.internal, Path: /status)
+ * - Internal status endpoint (Host: tako-internal, Path: /status)
  * - Graceful shutdown
  *
  * Users don't interact with this directly - it's used by tako dev and tako-server.

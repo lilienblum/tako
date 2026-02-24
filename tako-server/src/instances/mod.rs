@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use tokio::process::Child;
 use tokio::sync::mpsc;
 
-pub const INTERNAL_STATUS_HOST: &str = "tako.internal";
+pub const INTERNAL_STATUS_HOST: &str = "tako-internal";
 const APP_SOCKET_PID_TOKEN: &str = "{pid}";
 
 /// Configuration for an app
