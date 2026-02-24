@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { takoVitePlugin } from "../src/vite";
+import { tako } from "../src/vite";
 
 let rootDir = "";
 let originalPortEnv: string | undefined;
@@ -33,7 +33,7 @@ describe("tako Vite entry plugin", () => {
   test("writes wrapped server entry for a single entry chunk", async () => {
     await mkdir(path.join(rootDir, "dist"), { recursive: true });
 
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     plugin.configResolved?.({
       root: rootDir,
       build: { outDir: "dist" },
@@ -57,13 +57,13 @@ describe("tako Vite entry plugin", () => {
   });
 
   test("does not force SSR bundling options", () => {
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     expect(plugin.config?.({}, { command: "build" })).toEqual({});
   });
 
   test("uses PORT env for dev server binding", () => {
     process.env.PORT = "47831";
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     expect(plugin.config?.({}, { command: "serve" })).toEqual({
       server: {
         allowedHosts: [".tako.local"],
@@ -75,7 +75,7 @@ describe("tako Vite entry plugin", () => {
   });
 
   test("adds tako host allowance in serve mode without PORT", () => {
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     expect(plugin.config?.({}, { command: "serve" })).toEqual({
       server: {
         allowedHosts: [".tako.local"],
@@ -85,7 +85,7 @@ describe("tako Vite entry plugin", () => {
 
   test("merges user allowedHosts in serve mode", () => {
     process.env.PORT = "47831";
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     expect(
       plugin.config?.(
         {
@@ -107,7 +107,7 @@ describe("tako Vite entry plugin", () => {
 
   test("keeps allowedHosts true in serve mode", () => {
     process.env.PORT = "47831";
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     expect(
       plugin.config?.(
         {
@@ -129,12 +129,12 @@ describe("tako Vite entry plugin", () => {
 
   test("ignores PORT env in build mode", () => {
     process.env.PORT = "47831";
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     expect(plugin.config?.({}, { command: "build" })).toEqual({});
   });
 
   test("prefers entry paths under server when multiple entry chunks exist", async () => {
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     plugin.configResolved?.({
       root: rootDir,
       build: { outDir: "dist" },
@@ -161,7 +161,7 @@ describe("tako Vite entry plugin", () => {
   });
 
   test("fails clearly when multiple entries are ambiguous", async () => {
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     plugin.configResolved?.({
       root: rootDir,
       build: { outDir: "dist" },
@@ -180,7 +180,7 @@ describe("tako Vite entry plugin", () => {
   });
 
   test("fails clearly when no entry chunks exist", async () => {
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     plugin.configResolved?.({
       root: rootDir,
       build: { outDir: "dist" },
@@ -200,16 +200,16 @@ describe("tako Vite entry plugin", () => {
   });
 
   test("fails when closeBundle runs before configResolved", async () => {
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     await expect(plugin.closeBundle?.()).rejects.toThrow(
-      "takoVitePlugin was not initialized by Vite configResolved hook.",
+      "tako was not initialized by Vite configResolved hook.",
     );
   });
 
   test("writes wrapped entry inside the configured outDir", async () => {
     await mkdir(path.join(rootDir, "dist/server"), { recursive: true });
 
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     plugin.configResolved?.({
       root: rootDir,
       build: { outDir: "dist/server" },
@@ -233,7 +233,7 @@ describe("tako Vite entry plugin", () => {
   test("does not write deploy metadata files", async () => {
     await mkdir(path.join(rootDir, "dist"), { recursive: true });
 
-    const plugin = takoVitePlugin();
+    const plugin = tako();
     plugin.configResolved?.({
       root: rootDir,
       build: { outDir: "dist" },

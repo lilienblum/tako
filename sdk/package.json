@@ -61,6 +61,7 @@
   "devDependencies": {
     "@types/bun": "catalog:dev",
     "@types/node": "catalog:dev",
-    "typescript": "catalog:dev"
+    "typescript": "catalog:dev",
+    "vite": "catalog:web"
   }
 }

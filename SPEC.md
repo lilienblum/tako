@@ -1236,7 +1236,7 @@ import { Tako } from "tako.sh"; // Auto-detect
 ### Vite Plugin
 
 ```typescript
-import { takoVitePlugin } from "tako.sh/vite";
+import { tako } from "tako.sh/vite";
 ```
 
 - `tako.sh/vite` provides a plugin that prepares a deploy entry wrapper in Vite output.

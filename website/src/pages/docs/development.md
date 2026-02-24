@@ -62,6 +62,7 @@ Default URL:
 
 If your app runs `vite dev` under `tako dev` and uses `tako.sh/vite`:
 
+- configure Vite with `import { tako } from "tako.sh/vite"` and `plugins: [tako()]`
 - the plugin adds `.tako.local` to Vite `server.allowedHosts` so local Tako hosts are accepted
 - when `PORT` is set by `tako dev`, Vite binds to `127.0.0.1:$PORT` with `strictPort: true`
 

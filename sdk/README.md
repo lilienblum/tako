@@ -43,10 +43,10 @@ Use the Vite plugin to prepare a deploy entry wrapper for Tako.
 
 ```ts
 import { defineConfig } from "vite";
-import { takoVitePlugin } from "tako.sh/vite";
+import { tako } from "tako.sh/vite";
 
 export default defineConfig({
-  plugins: [takoVitePlugin()],
+  plugins: [tako()],
 });
 ```
 

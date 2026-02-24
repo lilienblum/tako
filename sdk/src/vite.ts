@@ -1,47 +1,11 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { Plugin, ResolvedConfig, UserConfig } from "vite";
 
-interface ViteUserConfigLike {
-  server?: {
-    host?: string;
-    port?: number;
-    strictPort?: boolean;
-    allowedHosts?: true | string[];
-  };
-}
-
-interface ViteConfigEnvLike {
-  command?: "build" | "serve";
-}
-
-interface ViteResolvedConfigLike {
-  root: string;
-  build: {
-    outDir: string;
-  };
-}
-
-interface ViteOutputChunkLike {
+interface ViteEntryChunkLike {
   type: "chunk";
   fileName: string;
   isEntry: boolean;
-}
-
-interface ViteOutputBundleEntryLike {
-  type: string;
-  fileName?: string;
-  isEntry?: boolean;
-}
-
-type ViteOutputBundleLike = Record<string, ViteOutputChunkLike | ViteOutputBundleEntryLike>;
-
-export interface VitePluginLike {
-  name: string;
-  apply?: "build" | "serve";
-  config?: (_userConfig?: ViteUserConfigLike, env?: ViteConfigEnvLike) => ViteUserConfigLike;
-  configResolved?: (config: ViteResolvedConfigLike) => void;
-  generateBundle?: (_options: unknown, bundle: ViteOutputBundleLike) => void;
-  closeBundle?: () => Promise<void>;
 }
 
 const WRAPPED_ENTRY_FILE = "tako-entry.mjs";
@@ -116,37 +80,50 @@ function parsePortFromEnv(rawPort: string | undefined): number | null {
   return parsedPort;
 }
 
-function mergeServeAllowedHosts(existing: true | string[] | undefined): true | string[] {
+function mergeServeAllowedHosts(existing: unknown): true | string[] {
   if (existing === true) {
     return true;
   }
 
-  const merged = Array.isArray(existing) ? [...existing] : [];
+  const merged = Array.isArray(existing)
+    ? existing.filter((host): host is string => typeof host === "string")
+    : [];
   if (!merged.includes(".tako.local")) {
     merged.push(".tako.local");
   }
   return merged;
 }
 
-export function takoVitePlugin(): VitePluginLike {
-  let resolvedConfig: ViteResolvedConfigLike | null = null;
+function isViteEntryChunk(chunk: unknown): chunk is ViteEntryChunkLike {
+  if (!chunk || typeof chunk !== "object") {
+    return false;
+  }
+
+  const maybeChunk = chunk as Partial<ViteEntryChunkLike>;
+  return (
+    maybeChunk.type === "chunk" &&
+    maybeChunk.isEntry === true &&
+    typeof maybeChunk.fileName === "string"
+  );
+}
+
+export function tako(): Plugin {
+  let resolvedConfig: ResolvedConfig | null = null;
   let entryChunks: string[] = [];
   let sawBundleGeneration = false;
   let activeCommand: "build" | "serve" | null = null;
 
   return {
     name: "tako-vite-entry",
-    config(_userConfig, env) {
-      if (env?.command === "build" || env?.command === "serve") {
-        activeCommand = env.command;
-      }
+    config(userConfig, env) {
+      activeCommand = env.command;
 
-      const config: ViteUserConfigLike = {};
+      const config: UserConfig = {};
 
       // Allow `tako dev` to reserve the local app port and have Vite bind there.
       if (activeCommand === "serve") {
-        const serverConfig: NonNullable<ViteUserConfigLike["server"]> = {
-          allowedHosts: mergeServeAllowedHosts(_userConfig?.server?.allowedHosts),
+        const serverConfig: NonNullable<UserConfig["server"]> = {
+          allowedHosts: mergeServeAllowedHosts(userConfig.server?.allowedHosts),
         };
         const parsedPort = parsePortFromEnv(process.env.PORT);
         if (parsedPort !== null) {
@@ -165,11 +142,7 @@ export function takoVitePlugin(): VitePluginLike {
     generateBundle(_options, bundle) {
       sawBundleGeneration = true;
       entryChunks = Object.values(bundle)
-        .filter((chunk): chunk is ViteOutputChunkLike => {
-          return (
-            chunk.type === "chunk" && chunk.isEntry === true && typeof chunk.fileName === "string"
-          );
-        })
+        .filter(isViteEntryChunk)
         .map((chunk) => chunk.fileName)
         .sort();
     },
@@ -178,7 +151,7 @@ export function takoVitePlugin(): VitePluginLike {
         return;
       }
       if (!resolvedConfig) {
-        throw new Error("takoVitePlugin was not initialized by Vite configResolved hook.");
+        throw new Error("tako was not initialized by Vite configResolved hook.");
       }
       if (!sawBundleGeneration) {
         return;
