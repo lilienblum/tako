@@ -9,7 +9,7 @@ set -eu
 # What it does:
 # - downloads and installs `tako-server`
 # - creates OS user `tako`
-# - configures a systemd service (required for normal install/start)
+# - configures a service manager (systemd or OpenRC) for `tako-server`
 #
 # Optional env vars:
 #   TAKO_USER               default: tako
@@ -75,21 +75,62 @@ systemd_is_usable() {
   return 0
 }
 
+openrc_is_usable() {
+  if ! need_cmd rc-service; then
+    return 1
+  fi
+
+  if ! need_cmd rc-update; then
+    return 1
+  fi
+
+  # OpenRC creates this runtime directory when it is the active init system.
+  if [ ! -d /run/openrc ]; then
+    return 1
+  fi
+
+  return 0
+}
+
+detect_service_manager() {
+  if systemd_is_usable; then
+    echo "systemd"
+    return
+  fi
+
+  if openrc_is_usable; then
+    echo "openrc"
+    return
+  fi
+
+  echo "none"
+}
+
+SERVICE_MANAGER="$(detect_service_manager)"
+
 ensure_privileged_bind_capability() {
   if need_cmd setcap; then
     if setcap cap_net_bind_service=+ep /usr/local/bin/tako-server; then
       echo "OK granted CAP_NET_BIND_SERVICE to /usr/local/bin/tako-server"
       return
     fi
-    echo "warning: failed to grant CAP_NET_BIND_SERVICE via setcap; systemd service will still use AmbientCapabilities." >&2
+    if [ "$SERVICE_MANAGER" = "systemd" ]; then
+      echo "warning: failed to grant CAP_NET_BIND_SERVICE via setcap; systemd service will still use AmbientCapabilities." >&2
+      return
+    fi
+    echo "warning: failed to grant CAP_NET_BIND_SERVICE via setcap; non-root :80/:443 binds may fail." >&2
     return
   fi
 
-  echo "warning: setcap not found; systemd service still sets bind capability via AmbientCapabilities." >&2
+  if [ "$SERVICE_MANAGER" = "systemd" ]; then
+    echo "warning: setcap not found; systemd service still sets bind capability via AmbientCapabilities." >&2
+    return
+  fi
+  echo "warning: setcap not found; non-root :80/:443 binds may fail." >&2
 }
 
-if is_enabled "$TAKO_RESTART_SERVICE" && ! systemd_is_usable; then
-  echo "error: systemd is required for tako-server" >&2
+if is_enabled "$TAKO_RESTART_SERVICE" && [ "$SERVICE_MANAGER" = "none" ]; then
+  echo "error: a usable service manager is required for tako-server (systemd or OpenRC)" >&2
   exit 1
 fi
 
@@ -510,7 +551,9 @@ else
   echo "warning: configure ~/.ssh/authorized_keys manually or rerun installer with TAKO_SSH_PUBKEY." >&2
 fi
 
-cat > /etc/systemd/system/tako-server.service <<EOF
+install_systemd_service_unit() {
+  mkdir -p /etc/systemd/system
+  cat > /etc/systemd/system/tako-server.service <<EOF
 [Unit]
 Description=Tako Server
 After=network.target
@@ -535,8 +578,46 @@ RuntimeDirectoryMode=0700
 [Install]
 WantedBy=multi-user.target
 EOF
+}
 
-if systemd_is_usable; then
+install_openrc_service_script() {
+  cat > /etc/init.d/tako-server <<EOF
+#!/sbin/openrc-run
+description="Tako Server"
+
+command="/usr/local/bin/tako-server"
+command_args="--socket $TAKO_SOCKET --data-dir $TAKO_HOME"
+command_user="$TAKO_USER:$TAKO_USER"
+pidfile="/run/\${RC_SVCNAME}.pid"
+command_background="yes"
+retry="TERM/1800/KILL/5"
+
+depend() {
+  need net
+}
+
+extra_started_commands="reload"
+
+reload() {
+  ebegin "Reloading \${RC_SVCNAME}"
+  if [ ! -f "\$pidfile" ]; then
+    eend 1
+    return 1
+  fi
+  start-stop-daemon --signal HUP --pidfile "\$pidfile"
+  eend \$?
+}
+EOF
+  chmod 0755 /etc/init.d/tako-server
+}
+
+if [ "$SERVICE_MANAGER" = "systemd" ]; then
+  install_systemd_service_unit
+elif [ "$SERVICE_MANAGER" = "openrc" ]; then
+  install_openrc_service_script
+fi
+
+if [ "$SERVICE_MANAGER" = "systemd" ]; then
   systemctl daemon-reload
   if is_enabled "$TAKO_RESTART_SERVICE"; then
     systemctl enable --now tako-server
@@ -550,10 +631,26 @@ if systemd_is_usable; then
     systemctl enable tako-server >/dev/null 2>&1 || true
     echo "OK install refreshed without restarting tako-server (TAKO_RESTART_SERVICE=0)"
   fi
+elif [ "$SERVICE_MANAGER" = "openrc" ]; then
+  rc-update add tako-server default >/dev/null 2>&1 || true
+  if is_enabled "$TAKO_RESTART_SERVICE"; then
+    if rc-service tako-server status >/dev/null 2>&1; then
+      rc-service tako-server restart
+    else
+      rc-service tako-server start
+    fi
+    rc-service tako-server status || true
+    if ! rc-service tako-server status >/dev/null 2>&1; then
+      echo "error: tako-server failed to start via OpenRC." >&2
+      exit 1
+    fi
+  else
+    echo "OK install refreshed without restarting tako-server (TAKO_RESTART_SERVICE=0)"
+  fi
 else
-  # Install-refresh mode is used in container image builds before systemd is PID 1.
-  # We still install binaries/users/unit files, and runtime systemd will handle start.
-  echo "OK install refreshed without active systemd (TAKO_RESTART_SERVICE=0)"
+  # Install-refresh mode can run before init is active (for example in image builds).
+  # In this mode we install binaries/users only and skip service definition install.
+  echo "OK install refreshed without active service manager (TAKO_RESTART_SERVICE=0); skipped service definition install"
 fi
 
 echo "OK installed tako-server"

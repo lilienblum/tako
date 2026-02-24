@@ -21,6 +21,12 @@ services:
     volumes:
       - /sys/fs/cgroup:/sys/fs/cgroup:rw
       - e2e_ssh_keys:/opt/e2e/keys:ro
+  server-alpine:
+    build:
+      context: ../..
+      dockerfile: e2e/docker/server/alpine.Dockerfile
+    volumes:
+      - e2e_ssh_keys:/opt/e2e/keys:ro
   runner:
     build:
       context: ../..
@@ -28,6 +34,7 @@ services:
     depends_on:
       - server-ubuntu
       - server-alma
+      - server-alpine
     environment:
       CARGO_HOME: /cargo-home
       CARGO_TARGET_DIR: /workspace/target

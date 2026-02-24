@@ -195,7 +195,7 @@ Typical remote layout:
 - `tako logs --env <env>`: live logs across mapped servers for an environment.
 - `tako releases ls` / `tako releases rollback`: inspect release history and roll back to a previous release id.
 - `tako upgrade`: upgrade local CLI installation only.
-- `tako servers upgrade <name>`: install updated server binary and perform in-place reload via systemd (SIGHUP).
+- `tako servers upgrade <name>`: install updated server binary and perform in-place reload via host service manager (`systemctl` on systemd hosts, `rc-service` on OpenRC hosts; both send SIGHUP).
 - `tako secrets ...`: encrypted secret management and sync to runtime.
 - `tako servers restart|upgrade`: runtime lifecycle operations for remote `tako-server`.
 

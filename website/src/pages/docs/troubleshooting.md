@@ -90,6 +90,9 @@ Expected deploy behavior:
 - `Installer reports unsupported libc`:
   - Symptom: `install-server` exits with `unsupported libc`.
   - Fix: run on Linux host with `glibc` or `musl`; for custom base images, set `TAKO_SERVER_URL` to a known matching artifact URL.
+- `Installer reports missing service manager`:
+  - Symptom: `install-server` exits with an error that a supported service manager is required.
+  - Fix: run on a host with active systemd or OpenRC (`rc-service` + `rc-update`) for normal installs, or rerun with `TAKO_RESTART_SERVICE=0` for install-refresh workflows where init is not active yet.
 - `Installer failed to install mise`:
   - Symptom: `install-server` exits after reporting mise install failure.
   - Fix: install `mise` manually on the host ([mise install docs](https://mise.jdx.dev/getting-started.html)), ensure `mise` is on `PATH`, then rerun installer (or set `TAKO_INSTALL_MISE=0` to skip installer-managed mise setup).

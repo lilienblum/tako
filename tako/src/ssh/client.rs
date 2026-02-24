@@ -583,23 +583,41 @@ impl SshClient {
 
     /// Restart tako-server
     pub async fn tako_restart(&self) -> SshResult<()> {
-        self.exec_checked("sudo systemctl restart tako-server")
-            .await?;
+        self.exec_checked(&Self::tako_restart_command()).await?;
         Ok(())
     }
 
-    /// Send SIGHUP to tako-server via systemd reload for zero-downtime binary swap.
-    /// Requires the connecting user to have sudo access for systemctl reload.
+    fn tako_restart_command() -> String {
+        "sudo sh -c 'if command -v systemctl >/dev/null 2>&1; then systemctl restart tako-server; elif command -v rc-service >/dev/null 2>&1; then rc-service tako-server restart; else echo \"error: no supported service manager found (systemctl or rc-service)\" >&2; exit 1; fi'".to_string()
+    }
+
+    fn tako_reload_command() -> String {
+        "sudo sh -c 'if command -v systemctl >/dev/null 2>&1; then systemctl reload tako-server; elif command -v rc-service >/dev/null 2>&1; then rc-service tako-server reload; else echo \"error: no supported service manager found (systemctl or rc-service)\" >&2; exit 1; fi'".to_string()
+    }
+
+    fn tako_service_status_command() -> &'static str {
+        "if command -v systemctl >/dev/null 2>&1; then systemctl is-active tako-server 2>/dev/null || echo unknown; elif command -v rc-service >/dev/null 2>&1; then if rc-service tako-server status >/dev/null 2>&1; then echo active; else echo inactive; fi; else echo unknown; fi"
+    }
+
+    fn service_start_hint() -> &'static str {
+        "sudo systemctl start tako-server or sudo rc-service tako-server start"
+    }
+
+    pub fn tako_start_hint() -> &'static str {
+        Self::service_start_hint()
+    }
+
+    /// Send SIGHUP to tako-server via service manager reload for zero-downtime binary swap.
+    /// Requires the connecting user to have sudo access for service manager reload.
     pub async fn tako_reload(&self) -> SshResult<()> {
-        self.exec_checked("sudo systemctl reload tako-server")
-            .await?;
+        self.exec_checked(&Self::tako_reload_command()).await?;
         Ok(())
     }
 
     /// Get tako-server status
     pub async fn tako_status(&self) -> SshResult<String> {
         // Prefer probing the management unix socket directly. This works on
-        // non-systemd hosts (e.g. minimal containers) and avoids sudo for
+        // non-systemd/non-OpenRC hosts (e.g. minimal containers) and avoids sudo for
         // read-only status checks.
         let list_probe = r#"{"command":"list"}"#;
         if self.tako_command_raw(list_probe).await.is_ok() {
@@ -607,11 +625,7 @@ impl SshClient {
         }
 
         // Fall back to service-manager status if socket probe fails.
-        let output = self
-            .exec(
-                "(command -v systemctl >/dev/null 2>&1 && systemctl is-active tako-server 2>/dev/null) || echo unknown",
-            )
-            .await?;
+        let output = self.exec(Self::tako_service_status_command()).await?;
         Ok(output.stdout.trim().to_string())
     }
 
@@ -991,6 +1005,31 @@ l4QMs5cmnWfrM0GQ==\n\
         let command = SshClient::socket_request_command_on_path("/tmp/tako-next.sock");
         assert!(command.contains("nc -U '/tmp/tako-next.sock'"));
         assert!(command.contains("| head -n 1"));
+    }
+
+    #[test]
+    fn tako_restart_command_supports_systemd_and_openrc() {
+        let command = SshClient::tako_restart_command();
+        assert!(command.contains("systemctl restart tako-server"));
+        assert!(command.contains("rc-service tako-server restart"));
+        assert!(command.contains("systemctl or rc-service"));
+    }
+
+    #[test]
+    fn tako_reload_command_supports_systemd_and_openrc() {
+        let command = SshClient::tako_reload_command();
+        assert!(command.contains("systemctl reload tako-server"));
+        assert!(command.contains("rc-service tako-server reload"));
+        assert!(command.contains("systemctl or rc-service"));
+    }
+
+    #[test]
+    fn tako_service_status_command_supports_openrc() {
+        let command = SshClient::tako_service_status_command();
+        assert!(command.contains("systemctl is-active tako-server"));
+        assert!(command.contains("rc-service tako-server status"));
+        assert!(command.contains("echo active"));
+        assert!(command.contains("echo inactive"));
     }
 
     #[tokio::test]

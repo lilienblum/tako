@@ -265,7 +265,7 @@ async fn query_global_server_status(
             Ok(response) => match parse_list_apps_response(response) {
                 Ok(app_names) => {
                     if service_status == "unknown" {
-                        // Non-systemd hosts can report "unknown" even when the
+                        // Non-systemd/non-OpenRC hosts can report "unknown" even when the
                         // management socket is healthy and serving commands.
                         effective_service_status = "active".to_string();
                     }

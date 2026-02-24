@@ -6,12 +6,14 @@ Repository scripts used by installers, CI checks, and local development workflow
 
 - `install-tako-cli.sh`: POSIX installer for local `tako` CLI.
 - `install-tako-server.sh`: POSIX installer for `tako-server` on Linux hosts.
-  - Requires usable systemd for normal install/start and exits with an error when unavailable.
-  - Supports install-refresh mode via `TAKO_RESTART_SERVICE=0` (writes unit/install artifacts without restarting service), used in build/container workflows before systemd is running.
+  - Supports systemd and OpenRC for normal install/start.
+  - Supports install-refresh mode via `TAKO_RESTART_SERVICE=0` (refreshes binary/users without restarting service; service definition is updated only when a supported manager is active), used in build/container workflows before init/service managers are running.
   - Detects host architecture (`x86_64`/`aarch64`) and libc (`glibc`/`musl`) to download the matching server artifact.
   - Applies `setcap cap_net_bind_service=+ep` to `/usr/local/bin/tako-server` when possible for non-root `:80/:443` binds.
   - Creates both `tako` (server) and `tako-app` (app process) users, and removes any legacy sudoers/upgrade-helper artifacts.
-  - Installs systemd unit with `Type=notify`, `ExecReload=/bin/kill -HUP $MAINPID`, and capability set including `CAP_SETUID`/`CAP_SETGID` for app-user spawning.
+  - Installs service definitions based on host init system:
+    - systemd unit with `Type=notify`, `ExecReload=/bin/kill -HUP $MAINPID`, and capability bounding for `CAP_NET_BIND_SERVICE`.
+    - OpenRC init script with `reload` support and `retry="TERM/1800/KILL/5"` graceful-stop semantics.
   - Installs required runtime dependencies (including Unix-socket-capable `nc` with `-U` support, sqlite runtime libraries, and `mise`) via the host package manager when available.
   - Falls back to the official `mise` installer if distro package managers do not provide `mise`.
 - `check_critical_coverage.sh`: coverage gate for selected critical source files.

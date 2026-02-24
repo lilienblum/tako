@@ -11,7 +11,7 @@ COPY scripts/install-tako-server.sh /tmp/install-tako-server.sh
 RUN chmod +x /tmp/install-tako-server.sh && \
     printf '#!/bin/sh\nexit 0\n' > /tmp/tako-server && \
     chmod +x /tmp/tako-server && \
-    TAKO_SERVER_URL="file:///tmp/tako-server" sh /tmp/install-tako-server.sh && \
+    TAKO_RESTART_SERVICE=0 TAKO_SERVER_URL="file:///tmp/tako-server" sh /tmp/install-tako-server.sh && \
     rm -f /tmp/install-tako-server.sh /tmp/tako-server
 
 RUN ssh-keygen -A && \

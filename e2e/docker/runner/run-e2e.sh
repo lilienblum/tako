@@ -25,7 +25,7 @@ mkdir -p "$HOME_DIR/.ssh" "$TAKO_HOME" "$JS_WORKSPACE_DIR"
 cp /opt/e2e/keys/id_ed25519 "$HOME_DIR/.ssh/id_ed25519"
 cp /opt/e2e/keys/id_ed25519.pub "$HOME_DIR/.ssh/id_ed25519.pub"
 cat > "$HOME_DIR/.ssh/config" <<'CFG'
-Host server-ubuntu server-alma
+Host server-ubuntu server-alma server-alpine
   User tako
   IdentityFile ~/.ssh/id_ed25519
   IdentitiesOnly yes
@@ -274,6 +274,11 @@ start_tako_server() {
 
 ssh_wait server-ubuntu
 ssh_wait server-alma
+ssh_wait server-alpine
+if ! ssh_exec server-alpine "command -v rc-service >/dev/null 2>&1"; then
+  echo "OpenRC (rc-service) is required on server-alpine e2e host." >&2
+  exit 1
+fi
 
 echo "Building CLI and server binaries"
 cd "$WORKSPACE"
@@ -281,6 +286,7 @@ cargo build -p tako --bin tako
 cargo build -p tako-server --bin tako-server
 start_tako_server server-ubuntu
 start_tako_server server-alma
+start_tako_server server-alpine
 
 # Stage a minimal JS monorepo copy so Bun workspace/catalog references resolve
 # like local dev, without rewriting dependency declarations.

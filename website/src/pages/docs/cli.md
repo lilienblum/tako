@@ -133,7 +133,7 @@ Notes:
   - `--no-test` skips SSH checks and target detection.
 - `tako servers rm` aliases: `remove`, `delete`.
 - `tako servers ls` alias: `list`.
-- `tako servers upgrade <NAME>` installs the updated server binary on the host, then performs an in-place reload via `systemctl reload tako-server` (SIGHUP). Systemd is required.
+- `tako servers upgrade <NAME>` installs the updated server binary on the host, then performs an in-place reload via the host service manager (`sudo systemctl reload tako-server` on systemd or `sudo rc-service tako-server reload` on OpenRC). A supported service manager is required.
 - `tako servers status` prints a single global deployment/runtime snapshot across configured servers.
 
 Deploy note:

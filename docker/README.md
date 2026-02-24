@@ -7,11 +7,11 @@ Internal Docker tooling for building and debugging Tako server artifacts.
 - `build.Dockerfile`: builds Linux `tako-server` artifacts for `x86_64` / `aarch64` across both libc families (`musl`, `glibc`).
 - `tako-builder-musl.Dockerfile`: base build image (`alpine:3.23`) with `mise` preinstalled (package-manager first, installer fallback).
 - `tako-builder-glibc.Dockerfile`: base build image (`debian:bookworm-slim`) with `mise` preinstalled (package-manager first, installer fallback).
-- `bun.Dockerfile`: internal debug container (`oven/bun:alpine` + sshd) used for deploy/install debugging.
+- `testbed.Dockerfile`: internal debug container (`oven/bun:alpine` + sshd) used for deploy/install debugging.
   - Bootstraps server-side dependencies through `scripts/install-tako-server.sh` so debug image deps stay aligned with installer behavior.
 - `install-authorized-key.sh`: helper script used by debug container boot flow.
 
-`bun.Dockerfile` is internal-only and not intended as a production application image.
+`testbed.Dockerfile` is internal-only and not intended as a production application image.
 
 ## Common Commands
 

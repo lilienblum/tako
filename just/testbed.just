@@ -24,7 +24,7 @@ DOCKER_SSH_KEY_FILE := "local-dev/tmp/docker_ssh_key"
 create-container:
     # Create a named testbed container with sshd for VPS-like installer behavior.
     docker rm -f {{ CONTAINER_NAME }} 2>/dev/null || true
-    docker build --platform {{ DOCKER_PLATFORM }} -f docker/bun.Dockerfile -t {{ IMAGE_NAME }} .
+    docker build --platform {{ DOCKER_PLATFORM }} -f docker/testbed.Dockerfile -t {{ IMAGE_NAME }} .
     mkdir -p {{ TESTBED_TMP_DIR }}
     PUBKEY_FILE="${SSH_PUBKEY_FILE:-}"; \
         if [ -z "$PUBKEY_FILE" ]; then \
@@ -71,7 +71,7 @@ install:
             -i "$(cat {{ DOCKER_SSH_KEY_FILE }})" \
             -p {{ DOCKER_SSH_PORT }} \
             root@localhost \
-            '\''TAKO_DOWNLOAD_BASE_URL=http://host.docker.internal:{{ ARTIFACTS_PORT }} TAKO_SSH_PUBKEY="$(cat /root/.ssh/authorized_keys)" sh -s'\'' \
+            '\''TAKO_RESTART_SERVICE=0 TAKO_DOWNLOAD_BASE_URL=http://host.docker.internal:{{ ARTIFACTS_PORT }} TAKO_SSH_PUBKEY="$(cat /root/.ssh/authorized_keys)" sh -s'\'' \
             < ./scripts/install-tako-server.sh; \
         ssh -F /dev/null \
             -o StrictHostKeyChecking=no \
@@ -81,38 +81,36 @@ install:
             -i "$(cat {{ DOCKER_SSH_KEY_FILE }})" \
             -p {{ DOCKER_SSH_PORT }} \
             root@localhost \
-            '\''if ! command -v systemctl >/dev/null 2>&1; then \
-                list_tako_pids() { \
-                    if command -v pidof >/dev/null 2>&1; then \
-                        pidof tako-server 2>/dev/null || true; \
-                        return; \
-                    fi; \
-                    if command -v pgrep >/dev/null 2>&1; then \
-                        pgrep -f "/usr/local/bin/tako-server" 2>/dev/null || true; \
-                        return; \
-                    fi; \
-                    for proc in /proc/[0-9]*; do \
-                        [ -r "$proc/cmdline" ] || continue; \
-                        cmd="$(tr "\\000" " " < "$proc/cmdline" 2>/dev/null || true)"; \
-                        case "$cmd" in \
-                            *"/usr/local/bin/tako-server"*) printf "%s " "${proc##*/}" ;; \
-                        esac; \
-                    done; \
-                }; \
-                pids="$(list_tako_pids)"; \
-                if [ -n "$pids" ]; then \
-                    for pid in $pids; do kill "$pid" >/dev/null 2>&1 || true; done; \
-                    sleep 1; \
-                    for pid in $(list_tako_pids); do kill -9 "$pid" >/dev/null 2>&1 || true; done; \
+            '\''list_tako_pids() { \
+                if command -v pidof >/dev/null 2>&1; then \
+                    pidof tako-server 2>/dev/null || true; \
+                    return; \
                 fi; \
-                if id -u tako >/dev/null 2>&1; then \
-                    if command -v usermod >/dev/null 2>&1; then usermod -U tako >/dev/null 2>&1 || true; fi; \
-                    if command -v passwd >/dev/null 2>&1; then passwd -u tako >/dev/null 2>&1 || true; passwd -d tako >/dev/null 2>&1 || true; fi; \
+                if command -v pgrep >/dev/null 2>&1; then \
+                    pgrep -f "/usr/local/bin/tako-server" 2>/dev/null || true; \
+                    return; \
                 fi; \
-                if id -u tako >/dev/null 2>&1; then \
-                    su -s /bin/sh -c "nohup /usr/local/bin/tako-server --socket /var/run/tako/tako.sock --data-dir /opt/tako >/opt/tako/tako-server.log 2>&1 &" tako; \
-                else \
-                    nohup /usr/local/bin/tako-server --socket /var/run/tako/tako.sock --data-dir /opt/tako >/opt/tako/tako-server.log 2>&1 & \
-                fi; \
+                for proc in /proc/[0-9]*; do \
+                    [ -r "$proc/cmdline" ] || continue; \
+                    cmd="$(tr "\\000" " " < "$proc/cmdline" 2>/dev/null || true)"; \
+                    case "$cmd" in \
+                        *"/usr/local/bin/tako-server"*) printf "%s " "${proc##*/}" ;; \
+                    esac; \
+                done; \
+            }; \
+            pids="$(list_tako_pids)"; \
+            if [ -n "$pids" ]; then \
+                for pid in $pids; do kill "$pid" >/dev/null 2>&1 || true; done; \
+                sleep 1; \
+                for pid in $(list_tako_pids); do kill -9 "$pid" >/dev/null 2>&1 || true; done; \
+            fi; \
+            if id -u tako >/dev/null 2>&1; then \
+                if command -v usermod >/dev/null 2>&1; then usermod -U tako >/dev/null 2>&1 || true; fi; \
+                if command -v passwd >/dev/null 2>&1; then passwd -u tako >/dev/null 2>&1 || true; passwd -d tako >/dev/null 2>&1 || true; fi; \
+            fi; \
+            if id -u tako >/dev/null 2>&1; then \
+                su -s /bin/sh -c "nohup /usr/local/bin/tako-server --socket /var/run/tako/tako.sock --data-dir /opt/tako >/opt/tako/tako-server.log 2>&1 &" tako; \
+            else \
+                nohup /usr/local/bin/tako-server --socket /var/run/tako/tako.sock --data-dir /opt/tako >/opt/tako/tako-server.log 2>&1 & \
             fi'\'' \
     '

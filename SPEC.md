@@ -544,7 +544,9 @@ Restart `tako-server` process entirely (causes brief downtime for all apps).
 
 Use for: binary updates, major configuration changes, system recovery.
 
-Systemd-managed servers use `KillMode=control-group` and a 30-minute stop timeout for restart/stop operations, allowing all app processes in the service cgroup time to handle graceful shutdown before systemd force-kills remaining processes.
+Service-manager restart/stop behavior:
+- On systemd hosts, installer configures `KillMode=control-group` and `TimeoutStopSec=30min`, allowing all app processes in the service cgroup time to handle graceful shutdown before forced termination.
+- On OpenRC hosts, installer configures `retry="TERM/1800/KILL/5"` in the init script so restart/stop waits up to 30 minutes before forced termination.
 
 `tako-server` persists app runtime registration (app config and routes) in SQLite under the data directory and restores it on startup so app routing/config survives process restarts and crashes. Env vars are stored in `app.json` in the release directory; secrets are stored in a per-app `secrets.json` file (0600 permissions) rather than in SQLite.
 
@@ -553,16 +555,19 @@ Upgrade mode transitions are guarded by a durable single-owner upgrade lock in S
 
 ### tako servers upgrade {server-name}
 
-Single-host in-place upgrade via systemd reload:
+Single-host in-place upgrade via service-manager reload:
 
 1. CLI verifies `tako-server` is active on the host.
 2. CLI installs the new server binary on the host.
 3. CLI acquires the durable upgrade lock (`enter_upgrading`) and sets server mode to `upgrading`.
-4. CLI signals the primary service with `systemctl reload tako-server` (sends SIGHUP), which triggers a graceful in-place reload.
+4. CLI signals the primary service with:
+   - `sudo systemctl reload tako-server` on systemd hosts, or
+   - `sudo rc-service tako-server reload` on OpenRC hosts.
+   Both paths send SIGHUP for graceful in-place reload.
 5. CLI waits for the primary management socket to report ready.
 6. CLI releases upgrade mode (`exit_upgrading`).
 
-Systemd is required for `tako servers upgrade`. Non-systemd hosts are not supported.
+`tako servers upgrade` requires a supported service manager on the host (systemd or OpenRC).
 
 Failure behavior:
 
@@ -891,7 +896,9 @@ Manual for v1. Users run a server setup script (or equivalent manual steps) to:
 
 1. Create dedicated OS users: `tako` for SSH access and running `tako-server` (plus `tako-app` for optional privileged process-separation setups)
 2. Install `tako-server` to `/usr/local/bin/tako-server`
-3. Install and enable a systemd service (systemd is required)
+3. Install and enable a host service definition for `tako-server`:
+   - systemd unit on systemd hosts
+   - OpenRC init script on OpenRC hosts
 4. Create and permissions required directories:
    - Data dir: `/opt/tako`
    - Socket dir: `/var/run/tako`
@@ -912,10 +919,15 @@ Installer SSH key behavior:
 - Installer ensures `nc` (netcat) is available so CLI management commands can talk to `/var/run/tako/tako.sock`.
 - Installer installs `mise` on the server (package-manager first; fallback to upstream installer when distro packages are unavailable).
 - Installer creates both `tako` and `tako-app` OS users.
-- Installer configures systemd capabilities to `CAP_NET_BIND_SERVICE` only.
-- Installer requires systemd; non-systemd hosts are not supported.
-- Installer configures systemd with `KillMode=control-group` and `TimeoutStopSec=30min`, so restart/stop waits up to 30 minutes for graceful app shutdown across all service child processes before forced termination.
-- Installer verifies `tako-server` is active after `enable --now`; if startup fails, installer exits non-zero and prints recent service logs.
+- Installer supports systemd and OpenRC hosts.
+- Installer supports install-refresh mode (`TAKO_RESTART_SERVICE=0`) for build/image workflows without active init; in this mode, it refreshes binary/users and skips service-definition install/start.
+- Installer configures service capability support for privileged binds:
+  - systemd: `AmbientCapabilities=CAP_NET_BIND_SERVICE`, `CapabilityBoundingSet=CAP_NET_BIND_SERVICE`
+  - non-systemd hosts: installer applies `setcap cap_net_bind_service=+ep /usr/local/bin/tako-server` when available
+- Installer configures graceful stop semantics:
+  - systemd: `KillMode=control-group`, `TimeoutStopSec=30min`
+  - OpenRC: `retry="TERM/1800/KILL/5"`
+- Installer verifies `tako-server` is active after service start; if startup fails, installer exits non-zero and prints available service diagnostics.
 
 Reference script in this repo: `scripts/install-tako-server.sh` (source for `/install-server`, alias `/server-install`).
 
@@ -950,9 +962,9 @@ email = "admin@example.com"
 
 ### Zero-Downtime Operation
 
-- `tako servers upgrade` performs an in-place upgrade via `systemctl reload tako-server` (SIGHUP), with no temporary candidate process or port overlap required.
+- `tako servers upgrade` performs an in-place upgrade via service-manager reload (`sudo systemctl reload tako-server` on systemd, `sudo rc-service tako-server reload` on OpenRC), with no temporary candidate process or port overlap required.
 - Management socket uses a symlink-based path: the active server creates a PID-specific socket (`tako-{pid}.sock`) and atomically updates the `tako.sock` symlink on ready, so clients always connect to the current process.
-- Restart/stop still honor graceful shutdown semantics from systemd (`KillMode=control-group`, `TimeoutStopSec=30min`).
+- Restart/stop still honor graceful shutdown semantics from the host service manager (systemd or OpenRC as described above).
 
 ### Directory Structure
 

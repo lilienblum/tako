@@ -59,11 +59,11 @@ Each target server should have:
 - Local SSH `known_hosts` entry for each target host (unknown/changed host keys are rejected).
 - `tako-server` installed and running.
 - `tako-server` installed via the hosted installer (or equivalent) for the host target; installer resolves `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>`.
-- systemd present and active (required by the installer and by `tako servers upgrade`).
+- A supported service manager present and active (`systemd` or OpenRC via `rc-service`), required by the installer and by `tako servers upgrade`.
 - `mise` installed on host (`install-server` attempts distro package manager first, then upstream installer fallback).
 - `nc` (netcat), `tar`, `base64`, and standard shell tools (`mkdir`, `find`, `stat`).
 - Writable runtime paths under `/opt/tako` and socket access at `/var/run/tako/tako.sock`.
-- Privileged bind capability for `tako-server` on `:80/:443` (provided by systemd service capabilities in the installer, plus `setcap` on the binary when available).
+- Privileged bind capability for `tako-server` on `:80/:443` (provided by installer-managed service capability setup on systemd hosts, plus `setcap` on the binary when available).
 
 ## Configuration Inputs
 
@@ -172,7 +172,7 @@ Each target server should have:
 - Use `tako logs --env <environment>` to stream remote logs.
 - Use `tako releases ls --env <environment>` to inspect release/build history before deciding on rollback.
 - Use `tako releases rollback <release-id> --env <environment>` to roll back to a previous release id using normal rolling-update behavior.
-- `tako servers upgrade <name>` installs the updated server binary then performs an in-place reload via `systemctl reload tako-server` (SIGHUP). Systemd is required.
+- `tako servers upgrade <name>` installs the updated server binary then performs an in-place reload via host service manager (`sudo systemctl reload tako-server` on systemd or `sudo rc-service tako-server reload` on OpenRC). A supported service manager is required.
 - HTTP requests are redirected to HTTPS by default (307 with `Cache-Control: no-store`).
 - Exception on HTTP: `/.well-known/acme-challenge/*`.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.

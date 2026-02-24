@@ -3497,7 +3497,7 @@ async fn is_tako_service_running(
         return Ok(running);
     }
 
-    // Non-systemd hosts or restrictive sudo policies can report "unknown".
+    // Non-systemd/non-OpenRC hosts or restrictive sudo policies can report "unknown".
     // Fall back to checking for a live process.
     let out = ssh.exec(&tako_process_probe_command()).await?;
     Ok(out.stdout.trim() == "yes")
@@ -3527,7 +3527,11 @@ async fn ensure_tako_running(
         return Ok(());
     }
 
-    Err("tako-server is installed but not running. Start the service (e.g. `sudo systemctl start tako-server`), then retry.".into())
+    Err(format!(
+        "tako-server is installed but not running. Start the service (e.g. `{}`), then retry.",
+        crate::ssh::SshClient::tako_start_hint()
+    )
+    .into())
 }
 
 /// Format file size in human-readable format
