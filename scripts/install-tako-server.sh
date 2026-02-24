@@ -85,7 +85,7 @@ ensure_privileged_bind_capability() {
     return
   fi
 
-  echo "warning: setcap not found; non-systemd/manual runs on :80/:443 may require root." >&2
+  echo "warning: setcap not found; systemd service still sets bind capability via AmbientCapabilities." >&2
 }
 
 if is_enabled "$TAKO_RESTART_SERVICE" && ! systemd_is_usable; then
