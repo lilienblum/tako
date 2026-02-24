@@ -227,7 +227,7 @@ install_mise_via_script() {
   fi
   rm -f "$installer"
 
-  if [ -x "$TAKO_MISE_BIN" ]; then
+  if [ -x "$TAKO_MISE_BIN" ] && [ "$TAKO_MISE_BIN" != "/usr/local/bin/mise" ]; then
     ln -sf "$TAKO_MISE_BIN" /usr/local/bin/mise
   elif [ -x "/root/.local/bin/mise" ]; then
     ln -sf "/root/.local/bin/mise" /usr/local/bin/mise
@@ -528,18 +528,24 @@ RuntimeDirectoryMode=0700
 WantedBy=multi-user.target
 EOF
 
-systemctl daemon-reload
-if is_enabled "$TAKO_RESTART_SERVICE"; then
-  systemctl enable --now tako-server
-  systemctl --no-pager status tako-server || true
-  if ! systemctl is-active --quiet tako-server; then
-    echo "error: tako-server failed to start. Recent logs:" >&2
-    journalctl -u tako-server --no-pager -n 60 >&2 || true
-    exit 1
+if systemd_is_usable; then
+  systemctl daemon-reload
+  if is_enabled "$TAKO_RESTART_SERVICE"; then
+    systemctl enable --now tako-server
+    systemctl --no-pager status tako-server || true
+    if ! systemctl is-active --quiet tako-server; then
+      echo "error: tako-server failed to start. Recent logs:" >&2
+      journalctl -u tako-server --no-pager -n 60 >&2 || true
+      exit 1
+    fi
+  else
+    systemctl enable tako-server >/dev/null 2>&1 || true
+    echo "OK install refreshed without restarting tako-server (TAKO_RESTART_SERVICE=0)"
   fi
 else
-  systemctl enable tako-server >/dev/null 2>&1 || true
-  echo "OK install refreshed without restarting tako-server (TAKO_RESTART_SERVICE=0)"
+  # Install-refresh mode is used in container image builds before systemd is PID 1.
+  # We still install binaries/users/unit files, and runtime systemd will handle start.
+  echo "OK install refreshed without active systemd (TAKO_RESTART_SERVICE=0)"
 fi
 
 echo "OK installed tako-server"
