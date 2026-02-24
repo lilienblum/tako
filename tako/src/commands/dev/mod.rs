@@ -80,15 +80,9 @@ pub struct ScopedLog {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ScopedLogSerde {
-    #[serde(default)]
-    timestamp: Option<String>,
-    #[serde(default)]
-    h: Option<u8>,
-    #[serde(default)]
-    m: Option<u8>,
-    #[serde(default)]
-    s: Option<u8>,
+    timestamp: String,
     level: LogLevel,
     scope: String,
     message: String,
@@ -104,16 +98,11 @@ impl<'de> Deserialize<'de> for ScopedLog {
         D: serde::Deserializer<'de>,
     {
         let raw = ScopedLogSerde::deserialize(deserializer)?;
-        let timestamp = raw
-            .timestamp
-            .filter(|s| !s.trim().is_empty())
-            .or_else(|| {
-                raw.h
-                    .zip(raw.m)
-                    .zip(raw.s)
-                    .map(|((h, m), s)| hms_timestamp(h, m, s))
-            })
-            .unwrap_or_else(|| "00:00:00".to_string());
+        let timestamp = if raw.timestamp.trim().is_empty() {
+            "00:00:00".to_string()
+        } else {
+            raw.timestamp
+        };
 
         Ok(Self {
             timestamp,
@@ -495,7 +484,7 @@ fn pf_conf_with_forwarding_hook(existing: &str) -> String {
         .map(|line| line.to_string())
         .collect();
 
-    // Replace any previously managed block (including legacy content) to keep
+    // Replace any previously managed block (including older managed content) to keep
     // the hook definition up to date while staying idempotent.
     let base_without_managed_block = if let Some(start) = existing.find(PF_FORWARDING_MARK_BEGIN) {
         if let Some(end_rel) = existing[start..].find(PF_FORWARDING_MARK_END) {
@@ -1526,19 +1515,19 @@ mod tests {
     }
 
     #[test]
-    fn stored_log_line_parses_legacy_hms_json() {
-        let decoded = parse_stored_log_line(
-            r#"{"h":12,"m":3,"s":7,"level":"Info","scope":"app","message":"hello"}"#,
-        )
-        .unwrap();
+    fn stored_log_line_rejects_old_hms_json_shape() {
+        let old_line = r#"{"h":12,"m":3,"s":7,"level":"Info","scope":"app","message":"hello"}"#;
+        let decoded = parse_stored_log_line(old_line).unwrap();
 
         let StoredLogEvent::Log(decoded) = decoded else {
             panic!("expected log event");
         };
-        assert_eq!(decoded.timestamp, "12:03:07");
+
+        // Old h/m/s payloads are no longer parsed as structured log records.
+        assert_ne!(decoded.timestamp, "12:03:07");
         assert!(matches!(decoded.level, LogLevel::Info));
         assert_eq!(decoded.scope, "app");
-        assert_eq!(decoded.message, "hello");
+        assert_eq!(decoded.message, old_line);
     }
 
     #[test]
@@ -2131,7 +2120,7 @@ mod tests {
     }
 
     #[test]
-    fn pf_conf_with_forwarding_hook_replaces_legacy_anchor_block() {
+    fn pf_conf_with_forwarding_hook_replaces_old_anchor_block() {
         let existing = r#"scrub-anchor "com.apple/*"
 
 # >>> tako >>>

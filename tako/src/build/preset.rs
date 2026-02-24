@@ -4,10 +4,7 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use crate::build::adapter::{
-    BUILTIN_BUN_PRESET_PATH, BUILTIN_DENO_PRESET_PATH, BUILTIN_NODE_PRESET_PATH, BuildAdapter,
-    PresetFamily, builtin_base_preset_content_for_alias, builtin_base_preset_content_for_path,
-};
+use crate::build::adapter::{BuildAdapter, PresetFamily, builtin_base_preset_content_for_alias};
 
 pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const FALLBACK_OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
@@ -15,6 +12,7 @@ const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const OFFICIAL_PRESET_BRANCH: &str = "master";
 const EMBEDDED_PRESET_REPO: &str = "embedded";
 const EMBEDDED_JS_FAMILY_PRESETS_PATH: &str = "presets/js.toml";
+const EMBEDDED_JS_FAMILY_PRESETS_CONTENT: &str = include_str!("../../../presets/js.toml");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -345,19 +343,23 @@ pub async fn load_build_preset(
 }
 
 fn official_alias_to_path(alias: &str) -> String {
-    match alias {
-        "bun" => BUILTIN_BUN_PRESET_PATH.to_string(),
-        "node" => BUILTIN_NODE_PRESET_PATH.to_string(),
-        "deno" => BUILTIN_DENO_PRESET_PATH.to_string(),
-        _ => match alias.split_once('/') {
-            Some((family, _)) => format!("presets/{family}.toml"),
-            None => format!("presets/{alias}.toml"),
-        },
+    match alias.split_once('/') {
+        Some((family, _)) => format!("presets/{family}.toml"),
+        None => {
+            if let Some(adapter) = BuildAdapter::from_id(alias) {
+                format!("presets/{}.toml", adapter.preset_family().id())
+            } else {
+                format!("presets/{alias}.toml")
+            }
+        }
     }
 }
 
 fn embedded_official_preset_content(path: &str) -> Option<&'static str> {
-    builtin_base_preset_content_for_path(path)
+    match path {
+        EMBEDDED_JS_FAMILY_PRESETS_PATH => Some(EMBEDDED_JS_FAMILY_PRESETS_CONTENT),
+        _ => None,
+    }
 }
 
 fn official_family_manifest_path(family: PresetFamily) -> Option<&'static str> {
@@ -458,6 +460,14 @@ fn parse_official_alias_preset_content(
 ) -> Result<BuildPreset, String> {
     if let Some((_family, preset_name)) = alias.split_once('/') {
         return parse_family_preset_content(path, content, preset_name);
+    }
+    if BuildAdapter::from_id(alias).is_some() {
+        if let Ok(preset) = parse_family_preset_content(path, content, alias) {
+            return Ok(preset);
+        }
+        if let Some(embedded_base) = builtin_base_preset_content_for_alias(alias) {
+            return parse_and_validate_preset(embedded_base, alias);
+        }
     }
     parse_and_validate_preset(content, alias)
 }
@@ -958,21 +968,19 @@ mod tests {
 
     #[test]
     fn official_alias_to_path_maps_family_layout() {
-        assert_eq!(official_alias_to_path("bun"), "presets/bun/bun.toml");
+        assert_eq!(official_alias_to_path("bun"), "presets/js.toml");
         assert_eq!(
             official_alias_to_path("js/tanstack-start"),
             "presets/js.toml"
         );
-        assert_eq!(official_alias_to_path("node"), "presets/node/node.toml");
-        assert_eq!(official_alias_to_path("deno"), "presets/deno/deno.toml");
+        assert_eq!(official_alias_to_path("node"), "presets/js.toml");
+        assert_eq!(official_alias_to_path("deno"), "presets/js.toml");
     }
 
     #[test]
-    fn embedded_official_preset_content_supports_only_base_paths() {
-        assert!(embedded_official_preset_content("presets/bun/bun.toml").is_some());
-        assert!(embedded_official_preset_content("presets/node/node.toml").is_some());
-        assert!(embedded_official_preset_content("presets/deno/deno.toml").is_some());
-        assert!(embedded_official_preset_content("presets/js.toml").is_none());
+    fn embedded_official_preset_content_supports_family_manifest_path() {
+        assert!(embedded_official_preset_content("presets/js.toml").is_some());
+        assert!(embedded_official_preset_content("presets/unknown.toml").is_none());
     }
 
     #[test]
@@ -1330,7 +1338,7 @@ install = "bun install"
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_legacy_dev_cmd() {
+    fn parse_and_validate_preset_rejects_old_dev_cmd() {
         let raw = r#"
 name = "bun"
 
@@ -1344,7 +1352,7 @@ install = "bun install"
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_legacy_dev_table() {
+    fn parse_and_validate_preset_rejects_old_dev_table() {
         let raw = r#"
 name = "bun"
 
@@ -1359,7 +1367,7 @@ start = ["bun", "run", "dev"]
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_legacy_deploy_table() {
+    fn parse_and_validate_preset_rejects_old_deploy_table() {
         let raw = r#"
 name = "bun"
 
@@ -1422,7 +1430,7 @@ targets = ["linux-x86_64-glibc"]
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_legacy_build_docker_toggle() {
+    fn parse_and_validate_preset_rejects_old_build_docker_toggle() {
         let raw = r#"
 name = "bun"
 
@@ -1437,7 +1445,7 @@ targets = ["linux-x86_64-glibc"]
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_legacy_build_targets_table() {
+    fn parse_and_validate_preset_rejects_old_build_targets_table() {
         let raw = r#"
 name = "bun"
 
@@ -1490,7 +1498,7 @@ build = "bun run --if-present build"
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_legacy_artifact_table() {
+    fn parse_and_validate_preset_rejects_old_artifact_table() {
         let raw = r#"
 [artifact]
 include = ["**/*"]
@@ -1533,7 +1541,7 @@ install = "bun install"
         let resolved = ResolvedPresetSource {
             preset_ref: "bun".to_string(),
             repo: "tako-sh/presets".to_string(),
-            path: "presets/bun/bun.toml".to_string(),
+            path: "presets/js.toml".to_string(),
             commit: "abc123".to_string(),
         };
         write_locked_preset(temp.path(), &resolved).unwrap();
@@ -1548,7 +1556,7 @@ install = "bun install"
         let locked = ResolvedPresetSource {
             preset_ref: "bun".to_string(),
             repo: "tako-sh/presets".to_string(),
-            path: "presets/bun/bun.toml".to_string(),
+            path: "presets/js.toml".to_string(),
             commit: "0000000000000000000000000000000000000000".to_string(),
         };
         write_locked_preset(temp.path(), &locked).unwrap();

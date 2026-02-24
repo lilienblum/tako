@@ -1,10 +1,6 @@
 use std::fs;
 use std::path::Path;
 
-pub const BUILTIN_BUN_PRESET_PATH: &str = "presets/bun/bun.toml";
-pub const BUILTIN_NODE_PRESET_PATH: &str = "presets/node/node.toml";
-pub const BUILTIN_DENO_PRESET_PATH: &str = "presets/deno/deno.toml";
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresetFamily {
     Js,
@@ -169,15 +165,6 @@ pub fn builtin_base_preset_content_for_alias(alias: &str) -> Option<&'static str
     }
 }
 
-pub fn builtin_base_preset_content_for_path(path: &str) -> Option<&'static str> {
-    match path {
-        BUILTIN_BUN_PRESET_PATH => Some(BUILTIN_BUN_PRESET_CONTENT),
-        BUILTIN_NODE_PRESET_PATH => Some(BUILTIN_NODE_PRESET_CONTENT),
-        BUILTIN_DENO_PRESET_PATH => Some(BUILTIN_DENO_PRESET_CONTENT),
-        _ => None,
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildAdapter {
     Bun,
@@ -337,9 +324,7 @@ fn parse_embedded_preset_default_main(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BUILTIN_BUN_PRESET_PATH, BUILTIN_DENO_PRESET_PATH, BUILTIN_NODE_PRESET_PATH, BuildAdapter,
-        PresetFamily, builtin_base_preset_content_for_alias, builtin_base_preset_content_for_path,
-        detect_build_adapter,
+        BuildAdapter, PresetFamily, builtin_base_preset_content_for_alias, detect_build_adapter,
     };
     use tempfile::TempDir;
 
@@ -420,13 +405,6 @@ mod tests {
         assert!(bun.contains("main = \"src/index.ts\""));
         assert!(node.contains("main = \"index.js\""));
         assert!(deno.contains("main = \"main.ts\""));
-    }
-
-    #[test]
-    fn builtin_base_preset_content_is_available_by_path() {
-        assert!(builtin_base_preset_content_for_path(BUILTIN_BUN_PRESET_PATH).is_some());
-        assert!(builtin_base_preset_content_for_path(BUILTIN_NODE_PRESET_PATH).is_some());
-        assert!(builtin_base_preset_content_for_path(BUILTIN_DENO_PRESET_PATH).is_some());
     }
 
     #[test]

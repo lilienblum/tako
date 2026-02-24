@@ -3060,13 +3060,15 @@ fn parse_existing_routes_response(
 }
 
 fn deploy_response_has_error(response: &str) -> bool {
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(response) {
-        if value.get("status").and_then(|s| s.as_str()) == Some("error") {
-            return true;
-        }
-        return value.get("error").is_some();
-    }
-    response.contains("\"error\"")
+    serde_json::from_str::<serde_json::Value>(response)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("status")
+                .and_then(|status| status.as_str())
+                .map(|status| status == "error")
+        })
+        .unwrap_or(false)
 }
 
 const DEPLOY_DISK_CHECK_PATH: &str = "/opt/tako";
@@ -4506,15 +4508,15 @@ name = "test-app"
     }
 
     #[test]
-    fn deploy_response_error_detection_handles_json_and_legacy_string_matches() {
+    fn deploy_response_error_detection_only_accepts_structured_status_errors() {
         let json_err = r#"{"status":"error","message":"nope"}"#;
         let json_ok = r#"{"status":"ok","data":{}}"#;
-        let legacy_err = r#"{"error":"legacy"}"#;
+        let old_error_shape = r#"{"error":"old-shape"}"#;
         let plain_text = "all good";
 
         assert!(deploy_response_has_error(json_err));
         assert!(!deploy_response_has_error(json_ok));
-        assert!(deploy_response_has_error(legacy_err));
+        assert!(!deploy_response_has_error(old_error_shape));
         assert!(!deploy_response_has_error(plain_text));
     }
 
@@ -4704,7 +4706,7 @@ name = "test-app"
     }
 
     #[test]
-    fn resolve_runtime_tool_for_mise_rejects_legacy_proto_start_command() {
+    fn resolve_runtime_tool_for_mise_rejects_old_proto_start_command() {
         let preset = BuildPreset {
             name: "custom".to_string(),
             main: None,
@@ -4809,7 +4811,7 @@ name = "test-app"
         let resolved = crate::build::ResolvedPresetSource {
             preset_ref: "bun".to_string(),
             repo: "tako-sh/presets".to_string(),
-            path: "presets/bun/bun.toml".to_string(),
+            path: "presets/js.toml".to_string(),
             commit: "abc123def456".to_string(),
         };
         let target = crate::build::BuildPresetTarget {
@@ -5492,13 +5494,13 @@ name = "test-app"
     }
 
     #[test]
-    fn resolve_runtime_version_from_workspace_ignores_legacy_runtime_version_file() {
+    fn resolve_runtime_version_from_workspace_ignores_old_runtime_version_file() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
         let app_dir = workspace.join("apps/web");
         std::fs::create_dir_all(&app_dir).unwrap();
-        let legacy_tools_file = format!(".{}{}", "proto", "tools");
-        std::fs::write(app_dir.join(legacy_tools_file), "bun = \"1.3.9\"\n").unwrap();
+        let old_tools_file = format!(".{}{}", "proto", "tools");
+        std::fs::write(app_dir.join(old_tools_file), "bun = \"1.3.9\"\n").unwrap();
 
         let resolved = resolve_runtime_version_from_workspace(&workspace, "apps/web", "bun")
             .expect("resolve runtime version");

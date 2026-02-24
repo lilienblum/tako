@@ -141,7 +141,7 @@ Deploy note:
 - `tako deploy` resolves preset from top-level `preset` or adapter default (top-level `runtime` override, otherwise detected adapter). `preset` in `tako.toml` must be runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `js/tanstack-start` are rejected and `github:` refs are not supported. Deploy builds target artifacts locally (Docker or local based on preset `[build].container`) in fixed order: preset stage first, then app `[[build.stages]]`, reuses locally cached verified artifacts on cache hits, then uploads those artifacts to servers. JS runtime base presets (`bun`, `node`, `deno`) default to local build mode (`container = false`) unless preset `container = true` is set.
 - `tako deploy`/`tako dev`/`tako logs`/`tako secrets sync` resolve app identity from top-level `name` when set, otherwise from sanitized project directory name.
 - Preset artifact filters come from preset `[build].exclude` plus app `[build].exclude` (`include` is app-level `[build].include` only).
-- Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is unsupported).
+- Preset runtime fields are top-level `main`/`install`/`start`.
 - During artifact prep, deploy verifies resolved `main` exists in the post-build app directory and fails if missing.
 - Containerized deploy builds reuse per-target dependency cache volumes (mise + runtime cache mounts, keyed by cache kind + target + builder image) while keeping build containers ephemeral.
 - Containerized deploy builds default to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.

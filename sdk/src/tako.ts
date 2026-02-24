@@ -13,11 +13,9 @@ import type { TakoOptions } from "./types";
  * ```typescript
  * import { Tako } from 'tako.sh';
  *
- * export default {
- *   fetch(request, env) {
- *     return new Response("Hello!");
- *   }
- * };
+ * export default function fetch(request: Request, env: Record<string, string>) {
+ *   return new Response("Hello!");
+ * }
  * ```
  */
 export class Tako {

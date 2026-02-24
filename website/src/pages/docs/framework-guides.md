@@ -18,9 +18,7 @@ Use the Bun adapter from `tako.sh`:
 ```ts
 import { serve } from "tako.sh/bun";
 
-serve({
-  fetch() {
-    return new Response("Hello from Bun + Tako");
-  },
+serve((request: Request, env: Record<string, string>) => {
+  return new Response("Hello from Bun + Tako");
 });
 ```

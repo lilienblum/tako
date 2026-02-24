@@ -123,12 +123,8 @@ export async function run(userAppPath: string): Promise<void> {
 
     if (typeof defaultExport === "function") {
       userFetch = defaultExport as FetchFunction;
-    } else if (defaultExport && typeof defaultExport.fetch === "function") {
-      userFetch = defaultExport.fetch.bind(defaultExport) as FetchFunction;
     } else {
-      throw new Error(
-        "App must export a default fetch(request, env) function (or legacy default object with fetch).",
-      );
+      throw new Error("App must export a default fetch(request, env) function.");
     }
   } catch (err) {
     console.error(`Failed to import app from ${userAppPath}:`, err);

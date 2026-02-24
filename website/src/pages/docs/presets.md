@@ -80,8 +80,8 @@ At runtime, edge proxy response caching stores proxied `GET`/`HEAD` responses on
   - `targets` (optional)
   - `container` (optional)
 
-### Not Supported
+### Rejected Keys/Sections
 
-- Legacy `[artifact]`, `[dev]`, `[deploy]`
+- `[artifact]`, `[dev]`, `[deploy]`
 - top-level `assets`, `include`, `exclude`, `builder_image`, `runtime`, `id`, `dev_cmd`
 - top-level `[targets]`, `[build].builder_image`, and `[build].docker`

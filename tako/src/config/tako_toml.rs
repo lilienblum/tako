@@ -1081,7 +1081,7 @@ runtime = "deno"
     }
 
     #[test]
-    fn test_parse_rejects_legacy_adapter_and_build_preset_keys() {
+    fn test_parse_rejects_old_adapter_and_build_preset_keys() {
         let top_level_adapter = r#"
 adapter = "node"
 "#;
@@ -1511,7 +1511,7 @@ preset = "custom:tanstack-start"
     }
 
     #[test]
-    fn test_parse_rejects_legacy_build_string_property() {
+    fn test_parse_rejects_old_build_string_property() {
         let toml = r#"
 build = "bun run build"
 "#;
@@ -1520,15 +1520,15 @@ build = "bun run build"
     }
 
     #[test]
-    fn test_parse_rejects_legacy_dist_property() {
-        let legacy_key = ["di", "st"].join("");
-        let toml = format!(r#"{legacy_key} = ".tako/dist""#);
+    fn test_parse_rejects_old_dist_property() {
+        let old_key = ["di", "st"].join("");
+        let toml = format!(r#"{old_key} = ".tako/dist""#);
         let err = TakoToml::parse(&toml).unwrap_err();
         assert!(err.to_string().contains("'dist' is no longer supported"));
     }
 
     #[test]
-    fn test_parse_rejects_legacy_top_level_assets_property() {
+    fn test_parse_rejects_old_top_level_assets_property() {
         let toml = r#"
 assets = ["dist/client"]
 "#;

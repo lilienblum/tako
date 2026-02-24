@@ -32,6 +32,7 @@ Created/used by `tako dev` / `tako doctor`:
 Created/used by `tako-dev-server`:
 
 - `{TAKO_HOME}/dev-server.sock`: Unix socket for the control protocol.
+- `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl`: shared app log stream; persisted records use a single `timestamp` field (`hh:mm:ss`).
 
 ## Running locally
 
@@ -103,7 +104,7 @@ Deploy e2e exercises artifact-cache behavior too: first deploy builds target art
 When top-level `preset` is omitted, dev/deploy choose adapter base preset from top-level `runtime` when set, otherwise adapter detection (`unknown` falls back to `bun`). When set, top-level `preset` is runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `js/tanstack-start` are rejected, and `github:` refs are not supported.
 When preset build mode resolves to container (`[build].container`), containerized builds reuse per-target Docker dependency cache volumes (prefix `tako-build-cache-`) across deploy runs.
 Containerized deploy builds default to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
-Preset artifact filters use preset `[build].exclude`; runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`. JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set. Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while `[build].targets` and `[build].container` override when set (legacy preset `[deploy]`, `[dev]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported).
+Preset artifact filters use preset `[build].exclude`; runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`. JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set. Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while `[build].targets` and `[build].container` override when set.
 During local builds, when `mise` is available, stage commands run through `mise exec -- sh -lc ...`.
 Preset `[[build.stages]]` is not supported; app-level custom stages are configured in `tako.toml` under `[[build.stages]]`.
 Per target build order is fixed: preset `[build].install`/`[build].build` first, then app `[[build.stages]]` in declaration order.
@@ -127,7 +128,7 @@ These are the environment variables Tako components read and/or set.
 | Name              | Used by         | Meaning                                       | Values / default             | Notes                                                               |
 | ----------------- | --------------- | --------------------------------------------- | ---------------------------- | ------------------------------------------------------------------- |
 | `PORT`            | app             | Listen port for HTTP server                   | number                       | Set by `tako dev` for local runs.                                   |
-| `ENV`             | app             | Local development environment hint            | `development`                | Set by `tako dev` for local app process compatibility.              |
+| `ENV`             | app             | Local development environment hint            | `development`                | Set by `tako dev` for local app process conventions.                |
 | `TAKO_ENV`        | app             | Deployed environment name                     | `production`, `staging`, ... | Set during deploy manifest generation for remote runtime.           |
 | `NODE_ENV`        | app             | Node convention env                           | `development` / `production` | Set by runtime adapter.                                             |
 | `BUN_ENV`         | app             | Bun convention env                            | `development` / `production` | Set by runtime adapter.                                             |

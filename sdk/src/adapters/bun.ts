@@ -22,13 +22,6 @@ import { resolveAppSocketPath } from "../socket-path";
 export { Tako } from "../tako";
 export type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 
-function resolveFetch(handler: FetchHandler) {
-  if (typeof handler === "function") {
-    return handler;
-  }
-  return handler.fetch.bind(handler);
-}
-
 /**
  * Create a Tako-wrapped Bun server
  *
@@ -44,7 +37,7 @@ export function serve(
   },
 ): void {
   const port = options?.port ?? parseInt(process.env.PORT || "3000", 10);
-  const userFetch = resolveFetch(handler);
+  const userFetch = handler;
 
   // Environment variables set by tako
   const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";

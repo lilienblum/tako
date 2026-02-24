@@ -21,13 +21,6 @@ import { handleTakoEndpoint } from "../endpoints";
 export { Tako } from "../tako";
 export type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 
-function resolveFetch(handler: FetchHandler) {
-  if (typeof handler === "function") {
-    return handler;
-  }
-  return handler.fetch.bind(handler);
-}
-
 // Environment variables set by tako (Deno uses Deno.env.get)
 const getEnv = (key: string, defaultValue: string = ""): string => {
   try {
@@ -76,7 +69,7 @@ export function serve(
   },
 ): void {
   const port = options?.port ?? parseInt(getEnv("PORT", "3000"), 10);
-  const userFetch = resolveFetch(handler);
+  const userFetch = handler;
 
   // Build environment object
   const env: Record<string, string> = {};

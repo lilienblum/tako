@@ -501,7 +501,7 @@ mod tests {
         );
         assert!(
             !rendered.contains("# main = \"server/index.mjs\""),
-            "expected legacy commented main example to be removed"
+            "expected commented main example to be removed"
         );
         assert!(
             rendered.contains("# assets = [\"public\", \".output/public\"]"),

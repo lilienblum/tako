@@ -20,13 +20,9 @@ bun add tako.sh
 ## Basic Usage
 
 ```ts
-import { Tako } from "tako.sh";
-
-const app = new Tako({
-  fetch: async (req) => new Response("ok"),
-});
-
-export default app;
+export default function fetch(req: Request, env: Record<string, string>) {
+  return new Response("ok");
+}
 ```
 
 Runtime-specific imports are also available:

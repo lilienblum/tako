@@ -106,7 +106,7 @@ env = "production"
 - If `main` is omitted in `tako.toml`, deploy/dev use preset top-level `main` when present.
 - For JS adapters (`bun`, `node`, `deno`), when preset `main` is `index.<ext>` or `src/index.<ext>` (`ext`: `ts`, `tsx`, `js`, `jsx`), deploy/dev resolve in this order: existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`.
 - If neither `tako.toml main` nor preset `main` is set, deploy/dev fail with guidance.
-- Legacy top-level `dist` and `assets` keys are not supported.
+- Top-level deploy/build keys in `tako.toml` are `main`, `runtime`, `preset`, and `[build]`; standalone top-level `dist` and `assets` keys are rejected.
 - Top-level `runtime` is optional; when set to `bun`, `node`, or `deno`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
 - Top-level `preset` is optional; when omitted, `tako deploy`/`tako dev` use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`).
 - `preset` supports:
@@ -123,7 +123,7 @@ env = "production"
 - Preset `[build].exclude` entries are appended to runtime-base excludes (base-first, deduplicated).
 - Preset `[build].targets` and `[build].container` override runtime defaults when set (including explicit empty arrays or explicit `container` values).
 - Preset `[build].assets` override runtime-base `assets` when set.
-- Build preset TOML supports optional top-level `name` (fallback: preset section name), top-level `main` (default app entrypoint), and `[build]` (`assets`, `exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false`). Presets can still override runtime lifecycle fields (`dev`, `install`, `start`, `[build].install`, `[build].build`) when needed. Legacy preset top-level `assets`, `[dev]`, `[deploy]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported.
+- Build preset TOML supports optional top-level `name` (fallback: preset section name), top-level `main` (default app entrypoint), top-level lifecycle overrides (`dev`, `install`, `start`), and `[build]` (`assets`, `exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false`, optional `[build].install`, optional `[build].build`).
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for visibility and cache-key inputs.
 - Unpinned official preset aliases are fetched from the `master` branch on each resolve.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
@@ -354,7 +354,7 @@ Start (or attach to) a local development session for the current app, backed by 
   - `tako dev` uses a per-project lock file under `{TAKO_HOME}/dev/locks/` to keep a single owning session per app/directory.
   - Running `tako dev` again from the same directory attaches as an additional client instead of starting a second local app process.
   - Dev logs are written to a shared per-app/per-project stream at `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl`.
-  - Each persisted log record stores a single `timestamp` token (`hh:mm:ss`) instead of split hour/minute/second fields; attached sessions continue to accept legacy `h`/`m`/`s` records from older streams.
+  - Each persisted log record stores a single `timestamp` token (`hh:mm:ss`) instead of split hour/minute/second fields.
   - When a new owning session starts, Tako truncates that shared stream before writing fresh logs for the new session.
   - Attached clients replay the existing file contents, then follow new lines from the same stream.
   - App lifecycle state (`starting`, `running`, `stopped`, app PID, and startup errors) is persisted to the same shared stream, so attached sessions reconstruct the same status/CPU/RAM view as the owning session.
@@ -1219,11 +1219,9 @@ npm install tako.sh
 Apps export a Web Standard fetch handler:
 
 ```typescript
-export default {
-  fetch(request: Request): Response | Promise<Response> {
-    return new Response("Hello!");
-  },
-};
+export default function fetch(request: Request): Response | Promise<Response> {
+  return new Response("Hello!");
+}
 ```
 
 ### Runtime Adapters

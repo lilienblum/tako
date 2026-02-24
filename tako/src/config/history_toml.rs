@@ -284,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_legacy_servers_entries_array_header() {
+    fn parse_rejects_old_servers_entries_array_header() {
         let parsed = CliHistoryToml::parse(
             r#"[servers]
 hosts = ["203.0.113.10"]
@@ -300,7 +300,7 @@ port = "2222"
 
         assert!(
             parsed.is_err(),
-            "legacy [[servers.entries]] format should not be accepted"
+            "old [[servers.entries]] format should not be accepted"
         );
     }
 

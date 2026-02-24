@@ -19,7 +19,6 @@ const LEAF_VALIDITY_DAYS: i64 = 365;
 const CA_COMMON_NAME: &str = "Tako Local Development CA";
 const CA_ORGANIZATION: &str = "Tako";
 const LOCAL_CA_CERT_FILENAME: &str = "ca.crt";
-const LEGACY_LOCAL_CA_CERT_FILENAME: &str = "tako-ca.crt";
 
 fn keychain_account_for_home(home: &std::path::Path) -> String {
     // Namespace keychain entries by TAKO_HOME so switching homes cannot pair a
@@ -191,28 +190,6 @@ impl LocalCAStore {
         self.ca_cert_path.with_extension("key")
     }
 
-    fn legacy_ca_cert_path(&self) -> PathBuf {
-        self.ca_cert_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join(LEGACY_LOCAL_CA_CERT_FILENAME)
-    }
-
-    fn legacy_ca_key_path(&self) -> PathBuf {
-        self.legacy_ca_cert_path().with_extension("key")
-    }
-
-    fn existing_ca_cert_path(&self) -> PathBuf {
-        if self.ca_cert_path.exists() {
-            return self.ca_cert_path.clone();
-        }
-        let legacy = self.legacy_ca_cert_path();
-        if legacy.exists() {
-            return legacy;
-        }
-        self.ca_cert_path.clone()
-    }
-
     fn save_ca_key_to_file(&self, key_pem: &str) -> Result<()> {
         let key_path = self.ca_key_path();
         fs::write(&key_path, key_pem).map_err(|e| CaError::FileWrite(key_path.clone(), e))?;
@@ -230,23 +207,17 @@ impl LocalCAStore {
 
     fn load_ca_key_from_file(&self) -> Result<String> {
         let primary = self.ca_key_path();
-        if let Ok(key) = fs::read_to_string(&primary) {
-            return Ok(key);
-        }
-
-        let legacy = self.legacy_ca_key_path();
-        fs::read_to_string(&legacy).map_err(|e| CaError::FileRead(legacy.clone(), e))
+        fs::read_to_string(&primary).map_err(|e| CaError::FileRead(primary.clone(), e))
     }
 
     pub fn ca_exists(&self) -> bool {
-        (self.ca_cert_path.exists() || self.legacy_ca_cert_path().exists())
+        self.ca_cert_path.exists()
             && (self.load_ca_key_from_keychain().is_ok() || self.load_ca_key_from_file().is_ok())
     }
 
     pub fn load_ca(&self) -> Result<LocalCA> {
-        let cert_path = self.existing_ca_cert_path();
-        let ca_cert_pem =
-            fs::read_to_string(&cert_path).map_err(|e| CaError::FileRead(cert_path.clone(), e))?;
+        let ca_cert_pem = fs::read_to_string(&self.ca_cert_path)
+            .map_err(|e| CaError::FileRead(self.ca_cert_path.clone(), e))?;
         let ca_key_pem = self.load_ca_key_from_keychain()?;
         Ok(LocalCA::new(ca_cert_pem, ca_key_pem))
     }
@@ -387,24 +358,29 @@ mod tests {
     }
 
     #[test]
-    fn ca_store_loads_legacy_filenames() {
+    fn ca_store_rejects_old_filenames() {
         let temp_dir = TempDir::new().unwrap();
         let current_ca_cert_path = temp_dir.path().join("ca").join("ca.crt");
-        let legacy_ca_cert_path = temp_dir.path().join("ca").join("tako-ca.crt");
+        let old_ca_cert_path = temp_dir.path().join("ca").join("tako-ca.crt");
 
         let store = LocalCAStore {
-            ca_cert_path: current_ca_cert_path,
-            keychain_service: "tako-dev-test-ca-legacy-load".to_string(),
-            keychain_account: "tako-dev-test-legacy-load".to_string(),
+            ca_cert_path: current_ca_cert_path.clone(),
+            keychain_service: "tako-dev-test-ca-old-load".to_string(),
+            keychain_account: "tako-dev-test-old-load".to_string(),
         };
 
         let ca = LocalCA::generate().unwrap();
-        std::fs::create_dir_all(legacy_ca_cert_path.parent().unwrap()).unwrap();
-        std::fs::write(&legacy_ca_cert_path, &ca.ca_cert_pem).unwrap();
-        std::fs::write(legacy_ca_cert_path.with_extension("key"), &ca.ca_key_pem).unwrap();
+        std::fs::create_dir_all(old_ca_cert_path.parent().unwrap()).unwrap();
+        std::fs::write(&old_ca_cert_path, &ca.ca_cert_pem).unwrap();
+        std::fs::write(old_ca_cert_path.with_extension("key"), &ca.ca_key_pem).unwrap();
 
-        let loaded = store.load_ca().unwrap();
-        assert_eq!(loaded.ca_cert_pem, ca.ca_cert_pem);
-        assert_eq!(loaded.ca_key_pem, ca.ca_key_pem);
+        let err = match store.load_ca() {
+            Ok(_) => panic!("old CA filenames should not be loaded"),
+            Err(err) => err,
+        };
+        match err {
+            CaError::FileRead(path, _) => assert_eq!(path, current_ca_cert_path),
+            other => panic!("expected FileRead error, got {other:?}"),
+        }
     }
 }

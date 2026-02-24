@@ -6,11 +6,9 @@
  * @example
  * ```typescript
  * // Basic usage - no SDK needed!
- * export default {
- *   fetch(request: Request, env: Record<string, string>) {
- *     return new Response("Hello World!");
- *   }
- * };
+ * export default function fetch(request: Request, env: Record<string, string>) {
+ *   return new Response("Hello World!");
+ * }
  * ```
  *
  * @example

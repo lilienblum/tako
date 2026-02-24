@@ -91,7 +91,7 @@ Each target server should have:
 - Archive payload is source-based and includes filtered files from the resolved source bundle root.
 - Archive includes a fallback `app.json` at app path inside the archive.
 - Build preset resolves from official alias; unpinned aliases fetch from `master` and resolved source metadata is written to `.tako/build.lock.json`.
-- Preset runtime fields are top-level `main`/`install`/`start` (legacy preset `[deploy]` is not supported).
+- Preset runtime fields are top-level `main`/`install`/`start`.
 - Runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`.
 - JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set.
 - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.

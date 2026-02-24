@@ -500,56 +500,6 @@ impl SqliteStateStore {
                     conn.exec(&format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"))?;
                     self.upsert_schema_meta(conn)?;
                 }
-                1 => {
-                    // v1 → v2: drop env_json column from apps table.
-                    // SQLite older than 3.35 doesn't support DROP COLUMN, so recreate the table.
-                    // v1 schema also lacks schema_meta and supporting tables; create them now.
-                    conn.exec(
-                        "CREATE TABLE IF NOT EXISTS schema_meta (
-                            id INTEGER PRIMARY KEY CHECK(id = 1),
-                            schema_version INTEGER NOT NULL,
-                            min_binary_version TEXT NOT NULL,
-                            created_by TEXT NOT NULL
-                        );",
-                    )?;
-                    conn.exec(
-                        "CREATE TABLE IF NOT EXISTS app_routes (
-                            app_name TEXT NOT NULL,
-                            route TEXT NOT NULL,
-                            PRIMARY KEY (app_name, route),
-                            FOREIGN KEY(app_name) REFERENCES apps(name) ON DELETE CASCADE
-                        );",
-                    )?;
-                    conn.exec(
-                        "CREATE TABLE IF NOT EXISTS server_state (
-                            id INTEGER PRIMARY KEY CHECK(id = 1),
-                            server_mode TEXT NOT NULL
-                        );",
-                    )?;
-                    conn.exec(
-                        "CREATE TABLE apps_v2 (
-                            name TEXT PRIMARY KEY,
-                            version TEXT NOT NULL,
-                            path TEXT NOT NULL,
-                            cwd TEXT NOT NULL,
-                            command_json TEXT NOT NULL,
-                            min_instances INTEGER NOT NULL,
-                            max_instances INTEGER NOT NULL,
-                            base_port INTEGER NOT NULL,
-                            idle_timeout_secs INTEGER NOT NULL
-                        );",
-                    )?;
-                    conn.exec(
-                        "INSERT INTO apps_v2
-                            SELECT name, version, path, cwd, command_json,
-                                   min_instances, max_instances, base_port, idle_timeout_secs
-                         FROM apps;",
-                    )?;
-                    conn.exec("DROP TABLE apps;")?;
-                    conn.exec("ALTER TABLE apps_v2 RENAME TO apps;")?;
-                    conn.exec(&format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"))?;
-                    self.upsert_schema_meta(conn)?;
-                }
                 CURRENT_SCHEMA_VERSION => {}
                 other => return Err(StateStoreError::UnsupportedSchemaVersion { found: other }),
             }
@@ -877,7 +827,7 @@ mod tests {
     }
 
     #[test]
-    fn migrates_v1_schema_to_v2_dropping_env_json() {
+    fn init_rejects_v1_schema() {
         let (_temp, store) = temp_store();
         // Bootstrap a v1 schema with env_json column
         let conn = store.open_connection().unwrap();
@@ -903,17 +853,10 @@ mod tests {
         conn.exec("PRAGMA user_version = 1;").unwrap();
         drop(conn);
 
-        // Running init() should migrate to v2
-        store.init().unwrap();
-
-        // Verify schema version bumped
-        let conn = store.open_connection().unwrap();
-        assert_eq!(conn.query_user_version().unwrap(), CURRENT_SCHEMA_VERSION);
-
-        // App data preserved (env_json dropped, not panic)
-        let apps = store.load_apps().unwrap();
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].config.name, "my-app");
-        assert!(apps[0].config.env_vars.is_empty());
+        let err = store.init().unwrap_err();
+        match err {
+            StateStoreError::UnsupportedSchemaVersion { found } => assert_eq!(found, 1),
+            _ => panic!("unexpected error: {err}"),
+        }
     }
 }

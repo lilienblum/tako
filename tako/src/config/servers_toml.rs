@@ -620,7 +620,7 @@ arch = "x86_64"
     }
 
     #[test]
-    fn test_parse_rejects_legacy_server_targets_table() {
+    fn test_parse_rejects_old_server_targets_table() {
         let toml = r#"
 [server_targets.ghost]
 arch = "x86_64"
@@ -1070,10 +1070,10 @@ port = 61234
     }
 
     #[test]
-    fn test_load_prefers_config_over_legacy_when_present() {
+    fn test_load_prefers_config_over_old_servers_path_when_present() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        let legacy_path = temp_dir.path().join("servers.toml");
+        let old_servers_path = temp_dir.path().join("servers.toml");
 
         fs::write(
             &config_path,
@@ -1085,10 +1085,10 @@ host = "1.1.1.1"
         )
         .unwrap();
         fs::write(
-            &legacy_path,
+            &old_servers_path,
             r#"
 [[servers]]
-name = "from-legacy"
+name = "from-old-path"
 host = "2.2.2.2"
 "#,
         )
@@ -1096,14 +1096,14 @@ host = "2.2.2.2"
 
         let loaded = ServersToml::load_from_paths(&config_path).unwrap();
         assert!(loaded.contains("from-config"));
-        assert!(!loaded.contains("from-legacy"));
+        assert!(!loaded.contains("from-old-path"));
     }
 
     #[test]
-    fn test_load_does_not_fallback_to_legacy_when_config_has_no_servers() {
+    fn test_load_does_not_fallback_to_old_servers_path_when_config_has_no_servers() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        let legacy_path = temp_dir.path().join("servers.toml");
+        let old_servers_path = temp_dir.path().join("servers.toml");
 
         fs::write(
             &config_path,
@@ -1114,10 +1114,10 @@ port = 55555
         )
         .unwrap();
         fs::write(
-            &legacy_path,
+            &old_servers_path,
             r#"
 [[servers]]
-name = "from-legacy"
+name = "from-old-path"
 host = "2.2.2.2"
 "#,
         )
@@ -1128,16 +1128,16 @@ host = "2.2.2.2"
     }
 
     #[test]
-    fn test_load_does_not_fallback_to_legacy_when_config_missing() {
+    fn test_load_does_not_fallback_to_old_servers_path_when_config_missing() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        let legacy_path = temp_dir.path().join("servers.toml");
+        let old_servers_path = temp_dir.path().join("servers.toml");
 
         fs::write(
-            &legacy_path,
+            &old_servers_path,
             r#"
 [[servers]]
-name = "from-legacy"
+name = "from-old-path"
 host = "2.2.2.2"
 "#,
         )

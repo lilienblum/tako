@@ -641,13 +641,15 @@ fn build_update_secrets_command(
 }
 
 fn tako_response_has_error(response: &str) -> bool {
-    if let Ok(value) = serde_json::from_str::<serde_json::Value>(response) {
-        if value.get("status").and_then(|s| s.as_str()) == Some("error") {
-            return true;
-        }
-        return value.get("error").is_some();
-    }
-    response.contains("\"error\"")
+    serde_json::from_str::<serde_json::Value>(response)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("status")
+                .and_then(|status| status.as_str())
+                .map(|status| status == "error")
+        })
+        .unwrap_or(false)
 }
 
 #[cfg(test)]
@@ -740,13 +742,24 @@ mod tests {
     }
 
     #[test]
-    fn load_or_create_key_for_env_ignores_legacy_global_key() {
+    fn tako_response_has_error_only_accepts_structured_status_errors() {
+        let json_err = r#"{"status":"error","message":"nope"}"#;
+        let json_ok = r#"{"status":"ok","data":{}}"#;
+        let old_error_shape = r#"{"error":"old-shape"}"#;
+        let plain_text = "all good";
+
+        assert!(tako_response_has_error(json_err));
+        assert!(!tako_response_has_error(json_ok));
+        assert!(!tako_response_has_error(old_error_shape));
+        assert!(!tako_response_has_error(plain_text));
+    }
+
+    #[test]
+    fn load_or_create_key_for_env_ignores_old_global_key_path() {
         with_temp_tako_home(|home| {
-            let legacy_store = crate::crypto::KeyStore::with_path(home.join("key"));
-            let legacy_key = crate::crypto::EncryptionKey::generate();
-            legacy_store
-                .save_key(&legacy_key)
-                .expect("save legacy global key");
+            let old_store = crate::crypto::KeyStore::with_path(home.join("key"));
+            let old_key = crate::crypto::EncryptionKey::generate();
+            old_store.save_key(&old_key).expect("save old global key");
 
             let loaded = load_or_create_key_for_env("production").expect("load env key");
             let env_store = crate::crypto::KeyStore::for_env("production").expect("env key store");
@@ -754,17 +767,17 @@ mod tests {
 
             let env_key = env_store.load_key().expect("load env key");
             assert_eq!(loaded.as_bytes(), env_key.as_bytes());
-            assert_ne!(loaded.as_bytes(), legacy_key.as_bytes());
+            assert_ne!(loaded.as_bytes(), old_key.as_bytes());
         });
     }
 
     #[test]
-    fn load_key_for_env_fails_when_only_legacy_global_key_exists() {
+    fn load_key_for_env_fails_when_only_old_global_key_path_exists() {
         with_temp_tako_home(|home| {
-            let legacy_store = crate::crypto::KeyStore::with_path(home.join("key"));
-            legacy_store
+            let old_store = crate::crypto::KeyStore::with_path(home.join("key"));
+            old_store
                 .save_key(&crate::crypto::EncryptionKey::generate())
-                .expect("save legacy global key");
+                .expect("save old global key");
 
             match load_key_for_env("production") {
                 Ok(_) => panic!("should require env key"),

@@ -85,7 +85,7 @@ For **each finding**:
 
 - Ordered steps to implement the fix
 - Tests / checks to verify it’s fixed
-- Rollout notes (flags, migrations, backward compatibility)
+- Rollout notes (flags, migrations, integration impact)
 
 #### Questions / Decision Points (only if non-trivial)
 

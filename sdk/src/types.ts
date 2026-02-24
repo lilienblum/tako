@@ -11,11 +11,7 @@ export type FetchFunction = (
   env: Record<string, string>,
 ) => Response | Promise<Response>;
 
-export type FetchHandler =
-  | FetchFunction
-  | {
-      fetch: FetchFunction;
-    };
+export type FetchHandler = FetchFunction;
 
 /**
  * Options for Tako SDK

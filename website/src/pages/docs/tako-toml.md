@@ -83,7 +83,7 @@ runtime = "bun"
   - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated).
   - Preset `[build].targets` and `[build].container` override runtime defaults when set (including explicit empty arrays or explicit `container` values).
   - Preset `[build].assets` override runtime-base `assets` when set.
-  - Build preset files support optional top-level `name`, top-level `main`, and preset `[build]` keys (`assets`, `exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container`). Presets can still override runtime lifecycle fields when needed. Preset top-level `assets`, preset `[[build.stages]]`, legacy preset `[dev]`, `[deploy]`, preset `include`, `[artifact]`, top-level `dev_cmd`, and `[build].docker` are not supported.
+  - Build preset files support optional top-level `name`, top-level `main`, top-level lifecycle overrides (`dev`, `install`, `start`), and preset `[build]` keys (`assets`, `exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container`, optional `[build].install`, optional `[build].build`).
   - Bun `tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and `[build].assets = ["dist/client"]`.
   - Deploy writes resolved preset metadata to `.tako/build.lock.json` for visibility and cache-key inputs.
   - Unpinned official preset aliases are fetched from `master` on each resolve.
@@ -99,7 +99,7 @@ runtime = "bun"
   - Deploy artifact cache keys include resolved preset source/commit, runtime tool/version, build mode (Docker/local), and `build.include` / `build.exclude` / `build.assets` / `build.stages`; changing these inputs invalidates cache and triggers rebuild for affected targets.
   - Bun runtime dependencies are installed on server from the uploaded release (`bun install --production`).
   - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
-- Legacy top-level `build = "..."` and top-level `assets = [...]` are not supported.
+- Top-level deploy/build keys are `main`, `runtime`, `preset`, and `[build]`; standalone top-level `build = "..."` and `assets = [...]` are rejected.
 
 ## `[vars]`
 
