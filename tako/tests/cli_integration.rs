@@ -1457,6 +1457,8 @@ env = "production"
             project_dir.join("tako.toml"),
             r#"
 name = "test-app"
+runtime = "node"
+entry = "index.js"
 
 [envs.production]
 route = "prod.example.com"
@@ -1465,9 +1467,12 @@ route = "prod.example.com"
         )
         .unwrap();
 
-        // Add bun.lockb and entry point
-        fs::write(project_dir.join("bun.lockb"), "").unwrap();
-        fs::write(project_dir.join("index.ts"), "export default {}").unwrap();
+        fs::write(
+            project_dir.join("package.json"),
+            r#"{"name": "test-app", "version": "1.0.0"}"#,
+        )
+        .unwrap();
+        fs::write(project_dir.join("index.js"), "export default {}").unwrap();
 
         let output = run_tako_with_env(
             &["deploy", "--env", "production"],
@@ -1561,11 +1566,13 @@ libc = "glibc"
         fs::create_dir_all(&home).unwrap();
         fs::create_dir_all(&tako_home).unwrap();
 
-        // Create a valid-looking config that will pass validation but fail on SSH
+        // Create a valid-looking config that passes validation.
         fs::write(
             project_dir.join("tako.toml"),
             r#"
 name = "test-app"
+runtime = "node"
+entry = "index.js"
 
 [envs.production]
 routes = ["api.example.com"]
@@ -1573,7 +1580,18 @@ routes = ["api.example.com"]
         )
         .unwrap();
 
-        // Create config.toml with a test server in isolated test TAKO_HOME.
+        fs::write(
+            project_dir.join("package.json"),
+            r#"{"name": "test-app", "version": "1.0.0"}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("index.js"),
+            "export default { fetch() { return new Response('ok'); } };",
+        )
+        .unwrap();
+
+        // Create config.toml with multiple servers so non-interactive deploy cannot auto-select.
         let servers_path = tako_home.join("config.toml");
         fs::write(
             &servers_path,
@@ -1582,15 +1600,12 @@ routes = ["api.example.com"]
 name = "test-server"
 host = "127.0.0.1"
 port = 22222
-"#,
-        )
-        .unwrap();
 
-        // Add bun.lockb and entry point
-        fs::write(project_dir.join("bun.lockb"), "").unwrap();
-        fs::write(
-            project_dir.join("index.ts"),
-            "export default { fetch() { return new Response('ok'); } };",
+[[servers]]
+name = "backup-server"
+host = "127.0.0.2"
+port = 22223
+"#,
         )
         .unwrap();
 
@@ -1601,10 +1616,10 @@ port = 22222
             &tako_home,
         );
 
-        // The deploy will fail (SSH will fail) but we should see validation messages first
+        // The deploy will fail after validation, but validation messages should still be shown.
         let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
 
-        // Should show validation succeeded before failing on SSH
+        // Should show validation succeeded before the later deploy failure.
         assert!(
             combined.contains("Validation complete")
                 || combined.contains("Validate")
