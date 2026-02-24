@@ -20,7 +20,7 @@ export type FetchHandler =
 /**
  * Options for Tako SDK
  */
-export interface TakoOptions {}
+export type TakoOptions = Record<string, never>;
 
 /**
  * Tako status response
