@@ -545,6 +545,7 @@ Restart `tako-server` process entirely (causes brief downtime for all apps).
 Use for: binary updates, major configuration changes, system recovery.
 
 Service-manager restart/stop behavior:
+
 - On systemd hosts, installer configures `KillMode=control-group` and `TimeoutStopSec=30min`, allowing all app processes in the service cgroup time to handle graceful shutdown before forced termination.
 - On OpenRC hosts, installer configures `retry="TERM/1800/KILL/5"` in the init script so restart/stop waits up to 30 minutes before forced termination.
 
@@ -563,7 +564,7 @@ Single-host in-place upgrade via service-manager reload:
 4. CLI signals the primary service with:
    - `sudo systemctl reload tako-server` on systemd hosts, or
    - `sudo rc-service tako-server reload` on OpenRC hosts.
-   Both paths send SIGHUP for graceful in-place reload.
+     Both paths send SIGHUP for graceful in-place reload.
 5. CLI waits for the primary management socket to report ready.
 6. CLI releases upgrade mode (`exit_upgrading`).
 
