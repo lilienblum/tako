@@ -109,6 +109,8 @@ just release tako-core
 just release tako-socket
 ```
 
+Release tags are signed (`git tag -s`). Ensure local Git tag signing is configured before running release commands.
+
 Each command is a full flow for that component:
 
 - `release tako`: release notes + `cargo publish -p tako` + GitHub release asset upload (`tako-*`)

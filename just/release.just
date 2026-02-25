@@ -343,7 +343,10 @@ cargo-tako-core: _guard _require-cargo-set-version
         exit 1; \
     fi; \
     git commit -m "chore(release): tako-core v$next"; \
-    git tag -a "$tag" -m "tako-core v$next"; \
+    if ! git tag -s "$tag" -m "tako-core v$next"; then \
+        echo "error: failed to create signed tag '$tag'; configure git tag signing and retry" >&2; \
+        exit 1; \
+    fi; \
     git push origin master --follow-tags
     @just --justfile just/release.just _guard
     cargo publish -p tako-core
@@ -385,7 +388,10 @@ cargo-tako-socket: _guard _require-cargo-set-version
         exit 1; \
     fi; \
     git commit -m "chore(release): tako-socket v$next"; \
-    git tag -a "$tag" -m "tako-socket v$next"; \
+    if ! git tag -s "$tag" -m "tako-socket v$next"; then \
+        echo "error: failed to create signed tag '$tag'; configure git tag signing and retry" >&2; \
+        exit 1; \
+    fi; \
     git push origin master --follow-tags
     @just --justfile just/release.just _guard
     cargo publish -p tako-socket
@@ -427,7 +433,10 @@ cargo-tako: _guard _guard-shared-crates-released _require-cargo-set-version _pre
         exit 1; \
     fi; \
     git commit -m "chore(release): tako v$next"; \
-    git tag -a "$tag" -m "tako v$next"; \
+    if ! git tag -s "$tag" -m "tako v$next"; then \
+        echo "error: failed to create signed tag '$tag'; configure git tag signing and retry" >&2; \
+        exit 1; \
+    fi; \
     git push origin master --follow-tags
     @just --justfile just/release.just _guard
     cargo publish -p tako
@@ -469,7 +478,10 @@ cargo-tako-server: _guard _guard-shared-crates-released _require-cargo-set-versi
         exit 1; \
     fi; \
     git commit -m "chore(release): tako-server v$next"; \
-    git tag -a "$tag" -m "tako-server v$next"; \
+    if ! git tag -s "$tag" -m "tako-server v$next"; then \
+        echo "error: failed to create signed tag '$tag'; configure git tag signing and retry" >&2; \
+        exit 1; \
+    fi; \
     git push origin master --follow-tags
     @just --justfile just/release.just _guard
     cargo publish -p tako-server
@@ -505,7 +517,10 @@ npm: _guard
         exit 1; \
     fi; \
     git commit -m "chore(release): sdk v$next"; \
-    git tag -a "$tag" -m "tako.sh v$next"; \
+    if ! git tag -s "$tag" -m "tako.sh v$next"; then \
+        echo "error: failed to create signed tag '$tag'; configure git tag signing and retry" >&2; \
+        exit 1; \
+    fi; \
     git push origin master --follow-tags
     @just --justfile just/release.just _guard
     cd sdk/js && npm publish
