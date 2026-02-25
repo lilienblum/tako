@@ -18,7 +18,7 @@ set -eu
 #   TAKO_SSH_PUBKEY         public key line to authorize for TAKO_USER (optional)
 #                           if unset, installer prompts in interactive terminals
 #
-#   TAKO_SERVER_URL         override binary URL (optional)
+#   TAKO_SERVER_URL         override archive URL (.tar.gz; optional)
 #   TAKO_DOWNLOAD_BASE_URL  override release download base URL (optional)
 #   TAKO_REPO_OWNER         default: lilienblum
 #   TAKO_REPO_NAME          default: tako
@@ -55,13 +55,37 @@ PATH="/root/.local/bin:$PATH"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
+download_file() {
+  src="$1"
+  dest="$2"
+  case "$src" in
+    file://*)
+      cp "${src#file://}" "$dest"
+      ;;
+    *)
+      if need_cmd curl; then
+        curl -fsSL "$src" -o "$dest"
+      else
+        wget -qO "$dest" "$src"
+      fi
+      ;;
+  esac
+}
+
 download_stdout() {
   url="$1"
-  if need_cmd curl; then
-    curl -fsSL "$url"
-  else
-    wget -qO- "$url"
-  fi
+  case "$url" in
+    file://*)
+      cat "${url#file://}"
+      ;;
+    *)
+      if need_cmd curl; then
+        curl -fsSL "$url"
+      else
+        wget -qO- "$url"
+      fi
+      ;;
+  esac
 }
 
 resolve_latest_tag() {
@@ -457,8 +481,8 @@ case "$libc" in
     ;;
 esac
 
-bin_url="${TAKO_SERVER_URL:-}"
-if [ -z "$bin_url" ]; then
+download_url="${TAKO_SERVER_URL:-}"
+if [ -z "$download_url" ]; then
   download_base="$TAKO_DOWNLOAD_BASE_URL"
   if [ -z "$download_base" ]; then
     tag="$(resolve_latest_tag "$TAKO_TAG_PREFIX" "$TAKO_TAGS_API" || true)"
@@ -468,67 +492,50 @@ if [ -z "$bin_url" ]; then
     fi
     download_base="https://github.com/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/releases/download/$tag"
   fi
-  bin_url="$download_base/tako-server-linux-$arch-$libc"
+  download_url="$download_base/tako-server-linux-$arch-$libc.tar.gz"
 fi
-sha_url="${bin_url}.sha256"
-
-tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
-
-echo "Downloading tako-server: $bin_url"
-case "$bin_url" in
-  file://*)
-    cp "${bin_url#file://}" "$tmp"
-    ;;
+case "$download_url" in
+  *.tar.gz|file://*.tar.gz) ;;
   *)
-    if need_cmd curl; then
-      curl -fL "$bin_url" -o "$tmp"
-    else
-      wget -O "$tmp" "$bin_url"
-    fi
+    echo "error: TAKO_SERVER_URL must point to a .tar.gz archive" >&2
+    exit 1
     ;;
 esac
+sha_url="${download_url}.sha256"
+
+tmp_payload="$(mktemp)"
+tmp_extract="$(mktemp -d)"
+trap 'rm -f "$tmp_payload"; rm -rf "$tmp_extract"' EXIT
+
+echo "Downloading tako-server: $download_url"
+download_file "$download_url" "$tmp_payload"
 
 expected_sha=""
-case "$sha_url" in
-  file://*)
-    sha_file="${sha_url#file://}"
-    if [ -f "$sha_file" ]; then
-      expected_sha="$(awk '{print $1}' "$sha_file" 2>/dev/null || true)"
-    fi
-    ;;
-  *)
-    if need_cmd curl; then
-      expected_sha="$(curl -fsSL "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
-    else
-      expected_sha="$(wget -qO- "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
-    fi
-    ;;
-esac
+expected_sha="$(download_stdout "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
 
 if [ -n "$expected_sha" ]; then
   if need_cmd sha256sum; then
-    actual="$(sha256sum "$tmp" | awk '{print $1}')"
+    actual="$(sha256sum "$tmp_payload" | awk '{print $1}')"
   else
-    actual="$(shasum -a 256 "$tmp" | awk '{print $1}')"
+    actual="$(shasum -a 256 "$tmp_payload" | awk '{print $1}')"
   fi
   if [ "$actual" != "$expected_sha" ]; then
     echo "error: sha256 mismatch (expected=$expected_sha actual=$actual)" >&2
     exit 1
   fi
 else
-  case "$sha_url" in
-    file://*)
-      echo "warning: local SHA256 file not found ($sha_url); skipping integrity check" >&2
-      ;;
-    *)
-      echo "error: could not fetch SHA256 ($sha_url); aborting install" >&2
-      exit 1
-      ;;
-  esac
+  echo "error: could not fetch SHA256 ($sha_url); aborting install" >&2
+  exit 1
 fi
 
-install -m 0755 "$tmp" /usr/local/bin/tako-server
+tar -xzf "$tmp_payload" -C "$tmp_extract"
+tmp_bin="$(find "$tmp_extract" -type f -name tako-server | head -n 1 || true)"
+if [ -z "$tmp_bin" ]; then
+  echo "error: archive did not contain a tako-server binary" >&2
+  exit 1
+fi
+
+install -m 0755 "$tmp_bin" /usr/local/bin/tako-server
 ensure_privileged_bind_capability
 
 # Create `tako` user.

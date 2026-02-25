@@ -12,7 +12,7 @@ set -eu
 #
 # Optional env vars:
 #   TAKO_INSTALL_DIR        default: $HOME/.local/bin
-#   TAKO_URL                override binary URL (optional)
+#   TAKO_URL                override archive URL (.tar.gz; optional)
 #   TAKO_DOWNLOAD_BASE_URL  override release download base URL (optional)
 #   TAKO_REPO_OWNER         default: lilienblum
 #   TAKO_REPO_NAME          default: tako
@@ -20,6 +20,16 @@ set -eu
 #   TAKO_TAGS_API           override tags API URL (optional)
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+download_file() {
+  src="$1"
+  dest="$2"
+  if need_cmd curl; then
+    curl -fsSL "$src" -o "$dest"
+  else
+    wget -qO "$dest" "$src"
+  fi
+}
 
 download_stdout() {
   url="$1"
@@ -58,6 +68,10 @@ if ! need_cmd curl && ! need_cmd wget; then
   echo "error: missing downloader (need curl or wget)" >&2
   exit 1
 fi
+if ! need_cmd tar; then
+  echo "error: missing required command: tar" >&2
+  exit 1
+fi
 
 TAKO_INSTALL_DIR="${TAKO_INSTALL_DIR:-$HOME/.local/bin}"
 TAKO_DOWNLOAD_BASE_URL="${TAKO_DOWNLOAD_BASE_URL:-}"
@@ -86,8 +100,8 @@ case "$arch_raw" in
     ;;
 esac
 
-bin_url="${TAKO_URL:-}"
-if [ -z "$bin_url" ]; then
+download_url="${TAKO_URL:-}"
+if [ -z "$download_url" ]; then
   download_base="$TAKO_DOWNLOAD_BASE_URL"
   if [ -z "$download_base" ]; then
     tag="$(resolve_latest_tag "$TAKO_TAG_PREFIX" "$TAKO_TAGS_API" || true)"
@@ -97,32 +111,32 @@ if [ -z "$bin_url" ]; then
     fi
     download_base="https://github.com/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/releases/download/$tag"
   fi
-  bin_url="$download_base/tako-$os-$arch"
+  download_url="$download_base/tako-$os-$arch.tar.gz"
 fi
-sha_url="${bin_url}.sha256"
+case "$download_url" in
+  *.tar.gz|file://*.tar.gz) ;;
+  *)
+    echo "error: TAKO_URL must point to a .tar.gz archive" >&2
+    exit 1
+    ;;
+esac
+sha_url="${download_url}.sha256"
 
-tmp="$(mktemp)"
-trap 'rm -f "$tmp"' EXIT
+tmp_payload="$(mktemp)"
+tmp_extract="$(mktemp -d)"
+trap 'rm -f "$tmp_payload"; rm -rf "$tmp_extract"' EXIT
 
-echo "Downloading tako CLI: $bin_url"
-if need_cmd curl; then
-  curl -fL "$bin_url" -o "$tmp"
-else
-  wget -O "$tmp" "$bin_url"
-fi
+echo "Downloading tako CLI: $download_url"
+download_file "$download_url" "$tmp_payload"
 
 expected_sha=""
-if need_cmd curl; then
-  expected_sha="$(curl -fsSL "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
-else
-  expected_sha="$(wget -qO- "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
-fi
+expected_sha="$(download_stdout "$sha_url" 2>/dev/null | awk '{print $1}' || true)"
 
 if [ -n "$expected_sha" ]; then
   if need_cmd sha256sum; then
-    actual="$(sha256sum "$tmp" | awk '{print $1}')"
+    actual="$(sha256sum "$tmp_payload" | awk '{print $1}')"
   elif need_cmd shasum; then
-    actual="$(shasum -a 256 "$tmp" | awk '{print $1}')"
+    actual="$(shasum -a 256 "$tmp_payload" | awk '{print $1}')"
   else
     echo "warning: sha256 tool not found; skipping integrity check" >&2
     actual=""
@@ -136,9 +150,16 @@ else
   echo "warning: could not fetch SHA256 ($sha_url); skipping integrity check" >&2
 fi
 
+tar -xzf "$tmp_payload" -C "$tmp_extract"
+tmp_bin="$(find "$tmp_extract" -type f -name tako | head -n 1 || true)"
+if [ -z "$tmp_bin" ]; then
+  echo "error: archive did not contain a tako binary" >&2
+  exit 1
+fi
+
 mkdir -p "$TAKO_INSTALL_DIR"
 target="$TAKO_INSTALL_DIR/tako"
-install -m 0755 "$tmp" "$target"
+install -m 0755 "$tmp_bin" "$target"
 
 echo "OK installed tako to $target"
 

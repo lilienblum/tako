@@ -104,23 +104,58 @@ _prebuild-tako:
     rustup target add aarch64-apple-darwin x86_64-apple-darwin
     cargo build -p tako --bin tako --release --target aarch64-apple-darwin
     cargo build -p tako --bin tako --release --target x86_64-apple-darwin
-    cp target/aarch64-apple-darwin/release/tako dist/tako-darwin-aarch64
-    cp target/x86_64-apple-darwin/release/tako dist/tako-darwin-x86_64
-    @if command -v sha256sum >/dev/null 2>&1; then \
-        sha256sum dist/tako-darwin-aarch64 > dist/tako-darwin-aarch64.sha256; \
-        sha256sum dist/tako-darwin-x86_64 > dist/tako-darwin-x86_64.sha256; \
-    else \
-        shasum -a 256 dist/tako-darwin-aarch64 > dist/tako-darwin-aarch64.sha256; \
-        shasum -a 256 dist/tako-darwin-x86_64 > dist/tako-darwin-x86_64.sha256; \
-    fi
     @echo "Prebuilding tako for Linux targets..."
     just build::tako-linux
+    @echo "Packaging tako release archives..."
+    tmpdir="$(mktemp -d)"; \
+    cp target/aarch64-apple-darwin/release/tako "$tmpdir/tako"; \
+    tar -czf dist/tako-darwin-aarch64.tar.gz -C "$tmpdir" tako; \
+    rm -rf "$tmpdir"; \
+    tmpdir="$(mktemp -d)"; \
+    cp target/x86_64-apple-darwin/release/tako "$tmpdir/tako"; \
+    tar -czf dist/tako-darwin-x86_64.tar.gz -C "$tmpdir" tako; \
+    rm -rf "$tmpdir"; \
+    for arch in x86_64 aarch64; do \
+        tmpdir="$(mktemp -d)"; \
+        cp "dist/tako-linux-$arch" "$tmpdir/tako"; \
+        tar -czf "dist/tako-linux-$arch.tar.gz" -C "$tmpdir" tako; \
+        rm -rf "$tmpdir"; \
+    done; \
+    if command -v sha256sum >/dev/null 2>&1; then \
+        sha256sum dist/tako-darwin-aarch64.tar.gz > dist/tako-darwin-aarch64.tar.gz.sha256; \
+        sha256sum dist/tako-darwin-x86_64.tar.gz > dist/tako-darwin-x86_64.tar.gz.sha256; \
+        sha256sum dist/tako-linux-x86_64.tar.gz > dist/tako-linux-x86_64.tar.gz.sha256; \
+        sha256sum dist/tako-linux-aarch64.tar.gz > dist/tako-linux-aarch64.tar.gz.sha256; \
+    else \
+        shasum -a 256 dist/tako-darwin-aarch64.tar.gz > dist/tako-darwin-aarch64.tar.gz.sha256; \
+        shasum -a 256 dist/tako-darwin-x86_64.tar.gz > dist/tako-darwin-x86_64.tar.gz.sha256; \
+        shasum -a 256 dist/tako-linux-x86_64.tar.gz > dist/tako-linux-x86_64.tar.gz.sha256; \
+        shasum -a 256 dist/tako-linux-aarch64.tar.gz > dist/tako-linux-aarch64.tar.gz.sha256; \
+    fi
 
 _prebuild-tako-server:
     @echo "Prebuilding tako-server for macOS (host target)..."
     cargo build -p tako-server --release
     @echo "Prebuilding tako-server for Linux targets..."
     just build::tako-server-all
+    @echo "Packaging tako-server release archives..."
+    @for variant in x86_64-glibc aarch64-glibc x86_64-musl aarch64-musl; do \
+        tmpdir="$(mktemp -d)"; \
+        cp "dist/tako-server-linux-$variant" "$tmpdir/tako-server"; \
+        tar -czf "dist/tako-server-linux-$variant.tar.gz" -C "$tmpdir" tako-server; \
+        rm -rf "$tmpdir"; \
+    done; \
+    if command -v sha256sum >/dev/null 2>&1; then \
+        sha256sum dist/tako-server-linux-x86_64-glibc.tar.gz > dist/tako-server-linux-x86_64-glibc.tar.gz.sha256; \
+        sha256sum dist/tako-server-linux-aarch64-glibc.tar.gz > dist/tako-server-linux-aarch64-glibc.tar.gz.sha256; \
+        sha256sum dist/tako-server-linux-x86_64-musl.tar.gz > dist/tako-server-linux-x86_64-musl.tar.gz.sha256; \
+        sha256sum dist/tako-server-linux-aarch64-musl.tar.gz > dist/tako-server-linux-aarch64-musl.tar.gz.sha256; \
+    else \
+        shasum -a 256 dist/tako-server-linux-x86_64-glibc.tar.gz > dist/tako-server-linux-x86_64-glibc.tar.gz.sha256; \
+        shasum -a 256 dist/tako-server-linux-aarch64-glibc.tar.gz > dist/tako-server-linux-aarch64-glibc.tar.gz.sha256; \
+        shasum -a 256 dist/tako-server-linux-x86_64-musl.tar.gz > dist/tako-server-linux-x86_64-musl.tar.gz.sha256; \
+        shasum -a 256 dist/tako-server-linux-aarch64-musl.tar.gz > dist/tako-server-linux-aarch64-musl.tar.gz.sha256; \
+    fi
 
 # Generate release notes draft for `tako`.
 # Output: dist/release-notes/tako.md
@@ -216,14 +251,14 @@ github-tako: _guard _require-gh
     if [ ! -f "$notes" ]; then echo "error: missing release notes file: $notes" >&2; exit 1; fi; \
     version="${tag#{{ TAKO_TAG_PREFIX }}}"; \
     set -- \
-        dist/tako-darwin-aarch64 \
-        dist/tako-darwin-aarch64.sha256 \
-        dist/tako-darwin-x86_64 \
-        dist/tako-darwin-x86_64.sha256 \
-        dist/tako-linux-x86_64 \
-        dist/tako-linux-x86_64.sha256 \
-        dist/tako-linux-aarch64 \
-        dist/tako-linux-aarch64.sha256; \
+        dist/tako-darwin-aarch64.tar.gz \
+        dist/tako-darwin-aarch64.tar.gz.sha256 \
+        dist/tako-darwin-x86_64.tar.gz \
+        dist/tako-darwin-x86_64.tar.gz.sha256 \
+        dist/tako-linux-x86_64.tar.gz \
+        dist/tako-linux-x86_64.tar.gz.sha256 \
+        dist/tako-linux-aarch64.tar.gz \
+        dist/tako-linux-aarch64.tar.gz.sha256; \
     for asset in "$@"; do \
         if [ ! -f "$asset" ]; then \
             echo "error: missing release artifact: $asset" >&2; \
@@ -250,14 +285,14 @@ github-tako-server: _guard _require-gh
     if [ ! -f "$notes" ]; then echo "error: missing release notes file: $notes" >&2; exit 1; fi; \
     version="${tag#{{ TAKO_SERVER_TAG_PREFIX }}}"; \
     set -- \
-        dist/tako-server-linux-x86_64-glibc \
-        dist/tako-server-linux-x86_64-glibc.sha256 \
-        dist/tako-server-linux-aarch64-glibc \
-        dist/tako-server-linux-aarch64-glibc.sha256 \
-        dist/tako-server-linux-x86_64-musl \
-        dist/tako-server-linux-x86_64-musl.sha256 \
-        dist/tako-server-linux-aarch64-musl \
-        dist/tako-server-linux-aarch64-musl.sha256; \
+        dist/tako-server-linux-x86_64-glibc.tar.gz \
+        dist/tako-server-linux-x86_64-glibc.tar.gz.sha256 \
+        dist/tako-server-linux-aarch64-glibc.tar.gz \
+        dist/tako-server-linux-aarch64-glibc.tar.gz.sha256 \
+        dist/tako-server-linux-x86_64-musl.tar.gz \
+        dist/tako-server-linux-x86_64-musl.tar.gz.sha256 \
+        dist/tako-server-linux-aarch64-musl.tar.gz \
+        dist/tako-server-linux-aarch64-musl.tar.gz.sha256; \
     for asset in "$@"; do \
         if [ ! -f "$asset" ]; then \
             echo "error: missing release artifact: $asset" >&2; \
