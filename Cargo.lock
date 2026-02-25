@@ -5103,7 +5103,7 @@ dependencies = [
 
 [[package]]
 name = "tako-socket"
-version = "0.0.1-alpha.0"
+version = "0.0.1"
 dependencies = [
  "serde",
  "serde_json",
