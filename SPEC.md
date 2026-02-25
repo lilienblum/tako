@@ -155,7 +155,7 @@ env = "production"
 - Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, target build commands/image, app custom build stages, include/exclude patterns, asset roots, and app subdirectory.
 - Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
 - After each target build (and asset merge), deploy verifies the resolved runtime `main` file exists in the build workspace before artifact packaging; missing files fail deploy with an explicit error.
-- On every deploy, local artifact cache is pruned automatically (best-effort): keep 30 most recent source archives (`*-source.tar.gz`), keep 90 most recent target artifacts (`artifact-cache-*.tar.gz`), and remove orphan target metadata files.
+- On every deploy, local artifact cache is pruned automatically (best-effort): keep 30 most recent source archives (`*-source.tar.zst`), keep 90 most recent target artifacts (`artifact-cache-*.tar.zst`), and remove orphan target metadata files.
 - Artifact include patterns are resolved in this order:
   - `build.include` (if set)
   - fallback `**/*`
@@ -660,7 +660,7 @@ Deploy flow helpers:
 2. Resolve source bundle root (git root when available; otherwise app directory)
 3. Resolve app subdirectory relative to source bundle root
 4. Resolve deploy runtime `main` (`main` from `tako.toml`; otherwise preset top-level `main`, with JS index fallback order: `index.<ext>` then `src/index.<ext>` for `ts`/`tsx`/`js`/`jsx` when applicable)
-5. Create source archive (`.tako/artifacts/{version}-source.tar.gz`) and write `app.json` at app path inside archive
+5. Create source archive (`.tako/artifacts/{version}-source.tar.zst`) and write `app.json` at app path inside archive
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
    - Best-effort local artifact cache prune runs before target builds (retention: 30 source archives, 90 target artifacts; orphan target metadata is removed).
 6. Resolve build preset (top-level `preset` override or adapter base preset from top-level `runtime`/detection), fetching unpinned official aliases from `master` (no embedded fallback on fetch failure), then persist resolved metadata in `.tako/build.lock.json`

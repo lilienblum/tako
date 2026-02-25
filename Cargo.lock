@@ -5018,7 +5018,6 @@ dependencies = [
  "crossterm",
  "demand",
  "dirs",
- "flate2",
  "getrandom 0.4.1",
  "hex",
  "hickory-proto",
@@ -5059,6 +5058,7 @@ dependencies = [
  "tracing-subscriber",
  "unicode-width",
  "x509-parser",
+ "zstd",
 ]
 
 [[package]]
@@ -5093,12 +5093,14 @@ dependencies = [
  "serde_json",
  "tako-core",
  "tako-socket",
+ "tar",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",
  "x509-parser",
+ "zstd",
 ]
 
 [[package]]

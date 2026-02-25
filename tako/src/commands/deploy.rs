@@ -407,7 +407,9 @@ async fn run_async(
     let deploy_secrets = build_deploy_secrets(secrets.get_env(&env));
 
     // Create source archive used as input for target-specific builds.
-    let source_archive_path = cache.cache_dir().join(format!("{}-source.tar.gz", version));
+    let source_archive_path = cache
+        .cache_dir()
+        .join(format!("{}-source.tar.zst", version));
     let app_json_bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
     let app_manifest_archive_path = archive_app_manifest_path(&app_subdir);
@@ -1838,7 +1840,7 @@ fn artifact_cache_paths(
     let label = sanitize_cache_label(target_label);
     let stem = format!("artifact-cache-{}-{}", label, cache_key);
     ArtifactCachePaths {
-        artifact_path: cache_dir.join(format!("{}.tar.gz", stem)),
+        artifact_path: cache_dir.join(format!("{}.tar.zst", stem)),
         metadata_path: cache_dir.join(format!("{}.json", stem)),
         lock_path: cache_dir.join(format!("{}.lock", stem)),
     }
@@ -1933,11 +1935,11 @@ fn cleanup_local_artifact_cache(
             continue;
         }
 
-        if file_name.ends_with("-source.tar.gz") {
+        if file_name.ends_with("-source.tar.zst") {
             source_archives.push((path, metadata.modified().unwrap_or(UNIX_EPOCH)));
             continue;
         }
-        if file_name.starts_with("artifact-cache-") && file_name.ends_with(".tar.gz") {
+        if file_name.starts_with("artifact-cache-") && file_name.ends_with(".tar.zst") {
             target_archives.push((path, metadata.modified().unwrap_or(UNIX_EPOCH)));
             continue;
         }
@@ -2021,14 +2023,14 @@ fn cleanup_local_build_workspaces(workspace_root: &Path) -> Result<usize, String
 
 fn artifact_cache_metadata_path_for_archive(archive_path: &Path) -> Option<PathBuf> {
     let file_name = archive_path.file_name()?.to_str()?;
-    let stem = file_name.strip_suffix(".tar.gz")?;
+    let stem = file_name.strip_suffix(".tar.zst")?;
     Some(archive_path.with_file_name(format!("{stem}.json")))
 }
 
 fn artifact_cache_archive_path_for_metadata(metadata_path: &Path) -> Option<PathBuf> {
     let file_name = metadata_path.file_name()?.to_str()?;
     let stem = file_name.strip_suffix(".json")?;
-    Some(metadata_path.with_file_name(format!("{stem}.tar.gz")))
+    Some(metadata_path.with_file_name(format!("{stem}.tar.zst")))
 }
 
 fn remove_cached_artifact_files(paths: &ArtifactCachePaths) {
@@ -3234,12 +3236,12 @@ fn normalize_asset_root(asset_root: &str) -> Result<String, String> {
 }
 
 fn remote_release_archive_path(release_dir: &str) -> String {
-    format!("{release_dir}/artifacts.tar.gz")
+    format!("{release_dir}/artifacts.tar.zst")
 }
 
 fn build_remote_extract_archive_command(release_dir: &str, remote_archive: &str) -> String {
     format!(
-        "tar -xzf {} -C {} && rm -f {}",
+        "tako-server --extract-zstd-archive {} --extract-dest {} && rm -f {}",
         shell_single_quote(remote_archive),
         shell_single_quote(release_dir),
         shell_single_quote(remote_archive)
@@ -4428,18 +4430,18 @@ name = "test-app"
     #[test]
     fn format_path_relative_to_returns_project_relative_path_when_possible() {
         let project = Path::new("/repo/examples/js/bun");
-        let artifact = Path::new("/repo/examples/js/bun/.tako/artifacts/a.tar.gz");
+        let artifact = Path::new("/repo/examples/js/bun/.tako/artifacts/a.tar.zst");
         assert_eq!(
             format_path_relative_to(project, artifact),
-            ".tako/artifacts/a.tar.gz"
+            ".tako/artifacts/a.tar.zst"
         );
     }
 
     #[test]
     fn format_path_relative_to_falls_back_to_absolute_when_outside_project() {
         let project = Path::new("/repo/examples/js/bun");
-        let outside = Path::new("/tmp/a.tar.gz");
-        assert_eq!(format_path_relative_to(project, outside), "/tmp/a.tar.gz");
+        let outside = Path::new("/tmp/a.tar.zst");
+        assert_eq!(format_path_relative_to(project, outside), "/tmp/a.tar.zst");
     }
 
     #[test]
@@ -5065,15 +5067,15 @@ name = "test-app"
         let cache_dir = temp.path().join("artifacts");
         std::fs::create_dir_all(&cache_dir).unwrap();
 
-        let old_source = cache_dir.join("v1-source.tar.gz");
-        let new_source = cache_dir.join("v2-source.tar.gz");
+        let old_source = cache_dir.join("v1-source.tar.zst");
+        let new_source = cache_dir.join("v2-source.tar.zst");
         std::fs::write(&old_source, b"old source").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(&new_source, b"new source").unwrap();
 
-        let old_artifact = cache_dir.join("artifact-cache-linux-aarch64-glibc-old.tar.gz");
+        let old_artifact = cache_dir.join("artifact-cache-linux-aarch64-glibc-old.tar.zst");
         let old_metadata = cache_dir.join("artifact-cache-linux-aarch64-glibc-old.json");
-        let new_artifact = cache_dir.join("artifact-cache-linux-aarch64-glibc-new.tar.gz");
+        let new_artifact = cache_dir.join("artifact-cache-linux-aarch64-glibc-new.tar.zst");
         let new_metadata = cache_dir.join("artifact-cache-linux-aarch64-glibc-new.json");
         std::fs::write(&old_artifact, b"old artifact").unwrap();
         std::fs::write(&old_metadata, b"{\"cache_key\":\"old\"}").unwrap();
@@ -5105,7 +5107,7 @@ name = "test-app"
         let cache_dir = temp.path().join("artifacts");
         std::fs::create_dir_all(&cache_dir).unwrap();
 
-        let artifact = cache_dir.join("artifact-cache-linux-aarch64-glibc-live.tar.gz");
+        let artifact = cache_dir.join("artifact-cache-linux-aarch64-glibc-live.tar.zst");
         let live_metadata = cache_dir.join("artifact-cache-linux-aarch64-glibc-live.json");
         let orphan_metadata = cache_dir.join("artifact-cache-linux-aarch64-glibc-orphan.json");
         std::fs::write(&artifact, b"live artifact").unwrap();
@@ -5337,7 +5339,7 @@ name = "test-app"
     #[test]
     fn source_archive_message_is_compact_in_concise_mode() {
         assert_eq!(
-            format_source_archive_created_message(".tako/artifacts/app.tar.gz", "10 KB", false),
+            format_source_archive_created_message(".tako/artifacts/app.tar.zst", "10 KB", false),
             "Source archive created"
         );
     }
@@ -5345,8 +5347,8 @@ name = "test-app"
     #[test]
     fn source_archive_message_includes_path_and_size_in_verbose_mode() {
         assert_eq!(
-            format_source_archive_created_message(".tako/artifacts/app.tar.gz", "10 KB", true),
-            "Source archive created: .tako/artifacts/app.tar.gz (10 KB)"
+            format_source_archive_created_message(".tako/artifacts/app.tar.zst", "10 KB", true),
+            "Source archive created: .tako/artifacts/app.tar.zst (10 KB)"
         );
     }
 
@@ -5701,19 +5703,19 @@ name = "test-app"
     }
 
     #[test]
-    fn remote_release_archive_path_uses_artifacts_tar_gz_name() {
+    fn remote_release_archive_path_uses_artifacts_tar_zst_name() {
         let path = remote_release_archive_path("/opt/tako/apps/my-app/releases/v1");
-        assert_eq!(path, "/opt/tako/apps/my-app/releases/v1/artifacts.tar.gz");
+        assert_eq!(path, "/opt/tako/apps/my-app/releases/v1/artifacts.tar.zst");
     }
 
     #[test]
-    fn build_remote_extract_archive_command_uses_quoted_paths_and_cleanup() {
+    fn build_remote_extract_archive_command_uses_tako_server_and_cleanup() {
         let cmd = build_remote_extract_archive_command(
             "/opt/tako/apps/a'b/releases/v1",
-            "/opt/tako/apps/a'b/releases/v1/artifacts.tar.gz",
+            "/opt/tako/apps/a'b/releases/v1/artifacts.tar.zst",
         );
-        assert!(cmd.contains("tar -xzf"));
-        assert!(cmd.contains(" -C "));
+        assert!(cmd.contains("tako-server --extract-zstd-archive"));
+        assert!(cmd.contains("--extract-dest"));
         assert!(cmd.contains("rm -f"));
         assert!(cmd.contains("'\\''"));
     }

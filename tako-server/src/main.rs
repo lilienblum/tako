@@ -91,6 +91,14 @@ pub struct Args {
     /// Offset added to persisted app base ports (used for temporary upgrade candidates).
     #[arg(long, default_value_t = 0)]
     pub instance_port_offset: u16,
+
+    /// Extract a `.tar.zst` archive into a destination directory and exit.
+    #[arg(long, hide = true)]
+    pub extract_zstd_archive: Option<String>,
+
+    /// Destination directory used with `--extract-zstd-archive`.
+    #[arg(long, hide = true)]
+    pub extract_dest: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +214,42 @@ fn write_secrets_file(path: &Path, secrets: &HashMap<String, String>) -> Result<
             .map_err(|e| format!("chmod {}: {}", path.display(), e))?;
     }
     Ok(())
+}
+
+fn extract_zstd_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dest_dir)
+        .map_err(|e| format!("create extraction dir {}: {}", dest_dir.display(), e))?;
+    let file = std::fs::File::open(archive_path)
+        .map_err(|e| format!("open archive {}: {}", archive_path.display(), e))?;
+    let decoder = zstd::stream::read::Decoder::new(file).map_err(|e| {
+        format!(
+            "initialize zstd decoder for {}: {}",
+            archive_path.display(),
+            e
+        )
+    })?;
+    let mut archive = tar::Archive::new(decoder);
+    archive.unpack(dest_dir).map_err(|e| {
+        format!(
+            "extract archive {} into {}: {}",
+            archive_path.display(),
+            dest_dir.display(),
+            e
+        )
+    })?;
+    Ok(())
+}
+
+fn run_extract_archive_mode(args: &Args) -> Result<(), String> {
+    let archive = args
+        .extract_zstd_archive
+        .as_deref()
+        .ok_or_else(|| "Extraction mode requires --extract-zstd-archive <path>".to_string())?;
+    let dest = args
+        .extract_dest
+        .as_deref()
+        .ok_or_else(|| "Extraction mode requires --extract-dest <dir>".to_string())?;
+    extract_zstd_archive(Path::new(archive), Path::new(dest))
 }
 
 /// Server state shared across components
@@ -1718,6 +1762,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .init();
 
     let args = Args::parse();
+    if args.extract_zstd_archive.is_some() || args.extract_dest.is_some() {
+        run_extract_archive_mode(&args)?;
+        return Ok(());
+    }
 
     // Tokio runtime for all non-proxy async tasks (socket, health checks, ACME, etc).
     // Pingora manages its own runtime(s) internally.
@@ -2283,16 +2331,18 @@ async fn replace_instance_if_needed(
 mod tests {
     use super::{
         SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, bun_install_args_for_release,
-        handle_idle_event, install_rustls_crypto_provider, prepare_release_runtime,
-        read_secrets_file, resolve_release_runtime, secrets_file_path,
-        should_signal_parent_on_ready, should_use_self_signed_route_cert, validate_deploy_routes,
-        write_secrets_file,
+        extract_zstd_archive, handle_idle_event, install_rustls_crypto_provider,
+        prepare_release_runtime, read_secrets_file, resolve_release_runtime,
+        run_extract_archive_mode, secrets_file_path, should_signal_parent_on_ready,
+        should_use_self_signed_route_cert, validate_deploy_routes, write_secrets_file,
     };
     use crate::instances::AppConfig;
     use crate::socket::{AppState, Command, InstanceState, Response};
     use crate::tls::{CertManager, CertManagerConfig};
+    use clap::Parser;
     use serde_json::Value;
     use std::collections::HashMap;
+    use std::io::Cursor;
     use std::process::{Command as StdCommand, Stdio};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
@@ -2302,6 +2352,45 @@ mod tests {
     #[test]
     fn default_server_log_filter_is_warn() {
         assert_eq!(super::DEFAULT_SERVER_LOG_FILTER, "warn");
+    }
+
+    #[test]
+    fn extract_zstd_archive_unpacks_files() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("payload.tar.zst");
+        let dest = temp.path().join("dest");
+
+        let file = std::fs::File::create(&archive_path).unwrap();
+        let encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
+        let mut archive = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        let payload = b"hello";
+        header.set_size(payload.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "app/index.txt", &mut Cursor::new(payload))
+            .unwrap();
+        let encoder = archive.into_inner().unwrap();
+        encoder.finish().unwrap();
+
+        extract_zstd_archive(&archive_path, &dest).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dest.join("app/index.txt")).unwrap(),
+            "hello"
+        );
+    }
+
+    #[test]
+    fn run_extract_archive_mode_requires_destination_flag() {
+        let args = super::Args::try_parse_from([
+            "tako-server",
+            "--extract-zstd-archive",
+            "/tmp/payload.tar.zst",
+        ])
+        .unwrap();
+        let err = run_extract_archive_mode(&args).unwrap_err();
+        assert!(err.contains("--extract-dest"));
     }
 
     #[test]

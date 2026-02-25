@@ -71,7 +71,7 @@ time = { version = "0.3", features = ["local-offset"] }
 pem = "3.0"
 
 # Build system (archiving)
-flate2 = "1.1"
+zstd = "0.13"
 tar = "0.4"
 sha2 = "0.10"
 hex = "0.4"

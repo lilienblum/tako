@@ -79,7 +79,7 @@ High-level deploy flow:
 
 1. Validate config/runtime/secrets/server target metadata.
 2. Resolve source bundle root and app subdirectory (git root when available; otherwise app directory).
-3. Create a source archive (`.tako/artifacts/{version}-source.tar.gz`) from filtered source files.
+3. Create a source archive (`.tako/artifacts/{version}-source.tar.zst`) from filtered source files.
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
 4. Resolve build preset (top-level runtime-local `preset` override or adapter base default from top-level `runtime`/detection), fetching unpinned official aliases from `master` (no embedded fallback on fetch failure), then write resolved metadata to `.tako/build.lock.json`.
 5. Build target-specific artifacts locally (Docker or local host based on preset `[build].container`, with defaults derived from `[build].targets`), running preset stage first then app `[[build.stages]]`, with deterministic local artifact cache reuse when inputs are unchanged.
@@ -110,7 +110,7 @@ Important deployment behavior:
 - Target artifacts are cached in `.tako/artifacts/` and reused across deploys when source/preset/target/build inputs are unchanged.
 - Cached artifacts are checksum-verified; invalid cached entries are rebuilt automatically.
 - Before packaging each target artifact, deploy verifies the resolved `main` exists in the post-build app directory.
-- On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
+- On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives (`*-source.tar.zst`), keeps 90 newest target artifacts (`artifact-cache-*.tar.zst`), and removes orphan target metadata files.
 - Deploy runtime `main` is resolved from `tako.toml main`, then preset top-level `main`; for JS runtimes (`bun`, `node`, `deno`) when preset `main` is `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`), Tako tries `index.<ext>` first, then `src/index.<ext>`.
 - Deploy app identity is resolved from top-level `name` when set, otherwise sanitized project directory name.
 - Server install resolves host target (`arch` + `libc`) and downloads matching `tako-server-linux-<arch>-<libc>` artifact.

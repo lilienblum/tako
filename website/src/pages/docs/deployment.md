@@ -34,7 +34,7 @@ What happens during deploy:
 - Default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - Target artifacts are cached locally in `.tako/artifacts/` using a deterministic build-input key.
 - On cache hit, deploy reuses the verified artifact; on cache mismatch/corruption, deploy rebuilds that target artifact automatically.
-- On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
+- On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives (`*-source.tar.zst`), keeps 90 newest target artifacts (`artifact-cache-*.tar.zst`), and removes orphan target metadata files.
 - Deploys run to all target servers in parallel.
 - On each server, Tako writes final `app.json` (with env vars) and per-app `secrets.json` (with secrets, 0600 permissions), sends the secrets payload in the deploy command, performs runtime prep (Bun dependency install), and performs rolling update from the uploaded target artifact.
 - Each server is handled independently, so partial success is possible.

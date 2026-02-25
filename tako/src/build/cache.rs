@@ -34,7 +34,7 @@ impl BuildCache {
 
     /// Get the archive path for a given version
     pub fn archive_path(&self, version: &str) -> PathBuf {
-        self.cache_dir.join(format!("{}.tar.gz", version))
+        self.cache_dir.join(format!("{}.tar.zst", version))
     }
 
     /// Check if a build exists in cache
@@ -76,7 +76,7 @@ impl BuildCache {
             let entry = entry?;
             let path = entry.path();
 
-            if path.extension().map(|e| e == "gz").unwrap_or(false)
+            if path.extension().map(|e| e == "zst").unwrap_or(false)
                 && let Some(name) = path.file_stem()
                 && let Some(name) = name.to_str()
             {
@@ -180,7 +180,7 @@ mod tests {
         let cache = BuildCache::new(temp.path().join("builds"));
 
         let path = cache.archive_path("abc1234");
-        assert!(path.ends_with("abc1234.tar.gz"));
+        assert!(path.ends_with("abc1234.tar.zst"));
     }
 
     #[test]
@@ -214,7 +214,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let cache = BuildCache::new(temp.path().join("builds"));
 
-        let source = temp.path().join("source.tar.gz");
+        let source = temp.path().join("source.tar.zst");
         fs::write(&source, "archive content").unwrap();
 
         let dest = cache.store_build(&source, "def5678").unwrap();
@@ -294,7 +294,7 @@ mod tests {
     fn test_size_human() {
         let build = CachedBuild {
             version: "v1".to_string(),
-            path: PathBuf::from("/tmp/v1.tar.gz"),
+            path: PathBuf::from("/tmp/v1.tar.zst"),
             size: 500,
             created: None,
         };
@@ -302,7 +302,7 @@ mod tests {
 
         let build = CachedBuild {
             version: "v2".to_string(),
-            path: PathBuf::from("/tmp/v2.tar.gz"),
+            path: PathBuf::from("/tmp/v2.tar.zst"),
             size: 2048,
             created: None,
         };
@@ -310,7 +310,7 @@ mod tests {
 
         let build = CachedBuild {
             version: "v3".to_string(),
-            path: PathBuf::from("/tmp/v3.tar.gz"),
+            path: PathBuf::from("/tmp/v3.tar.zst"),
             size: 5 * 1024 * 1024,
             created: None,
         };

@@ -147,7 +147,7 @@ Deploy note:
 - Containerized deploy builds default to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - During local builds, when `mise` is available, stage commands run through `mise exec -- sh -lc ...`.
 - Bun release dependencies are installed on server before rollout (`bun install --production`).
-- On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
+- On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives (`*-source.tar.zst`), keeps 90 newest target artifacts (`artifact-cache-*.tar.zst`), and removes orphan target metadata files.
 - For private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`), deploy provisions self-signed certs on the server instead of ACME.
 - If a TLS SNI hostname has no matching cert yet, Tako serves a fallback self-signed default cert so HTTPS requests still complete and unmatched hosts/routes return `404`.
 - Remote edge proxy caching stores proxied `GET`/`HEAD` responses only when response `Cache-Control`/`Expires` headers explicitly allow caching (no implicit TTL defaults).

@@ -98,7 +98,7 @@ runtime = "bun"
   - During local builds, stage commands run through `mise exec -- sh -lc ...` when `mise` is available.
   - Deploy artifact cache keys include resolved preset source/commit, runtime tool/version, build mode (Docker/local), and `build.include` / `build.exclude` / `build.assets` / `build.stages`; changing these inputs invalidates cache and triggers rebuild for affected targets.
   - Bun runtime dependencies are installed on server from the uploaded release (`bun install --production`).
-  - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives, keeps 90 newest target artifacts, and removes orphan target metadata files.
+  - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives (`*-source.tar.zst`), keeps 90 newest target artifacts (`artifact-cache-*.tar.zst`), and removes orphan target metadata files.
 - Top-level deploy/build keys are `main`, `runtime`, `preset`, and `[build]`; standalone top-level `build = "..."` and `assets = [...]` are rejected.
 
 ## `[vars]`

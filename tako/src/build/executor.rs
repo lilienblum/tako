@@ -144,7 +144,7 @@ impl BuildExecutor {
         }
     }
 
-    /// Create a deployment archive (.tar.gz)
+    /// Create a deployment archive (.tar.zst)
     pub fn create_archive(
         &self,
         source_dir: &Path,
@@ -154,7 +154,7 @@ impl BuildExecutor {
         self.create_archive_with_extra_files(source_dir, output_path, exclude_patterns, &[])
     }
 
-    /// Create a deployment archive (.tar.gz) with additional virtual files.
+    /// Create a deployment archive (.tar.zst) with additional virtual files.
     pub fn create_archive_with_extra_files(
         &self,
         source_dir: &Path,
@@ -162,8 +162,6 @@ impl BuildExecutor {
         exclude_patterns: &[&str],
         extra_files: &[(&str, &[u8])],
     ) -> Result<u64, BuildError> {
-        use flate2::Compression;
-        use flate2::write::GzEncoder;
         use tar::Header;
 
         // Create parent directory if needed
@@ -172,7 +170,9 @@ impl BuildExecutor {
         }
 
         let file = std::fs::File::create(output_path)?;
-        let encoder = GzEncoder::new(file, Compression::default());
+        let encoder = zstd::stream::write::Encoder::new(file, 3).map_err(|e| {
+            BuildError::ArchiveError(format!("Failed to initialize zstd encoder: {}", e))
+        })?;
         let mut archive = tar::Builder::new(encoder);
         archive.follow_symlinks(false);
 
@@ -217,7 +217,7 @@ impl BuildExecutor {
         Ok(metadata.len())
     }
 
-    /// Create a source deployment archive (.tar.gz).
+    /// Create a source deployment archive (.tar.zst).
     ///
     /// File selection rules:
     /// - Base ignore semantics from `.gitignore`
@@ -228,8 +228,6 @@ impl BuildExecutor {
         output_path: &Path,
         extra_files: &[(&str, &[u8])],
     ) -> Result<u64, BuildError> {
-        use flate2::Compression;
-        use flate2::write::GzEncoder;
         use tar::Header;
 
         if let Some(parent) = output_path.parent() {
@@ -237,7 +235,9 @@ impl BuildExecutor {
         }
 
         let file = std::fs::File::create(output_path)?;
-        let encoder = GzEncoder::new(file, Compression::default());
+        let encoder = zstd::stream::write::Encoder::new(file, 3).map_err(|e| {
+            BuildError::ArchiveError(format!("Failed to initialize zstd encoder: {}", e))
+        })?;
         let mut archive = tar::Builder::new(encoder);
         archive.follow_symlinks(false);
 
@@ -365,12 +365,12 @@ impl BuildExecutor {
 
     /// Extract an archive to a directory
     pub fn extract_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), BuildError> {
-        use flate2::read::GzDecoder;
-
         std::fs::create_dir_all(dest_dir)?;
 
         let file = std::fs::File::open(archive_path)?;
-        let decoder = GzDecoder::new(file);
+        let decoder = zstd::stream::read::Decoder::new(file).map_err(|e| {
+            BuildError::ArchiveError(format!("Failed to initialize zstd decoder: {}", e))
+        })?;
         let mut archive = tar::Archive::new(decoder);
 
         archive
@@ -534,7 +534,16 @@ fn collect_files(
 mod tests {
     use super::*;
     use std::fs;
+    use std::io::Read;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    fn assert_zstd_magic(path: &Path) {
+        let mut file = fs::File::open(path).unwrap();
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic).unwrap();
+        assert_eq!(magic, [0x28, 0xB5, 0x2F, 0xFD], "archive should be zstd");
+    }
 
     #[test]
     fn test_run_build_echo() {
@@ -568,7 +577,7 @@ mod tests {
     fn test_create_and_extract_archive() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive_path = temp.path().join("test.tar.gz");
+        let archive_path = temp.path().join("test.tar.zst");
         let dest = temp.path().join("dest");
 
         // Create source files
@@ -584,6 +593,7 @@ mod tests {
             .unwrap();
         assert!(size > 0);
         assert!(archive_path.exists());
+        assert_zstd_magic(&archive_path);
 
         // Extract archive
         BuildExecutor::extract_archive(&archive_path, &dest).unwrap();
@@ -605,7 +615,7 @@ mod tests {
     fn test_create_archive_with_extra_files_includes_virtual_manifest() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive_path = temp.path().join("test.tar.gz");
+        let archive_path = temp.path().join("test.tar.zst");
         let dest = temp.path().join("dest");
 
         fs::create_dir_all(&source).unwrap();
@@ -633,7 +643,7 @@ mod tests {
     fn test_archive_excludes_node_modules() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive_path = temp.path().join("test.tar.gz");
+        let archive_path = temp.path().join("test.tar.zst");
         let dest = temp.path().join("dest");
 
         // Create source with node_modules
@@ -658,7 +668,7 @@ mod tests {
     fn test_create_source_archive_respects_gitignore() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive_path = temp.path().join("source.tar.gz");
+        let archive_path = temp.path().join("source.tar.zst");
         let dest = temp.path().join("dest");
         fs::create_dir_all(source.join("dist")).unwrap();
         fs::create_dir_all(source.join("src")).unwrap();
@@ -671,6 +681,7 @@ mod tests {
         executor
             .create_source_archive_with_extra_files(&source, &archive_path, &[])
             .unwrap();
+        assert_zstd_magic(&archive_path);
 
         BuildExecutor::extract_archive(&archive_path, &dest).unwrap();
         assert!(dest.join("src/main.ts").exists());
@@ -681,7 +692,7 @@ mod tests {
     fn test_create_source_archive_keeps_default_excludes_non_overridable() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive_path = temp.path().join("source.tar.gz");
+        let archive_path = temp.path().join("source.tar.zst");
         let dest = temp.path().join("dest");
 
         fs::create_dir_all(source.join("src")).unwrap();
@@ -718,7 +729,7 @@ mod tests {
 
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive_path = temp.path().join("source.tar.gz");
+        let archive_path = temp.path().join("source.tar.zst");
         let dest = temp.path().join("dest");
 
         fs::create_dir_all(source.join("sdk")).unwrap();

@@ -105,7 +105,7 @@ Expected deploy behavior:
 - `Unexpected local artifact cache behavior`:
   - Symptom: repeated deploy unexpectedly rebuilds or cache warning appears before rebuild.
   - Expected: Tako verifies cached artifact checksum/size and automatically rebuilds if cache is invalid.
-  - Expected: each deploy also prunes local `.tako/artifacts/` cache (best-effort), keeping 30 newest source archives and 90 newest target artifacts, and removing orphan target metadata files.
+  - Expected: each deploy also prunes local `.tako/artifacts/` cache (best-effort), keeping 30 newest source archives (`*-source.tar.zst`) and 90 newest target artifacts (`artifact-cache-*.tar.zst`), and removing orphan target metadata files.
   - Fix: if needed, remove local cache directory `.tako/artifacts/` and redeploy.
 - `Unexpected edge response cache behavior`:
   - Symptom: stale app response appears on repeated `GET`/`HEAD` requests.

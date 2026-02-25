@@ -26,9 +26,6 @@ pub fn create_filtered_archive_with_prefix(
     exclude_patterns: &[String],
     archive_prefix: Option<&Path>,
 ) -> Result<u64, BuildError> {
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
-
     let includes = compile_patterns(source_root, include_patterns, "include")?;
     let excludes = compile_patterns(source_root, exclude_patterns, "exclude")?;
 
@@ -40,7 +37,9 @@ pub fn create_filtered_archive_with_prefix(
     }
 
     let file = std::fs::File::create(output_path)?;
-    let encoder = GzEncoder::new(file, Compression::default());
+    let encoder = zstd::stream::write::Encoder::new(file, 3).map_err(|e| {
+        BuildError::ArchiveError(format!("Failed to initialize zstd encoder: {}", e))
+    })?;
     let mut archive = tar::Builder::new(encoder);
     archive.follow_symlinks(false);
 
@@ -171,13 +170,22 @@ mod tests {
     use super::*;
     use crate::build::BuildExecutor;
     use std::fs;
+    use std::io::Read;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    fn assert_zstd_magic(path: &Path) {
+        let mut file = fs::File::open(path).unwrap();
+        let mut magic = [0u8; 4];
+        file.read_exact(&mut magic).unwrap();
+        assert_eq!(magic, [0x28, 0xB5, 0x2F, 0xFD], "archive should be zstd");
+    }
 
     #[test]
     fn filtered_archive_uses_include_and_exclude_globs() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive = temp.path().join("out.tar.gz");
+        let archive = temp.path().join("out.tar.zst");
         let dest = temp.path().join("dest");
 
         fs::create_dir_all(source.join("dist/client")).unwrap();
@@ -194,6 +202,7 @@ mod tests {
             &[String::from("**/*.map")],
         )
         .unwrap();
+        assert_zstd_magic(&archive);
 
         BuildExecutor::extract_archive(&archive, &dest).unwrap();
         assert!(dest.join("dist/client/index.js").exists());
@@ -206,7 +215,7 @@ mod tests {
     fn filtered_archive_can_prefix_paths() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive = temp.path().join("out.tar.gz");
+        let archive = temp.path().join("out.tar.zst");
         let dest = temp.path().join("dest");
 
         fs::create_dir_all(source.join("dist/client")).unwrap();
@@ -230,7 +239,7 @@ mod tests {
     fn filtered_archive_force_excludes_sensitive_paths() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive = temp.path().join("out.tar.gz");
+        let archive = temp.path().join("out.tar.zst");
         let dest = temp.path().join("dest");
 
         fs::create_dir_all(source.join(".git")).unwrap();
@@ -254,7 +263,7 @@ mod tests {
     fn filtered_archive_keeps_node_modules_when_not_excluded() {
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive = temp.path().join("out.tar.gz");
+        let archive = temp.path().join("out.tar.zst");
         let dest = temp.path().join("dest");
 
         fs::create_dir_all(source.join("node_modules/tako.sh/src")).unwrap();
@@ -277,7 +286,7 @@ mod tests {
 
         let temp = TempDir::new().unwrap();
         let source = temp.path().join("source");
-        let archive = temp.path().join("out.tar.gz");
+        let archive = temp.path().join("out.tar.zst");
         let dest = temp.path().join("dest");
 
         fs::create_dir_all(source.join("sdk")).unwrap();
