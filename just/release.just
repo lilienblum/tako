@@ -134,7 +134,7 @@ flow-sdk series="": _guard
 
 # Release and publish `tako-core`:
 # - prompts next version
-# - updates tako-core/Cargo.toml
+# - updates tako-core/Cargo.toml (plus dependent workspace manifests/lockfile as needed)
 # - commits, tags, pushes
 # - runs `cargo publish -p tako-core`
 cargo-tako-core: _guard _require-cargo-set-version
@@ -145,15 +145,21 @@ cargo-tako-core: _guard _require-cargo-set-version
     if [ -z "$next" ]; then echo "error: version is required" >&2; exit 1; fi; \
     cargo set-version --package tako-core "$next"; \
     if [ -z "$(git diff -- tako-core/Cargo.toml)" ]; then echo "error: version did not change" >&2; exit 1; fi; \
-    unexpected="$(git diff --name-only | grep -v '^tako-core/Cargo.toml$' || true)"; \
+    unexpected="$(git diff --name-only | grep -Ev '^(Cargo.lock|tako-core/Cargo.toml|tako/Cargo.toml|tako-server/Cargo.toml)$' || true)"; \
     if [ -n "$unexpected" ]; then \
-        echo "error: expected only tako-core/Cargo.toml to change before release commit" >&2; \
+        echo "error: unexpected file changes before tako-core release commit" >&2; \
         echo "$unexpected" >&2; \
         exit 1; \
     fi; \
-    git add tako-core/Cargo.toml; \
-    if [ "$(git diff --cached --name-only)" != "tako-core/Cargo.toml" ]; then \
-        echo "error: expected only tako-core/Cargo.toml to be staged" >&2; \
+    git add Cargo.lock tako-core/Cargo.toml tako/Cargo.toml tako-server/Cargo.toml; \
+    staged_unexpected="$(git diff --cached --name-only | grep -Ev '^(Cargo.lock|tako-core/Cargo.toml|tako/Cargo.toml|tako-server/Cargo.toml)$' || true)"; \
+    if [ -n "$staged_unexpected" ]; then \
+        echo "error: unexpected staged files before tako-core release commit" >&2; \
+        echo "$staged_unexpected" >&2; \
+        exit 1; \
+    fi; \
+    if ! git diff --cached --name-only | grep -qx 'tako-core/Cargo.toml'; then \
+        echo "error: expected tako-core/Cargo.toml to be staged" >&2; \
         git diff --cached --name-only >&2; \
         exit 1; \
     fi; \
@@ -170,7 +176,7 @@ cargo-tako-core: _guard _require-cargo-set-version
 
 # Release and publish `tako-socket`:
 # - prompts next version
-# - updates tako-socket/Cargo.toml
+# - updates tako-socket/Cargo.toml (plus dependent workspace manifests/lockfile as needed)
 # - commits, tags, pushes
 # - runs `cargo publish -p tako-socket`
 cargo-tako-socket: _guard _require-cargo-set-version
@@ -181,15 +187,21 @@ cargo-tako-socket: _guard _require-cargo-set-version
     if [ -z "$next" ]; then echo "error: version is required" >&2; exit 1; fi; \
     cargo set-version --package tako-socket "$next"; \
     if [ -z "$(git diff -- tako-socket/Cargo.toml)" ]; then echo "error: version did not change" >&2; exit 1; fi; \
-    unexpected="$(git diff --name-only | grep -v '^tako-socket/Cargo.toml$' || true)"; \
+    unexpected="$(git diff --name-only | grep -Ev '^(Cargo.lock|tako-socket/Cargo.toml|tako/Cargo.toml|tako-server/Cargo.toml)$' || true)"; \
     if [ -n "$unexpected" ]; then \
-        echo "error: expected only tako-socket/Cargo.toml to change before release commit" >&2; \
+        echo "error: unexpected file changes before tako-socket release commit" >&2; \
         echo "$unexpected" >&2; \
         exit 1; \
     fi; \
-    git add tako-socket/Cargo.toml; \
-    if [ "$(git diff --cached --name-only)" != "tako-socket/Cargo.toml" ]; then \
-        echo "error: expected only tako-socket/Cargo.toml to be staged" >&2; \
+    git add Cargo.lock tako-socket/Cargo.toml tako/Cargo.toml tako-server/Cargo.toml; \
+    staged_unexpected="$(git diff --cached --name-only | grep -Ev '^(Cargo.lock|tako-socket/Cargo.toml|tako/Cargo.toml|tako-server/Cargo.toml)$' || true)"; \
+    if [ -n "$staged_unexpected" ]; then \
+        echo "error: unexpected staged files before tako-socket release commit" >&2; \
+        echo "$staged_unexpected" >&2; \
+        exit 1; \
+    fi; \
+    if ! git diff --cached --name-only | grep -qx 'tako-socket/Cargo.toml'; then \
+        echo "error: expected tako-socket/Cargo.toml to be staged" >&2; \
         git diff --cached --name-only >&2; \
         exit 1; \
     fi; \
@@ -206,7 +218,7 @@ cargo-tako-socket: _guard _require-cargo-set-version
 
 # Release and publish `tako`:
 # - prompts next version
-# - updates tako/Cargo.toml
+# - updates tako/Cargo.toml (and Cargo.lock)
 # - commits, tags, pushes
 # - runs `cargo publish -p tako`
 cargo-tako: _guard _guard-shared-crates-released _require-cargo-set-version _prebuild-tako
@@ -217,15 +229,21 @@ cargo-tako: _guard _guard-shared-crates-released _require-cargo-set-version _pre
     if [ -z "$next" ]; then echo "error: version is required" >&2; exit 1; fi; \
     cargo set-version --package tako "$next"; \
     if [ -z "$(git diff -- tako/Cargo.toml)" ]; then echo "error: version did not change" >&2; exit 1; fi; \
-    unexpected="$(git diff --name-only | grep -v '^tako/Cargo.toml$' || true)"; \
+    unexpected="$(git diff --name-only | grep -Ev '^(Cargo.lock|tako/Cargo.toml)$' || true)"; \
     if [ -n "$unexpected" ]; then \
-        echo "error: expected only tako/Cargo.toml to change before release commit" >&2; \
+        echo "error: unexpected file changes before tako release commit" >&2; \
         echo "$unexpected" >&2; \
         exit 1; \
     fi; \
-    git add tako/Cargo.toml; \
-    if [ "$(git diff --cached --name-only)" != "tako/Cargo.toml" ]; then \
-        echo "error: expected only tako/Cargo.toml to be staged" >&2; \
+    git add Cargo.lock tako/Cargo.toml; \
+    staged_unexpected="$(git diff --cached --name-only | grep -Ev '^(Cargo.lock|tako/Cargo.toml)$' || true)"; \
+    if [ -n "$staged_unexpected" ]; then \
+        echo "error: unexpected staged files before tako release commit" >&2; \
+        echo "$staged_unexpected" >&2; \
+        exit 1; \
+    fi; \
+    if ! git diff --cached --name-only | grep -qx 'tako/Cargo.toml'; then \
+        echo "error: expected tako/Cargo.toml to be staged" >&2; \
         git diff --cached --name-only >&2; \
         exit 1; \
     fi; \
@@ -242,7 +260,7 @@ cargo-tako: _guard _guard-shared-crates-released _require-cargo-set-version _pre
 
 # Release and publish `tako-server`:
 # - prompts next version
-# - updates tako-server/Cargo.toml
+# - updates tako-server/Cargo.toml (and Cargo.lock)
 # - commits, tags, pushes
 # - runs `cargo publish -p tako-server`
 cargo-tako-server: _guard _guard-shared-crates-released _require-cargo-set-version _prebuild-tako-server
@@ -253,15 +271,21 @@ cargo-tako-server: _guard _guard-shared-crates-released _require-cargo-set-versi
     if [ -z "$next" ]; then echo "error: version is required" >&2; exit 1; fi; \
     cargo set-version --package tako-server "$next"; \
     if [ -z "$(git diff -- tako-server/Cargo.toml)" ]; then echo "error: version did not change" >&2; exit 1; fi; \
-    unexpected="$(git diff --name-only | grep -v '^tako-server/Cargo.toml$' || true)"; \
+    unexpected="$(git diff --name-only | grep -Ev '^(Cargo.lock|tako-server/Cargo.toml)$' || true)"; \
     if [ -n "$unexpected" ]; then \
-        echo "error: expected only tako-server/Cargo.toml to change before release commit" >&2; \
+        echo "error: unexpected file changes before tako-server release commit" >&2; \
         echo "$unexpected" >&2; \
         exit 1; \
     fi; \
-    git add tako-server/Cargo.toml; \
-    if [ "$(git diff --cached --name-only)" != "tako-server/Cargo.toml" ]; then \
-        echo "error: expected only tako-server/Cargo.toml to be staged" >&2; \
+    git add Cargo.lock tako-server/Cargo.toml; \
+    staged_unexpected="$(git diff --cached --name-only | grep -Ev '^(Cargo.lock|tako-server/Cargo.toml)$' || true)"; \
+    if [ -n "$staged_unexpected" ]; then \
+        echo "error: unexpected staged files before tako-server release commit" >&2; \
+        echo "$staged_unexpected" >&2; \
+        exit 1; \
+    fi; \
+    if ! git diff --cached --name-only | grep -qx 'tako-server/Cargo.toml'; then \
+        echo "error: expected tako-server/Cargo.toml to be staged" >&2; \
         git diff --cached --name-only >&2; \
         exit 1; \
     fi; \
