@@ -72,21 +72,21 @@ fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String
         ));
     }
 
-    if let Some(start) = manifest.start {
-        if !start.is_empty() {
-            return Ok(Some(
-                start
-                    .into_iter()
-                    .map(|arg| {
-                        if arg == "{main}" {
-                            manifest.main.clone()
-                        } else {
-                            arg
-                        }
-                    })
-                    .collect(),
-            ));
-        }
+    if let Some(start) = manifest.start
+        && !start.is_empty()
+    {
+        return Ok(Some(
+            start
+                .into_iter()
+                .map(|arg| {
+                    if arg == "{main}" {
+                        manifest.main.clone()
+                    } else {
+                        arg
+                    }
+                })
+                .collect(),
+        ));
     }
 
     match manifest.runtime.as_str() {

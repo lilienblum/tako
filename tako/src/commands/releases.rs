@@ -93,10 +93,12 @@ fn resolve_server_names_for_env(
         .into_iter()
         .map(|name| name.to_string())
         .collect();
-    if names.is_empty() && env == "production" && servers.len() == 1 {
-        if let Some(name) = servers.names().into_iter().next() {
-            names.push(name.to_string());
-        }
+    if names.is_empty()
+        && env == "production"
+        && servers.len() == 1
+        && let Some(name) = servers.names().into_iter().next()
+    {
+        names.push(name.to_string());
     }
     if names.is_empty() {
         return Err(format!(

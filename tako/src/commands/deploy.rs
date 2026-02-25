@@ -448,12 +448,11 @@ async fn run_async(
         should_use_docker_build(&build_preset),
         &build_preset,
     );
-    if output::is_verbose() {
-        if let Some(server_targets_summary) =
+    if output::is_verbose()
+        && let Some(server_targets_summary) =
             format_server_targets_summary(&server_targets, use_unified_js_target_process)
-        {
-            output::muted(&server_targets_summary);
-        }
+    {
+        output::muted(&server_targets_summary);
     }
 
     let artifacts_by_target = build_target_artifacts(
@@ -1392,12 +1391,9 @@ fn resolve_js_preset_main_for_project(
         format!("index.{extension}"),
         format!("src/index.{extension}"),
     ];
-    for candidate in candidates {
-        if project_dir.join(&candidate).is_file() {
-            return Some(candidate);
-        }
-    }
-    None
+    candidates
+        .into_iter()
+        .find(|candidate| project_dir.join(candidate).is_file())
 }
 
 pub(crate) fn resolve_deploy_main(
@@ -2460,7 +2456,7 @@ enum LocalShellRunner {
 fn detect_local_shell_runner() -> LocalShellRunner {
     #[cfg(test)]
     {
-        return LocalShellRunner::Direct;
+        LocalShellRunner::Direct
     }
 
     #[cfg(not(test))]
@@ -2808,7 +2804,7 @@ fn resolve_runtime_version_with_local_mise(
         let _ = workspace;
         let _ = app_dir;
         let _ = runtime_tool;
-        return Ok(None);
+        Ok(None)
     }
 
     #[cfg(not(test))]
@@ -3445,14 +3441,15 @@ async fn deploy_to_server(
     }
     .await;
 
-    if result.is_err() && !release_dir_preexisted {
-        if let Err(e) = cleanup_partial_release(&ssh, &release_dir).await {
-            tracing::warn!(
-                release_dir = %release_dir,
-                error = %e,
-                "Failed to cleanup partial release directory"
-            );
-        }
+    if result.is_err()
+        && !release_dir_preexisted
+        && let Err(e) = cleanup_partial_release(&ssh, &release_dir).await
+    {
+        tracing::warn!(
+            release_dir = %release_dir,
+            error = %e,
+            "Failed to cleanup partial release directory"
+        );
     }
 
     // Always release lock (best-effort).

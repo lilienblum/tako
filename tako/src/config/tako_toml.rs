@@ -191,19 +191,25 @@ impl TakoToml {
             ));
         }
 
-        let mut config = TakoToml::default();
-
         // Parse top-level metadata
-        config.name = parse_optional_string(&raw, "name")?;
-        config.main = parse_optional_string(&raw, "main")?;
+        let name = parse_optional_string(&raw, "name")?;
+        let main = parse_optional_string(&raw, "main")?;
         if raw.get("adapter").is_some() {
             return Err(ConfigError::Validation(
                 "'adapter' is no longer supported at top level; use `runtime`".to_string(),
             ));
         }
-        config.runtime = parse_optional_string(&raw, "runtime")?;
-        config.preset = parse_optional_string(&raw, "preset")?;
-        config.build = parse_build_config(&raw)?;
+        let runtime = parse_optional_string(&raw, "runtime")?;
+        let preset = parse_optional_string(&raw, "preset")?;
+        let build = parse_build_config(&raw)?;
+        let mut config = TakoToml {
+            name,
+            main,
+            runtime,
+            preset,
+            build,
+            ..TakoToml::default()
+        };
 
         // Parse [vars] section (global) and [vars.*] sections (per-environment)
         if let Some(vars) = raw.get("vars")
@@ -1144,7 +1150,7 @@ route = "api.example.com"
         let toml = r#"
 [envs.production]
 "#;
-        let err = TakoToml::parse(&toml).unwrap_err();
+        let err = TakoToml::parse(toml).unwrap_err();
         assert!(
             err.to_string()
                 .contains("must define either 'route' or 'routes'")
@@ -1168,7 +1174,7 @@ route = "api.example.com"
 [envs.production]
 routes = []
 "#;
-        let err = TakoToml::parse(&toml).unwrap_err();
+        let err = TakoToml::parse(toml).unwrap_err();
         assert!(err.to_string().contains("routes"));
     }
 

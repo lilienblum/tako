@@ -828,7 +828,7 @@ fn forwarded_header_has_proto(value: &str) -> bool {
 
 fn insert_body_headers(header: &mut ResponseHeader, content_type: &str, body: &str) -> Result<()> {
     header.insert_header("Content-Type", content_type)?;
-    header.insert_header("Content-Length", body.as_bytes().len().to_string())?;
+    header.insert_header("Content-Length", body.len().to_string())?;
     Ok(())
 }
 
@@ -927,9 +927,7 @@ fn strip_route_prefix_for_static_lookup(request_path: &str, route_path: &str) ->
         return Some("/".to_string());
     }
 
-    let Some(stripped) = request_path.strip_prefix(prefix) else {
-        return None;
-    };
+    let stripped = request_path.strip_prefix(prefix)?;
     if stripped.is_empty() {
         return Some("/".to_string());
     }

@@ -1098,7 +1098,7 @@ impl ServerState {
     }
 
     fn select_runtime_base_port(&self, persisted_base: u16, max_instances: u32) -> u16 {
-        let width = max_instances.max(1).min(64);
+        let width = max_instances.clamp(1, 64);
         let preferred = persisted_base.saturating_add(self.runtime.instance_port_offset);
 
         if Self::port_range_is_available(preferred, width) {
@@ -1684,8 +1684,8 @@ fn sd_notify_ready() {
                 let pid = std::process::id();
                 let msg = format!("READY=1\nMAINPID={pid}\n");
                 // Abstract sockets have a leading '@' which maps to '\0'
-                let path = if socket_path.starts_with('@') {
-                    format!("\0{}", &socket_path[1..])
+                let path = if let Some(stripped) = socket_path.strip_prefix('@') {
+                    format!("\0{}", stripped)
                 } else {
                     socket_path
                 };

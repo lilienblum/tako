@@ -389,9 +389,8 @@ mod tests {
 
     #[test]
     fn test_spawner_creation() {
-        let spawner = Spawner::new();
+        let _spawner = Spawner::new();
         // Just verify it creates without panic
-        drop(spawner);
     }
 
     #[test]
@@ -403,8 +402,7 @@ mod tests {
         assert!(pw.is_null(), "expected nonexistent user to return null");
         // resolve_app_user looks up "tako-app"; on dev machines it won't exist.
         // Calling Spawner::new() must not panic regardless.
-        let spawner = Spawner::new();
-        drop(spawner);
+        let _spawner = Spawner::new();
     }
 
     #[test]
