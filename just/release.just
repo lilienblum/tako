@@ -45,6 +45,16 @@ _require-cargo-set-version:
         exit 1; \
     fi
 
+_require-gh:
+    @if ! gh --version >/dev/null 2>&1; then \
+        echo "error: gh CLI is required for publishing GitHub releases" >&2; \
+        exit 1; \
+    fi; \
+    if ! gh auth status >/dev/null 2>&1; then \
+        echo "error: gh is not authenticated; run 'gh auth login'" >&2; \
+        exit 1; \
+    fi
+
 _guard-shared-crates-released:
     @core_tag="$(git tag --list '{{ TAKO_CORE_TAG_PREFIX }}*' --sort=-v:refname | head -n 1 || true)"; \
     socket_tag="$(git tag --list '{{ TAKO_SOCKET_TAG_PREFIX }}*' --sort=-v:refname | head -n 1 || true)"; \
@@ -79,8 +89,24 @@ _guard-shared-crates-released:
     fi
 
 _prebuild-tako:
-    @echo "Prebuilding tako for macOS (host target)..."
-    cargo build -p tako --bin tako --release
+    @if [ "$(uname -s)" != "Darwin" ]; then \
+        echo "error: release::tako must run on macOS to produce darwin installer artifacts" >&2; \
+        exit 1; \
+    fi
+    @mkdir -p dist
+    @echo "Prebuilding tako for macOS installer targets..."
+    rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    cargo build -p tako --bin tako --release --target aarch64-apple-darwin
+    cargo build -p tako --bin tako --release --target x86_64-apple-darwin
+    cp target/aarch64-apple-darwin/release/tako dist/tako-darwin-aarch64
+    cp target/x86_64-apple-darwin/release/tako dist/tako-darwin-x86_64
+    @if command -v sha256sum >/dev/null 2>&1; then \
+        sha256sum dist/tako-darwin-aarch64 > dist/tako-darwin-aarch64.sha256; \
+        sha256sum dist/tako-darwin-x86_64 > dist/tako-darwin-x86_64.sha256; \
+    else \
+        shasum -a 256 dist/tako-darwin-aarch64 > dist/tako-darwin-aarch64.sha256; \
+        shasum -a 256 dist/tako-darwin-x86_64 > dist/tako-darwin-x86_64.sha256; \
+    fi
     @echo "Prebuilding tako for Linux targets..."
     just build::tako-linux
 
@@ -120,16 +146,20 @@ notes-sdk series="": _guard
 # Full `tako` release flow:
 # 1) Generate notes for `tako`
 # 2) Release `tako`
+# 3) Publish GitHub release assets for installer downloads
 tako series="": _guard
     just --justfile just/release.just notes-tako "{{ series }}"
     just --justfile just/release.just cargo-tako
+    just --justfile just/release.just github-tako
 
 # Full `tako-server` release flow:
 # 1) Generate notes for `tako-server`
 # 2) Release `tako-server`
+# 3) Publish GitHub release assets for installer downloads
 tako-server series="": _guard
     just --justfile just/release.just notes-tako-server "{{ series }}"
     just --justfile just/release.just cargo-tako-server
+    just --justfile just/release.just github-tako-server
 
 # Full `tako.sh` SDK release flow:
 # 1) Generate notes for `sdk-npm`
@@ -145,6 +175,74 @@ tako-core: _guard
 # Full `tako-socket` release flow.
 tako-socket: _guard
     just --justfile just/release.just cargo-tako-socket
+
+# Publish GitHub release + assets for latest `tako` tag.
+# Requires dist artifacts from release::cargo-tako prebuild.
+github-tako: _guard _require-gh
+    tag="$(git tag --list '{{ TAKO_TAG_PREFIX }}*' --sort=-v:refname | head -n 1 || true)"; \
+    if [ -z "$tag" ]; then echo "error: no {{ TAKO_TAG_PREFIX }}* tag found" >&2; exit 1; fi; \
+    if [ "$(git rev-list -n 1 "$tag")" != "$(git rev-parse HEAD)" ]; then \
+        echo "error: latest tako tag ($tag) does not point to HEAD; run this after release::cargo-tako" >&2; \
+        exit 1; \
+    fi; \
+    notes="{{ RELEASE_NOTES_DIR }}/tako.md"; \
+    if [ ! -f "$notes" ]; then echo "error: missing release notes file: $notes" >&2; exit 1; fi; \
+    version="${tag#{{ TAKO_TAG_PREFIX }}}"; \
+    set -- \
+        dist/tako-darwin-aarch64 \
+        dist/tako-darwin-aarch64.sha256 \
+        dist/tako-darwin-x86_64 \
+        dist/tako-darwin-x86_64.sha256 \
+        dist/tako-linux-x86_64 \
+        dist/tako-linux-x86_64.sha256 \
+        dist/tako-linux-aarch64 \
+        dist/tako-linux-aarch64.sha256; \
+    for asset in "$@"; do \
+        if [ ! -f "$asset" ]; then \
+            echo "error: missing release artifact: $asset" >&2; \
+            exit 1; \
+        fi; \
+    done; \
+    if gh release view "$tag" >/dev/null 2>&1; then \
+        gh release upload "$tag" "$@" --clobber; \
+        gh release edit "$tag" --title "tako v$version" --notes-file "$notes"; \
+    else \
+        gh release create "$tag" --title "tako v$version" --notes-file "$notes" "$@"; \
+    fi
+
+# Publish GitHub release + assets for latest `tako-server` tag.
+# Requires dist artifacts from release::cargo-tako-server prebuild.
+github-tako-server: _guard _require-gh
+    tag="$(git tag --list '{{ TAKO_SERVER_TAG_PREFIX }}*' --sort=-v:refname | head -n 1 || true)"; \
+    if [ -z "$tag" ]; then echo "error: no {{ TAKO_SERVER_TAG_PREFIX }}* tag found" >&2; exit 1; fi; \
+    if [ "$(git rev-list -n 1 "$tag")" != "$(git rev-parse HEAD)" ]; then \
+        echo "error: latest tako-server tag ($tag) does not point to HEAD; run this after release::cargo-tako-server" >&2; \
+        exit 1; \
+    fi; \
+    notes="{{ RELEASE_NOTES_DIR }}/tako-server.md"; \
+    if [ ! -f "$notes" ]; then echo "error: missing release notes file: $notes" >&2; exit 1; fi; \
+    version="${tag#{{ TAKO_SERVER_TAG_PREFIX }}}"; \
+    set -- \
+        dist/tako-server-linux-x86_64-glibc \
+        dist/tako-server-linux-x86_64-glibc.sha256 \
+        dist/tako-server-linux-aarch64-glibc \
+        dist/tako-server-linux-aarch64-glibc.sha256 \
+        dist/tako-server-linux-x86_64-musl \
+        dist/tako-server-linux-x86_64-musl.sha256 \
+        dist/tako-server-linux-aarch64-musl \
+        dist/tako-server-linux-aarch64-musl.sha256; \
+    for asset in "$@"; do \
+        if [ ! -f "$asset" ]; then \
+            echo "error: missing release artifact: $asset" >&2; \
+            exit 1; \
+        fi; \
+    done; \
+    if gh release view "$tag" >/dev/null 2>&1; then \
+        gh release upload "$tag" "$@" --clobber; \
+        gh release edit "$tag" --title "tako-server v$version" --notes-file "$notes"; \
+    else \
+        gh release create "$tag" --title "tako-server v$version" --notes-file "$notes" "$@"; \
+    fi
 
 # Release and publish `tako-core`:
 # - prompts next version

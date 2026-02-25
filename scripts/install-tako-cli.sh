@@ -13,9 +13,36 @@ set -eu
 # Optional env vars:
 #   TAKO_INSTALL_DIR        default: $HOME/.local/bin
 #   TAKO_URL                override binary URL (optional)
-#   TAKO_DOWNLOAD_BASE_URL  default: https://github.com/lilienblum/tako/releases/latest/download
+#   TAKO_DOWNLOAD_BASE_URL  override release download base URL (optional)
+#   TAKO_REPO_OWNER         default: lilienblum
+#   TAKO_REPO_NAME          default: tako
+#   TAKO_TAG_PREFIX         default: tako-v
+#   TAKO_TAGS_API           override tags API URL (optional)
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+download_stdout() {
+  url="$1"
+  if need_cmd curl; then
+    curl -fsSL "$url"
+  else
+    wget -qO- "$url"
+  fi
+}
+
+resolve_latest_tag() {
+  prefix="$1"
+  tags_api="$2"
+  tags_json="$(download_stdout "$tags_api" 2>/dev/null || true)"
+  if [ -z "$tags_json" ]; then
+    return 1
+  fi
+  tag="$(printf '%s' "$tags_json" | grep -o "\"name\": \"${prefix}[^\"]*\"" | head -n 1 | sed -E 's/"name": "([^"]+)"/\1/' || true)"
+  if [ -z "$tag" ]; then
+    return 1
+  fi
+  printf '%s\n' "$tag"
+}
 
 if [ -z "${HOME:-}" ]; then
   echo "error: HOME is not set" >&2
@@ -33,7 +60,11 @@ if ! need_cmd curl && ! need_cmd wget; then
 fi
 
 TAKO_INSTALL_DIR="${TAKO_INSTALL_DIR:-$HOME/.local/bin}"
-TAKO_DOWNLOAD_BASE_URL="${TAKO_DOWNLOAD_BASE_URL:-https://github.com/lilienblum/tako/releases/latest/download}"
+TAKO_DOWNLOAD_BASE_URL="${TAKO_DOWNLOAD_BASE_URL:-}"
+TAKO_REPO_OWNER="${TAKO_REPO_OWNER:-lilienblum}"
+TAKO_REPO_NAME="${TAKO_REPO_NAME:-tako}"
+TAKO_TAG_PREFIX="${TAKO_TAG_PREFIX:-tako-v}"
+TAKO_TAGS_API="${TAKO_TAGS_API:-https://api.github.com/repos/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/tags?per_page=100}"
 
 os_raw="$(uname -s)"
 case "$os_raw" in
@@ -55,7 +86,19 @@ case "$arch_raw" in
     ;;
 esac
 
-bin_url="${TAKO_URL:-$TAKO_DOWNLOAD_BASE_URL/tako-$os-$arch}"
+bin_url="${TAKO_URL:-}"
+if [ -z "$bin_url" ]; then
+  download_base="$TAKO_DOWNLOAD_BASE_URL"
+  if [ -z "$download_base" ]; then
+    tag="$(resolve_latest_tag "$TAKO_TAG_PREFIX" "$TAKO_TAGS_API" || true)"
+    if [ -z "$tag" ]; then
+      echo "error: could not resolve latest tag for prefix '$TAKO_TAG_PREFIX'" >&2
+      exit 1
+    fi
+    download_base="https://github.com/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/releases/download/$tag"
+  fi
+  bin_url="$download_base/tako-$os-$arch"
+fi
 sha_url="${bin_url}.sha256"
 
 tmp="$(mktemp)"

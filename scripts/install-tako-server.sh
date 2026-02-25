@@ -19,7 +19,11 @@ set -eu
 #                           if unset, installer prompts in interactive terminals
 #
 #   TAKO_SERVER_URL         override binary URL (optional)
-#   TAKO_DOWNLOAD_BASE_URL  default: https://github.com/lilienblum/tako/releases/latest/download
+#   TAKO_DOWNLOAD_BASE_URL  override release download base URL (optional)
+#   TAKO_REPO_OWNER         default: lilienblum
+#   TAKO_REPO_NAME          default: tako
+#   TAKO_TAG_PREFIX         default: tako-server-v
+#   TAKO_TAGS_API           override tags API URL (optional)
 #   TAKO_INSTALL_MISE       default: 1 (set 0/false to skip mise install)
 #   TAKO_MISE_VERSION       optional mise version for installer (default: latest)
 #   TAKO_MISE_BIN           default: /usr/local/bin/mise
@@ -38,7 +42,11 @@ fi
 TAKO_USER="${TAKO_USER:-tako}"
 TAKO_HOME="${TAKO_HOME:-/opt/tako}"
 TAKO_SOCKET="${TAKO_SOCKET:-/var/run/tako/tako.sock}"
-TAKO_DOWNLOAD_BASE_URL="${TAKO_DOWNLOAD_BASE_URL:-https://github.com/lilienblum/tako/releases/latest/download}"
+TAKO_DOWNLOAD_BASE_URL="${TAKO_DOWNLOAD_BASE_URL:-}"
+TAKO_REPO_OWNER="${TAKO_REPO_OWNER:-lilienblum}"
+TAKO_REPO_NAME="${TAKO_REPO_NAME:-tako}"
+TAKO_TAG_PREFIX="${TAKO_TAG_PREFIX:-tako-server-v}"
+TAKO_TAGS_API="${TAKO_TAGS_API:-https://api.github.com/repos/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/tags?per_page=100}"
 TAKO_INSTALL_MISE="${TAKO_INSTALL_MISE:-1}"
 TAKO_MISE_VERSION="${TAKO_MISE_VERSION:-}"
 TAKO_MISE_BIN="${TAKO_MISE_BIN:-/usr/local/bin/mise}"
@@ -46,6 +54,29 @@ TAKO_RESTART_SERVICE="${TAKO_RESTART_SERVICE:-1}"
 PATH="/root/.local/bin:$PATH"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+download_stdout() {
+  url="$1"
+  if need_cmd curl; then
+    curl -fsSL "$url"
+  else
+    wget -qO- "$url"
+  fi
+}
+
+resolve_latest_tag() {
+  prefix="$1"
+  tags_api="$2"
+  tags_json="$(download_stdout "$tags_api" 2>/dev/null || true)"
+  if [ -z "$tags_json" ]; then
+    return 1
+  fi
+  tag="$(printf '%s' "$tags_json" | grep -o "\"name\": \"${prefix}[^\"]*\"" | head -n 1 | sed -E 's/"name": "([^"]+)"/\1/' || true)"
+  if [ -z "$tag" ]; then
+    return 1
+  fi
+  printf '%s\n' "$tag"
+}
 
 is_enabled() {
   case "${1:-}" in
@@ -426,7 +457,19 @@ case "$libc" in
     ;;
 esac
 
-bin_url="${TAKO_SERVER_URL:-$TAKO_DOWNLOAD_BASE_URL/tako-server-linux-$arch-$libc}"
+bin_url="${TAKO_SERVER_URL:-}"
+if [ -z "$bin_url" ]; then
+  download_base="$TAKO_DOWNLOAD_BASE_URL"
+  if [ -z "$download_base" ]; then
+    tag="$(resolve_latest_tag "$TAKO_TAG_PREFIX" "$TAKO_TAGS_API" || true)"
+    if [ -z "$tag" ]; then
+      echo "error: could not resolve latest tag for prefix '$TAKO_TAG_PREFIX'" >&2
+      exit 1
+    fi
+    download_base="https://github.com/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/releases/download/$tag"
+  fi
+  bin_url="$download_base/tako-server-linux-$arch-$libc"
+fi
 sha_url="${bin_url}.sha256"
 
 tmp="$(mktemp)"

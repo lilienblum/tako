@@ -6,6 +6,7 @@ Repository scripts used by installers, CI checks, and local development workflow
 
 - `install-tako-cli.sh`: POSIX installer for local `tako` CLI.
 - `install-tako-server.sh`: POSIX installer for `tako-server` on Linux hosts.
+  - Both installers resolve component-specific latest tags (`tako-v*`, `tako-server-v*`) via GitHub tags API by default, then download release assets for that tag.
   - Supports systemd and OpenRC for normal install/start.
   - Supports install-refresh mode via `TAKO_RESTART_SERVICE=0` (refreshes binary/users without restarting service; service definition is updated only when a supported manager is active), used in build/container workflows before init/service managers are running.
   - Detects host architecture (`x86_64`/`aarch64`) and libc (`glibc`/`musl`) to download the matching server artifact.
