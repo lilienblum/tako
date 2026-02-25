@@ -8,9 +8,9 @@ workspace:
     cargo test --workspace
 
 sdk:
-    cd sdk && bun run build
-    cd sdk && bun run typecheck
-    cd sdk && bun test
+    cd sdk/js && bun run build
+    cd sdk/js && bun run typecheck
+    cd sdk/js && bun test
 
 e2e-all:
     ./e2e/run.sh e2e/fixtures/js/bun

@@ -17,6 +17,7 @@ Repository scripts used by installers, CI checks, and local development workflow
   - Installs required runtime dependencies (including Unix-socket-capable `nc` with `-U` support, sqlite runtime libraries, and `mise`) via the host package manager when available.
   - Falls back to the official `mise` installer if distro package managers do not provide `mise`.
 - `check_critical_coverage.sh`: coverage gate for selected critical source files.
+- `release-notes.sh`: generate per-package release notes drafts from git tags/commits for AI-assisted release prep.
 
 ## Typical Usage
 
@@ -26,6 +27,7 @@ Run from repository root:
 sh scripts/install-tako-cli.sh
 sh scripts/install-tako-server.sh
 bash scripts/check_critical_coverage.sh
+sh scripts/release-notes.sh --component tako --prefix tako-v --output dist/release-notes/tako.md
 ```
 
 The install scripts are exposed via website redirect endpoints:

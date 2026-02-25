@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.6
 
-# Build Linux tako-server artifacts for both musl and glibc.
+# Build Linux tako and tako-server artifacts for both musl and glibc.
 
 FROM rust:1.89-alpine AS builder-musl
 
@@ -19,7 +19,7 @@ RUN apk add --no-cache \
 
 WORKDIR /work
 
-# Copy only Rust workspace inputs needed to build `tako-server`.
+# Copy only Rust workspace inputs needed to build release binaries.
 COPY Cargo.toml Cargo.lock ./
 COPY tako-core/Cargo.toml tako-core/Cargo.toml
 COPY tako-socket/Cargo.toml tako-socket/Cargo.toml
@@ -31,7 +31,8 @@ COPY tako-socket/src tako-socket/src
 COPY tako/src tako/src
 COPY tako-server/src tako-server/src
 
-RUN cargo build -p tako-server --release
+RUN cargo build -p tako --bin tako --release \
+    && cargo build -p tako-server --release
 
 
 FROM rust:1.89-bookworm AS builder-glibc
@@ -52,7 +53,7 @@ RUN apt-get update \
 
 WORKDIR /work
 
-# Copy only Rust workspace inputs needed to build `tako-server`.
+# Copy only Rust workspace inputs needed to build release binaries.
 COPY Cargo.toml Cargo.lock ./
 COPY tako-core/Cargo.toml tako-core/Cargo.toml
 COPY tako-socket/Cargo.toml tako-socket/Cargo.toml
@@ -64,7 +65,20 @@ COPY tako-socket/src tako-socket/src
 COPY tako/src tako/src
 COPY tako-server/src tako-server/src
 
-RUN cargo build -p tako-server --release
+RUN cargo build -p tako --bin tako --release \
+    && cargo build -p tako-server --release
+
+
+FROM alpine:3.20 AS tako-artifact-musl
+
+COPY --from=builder-musl /work/target/release/tako /tako
+RUN sha256sum /tako > /tako.sha256
+
+
+FROM debian:bookworm-slim AS tako-artifact-glibc
+
+COPY --from=builder-glibc /work/target/release/tako /tako
+RUN sha256sum /tako > /tako.sha256
 
 
 FROM alpine:3.20 AS tako-server-artifact-musl

@@ -65,7 +65,7 @@ main = "dist/server/tako-entry.mjs"
 ## Build and Test
 
 ```bash
-cd sdk
+cd sdk/js
 bun install
 bun run build
 bun run typecheck
@@ -74,5 +74,5 @@ bun test
 
 ## Related Docs
 
-- `../website/src/pages/docs/quickstart.md`
-- `examples/js/bun/README.md`
+- `../../website/src/pages/docs/quickstart.md`
+- `../../examples/js/bun/README.md`

@@ -291,12 +291,13 @@ start_tako_server server-alpine
 # Stage a minimal JS monorepo copy so Bun workspace/catalog references resolve
 # like local dev, without rewriting dependency declarations.
 jq --arg fixture_rel "$FIXTURE_REL" '
-  .workspaces.packages = ["sdk", $fixture_rel]
+  .workspaces.packages = ["sdk/js", $fixture_rel]
 ' "$WORKSPACE/package.json" > "$JS_WORKSPACE_DIR/package.json"
-cp -R "$WORKSPACE/sdk" "$JS_WORKSPACE_DIR/sdk"
+mkdir -p "$JS_WORKSPACE_DIR/sdk"
+cp -R "$WORKSPACE/sdk/js" "$JS_WORKSPACE_DIR/sdk/js"
 mkdir -p "$(dirname "$PROJECT_DIR")"
 cp -R "$FIXTURE_DIR" "$PROJECT_DIR"
-rm -rf "$JS_WORKSPACE_DIR/sdk/node_modules" "$PROJECT_DIR/node_modules"
+rm -rf "$JS_WORKSPACE_DIR/sdk/js/node_modules" "$PROJECT_DIR/node_modules"
 # Ensure deploy uses this staged JS workspace as source root so Bun workspace
 # dependencies (for example tako.sh = workspace:*) resolve on remote installs.
 (cd "$JS_WORKSPACE_DIR" && git init -q)
@@ -308,7 +309,7 @@ if [[ -f "$PROJECT_DIR/package.json" ]]; then
   fi
 
   (cd "$JS_WORKSPACE_DIR" && bun install)
-  (cd "$JS_WORKSPACE_DIR/sdk" && bun run build)
+  (cd "$JS_WORKSPACE_DIR/sdk/js" && bun run build)
   (cd "$PROJECT_DIR" && bun install)
 fi
 

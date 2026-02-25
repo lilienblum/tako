@@ -81,7 +81,7 @@ just ci
 - `tako-server/`: remote runtime/proxy crate (`tako-server`)
 - `tako-core/`: shared protocol types
 - `tako-socket/`: shared Unix socket JSONL transport helpers
-- `sdk/`: `tako.sh` SDK package
+- `sdk/js/`: `tako.sh` SDK package
 - `examples/`: runnable examples
 - `e2e/`: deploy e2e fixture apps used by Docker integration tests
 - `scripts/`: install/check helper scripts
@@ -97,6 +97,50 @@ just e2e e2e/fixtures/js/bun
 just e2e e2e/fixtures/js/tanstack-start
 ```
 
+## Release Workflow (Maintainers)
+
+Use two local release flows:
+
+1. Shared crates (only when changed):
+
+```bash
+just release::cargo-tako-core
+just release::cargo-tako-socket
+```
+
+2. CLI + server flow:
+
+```bash
+just release::notes-tako
+just release::notes-tako-server
+just release::cargo-tako-server
+just release::cargo-tako
+```
+
+Or run it as a single command:
+
+```bash
+just release::flow-cli-server
+```
+
+`release::cargo-tako` and `release::cargo-tako-server` enforce a guard: if `tako-core` or `tako-socket` source changed since the last shared crate release tag, they fail with instructions to release shared crates first.
+
+3. SDK flow:
+
+```bash
+just release::notes-sdk
+just release::npm
+```
+
+Or run it as a single command:
+
+```bash
+just release::flow-sdk
+```
+
+Draft notes are written under `dist/release-notes/` and can be fed to AI for final release notes + version recommendation.
+If no prior tag exists for a package line, notes generation falls back to full history.
+
 ## Docs
 
 User docs live in `website/` (source pages: `website/src/pages/docs/`).
@@ -107,7 +151,7 @@ Component-focused docs:
 - `tako-server/README.md`
 - `tako-core/README.md`
 - `tako-socket/README.md`
-- `sdk/README.md`
+- `sdk/js/README.md`
 
 ## License
 

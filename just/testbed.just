@@ -63,7 +63,7 @@ create:
 install:
     # Install tako-server in the temporary Docker testbed server container.
     # Starts a temporary local artifacts server for this install run.
-    test -f {{ DOCKER_SSH_KEY_FILE }} || (echo "Missing {{ DOCKER_SSH_KEY_FILE }}. Run 'just testbed::create-container' first." >&2; exit 1)
+    test -f {{ DOCKER_SSH_KEY_FILE }} || (echo "Missing {{ DOCKER_SSH_KEY_FILE }}. Run 'just testbed::create' first." >&2; exit 1)
     mkdir -p {{ ARTIFACTS_DIR }}
     mkdir -p {{ TESTBED_TMP_DIR }}
     sh -eu -c '\

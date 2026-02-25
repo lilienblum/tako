@@ -15,7 +15,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lilienblum/tako.git",
-    "directory": "sdk"
+    "directory": "sdk/js"
   },
   "files": [
     "dist",

@@ -52,14 +52,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Typecheck
+        run: bun run --filter '*' typecheck
+
+      - name: Test
+        run: bun test
+
       - name: SDK build
-        run: bun run --cwd sdk build
-
-      - name: SDK typecheck
-        run: bun run --cwd sdk typecheck
-
-      - name: SDK tests
-        run: bun run --cwd sdk test
+        run: bun run --cwd sdk/js build
 
   e2e:
     name: E2E

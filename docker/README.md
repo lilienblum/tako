@@ -1,10 +1,12 @@
 # Docker Assets
 
-Internal Docker tooling for building and debugging Tako server artifacts.
+Internal Docker tooling for building and debugging Tako release artifacts.
 
 ## Files
 
-- `build.Dockerfile`: builds Linux `tako-server` artifacts for `x86_64` / `aarch64` across both libc families (`musl`, `glibc`).
+- `build.Dockerfile`: builds Linux release artifacts for `tako` and `tako-server` across `x86_64` / `aarch64`.
+  - `tako` artifacts are built from the glibc image path.
+  - `tako-server` artifacts are built for both libc families (`musl`, `glibc`).
 - `tako-builder-musl.Dockerfile`: base build image (`alpine:3.23`) with `mise` preinstalled (package-manager first, installer fallback).
 - `tako-builder-glibc.Dockerfile`: base build image (`debian:bookworm-slim`) with `mise` preinstalled (package-manager first, installer fallback).
 - `testbed.Dockerfile`: internal debug container (`oven/bun:alpine` + sshd) used for deploy/install debugging.
@@ -21,9 +23,10 @@ From repository root:
 just build::tako-server-all
 just build::tako-server arm64 musl   # default testbed.Dockerfile container (Alpine on linux/arm64)
 just build::tako-server amd64 glibc
+just build::tako-linux
 just testbed::create
 just testbed::install
-just release::builder-images
+just release::builder-images v1
 ```
 
 `just build::tako-server` builds a single target and requires args:
@@ -37,6 +40,11 @@ Use `just build::tako-server-all` to build all Linux target/libc combinations:
 - `dist/tako-server-linux-aarch64-musl`
 - `dist/tako-server-linux-x86_64-glibc`
 - `dist/tako-server-linux-aarch64-glibc`
+
+`just build::tako-linux` builds Linux CLI artifacts:
+
+- `dist/tako-linux-x86_64`
+- `dist/tako-linux-aarch64`
 
 Use the `testbed::` namespace for these recipes.
 

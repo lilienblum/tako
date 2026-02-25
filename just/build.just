@@ -5,6 +5,22 @@ ARTIFACTS_DIR := "dist"
 tako:
     cargo build -p tako --bin tako --release
 
+tako-linux:
+    mkdir -p {{ ARTIFACTS_DIR }}
+    for arch in amd64 arm64; do \
+        docker buildx build -f docker/build.Dockerfile \
+            --platform linux/$arch \
+            --target tako-artifact-glibc \
+            --output type=local,dest={{ ARTIFACTS_DIR }}/linux-$arch-glibc \
+            . || exit 1; \
+        if [ "$arch" = "amd64" ]; then outarch="x86_64"; else outarch="aarch64"; fi; \
+        cp {{ ARTIFACTS_DIR }}/linux-$arch-glibc/tako {{ ARTIFACTS_DIR }}/tako-linux-$outarch || exit 1; \
+        cp {{ ARTIFACTS_DIR }}/linux-$arch-glibc/tako.sha256 {{ ARTIFACTS_DIR }}/tako-linux-$outarch.sha256 || exit 1; \
+        rm -rf {{ ARTIFACTS_DIR }}/linux-$arch-glibc; \
+    done
+    echo "Built binaries:"
+    ls -la {{ ARTIFACTS_DIR }}/tako-linux-*
+
 # Build a single tako-server artifact.
 # arch: amd64 | arm64
 # libc: musl | glibc

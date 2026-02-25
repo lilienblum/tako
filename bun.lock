@@ -55,7 +55,7 @@
         "vite": "catalog:web",
       },
     },
-    "sdk": {
+    "sdk/js": {
       "name": "tako.sh",
       "version": "0.0.1-alpha.0",
       "devDependencies": {
@@ -1010,7 +1010,7 @@
 
     "svgo": ["svgo@4.0.0", "", { "dependencies": { "commander": "^11.1.0", "css-select": "^5.1.0", "css-tree": "^3.0.1", "css-what": "^6.1.0", "csso": "^5.0.5", "picocolors": "^1.1.1", "sax": "^1.4.1" }, "bin": "./bin/svgo.js" }, "sha512-VvrHQ+9uniE+Mvx3+C9IEe/lWasXCU0nXMY2kZeLrHNICuRiC8uMPyM14UEaMOFA5mhyQqEkB02VoQ16n3DLaw=="],
 
-    "tako.sh": ["tako.sh@workspace:sdk"],
+    "tako.sh": ["tako.sh@workspace:sdk/js"],
 
     "tanstack-start-e2e": ["tanstack-start-e2e@workspace:e2e/fixtures/js/tanstack-start"],
 

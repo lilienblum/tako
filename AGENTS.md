@@ -51,7 +51,7 @@ Tako is under active development: prefer breaking changes and remove outdated co
 
 **SDK (current implementation):**
 
-- `sdk/` - `tako.sh` JavaScript/TypeScript SDK package (npm)
+- `sdk/js/` - `tako.sh` JavaScript/TypeScript SDK package (npm)
 
 **Website:**
 
@@ -74,7 +74,7 @@ cargo test -p tako
 cargo test -p tako-server
 
 # SDK (current JS/TS implementation)
-cd sdk && bun install
+cd sdk/js && bun install
 bun run build && bun run typecheck
 bun test
 ```
