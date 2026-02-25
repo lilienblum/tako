@@ -9,12 +9,14 @@ SDK_TAG_PREFIX := "sdk-npm-v"
 RELEASE_NOTES_DIR := "dist/release-notes"
 
 # Release flow (local):
-# - CLI + server flow: just release::flow-cli-server [series]
-# - SDK flow:          just release::flow-sdk [series]
+# - CLI:          just release tako [series]
+# - Server:       just release tako-server [series]
+# - SDK:          just release sdk [series]
+# - Shared crates: just release tako-core / just release tako-socket
 #
 # If shared crates changed, release them first:
-#   just release::cargo-tako-core
-#   just release::cargo-tako-socket
+#   just release tako-core
+#   just release tako-socket
 
 _guard:
     @branch="$(git rev-parse --abbrev-ref HEAD)"; \
@@ -71,8 +73,8 @@ _guard-shared-crates-released:
             fi; \
         fi; \
         echo "Release shared crates first:" >&2; \
-        echo "  just release::cargo-tako-core" >&2; \
-        echo "  just release::cargo-tako-socket" >&2; \
+        echo "  just release tako-core" >&2; \
+        echo "  just release tako-socket" >&2; \
         exit 1; \
     fi
 
@@ -115,22 +117,34 @@ notes-sdk series="": _guard
         --series "{{ series }}" \
         --output "{{ RELEASE_NOTES_DIR }}/sdk-npm.md"
 
-# Full CLI + server release flow:
-# 1) Generate notes for `tako` and `tako-server`
-# 2) Release `tako-server`
-# 3) Release `tako`
-flow-cli-server series="": _guard
+# Full `tako` release flow:
+# 1) Generate notes for `tako`
+# 2) Release `tako`
+tako series="": _guard
     just --justfile just/release.just notes-tako "{{ series }}"
-    just --justfile just/release.just notes-tako-server "{{ series }}"
-    just --justfile just/release.just cargo-tako-server
     just --justfile just/release.just cargo-tako
 
-# Full SDK release flow:
+# Full `tako-server` release flow:
+# 1) Generate notes for `tako-server`
+# 2) Release `tako-server`
+tako-server series="": _guard
+    just --justfile just/release.just notes-tako-server "{{ series }}"
+    just --justfile just/release.just cargo-tako-server
+
+# Full `tako.sh` SDK release flow:
 # 1) Generate notes for `sdk-npm`
 # 2) Release `tako.sh` to npm
-flow-sdk series="": _guard
+sdk series="": _guard
     just --justfile just/release.just notes-sdk "{{ series }}"
     just --justfile just/release.just npm
+
+# Full `tako-core` release flow.
+tako-core: _guard
+    just --justfile just/release.just cargo-tako-core
+
+# Full `tako-socket` release flow.
+tako-socket: _guard
+    just --justfile just/release.just cargo-tako-socket
 
 # Release and publish `tako-core`:
 # - prompts next version
@@ -337,7 +351,7 @@ npm: _guard
     cd sdk/js && npm publish
 
 # Publish multi-arch builder images to container registry.
-# Usage: just release::builder-images <version> [registry]
+# Usage: just release builder-images <version> [registry]
 builder-images version registry=BUILDER_IMAGE_REGISTRY:
     docker buildx build -f docker/tako-builder-musl.Dockerfile \
         --platform linux/amd64,linux/arm64 \

@@ -99,44 +99,35 @@ just e2e e2e/fixtures/js/tanstack-start
 
 ## Release Workflow (Maintainers)
 
-Use two local release flows:
-
-1. Shared crates (only when changed):
+Use the release module entrypoints:
 
 ```bash
-just release::cargo-tako-core
-just release::cargo-tako-socket
+just release tako
+just release tako-server
+just release sdk
+just release tako-core
+just release tako-socket
 ```
 
-2. CLI + server flow:
+Each command is a full flow for that component:
+
+- `release tako`: release notes + `cargo publish -p tako`
+- `release tako-server`: release notes + `cargo publish -p tako-server`
+- `release sdk`: release notes + `npm publish` from `sdk/js`
+- `release tako-core`: shared crate release + `cargo publish -p tako-core`
+- `release tako-socket`: shared crate release + `cargo publish -p tako-socket`
+
+Recommended full release order:
 
 ```bash
-just release::notes-tako
-just release::notes-tako-server
-just release::cargo-tako-server
-just release::cargo-tako
+just release tako-core
+just release tako-socket
+just release tako-server
+just release tako
+just release sdk
 ```
 
-Or run it as a single command:
-
-```bash
-just release::flow-cli-server
-```
-
-`release::cargo-tako` and `release::cargo-tako-server` enforce a guard: if `tako-core` or `tako-socket` source changed since the last shared crate release tag, they fail with instructions to release shared crates first.
-
-3. SDK flow:
-
-```bash
-just release::notes-sdk
-just release::npm
-```
-
-Or run it as a single command:
-
-```bash
-just release::flow-sdk
-```
+`release tako` and `release tako-server` enforce a guard: if `tako-core` or `tako-socket` source changed since the last shared crate release tag, they fail with instructions to release shared crates first.
 
 Draft notes are written under `dist/release-notes/` and can be fed to AI for final release notes + version recommendation.
 If no prior tag exists for a package line, notes generation falls back to full history.
