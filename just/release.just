@@ -134,7 +134,13 @@ notes-tako series="": _guard _require-git-cliff
         escaped_series="$(printf '%s' "$series_prefix" | sed 's/[][\.^$*+?(){}|\\]/\\&/g')"; \
         pattern="^{{ TAKO_TAG_PREFIX }}$escaped_series"; \
     fi; \
-    git cliff --unreleased --tag-pattern "$pattern" -o "{{ RELEASE_NOTES_DIR }}/tako.md"
+    git cliff -c cliff.toml --unreleased --tag-pattern "$pattern" \
+        --include-path 'tako/**/*' \
+        --include-path 'tako-core/**/*' \
+        --include-path 'tako-socket/**/*' \
+        --include-path 'presets/**/*' \
+        --include-path 'scripts/install-tako-cli.sh' \
+        -o "{{ RELEASE_NOTES_DIR }}/tako.md"
 
 # Generate release notes draft for `tako-server`.
 # Output: dist/release-notes/tako-server.md
@@ -148,7 +154,12 @@ notes-tako-server series="": _guard _require-git-cliff
         escaped_series="$(printf '%s' "$series_prefix" | sed 's/[][\.^$*+?(){}|\\]/\\&/g')"; \
         pattern="^{{ TAKO_SERVER_TAG_PREFIX }}$escaped_series"; \
     fi; \
-    git cliff --unreleased --tag-pattern "$pattern" -o "{{ RELEASE_NOTES_DIR }}/tako-server.md"
+    git cliff -c cliff.toml --unreleased --tag-pattern "$pattern" \
+        --include-path 'tako-server/**/*' \
+        --include-path 'tako-core/**/*' \
+        --include-path 'tako-socket/**/*' \
+        --include-path 'scripts/install-tako-server.sh' \
+        -o "{{ RELEASE_NOTES_DIR }}/tako-server.md"
 
 # Generate release notes draft for `tako.sh` (npm SDK).
 # Output: dist/release-notes/sdk-npm.md

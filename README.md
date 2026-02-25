@@ -131,7 +131,8 @@ just release sdk
 `release tako` and `release tako-server` also require authenticated GitHub CLI (`gh auth login`) to publish release assets used by `https://tako.sh/install` and `https://tako.sh/install-server`.
 
 Draft notes are written under `dist/release-notes/`.
-`tako` and `tako-server` notes use `git-cliff` (requires `git cliff` installed locally).
+`tako` and `tako-server` notes use `git-cliff` with [`cliff.toml`](cliff.toml), focusing on user-facing Features and Bug Fixes.
+Notes generation is path-filtered per component (`--include-path`) so only relevant commits are included.
 
 ## Docs
 
