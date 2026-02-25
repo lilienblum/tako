@@ -1419,6 +1419,7 @@ pub(crate) fn resolve_deploy_main(
     Err("No deploy entrypoint configured. Set `main` in tako.toml or preset `main`.".to_string())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_deploy_archive_manifest(
     app_name: &str,
     environment: &str,
@@ -1843,6 +1844,7 @@ fn artifact_cache_paths(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_artifact_cache_key(
     source_hash: &str,
     runtime_name: &str,
@@ -2203,6 +2205,7 @@ fn acquire_artifact_cache_lock_with_options(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn build_target_artifacts(
     project_dir: &Path,
     cache_dir: &Path,
@@ -2953,6 +2956,7 @@ fn validate_main_exists_after_build(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn package_target_artifact(
     workspace: &Path,
     app_subdir: &str,

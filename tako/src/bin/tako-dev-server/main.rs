@@ -217,6 +217,7 @@ struct State {
 }
 
 impl State {
+    #[allow(clippy::too_many_arguments)]
     fn new(
         shutdown_tx: watch::Sender<bool>,
         routes: proxy::Routes,

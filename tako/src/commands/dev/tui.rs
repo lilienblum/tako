@@ -468,6 +468,7 @@ fn intersect_ranges(a: (usize, usize), b: (usize, usize)) -> Option<(usize, usiz
     (start < end).then_some((start, end))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_log_line_spans(
     line: &str,
     row_range: (usize, usize),
@@ -1712,6 +1713,7 @@ fn scroll_logs(state: &mut UiState, delta: isize) {
     state.log_scroll = ensure_visible(state.log_selected, state.log_scroll, visible);
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run_dev_tui(
     app_name: String,
     adapter_name: String,

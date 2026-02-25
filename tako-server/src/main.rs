@@ -552,6 +552,7 @@ impl ServerState {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn deploy_app(
         &self,
         app_name: &str,
