@@ -5,4 +5,5 @@ repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
 just fmt
+git add -u
 just lint
