@@ -10,9 +10,7 @@ pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const FALLBACK_OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const OFFICIAL_PRESET_BRANCH: &str = "master";
-const EMBEDDED_PRESET_REPO: &str = "embedded";
 const EMBEDDED_JS_FAMILY_PRESETS_PATH: &str = "presets/js.toml";
-const EMBEDDED_JS_FAMILY_PRESETS_CONTENT: &str = include_str!("../../../presets/js.toml");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -315,20 +313,9 @@ pub async fn load_build_preset(
         let content = fetch_preset_content_by_commit(&official_repo, &path, &commit).await?;
         (official_repo.clone(), commit, content)
     } else {
-        match fetch_preset_content_from_master_branch(&official_repo, &path).await {
-            Ok((resolved_commit, content)) => (official_repo.clone(), resolved_commit, content),
-            Err(default_branch_error) => {
-                if let Some(content) = embedded_official_preset_content(&path) {
-                    (
-                        EMBEDDED_PRESET_REPO.to_string(),
-                        embedded_content_hash(content),
-                        content.to_string(),
-                    )
-                } else {
-                    return Err(default_branch_error);
-                }
-            }
-        }
+        let (resolved_commit, content) =
+            fetch_preset_content_from_master_branch(&official_repo, &path).await?;
+        (official_repo.clone(), resolved_commit, content)
     };
 
     let preset = parse_resolved_preset_from_content(&parsed_ref, &path, &content)?;
@@ -352,13 +339,6 @@ fn official_alias_to_path(alias: &str) -> String {
                 format!("presets/{alias}.toml")
             }
         }
-    }
-}
-
-fn embedded_official_preset_content(path: &str) -> Option<&'static str> {
-    match path {
-        EMBEDDED_JS_FAMILY_PRESETS_PATH => Some(EMBEDDED_JS_FAMILY_PRESETS_CONTENT),
-        _ => None,
     }
 }
 
@@ -462,12 +442,7 @@ fn parse_official_alias_preset_content(
         return parse_family_preset_content(path, content, preset_name);
     }
     if BuildAdapter::from_id(alias).is_some() {
-        if let Ok(preset) = parse_family_preset_content(path, content, alias) {
-            return Ok(preset);
-        }
-        if let Some(embedded_base) = builtin_base_preset_content_for_alias(alias) {
-            return parse_and_validate_preset(embedded_base, alias);
-        }
+        return parse_family_preset_content(path, content, alias);
     }
     parse_and_validate_preset(content, alias)
 }
@@ -501,14 +476,6 @@ fn parse_family_preset_content(
         )
     })?;
     parse_and_validate_preset(&preset_content, preset_name)
-}
-
-fn embedded_content_hash(content: &str) -> String {
-    use sha2::{Digest, Sha256};
-
-    let mut hasher = Sha256::new();
-    hasher.update(content.as_bytes());
-    hex::encode(hasher.finalize())
 }
 
 pub fn parse_and_validate_preset(
@@ -978,9 +945,12 @@ mod tests {
     }
 
     #[test]
-    fn embedded_official_preset_content_supports_family_manifest_path() {
-        assert!(embedded_official_preset_content("presets/js.toml").is_some());
-        assert!(embedded_official_preset_content("presets/unknown.toml").is_none());
+    fn official_family_manifest_path_supports_known_families() {
+        assert_eq!(
+            official_family_manifest_path(PresetFamily::Js),
+            Some("presets/js.toml")
+        );
+        assert_eq!(official_family_manifest_path(PresetFamily::Unknown), None);
     }
 
     #[test]
@@ -1063,6 +1033,17 @@ assets = ["dist/client"]
         assert_eq!(preset.name, "tanstack-start");
         assert_eq!(preset.main.as_deref(), Some("dist/server/tako-entry.mjs"));
         assert_eq!(preset.assets, vec!["dist/client"]);
+    }
+
+    #[test]
+    fn parse_official_alias_preset_content_rejects_missing_runtime_alias_without_fallback() {
+        let content = r#"
+[tanstack-start]
+main = "dist/server/tako-entry.mjs"
+"#;
+        let err = parse_official_alias_preset_content("bun", "presets/js.toml", content)
+            .expect_err("runtime alias should not fall back to built-in preset");
+        assert!(err.contains("Preset 'bun' was not found"));
     }
 
     #[test]
@@ -1548,26 +1529,6 @@ install = "bun install"
         let loaded = read_locked_preset(temp.path()).unwrap().unwrap();
         assert_eq!(loaded, resolved);
         assert!(lock_file_path(temp.path()).exists());
-    }
-
-    #[test]
-    fn load_build_preset_ignores_locked_commit_for_unpinned_alias() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let locked = ResolvedPresetSource {
-            preset_ref: "bun".to_string(),
-            repo: "tako-sh/presets".to_string(),
-            path: "presets/js.toml".to_string(),
-            commit: "0000000000000000000000000000000000000000".to_string(),
-        };
-        write_locked_preset(temp.path(), &locked).unwrap();
-
-        let runtime = tokio::runtime::Runtime::new().unwrap();
-        let (_preset, resolved) = runtime
-            .block_on(load_build_preset(temp.path(), "bun"))
-            .unwrap();
-
-        assert_eq!(resolved.preset_ref, "bun");
-        assert_ne!(resolved.commit, locked.commit);
     }
 
     #[test]

@@ -27,7 +27,7 @@ What happens during deploy:
 - Non-overridable excludes: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
 - A versioned source tarball is created under `.tako/artifacts/`.
 - Deploy version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-- Build preset is resolved from top-level `preset` (runtime-local alias; namespaced aliases like `js/tanstack-start` are rejected and `github:` refs are not supported) or adapter base default from top-level `runtime`/detection when omitted; unpinned official aliases are fetched from `master` on each resolve and resolved metadata is written to `.tako/build.lock.json`.
+- Build preset is resolved from top-level `preset` (runtime-local alias; namespaced aliases like `js/tanstack-start` are rejected and `github:` refs are not supported) or adapter base default from top-level `runtime`/detection when omitted; unpinned official aliases are fetched from `master` on each resolve, fetch failures do not use embedded fallback, and resolved metadata is written to `.tako/build.lock.json`.
 - For each required server target (`arch`/`libc`), Tako runs preset install/build first, then app `[[build.stages]]` (if configured), and packages a target artifact tarball (Docker/local based on preset `[build].container`; built-in JS base presets default to local mode with `container = false`).
 - Before packaging each target artifact, Tako verifies the resolved deploy `main` file exists in the post-build app directory.
 - Docker build containers stay ephemeral, but dependency downloads are reused from per-target Docker cache volumes keyed by cache kind + target label + builder image.
@@ -90,7 +90,7 @@ Each target server should have:
 
 - Archive payload is source-based and includes filtered files from the resolved source bundle root.
 - Archive includes a fallback `app.json` at app path inside the archive.
-- Build preset resolves from official alias; unpinned aliases fetch from `master` and resolved source metadata is written to `.tako/build.lock.json`.
+- Build preset resolves from official alias; unpinned aliases fetch from `master` (no embedded fallback on fetch failure) and resolved source metadata is written to `.tako/build.lock.json`.
 - Preset runtime fields are top-level `main`/`install`/`start`.
 - Runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`.
 - JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set.

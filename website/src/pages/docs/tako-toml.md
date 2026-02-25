@@ -86,7 +86,7 @@ runtime = "bun"
   - Build preset files support optional top-level `name`, top-level `main`, top-level lifecycle overrides (`dev`, `install`, `start`), and preset `[build]` keys (`assets`, `exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container`, optional `[build].install`, optional `[build].build`).
   - Bun `tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and `[build].assets = ["dist/client"]`.
   - Deploy writes resolved preset metadata to `.tako/build.lock.json` for visibility and cache-key inputs.
-  - Unpinned official preset aliases are fetched from `master` on each resolve.
+  - Unpinned official preset aliases are fetched from `master` on each resolve; if fetch fails, preset resolution fails (no embedded fallback).
   - Deploy build mode is controlled by preset `[build].container`.
     - `true`: Docker target builds
     - `false`: local host target builds

@@ -125,7 +125,7 @@ env = "production"
 - Preset `[build].assets` override runtime-base `assets` when set.
 - Build preset TOML supports optional top-level `name` (fallback: preset section name), top-level `main` (default app entrypoint), top-level lifecycle overrides (`dev`, `install`, `start`), and `[build]` (`assets`, `exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false`, optional `[build].install`, optional `[build].build`).
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for visibility and cache-key inputs.
-- Unpinned official preset aliases are fetched from the `master` branch on each resolve.
+- Unpinned official preset aliases are fetched from the `master` branch on each resolve; if fetch fails, preset resolution fails (no embedded fallback).
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Source bundle filtering uses `.gitignore`.
 - Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
@@ -663,7 +663,7 @@ Deploy flow helpers:
 5. Create source archive (`.tako/artifacts/{version}-source.tar.gz`) and write `app.json` at app path inside archive
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
    - Best-effort local artifact cache prune runs before target builds (retention: 30 source archives, 90 target artifacts; orphan target metadata is removed).
-6. Resolve build preset (top-level `preset` override or adapter base preset from top-level `runtime`/detection), fetching unpinned official aliases from `master`, then persist resolved metadata in `.tako/build.lock.json`
+6. Resolve build preset (top-level `preset` override or adapter base preset from top-level `runtime`/detection), fetching unpinned official aliases from `master` (no embedded fallback on fetch failure), then persist resolved metadata in `.tako/build.lock.json`
 7. Build target artifacts locally (one artifact per unique server target label):
    - Resolve deterministic cache key per target.
    - On cache hit, reuse existing verified target artifact.
