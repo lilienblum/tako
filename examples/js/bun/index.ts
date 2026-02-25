@@ -1,9 +1,12 @@
+const WIDLCARD_SUFFIX = ".bun.tako-testbed.orb.local";
+
 export default async function fetch(req: Request) {
   const url = new URL(req.url);
   const tenant = getTenantFromHostname(url.hostname);
   const pid = process.pid;
+  const servesRootForTenant = tenant !== null && (url.pathname === "/" || url.pathname === "");
 
-  if (url.pathname === "/bun" || url.pathname === "/bun/") {
+  if (url.pathname === "/bun" || url.pathname === "/bun/" || servesRootForTenant) {
     const tenantHtml = tenant ? `<p>Tenant: ${escapeHtml(tenant)}</p>` : "";
     const pidHtml = `<p>PID: ${pid}</p>`;
     const html = `<h1>Bun example for tako</h1>${tenantHtml}${pidHtml}`;
@@ -19,12 +22,12 @@ export default async function fetch(req: Request) {
 }
 
 function getTenantFromHostname(hostname: string): string | null {
-  const parts = hostname.split(".").filter(Boolean);
-  if (parts.length < 2) {
+  if (!hostname.endsWith(WIDLCARD_SUFFIX)) {
     return null;
   }
 
-  return parts[0] ?? null;
+  const tenant = hostname.slice(0, -WIDLCARD_SUFFIX.length);
+  return tenant.length > 0 ? tenant : null;
 }
 
 function escapeHtml(value: string): string {

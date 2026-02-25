@@ -1,7 +1,7 @@
 runtime = "bun"
 
 [envs.production]
-routes = ["tako-testbed.orb.local/bun", "*.tako-testbed.orb.local"]
+routes = ["tako-testbed.orb.local/bun", "*.bun.tako-testbed.orb.local"]
 
 [servers.testbed]
 env = "production"
