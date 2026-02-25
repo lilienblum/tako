@@ -130,8 +130,8 @@ just release sdk
 `release tako` and `release tako-server` enforce a guard: if `tako-core` or `tako-socket` source changed since the last shared crate release tag, they fail with instructions to release shared crates first.
 `release tako` and `release tako-server` also require authenticated GitHub CLI (`gh auth login`) to publish release assets used by `https://tako.sh/install` and `https://tako.sh/install-server`.
 
-Draft notes are written under `dist/release-notes/` and can be fed to AI for final release notes + version recommendation.
-If no prior tag exists for a package line, notes generation falls back to full history.
+Draft notes are written under `dist/release-notes/`.
+`tako` and `tako-server` notes use `git-cliff` (requires `git cliff` installed locally).
 
 ## Docs
 

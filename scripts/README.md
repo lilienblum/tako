@@ -18,7 +18,7 @@ Repository scripts used by installers, CI checks, and local development workflow
   - Installs required runtime dependencies (including Unix-socket-capable `nc` with `-U` support, sqlite runtime libraries, and `mise`) via the host package manager when available.
   - Falls back to the official `mise` installer if distro package managers do not provide `mise`.
 - `check_critical_coverage.sh`: coverage gate for selected critical source files.
-- `release-notes.sh`: generate per-package release notes drafts from git tags/commits for AI-assisted release prep.
+- `release-notes.sh`: legacy release notes generator (currently used by SDK notes flow).
 
 ## Typical Usage
 

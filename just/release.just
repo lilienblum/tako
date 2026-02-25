@@ -55,6 +55,12 @@ _require-gh:
         exit 1; \
     fi
 
+_require-git-cliff:
+    @if ! git cliff --version >/dev/null 2>&1; then \
+        echo "error: git-cliff is required for release notes generation" >&2; \
+        exit 1; \
+    fi
+
 _guard-shared-crates-released:
     @core_tag="$(git tag --list '{{ TAKO_CORE_TAG_PREFIX }}*' --sort=-v:refname | head -n 1 || true)"; \
     socket_tag="$(git tag --list '{{ TAKO_SOCKET_TAG_PREFIX }}*' --sort=-v:refname | head -n 1 || true)"; \
@@ -118,21 +124,31 @@ _prebuild-tako-server:
 
 # Generate release notes draft for `tako`.
 # Output: dist/release-notes/tako.md
-notes-tako series="": _guard
-    sh scripts/release-notes.sh \
-        --component "tako" \
-        --prefix "{{ TAKO_TAG_PREFIX }}" \
-        --series "{{ series }}" \
-        --output "{{ RELEASE_NOTES_DIR }}/tako.md"
+notes-tako series="": _guard _require-git-cliff
+    @pattern='^{{ TAKO_TAG_PREFIX }}'; \
+    if [ -n "{{ series }}" ]; then \
+        series_prefix='{{ series }}'; \
+        case "$series_prefix" in \
+            *.x) series_prefix="${series_prefix%.x}." ;; \
+        esac; \
+        escaped_series="$(printf '%s' "$series_prefix" | sed 's/[][\.^$*+?(){}|\\]/\\&/g')"; \
+        pattern="^{{ TAKO_TAG_PREFIX }}$escaped_series"; \
+    fi; \
+    git cliff --unreleased --tag-pattern "$pattern" -o "{{ RELEASE_NOTES_DIR }}/tako.md"
 
 # Generate release notes draft for `tako-server`.
 # Output: dist/release-notes/tako-server.md
-notes-tako-server series="": _guard
-    sh scripts/release-notes.sh \
-        --component "tako-server" \
-        --prefix "{{ TAKO_SERVER_TAG_PREFIX }}" \
-        --series "{{ series }}" \
-        --output "{{ RELEASE_NOTES_DIR }}/tako-server.md"
+notes-tako-server series="": _guard _require-git-cliff
+    @pattern='^{{ TAKO_SERVER_TAG_PREFIX }}'; \
+    if [ -n "{{ series }}" ]; then \
+        series_prefix='{{ series }}'; \
+        case "$series_prefix" in \
+            *.x) series_prefix="${series_prefix%.x}." ;; \
+        esac; \
+        escaped_series="$(printf '%s' "$series_prefix" | sed 's/[][\.^$*+?(){}|\\]/\\&/g')"; \
+        pattern="^{{ TAKO_SERVER_TAG_PREFIX }}$escaped_series"; \
+    fi; \
+    git cliff --unreleased --tag-pattern "$pattern" -o "{{ RELEASE_NOTES_DIR }}/tako-server.md"
 
 # Generate release notes draft for `tako.sh` (npm SDK).
 # Output: dist/release-notes/sdk-npm.md

@@ -89,21 +89,65 @@ last_tag="$(git tag --list "$tag_pattern" --sort=-v:refname | head -n 1 || true)
 
 if [ -n "$last_tag" ]; then
   commit_range="$last_tag..HEAD"
-  commits="$(git log --no-merges --pretty='- %s (%h)' "$commit_range" || true)"
+  git log --no-merges --pretty='%h%x09%s' "$commit_range" > /tmp/tako-release-notes-commits.$$ 2>/dev/null || true
 else
   commit_range="full history"
-  commits="$(git log --no-merges --pretty='- %s (%h)' || true)"
+  git log --no-merges --pretty='%h%x09%s' > /tmp/tako-release-notes-commits.$$ 2>/dev/null || true
 fi
 
-if [ -z "$commits" ]; then
-  commits="- No commits found."
+commit_file="/tmp/tako-release-notes-commits.$$"
+trap 'rm -f "$commit_file"' EXIT INT TERM
+
+if [ ! -s "$commit_file" ]; then
+  commit_sections='## no-changes
+
+- No commits found.
+'
+else
+  commit_sections="$(
+    awk '
+      BEGIN {
+        split("feat fix perf refactor docs test chore ci build style revert other", order, " ")
+      }
+      {
+        hash=$1
+        $1=""
+        sub(/^\t/, "", $0)
+        subject=$0
+
+        type="other"
+        header=subject
+        sub(/: .*/, "", header)
+        if (header ~ /^[a-z0-9]+(\([^)]+\))?(!)?$/) {
+          type=header
+          sub(/\(.*/, "", type)
+          sub(/!$/, "", type)
+        }
+
+        entries[type]=entries[type] "- " subject " (" hash ")\n"
+      }
+      END {
+        any=0
+        for (i=1; i<=length(order); i++) {
+          t=order[i]
+          if (entries[t] != "") {
+            printf "## %s\n\n%s\n", t, entries[t]
+            any=1
+          }
+        }
+        if (!any) {
+          printf "## no-changes\n\n- No commits found.\n\n"
+        }
+      }
+    ' "$commit_file"
+  )"
 fi
 
 generated_at="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 mkdir -p "$(dirname "$output")"
 
 {
-  printf '# %s Release Notes Draft\n\n' "$component"
+  printf '# %s Release Notes\n\n' "$component"
   printf -- '- Generated: %s\n' "$generated_at"
   printf -- '- Tag prefix: `%s`\n' "$prefix"
   if [ -n "$series" ]; then
@@ -116,16 +160,7 @@ mkdir -p "$(dirname "$output")"
     printf -- '- Baseline tag: `(none found for pattern %s)`\n' "$tag_pattern"
     printf -- '- Commit range: `%s`\n' "$commit_range"
   fi
-  printf '\n## Commits\n\n'
-  printf '%s\n' "$commits"
-  printf '\n## AI Prompt\n\n'
-  printf 'Use the commit list above to draft GitHub release notes for `%s`.\n\n' "$component"
-  printf 'Return:\n'
-  printf '1. Recommended semver bump (`patch`, `minor`, or `major`) with short rationale.\n'
-  printf '2. Release title and one-paragraph summary.\n'
-  printf '3. Categorized sections: Features, Fixes, Docs, Refactors, Chore.\n'
-  printf '4. Breaking changes section (or `None`).\n'
-  printf '5. Upgrade notes section (or `None`).\n'
+  printf '\n%s' "$commit_sections"
 } > "$output"
 
 echo "Wrote $output"
