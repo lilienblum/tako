@@ -4,7 +4,7 @@ set -eu
 # Tako installer (POSIX sh)
 #
 # Usage:
-#   curl -fsSL https://tako.sh/install-server | sudo sh
+#   sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"
 #
 # What it does:
 # - downloads and installs `tako-server`

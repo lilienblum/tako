@@ -6,6 +6,7 @@ Repository scripts used by installers, CI checks, and local development workflow
 
 - `install-tako-cli.sh`: POSIX installer for local `tako` CLI.
 - `install-tako-server.sh`: POSIX installer for `tako-server` on Linux hosts.
+- `install-tako-server-canary.sh`: lightweight wrapper that runs hosted server installer with canary artifact base URL.
   - Both installers resolve component-specific latest tags (`tako-v*`, `tako-server-v*`) via GitHub tags API by default, then download release assets for that tag.
   - Supports systemd and OpenRC for normal install/start.
   - Supports install-refresh mode via `TAKO_RESTART_SERVICE=0` (refreshes binary/users without restarting service; service definition is updated only when a supported manager is active), used in build/container workflows before init/service managers are running.
@@ -37,3 +38,5 @@ The install scripts are exposed via website redirect endpoints:
 
 - `/install`
 - `/install-server`
+- `/server-install`
+- `/server-install-canary`

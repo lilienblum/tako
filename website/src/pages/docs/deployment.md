@@ -67,6 +67,11 @@ Each target server should have:
 - Writable runtime paths under `/opt/tako` and socket access at `/var/run/tako/tako.sock`.
 - Privileged bind capability for `tako-server` on `:80/:443` (provided by installer-managed service capability setup on systemd hosts, plus `setcap` on the binary when available).
 
+Install/refresh server runtime commands:
+
+- stable: `sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"`
+- canary: `sudo sh -c "$(curl -fsSL https://tako.sh/server-install-canary)"`
+
 ## Configuration Inputs
 
 ### Project config ([`tako.toml`](/docs/tako-toml))

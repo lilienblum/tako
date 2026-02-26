@@ -86,7 +86,7 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
 
   <h2 id="remote-setup">Remote setup</h2>
   <p>On each deployment host (as <code>root</code> or with <code>sudo</code>), install the runtime:</p>
-  <Snippet code="curl -fsSL https://tako.sh/install-server | sudo sh" lang="bash" />
+  <Snippet code='sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"' lang="bash" />
 
   <p>Verify installation:</p>
   <Snippet code="tako-server --version" lang="bash" />

@@ -934,13 +934,13 @@ Manual for v1. Users run a server setup script (or equivalent manual steps) to:
 Recommended: run the hosted installer script on the server (as root):
 
 ```bash
-curl -fsSL https://tako.sh/install-server | sudo sh
+sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"
 ```
 
 Installer SSH key behavior:
 
 - If `TAKO_SSH_PUBKEY` is set, installer uses it and skips prompting.
-- If unset and a terminal is available, installer prompts for a public key to authorize for user `tako` (including common piped installs such as `curl ... | sudo sh`) and re-prompts on invalid input until a valid SSH public key line is provided.
+- If unset and a terminal is available, installer prompts for a public key to authorize for user `tako` (including `sudo sh -c "$(curl ...)"` and common piped installs such as `curl ... | sudo sh`) and re-prompts on invalid input until a valid SSH public key line is provided.
 - If terminal key input cannot be read, installer attempts to reuse the first valid key from the invoking `SUDO_USER` `~/.ssh/authorized_keys`; if unavailable, installer continues without key setup and prints a warning with a `TAKO_SSH_PUBKEY` rerun hint.
 - If unset and no terminal is available, installer attempts the same invoking-user key fallback before warning and continuing without key setup.
 - CLI SSH connections require host key verification against `~/.ssh/known_hosts` (or configured SSH keys directory); unknown/changed host keys are rejected.
@@ -959,7 +959,10 @@ Installer SSH key behavior:
   - OpenRC: `retry="TERM/1800/KILL/5"`
 - Installer verifies `tako-server` is active after service start; if startup fails, installer exits non-zero and prints available service diagnostics.
 
-Reference script in this repo: `scripts/install-tako-server.sh` (source for `/install-server`, alias `/server-install`).
+Reference scripts in this repo:
+
+- `scripts/install-tako-server.sh` (source for `/install-server`, alias `/server-install`)
+- `scripts/install-tako-server-canary.sh` (source for `/server-install-canary`)
 
 **Default behavior (no configuration file needed):**
 
