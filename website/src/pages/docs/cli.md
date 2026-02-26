@@ -17,7 +17,7 @@ tako [--version] [-v|--verbose] <command> [args]
 
 Global flags:
 
-- `--version`: print version and exit.
+- `--version`: print version and exit (`<semver>` on stable builds, `<semver>-canary-<sha7>` on canary builds).
 - `-v`, `--verbose`: enable verbose output.
 
 CLI output conventions:

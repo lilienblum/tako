@@ -268,6 +268,7 @@ tako upgrade --stable
 Canary distribution model:
 
 - `canary` is a single moving GitHub prerelease tag updated by CI on each `master` push.
+- Canary CLI artifacts embed the source commit in `tako --version` output as `<semver>-canary-<sha7>`.
 - Stable versioned releases remain maintainer-driven and are published from local release flows.
 
 Upgrade channel state:
@@ -278,7 +279,7 @@ Upgrade channel state:
 
 ### Global options
 
-- `--version`: Print version and exit.
+- `--version`: Print version and exit (`<semver>` on stable builds, `<semver>-canary-<sha7>` on canary builds).
 - `-v, --verbose`: Show verbose output (enables detailed command output and info logs).
 
 CLI output conventions:

@@ -4,6 +4,24 @@ use crate::commands::{self, delete, releases, secret, server, upgrade};
 use clap::CommandFactory;
 
 const DEV_PUBLIC_PORT: u16 = 47831;
+const VERSION_BASE: &str = env!("CARGO_PKG_VERSION");
+const VERSION_CANARY_SHA: Option<&str> = option_env!("TAKO_CANARY_SHA");
+
+fn display_version() -> String {
+    format_display_version(VERSION_BASE, VERSION_CANARY_SHA)
+}
+
+fn format_display_version(base: &str, canary_sha: Option<&str>) -> String {
+    let Some(raw_sha) = canary_sha else {
+        return base.to_owned();
+    };
+    let sha = raw_sha.trim();
+    if sha.is_empty() {
+        return base.to_owned();
+    }
+    let short_sha = &sha[..sha.len().min(7)];
+    format!("{base}-canary-{short_sha}")
+}
 
 /// Tako - Modern application development, deployment, and runtime platform
 #[derive(Parser)]
@@ -459,6 +477,30 @@ mod tests {
             ),
         }
     }
+
+    #[test]
+    fn display_version_without_canary_sha_uses_base_version() {
+        let version = format_display_version("1.2.3", None);
+        assert_eq!(version, "1.2.3");
+    }
+
+    #[test]
+    fn display_version_with_full_canary_sha_uses_short_hash() {
+        let version = format_display_version("1.2.3", Some("0123456789abcdef"));
+        assert_eq!(version, "1.2.3-canary-0123456");
+    }
+
+    #[test]
+    fn display_version_with_short_canary_sha_keeps_full_value() {
+        let version = format_display_version("1.2.3", Some("abc"));
+        assert_eq!(version, "1.2.3-canary-abc");
+    }
+
+    #[test]
+    fn display_version_with_blank_canary_sha_uses_base_version() {
+        let version = format_display_version("1.2.3", Some("   "));
+        assert_eq!(version, "1.2.3");
+    }
 }
 
 #[derive(Subcommand)]
@@ -561,7 +603,7 @@ pub enum Commands {
 impl Cli {
     pub fn run(self) -> Result<(), Box<dyn std::error::Error>> {
         if self.version {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!("{}", display_version());
             return Ok(());
         }
 

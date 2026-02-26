@@ -37,6 +37,7 @@ jobs:
             docker buildx build -f docker/build.Dockerfile \
               --platform "linux/$arch" \
               --target tako-artifact-glibc \
+              --build-arg TAKO_CANARY_SHA="$GITHUB_SHA" \
               --output "type=local,dest=dist/linux-$arch-glibc" \
               .
 
@@ -58,6 +59,7 @@ jobs:
               docker buildx build -f docker/build.Dockerfile \
                 --platform "linux/$arch" \
                 --target "tako-server-artifact-$libc" \
+                --build-arg TAKO_CANARY_SHA="$GITHUB_SHA" \
                 --output "type=local,dest=dist/linux-$arch-$libc" \
                 .
 
@@ -105,6 +107,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
+          export TAKO_CANARY_SHA="$GITHUB_SHA"
 
           cargo build -p tako --bin tako --release --target aarch64-apple-darwin
           cargo build -p tako --bin tako --release --target x86_64-apple-darwin

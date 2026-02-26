@@ -18,6 +18,8 @@ RUN apk add --no-cache \
     sqlite-static
 
 WORKDIR /work
+ARG TAKO_CANARY_SHA
+ENV TAKO_CANARY_SHA=$TAKO_CANARY_SHA
 
 # Copy only Rust workspace inputs needed to build release binaries.
 COPY Cargo.toml Cargo.lock ./
@@ -52,6 +54,8 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /work
+ARG TAKO_CANARY_SHA
+ENV TAKO_CANARY_SHA=$TAKO_CANARY_SHA
 
 # Copy only Rust workspace inputs needed to build release binaries.
 COPY Cargo.toml Cargo.lock ./
