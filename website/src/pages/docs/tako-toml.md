@@ -58,7 +58,7 @@ runtime = "bun"
   - During deploy artifact prep, Tako verifies this resolved path exists in the post-build app directory and fails if it is missing.
   - Final runtime `app.json` written during deploy can also include release metadata (`commit_message`, `git_dirty`) for `tako releases ls`.
 - `runtime`: optional adapter override (`bun`, `node`, `deno`) used when selecting the default base preset.
-- `preset`: optional runtime-local build preset override. If omitted, deploy/dev use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`). Supports:
+- `preset`: optional runtime-local build preset override. If omitted, deploy/dev use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`). In `tako dev`, omitted top-level `preset` ignores preset top-level `dev` and runs runtime-default command with resolved `main` (`bun run node_modules/tako.sh/src/wrapper.ts {main}`, `node {main}`, or `deno run --allow-net --allow-env --allow-read {main}`); explicit top-level `preset` uses preset top-level `dev`. Supports:
   - runtime-local aliases: `tanstack-start` (resolved under selected `runtime`)
   - pinned runtime-local aliases: `tanstack-start@<commit-hash>`
   - Namespaced aliases in `tako.toml` (for example `js/tanstack-start`) are rejected.
@@ -77,7 +77,7 @@ runtime = "bun"
   - Stage execution order per target is fixed: preset stage first (`[build].install`, `[build].build`), then `[[build.stages]]` in declaration order.
   - Adapter base presets (`bun`, `node`, `deno`) are built into the CLI (not loaded from workspace preset files).
   - Runtime family preset definitions live in `presets/<family>.toml` (for example `presets/js.toml`), where each preset is a section (`[tanstack-start]`, etc.).
-  - Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`dev`, `install`, `start`, `[build].install`, `[build].build`).
+  - Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`install`, `start`, `[build].install`, `[build].build`), and explicit top-level `preset` uses preset top-level `dev`.
   - Runtime base presets also provide default build filters/targets (`[build].exclude`, `[build].targets`, `[build].container`) and default `assets`.
   - JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds run locally by default unless a preset explicitly sets `container = true`.
   - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated).
@@ -86,7 +86,7 @@ runtime = "bun"
   - Build preset files support optional top-level `name`, top-level `main`, top-level lifecycle overrides (`dev`, `install`, `start`), and preset `[build]` keys (`assets`, `exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container`, optional `[build].install`, optional `[build].build`).
   - Bun `tanstack-start` defaults `main = "dist/server/tako-entry.mjs"` and `[build].assets = ["dist/client"]`.
   - Deploy writes resolved preset metadata to `.tako/build.lock.json` for visibility and cache-key inputs.
-  - Unpinned official preset aliases are fetched from `master` on each resolve; if fetch fails, preset resolution fails (no embedded fallback).
+  - Unpinned official preset aliases are fetched from `master` on each resolve; fetch failures fail resolution, and runtime base aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from fetched family manifests.
   - Deploy build mode is controlled by preset `[build].container`.
     - `true`: Docker target builds
     - `false`: local host target builds

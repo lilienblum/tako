@@ -22,8 +22,21 @@ This runs the example through `tako dev` (HTTPS local ingress + routing).
 
 ## Notes
 
-- `tako.toml` defines an explicit production route; local dev defaults to `bun-example.tako.local`.
+- `tako.toml` sets `runtime = "bun"` with no top-level `preset`.
+  - In `tako dev`, this uses the runtime-default Bun command with resolved `main`.
+  - For local direct runs, `bun run dev` uses `bun run index.ts`.
 - The app starts Bun on `0.0.0.0:$PORT` (default `3000`) and serves HTTP directly.
 - Internal health checks use `Host: tako-internal` with path `/status` via the Tako SDK wrapper.
-- `https://tako-testbed.orb.local/bun` serves the app for the base route.
-- `https://<tenant>.bun.tako-testbed.orb.local/` serves the app for wildcard subdomain routes.
+- Development routes in `tako.toml` are:
+  - `bun.tako.local/bun`
+  - `foo.bun.tako.local`
+  - `*.bun.tako.local`
+- Current `tako dev` routing is exact-host only, so use:
+  - `https://bun.tako.local/bun`
+  - `https://foo.bun.tako.local/`
+- Staging routes:
+  - `https://tako-testbed.orb.local/bun`
+  - `https://<tenant>.bun.tako-testbed.orb.local/`
+- Production routes:
+  - `https://demo.tako.sh/bun`
+  - `https://<tenant>.bun.tako.sh/`

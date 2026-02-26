@@ -1,8 +1,26 @@
 runtime = "bun"
 
+[vars.development]
+WIDLCARD_SUFFIX = ".bun.tako.local"
+
+[vars.production]
+WIDLCARD_SUFFIX = ".bun.tako.sh"
+
+[vars.staging]
+WIDLCARD_SUFFIX = ".bun.tako-testbed.orb.local"
+
+[envs.development]
+routes = ["bun.tako.local/bun", "foo.bun.tako.local", "*.bun.tako.local"]
+
 [envs.production]
+routes = ["demo.tako.sh/bun", "*.bun.tako.sh"]
+
+[envs.staging]
 routes = ["tako-testbed.orb.local/bun", "*.bun.tako-testbed.orb.local"]
 
-[servers.testbed]
+[servers.production]
 env = "production"
+
+[servers.testbed]
+env = "staging"
 instances = 2

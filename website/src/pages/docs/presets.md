@@ -25,7 +25,7 @@ preset = "tanstack-start"
 - Pinned refs:
   - `tanstack-start@<commit-hash>`
 
-Unpinned official aliases are fetched from the `master` branch on each resolve; if fetch fails, preset resolution fails (no embedded fallback).
+Unpinned official aliases are fetched from the `master` branch on each resolve; fetch failures fail resolution, and runtime base aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from fetched family manifests.
 
 Namespaced aliases in `tako.toml` (for example `js/tanstack-start`) are rejected; choose runtime with top-level `runtime` and keep `preset` runtime-local.
 
@@ -59,7 +59,7 @@ main = "dist/server/tako-entry.mjs" # Optional default app entry
 # container = true                  # Optional build mode override
 ```
 
-Runtime base presets (`bun`, `node`, `deno`) provide default lifecycle commands (`dev`, `install`, `start`, `[build].install`, `[build].build`), default build filters/targets, and default `assets`.
+Runtime base presets (`bun`, `node`, `deno`) provide default lifecycle commands (`install`, `start`, `[build].install`, `[build].build`), default build filters/targets, and default `assets`. With explicit top-level `preset`, `tako dev` uses preset top-level `dev`; when top-level `preset` is omitted, `tako dev` ignores preset top-level `dev` and runs runtime-default command with resolved `main` (`bun run node_modules/tako.sh/src/wrapper.ts {main}`, `node {main}`, or `deno run --allow-net --allow-env --allow-read {main}`).
 JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set.
 When preset build mode resolves to container, default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 Preset `build.exclude` adds extra patterns on top of runtime-base excludes (base-first, deduplicated), while preset `build.assets` replace runtime-base assets when set.

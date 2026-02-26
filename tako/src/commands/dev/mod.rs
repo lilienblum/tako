@@ -189,6 +189,7 @@ const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
 const LOCAL_HTTP_REDIRECT_PORT: u16 = 47830;
 const DEV_TLS_CERT_FILENAME: &str = "fullchain.pem";
 const DEV_TLS_KEY_FILENAME: &str = "privkey.pem";
+const DEV_TLS_NAMES_FILENAME: &str = "names.json";
 
 fn dev_initial_instance_count() -> usize {
     DEV_INITIAL_INSTANCE_COUNT
@@ -340,6 +341,55 @@ fn resolve_dev_start_command(preset: &BuildPreset, main: &str) -> Result<Vec<Str
         .collect())
 }
 
+fn resolve_runtime_default_dev_command(
+    runtime_adapter: BuildAdapter,
+    main: &str,
+) -> Result<Vec<String>, String> {
+    let command = match runtime_adapter {
+        BuildAdapter::Bun => vec![
+            "bun".to_string(),
+            "run".to_string(),
+            "node_modules/tako.sh/src/wrapper.ts".to_string(),
+            main.to_string(),
+        ],
+        BuildAdapter::Node => vec!["node".to_string(), main.to_string()],
+        BuildAdapter::Deno => vec![
+            "deno".to_string(),
+            "run".to_string(),
+            "--allow-net".to_string(),
+            "--allow-env".to_string(),
+            "--allow-read".to_string(),
+            main.to_string(),
+        ],
+        BuildAdapter::Unknown => {
+            return Err(
+                "Cannot determine default dev command because runtime is unknown. Set top-level `runtime` or set `preset`."
+                    .to_string(),
+            )
+        }
+    };
+    Ok(command)
+}
+
+fn has_explicit_dev_preset(cfg: &TakoToml) -> bool {
+    cfg.preset
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|preset| !preset.is_empty())
+}
+
+fn resolve_dev_run_command(
+    preset: &BuildPreset,
+    main: &str,
+    runtime_adapter: BuildAdapter,
+    explicit_preset: bool,
+) -> Result<Vec<String>, String> {
+    if !explicit_preset {
+        return resolve_runtime_default_dev_command(runtime_adapter, main);
+    }
+    resolve_dev_start_command(preset, main)
+}
+
 fn infer_preset_name_from_ref(preset_ref: &str) -> String {
     match parse_preset_reference(preset_ref) {
         Ok(PresetReference::OfficialAlias { name, .. }) => name,
@@ -445,28 +495,76 @@ fn dev_server_tls_paths_for_home(home: &Path) -> (PathBuf, PathBuf) {
     )
 }
 
+fn dev_server_tls_names_path_for_home(home: &Path) -> PathBuf {
+    home.join("certs").join(DEV_TLS_NAMES_FILENAME)
+}
+
+fn default_dev_tls_names_for_app(app_name: &str) -> Vec<String> {
+    vec![
+        "*.tako.local".to_string(),
+        "tako.local".to_string(),
+        format!("{}.tako.local", app_name),
+        format!("*.{}.tako.local", app_name),
+    ]
+}
+
+fn normalize_tls_names(mut names: Vec<String>) -> Vec<String> {
+    names.sort();
+    names.dedup();
+    names
+}
+
+fn load_dev_tls_names(path: &Path) -> Option<Vec<String>> {
+    let raw = std::fs::read_to_string(path).ok()?;
+    let parsed = serde_json::from_str::<Vec<String>>(&raw).ok()?;
+    Some(normalize_tls_names(parsed))
+}
+
 fn ensure_dev_server_tls_material_for_home(
     ca: &LocalCA,
     home: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+    app_name: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
     let (cert_path, key_path) = dev_server_tls_paths_for_home(home);
-    if cert_path.is_file() && key_path.is_file() {
-        return Ok(());
+    let names_path = dev_server_tls_names_path_for_home(home);
+    let have_cert_material = cert_path.is_file() && key_path.is_file();
+    let existing_names = if have_cert_material {
+        load_dev_tls_names(&names_path)
+    } else {
+        None
+    };
+    let mut names = default_dev_tls_names_for_app(app_name);
+    if let Some(existing) = existing_names.clone() {
+        names.extend(existing);
+    }
+    let names = normalize_tls_names(names);
+
+    if have_cert_material
+        && existing_names
+            .as_ref()
+            .is_some_and(|existing| *existing == names)
+    {
+        return Ok(false);
     }
 
     if let Some(parent) = cert_path.parent() {
         std::fs::create_dir_all(parent)?;
     }
 
-    let cert = ca.generate_leaf_cert_for_names(&["*.tako.local", "tako.local"])?;
+    let name_refs: Vec<&str> = names.iter().map(|name| name.as_str()).collect();
+    let cert = ca.generate_leaf_cert_for_names(&name_refs)?;
     std::fs::write(&cert_path, cert.cert_pem.as_bytes())?;
     std::fs::write(&key_path, cert.key_pem.as_bytes())?;
-    Ok(())
+    std::fs::write(&names_path, serde_json::to_string_pretty(&names)?)?;
+    Ok(true)
 }
 
-fn ensure_dev_server_tls_material(ca: &LocalCA) -> Result<(), Box<dyn std::error::Error>> {
+fn ensure_dev_server_tls_material(
+    ca: &LocalCA,
+    app_name: &str,
+) -> Result<bool, Box<dyn std::error::Error>> {
     let home = crate::paths::tako_home_dir()?;
-    ensure_dev_server_tls_material_for_home(ca, &home)
+    ensure_dev_server_tls_material_for_home(ca, &home, app_name)
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -1165,21 +1263,22 @@ mod tests {
         DevEvent, LogLevel, ScopedLog, StoredLogEvent, app_log_scope, child_log_level_and_message,
         compute_dev_hosts, dev_disconnect_grace, dev_disconnect_grace_label,
         dev_disconnect_grace_ttl_ms, dev_idle_timeout, dev_initial_instance_count,
-        dev_server_ready_log, dev_server_starting_log, dev_server_tls_paths_for_home,
-        dev_startup_lines, doctor_dev_server_lines, doctor_dev_server_unavailable_lines,
-        doctor_local_forwarding_preflight_lines, ensure_dev_server_tls_material_for_home,
-        ensure_local_80_443_forwarding, ensure_local_dns_resolver_configured,
-        forwarding_repair_diagnostic_lines, host_and_port_from_url,
-        is_dev_server_unavailable_error_message, listed_apps_contain_app,
+        dev_server_ready_log, dev_server_starting_log, dev_server_tls_names_path_for_home,
+        dev_server_tls_paths_for_home, dev_startup_lines, doctor_dev_server_lines,
+        doctor_dev_server_unavailable_lines, doctor_local_forwarding_preflight_lines,
+        ensure_dev_server_tls_material_for_home, ensure_local_80_443_forwarding,
+        ensure_local_dns_resolver_configured, forwarding_repair_diagnostic_lines,
+        host_and_port_from_url, is_dev_server_unavailable_error_message, listed_apps_contain_app,
         local_dns_resolver_contents, local_https_probe_error, parse_local_dns_resolver,
         parse_stored_log_line, pf_anchor_maps_loopback_port, pf_conf_forwarding_hook_block,
         pf_conf_with_forwarding_hook, pfctl_args, pfctl_shell_command, port_from_listen,
         preferred_public_url, replay_and_follow_logs, resolve_dev_preset_ref,
-        resolve_effective_dev_build_adapter, restart_required_for_requested_listen,
-        selected_public_url_port, should_drop_child_log_line, should_linger_after_disconnect,
-        tcp_probe, trim_child_log_message, wait_for_localhost_tcp_port_open,
+        resolve_dev_run_command, resolve_effective_dev_build_adapter,
+        restart_required_for_requested_listen, selected_public_url_port,
+        should_drop_child_log_line, should_linger_after_disconnect, tcp_probe,
+        trim_child_log_message, wait_for_localhost_tcp_port_open,
     };
-    use crate::build::BuildAdapter;
+    use crate::build::{BuildAdapter, parse_and_validate_preset};
     use crate::config::TakoToml;
     use crate::dev::LocalCA;
     use std::path::Path;
@@ -1254,6 +1353,49 @@ mod tests {
 
         let adapter = resolve_effective_dev_build_adapter(temp.path(), &cfg, "bun").unwrap();
         assert_eq!(adapter, BuildAdapter::Bun);
+    }
+
+    #[test]
+    fn resolve_dev_run_command_uses_runtime_default_when_preset_is_implicit() {
+        let preset = parse_and_validate_preset(
+            r#"
+dev = ["bun", "run", "dev"]
+"#,
+            "bun",
+        )
+        .unwrap();
+
+        let cmd = resolve_dev_run_command(&preset, "src/index.ts", BuildAdapter::Bun, false)
+            .expect("runtime default dev command");
+
+        assert_eq!(
+            cmd,
+            vec![
+                "bun".to_string(),
+                "run".to_string(),
+                "node_modules/tako.sh/src/wrapper.ts".to_string(),
+                "src/index.ts".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_dev_run_command_uses_preset_dev_when_preset_is_explicit() {
+        let preset = parse_and_validate_preset(
+            r#"
+dev = ["bun", "run", "dev"]
+"#,
+            "bun",
+        )
+        .unwrap();
+
+        let cmd = resolve_dev_run_command(&preset, "src/index.ts", BuildAdapter::Bun, true)
+            .expect("preset dev command");
+
+        assert_eq!(
+            cmd,
+            vec!["bun".to_string(), "run".to_string(), "dev".to_string()]
+        );
     }
 
     #[test]
@@ -1907,30 +2049,84 @@ mod tests {
     fn ensure_dev_server_tls_material_writes_cert_and_key_when_missing() {
         let temp = TempDir::new().unwrap();
         let ca = LocalCA::generate().unwrap();
-        ensure_dev_server_tls_material_for_home(&ca, temp.path()).unwrap();
+        let changed = ensure_dev_server_tls_material_for_home(&ca, temp.path(), "demo").unwrap();
+        assert!(changed);
 
         let (cert_path, key_path) = dev_server_tls_paths_for_home(temp.path());
+        let names_path = dev_server_tls_names_path_for_home(temp.path());
         let cert = std::fs::read_to_string(cert_path).unwrap();
         let key = std::fs::read_to_string(key_path).unwrap();
+        let names = std::fs::read_to_string(names_path).unwrap();
         assert!(cert.contains("BEGIN CERTIFICATE"));
         assert!(key.contains("BEGIN PRIVATE KEY"));
+        assert!(names.contains("*.demo.tako.local"));
     }
 
     #[test]
     fn ensure_dev_server_tls_material_keeps_existing_files() {
         let temp = TempDir::new().unwrap();
         let (cert_path, key_path) = dev_server_tls_paths_for_home(temp.path());
+        let names_path = dev_server_tls_names_path_for_home(temp.path());
         std::fs::create_dir_all(cert_path.parent().unwrap()).unwrap();
         std::fs::write(&cert_path, "existing-cert").unwrap();
         std::fs::write(&key_path, "existing-key").unwrap();
+        std::fs::write(
+            &names_path,
+            r#"[
+  "*.tako.local",
+  "tako.local",
+  "demo.tako.local",
+  "*.demo.tako.local"
+]"#,
+        )
+        .unwrap();
 
         let ca = LocalCA::generate().unwrap();
-        ensure_dev_server_tls_material_for_home(&ca, temp.path()).unwrap();
+        let changed = ensure_dev_server_tls_material_for_home(&ca, temp.path(), "demo").unwrap();
+        assert!(!changed);
 
         let cert = std::fs::read_to_string(cert_path).unwrap();
         let key = std::fs::read_to_string(key_path).unwrap();
         assert_eq!(cert, "existing-cert");
         assert_eq!(key, "existing-key");
+    }
+
+    #[test]
+    fn ensure_dev_server_tls_material_regenerates_legacy_files_without_names_manifest() {
+        let temp = TempDir::new().unwrap();
+        let (cert_path, key_path) = dev_server_tls_paths_for_home(temp.path());
+        std::fs::create_dir_all(cert_path.parent().unwrap()).unwrap();
+        std::fs::write(&cert_path, "legacy-cert").unwrap();
+        std::fs::write(&key_path, "legacy-key").unwrap();
+
+        let ca = LocalCA::generate().unwrap();
+        let changed = ensure_dev_server_tls_material_for_home(&ca, temp.path(), "demo").unwrap();
+        assert!(changed);
+
+        let cert = std::fs::read_to_string(&cert_path).unwrap();
+        let key = std::fs::read_to_string(&key_path).unwrap();
+        let names =
+            std::fs::read_to_string(dev_server_tls_names_path_for_home(temp.path())).unwrap();
+        assert!(cert.contains("BEGIN CERTIFICATE"));
+        assert!(key.contains("BEGIN PRIVATE KEY"));
+        assert!(names.contains("*.demo.tako.local"));
+    }
+
+    #[test]
+    fn ensure_dev_server_tls_material_merges_names_for_multiple_apps() {
+        let temp = TempDir::new().unwrap();
+        let ca = LocalCA::generate().unwrap();
+        let first_changed = ensure_dev_server_tls_material_for_home(&ca, temp.path(), "alpha")
+            .expect("first cert write");
+        assert!(first_changed);
+        let second_changed = ensure_dev_server_tls_material_for_home(&ca, temp.path(), "beta")
+            .expect("second cert write");
+        assert!(second_changed);
+
+        let names =
+            std::fs::read_to_string(dev_server_tls_names_path_for_home(temp.path())).unwrap();
+        assert!(names.contains("*.alpha.tako.local"));
+        assert!(names.contains("*.beta.tako.local"));
     }
 
     #[test]
@@ -2398,7 +2594,7 @@ pub async fn run(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let domain = LocalCA::app_domain(&app_name);
     let local_ca = setup_local_ca().await?;
-    ensure_dev_server_tls_material(&local_ca)?;
+    let tls_material_updated = ensure_dev_server_tls_material(&local_ca, &app_name)?;
     ensure_local_dns_resolver_configured(LOCAL_DNS_PORT)?;
 
     let require_loopback_https = cfg!(target_os = "macos");
@@ -2445,17 +2641,22 @@ pub async fn run(
         .as_deref()
         .map(|ip| ip != daemon_dns_ip)
         .unwrap_or(false);
+    let restart_for_tls = tls_material_updated && existing_info.is_some();
 
-    if restart_for_listen || restart_for_dns {
+    if restart_for_listen || restart_for_dns || restart_for_tls {
         let current_listen = existing_listen.unwrap_or_else(|| "(unknown)".to_string());
         let current_dns_ip = existing_advertised_ip.unwrap_or_else(|| "(unknown)".to_string());
-        let restart_reason = if restart_for_listen && restart_for_dns {
-            format!("listen {} and DNS {}", current_listen, current_dns_ip)
-        } else if restart_for_listen {
-            format!("listen {}", current_listen)
-        } else {
-            format!("DNS {}", current_dns_ip)
-        };
+        let mut reasons = Vec::new();
+        if restart_for_listen {
+            reasons.push(format!("listen {}", current_listen));
+        }
+        if restart_for_dns {
+            reasons.push(format!("DNS {}", current_dns_ip));
+        }
+        if restart_for_tls {
+            reasons.push("updated TLS certificates".to_string());
+        }
+        let restart_reason = reasons.join(" and ");
 
         if crate::output::is_interactive() {
             crate::output::section("Dev Server");
@@ -2518,8 +2719,13 @@ pub async fn run(
 
     // Allocate an ephemeral port for the app.
     let (upstream_port, reserve_listener) = reserve_ephemeral_port()?;
-    let cmd = resolve_dev_start_command(&build_preset, &main)
-        .map_err(|e| format!("Invalid dev start command: {}", e))?;
+    let cmd = resolve_dev_run_command(
+        &build_preset,
+        &main,
+        runtime_adapter,
+        has_explicit_dev_preset(&cfg),
+    )
+    .map_err(|e| format!("Invalid dev start command: {}", e))?;
 
     // Keep receivers optional until we decide whether to launch the TUI.
     let mut log_rx_opt = Some(log_rx);

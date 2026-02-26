@@ -81,7 +81,7 @@ High-level deploy flow:
 2. Resolve source bundle root and app subdirectory (git root when available; otherwise app directory).
 3. Create a source archive (`.tako/artifacts/{version}-source.tar.zst`) from filtered source files.
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-4. Resolve build preset (top-level runtime-local `preset` override or adapter base default from top-level `runtime`/detection), fetching unpinned official aliases from `master` (no embedded fallback on fetch failure), then write resolved metadata to `.tako/build.lock.json`.
+4. Resolve build preset (top-level runtime-local `preset` override or adapter base default from top-level `runtime`/detection), fetching unpinned official aliases from `master` (fetch failures fail resolution; runtime base aliases fall back to embedded defaults when missing from fetched family manifests), then write resolved metadata to `.tako/build.lock.json`.
 5. Build target-specific artifacts locally (Docker or local host based on preset `[build].container`, with defaults derived from `[build].targets`), running preset stage first then app `[[build.stages]]`, with deterministic local artifact cache reuse when inputs are unchanged.
 6. Deploy to target servers in parallel over SSH.
 7. On each server: lock, upload/extract target artifact, finalize `app.json`, send deploy command with secrets payload (env vars come from `app.json`), run runtime prep (Bun dependency install), rolling update, unlock.
@@ -99,7 +99,8 @@ Important deployment behavior:
 - During local builds, when `mise` is available, stage commands run through `mise exec -- sh -lc ...`.
 - Preset runtime fields use top-level `main`/`install`/`start` keys.
 - Top-level `preset` in `tako.toml` must be runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `js/tanstack-start` are rejected and `github:` refs are not supported.
-- Runtime base presets provide defaults for `dev`/`install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`.
+- Runtime base presets provide defaults for `install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`; explicit top-level `preset` also uses preset top-level `dev`.
+- For `tako dev`, when top-level `preset` is omitted, Tako ignores preset top-level `dev` and runs runtime-default command with resolved `main` (`bun run node_modules/tako.sh/src/wrapper.ts {main}`, `node {main}`, or `deno run --allow-net --allow-env --allow-read {main}`).
 - JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set.
 - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.
 - Preset `[[build.stages]]` is not supported; app-level custom stages are configured in `tako.toml` under `[[build.stages]]`.

@@ -1,4 +1,4 @@
-const WIDLCARD_SUFFIX = ".bun.tako-testbed.orb.local";
+const WIDLCARD_SUFFIX = process.env.WIDLCARD_SUFFIX!;
 
 export default async function fetch(req: Request) {
   const url = new URL(req.url);

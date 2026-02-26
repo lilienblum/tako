@@ -442,8 +442,28 @@ fn parse_official_alias_preset_content(
         return parse_family_preset_content(path, content, preset_name);
     }
     if BuildAdapter::from_id(alias).is_some() {
-        return parse_family_preset_content(path, content, alias);
+        return parse_family_preset_content(path, content, alias).or_else(|error| {
+            if error == missing_family_preset_error(alias, path) {
+                parse_embedded_runtime_base_preset(alias)
+            } else {
+                Err(error)
+            }
+        });
     }
+    parse_and_validate_preset(content, alias)
+}
+
+fn missing_family_preset_error(preset_name: &str, path: &str) -> String {
+    format!("Preset '{}' was not found in '{}'.", preset_name, path)
+}
+
+fn parse_embedded_runtime_base_preset(alias: &str) -> Result<BuildPreset, String> {
+    let content = builtin_base_preset_content_for_alias(alias).ok_or_else(|| {
+        format!(
+            "Missing built-in base preset content for runtime '{}'.",
+            alias
+        )
+    })?;
     parse_and_validate_preset(content, alias)
 }
 
@@ -1036,14 +1056,29 @@ assets = ["dist/client"]
     }
 
     #[test]
-    fn parse_official_alias_preset_content_rejects_missing_runtime_alias_without_fallback() {
+    fn runtime_alias_uses_embedded_base_when_missing_from_manifest() {
         let content = r#"
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
 "#;
-        let err = parse_official_alias_preset_content("bun", "presets/js.toml", content)
-            .expect_err("runtime alias should not fall back to built-in preset");
-        assert!(err.contains("Preset 'bun' was not found"));
+        let preset = parse_official_alias_preset_content("bun", "presets/js.toml", content)
+            .expect("runtime alias should use built-in preset fallback");
+        assert_eq!(preset.name, "bun");
+        assert_eq!(preset.main.as_deref(), Some("src/index.ts"));
+        assert!(!preset.dev.is_empty());
+        assert!(preset.install.is_some());
+        assert!(!preset.start.is_empty());
+    }
+
+    #[test]
+    fn parse_official_alias_preset_content_rejects_missing_non_runtime_family_alias() {
+        let content = r#"
+[tanstack-start]
+main = "dist/server/tako-entry.mjs"
+"#;
+        let err = parse_official_alias_preset_content("js/missing", "presets/js.toml", content)
+            .expect_err("non-runtime family alias should still require manifest section");
+        assert!(err.contains("Preset 'missing' was not found"));
     }
 
     #[test]
