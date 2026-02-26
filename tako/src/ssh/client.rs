@@ -13,6 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 use tako_core::{Command, Response, ServerRuntimeInfo};
 
+const TAKO_SERVER_SERVICE_HELPER: &str = "/usr/local/bin/tako-server-service";
+
 /// SSH connection configuration
 #[derive(Debug, Clone)]
 pub struct SshConfig {
@@ -587,12 +589,19 @@ impl SshClient {
         Ok(())
     }
 
+    fn run_with_root_or_sudo(shell_script: &str) -> String {
+        format!(
+            "if [ \"$(id -u)\" -eq 0 ]; then sh -c '{0}'; elif command -v sudo >/dev/null 2>&1; then sudo sh -c '{0}'; else echo \"error: this operation requires root privileges (run as root or install/configure sudo)\" >&2; exit 1; fi",
+            shell_script
+        )
+    }
+
     fn tako_restart_command() -> String {
-        "sudo sh -c 'if command -v systemctl >/dev/null 2>&1; then systemctl restart tako-server; elif command -v rc-service >/dev/null 2>&1; then rc-service tako-server restart; else echo \"error: no supported service manager found (systemctl or rc-service)\" >&2; exit 1; fi'".to_string()
+        Self::run_with_root_or_sudo(&format!("{TAKO_SERVER_SERVICE_HELPER} restart"))
     }
 
     fn tako_reload_command() -> String {
-        "sudo sh -c 'if command -v systemctl >/dev/null 2>&1; then systemctl reload tako-server; elif command -v rc-service >/dev/null 2>&1; then rc-service tako-server reload; else echo \"error: no supported service manager found (systemctl or rc-service)\" >&2; exit 1; fi'".to_string()
+        Self::run_with_root_or_sudo(&format!("{TAKO_SERVER_SERVICE_HELPER} reload"))
     }
 
     fn tako_service_status_command() -> &'static str {
@@ -600,7 +609,7 @@ impl SshClient {
     }
 
     fn service_start_hint() -> &'static str {
-        "sudo systemctl start tako-server or sudo rc-service tako-server start"
+        "systemctl start tako-server (as root) or sudo systemctl start tako-server; rc-service tako-server start (as root) or sudo rc-service tako-server start"
     }
 
     pub fn tako_start_hint() -> &'static str {
@@ -608,7 +617,7 @@ impl SshClient {
     }
 
     /// Send SIGHUP to tako-server via service manager reload for zero-downtime binary swap.
-    /// Requires the connecting user to have sudo access for service manager reload.
+    /// Requires root privileges (root user or a user with sudo access).
     pub async fn tako_reload(&self) -> SshResult<()> {
         self.exec_checked(&Self::tako_reload_command()).await?;
         Ok(())
@@ -1008,19 +1017,19 @@ l4QMs5cmnWfrM0GQ==\n\
     }
 
     #[test]
-    fn tako_restart_command_supports_systemd_and_openrc() {
+    fn tako_restart_command_uses_service_helper_with_root_or_sudo() {
         let command = SshClient::tako_restart_command();
-        assert!(command.contains("systemctl restart tako-server"));
-        assert!(command.contains("rc-service tako-server restart"));
-        assert!(command.contains("systemctl or rc-service"));
+        assert!(command.contains("if [ \"$(id -u)\" -eq 0 ]"));
+        assert!(command.contains("command -v sudo"));
+        assert!(command.contains("/usr/local/bin/tako-server-service restart"));
     }
 
     #[test]
-    fn tako_reload_command_supports_systemd_and_openrc() {
+    fn tako_reload_command_uses_service_helper_with_root_or_sudo() {
         let command = SshClient::tako_reload_command();
-        assert!(command.contains("systemctl reload tako-server"));
-        assert!(command.contains("rc-service tako-server reload"));
-        assert!(command.contains("systemctl or rc-service"));
+        assert!(command.contains("if [ \"$(id -u)\" -eq 0 ]"));
+        assert!(command.contains("command -v sudo"));
+        assert!(command.contains("/usr/local/bin/tako-server-service reload"));
     }
 
     #[test]

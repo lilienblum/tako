@@ -132,6 +132,11 @@ just release sdk
 `release tako` and `release tako-server` enforce a guard: if `tako-core` or `tako-socket` source changed since the last shared crate release tag, they fail with instructions to release shared crates first.
 `release tako` and `release tako-server` also require authenticated GitHub CLI (`gh auth login`) to publish release assets used by `https://tako.sh/install` and `https://tako.sh/install-server`.
 
+Canary prerelease flow:
+
+- CI publishes a single moving GitHub prerelease tag `canary` on each `master` push (`.github/workflows/canary.yml`).
+- Stable/versioned releases remain local maintainer flows (`just release ...`).
+
 Release notes are written under `dist/release-notes/`.
 `tako` and `tako-server` notes use `git-cliff` with [`cliff.toml`](cliff.toml), focusing on user-facing Features and Bug Fixes.
 Notes generation is path-filtered per component (`--include-path`) so only relevant commits are included.

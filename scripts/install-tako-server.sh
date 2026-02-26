@@ -10,6 +10,7 @@ set -eu
 # - downloads and installs `tako-server`
 # - creates OS user `tako`
 # - configures a service manager (systemd or OpenRC) for `tako-server`
+# - installs scoped maintenance helpers/sudoers for non-interactive upgrade/reload
 #
 # Optional env vars:
 #   TAKO_USER               default: tako
@@ -51,6 +52,8 @@ TAKO_INSTALL_MISE="${TAKO_INSTALL_MISE:-1}"
 TAKO_MISE_VERSION="${TAKO_MISE_VERSION:-}"
 TAKO_MISE_BIN="${TAKO_MISE_BIN:-/usr/local/bin/mise}"
 TAKO_RESTART_SERVICE="${TAKO_RESTART_SERVICE:-1}"
+TAKO_SERVER_INSTALL_REFRESH_HELPER="/usr/local/bin/tako-server-install-refresh"
+TAKO_SERVER_SERVICE_HELPER="/usr/local/bin/tako-server-service"
 PATH="/root/.local/bin:$PATH"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
@@ -162,6 +165,85 @@ detect_service_manager() {
 }
 
 SERVICE_MANAGER="$(detect_service_manager)"
+
+install_upgrade_helpers() {
+  cat > "$TAKO_SERVER_INSTALL_REFRESH_HELPER" <<'EOF'
+#!/bin/sh
+set -eu
+
+channel="${1:-stable}"
+case "$channel" in
+  stable)
+    download_base=""
+    ;;
+  canary)
+    download_base="https://github.com/lilienblum/tako/releases/download/canary"
+    ;;
+  *)
+    echo "error: expected channel 'stable' or 'canary'" >&2
+    exit 1
+    ;;
+esac
+
+installer_url="https://tako.sh/install-server"
+installer="$(mktemp)"
+trap 'rm -f "$installer"' EXIT
+
+if command -v curl >/dev/null 2>&1; then
+  curl -fsSL "$installer_url" -o "$installer"
+elif command -v wget >/dev/null 2>&1; then
+  wget -qO "$installer" "$installer_url"
+else
+  echo "error: missing required downloader (curl or wget)" >&2
+  exit 1
+fi
+
+if [ -n "$download_base" ]; then
+  TAKO_DOWNLOAD_BASE_URL="$download_base" TAKO_RESTART_SERVICE=0 sh "$installer"
+else
+  TAKO_RESTART_SERVICE=0 sh "$installer"
+fi
+EOF
+  chmod 0755 "$TAKO_SERVER_INSTALL_REFRESH_HELPER"
+
+  cat > "$TAKO_SERVER_SERVICE_HELPER" <<'EOF'
+#!/bin/sh
+set -eu
+
+action="${1:-}"
+case "$action" in
+  reload|restart)
+    ;;
+  *)
+    echo "error: expected action 'reload' or 'restart'" >&2
+    exit 1
+    ;;
+esac
+
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl "$action" tako-server
+elif command -v rc-service >/dev/null 2>&1; then
+  rc-service tako-server "$action"
+else
+  echo "error: no supported service manager found (systemctl or rc-service)" >&2
+  exit 1
+fi
+EOF
+  chmod 0755 "$TAKO_SERVER_SERVICE_HELPER"
+
+  cat > /etc/sudoers.d/tako <<EOF
+# Managed by Tako install-server.
+$TAKO_USER ALL=(root) NOPASSWD: $TAKO_SERVER_INSTALL_REFRESH_HELPER, $TAKO_SERVER_INSTALL_REFRESH_HELPER *, $TAKO_SERVER_SERVICE_HELPER, $TAKO_SERVER_SERVICE_HELPER *
+EOF
+  chmod 0440 /etc/sudoers.d/tako
+
+  if need_cmd visudo; then
+    if ! visudo -cf /etc/sudoers.d/tako >/dev/null 2>&1; then
+      echo "error: generated sudoers policy is invalid (/etc/sudoers.d/tako)" >&2
+      exit 1
+    fi
+  fi
+}
 
 ensure_privileged_bind_capability() {
   if need_cmd setcap; then
@@ -658,8 +740,9 @@ if ! id -u "tako-app" >/dev/null 2>&1; then
   fi
 fi
 
-# Remove previous sudo/upgrade helper if present.
-rm -f /etc/sudoers.d/tako /usr/local/bin/tako-server-upgrade
+# Remove deprecated helper path if present.
+rm -f /usr/local/bin/tako-server-upgrade
+install_upgrade_helpers
 
 mkdir -p "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")"
 chown -R "$TAKO_USER":"$TAKO_USER" "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")" 2>/dev/null || true

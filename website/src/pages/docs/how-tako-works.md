@@ -197,8 +197,8 @@ Typical remote layout:
 - `tako servers status`: snapshot of server/app state across configured servers.
 - `tako logs --env <env>`: live logs across mapped servers for an environment.
 - `tako releases ls` / `tako releases rollback`: inspect release history and roll back to a previous release id.
-- `tako upgrade`: upgrade local CLI installation only.
-- `tako servers upgrade <name>`: install updated server binary and perform in-place reload via host service manager (`systemctl` on systemd hosts, `rc-service` on OpenRC hosts; both send SIGHUP).
+- `tako upgrade [--canary|--stable]`: upgrade local CLI installation only (`--canary` uses moving canary prerelease assets; default channel is persisted in global `upgrade_channel`).
+- `tako servers upgrade <name> [--canary|--stable]`: install updated server binary and perform in-place reload via host service manager (`systemctl` on systemd hosts, `rc-service` on OpenRC hosts; both send SIGHUP). `--canary` installs from canary prerelease assets; default channel is persisted in global `upgrade_channel`. Installer-managed hosts configure scoped passwordless sudo helpers for `tako` user maintenance actions.
 - `tako secrets ...`: encrypted secret management and sync to runtime.
 - `tako servers restart|upgrade`: runtime lifecycle operations for remote `tako-server`.
 

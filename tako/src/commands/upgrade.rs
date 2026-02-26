@@ -1,10 +1,14 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::config::{UpgradeChannel, resolve_upgrade_channel};
 use crate::output;
 
 const DEFAULT_INSTALL_URL: &str = "https://tako.sh/install";
 const INSTALL_URL_ENV: &str = "TAKO_INSTALL_URL";
+const CANARY_DOWNLOAD_BASE_URL: &str =
+    "https://github.com/lilienblum/tako/releases/download/canary";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Downloader {
@@ -48,34 +52,47 @@ struct CliUpgradeDetectionContext {
     brew_formula_installed: bool,
 }
 
-pub fn run() -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(canary: bool, stable: bool) -> Result<(), Box<dyn std::error::Error>> {
     output::section("Upgrade");
-    run_cli_upgrade()?;
+    let channel = resolve_upgrade_channel(canary, stable)?;
+    output::step(&format!(
+        "You're on {} channel",
+        output::emphasized(channel.as_str())
+    ));
+    run_cli_upgrade(channel)?;
     output::success("Upgrade complete");
     Ok(())
 }
 
-fn run_cli_upgrade() -> Result<(), Box<dyn std::error::Error>> {
-    let method = detect_cli_upgrade_method_runtime();
+fn run_cli_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn std::error::Error>> {
+    let method = if channel == UpgradeChannel::Canary {
+        CliUpgradeMethod::Installer
+    } else {
+        detect_cli_upgrade_method_runtime()
+    };
     match method {
-        CliUpgradeMethod::Installer => run_cli_upgrade_with_installer(),
+        CliUpgradeMethod::Installer => run_cli_upgrade_with_installer(channel),
         CliUpgradeMethod::Homebrew => run_cli_upgrade_with_homebrew(),
         CliUpgradeMethod::Cargo => run_cli_upgrade_with_cargo(),
     }
 }
 
-fn run_cli_upgrade_with_installer() -> Result<(), Box<dyn std::error::Error>> {
+fn run_cli_upgrade_with_installer(
+    channel: UpgradeChannel,
+) -> Result<(), Box<dyn std::error::Error>> {
     let install_url = resolve_install_url();
+    let env_overrides = installer_env_overrides(channel);
     output::step(&format_upgrade_start_message(
         &install_url,
         output::is_verbose(),
+        channel,
     ));
 
     let downloader = select_downloader(command_exists("curl"), command_exists("wget"))
         .map_err(|e| format!("{e}. Install curl or wget and retry."))?;
 
     output::with_spinner("Running installer...", || {
-        run_installer(downloader, &install_url)
+        run_installer(downloader, &install_url, &env_overrides)
     })?
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
@@ -195,17 +212,42 @@ fn homebrew_formula_installed(formula: &str) -> bool {
     }
 }
 
-fn format_upgrade_start_message(install_url: &str, verbose: bool) -> String {
+fn format_upgrade_start_message(
+    install_url: &str,
+    verbose: bool,
+    channel: UpgradeChannel,
+) -> String {
+    let channel_label = if channel == UpgradeChannel::Canary {
+        "canary "
+    } else {
+        ""
+    };
     if verbose {
         return format!(
-            "Installing latest tako CLI from {}",
+            "Installing latest {}tako CLI from {}",
+            channel_label,
             output::emphasized(install_url)
         );
     }
-    "Installing latest tako CLI".to_string()
+    format!("Installing latest {}tako CLI", channel_label)
 }
 
-fn run_installer(downloader: Downloader, install_url: &str) -> Result<(), String> {
+fn installer_env_overrides(channel: UpgradeChannel) -> HashMap<String, String> {
+    let mut overrides = HashMap::new();
+    if channel == UpgradeChannel::Canary {
+        overrides.insert(
+            "TAKO_DOWNLOAD_BASE_URL".to_string(),
+            CANARY_DOWNLOAD_BASE_URL.to_string(),
+        );
+    }
+    overrides
+}
+
+fn run_installer(
+    downloader: Downloader,
+    install_url: &str,
+    env_overrides: &HashMap<String, String>,
+) -> Result<(), String> {
     let mut download = Command::new(downloader.binary());
     downloader.apply_args(&mut download, install_url);
     let mut download = download
@@ -220,6 +262,7 @@ fn run_installer(downloader: Downloader, install_url: &str) -> Result<(), String
     };
 
     let mut install = Command::new("sh")
+        .envs(env_overrides)
         .stdin(download_stdout)
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit())
@@ -317,15 +360,39 @@ mod tests {
 
     #[test]
     fn format_upgrade_start_message_is_compact_by_default() {
-        let message = format_upgrade_start_message("https://tako.sh/install", false);
+        let message =
+            format_upgrade_start_message("https://tako.sh/install", false, UpgradeChannel::Stable);
         assert_eq!(message, "Installing latest tako CLI");
     }
 
     #[test]
     fn format_upgrade_start_message_includes_url_in_verbose_mode() {
-        let message = format_upgrade_start_message("https://tako.sh/install", true);
+        let message =
+            format_upgrade_start_message("https://tako.sh/install", true, UpgradeChannel::Stable);
         assert!(message.contains("Installing latest tako CLI from"));
         assert!(message.contains("tako.sh/install"));
+    }
+
+    #[test]
+    fn format_upgrade_start_message_mentions_canary_channel() {
+        let message =
+            format_upgrade_start_message("https://tako.sh/install", false, UpgradeChannel::Canary);
+        assert_eq!(message, "Installing latest canary tako CLI");
+    }
+
+    #[test]
+    fn canary_installer_env_overrides_include_download_base() {
+        let env = installer_env_overrides(UpgradeChannel::Canary);
+        assert_eq!(
+            env.get("TAKO_DOWNLOAD_BASE_URL"),
+            Some(&"https://github.com/lilienblum/tako/releases/download/canary".to_string())
+        );
+    }
+
+    #[test]
+    fn stable_installer_env_overrides_are_empty() {
+        let env = installer_env_overrides(UpgradeChannel::Stable);
+        assert!(env.is_empty());
     }
 
     #[test]

@@ -183,12 +183,62 @@ mod tests {
     #[test]
     fn servers_upgrade_parses_with_name() {
         let cli = Cli::try_parse_from(["tako", "servers", "upgrade", "prod"]).unwrap();
-        let Commands::Servers(server::ServerCommands::Upgrade { name }) =
-            cli.command.expect("command")
+        let Commands::Servers(server::ServerCommands::Upgrade {
+            name,
+            canary,
+            stable,
+        }) = cli.command.expect("command")
         else {
             panic!("expected Servers::Upgrade");
         };
         assert_eq!(name, "prod");
+        assert!(!canary);
+        assert!(!stable);
+    }
+
+    #[test]
+    fn servers_upgrade_parses_with_canary_flag() {
+        let cli = Cli::try_parse_from(["tako", "servers", "upgrade", "prod", "--canary"]).unwrap();
+        let Commands::Servers(server::ServerCommands::Upgrade {
+            name,
+            canary,
+            stable,
+        }) = cli.command.expect("command")
+        else {
+            panic!("expected Servers::Upgrade");
+        };
+        assert_eq!(name, "prod");
+        assert!(canary);
+        assert!(!stable);
+    }
+
+    #[test]
+    fn servers_upgrade_parses_with_stable_flag() {
+        let cli = Cli::try_parse_from(["tako", "servers", "upgrade", "prod", "--stable"]).unwrap();
+        let Commands::Servers(server::ServerCommands::Upgrade {
+            name,
+            canary,
+            stable,
+        }) = cli.command.expect("command")
+        else {
+            panic!("expected Servers::Upgrade");
+        };
+        assert_eq!(name, "prod");
+        assert!(!canary);
+        assert!(stable);
+    }
+
+    #[test]
+    fn servers_upgrade_rejects_both_channel_flags() {
+        let res =
+            Cli::try_parse_from(["tako", "servers", "upgrade", "prod", "--canary", "--stable"]);
+        match res {
+            Ok(_) => panic!("expected parse failure"),
+            Err(err) => assert!(
+                err.to_string().contains("cannot be used with"),
+                "unexpected error: {err}"
+            ),
+        }
     }
 
     #[test]
@@ -325,9 +375,43 @@ mod tests {
     #[test]
     fn upgrade_command_parses() {
         let cli = Cli::try_parse_from(["tako", "upgrade"]).unwrap();
-        let Some(Commands::Upgrade) = cli.command else {
+        let Some(Commands::Upgrade { canary, stable }) = cli.command else {
             panic!("expected Upgrade");
         };
+        assert!(!canary);
+        assert!(!stable);
+    }
+
+    #[test]
+    fn upgrade_command_parses_canary_flag() {
+        let cli = Cli::try_parse_from(["tako", "upgrade", "--canary"]).unwrap();
+        let Some(Commands::Upgrade { canary, stable }) = cli.command else {
+            panic!("expected Upgrade");
+        };
+        assert!(canary);
+        assert!(!stable);
+    }
+
+    #[test]
+    fn upgrade_command_parses_stable_flag() {
+        let cli = Cli::try_parse_from(["tako", "upgrade", "--stable"]).unwrap();
+        let Some(Commands::Upgrade { canary, stable }) = cli.command else {
+            panic!("expected Upgrade");
+        };
+        assert!(!canary);
+        assert!(stable);
+    }
+
+    #[test]
+    fn upgrade_command_rejects_both_channel_flags() {
+        let result = Cli::try_parse_from(["tako", "upgrade", "--canary", "--stable"]);
+        match result {
+            Ok(_) => panic!("expected parse failure"),
+            Err(err) => assert!(
+                err.to_string().contains("cannot be used with"),
+                "unexpected error: {err}"
+            ),
+        }
     }
 
     #[test]
@@ -432,7 +516,15 @@ pub enum Commands {
     Releases(releases::ReleaseCommands),
 
     /// Upgrade the local tako CLI to the latest version
-    Upgrade,
+    Upgrade {
+        /// Install latest canary build instead of stable release
+        #[arg(long, conflicts_with = "stable")]
+        canary: bool,
+
+        /// Install latest stable build and set default channel to stable
+        #[arg(long, conflicts_with = "canary")]
+        stable: bool,
+    },
 
     /// Deploy to an environment
     Deploy {
@@ -508,7 +600,7 @@ impl Cli {
             Commands::Servers(cmd) => server::run(cmd),
             Commands::Secrets(cmd) => secret::run(cmd),
             Commands::Releases(cmd) => releases::run(cmd),
-            Commands::Upgrade => upgrade::run(),
+            Commands::Upgrade { canary, stable } => upgrade::run(canary, stable),
             Commands::Deploy { env, yes, dir } => {
                 if let Some(dir) = dir {
                     std::env::set_current_dir(dir)?;

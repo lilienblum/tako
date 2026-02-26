@@ -31,9 +31,10 @@ Use `cargo run -p tako --bin tako -- --help` for current flags and subcommand he
 
 Operational behavior highlights:
 
-- `tako upgrade` upgrades only the local CLI (install-aware: Homebrew, Cargo, or hosted installer fallback).
+- `tako upgrade [--canary|--stable]` upgrades only the local CLI (install-aware: Homebrew, Cargo, or hosted installer fallback). `--canary` forces hosted installer mode against the moving canary prerelease assets. Channel default is persisted in global `upgrade_channel`.
 - `tako servers status` prints one global snapshot and exits.
-- `tako servers upgrade <name>` runs the remote installer in refresh mode (`TAKO_RESTART_SERVICE=0`) to update `/usr/local/bin/tako-server`, enters server upgrade mode, triggers service-manager reload (`sudo systemctl reload tako-server` on systemd or `sudo rc-service tako-server reload` on OpenRC), waits for readiness, then exits upgrade mode.
+- `tako servers upgrade <name> [--canary|--stable]` runs the remote installer in refresh mode (`TAKO_RESTART_SERVICE=0`) to update `/usr/local/bin/tako-server`, enters server upgrade mode, triggers service-manager reload (`systemctl reload tako-server` on systemd or `rc-service tako-server reload` on OpenRC) using root privileges (root login or sudo-capable user), waits for readiness, then exits upgrade mode. `--canary` installs from canary prerelease assets and channel default is persisted in global `upgrade_channel`.
+- Installer-managed hosts configure scoped passwordless sudo helpers for the `tako` SSH user, so upgrade/restart maintenance flows run non-interactively by default.
 - Status output shows separate lines for concurrently running builds of the same app.
 - App heading lines show `app (environment) state`; build/version is shown on the nested `build:` line.
 - `tako deploy` packages source files from the app's source root (git root when available; otherwise app directory), filtered by `.gitignore`.

@@ -259,9 +259,22 @@ Upgrade local CLI:
 
 ```bash
 tako upgrade
+tako upgrade --canary
+tako upgrade --stable
 ```
 
 `tako upgrade` upgrades only the local CLI installation.
+
+Canary distribution model:
+
+- `canary` is a single moving GitHub prerelease tag updated by CI on each `master` push.
+- Stable versioned releases remain maintainer-driven and are published from local release flows.
+
+Upgrade channel state:
+
+- Global config key `upgrade_channel` in `~/.tako/config.toml` stores the default upgrade channel (`stable` or `canary`).
+- Explicit channel flags update this key.
+- Upgrade commands print the active channel before execution (`You're on {channel} channel`).
 
 ### Global options
 
@@ -329,7 +342,7 @@ If `tako.toml` already exists:
 
 Show all commands with brief descriptions.
 
-### tako upgrade
+### tako upgrade [--canary|--stable]
 
 Upgrade the local `tako` CLI binary to the latest available release.
 
@@ -338,6 +351,9 @@ CLI upgrade strategy:
 - Homebrew install detection: runs `brew upgrade tako`
 - Cargo install detection (`~/.cargo/bin/tako`): runs `cargo install tako --locked`
 - Default/fallback: downloads and runs hosted installer (`https://tako.sh/install`) via `curl`/`wget`
+- `--canary`: always uses hosted installer mode and sets `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary`
+- `--stable`: forces stable channel and persists it as default
+- Without channel flags, `tako upgrade` uses persisted `upgrade_channel` from global config (default: `stable`)
 
 ### tako dev [--tui|--no-tui] [DIR]
 
@@ -560,17 +576,21 @@ Service-manager restart/stop behavior:
 During single-host upgrade orchestration, `tako-server` may enter an internal `upgrading` server mode that temporarily rejects mutating management commands (`deploy`, `stop`, `delete`, `update-secrets`) until the upgrade window ends.
 Upgrade mode transitions are guarded by a durable single-owner upgrade lock in SQLite so only one upgrade controller can hold the upgrade window at a time.
 
-### tako servers upgrade {server-name}
+### tako servers upgrade {server-name} [--canary|--stable]
 
 Single-host in-place upgrade via service-manager reload:
 
 1. CLI verifies `tako-server` is active on the host.
 2. CLI installs the new server binary on the host.
+   - default: latest stable installer artifact
+   - `--canary`: installer uses canary prerelease assets via `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary`
+   - `--stable`: installer uses stable artifacts and persists stable as default channel
+   - without channel flags: uses persisted `upgrade_channel` from global config (default: `stable`)
 3. CLI acquires the durable upgrade lock (`enter_upgrading`) and sets server mode to `upgrading`.
 4. CLI signals the primary service with:
-   - `sudo systemctl reload tako-server` on systemd hosts, or
-   - `sudo rc-service tako-server reload` on OpenRC hosts.
-     Both paths send SIGHUP for graceful in-place reload.
+   - `systemctl reload tako-server` on systemd hosts, or
+   - `rc-service tako-server reload` on OpenRC hosts.
+     Both paths send SIGHUP for graceful in-place reload and run with root privileges (root login or sudo-capable user).
 5. CLI waits for the primary management socket to report ready.
 6. CLI releases upgrade mode (`exit_upgrading`).
 
@@ -927,6 +947,7 @@ Installer SSH key behavior:
 - Installer ensures `nc` (netcat) is available so CLI management commands can talk to `/var/run/tako/tako.sock`.
 - Installer installs `mise` on the server (package-manager first; fallback to upstream installer when distro packages are unavailable).
 - Installer creates both `tako` and `tako-app` OS users.
+- Installer installs restricted maintenance helpers and scoped sudoers policy so the `tako` SSH user can perform non-interactive server upgrade/reload operations.
 - Installer supports systemd and OpenRC hosts.
 - Installer supports install-refresh mode (`TAKO_RESTART_SERVICE=0`) for build/image workflows without active init; in this mode, it refreshes binary/users and skips service-definition install/start.
 - Installer configures service capability support for privileged binds:
@@ -970,7 +991,7 @@ email = "admin@example.com"
 
 ### Zero-Downtime Operation
 
-- `tako servers upgrade` performs an in-place upgrade via service-manager reload (`sudo systemctl reload tako-server` on systemd, `sudo rc-service tako-server reload` on OpenRC), with no temporary candidate process or port overlap required.
+- `tako servers upgrade` performs an in-place upgrade via service-manager reload (`systemctl reload tako-server` on systemd, `rc-service tako-server reload` on OpenRC) with root privileges (root login or sudo-capable user), with no temporary candidate process or port overlap required.
 - Management socket uses a symlink-based path: the active server creates a PID-specific socket (`tako-{pid}.sock`) and atomically updates the `tako.sock` symlink on ready, so clients always connect to the current process.
 - Restart/stop still honor graceful shutdown semantics from the host service manager (systemd or OpenRC as described above).
 

@@ -3,8 +3,11 @@ use clap::Subcommand;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tako_core::ServerRuntimeInfo;
 
+use crate::config::{UpgradeChannel, resolve_upgrade_channel};
+
 const UPGRADE_SOCKET_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const UPGRADE_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const SERVER_INSTALL_REFRESH_HELPER: &str = "/usr/local/bin/tako-server-install-refresh";
 
 #[derive(Subcommand)]
 pub enum ServerCommands {
@@ -51,6 +54,14 @@ pub enum ServerCommands {
     Upgrade {
         /// Server name
         name: String,
+
+        /// Install latest canary build instead of stable release
+        #[arg(long, conflicts_with = "stable")]
+        canary: bool,
+
+        /// Install latest stable build and set default channel to stable
+        #[arg(long, conflicts_with = "canary")]
+        stable: bool,
     },
 
     /// Show global deployment status across configured servers
@@ -91,7 +102,11 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
         ServerCommands::Rm { name } => remove_server(name.as_deref()).await,
         ServerCommands::Ls => list_servers().await,
         ServerCommands::Restart { name } => restart_server(&name).await,
-        ServerCommands::Upgrade { name } => upgrade_server(&name).await,
+        ServerCommands::Upgrade {
+            name,
+            canary,
+            stable,
+        } => upgrade_server(&name, canary, stable).await,
         ServerCommands::Status => crate::commands::status::run().await,
     }
 }
@@ -706,18 +721,40 @@ fn first_non_empty_line(value: &str) -> Option<&str> {
     value.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
-fn remote_installer_command() -> String {
-    // Download installer to a temp file before execution (avoid direct pipe-to-shell).
-    // The connecting operator must have sudo access on the host.
-    "sudo sh -c 'set -eu; installer=$(mktemp); trap \"rm -f $installer\" EXIT; curl -fsSL https://tako.sh/install-server -o \"$installer\"; TAKO_RESTART_SERVICE=0 sh \"$installer\"'".to_string()
+fn run_with_root_or_sudo(shell_script: &str) -> String {
+    format!(
+        "if [ \"$(id -u)\" -eq 0 ]; then sh -c '{0}'; elif command -v sudo >/dev/null 2>&1; then sudo sh -c '{0}'; else echo \"error: this operation requires root privileges (run as root or install/configure sudo)\" >&2; exit 1; fi",
+        shell_script
+    )
+}
+
+fn remote_installer_command(channel: UpgradeChannel) -> String {
+    let channel_arg = if channel == UpgradeChannel::Canary {
+        "canary"
+    } else {
+        "stable"
+    };
+
+    run_with_root_or_sudo(&format!(
+        "{} {}",
+        SERVER_INSTALL_REFRESH_HELPER, channel_arg
+    ))
 }
 
 fn format_installer_failure(output: &crate::ssh::CommandOutput) -> String {
     let combined = output.combined();
     let message = first_non_empty_line(combined.trim()).unwrap_or("remote installer failed");
     let lower = message.to_ascii_lowercase();
-    if lower.contains("password") || lower.contains("not allowed") || lower.contains("sorry") {
-        return "Remote user does not have sudo access. Ensure the connecting SSH user can run 'sudo sh -c ...' on the server.".to_string();
+    if lower.contains("tako-server-install-refresh") && lower.contains("not found") {
+        return "Remote host is missing the tako-server upgrade helper. Re-run https://tako.sh/install-server as root, then retry upgrade.".to_string();
+    }
+    if lower.contains("password")
+        || lower.contains("not allowed")
+        || lower.contains("sorry")
+        || lower.contains("requires root privileges")
+        || lower.contains("sudo:")
+    {
+        return "Remote upgrade requires root privileges. Connect as root or use an SSH user with sudo access on the server.".to_string();
     }
     format!(
         "Remote installer failed with exit code {}: {}",
@@ -747,9 +784,19 @@ async fn wait_for_primary_ready(
     ))
 }
 
-pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub(crate) async fn upgrade_server(
+    name: &str,
+    canary: bool,
+    stable: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::ServersToml;
     use crate::ssh::{SshClient, SshConfig};
+
+    let channel = resolve_upgrade_channel(canary, stable)?;
+    output::step(&format!(
+        "You're on {} channel",
+        output::emphasized(channel.as_str())
+    ));
 
     let servers = ServersToml::load()?;
     let server = servers
@@ -781,9 +828,14 @@ pub(crate) async fn upgrade_server(name: &str) -> Result<(), Box<dyn std::error:
         }
 
         // Install/update binary without restarting the service
+        let install_message = if channel == UpgradeChannel::Canary {
+            "Installing updated canary tako-server binary..."
+        } else {
+            "Installing updated tako-server binary..."
+        };
         let install_output = output::with_spinner_async(
-            "Installing updated tako-server binary...",
-            ssh.exec(&remote_installer_command()),
+            install_message,
+            ssh.exec(&remote_installer_command(channel)),
         )
         .await
         .map_err(|e| format!("Failed to run installer: {}", e))?
@@ -890,9 +942,15 @@ mod tests {
 
     #[test]
     fn remote_installer_command_downloads_script_before_execution() {
-        let command = remote_installer_command();
-        assert!(command.contains("curl -fsSL https://tako.sh/install-server -o"));
-        assert!(command.contains("TAKO_RESTART_SERVICE=0 sh \"$installer\""));
-        assert!(!command.contains("| TAKO_RESTART_SERVICE=0 sh"));
+        let command = remote_installer_command(UpgradeChannel::Stable);
+        assert!(command.contains("if [ \"$(id -u)\" -eq 0 ]"));
+        assert!(command.contains("command -v sudo"));
+        assert!(command.contains("/usr/local/bin/tako-server-install-refresh stable"));
+    }
+
+    #[test]
+    fn remote_installer_command_uses_canary_channel_arg_when_requested() {
+        let command = remote_installer_command(UpgradeChannel::Canary);
+        assert!(command.contains("/usr/local/bin/tako-server-install-refresh canary"));
     }
 }

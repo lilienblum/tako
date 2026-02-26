@@ -1,0 +1,213 @@
+name: Canary Release
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: canary-release
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux Artifacts
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and package Linux artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          for arch in amd64 arm64; do
+            docker buildx build -f docker/build.Dockerfile \
+              --platform "linux/$arch" \
+              --target tako-artifact-glibc \
+              --output "type=local,dest=dist/linux-$arch-glibc" \
+              .
+
+            if [ "$arch" = "amd64" ]; then
+              outarch="x86_64"
+            else
+              outarch="aarch64"
+            fi
+
+            tmpdir="$(mktemp -d)"
+            cp "dist/linux-$arch-glibc/tako" "$tmpdir/tako"
+            tar -czf "dist/tako-linux-$outarch.tar.gz" -C "$tmpdir" tako
+            sha256sum "dist/tako-linux-$outarch.tar.gz" > "dist/tako-linux-$outarch.tar.gz.sha256"
+            rm -rf "$tmpdir" "dist/linux-$arch-glibc"
+          done
+
+          for libc in glibc musl; do
+            for arch in amd64 arm64; do
+              docker buildx build -f docker/build.Dockerfile \
+                --platform "linux/$arch" \
+                --target "tako-server-artifact-$libc" \
+                --output "type=local,dest=dist/linux-$arch-$libc" \
+                .
+
+              if [ "$arch" = "amd64" ]; then
+                outarch="x86_64"
+              else
+                outarch="aarch64"
+              fi
+
+              tmpdir="$(mktemp -d)"
+              cp "dist/linux-$arch-$libc/tako-server" "$tmpdir/tako-server"
+              tar -czf "dist/tako-server-linux-$outarch-$libc.tar.gz" -C "$tmpdir" tako-server
+              sha256sum "dist/tako-server-linux-$outarch-$libc.tar.gz" > "dist/tako-server-linux-$outarch-$libc.tar.gz.sha256"
+              rm -rf "$tmpdir" "dist/linux-$arch-$libc"
+            done
+          done
+
+          ls -1 dist/*.tar.gz dist/*.sha256
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-linux
+          path: |
+            dist/tako-linux-*.tar.gz
+            dist/tako-linux-*.tar.gz.sha256
+            dist/tako-server-linux-*.tar.gz
+            dist/tako-server-linux-*.tar.gz.sha256
+          if-no-files-found: error
+
+  build-darwin-cli:
+    name: Build macOS CLI Artifacts
+    if: github.ref == 'refs/heads/master'
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Build and package macOS CLI artifacts
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          cargo build -p tako --bin tako --release --target aarch64-apple-darwin
+          cargo build -p tako --bin tako --release --target x86_64-apple-darwin
+
+          tmpdir="$(mktemp -d)"
+          cp target/aarch64-apple-darwin/release/tako "$tmpdir/tako"
+          tar -czf dist/tako-darwin-aarch64.tar.gz -C "$tmpdir" tako
+          rm -rf "$tmpdir"
+
+          tmpdir="$(mktemp -d)"
+          cp target/x86_64-apple-darwin/release/tako "$tmpdir/tako"
+          tar -czf dist/tako-darwin-x86_64.tar.gz -C "$tmpdir" tako
+          rm -rf "$tmpdir"
+
+          shasum -a 256 dist/tako-darwin-aarch64.tar.gz > dist/tako-darwin-aarch64.tar.gz.sha256
+          shasum -a 256 dist/tako-darwin-x86_64.tar.gz > dist/tako-darwin-x86_64.tar.gz.sha256
+
+          ls -1 dist/tako-darwin-*.tar.gz dist/tako-darwin-*.tar.gz.sha256
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-darwin
+          path: |
+            dist/tako-darwin-*.tar.gz
+            dist/tako-darwin-*.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish Canary Prerelease
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    needs:
+      - build-linux
+      - build-darwin-cli
+    permissions:
+      contents: write
+    steps:
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: canary-linux
+          path: dist
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: canary-darwin
+          path: dist
+
+      - name: Publish moving canary prerelease
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          for required in \
+            dist/tako-darwin-aarch64.tar.gz \
+            dist/tako-darwin-aarch64.tar.gz.sha256 \
+            dist/tako-darwin-x86_64.tar.gz \
+            dist/tako-darwin-x86_64.tar.gz.sha256 \
+            dist/tako-linux-x86_64.tar.gz \
+            dist/tako-linux-x86_64.tar.gz.sha256 \
+            dist/tako-linux-aarch64.tar.gz \
+            dist/tako-linux-aarch64.tar.gz.sha256 \
+            dist/tako-server-linux-x86_64-glibc.tar.gz \
+            dist/tako-server-linux-x86_64-glibc.tar.gz.sha256 \
+            dist/tako-server-linux-aarch64-glibc.tar.gz \
+            dist/tako-server-linux-aarch64-glibc.tar.gz.sha256 \
+            dist/tako-server-linux-x86_64-musl.tar.gz \
+            dist/tako-server-linux-x86_64-musl.tar.gz.sha256 \
+            dist/tako-server-linux-aarch64-musl.tar.gz \
+            dist/tako-server-linux-aarch64-musl.tar.gz.sha256; do
+            test -f "$required"
+          done
+
+          if gh release view canary >/dev/null 2>&1; then
+            gh release delete canary --yes --cleanup-tag
+          fi
+
+          timestamp="$(date -u +'%Y-%m-%d %H:%M UTC')"
+          short_sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+          notes="Latest canary build from master (${short_sha}) on ${timestamp}."
+
+          gh release create canary \
+            --prerelease \
+            --target "$GITHUB_SHA" \
+            --title "canary" \
+            --notes "$notes" \
+            dist/tako-darwin-aarch64.tar.gz \
+            dist/tako-darwin-aarch64.tar.gz.sha256 \
+            dist/tako-darwin-x86_64.tar.gz \
+            dist/tako-darwin-x86_64.tar.gz.sha256 \
+            dist/tako-linux-x86_64.tar.gz \
+            dist/tako-linux-x86_64.tar.gz.sha256 \
+            dist/tako-linux-aarch64.tar.gz \
+            dist/tako-linux-aarch64.tar.gz.sha256 \
+            dist/tako-server-linux-x86_64-glibc.tar.gz \
+            dist/tako-server-linux-x86_64-glibc.tar.gz.sha256 \
+            dist/tako-server-linux-aarch64-glibc.tar.gz \
+            dist/tako-server-linux-aarch64-glibc.tar.gz.sha256 \
+            dist/tako-server-linux-x86_64-musl.tar.gz \
+            dist/tako-server-linux-x86_64-musl.tar.gz.sha256 \
+            dist/tako-server-linux-aarch64-musl.tar.gz \
+            dist/tako-server-linux-aarch64-musl.tar.gz.sha256

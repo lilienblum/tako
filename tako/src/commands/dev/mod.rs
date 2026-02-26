@@ -2092,12 +2092,12 @@ dev = ["bun", "run", "dev"]
     }
 
     #[test]
-    fn ensure_dev_server_tls_material_regenerates_legacy_files_without_names_manifest() {
+    fn ensure_dev_server_tls_material_regenerates_files_without_names_manifest() {
         let temp = TempDir::new().unwrap();
         let (cert_path, key_path) = dev_server_tls_paths_for_home(temp.path());
         std::fs::create_dir_all(cert_path.parent().unwrap()).unwrap();
-        std::fs::write(&cert_path, "legacy-cert").unwrap();
-        std::fs::write(&key_path, "legacy-key").unwrap();
+        std::fs::write(&cert_path, "existing-cert").unwrap();
+        std::fs::write(&key_path, "existing-key").unwrap();
 
         let ca = LocalCA::generate().unwrap();
         let changed = ensure_dev_server_tls_material_for_home(&ca, temp.path(), "demo").unwrap();

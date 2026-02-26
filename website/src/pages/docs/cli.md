@@ -37,7 +37,7 @@ Directory selection is command-scoped:
 
 - `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` (recommended unique per server), production `route`, runtime, and preset selection when family presets are available); detailed "Detected" summary is shown in verbose mode.
 - `tako help`: show all commands with brief descriptions.
-- `tako upgrade`: upgrade local CLI installation.
+- `tako upgrade [--canary|--stable]`: upgrade local CLI installation.
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
 - `tako dev [--tui | --no-tui] [DIR]`: run local development mode.
 - `tako doctor`: print local dev diagnostics (DNS, socket, listener, leases, and local forwarding preflight checks).
@@ -51,6 +51,8 @@ Directory selection is command-scoped:
 
 ```bash
 tako upgrade
+tako upgrade --canary
+tako upgrade --stable
 ```
 
 Notes:
@@ -59,6 +61,10 @@ Notes:
   - Homebrew installs use `brew upgrade tako`
   - Cargo installs under `~/.cargo/bin/tako` use `cargo install tako --locked`
   - fallback uses hosted installer script (`https://tako.sh/install`) via `curl`/`wget`
+  - `--canary` forces hosted installer mode and sets `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary`
+  - `--stable` forces stable channel and persists it as default
+  - without channel flags, upgrade uses persisted global `upgrade_channel` (default: `stable`)
+- both upgrade commands print active channel before execution (`You're on {channel} channel`)
 
 ## `releases` Subcommands
 
@@ -112,7 +118,7 @@ tako servers restart <NAME>
 `tako servers upgrade`:
 
 ```bash
-tako servers upgrade <NAME>
+tako servers upgrade <NAME> [--canary|--stable]
 ```
 
 `tako servers status`:
@@ -133,7 +139,11 @@ Notes:
   - `--no-test` skips SSH checks and target detection.
 - `tako servers rm` aliases: `remove`, `delete`.
 - `tako servers ls` alias: `list`.
-- `tako servers upgrade <NAME>` installs the updated server binary on the host, then performs an in-place reload via the host service manager (`sudo systemctl reload tako-server` on systemd or `sudo rc-service tako-server reload` on OpenRC). A supported service manager is required.
+- `tako servers upgrade <NAME>` installs the updated server binary on the host, then performs an in-place reload via the host service manager (`systemctl reload tako-server` on systemd or `rc-service tako-server reload` on OpenRC) using root privileges (root login or sudo-capable user). A supported service manager is required.
+- `tako servers upgrade <NAME> --canary` installs canary prerelease server artifacts by passing `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary` to the installer.
+- `tako servers upgrade <NAME> --stable` forces stable channel and persists it as default.
+- without channel flags, server upgrade uses persisted global `upgrade_channel` (default: `stable`).
+- installer-managed hosts configure scoped passwordless sudo for `tako` user maintenance helpers, so `tako servers upgrade`/`restart` run non-interactively by default.
 - `tako servers status` prints a single global deployment/runtime snapshot across configured servers.
 
 Deploy note:
