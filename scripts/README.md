@@ -12,6 +12,7 @@ Repository scripts used by installers, CI checks, and local development workflow
   - Detects host architecture (`x86_64`/`aarch64`) and libc (`glibc`/`musl`) to download the matching server artifact.
   - Applies `setcap cap_net_bind_service=+ep` to `/usr/local/bin/tako-server` when possible for non-root `:80/:443` binds.
   - Creates both `tako` (server) and `tako-app` (app process) users, and removes any old sudoers/upgrade-helper artifacts.
+  - If `TAKO_SSH_PUBKEY` is unset, prompts for a public key from the terminal (`/dev/tty`) when available, including common piped installs; invalid key lines are re-prompted. If key input cannot be read, installer tries the invoking sudo user's `~/.ssh/authorized_keys` first, then warns/skips if no valid key is found.
   - Installs service definitions based on host init system:
     - systemd unit with `Type=notify`, `ExecReload=/bin/kill -HUP $MAINPID`, and capability bounding for `CAP_NET_BIND_SERVICE`.
     - OpenRC init script with `reload` support and `retry="TERM/1800/KILL/5"` graceful-stop semantics.

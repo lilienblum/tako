@@ -913,8 +913,9 @@ curl -fsSL https://tako.sh/install-server | sudo sh
 Installer SSH key behavior:
 
 - If `TAKO_SSH_PUBKEY` is set, installer uses it and skips prompting.
-- If unset and running interactively, installer prompts for a public key to authorize for user `tako`.
-- If unset and non-interactive, installer continues without key setup and prints a warning.
+- If unset and a terminal is available, installer prompts for a public key to authorize for user `tako` (including common piped installs such as `curl ... | sudo sh`) and re-prompts on invalid input until a valid SSH public key line is provided.
+- If terminal key input cannot be read, installer attempts to reuse the first valid key from the invoking `SUDO_USER` `~/.ssh/authorized_keys`; if unavailable, installer continues without key setup and prints a warning with a `TAKO_SSH_PUBKEY` rerun hint.
+- If unset and no terminal is available, installer attempts the same invoking-user key fallback before warning and continuing without key setup.
 - CLI SSH connections require host key verification against `~/.ssh/known_hosts` (or configured SSH keys directory); unknown/changed host keys are rejected.
 - Installer detects host target (`arch` + `libc`) and downloads matching artifact name `tako-server-linux-{arch}-{libc}` (supported: `x86_64`/`aarch64` with `glibc`/`musl`).
 - Installer ensures `nc` (netcat) is available so CLI management commands can talk to `/var/run/tako/tako.sock`.

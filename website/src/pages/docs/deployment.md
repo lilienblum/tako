@@ -56,6 +56,7 @@ Before you ship, do a quick sanity pass:
 Each target server should have:
 
 - SSH access as the configured deployment user (typically `tako`).
+- For hosted installer usage, provide `TAKO_SSH_PUBKEY` or paste a public key when prompted (the installer prompts on a terminal when available, including common piped installs, re-prompts on invalid key lines, and if input cannot be read it tries the invoking sudo user's `~/.ssh/authorized_keys` before warning + skip).
 - Local SSH `known_hosts` entry for each target host (unknown/changed host keys are rejected).
 - `tako-server` installed and running.
 - `tako-server` installed via the hosted installer (or equivalent) for the host target; installer resolves `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>`.
