@@ -157,10 +157,11 @@ _prebuild-tako-server:
         shasum -a 256 dist/tako-server-linux-aarch64-musl.tar.gz > dist/tako-server-linux-aarch64-musl.tar.gz.sha256; \
     fi
 
-# Generate release notes draft for `tako`.
+# Generate release notes for the latest `tako` release tag on HEAD.
 # Output: dist/release-notes/tako.md
 notes-tako series="": _guard _require-git-cliff
-    @pattern='^{{ TAKO_TAG_PREFIX }}'; \
+    @tag_glob='{{ TAKO_TAG_PREFIX }}*'; \
+    pattern='^{{ TAKO_TAG_PREFIX }}'; \
     if [ -n "{{ series }}" ]; then \
         series_prefix='{{ series }}'; \
         case "$series_prefix" in \
@@ -168,8 +169,18 @@ notes-tako series="": _guard _require-git-cliff
         esac; \
         escaped_series="$(printf '%s' "$series_prefix" | sed 's/[][\.^$*+?(){}|\\]/\\&/g')"; \
         pattern="^{{ TAKO_TAG_PREFIX }}$escaped_series"; \
+        tag_glob='{{ TAKO_TAG_PREFIX }}'"$series_prefix"'*'; \
     fi; \
-    git cliff -c cliff.toml --unreleased --tag-pattern "$pattern" \
+    tag="$(git tag --list "$tag_glob" --sort=-v:refname | head -n 1 || true)"; \
+    if [ -z "$tag" ]; then \
+        echo "error: no {{ TAKO_TAG_PREFIX }}* tag found for notes generation" >&2; \
+        exit 1; \
+    fi; \
+    if [ "$(git rev-list -n 1 "$tag")" != "$(git rev-parse HEAD)" ]; then \
+        echo "error: latest matching tako tag ($tag) does not point to HEAD; run this after release::cargo-tako" >&2; \
+        exit 1; \
+    fi; \
+    git cliff -c cliff.toml --current --tag-pattern "$pattern" \
         --include-path 'tako/**/*' \
         --include-path 'tako-core/**/*' \
         --include-path 'tako-socket/**/*' \
@@ -177,10 +188,11 @@ notes-tako series="": _guard _require-git-cliff
         --include-path 'scripts/install-tako-cli.sh' \
         -o "{{ RELEASE_NOTES_DIR }}/tako.md"
 
-# Generate release notes draft for `tako-server`.
+# Generate release notes for the latest `tako-server` release tag on HEAD.
 # Output: dist/release-notes/tako-server.md
 notes-tako-server series="": _guard _require-git-cliff
-    @pattern='^{{ TAKO_SERVER_TAG_PREFIX }}'; \
+    @tag_glob='{{ TAKO_SERVER_TAG_PREFIX }}*'; \
+    pattern='^{{ TAKO_SERVER_TAG_PREFIX }}'; \
     if [ -n "{{ series }}" ]; then \
         series_prefix='{{ series }}'; \
         case "$series_prefix" in \
@@ -188,8 +200,18 @@ notes-tako-server series="": _guard _require-git-cliff
         esac; \
         escaped_series="$(printf '%s' "$series_prefix" | sed 's/[][\.^$*+?(){}|\\]/\\&/g')"; \
         pattern="^{{ TAKO_SERVER_TAG_PREFIX }}$escaped_series"; \
+        tag_glob='{{ TAKO_SERVER_TAG_PREFIX }}'"$series_prefix"'*'; \
     fi; \
-    git cliff -c cliff.toml --unreleased --tag-pattern "$pattern" \
+    tag="$(git tag --list "$tag_glob" --sort=-v:refname | head -n 1 || true)"; \
+    if [ -z "$tag" ]; then \
+        echo "error: no {{ TAKO_SERVER_TAG_PREFIX }}* tag found for notes generation" >&2; \
+        exit 1; \
+    fi; \
+    if [ "$(git rev-list -n 1 "$tag")" != "$(git rev-parse HEAD)" ]; then \
+        echo "error: latest matching tako-server tag ($tag) does not point to HEAD; run this after release::cargo-tako-server" >&2; \
+        exit 1; \
+    fi; \
+    git cliff -c cliff.toml --current --tag-pattern "$pattern" \
         --include-path 'tako-server/**/*' \
         --include-path 'tako-core/**/*' \
         --include-path 'tako-socket/**/*' \
@@ -206,21 +228,21 @@ notes-sdk series="": _guard
         --output "{{ RELEASE_NOTES_DIR }}/sdk-npm.md"
 
 # Full `tako` release flow:
-# 1) Generate notes for `tako`
-# 2) Release `tako`
+# 1) Release `tako`
+# 2) Generate notes for tagged `tako` release
 # 3) Publish GitHub release assets for installer downloads
 tako series="": _guard
-    just --justfile just/release.just notes-tako "{{ series }}"
     just --justfile just/release.just cargo-tako
+    just --justfile just/release.just notes-tako "{{ series }}"
     just --justfile just/release.just github-tako
 
 # Full `tako-server` release flow:
-# 1) Generate notes for `tako-server`
-# 2) Release `tako-server`
+# 1) Release `tako-server`
+# 2) Generate notes for tagged `tako-server` release
 # 3) Publish GitHub release assets for installer downloads
 tako-server series="": _guard
-    just --justfile just/release.just notes-tako-server "{{ series }}"
     just --justfile just/release.just cargo-tako-server
+    just --justfile just/release.just notes-tako-server "{{ series }}"
     just --justfile just/release.just github-tako-server
 
 # Full `tako.sh` SDK release flow:

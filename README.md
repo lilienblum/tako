@@ -113,8 +113,8 @@ Release tags are signed (`git tag -s`). Ensure local Git tag signing is configur
 
 Each command is a full flow for that component:
 
-- `release tako`: release notes + `cargo publish -p tako` + GitHub release asset upload (`tako-*`)
-- `release tako-server`: release notes + `cargo publish -p tako-server` + GitHub release asset upload (`tako-server-*`)
+- `release tako`: `cargo publish -p tako` + versioned release notes + GitHub release asset upload (`tako-*`)
+- `release tako-server`: `cargo publish -p tako-server` + versioned release notes + GitHub release asset upload (`tako-server-*`)
 - `release sdk`: release notes + `npm publish` from `sdk/js`
 - `release tako-core`: shared crate release + `cargo publish -p tako-core`
 - `release tako-socket`: shared crate release + `cargo publish -p tako-socket`
@@ -132,7 +132,7 @@ just release sdk
 `release tako` and `release tako-server` enforce a guard: if `tako-core` or `tako-socket` source changed since the last shared crate release tag, they fail with instructions to release shared crates first.
 `release tako` and `release tako-server` also require authenticated GitHub CLI (`gh auth login`) to publish release assets used by `https://tako.sh/install` and `https://tako.sh/install-server`.
 
-Draft notes are written under `dist/release-notes/`.
+Release notes are written under `dist/release-notes/`.
 `tako` and `tako-server` notes use `git-cliff` with [`cliff.toml`](cliff.toml), focusing on user-facing Features and Bug Fixes.
 Notes generation is path-filtered per component (`--include-path`) so only relevant commits are included.
 
