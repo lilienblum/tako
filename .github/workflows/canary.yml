@@ -38,6 +38,8 @@ jobs:
               --platform "linux/$arch" \
               --target tako-artifact-glibc \
               --build-arg TAKO_CANARY_SHA="$GITHUB_SHA" \
+              --cache-from "type=gha,scope=canary-linux-$arch-glibc" \
+              --cache-to "type=gha,scope=canary-linux-$arch-glibc,mode=max" \
               --output "type=local,dest=dist/linux-$arch-glibc" \
               .
 
@@ -60,6 +62,8 @@ jobs:
                 --platform "linux/$arch" \
                 --target "tako-server-artifact-$libc" \
                 --build-arg TAKO_CANARY_SHA="$GITHUB_SHA" \
+                --cache-from "type=gha,scope=canary-linux-$arch-$libc" \
+                --cache-to "type=gha,scope=canary-linux-$arch-$libc,mode=max" \
                 --output "type=local,dest=dist/linux-$arch-$libc" \
                 .
 
@@ -102,6 +106,9 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Build and package macOS CLI artifacts
         run: |
