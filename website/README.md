@@ -31,7 +31,7 @@ bun run --cwd website dev
 
 ```bash
 curl -fsSL http://localhost:4321/install | sh
-curl -fsSL http://localhost:4321/install-server | sh
+curl -fsSL http://localhost:4321/install-server | sudo sh
 ```
 
 ## Build and Deploy

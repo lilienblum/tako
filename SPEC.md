@@ -907,7 +907,7 @@ Manual for v1. Users run a server setup script (or equivalent manual steps) to:
 Recommended: run the hosted installer script on the server (as root):
 
 ```bash
-curl -fsSL https://tako.sh/install-server | sh
+curl -fsSL https://tako.sh/install-server | sudo sh
 ```
 
 Installer SSH key behavior:
