@@ -89,10 +89,18 @@ pub fn validate_tako_toml(config: &TakoToml) -> ValidationResult {
         }
     }
 
-    // Check for environments without servers
+    // Check for environments without servers (development is exempt: servers are ignored there)
     for env_name in config.envs.keys() {
         let servers = config.get_servers_for_env(env_name);
-        if servers.is_empty() {
+        if env_name == "development" {
+            if !servers.is_empty() {
+                result.warn(
+                    "Servers configured for 'development' are ignored; \
+                     'development' is only used by 'tako dev'"
+                        .to_string(),
+                );
+            }
+        } else if servers.is_empty() {
             result.warn(format!(
                 "Environment '{}' has no servers configured",
                 env_name
@@ -268,6 +276,47 @@ mod tests {
                 .errors
                 .iter()
                 .all(|e| !e.contains("must define either 'route' or 'routes'"))
+        );
+    }
+
+    #[test]
+    fn validate_tako_toml_no_warning_for_development_without_servers() {
+        let mut config = TakoToml::default();
+        config
+            .envs
+            .insert("development".to_string(), EnvConfig::default());
+
+        let result = validate_tako_toml(&config);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .all(|w| !w.contains("no servers configured"))
+        );
+    }
+
+    #[test]
+    fn validate_tako_toml_warns_when_servers_configured_for_development() {
+        let mut config = TakoToml::default();
+        config
+            .envs
+            .insert("development".to_string(), EnvConfig::default());
+        config.servers.insert(
+            "dev-server".to_string(),
+            ServerConfig {
+                env: "development".to_string(),
+                instances: None,
+                port: None,
+                idle_timeout: None,
+            },
+        );
+
+        let result = validate_tako_toml(&config);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("'development'") && w.contains("ignored"))
         );
     }
 
