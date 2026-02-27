@@ -135,13 +135,20 @@ pub fn validate_servers_toml(config: &ServersToml) -> ValidationResult {
 }
 
 /// Validate that tako.toml servers reference existing global servers.
+/// If `deploy_env` is set, only validates servers targeting that environment.
 pub fn validate_server_references(
     tako_config: &TakoToml,
     servers_config: &ServersToml,
+    deploy_env: Option<&str>,
 ) -> ValidationResult {
     let mut result = ValidationResult::new();
 
-    for server_name in tako_config.servers.keys() {
+    for (server_name, server_config) in &tako_config.servers {
+        if let Some(env) = deploy_env {
+            if server_config.env != env {
+                continue;
+            }
+        }
         if !servers_config.contains(server_name) {
             result.error(format!(
                 "Server '{}' is configured in tako.toml but not found in ~/.tako/config.toml [[servers]]. \
@@ -158,12 +165,17 @@ pub fn validate_server_references(
 pub fn validate_full_config(
     tako_config: &TakoToml,
     servers_config: &ServersToml,
+    deploy_env: Option<&str>,
 ) -> ValidationResult {
     let mut result = ValidationResult::new();
 
     result.merge(validate_tako_toml(tako_config));
     result.merge(validate_servers_toml(servers_config));
-    result.merge(validate_server_references(tako_config, servers_config));
+    result.merge(validate_server_references(
+        tako_config,
+        servers_config,
+        deploy_env,
+    ));
 
     result
 }
@@ -171,7 +183,7 @@ pub fn validate_full_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EnvConfig, ServerConfig, TakoToml};
+    use crate::config::{EnvConfig, ServerConfig, ServerEntry, ServersToml, TakoToml};
 
     #[test]
     fn validate_tako_toml_allows_implicit_production_server_env() {
@@ -257,5 +269,47 @@ mod tests {
                 .iter()
                 .all(|e| !e.contains("must define either 'route' or 'routes'"))
         );
+    }
+
+    #[test]
+    fn validate_server_references_skips_servers_for_other_envs() {
+        let mut tako_config = TakoToml::default();
+        tako_config.servers.insert(
+            "prod-server".to_string(),
+            ServerConfig {
+                env: "production".to_string(),
+                instances: None,
+                port: None,
+                idle_timeout: None,
+            },
+        );
+        tako_config.servers.insert(
+            "staging-server".to_string(),
+            ServerConfig {
+                env: "staging".to_string(),
+                instances: None,
+                port: None,
+                idle_timeout: None,
+            },
+        );
+
+        // Only prod-server is in global config
+        let mut servers_config = ServersToml::default();
+        servers_config.servers.insert(
+            "prod-server".to_string(),
+            ServerEntry {
+                host: "prod.example.com".to_string(),
+                port: 22,
+                description: None,
+            },
+        );
+
+        // Deploying to production: staging-server missing from global config is not an error
+        let result = validate_server_references(&tako_config, &servers_config, Some("production"));
+        assert!(result.errors.is_empty());
+
+        // Without env filter: staging-server missing is an error
+        let result = validate_server_references(&tako_config, &servers_config, None);
+        assert!(result.errors.iter().any(|e| e.contains("staging-server")));
     }
 }

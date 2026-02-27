@@ -18,7 +18,7 @@ routes = ["demo.tako.sh/bun", "*.bun.tako.sh"]
 [envs.staging]
 routes = ["tako-testbed.orb.local/bun", "*.bun.tako-testbed.orb.local"]
 
-[servers.production]
+[servers.tako-demo]
 env = "production"
 
 [servers.testbed]

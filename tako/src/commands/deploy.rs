@@ -213,7 +213,7 @@ async fn run_async(
 
             let env = resolve_deploy_environment(requested_env, &tako_config)?;
 
-            let config_result = validate_full_config(&tako_config, &servers);
+            let config_result = validate_full_config(&tako_config, &servers, Some(&env));
             if config_result.has_errors() {
                 return Err(format!(
                     "Configuration errors:\n  {}",
