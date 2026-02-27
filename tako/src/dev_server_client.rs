@@ -144,10 +144,13 @@ fn spawn_dev_server(
 ) -> Result<std::process::Child, Box<dyn std::error::Error>> {
     use std::process::Stdio;
 
+    let mut running_from_source_checkout = false;
+
     // Try repo-local target paths first when running from a source checkout.
     if let Ok(exe) = std::env::current_exe()
         && let Some(root) = crate::paths::repo_root_from_exe(&exe)
     {
+        running_from_source_checkout = true;
         let candidates = repo_local_dev_server_candidates(&root);
         if repo_local_dev_server_build_needed(
             file_modified_time(&exe),
@@ -182,12 +185,25 @@ fn spawn_dev_server(
         .spawn()
     {
         Ok(child) => Ok(child),
-        Err(e) => Err(format!(
-            "failed to spawn 'tako-dev-server' ({}). If you're running from a source checkout, build it with: cargo build -p tako --bin tako-dev-server",
-            e
-        )
-        .into()),
+        Err(e) => {
+            Err(format_missing_dev_server_spawn_error(running_from_source_checkout, &e).into())
+        }
     }
+}
+
+fn format_missing_dev_server_spawn_error(
+    running_from_source_checkout: bool,
+    spawn_error: &std::io::Error,
+) -> String {
+    if running_from_source_checkout {
+        return format!(
+            "failed to spawn 'tako-dev-server' ({spawn_error}). If you're running from a source checkout, build it with: cargo build -p tako --bin tako-dev-server"
+        );
+    }
+
+    format!(
+        "failed to spawn 'tako-dev-server' ({spawn_error}). Reinstall Tako CLI and retry: curl -fsSL https://tako.sh/install | sh"
+    )
 }
 
 fn repo_local_dev_server_candidates(root: &std::path::Path) -> [PathBuf; 2] {
@@ -560,6 +576,23 @@ mod tests {
             (DEV_SERVER_STARTUP_WAIT_ATTEMPTS as u64) * DEV_SERVER_STARTUP_WAIT_INTERVAL_MS,
             15_000
         );
+    }
+
+    #[test]
+    fn missing_daemon_spawn_hint_for_source_checkout_recommends_build() {
+        let err = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let msg = format_missing_dev_server_spawn_error(true, &err);
+        assert!(msg.contains("build it with: cargo build -p tako --bin tako-dev-server"));
+        assert!(!msg.contains("Reinstall Tako CLI"));
+    }
+
+    #[test]
+    fn missing_daemon_spawn_hint_for_installed_cli_recommends_reinstall() {
+        let err = std::io::Error::from(std::io::ErrorKind::NotFound);
+        let msg = format_missing_dev_server_spawn_error(false, &err);
+        assert!(msg.contains("Reinstall Tako CLI and retry"));
+        assert!(msg.contains("curl -fsSL https://tako.sh/install | sh"));
+        assert!(!msg.contains("build it with: cargo build -p tako --bin tako-dev-server"));
     }
 
     #[test]

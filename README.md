@@ -113,7 +113,7 @@ Release tags are signed (`git tag -s`). Ensure local Git tag signing is configur
 
 Each command is a full flow for that component:
 
-- `release tako`: `cargo publish -p tako` + versioned release notes + GitHub release asset upload (`tako-*`)
+- `release tako`: `cargo publish -p tako` + versioned release notes + GitHub release asset upload (`tako-*` tarballs include both `tako` and `tako-dev-server`)
 - `release tako-server`: `cargo publish -p tako-server` + versioned release notes + GitHub release asset upload (`tako-server-*`)
 - `release sdk`: release notes + `npm publish` from `sdk/js`
 - `release tako-core`: shared crate release + `cargo publish -p tako-core`

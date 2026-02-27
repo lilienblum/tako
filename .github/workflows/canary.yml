@@ -71,7 +71,8 @@ jobs:
           if [ "${{ matrix.libc }}" = "glibc" ]; then
             tmpdir="$(mktemp -d)"
             cp "dist/linux-${{ matrix.arch }}-${{ matrix.libc }}/tako" "$tmpdir/tako"
-            tar -czf "dist/tako-linux-${{ matrix.outarch }}.tar.gz" -C "$tmpdir" tako
+            cp "dist/linux-${{ matrix.arch }}-${{ matrix.libc }}/tako-dev-server" "$tmpdir/tako-dev-server"
+            tar -czf "dist/tako-linux-${{ matrix.outarch }}.tar.gz" -C "$tmpdir" tako tako-dev-server
             sha256sum "dist/tako-linux-${{ matrix.outarch }}.tar.gz" > "dist/tako-linux-${{ matrix.outarch }}.tar.gz.sha256"
             rm -rf "$tmpdir"
           fi
@@ -123,17 +124,19 @@ jobs:
           mkdir -p dist
           export TAKO_CANARY_SHA="$GITHUB_SHA"
 
-          cargo build -p tako --bin tako --release --target aarch64-apple-darwin
-          cargo build -p tako --bin tako --release --target x86_64-apple-darwin
+          cargo build -p tako --bin tako --bin tako-dev-server --release --target aarch64-apple-darwin
+          cargo build -p tako --bin tako --bin tako-dev-server --release --target x86_64-apple-darwin
 
           tmpdir="$(mktemp -d)"
           cp target/aarch64-apple-darwin/release/tako "$tmpdir/tako"
-          tar -czf dist/tako-darwin-aarch64.tar.gz -C "$tmpdir" tako
+          cp target/aarch64-apple-darwin/release/tako-dev-server "$tmpdir/tako-dev-server"
+          tar -czf dist/tako-darwin-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server
           rm -rf "$tmpdir"
 
           tmpdir="$(mktemp -d)"
           cp target/x86_64-apple-darwin/release/tako "$tmpdir/tako"
-          tar -czf dist/tako-darwin-x86_64.tar.gz -C "$tmpdir" tako
+          cp target/x86_64-apple-darwin/release/tako-dev-server "$tmpdir/tako-dev-server"
+          tar -czf dist/tako-darwin-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server
           rm -rf "$tmpdir"
 
           shasum -a 256 dist/tako-darwin-aarch64.tar.gz > dist/tako-darwin-aarch64.tar.gz.sha256

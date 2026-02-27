@@ -16,10 +16,12 @@ tako-linux:
         if [ "$arch" = "amd64" ]; then outarch="x86_64"; else outarch="aarch64"; fi; \
         cp {{ ARTIFACTS_DIR }}/linux-$arch-glibc/tako {{ ARTIFACTS_DIR }}/tako-linux-$outarch || exit 1; \
         cp {{ ARTIFACTS_DIR }}/linux-$arch-glibc/tako.sha256 {{ ARTIFACTS_DIR }}/tako-linux-$outarch.sha256 || exit 1; \
+        cp {{ ARTIFACTS_DIR }}/linux-$arch-glibc/tako-dev-server {{ ARTIFACTS_DIR }}/tako-dev-server-linux-$outarch || exit 1; \
+        cp {{ ARTIFACTS_DIR }}/linux-$arch-glibc/tako-dev-server.sha256 {{ ARTIFACTS_DIR }}/tako-dev-server-linux-$outarch.sha256 || exit 1; \
         rm -rf {{ ARTIFACTS_DIR }}/linux-$arch-glibc; \
     done
     echo "Built binaries:"
-    ls -la {{ ARTIFACTS_DIR }}/tako-linux-*
+    ls -la {{ ARTIFACTS_DIR }}/tako-linux-* {{ ARTIFACTS_DIR }}/tako-dev-server-linux-*
 
 # Build a single tako-server artifact.
 # arch: amd64 | arm64

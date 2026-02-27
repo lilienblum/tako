@@ -7,8 +7,8 @@ set -eu
 #   curl -fsSL https://tako.sh/install | sh
 #
 # What it does:
-# - downloads and installs `tako` CLI for your OS/architecture
-# - installs to ~/.local/bin/tako by default
+# - downloads and installs `tako` and `tako-dev-server` for your OS/architecture
+# - installs binaries to ~/.local/bin by default
 #
 # Optional env vars:
 #   TAKO_INSTALL_DIR        default: $HOME/.local/bin
@@ -151,17 +151,25 @@ else
 fi
 
 tar -xzf "$tmp_payload" -C "$tmp_extract"
-tmp_bin="$(find "$tmp_extract" -type f -name tako | head -n 1 || true)"
-if [ -z "$tmp_bin" ]; then
+tmp_tako_bin="$(find "$tmp_extract" -type f -name tako | head -n 1 || true)"
+if [ -z "$tmp_tako_bin" ]; then
   echo "error: archive did not contain a tako binary" >&2
+  exit 1
+fi
+tmp_dev_server_bin="$(find "$tmp_extract" -type f -name tako-dev-server | head -n 1 || true)"
+if [ -z "$tmp_dev_server_bin" ]; then
+  echo "error: archive did not contain a tako-dev-server binary" >&2
   exit 1
 fi
 
 mkdir -p "$TAKO_INSTALL_DIR"
-target="$TAKO_INSTALL_DIR/tako"
-install -m 0755 "$tmp_bin" "$target"
+target_tako="$TAKO_INSTALL_DIR/tako"
+target_dev_server="$TAKO_INSTALL_DIR/tako-dev-server"
+install -m 0755 "$tmp_tako_bin" "$target_tako"
+install -m 0755 "$tmp_dev_server_bin" "$target_dev_server"
 
-echo "OK installed tako to $target"
+echo "OK installed tako to $target_tako"
+echo "OK installed tako-dev-server to $target_dev_server"
 
 case ":$PATH:" in
   *":$TAKO_INSTALL_DIR:"*)

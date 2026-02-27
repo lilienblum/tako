@@ -57,10 +57,11 @@ tako upgrade --stable
 
 Notes:
 
+- direct canary install endpoint: `curl -fsSL https://tako.sh/install-canary | sh`
 - local CLI upgrade strategy is install-aware:
   - Homebrew installs use `brew upgrade tako`
   - Cargo installs under `~/.cargo/bin/tako` use `cargo install tako --locked`
-  - fallback uses hosted installer script (`https://tako.sh/install`) via `curl`/`wget`
+  - fallback uses hosted installer script (`https://tako.sh/install`) via `curl`/`wget` (installs both `tako` and `tako-dev-server`)
   - `--canary` forces hosted installer mode and sets `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary`
   - `--stable` forces stable channel and persists it as default
   - without channel flags, upgrade uses persisted global `upgrade_channel` (default: `stable`)

@@ -14,6 +14,7 @@ CLI output follows shared conventions: concise by default, technical detail with
 ## Overview
 
 - `tako dev` is a **client** that talks to a background daemon: `tako-dev-server`.
+- Installed CLI distributions include both `tako` and `tako-dev-server`.
 - When running from source, the daemon binary is built from the `tako` package (`cargo build -p tako --bin tako-dev-server`).
 - `tako dev` owns your app process lifecycle and spawns the app locally on an ephemeral port.
 - `tako-dev-server` terminates HTTPS and routes by `Host` to that app port.

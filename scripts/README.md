@@ -4,7 +4,8 @@ Repository scripts used by installers, CI checks, and local development workflow
 
 ## Scripts
 
-- `install-tako-cli.sh`: POSIX installer for local `tako` CLI.
+- `install-tako-cli.sh`: POSIX installer for local `tako` CLI and `tako-dev-server`.
+- `install-tako-cli-canary.sh`: lightweight wrapper that runs hosted CLI installer with canary artifact base URL.
 - `install-tako-server.sh`: POSIX installer for `tako-server` on Linux hosts.
 - `install-tako-server-canary.sh`: lightweight wrapper that runs hosted server installer with canary artifact base URL.
   - Both installers resolve component-specific latest tags (`tako-v*`, `tako-server-v*`) via GitHub tags API by default, then download release assets for that tag.
@@ -37,6 +38,7 @@ sh scripts/release-notes.sh --component tako --prefix tako-v --output dist/relea
 The install scripts are exposed via website redirect endpoints:
 
 - `/install`
+- `/install-canary`
 - `/install-server`
 - `/server-install`
 - `/install-server-canary`

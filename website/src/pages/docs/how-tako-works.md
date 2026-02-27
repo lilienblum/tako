@@ -51,6 +51,8 @@ See full config details in [`tako.toml` Reference](/docs/tako-toml).
 When you run `tako dev`, the CLI behaves like a client for a persistent local daemon.
 
 - It ensures `tako-dev-server` is running.
+  - Installed CLI distributions provide `tako-dev-server` alongside `tako`.
+  - Source-checkout runs can build `tako-dev-server` from the `tako` crate when needed.
 - It registers the current app directory with the daemon.
 - It starts one local instance immediately.
 - It exposes HTTPS routes on `*.tako.local` with a fixed daemon listen port (`127.0.0.1:47831`).

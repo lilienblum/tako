@@ -247,13 +247,21 @@ Install the CLI on your local machine:
 curl -fsSL https://tako.sh/install | sh
 ```
 
+The hosted installer installs both `tako` and `tako-dev-server` binaries from the same channel/archive.
+
+Install canary CLI artifacts directly:
+
+```bash
+curl -fsSL https://tako.sh/install-canary | sh
+```
+
 Install from crates.io:
 
 ```bash
 cargo install tako
 ```
 
-`cargo install tako` installs both `tako` and `tako-dev-server` binaries from the same package/version.
+`cargo install tako` also installs both `tako` and `tako-dev-server` binaries from the same package/version.
 
 Upgrade local CLI:
 
@@ -362,7 +370,10 @@ Start (or attach to) a local development session for the current app, backed by 
 
 - `tako dev` is a **client**: it ensures `tako-dev-server` is running, then registers the current app directory with the daemon.
   - When running from a source checkout, `tako dev` prefers the repo-local `target/debug|release/tako-dev-server` binary.
-  - If no local daemon binary exists, `tako dev` falls back to `tako-dev-server` on `PATH` and reports an explicit build hint (`cargo build -p tako --bin tako-dev-server`) when missing.
+  - If no local daemon binary exists, `tako dev` falls back to `tako-dev-server` on `PATH`.
+  - If that fallback binary is missing:
+    - source checkout flow reports a build hint (`cargo build -p tako --bin tako-dev-server`)
+    - installed CLI flow reports a reinstall hint (`curl -fsSL https://tako.sh/install | sh`)
   - If daemon startup fails, `tako dev` reports the last lines from `{TAKO_HOME}/dev-server.log`.
   - `tako dev` waits up to ~15 seconds for the daemon socket after spawn before reporting startup failure.
   - The daemon performs an upfront bind-availability check for its HTTPS listen address and exits immediately with an explicit error when that address is unavailable.
@@ -963,6 +974,7 @@ Reference scripts in this repo:
 
 - `scripts/install-tako-server.sh` (source for `/install-server`, alias `/server-install`)
 - `scripts/install-tako-server-canary.sh` (source for `/install-server-canary`)
+- `scripts/install-tako-cli-canary.sh` (source for `/install-canary`)
 
 **Default behavior (no configuration file needed):**
 

@@ -15,6 +15,7 @@ Astro static site deployed with Cloudflare Workers static assets.
 - `/docs/troubleshooting`: troubleshooting runbook
 - `/docs/how-tako-works`: how Tako works overview
 - `/install`: `301` redirect to GitHub-hosted POSIX `sh` installer script for `tako`
+- `/install-canary`: `301` redirect to GitHub-hosted POSIX `sh` installer wrapper for canary `tako` artifacts
 - `/install-server`: `301` redirect to GitHub-hosted POSIX `sh` installer script for `tako-server`
 - `/server-install`: alias for `/install-server` (same redirect target)
 
@@ -31,6 +32,7 @@ bun run --cwd website dev
 
 ```bash
 curl -fsSL http://localhost:4321/install | sh
+curl -fsSL http://localhost:4321/install-canary | sh
 curl -fsSL http://localhost:4321/install-server | sudo sh
 ```
 
