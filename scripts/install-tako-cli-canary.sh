@@ -12,7 +12,7 @@ set -eu
 # - runs installer as-is
 
 INSTALLER_URL="https://tako.sh/install"
-CANARY_DOWNLOAD_BASE_URL="https://github.com/lilienblum/tako/releases/download/canary"
+CANARY_DOWNLOAD_BASE_URL="https://github.com/lilienblum/tako/releases/download/canary-latest"
 
 installer="$(mktemp)"
 trap 'rm -f "$installer"' EXIT

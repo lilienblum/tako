@@ -200,59 +200,46 @@ jobs:
           name: canary-darwin
           path: dist
 
-      - name: Publish moving canary prerelease
+      - name: Publish canary prerelease
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
 
-          for required in \
-            dist/tako-darwin-aarch64.tar.gz \
-            dist/tako-darwin-aarch64.tar.gz.sha256 \
-            dist/tako-darwin-x86_64.tar.gz \
-            dist/tako-darwin-x86_64.tar.gz.sha256 \
-            dist/tako-linux-x86_64.tar.gz \
-            dist/tako-linux-x86_64.tar.gz.sha256 \
-            dist/tako-linux-aarch64.tar.gz \
-            dist/tako-linux-aarch64.tar.gz.sha256 \
-            dist/tako-server-linux-x86_64-glibc.tar.gz \
-            dist/tako-server-linux-x86_64-glibc.tar.gz.sha256 \
-            dist/tako-server-linux-aarch64-glibc.tar.gz \
-            dist/tako-server-linux-aarch64-glibc.tar.gz.sha256 \
-            dist/tako-server-linux-x86_64-musl.tar.gz \
-            dist/tako-server-linux-x86_64-musl.tar.gz.sha256 \
-            dist/tako-server-linux-aarch64-musl.tar.gz \
-            dist/tako-server-linux-aarch64-musl.tar.gz.sha256; do
-            test -f "$required"
-          done
+          assets=(
+            dist/tako-darwin-aarch64.tar.gz
+            dist/tako-darwin-aarch64.tar.gz.sha256
+            dist/tako-darwin-x86_64.tar.gz
+            dist/tako-darwin-x86_64.tar.gz.sha256
+            dist/tako-linux-x86_64.tar.gz
+            dist/tako-linux-x86_64.tar.gz.sha256
+            dist/tako-linux-aarch64.tar.gz
+            dist/tako-linux-aarch64.tar.gz.sha256
+            dist/tako-server-linux-x86_64-glibc.tar.gz
+            dist/tako-server-linux-x86_64-glibc.tar.gz.sha256
+            dist/tako-server-linux-aarch64-glibc.tar.gz
+            dist/tako-server-linux-aarch64-glibc.tar.gz.sha256
+            dist/tako-server-linux-x86_64-musl.tar.gz
+            dist/tako-server-linux-x86_64-musl.tar.gz.sha256
+            dist/tako-server-linux-aarch64-musl.tar.gz
+            dist/tako-server-linux-aarch64-musl.tar.gz.sha256
+          )
 
-          if gh release view canary >/dev/null 2>&1; then
-            gh release delete canary --yes --cleanup-tag
-          fi
+          for f in "${assets[@]}"; do test -f "$f"; done
 
           timestamp="$(date -u +'%Y-%m-%d %H:%M UTC')"
           short_sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+          title="Canary (${GITHUB_SHA})"
           notes="Latest canary build from master (${short_sha}) on ${timestamp}."
 
-          gh release create canary \
-            --prerelease \
-            --target "$GITHUB_SHA" \
-            --title "canary" \
-            --notes "$notes" \
-            dist/tako-darwin-aarch64.tar.gz \
-            dist/tako-darwin-aarch64.tar.gz.sha256 \
-            dist/tako-darwin-x86_64.tar.gz \
-            dist/tako-darwin-x86_64.tar.gz.sha256 \
-            dist/tako-linux-x86_64.tar.gz \
-            dist/tako-linux-x86_64.tar.gz.sha256 \
-            dist/tako-linux-aarch64.tar.gz \
-            dist/tako-linux-aarch64.tar.gz.sha256 \
-            dist/tako-server-linux-x86_64-glibc.tar.gz \
-            dist/tako-server-linux-x86_64-glibc.tar.gz.sha256 \
-            dist/tako-server-linux-aarch64-glibc.tar.gz \
-            dist/tako-server-linux-aarch64-glibc.tar.gz.sha256 \
-            dist/tako-server-linux-x86_64-musl.tar.gz \
-            dist/tako-server-linux-x86_64-musl.tar.gz.sha256 \
-            dist/tako-server-linux-aarch64-musl.tar.gz \
-            dist/tako-server-linux-aarch64-musl.tar.gz.sha256
+          if ! gh release view canary-latest >/dev/null 2>&1; then
+            gh release create canary-latest \
+              --prerelease \
+              --target master \
+              --title "$title" \
+              --notes "$notes"
+          fi
+
+          gh release edit canary-latest --title "$title" --notes "$notes"
+          gh release upload canary-latest --clobber "${assets[@]}"

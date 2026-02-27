@@ -177,7 +177,7 @@ case "$channel" in
     download_base=""
     ;;
   canary)
-    download_base="https://github.com/lilienblum/tako/releases/download/canary"
+    download_base="https://github.com/lilienblum/tako/releases/download/canary-latest"
     ;;
   *)
     echo "error: expected channel 'stable' or 'canary'" >&2

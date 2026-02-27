@@ -8,7 +8,7 @@ use crate::output;
 const DEFAULT_INSTALL_URL: &str = "https://tako.sh/install";
 const INSTALL_URL_ENV: &str = "TAKO_INSTALL_URL";
 const CANARY_DOWNLOAD_BASE_URL: &str =
-    "https://github.com/lilienblum/tako/releases/download/canary";
+    "https://github.com/lilienblum/tako/releases/download/canary-latest";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Downloader {
@@ -385,7 +385,7 @@ mod tests {
         let env = installer_env_overrides(UpgradeChannel::Canary);
         assert_eq!(
             env.get("TAKO_DOWNLOAD_BASE_URL"),
-            Some(&"https://github.com/lilienblum/tako/releases/download/canary".to_string())
+            Some(&"https://github.com/lilienblum/tako/releases/download/canary-latest".to_string())
         );
     }
 
