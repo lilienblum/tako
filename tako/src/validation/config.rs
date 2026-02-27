@@ -144,10 +144,10 @@ pub fn validate_server_references(
     let mut result = ValidationResult::new();
 
     for (server_name, server_config) in &tako_config.servers {
-        if let Some(env) = deploy_env {
-            if server_config.env != env {
-                continue;
-            }
+        if let Some(env) = deploy_env
+            && server_config.env != env
+        {
+            continue;
         }
         if !servers_config.contains(server_name) {
             result.error(format!(
