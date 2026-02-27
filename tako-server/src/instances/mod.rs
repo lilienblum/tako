@@ -17,9 +17,16 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::process::Child;
 use tokio::sync::mpsc;
+
+fn now_unix_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
 
 pub const INTERNAL_STATUS_HOST: &str = "tako-internal";
 const APP_SOCKET_PID_TOKEN: &str = "{pid}";
@@ -107,10 +114,10 @@ pub struct Instance {
 
     /// In-flight requests (best-effort; used to avoid killing while serving)
     in_flight: AtomicU64,
-    /// Last request time (for idle timeout)
-    last_request: RwLock<Instant>,
-    /// Last heartbeat time (for health checking)
-    last_heartbeat: RwLock<Instant>,
+    /// Last request completion time as millis since UNIX_EPOCH (for idle timeout)
+    last_request_ms: AtomicU64,
+    /// Last health-check heartbeat time as millis since UNIX_EPOCH
+    last_heartbeat_ms: AtomicU64,
 }
 
 impl Instance {
@@ -126,8 +133,8 @@ impl Instance {
             started_at: RwLock::new(None),
             requests_total: AtomicU64::new(0),
             in_flight: AtomicU64::new(0),
-            last_request: RwLock::new(Instant::now()),
-            last_heartbeat: RwLock::new(Instant::now()),
+            last_request_ms: AtomicU64::new(now_unix_millis()),
+            last_heartbeat_ms: AtomicU64::new(now_unix_millis()),
         }
     }
 
@@ -185,7 +192,8 @@ impl Instance {
 
     pub fn request_finished(&self) {
         self.in_flight.fetch_sub(1, Ordering::Relaxed);
-        *self.last_request.write() = Instant::now();
+        self.last_request_ms
+            .store(now_unix_millis(), Ordering::Relaxed);
     }
 
     pub fn in_flight(&self) -> u64 {
@@ -204,17 +212,15 @@ impl Instance {
     }
 
     pub fn idle_time(&self) -> Duration {
-        self.last_request.read().elapsed()
-    }
-
-    /// Get last heartbeat time
-    pub fn last_heartbeat(&self) -> Instant {
-        *self.last_heartbeat.read()
+        let last_ms = self.last_request_ms.load(Ordering::Relaxed);
+        let now_ms = now_unix_millis();
+        Duration::from_millis(now_ms.saturating_sub(last_ms))
     }
 
     /// Record a heartbeat
     pub fn record_heartbeat(&self) {
-        *self.last_heartbeat.write() = Instant::now();
+        self.last_heartbeat_ms
+            .store(now_unix_millis(), Ordering::Relaxed);
     }
 
     pub fn status(&self) -> InstanceStatus {
@@ -333,23 +339,6 @@ impl App {
             .filter(|entry| entry.value().state() == InstanceState::Healthy)
             .map(|entry| entry.value().clone())
             .collect()
-    }
-
-    /// Count healthy instances without cloning them.
-    pub fn healthy_instance_count(&self) -> usize {
-        self.instances
-            .iter()
-            .filter(|entry| entry.value().state() == InstanceState::Healthy)
-            .count()
-    }
-
-    /// Get the Nth healthy instance.
-    pub fn get_nth_healthy_instance(&self, index: usize) -> Option<Arc<Instance>> {
-        self.instances
-            .iter()
-            .filter(|entry| entry.value().state() == InstanceState::Healthy)
-            .nth(index)
-            .map(|entry| entry.value().clone())
     }
 
     /// Pick the healthy instance with the lowest externally provided load value.

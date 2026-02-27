@@ -199,7 +199,10 @@ fn hostname_matches(pattern: &str, hostname: &str) -> bool {
         if hostname == suffix {
             return false;
         }
-        hostname.ends_with(&format!(".{}", suffix))
+        // Check hostname ends with ".{suffix}" without allocating a String
+        hostname.len() > suffix.len()
+            && hostname.as_bytes()[hostname.len() - suffix.len() - 1] == b'.'
+            && hostname.ends_with(suffix)
     } else {
         pattern == hostname
     }

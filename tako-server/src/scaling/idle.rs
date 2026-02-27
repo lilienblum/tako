@@ -57,8 +57,10 @@ impl IdleMonitor {
         loop {
             check_interval.tick().await;
 
-            let idle_timeout = app.config.read().idle_timeout;
-            let min_instances = app.config.read().min_instances;
+            let (idle_timeout, min_instances) = {
+                let config = app.config.read();
+                (config.idle_timeout, config.min_instances)
+            };
 
             let instances = app.get_instances();
             let healthy_count = instances
@@ -98,8 +100,7 @@ impl IdleMonitor {
             }
 
             // Check if app is fully idle (no running instances)
-            let running_count = app
-                .get_instances()
+            let running_count = instances
                 .iter()
                 .filter(|i| {
                     matches!(

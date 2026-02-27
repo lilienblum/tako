@@ -223,9 +223,20 @@ impl RollingUpdater {
         // Mark as draining (load balancer should stop sending new requests)
         instance.set_state(InstanceState::Draining);
 
-        // Wait for drain timeout or until no active requests
-        // For now, just wait a short time
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Wait until all in-flight requests finish or drain_timeout is reached
+        let deadline = tokio::time::Instant::now() + self.config.drain_timeout;
+        while instance.in_flight() > 0 {
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    app = %app.name(),
+                    instance = instance.id,
+                    in_flight = instance.in_flight(),
+                    "Drain timeout exceeded, forcing stop"
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
 
         // Kill the instance
         instance.kill().await?;

@@ -78,14 +78,14 @@ impl HealthChecker {
     /// Start health check loop for an app
     pub async fn monitor_app(&self, app: Arc<App>) {
         let mut check_interval = interval(self.config.check_interval);
+        let concurrency = Self::effective_probe_concurrency(self.config.max_probe_concurrency);
+        let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
         loop {
             check_interval.tick().await;
 
             let instances = app.get_instances();
             let mut checks = tokio::task::JoinSet::new();
-            let concurrency = Self::effective_probe_concurrency(self.config.max_probe_concurrency);
-            let semaphore = Arc::new(tokio::sync::Semaphore::new(concurrency));
 
             for instance in instances {
                 let permit = match semaphore.clone().acquire_owned().await {

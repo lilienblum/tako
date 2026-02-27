@@ -148,9 +148,10 @@ impl CertManager {
             return Err(CertError::NotFound(domain.to_string()));
         }
 
-        // Parse certificate to get expiry date
-        let expires_at = self.parse_cert_expiry(&cert_path).ok();
-        let is_self_signed = self.check_self_signed(&cert_path).unwrap_or(false);
+        // Read PEM once and derive all certificate metadata from the same bytes
+        let pem_data = std::fs::read(&cert_path)?;
+        let expires_at = Self::parse_cert_expiry_from_bytes(&pem_data).ok();
+        let is_self_signed = Self::check_self_signed_from_bytes(&pem_data).unwrap_or(false);
 
         Ok(CertInfo {
             domain: domain.to_string(),
@@ -162,12 +163,9 @@ impl CertManager {
         })
     }
 
-    /// Parse certificate expiry date from PEM file
-    fn parse_cert_expiry(&self, cert_path: &PathBuf) -> Result<SystemTime, CertError> {
-        let pem_data = std::fs::read(cert_path)?;
-
-        // Parse PEM to get the first certificate
-        for pem in Pem::iter_from_buffer(&pem_data) {
+    /// Parse certificate expiry date from PEM bytes
+    fn parse_cert_expiry_from_bytes(pem_data: &[u8]) -> Result<SystemTime, CertError> {
+        for pem in Pem::iter_from_buffer(pem_data) {
             let pem = pem.map_err(|e| CertError::ParseError(e.to_string()))?;
 
             if pem.label == "CERTIFICATE" {
@@ -190,11 +188,9 @@ impl CertManager {
         ))
     }
 
-    /// Check if certificate is self-signed
-    fn check_self_signed(&self, cert_path: &PathBuf) -> Result<bool, CertError> {
-        let pem_data = std::fs::read(cert_path)?;
-
-        for pem in Pem::iter_from_buffer(&pem_data) {
+    /// Check if certificate is self-signed from PEM bytes
+    fn check_self_signed_from_bytes(pem_data: &[u8]) -> Result<bool, CertError> {
+        for pem in Pem::iter_from_buffer(pem_data) {
             let pem = pem.map_err(|e| CertError::ParseError(e.to_string()))?;
 
             if pem.label == "CERTIFICATE" {

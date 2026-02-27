@@ -66,13 +66,12 @@ impl AppLoadBalancer {
 
     /// Get instance using round-robin
     fn round_robin(&self) -> Option<Arc<Instance>> {
-        let healthy_count = self.app.healthy_instance_count();
-        if healthy_count == 0 {
+        let healthy = self.app.get_healthy_instances();
+        if healthy.is_empty() {
             return None;
         }
-
-        let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % healthy_count;
-        self.app.get_nth_healthy_instance(idx)
+        let idx = self.rr_counter.fetch_add(1, Ordering::Relaxed) % healthy.len();
+        Some(healthy[idx].clone())
     }
 
     /// Get instance with least active connections
@@ -91,16 +90,16 @@ impl AppLoadBalancer {
     /// (as long as the instance remains healthy). If no client IP is
     /// provided, falls back to round-robin.
     fn ip_hash(&self, client_ip: Option<IpAddr>) -> Option<Arc<Instance>> {
-        let healthy_count = self.app.healthy_instance_count();
-        if healthy_count == 0 {
-            return None;
-        }
-
         // Fall back to round-robin if no IP provided
         let ip = match client_ip {
             Some(ip) => ip,
             None => return self.round_robin(),
         };
+
+        let healthy = self.app.get_healthy_instances();
+        if healthy.is_empty() {
+            return None;
+        }
 
         // Hash the IP address
         let mut hasher = DefaultHasher::new();
@@ -108,8 +107,8 @@ impl AppLoadBalancer {
         let hash = hasher.finish();
 
         // Use hash to select instance
-        let idx = (hash as usize) % healthy_count;
-        self.app.get_nth_healthy_instance(idx)
+        let idx = (hash as usize) % healthy.len();
+        Some(healthy[idx].clone())
     }
 
     /// Mark connection started
