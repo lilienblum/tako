@@ -89,6 +89,14 @@ COPY --from=builder-glibc /work/target/release/tako /tako
 RUN sha256sum /tako > /tako.sha256
 
 
+FROM debian:bookworm-slim AS tako-and-server-artifact-glibc
+
+COPY --from=builder-glibc /work/target/release/tako /tako
+COPY --from=builder-glibc /work/target/release/tako-server /tako-server
+RUN sha256sum /tako > /tako.sha256 \
+    && sha256sum /tako-server > /tako-server.sha256
+
+
 FROM alpine:3.20 AS tako-server-artifact-musl
 
 COPY --from=builder-musl /work/target/release/tako-server /tako-server
