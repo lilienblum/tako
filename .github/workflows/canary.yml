@@ -14,10 +14,18 @@ permissions:
   contents: write
 
 jobs:
-  build-linux:
-    name: Build Linux Artifacts
+  build-linux-cli:
+    name: Build Linux CLI (${{ matrix.arch }})
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            outarch: x86_64
+          - arch: arm64
+            outarch: aarch64
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,70 +36,96 @@ jobs:
       - name: Setup Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build and package Linux artifacts
+      - name: Build and package Linux CLI artifact
         run: |
           set -euo pipefail
           mkdir -p dist
 
-          for arch in amd64 arm64; do
-            docker buildx build -f docker/build.Dockerfile \
-              --platform "linux/$arch" \
-              --target tako-artifact-glibc \
-              --build-arg TAKO_CANARY_SHA="$GITHUB_SHA" \
-              --cache-from "type=gha,scope=canary-linux-$arch-glibc" \
-              --cache-to "type=gha,scope=canary-linux-$arch-glibc,mode=max" \
-              --output "type=local,dest=dist/linux-$arch-glibc" \
-              .
+          docker buildx build -f docker/build.Dockerfile \
+            --platform "linux/${{ matrix.arch }}" \
+            --target tako-artifact-glibc \
+            --build-arg TAKO_CANARY_SHA="$GITHUB_SHA" \
+            --build-arg BUILD_TAKO=1 \
+            --build-arg BUILD_TAKO_SERVER=0 \
+            --cache-from "type=gha,scope=canary-linux-cli-${{ matrix.arch }}" \
+            --cache-to "type=gha,scope=canary-linux-cli-${{ matrix.arch }},mode=max" \
+            --output "type=local,dest=dist/linux-${{ matrix.arch }}-glibc" \
+            .
 
-            if [ "$arch" = "amd64" ]; then
-              outarch="x86_64"
-            else
-              outarch="aarch64"
-            fi
+          tmpdir="$(mktemp -d)"
+          cp "dist/linux-${{ matrix.arch }}-glibc/tako" "$tmpdir/tako"
+          tar -czf "dist/tako-linux-${{ matrix.outarch }}.tar.gz" -C "$tmpdir" tako
+          sha256sum "dist/tako-linux-${{ matrix.outarch }}.tar.gz" > "dist/tako-linux-${{ matrix.outarch }}.tar.gz.sha256"
+          rm -rf "$tmpdir" "dist/linux-${{ matrix.arch }}-glibc"
 
-            tmpdir="$(mktemp -d)"
-            cp "dist/linux-$arch-glibc/tako" "$tmpdir/tako"
-            tar -czf "dist/tako-linux-$outarch.tar.gz" -C "$tmpdir" tako
-            sha256sum "dist/tako-linux-$outarch.tar.gz" > "dist/tako-linux-$outarch.tar.gz.sha256"
-            rm -rf "$tmpdir" "dist/linux-$arch-glibc"
-          done
-
-          for libc in glibc musl; do
-            for arch in amd64 arm64; do
-              docker buildx build -f docker/build.Dockerfile \
-                --platform "linux/$arch" \
-                --target "tako-server-artifact-$libc" \
-                --build-arg TAKO_CANARY_SHA="$GITHUB_SHA" \
-                --cache-from "type=gha,scope=canary-linux-$arch-$libc" \
-                --cache-to "type=gha,scope=canary-linux-$arch-$libc,mode=max" \
-                --output "type=local,dest=dist/linux-$arch-$libc" \
-                .
-
-              if [ "$arch" = "amd64" ]; then
-                outarch="x86_64"
-              else
-                outarch="aarch64"
-              fi
-
-              tmpdir="$(mktemp -d)"
-              cp "dist/linux-$arch-$libc/tako-server" "$tmpdir/tako-server"
-              tar -czf "dist/tako-server-linux-$outarch-$libc.tar.gz" -C "$tmpdir" tako-server
-              sha256sum "dist/tako-server-linux-$outarch-$libc.tar.gz" > "dist/tako-server-linux-$outarch-$libc.tar.gz.sha256"
-              rm -rf "$tmpdir" "dist/linux-$arch-$libc"
-            done
-          done
-
-          ls -1 dist/*.tar.gz dist/*.sha256
-
-      - name: Upload Linux artifacts
+      - name: Upload Linux CLI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: canary-linux
+          name: canary-linux-cli-${{ matrix.arch }}
           path: |
-            dist/tako-linux-*.tar.gz
-            dist/tako-linux-*.tar.gz.sha256
-            dist/tako-server-linux-*.tar.gz
-            dist/tako-server-linux-*.tar.gz.sha256
+            dist/tako-linux-${{ matrix.outarch }}.tar.gz
+            dist/tako-linux-${{ matrix.outarch }}.tar.gz.sha256
+          if-no-files-found: error
+
+  build-linux-server:
+    name: Build Linux Server (${{ matrix.arch }}-${{ matrix.libc }})
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            outarch: x86_64
+            libc: glibc
+          - arch: arm64
+            outarch: aarch64
+            libc: glibc
+          - arch: amd64
+            outarch: x86_64
+            libc: musl
+          - arch: arm64
+            outarch: aarch64
+            libc: musl
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and package Linux server artifact
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          docker buildx build -f docker/build.Dockerfile \
+            --platform "linux/${{ matrix.arch }}" \
+            --target "tako-server-artifact-${{ matrix.libc }}" \
+            --build-arg TAKO_CANARY_SHA="$GITHUB_SHA" \
+            --build-arg BUILD_TAKO=0 \
+            --build-arg BUILD_TAKO_SERVER=1 \
+            --cache-from "type=gha,scope=canary-linux-server-${{ matrix.arch }}-${{ matrix.libc }}" \
+            --cache-to "type=gha,scope=canary-linux-server-${{ matrix.arch }}-${{ matrix.libc }},mode=max" \
+            --output "type=local,dest=dist/linux-${{ matrix.arch }}-${{ matrix.libc }}" \
+            .
+
+          tmpdir="$(mktemp -d)"
+          cp "dist/linux-${{ matrix.arch }}-${{ matrix.libc }}/tako-server" "$tmpdir/tako-server"
+          tar -czf "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz" -C "$tmpdir" tako-server
+          sha256sum "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz" > "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz.sha256"
+          rm -rf "$tmpdir" "dist/linux-${{ matrix.arch }}-${{ matrix.libc }}"
+
+      - name: Upload Linux server artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: canary-linux-server-${{ matrix.arch }}-${{ matrix.libc }}
+          path: |
+            dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz
+            dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz.sha256
           if-no-files-found: error
 
   build-darwin-cli:
@@ -148,7 +182,8 @@ jobs:
     if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     needs:
-      - build-linux
+      - build-linux-cli
+      - build-linux-server
       - build-darwin-cli
     permissions:
       contents: write
@@ -156,7 +191,8 @@ jobs:
       - name: Download Linux artifacts
         uses: actions/download-artifact@v4
         with:
-          name: canary-linux
+          pattern: canary-linux-*
+          merge-multiple: true
           path: dist
 
       - name: Download macOS artifacts

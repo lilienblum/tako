@@ -20,6 +20,8 @@ RUN apk add --no-cache \
 WORKDIR /work
 ARG TAKO_CANARY_SHA
 ENV TAKO_CANARY_SHA=$TAKO_CANARY_SHA
+ARG BUILD_TAKO=1
+ARG BUILD_TAKO_SERVER=1
 
 # Copy only Rust workspace inputs needed to build release binaries.
 COPY Cargo.toml Cargo.lock ./
@@ -33,8 +35,8 @@ COPY tako-socket/src tako-socket/src
 COPY tako/src tako/src
 COPY tako-server/src tako-server/src
 
-RUN cargo build -p tako --bin tako --release \
-    && cargo build -p tako-server --release
+RUN if [ "$BUILD_TAKO" = "1" ]; then cargo build -p tako --bin tako --release; fi \
+    && if [ "$BUILD_TAKO_SERVER" = "1" ]; then cargo build -p tako-server --release; fi
 
 
 FROM rust:1.89-bookworm AS builder-glibc
@@ -56,6 +58,8 @@ RUN apt-get update \
 WORKDIR /work
 ARG TAKO_CANARY_SHA
 ENV TAKO_CANARY_SHA=$TAKO_CANARY_SHA
+ARG BUILD_TAKO=1
+ARG BUILD_TAKO_SERVER=1
 
 # Copy only Rust workspace inputs needed to build release binaries.
 COPY Cargo.toml Cargo.lock ./
@@ -69,8 +73,8 @@ COPY tako-socket/src tako-socket/src
 COPY tako/src tako/src
 COPY tako-server/src tako-server/src
 
-RUN cargo build -p tako --bin tako --release \
-    && cargo build -p tako-server --release
+RUN if [ "$BUILD_TAKO" = "1" ]; then cargo build -p tako --bin tako --release; fi \
+    && if [ "$BUILD_TAKO_SERVER" = "1" ]; then cargo build -p tako-server --release; fi
 
 
 FROM alpine:3.20 AS tako-artifact-musl
