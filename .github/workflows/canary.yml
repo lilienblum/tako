@@ -15,78 +15,102 @@ permissions:
 
 jobs:
   build-linux-target:
-    name: Build Linux (${{ matrix.arch }}-${{ matrix.libc }})
+    name: Build Linux (${{ matrix.outarch }}-${{ matrix.libc }})
     if: github.ref == 'refs/heads/master'
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
-            outarch: x86_64
+          - outarch: x86_64
             libc: glibc
-          - arch: arm64
-            outarch: aarch64
+            rust_target: x86_64-unknown-linux-gnu
+            runs_on: ubuntu-latest
+          - outarch: aarch64
             libc: glibc
-          - arch: amd64
-            outarch: x86_64
+            rust_target: aarch64-unknown-linux-gnu
+            runs_on: ubuntu-24.04-arm
+          - outarch: x86_64
             libc: musl
-          - arch: arm64
-            outarch: aarch64
+            rust_target: x86_64-unknown-linux-musl
+            runs_on: ubuntu-latest
+          - outarch: aarch64
             libc: musl
+            rust_target: aarch64-unknown-linux-musl
+            runs_on: ubuntu-24.04-arm
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup QEMU
-        uses: docker/setup-qemu-action@v3
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_target }}
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.rust_target }}
 
-      - name: Build and package Linux artifacts
+      - name: Install glibc build dependencies
+        if: matrix.libc == 'glibc'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+
+      - name: Install musl build dependencies
+        if: matrix.libc == 'musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build and package glibc artifacts
+        if: matrix.libc == 'glibc'
+        env:
+          TAKO_CANARY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           mkdir -p dist
 
-          if [ "${{ matrix.libc }}" = "glibc" ]; then
-            target="tako-and-server-artifact-glibc"
-            build_tako=1
-          else
-            target="tako-server-artifact-musl"
-            build_tako=0
-          fi
-
-          docker buildx build -f docker/build.Dockerfile \
-            --platform "linux/${{ matrix.arch }}" \
-            --target "$target" \
-            --build-arg TAKO_CANARY_SHA="$GITHUB_SHA" \
-            --build-arg BUILD_TAKO="$build_tako" \
-            --build-arg BUILD_TAKO_SERVER=1 \
-            --cache-from "type=gha,scope=canary-linux-${{ matrix.arch }}-${{ matrix.libc }}" \
-            --cache-to "type=gha,scope=canary-linux-${{ matrix.arch }}-${{ matrix.libc }},mode=max" \
-            --output "type=local,dest=dist/linux-${{ matrix.arch }}-${{ matrix.libc }}" \
-            .
-
-          if [ "${{ matrix.libc }}" = "glibc" ]; then
-            tmpdir="$(mktemp -d)"
-            cp "dist/linux-${{ matrix.arch }}-${{ matrix.libc }}/tako" "$tmpdir/tako"
-            cp "dist/linux-${{ matrix.arch }}-${{ matrix.libc }}/tako-dev-server" "$tmpdir/tako-dev-server"
-            tar -czf "dist/tako-linux-${{ matrix.outarch }}.tar.gz" -C "$tmpdir" tako tako-dev-server
-            sha256sum "dist/tako-linux-${{ matrix.outarch }}.tar.gz" > "dist/tako-linux-${{ matrix.outarch }}.tar.gz.sha256"
-            rm -rf "$tmpdir"
-          fi
+          cargo build -p tako --bin tako --bin tako-dev-server -p tako-server --release --target ${{ matrix.rust_target }}
 
           tmpdir="$(mktemp -d)"
-          cp "dist/linux-${{ matrix.arch }}-${{ matrix.libc }}/tako-server" "$tmpdir/tako-server"
-          tar -czf "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz" -C "$tmpdir" tako-server
-          sha256sum "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz" > "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz.sha256"
-          rm -rf "$tmpdir" "dist/linux-${{ matrix.arch }}-${{ matrix.libc }}"
+          cp "target/${{ matrix.rust_target }}/release/tako" "$tmpdir/tako"
+          cp "target/${{ matrix.rust_target }}/release/tako-dev-server" "$tmpdir/tako-dev-server"
+          tar -czf "dist/tako-linux-${{ matrix.outarch }}.tar.gz" -C "$tmpdir" tako tako-dev-server
+          sha256sum "dist/tako-linux-${{ matrix.outarch }}.tar.gz" > "dist/tako-linux-${{ matrix.outarch }}.tar.gz.sha256"
+          rm -rf "$tmpdir"
+
+          tmpdir="$(mktemp -d)"
+          cp "target/${{ matrix.rust_target }}/release/tako-server" "$tmpdir/tako-server"
+          tar -czf "dist/tako-server-linux-${{ matrix.outarch }}-glibc.tar.gz" -C "$tmpdir" tako-server
+          sha256sum "dist/tako-server-linux-${{ matrix.outarch }}-glibc.tar.gz" > "dist/tako-server-linux-${{ matrix.outarch }}-glibc.tar.gz.sha256"
+          rm -rf "$tmpdir"
+
+      - name: Build and package musl artifacts
+        if: matrix.libc == 'musl'
+        env:
+          TAKO_CANARY_SHA: ${{ github.sha }}
+          OPENSSL_VENDORED: "1"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: musl-gcc
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          cargo build -p tako-server --release --target ${{ matrix.rust_target }}
+
+          tmpdir="$(mktemp -d)"
+          cp "target/${{ matrix.rust_target }}/release/tako-server" "$tmpdir/tako-server"
+          tar -czf "dist/tako-server-linux-${{ matrix.outarch }}-musl.tar.gz" -C "$tmpdir" tako-server
+          sha256sum "dist/tako-server-linux-${{ matrix.outarch }}-musl.tar.gz" > "dist/tako-server-linux-${{ matrix.outarch }}-musl.tar.gz.sha256"
+          rm -rf "$tmpdir"
 
       - name: Upload Linux server artifact
         uses: actions/upload-artifact@v4
         with:
-          name: canary-linux-${{ matrix.arch }}-${{ matrix.libc }}
+          name: canary-linux-${{ matrix.outarch }}-${{ matrix.libc }}
           path: |
             dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz
             dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz.sha256
@@ -96,7 +120,7 @@ jobs:
         if: matrix.libc == 'glibc'
         uses: actions/upload-artifact@v4
         with:
-          name: canary-linux-cli-${{ matrix.arch }}
+          name: canary-linux-cli-${{ matrix.outarch }}
           path: |
             dist/tako-linux-${{ matrix.outarch }}.tar.gz
             dist/tako-linux-${{ matrix.outarch }}.tar.gz.sha256
