@@ -4,7 +4,7 @@ set -eu
 # Tako server canary installer (POSIX sh)
 #
 # Usage:
-#   sudo sh -c "$(curl -fsSL https://tako.sh/server-install-canary)"
+#   sudo sh -c "$(curl -fsSL https://tako.sh/install-server-canary)"
 #
 # What it does:
 # - downloads the hosted server installer

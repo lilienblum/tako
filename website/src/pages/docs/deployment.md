@@ -70,7 +70,7 @@ Each target server should have:
 Install/refresh server runtime commands:
 
 - stable: `sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"`
-- canary: `sudo sh -c "$(curl -fsSL https://tako.sh/server-install-canary)"`
+- canary: `sudo sh -c "$(curl -fsSL https://tako.sh/install-server-canary)"`
 
 ## Configuration Inputs
 

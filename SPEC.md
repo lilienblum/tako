@@ -962,7 +962,7 @@ Installer SSH key behavior:
 Reference scripts in this repo:
 
 - `scripts/install-tako-server.sh` (source for `/install-server`, alias `/server-install`)
-- `scripts/install-tako-server-canary.sh` (source for `/server-install-canary`)
+- `scripts/install-tako-server-canary.sh` (source for `/install-server-canary`)
 
 **Default behavior (no configuration file needed):**
 

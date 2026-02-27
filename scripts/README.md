@@ -39,4 +39,4 @@ The install scripts are exposed via website redirect endpoints:
 - `/install`
 - `/install-server`
 - `/server-install`
-- `/server-install-canary`
+- `/install-server-canary`
