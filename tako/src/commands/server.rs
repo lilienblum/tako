@@ -52,8 +52,8 @@ pub enum ServerCommands {
 
     /// Upgrade tako-server with a temporary candidate process and promotion handoff
     Upgrade {
-        /// Server name
-        name: String,
+        /// Server name (omit to upgrade all servers)
+        name: Option<String>,
 
         /// Install latest canary build instead of stable release
         #[arg(long, conflicts_with = "stable")]
@@ -106,7 +106,7 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
             name,
             canary,
             stable,
-        } => upgrade_server(&name, canary, stable).await,
+        } => upgrade_servers(name.as_deref(), canary, stable).await,
         ServerCommands::Status => crate::commands::status::run().await,
     }
 }
@@ -782,6 +782,29 @@ async fn wait_for_primary_ready(
         "timed out waiting for primary service after restart: {}",
         last_err
     ))
+}
+
+async fn upgrade_servers(
+    name: Option<&str>,
+    canary: bool,
+    stable: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::config::ServersToml;
+
+    let Some(name) = name else {
+        let servers = ServersToml::load()?;
+        if servers.is_empty() {
+            return Err("No servers configured. Run 'tako servers add <host>' first.".into());
+        }
+        let mut names: Vec<String> = servers.names().iter().map(|s| s.to_string()).collect();
+        names.sort_unstable();
+        for server_name in &names {
+            upgrade_server(server_name, canary, stable).await?;
+        }
+        return Ok(());
+    };
+
+    upgrade_server(name, canary, stable).await
 }
 
 pub(crate) async fn upgrade_server(
