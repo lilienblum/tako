@@ -230,7 +230,7 @@ jobs:
 
           timestamp="$(date -u +'%Y-%m-%d %H:%M UTC')"
           short_sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
-          title="Canary (${GITHUB_SHA})"
+          title="Canary"
           notes="Latest canary build from master (${short_sha}) on ${timestamp}."
 
           if ! gh release view canary-latest >/dev/null 2>&1; then
