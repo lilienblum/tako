@@ -89,9 +89,13 @@ pub enum Response {
 pub enum DevEvent {
     RequestStarted {
         host: String,
+        #[serde(default)]
+        path: String,
     },
     RequestFinished {
         host: String,
+        #[serde(default)]
+        path: String,
     },
     AppStatusChanged {
         project_dir: String,
@@ -180,6 +184,7 @@ mod tests {
         let resp = Response::Event {
             event: DevEvent::RequestStarted {
                 host: "a.tako".to_string(),
+                path: "/api".to_string(),
             },
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -188,6 +193,7 @@ mod tests {
         let resp = Response::Event {
             event: DevEvent::RequestFinished {
                 host: "a.tako".to_string(),
+                path: "/api".to_string(),
             },
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -219,7 +225,7 @@ mod tests {
         let req = Request::RegisterApp {
             project_dir: "/home/user/proj".to_string(),
             app_name: "my-app".to_string(),
-            hosts: vec!["my-app.tako".to_string()],
+            hosts: vec!["my-app.tako".to_string(), "my-app.tako/api".to_string()],
             upstream_port: 3000,
             command: vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()],
             env: std::collections::HashMap::from([(
@@ -348,6 +354,35 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_event_defaults_path_to_empty_for_older_payloads() {
+        // Old dev-server sends RequestStarted without path field.
+        let json = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.tako"}}"#;
+        let resp: Response = serde_json::from_str(json).unwrap();
+        match resp {
+            Response::Event {
+                event: DevEvent::RequestStarted { host, path },
+            } => {
+                assert_eq!(host, "a.tako");
+                assert_eq!(path, "");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn serde_register_app_ignores_legacy_display_routes_field() {
+        // Old clients may still send display_routes; new server ignores it.
+        let json = r#"{"type":"RegisterApp","project_dir":"/p","app_name":"a","hosts":["a.tako"],"display_routes":["a.tako"],"upstream_port":3000,"command":["node"],"env":{},"log_path":"/l"}"#;
+        let req: Request = serde_json::from_str(json).unwrap();
+        match req {
+            Request::RegisterApp { hosts, .. } => {
+                assert_eq!(hosts, vec!["a.tako"]);
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
     }
 
     #[test]

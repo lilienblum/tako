@@ -44,6 +44,7 @@ notify-debouncer-mini = "0.7"
 hyper = { version = "1.8", features = ["full"] }
 hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
+openssl = "0.10"
 pingora-core = { version = "0.7", default-features = false, features = ["openssl"] }
 pingora-proxy = { version = "0.7", default-features = false, features = ["openssl"] }
 pingora-http = "0.7"
@@ -78,6 +79,7 @@ ignore = "0.4"
 # Encryption for secrets
 aes-gcm = "0.10"
 getrandom = "0.4"
+libc = "0.2"
 
 # SQLite state store for dev-server
 rusqlite = { version = "0.32", features = ["bundled"] }

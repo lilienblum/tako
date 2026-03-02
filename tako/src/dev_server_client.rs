@@ -251,9 +251,11 @@ async fn ping(c: &mut LineClient) -> Result<(), Box<dyn std::error::Error>> {
 pub enum DevServerEvent {
     RequestStarted {
         host: String,
+        path: String,
     },
     RequestFinished {
         host: String,
+        path: String,
     },
     AppStatusChanged {
         project_dir: String,
@@ -305,22 +307,32 @@ pub async fn subscribe_events()
                 .and_then(|t| t.as_str())
             {
                 Some("RequestStarted") => {
-                    let host = v
-                        .get("event")
-                        .and_then(|e| e.get("host"))
+                    let event = v.get("event").unwrap();
+                    let host = event
+                        .get("host")
                         .and_then(|h| h.as_str())
                         .unwrap_or("")
                         .to_string();
-                    DevServerEvent::RequestStarted { host }
+                    let path = event
+                        .get("path")
+                        .and_then(|p| p.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    DevServerEvent::RequestStarted { host, path }
                 }
                 Some("RequestFinished") => {
-                    let host = v
-                        .get("event")
-                        .and_then(|e| e.get("host"))
+                    let event = v.get("event").unwrap();
+                    let host = event
+                        .get("host")
                         .and_then(|h| h.as_str())
                         .unwrap_or("")
                         .to_string();
-                    DevServerEvent::RequestFinished { host }
+                    let path = event
+                        .get("path")
+                        .and_then(|p| p.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    DevServerEvent::RequestFinished { host, path }
                 }
                 Some("AppStatusChanged") => {
                     let event = v.get("event").unwrap();

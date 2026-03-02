@@ -49,7 +49,6 @@ const INDENT: &str = "  ";
 const STACKED_THRESHOLD: usize = 76;
 
 // Panel column widths (wide mode).
-const COL1_W: usize = 20; // status · worktree · repo slug · repo path
 const COL3_W: usize = 22; // cpu · ram · pid
 const COL_SEP: usize = 2; // gap between columns
 const BAR_W: usize = 8; // chars inside the progress bar
@@ -375,9 +374,10 @@ fn format_panel_wide(
 
     // ── Column geometry ───────────────────────────────────────────────────────
     let inner_w = cols.saturating_sub(2);
-    let col2_w = inner_w
-        .saturating_sub(2 + COL1_W + COL_SEP + COL3_W + COL_SEP)
-        .max(10);
+    // Col1 gets 1/3, col2 gets 2/3 of the space left after col3.
+    let shared = inner_w.saturating_sub(2 + COL3_W + 2 * COL_SEP);
+    let col1_w = (shared / 3).max(10);
+    let col2_w = shared.saturating_sub(col1_w).max(10);
 
     // ── Borders ───────────────────────────────────────────────────────────────
     let title_text = if adapter_name.trim().is_empty() {
@@ -399,15 +399,15 @@ fn format_panel_wide(
     let mut left = vec![l0];
     if let Some(wt) = worktree_name {
         let wt_label = format!("worktree ({wt})");
-        let wt_t = truncate_str(&wt_label, COL1_W, "…");
+        let wt_t = truncate_str(&wt_label, col1_w, "…");
         left.push(format!("{DIM}{wt_t}{RESET}"));
     }
     if !repo_slug.is_empty() {
-        let slug_t = truncate_str(repo_slug, COL1_W, "…");
+        let slug_t = truncate_str(repo_slug, col1_w, "…");
         left.push(format!("{DIM}{slug_t}{RESET}"));
     }
     if !repo_path.is_empty() {
-        let path_t = truncate_str(repo_path, COL1_W, "…");
+        let path_t = truncate_str(repo_path, col1_w, "…");
         left.push(format!("{DIM}{path_t}{RESET}"));
     }
 
@@ -453,7 +453,7 @@ fn format_panel_wide(
         let la = left.get(i).map(|s| s.as_str()).unwrap_or("");
         let ma = mid.get(i).map(|s| s.as_str()).unwrap_or("");
         let ra = right.get(i).map(|s| s.as_str()).unwrap_or("");
-        lines.push(panel_row(la, ma, ra, col2_w));
+        lines.push(panel_row(la, ma, ra, col1_w, col2_w));
     }
     lines.push(bot);
     lines.join("\n")
@@ -573,13 +573,13 @@ fn stacked_row(content: &str, inner_w: usize) -> String {
 }
 
 /// Build one full-width wide-panel data row from three ANSI-styled cell strings.
-fn panel_row(c1: &str, c2: &str, c3: &str, col2_w: usize) -> String {
+fn panel_row(c1: &str, c2: &str, c3: &str, col1_w: usize, col2_w: usize) -> String {
     let p1 = measure_text_width(c1);
     let p2 = measure_text_width(c2);
     let p3 = measure_text_width(c3);
     format!(
         "{BORDER}│{RESET} {c1}{}{c2}{}{c3}{} {BORDER}│{RESET}",
-        " ".repeat(COL1_W.saturating_sub(p1) + COL_SEP),
+        " ".repeat(col1_w.saturating_sub(p1) + COL_SEP),
         " ".repeat(col2_w.saturating_sub(p2) + COL_SEP),
         " ".repeat(COL3_W.saturating_sub(p3)),
     )
@@ -663,56 +663,67 @@ fn process_tree_metrics(sys: &System, root: Pid) -> Option<(f32, u64)> {
 
 struct StickyFooter {
     lines: Vec<String>,
-    /// Terminal width at the time the footer was last drawn.
-    drawn_cols: usize,
+    /// Terminal width when the footer was last drawn, used to compute the
+    /// maximum number of wrapped visual rows on resize.
+    drawn_cols: u16,
 }
 
 impl StickyFooter {
     fn new() -> Self {
         Self {
             lines: vec![],
-            drawn_cols: terminal_cols().max(1),
+            drawn_cols: 0,
         }
     }
 
-    /// How many terminal rows `self.lines` occupy at the given column width.
-    fn height_at_cols(&self, cols: usize) -> u16 {
-        self.lines
-            .iter()
-            .map(|l| (vlen(l).max(1) + cols - 1) / cols)
-            .sum::<usize>() as u16
-    }
-
+    /// Erase the footer by moving up one row per line and clearing.
     fn erase(&self, out: &mut io::Stdout) {
-        let current_cols = terminal_cols().max(1);
-        // After a resize the terminal reflows content to the new width,
-        // but the size query may still return the previous value.  Use
-        // the larger of the drawn-width and current-width heights so we
-        // always move up far enough to cover the old footer.
-        let h = self
-            .height_at_cols(current_cols)
-            .max(self.height_at_cols(self.drawn_cols));
-        if h > 0 {
-            let _ = queue!(
-                out,
-                cursor::MoveUp(h),
-                terminal::Clear(ClearType::FromCursorDown),
-            );
+        if self.lines.is_empty() {
+            return;
         }
+        let _ = queue!(
+            out,
+            cursor::MoveUp(self.lines.len() as u16),
+            terminal::Clear(ClearType::FromCursorDown),
+        );
     }
 
-    fn draw(&self, out: &mut io::Stdout) {
+    /// Erase the footer after a resize. Each original line was drawn at
+    /// `drawn_cols` width. At the new (narrower) terminal width each line
+    /// wraps to at most `ceil(drawn_cols / cols)` visual rows. We use that
+    /// upper bound — overshooting is harmless because the cursor is at the
+    /// very bottom of output and MoveUp cannot scroll past the first row of
+    /// the viewport (the log lines above are untouched).
+    fn erase_after_resize(&self, out: &mut io::Stdout) {
+        if self.lines.is_empty() {
+            return;
+        }
+        let (cols, _) = terminal::size().unwrap_or((80, 24));
+        let rows_per_line = if self.drawn_cols > 0 && cols > 0 && cols < self.drawn_cols {
+            (self.drawn_cols + cols - 1) / cols
+        } else {
+            1
+        };
+        let total = self.lines.len() as u16 * rows_per_line;
+        let _ = queue!(
+            out,
+            cursor::MoveUp(total),
+            terminal::Clear(ClearType::FromCursorDown),
+        );
+    }
+
+    fn draw(&mut self, out: &mut io::Stdout) {
         for line in &self.lines {
             let _ = write!(out, "{}\r\n", line);
         }
         let _ = out.flush();
+        self.drawn_cols = terminal::size().unwrap_or((80, 24)).0;
     }
 
     pub fn println(&mut self, msg: &str) {
         let mut out = io::stdout();
         self.erase(&mut out);
         let _ = write!(out, "{}\r\n", msg);
-        self.drawn_cols = terminal_cols().max(1);
         self.draw(&mut out);
     }
 
@@ -720,7 +731,14 @@ impl StickyFooter {
         let mut out = io::stdout();
         self.erase(&mut out);
         self.lines = new_lines;
-        self.drawn_cols = terminal_cols().max(1);
+        self.draw(&mut out);
+    }
+
+    /// Like `set`, but uses the resize-safe erase strategy.
+    pub fn set_after_resize(&mut self, new_lines: Vec<String>) {
+        let mut out = io::stdout();
+        self.erase_after_resize(&mut out);
+        self.lines = new_lines;
         self.draw(&mut out);
     }
 }
@@ -905,6 +923,11 @@ pub async fn run_dev_output(
     let mut tick_count = 0u64;
     let mut app_pid: Option<Pid> = None;
 
+    // Debounce resize: each Resize event pushes the deadline forward.
+    // When the deadline fires (no resize for 100ms), we do a full redraw.
+    let mut resize_deadline: Option<tokio::time::Instant> = None;
+    const RESIZE_DEBOUNCE: Duration = Duration::from_millis(100);
+
     // Catch SIGTERM / SIGHUP so the footer is cleaned up on signal-based exit.
     let sig = shutdown_signal();
     tokio::pin!(sig);
@@ -912,9 +935,25 @@ pub async fn run_dev_output(
     // We break with a LoopExit tag to avoid moving log_rx/event_rx inside
     // the select! arms (they're borrowed by recv() arms).
     let loop_exit = loop {
+        // Build the debounce future. `sleep_until` is only polled when a
+        // resize is pending; otherwise we use a future that never resolves.
+        let resize_sleep = match resize_deadline {
+            Some(dl) => tokio::time::sleep_until(dl),
+            None => tokio::time::sleep(Duration::from_secs(86400)),
+        };
+        let has_resize = resize_deadline.is_some();
+        tokio::pin!(resize_sleep);
+
         tokio::select! {
             _ = &mut sig => {
                 break LoopExit::Terminate;
+            }
+            // Debounced resize: fires 100ms after the last Resize event.
+            _ = &mut resize_sleep, if has_resize => {
+                resize_deadline = None;
+                footer.set_after_resize(
+                    fs.build_lines(&app_name, &adapter_name, &hosts, port),
+                );
             }
             _ = ticker.tick() => {
                 tick_count += 1;
@@ -1003,7 +1042,15 @@ pub async fn run_dev_output(
                         _ => {}
                     },
                     Event::Resize(_, _) => {
-                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
+                        // Immediately erase the (possibly wrapped) footer so
+                        // remnants don't linger, then debounce the redraw.
+                        {
+                            let mut out = io::stdout();
+                            footer.erase_after_resize(&mut out);
+                            let _ = out.flush();
+                        }
+                        footer.lines.clear();
+                        resize_deadline = Some(tokio::time::Instant::now() + RESIZE_DEBOUNCE);
                     }
                     _ => {}
                 }
@@ -1027,15 +1074,15 @@ pub async fn run_dev_output(
     // Build the exit value (now that log_rx/event_rx are no longer borrowed).
     let exit = match loop_exit {
         LoopExit::Terminate => {
-            println!("{DIM}{app_name} stopped{RESET}");
+            print!("{DIM}{app_name} stopped{RESET}");
             DevOutputExit::Terminate
         }
         LoopExit::Detach => {
-            println!("{DIM}{app_name} detached — run `tako dev` to re-attach{RESET}");
+            print!("{DIM}{app_name} detached — run `tako dev` to re-attach{RESET}");
             DevOutputExit::Detach { log_rx, event_rx }
         }
         LoopExit::Message(msg) => {
-            println!("{DIM}{app_name} {msg}{RESET}");
+            print!("{DIM}{app_name} {msg}{RESET}");
             DevOutputExit::Terminate
         }
     };
@@ -1367,22 +1414,6 @@ mod tests {
     fn trunc_at_limit() {
         assert_eq!(truncate_str("hello", 10, "…").as_ref(), "hello");
         assert_eq!(measure_text_width(&truncate_str("hello world", 7, "…")), 7);
-    }
-
-    #[test]
-    fn height_at_cols_accounts_for_wrapping() {
-        let mut footer = StickyFooter::new();
-        footer.lines = vec!["a".repeat(10)];
-        // 10-char line fits in 1 row at 80 cols.
-        assert_eq!(footer.height_at_cols(80), 1);
-        // 10-char line wraps to 2 rows at 6 cols.
-        assert_eq!(footer.height_at_cols(6), 2);
-        // Multiple lines.
-        footer.lines = vec!["a".repeat(10), "b".repeat(20)];
-        // At 80 cols: 1 + 1 = 2.
-        assert_eq!(footer.height_at_cols(80), 2);
-        // At 6 cols: ceil(10/6)=2 + ceil(20/6)=4 = 6.
-        assert_eq!(footer.height_at_cols(6), 6);
     }
 
     #[test]

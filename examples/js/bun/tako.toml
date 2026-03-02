@@ -10,7 +10,7 @@ WIDLCARD_SUFFIX = ".bun.tako.sh"
 WIDLCARD_SUFFIX = ".bun.tako-testbed.orb.local"
 
 [envs.development]
-routes = ["bun-example.tako/bun", "*.bun-example.tako"]
+routes = ["some-app.tako/bun", "*.bun-example.tako"]
 
 [envs.production]
 routes = ["demo.tako.sh/bun", "*.bun.tako.sh"]

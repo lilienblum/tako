@@ -239,22 +239,39 @@ fn compute_dev_hosts(
         _ => return Ok(vec![default_host.to_string()]),
     };
 
-    let mut out = Vec::new();
+    // Always include the default host so `{app-name}.tako` works even when
+    // the user only configures path-specific or wildcard routes.
+    let mut out = vec![default_host.to_string()];
     for r in routes {
         validate_dev_route(&r, app_name).map_err(|e| e.to_string())?;
-        let host = r.split('/').next().unwrap_or("");
-        if !host.is_empty() {
-            out.push(host.to_string());
+        if !r.is_empty() {
+            out.push(r);
         }
     }
 
-    out.sort();
-    out.dedup();
-    if out.is_empty() {
-        Ok(vec![default_host.to_string()])
-    } else {
-        Ok(out)
+    // Dedup preserving order (default_host first).
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|r| seen.insert(r.clone()));
+    Ok(out)
+}
+
+/// Check whether a route pattern's hostname matches an incoming request hostname.
+/// Route pattern may include a path (e.g. "app.tako/api") — the path is ignored.
+/// Wildcard hosts (e.g. "*.app.tako") match any subdomain.
+fn route_hostname_matches(route_pattern: &str, request_host: &str) -> bool {
+    let host = route_pattern.split('/').next().unwrap_or(route_pattern);
+    if host == request_host {
+        return true;
     }
+    if let Some(suffix) = host.strip_prefix("*.") {
+        if request_host == suffix {
+            return false;
+        }
+        return request_host.len() > suffix.len()
+            && request_host.as_bytes()[request_host.len() - suffix.len() - 1] == b'.'
+            && request_host.ends_with(suffix);
+    }
+    false
 }
 
 fn compute_dev_env(cfg: &TakoToml) -> std::collections::HashMap<String, String> {
@@ -967,7 +984,7 @@ mod tests {
         pf_anchor_content, pf_conf_with_hook, port_from_listen, preferred_public_url,
         replay_and_follow_logs, resolve_dev_preset_ref, resolve_dev_run_command,
         resolve_effective_dev_build_adapter, restart_required_for_requested_listen,
-        should_drop_child_log_line, tcp_probe, trim_child_log_message,
+        route_hostname_matches, should_drop_child_log_line, tcp_probe, trim_child_log_message,
     };
     use crate::build::{BuildAdapter, parse_and_validate_preset};
     use crate::config::TakoToml;
@@ -1848,26 +1865,29 @@ dev = ["bun", "run", "dev"]
     }
 
     #[test]
-    fn keeps_hosts_unchanged_when_dev_routes_are_explicit() {
+    fn always_includes_default_host_with_explicit_routes() {
         let cfg = TakoToml::parse("[envs.development]\nroutes = [\"api.app.tako\"]\n").unwrap();
         let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
-        assert_eq!(hosts, vec!["api.app.tako".to_string()]);
+        assert_eq!(hosts, vec!["app.tako", "api.app.tako"]);
     }
 
     #[test]
-    fn wildcard_only_routes_are_accepted() {
+    fn always_includes_default_host_with_wildcard_routes() {
         let cfg = TakoToml::parse("[envs.development]\nroutes = [\"*.app.tako\"]\n").unwrap();
         let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
-        assert_eq!(hosts, vec!["*.app.tako"]);
+        assert_eq!(hosts, vec!["app.tako", "*.app.tako"]);
     }
 
-    /// Both owner and attached clients must show the same routes. The owner
-    /// uses `compute_display_routes` (wildcards + paths) while the daemon
-    /// only stores routing hosts (exact hostnames from `compute_dev_hosts`).
-    /// An attached client must use `compute_display_routes` too, not the
-    /// daemon's host list.
     #[test]
-    fn display_routes_include_wildcards_and_paths_that_dev_hosts_omit() {
+    fn default_host_deduped_when_already_in_routes() {
+        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.tako\"]\n").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
+        assert_eq!(hosts, vec!["app.tako"]);
+    }
+
+    /// Both routing and display include the full route patterns (host + path).
+    #[test]
+    fn dev_hosts_now_include_paths_and_wildcards() {
         let cfg = TakoToml::parse(
             "[envs.development]\nroutes = [\"app.tako\", \"app.tako/api\", \"*.app.tako\"]\n",
         )
@@ -1875,10 +1895,28 @@ dev = ["bun", "run", "dev"]
         let display = compute_display_routes(&cfg, "app.tako");
         let routing = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
 
-        // Display includes wildcard and path routes.
         assert_eq!(display, vec!["app.tako", "app.tako/api", "*.app.tako"]);
-        // Routing hosts now include wildcards (but still not paths).
-        assert_eq!(routing, vec!["*.app.tako", "app.tako"]);
+        // Routing now carries full route patterns including paths.
+        assert_eq!(routing, vec!["app.tako", "app.tako/api", "*.app.tako"]);
+    }
+
+    #[test]
+    fn route_hostname_matches_exact() {
+        assert!(route_hostname_matches("app.tako", "app.tako"));
+        assert!(!route_hostname_matches("app.tako", "other.tako"));
+    }
+
+    #[test]
+    fn route_hostname_matches_with_path() {
+        assert!(route_hostname_matches("app.tako/api", "app.tako"));
+        assert!(!route_hostname_matches("app.tako/api", "other.tako"));
+    }
+
+    #[test]
+    fn route_hostname_matches_wildcard() {
+        assert!(route_hostname_matches("*.app.tako", "foo.app.tako"));
+        assert!(!route_hostname_matches("*.app.tako", "app.tako"));
+        assert!(!route_hostname_matches("*.app.tako", "other.tako"));
     }
 }
 
@@ -2237,8 +2275,9 @@ pub async fn run(
         .map_err(|e| format!("invalid development routes: {}", e))?;
     let primary_host = dev_hosts
         .iter()
+        .map(|h| h.split('/').next().unwrap_or(h))
         .find(|h| !h.starts_with("*."))
-        .cloned()
+        .map(|h| h.to_string())
         .unwrap_or_else(|| domain.clone());
 
     let hosts_state = Arc::new(tokio::sync::Mutex::new(dev_hosts.clone()));
@@ -2482,10 +2521,10 @@ pub async fn run(
     )
     .await?;
 
-    if reg_hosts
-        .iter()
-        .any(|h| h.ends_with(&format!(".{}", crate::dev::TAKO_DEV_DOMAIN)))
-        && let Ok(info) = crate::dev_server_client::info().await
+    if reg_hosts.iter().any(|h| {
+        let host = h.split('/').next().unwrap_or(h);
+        host.ends_with(&format!(".{}", crate::dev::TAKO_DEV_DOMAIN))
+    }) && let Ok(info) = crate::dev_server_client::info().await
     {
         let local_dns_enabled = info
             .get("info")
@@ -2782,8 +2821,11 @@ pub async fn run(
                 tokio::spawn(async move {
                     while let Some(ev) = ev_rx.recv().await {
                         match ev {
-                            crate::dev_server_client::DevServerEvent::RequestStarted { host } => {
-                                if !app_hosts.iter().any(|h| h == &host) {
+                            crate::dev_server_client::DevServerEvent::RequestStarted {
+                                host,
+                                ..
+                            } => {
+                                if !app_hosts.iter().any(|h| route_hostname_matches(h, &host)) {
                                     continue;
                                 }
 
@@ -2865,8 +2907,11 @@ pub async fn run(
                                     }
                                 }
                             }
-                            crate::dev_server_client::DevServerEvent::RequestFinished { host } => {
-                                if !app_hosts.iter().any(|h| h == &host) {
+                            crate::dev_server_client::DevServerEvent::RequestFinished {
+                                host,
+                                ..
+                            } => {
+                                if !app_hosts.iter().any(|h| route_hostname_matches(h, &host)) {
                                     continue;
                                 }
                                 inflight

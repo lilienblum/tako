@@ -10,11 +10,90 @@ use tokio::sync::Notify;
 
 use crate::protocol;
 
-#[derive(Clone, Default)]
-pub struct Routes {
-    by_host: Arc<Mutex<HashMap<String, String>>>,
-    apps: Arc<Mutex<HashMap<String, AppRoute>>>,
+// ---------------------------------------------------------------------------
+// Route matching helpers (ported from tako-server/src/routing.rs)
+// ---------------------------------------------------------------------------
+
+fn split_route(route: &str) -> (&str, Option<&str>) {
+    match route.find('/') {
+        Some(idx) => (&route[..idx], Some(&route[idx..])),
+        None => (route, None),
+    }
 }
+
+fn hostname_matches(pattern: &str, hostname: &str) -> bool {
+    if let Some(suffix) = pattern.strip_prefix("*.") {
+        if hostname == suffix {
+            return false;
+        }
+        hostname.len() > suffix.len()
+            && hostname.as_bytes()[hostname.len() - suffix.len() - 1] == b'.'
+            && hostname.ends_with(suffix)
+    } else {
+        pattern == hostname
+    }
+}
+
+fn path_matches(pattern: &str, path: &str) -> bool {
+    if let Some(prefix) = pattern.strip_suffix("/*") {
+        path.starts_with(prefix)
+            && (path.len() == prefix.len() || path[prefix.len()..].starts_with('/'))
+    } else if pattern.ends_with('*') {
+        let prefix = &pattern[..pattern.len().saturating_sub(1)];
+        path.starts_with(prefix)
+    } else {
+        normalize_exact_path(pattern) == normalize_exact_path(path)
+    }
+}
+
+fn normalize_exact_path(path: &str) -> &str {
+    if path == "/" {
+        return "/";
+    }
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() { "/" } else { trimmed }
+}
+
+fn route_specificity(pattern: &str) -> (u8, usize, u8) {
+    if pattern.is_empty() {
+        return (0, 0, 0);
+    }
+    let (pattern_host, pattern_path) = split_route(pattern);
+
+    let host_score: u8 = if pattern_host.starts_with("*.") { 1 } else { 2 };
+
+    let (path_len, exact_bonus) = match pattern_path {
+        None => (0, 0),
+        Some(p) => {
+            if let Some(prefix) = p.strip_suffix("/*") {
+                (prefix.len(), 0)
+            } else if p.ends_with('*') {
+                let prefix = &p[..p.len().saturating_sub(1)];
+                (prefix.len(), 0)
+            } else {
+                (normalize_exact_path(p).len(), 1)
+            }
+        }
+    };
+
+    (host_score, path_len, exact_bonus)
+}
+
+// ---------------------------------------------------------------------------
+// Compiled route entry
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+struct CompiledRoute {
+    host: String,
+    path: Option<String>,
+    app_id: String,
+    specificity: (u8, usize, u8),
+}
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
 
 #[derive(Clone)]
 struct AppRoute {
@@ -23,9 +102,30 @@ struct AppRoute {
     notify: Arc<Notify>,
 }
 
+#[derive(Clone, Default)]
+pub struct Routes {
+    /// Per-app route patterns (the raw strings from tako.toml).
+    app_routes: Arc<Mutex<HashMap<String, Vec<String>>>>,
+    /// Compiled routes sorted by specificity (most specific first).
+    compiled: Arc<Mutex<Vec<CompiledRoute>>>,
+    /// Per-app upstream + active state.
+    apps: Arc<Mutex<HashMap<String, AppRoute>>>,
+}
+
 impl Routes {
-    pub fn set(&self, host: String, app_id: String, upstream_port: u16, active: bool) {
-        self.by_host.lock().unwrap().insert(host, app_id.clone());
+    /// Register (or replace) all routes for an app.
+    pub fn set_routes(
+        &self,
+        app_id: String,
+        routes: Vec<String>,
+        upstream_port: u16,
+        active: bool,
+    ) {
+        {
+            let mut ar = self.app_routes.lock().unwrap();
+            ar.insert(app_id.clone(), routes);
+            self.rebuild(&ar);
+        }
 
         let mut apps = self.apps.lock().unwrap();
         let entry = apps.entry(app_id).or_insert_with(|| AppRoute {
@@ -38,20 +138,15 @@ impl Routes {
         if active {
             entry.notify.notify_waiters();
         }
-        drop(apps);
     }
 
-    pub fn remove(&self, host: &str) {
-        let mut by_host = self.by_host.lock().unwrap();
-        let Some(app_id) = by_host.remove(host) else {
-            return;
-        };
-        // Garbage collect app entry if no hosts refer to it.
-        let hosts_left = by_host.values().any(|v| v == &app_id);
-        drop(by_host);
-        if !hosts_left {
-            self.apps.lock().unwrap().remove(&app_id);
-        }
+    /// Remove all routes for an app.
+    pub fn remove_app(&self, app_id: &str) {
+        let mut ar = self.app_routes.lock().unwrap();
+        ar.remove(app_id);
+        self.rebuild(&ar);
+        drop(ar);
+        self.apps.lock().unwrap().remove(app_id);
     }
 
     pub fn set_active(&self, app_id: &str, active: bool) {
@@ -63,25 +158,39 @@ impl Routes {
         }
     }
 
-    pub fn lookup(&self, host: &str) -> Option<(String, u16, bool, Arc<Notify>)> {
-        let by_host = self.by_host.lock().unwrap();
-        let app_id = by_host
-            .get(host)
-            .or_else(|| {
-                // Wildcard fallback: strip the first label and look up `*.{rest}`.
-                let rest = host.split_once('.')?.1;
-                let wildcard = format!("*.{rest}");
-                by_host.get(&wildcard)
-            })
-            .cloned()?;
-        drop(by_host);
+    /// Find the best matching route for a (host, path) pair.
+    pub fn lookup(&self, host: &str, path: &str) -> Option<(String, u16, bool, Arc<Notify>)> {
+        let app_id = {
+            let compiled = self.compiled.lock().unwrap();
+            let mut found = None;
+            for entry in compiled.iter() {
+                if !hostname_matches(&entry.host, host) {
+                    continue;
+                }
+                if let Some(p) = &entry.path {
+                    if !path_matches(p, path) {
+                        continue;
+                    }
+                }
+                found = Some(entry.app_id.clone());
+                break;
+            }
+            found?
+        };
         let apps = self.apps.lock().unwrap();
         let r = apps.get(&app_id)?.clone();
         Some((app_id, r.upstream_port, r.active, r.notify))
     }
 
-    pub fn hosts(&self) -> Vec<String> {
-        self.by_host.lock().unwrap().keys().cloned().collect()
+    /// All route patterns across all apps, for error pages.
+    pub fn all_display_routes(&self) -> Vec<String> {
+        self.app_routes
+            .lock()
+            .unwrap()
+            .values()
+            .flatten()
+            .cloned()
+            .collect()
     }
 
     pub async fn wait_for_active(&self, app_id: &str, timeout: std::time::Duration) -> bool {
@@ -105,6 +214,28 @@ impl Routes {
         let apps = self.apps.lock().unwrap();
         apps.get(app_id).is_some_and(|r| r.active)
     }
+
+    /// Rebuild the compiled route table from all app_routes.
+    fn rebuild(&self, app_routes: &HashMap<String, Vec<String>>) {
+        let mut entries = Vec::new();
+        for (app_id, patterns) in app_routes {
+            for pattern in patterns {
+                if pattern.is_empty() {
+                    continue;
+                }
+                let (host, path) = split_route(pattern);
+                entries.push(CompiledRoute {
+                    host: host.to_string(),
+                    path: path.map(|p| p.to_string()),
+                    app_id: app_id.clone(),
+                    specificity: route_specificity(pattern),
+                });
+            }
+        }
+        // Most specific first. Stable order for ties.
+        entries.sort_by(|a, b| b.specificity.cmp(&a.specificity));
+        *self.compiled.lock().unwrap() = entries;
+    }
 }
 
 #[derive(Clone)]
@@ -117,6 +248,7 @@ pub struct DevProxy {
 pub struct Ctx {
     upstream_port: Option<u16>,
     host: Option<String>,
+    path: Option<String>,
 }
 
 #[async_trait]
@@ -128,42 +260,43 @@ impl ProxyHttp for DevProxy {
     }
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
-        let host_header = {
+        let (hostname, path) = {
             let req = session.req_header();
-            req.headers
-                .get("host")
-                .and_then(|h| h.to_str().ok())
-                .unwrap_or("")
-                .to_string()
+            // HTTP/2 uses :authority (stored in URI), HTTP/1.1 uses Host header.
+            let raw = req
+                .uri
+                .host()
+                .or_else(|| req.headers.get("host").and_then(|h| h.to_str().ok()))
+                .unwrap_or("");
+            let host = raw.split(':').next().unwrap_or(raw).to_string();
+            let path = req.uri.path().to_string();
+            (host, path)
         };
-
-        let hostname = host_header
-            .split(':')
-            .next()
-            .unwrap_or(host_header.as_str())
-            .to_string();
         ctx.host = Some(hostname.clone());
+        ctx.path = Some(path.clone());
 
         let _ = self.events.send(protocol::DevEvent::RequestStarted {
             host: hostname.clone(),
+            path: path.clone(),
         });
 
-        let Some((app_id, port, active, _notify)) = self.routes.lookup(&hostname) else {
-            let mut header = ResponseHeader::build(404, None)?;
+        let Some((app_id, port, active, _notify)) = self.routes.lookup(&hostname, &path) else {
+            let mut header = ResponseHeader::build(421, None)?;
             header.insert_header("Content-Type", "text/plain")?;
             session
                 .write_response_header(Box::new(header), false)
                 .await?;
 
-            let mut known = self.routes.hosts();
+            let app_name = hostname.trim_end_matches(".tako");
+            let mut known = self.routes.all_display_routes();
             known.sort();
+            let routes: Vec<String> = known.iter().map(|r| format!("  https://{r}")).collect();
             session
                 .write_response_body(
                     Some(
                         format!(
-                            "Unknown dev host '{}'. Known apps:\n{}",
-                            hostname,
-                            known.join("\n")
+                            "Unknown application \"{app_name}\". Known routes:\n{}",
+                            routes.join("\n")
                         )
                         .into(),
                     ),
@@ -204,9 +337,10 @@ impl ProxyHttp for DevProxy {
         Self::CTX: Send + Sync,
     {
         if let Some(host) = ctx.host.take() {
+            let path = ctx.path.take().unwrap_or_default();
             let _ = self
                 .events
-                .send(protocol::DevEvent::RequestFinished { host });
+                .send(protocol::DevEvent::RequestFinished { host, path });
         }
     }
 
@@ -230,10 +364,14 @@ mod tests {
     #[test]
     fn lookup_matches_wildcard_route() {
         let routes = Routes::default();
-        routes.set("*.app.tako".to_string(), "app".to_string(), 3000, true);
+        routes.set_routes(
+            "app".to_string(),
+            vec!["*.app.tako".to_string()],
+            3000,
+            true,
+        );
 
-        // Exact wildcard key doesn't match a real request.
-        let hit = routes.lookup("foo.app.tako");
+        let hit = routes.lookup("foo.app.tako", "/");
         assert!(hit.is_some());
         let (app_id, port, active, _) = hit.unwrap();
         assert_eq!(app_id, "app");
@@ -241,13 +379,13 @@ mod tests {
         assert!(active);
 
         // Unrelated host should not match.
-        assert!(routes.lookup("foo.other.tako").is_none());
+        assert!(routes.lookup("foo.other.tako", "/").is_none());
     }
 
     #[tokio::test]
     async fn routes_waits_for_active() {
         let routes = Routes::default();
-        routes.set("a.tako".to_string(), "app".to_string(), 1234, false);
+        routes.set_routes("app".to_string(), vec!["a.tako".to_string()], 1234, false);
 
         let r2 = routes.clone();
         tokio::spawn(async move {
@@ -260,5 +398,131 @@ mod tests {
                 .wait_for_active("app", std::time::Duration::from_secs(1))
                 .await
         );
+    }
+
+    #[test]
+    fn lookup_matches_path_route() {
+        let routes = Routes::default();
+        routes.set_routes(
+            "api".to_string(),
+            vec!["app.tako/api/*".to_string()],
+            3001,
+            true,
+        );
+        routes.set_routes("web".to_string(), vec!["app.tako".to_string()], 3002, true);
+
+        // /api/users → api app
+        let hit = routes.lookup("app.tako", "/api/users");
+        assert!(hit.is_some());
+        let (app_id, port, _, _) = hit.unwrap();
+        assert_eq!(app_id, "api");
+        assert_eq!(port, 3001);
+
+        // / → web app
+        let hit = routes.lookup("app.tako", "/");
+        assert!(hit.is_some());
+        let (app_id, port, _, _) = hit.unwrap();
+        assert_eq!(app_id, "web");
+        assert_eq!(port, 3002);
+    }
+
+    #[test]
+    fn lookup_exact_path_beats_wildcard_path() {
+        let routes = Routes::default();
+        routes.set_routes(
+            "exact".to_string(),
+            vec!["app.tako/api/health".to_string()],
+            3001,
+            true,
+        );
+        routes.set_routes(
+            "wildcard".to_string(),
+            vec!["app.tako/api/*".to_string()],
+            3002,
+            true,
+        );
+
+        let hit = routes.lookup("app.tako", "/api/health").unwrap();
+        assert_eq!(hit.0, "exact");
+
+        let hit = routes.lookup("app.tako", "/api/other").unwrap();
+        assert_eq!(hit.0, "wildcard");
+    }
+
+    #[test]
+    fn lookup_exact_host_beats_wildcard_host() {
+        let routes = Routes::default();
+        routes.set_routes(
+            "exact".to_string(),
+            vec!["api.app.tako".to_string()],
+            3001,
+            true,
+        );
+        routes.set_routes(
+            "wildcard".to_string(),
+            vec!["*.app.tako".to_string()],
+            3002,
+            true,
+        );
+
+        let hit = routes.lookup("api.app.tako", "/").unwrap();
+        assert_eq!(hit.0, "exact");
+
+        let hit = routes.lookup("other.app.tako", "/").unwrap();
+        assert_eq!(hit.0, "wildcard");
+    }
+
+    #[test]
+    fn remove_app_cleans_up() {
+        let routes = Routes::default();
+        routes.set_routes("app".to_string(), vec!["app.tako".to_string()], 3000, true);
+        assert!(routes.lookup("app.tako", "/").is_some());
+
+        routes.remove_app("app");
+        assert!(routes.lookup("app.tako", "/").is_none());
+        assert!(routes.all_display_routes().is_empty());
+    }
+
+    #[test]
+    fn all_display_routes_shows_full_patterns() {
+        let routes = Routes::default();
+        routes.set_routes(
+            "app".to_string(),
+            vec!["app.tako".to_string(), "app.tako/api".to_string()],
+            3000,
+            true,
+        );
+
+        let mut display = routes.all_display_routes();
+        display.sort();
+        assert_eq!(display, vec!["app.tako", "app.tako/api"]);
+    }
+
+    #[test]
+    fn hostname_matches_basic() {
+        assert!(hostname_matches("app.tako", "app.tako"));
+        assert!(!hostname_matches("app.tako", "other.tako"));
+        assert!(hostname_matches("*.app.tako", "foo.app.tako"));
+        assert!(!hostname_matches("*.app.tako", "app.tako"));
+    }
+
+    #[test]
+    fn path_matches_basic() {
+        assert!(path_matches("/api/*", "/api/users"));
+        assert!(path_matches("/api/*", "/api"));
+        assert!(!path_matches("/api/*", "/apifoo"));
+        assert!(path_matches("/api", "/api"));
+        assert!(path_matches("/api", "/api/"));
+        assert!(!path_matches("/api", "/api/users"));
+    }
+
+    #[test]
+    fn specificity_ordering() {
+        // exact host > wildcard host
+        assert!(route_specificity("app.tako") > route_specificity("*.app.tako"));
+        // longer path > shorter path
+        assert!(route_specificity("app.tako/api/v1/*") > route_specificity("app.tako/api/*"));
+        // exact path > wildcard path of same length
+        assert!(route_specificity("app.tako/api") > route_specificity("app.tako/api/*"));
     }
 }

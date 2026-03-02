@@ -136,18 +136,12 @@ impl TlsAccept for SniCertResolver {
                 }
             }
             None => {
-                if should_allow_default_cert_fallback_for_unknown_sni() {
-                    tracing::warn!(
-                        hostname = %sni_hostname,
-                        "No certificate found for hostname, using default certificate fallback"
-                    );
-                    self.set_default_cert(ssl, "unknown-sni");
-                } else {
-                    tracing::warn!(
-                        hostname = %sni_hostname,
-                        "No certificate found for hostname, TLS handshake may fail"
-                    );
-                }
+                tracing::warn!(
+                    hostname = %sni_hostname,
+                    "No certificate found for hostname, TLS handshake will fail"
+                );
+                // No fallback cert — let the handshake fail so misconfigurations
+                // are immediately obvious rather than silently serving a mismatched cert.
             }
         }
     }
@@ -158,10 +152,6 @@ pub fn create_sni_callbacks(cert_manager: Arc<CertManager>) -> Box<dyn TlsAccept
     Box::new(SniCertResolver::new(cert_manager))
 }
 
-fn should_allow_default_cert_fallback_for_unknown_sni() -> bool {
-    true
-}
-
 fn should_allow_default_cert_fallback_for_missing_sni() -> bool {
     true
 }
@@ -169,11 +159,6 @@ fn should_allow_default_cert_fallback_for_missing_sni() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn default_cert_fallback_for_unknown_sni_is_enabled() {
-        assert!(should_allow_default_cert_fallback_for_unknown_sni());
-    }
 
     #[test]
     fn default_cert_fallback_for_missing_sni_is_enabled() {

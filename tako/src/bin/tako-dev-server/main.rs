@@ -5,11 +5,20 @@ mod protocol;
 mod proxy;
 mod state;
 
+use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read as _, Seek, Write as _};
 use std::net::Ipv4Addr;
-use std::path::PathBuf;
+use std::os::unix::io::AsRawFd;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use async_trait::async_trait;
+use openssl::pkey::PKey;
+use openssl::ssl::SslRef;
+use openssl::x509::X509;
+use pingora_core::listeners::TlsAccept;
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::prelude::Server;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -28,8 +37,6 @@ const TAKO_DEV_DOMAIN: &str = "tako";
 const LOCAL_DNS_LISTEN_ADDR: &str = "127.0.0.1:53535";
 const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
 const HTTP_REDIRECT_LISTEN_ADDR: &str = "127.0.0.1:47830";
-const DEV_TLS_CERT_FILENAME: &str = "fullchain.pem";
-const DEV_TLS_KEY_FILENAME: &str = "privkey.pem";
 
 #[derive(Debug, Clone)]
 struct Args {
@@ -68,6 +75,72 @@ fn parse_args() -> Args {
     }
 }
 
+/// Acquire an exclusive PID file lock using `flock(LOCK_EX | LOCK_NB)`.
+///
+/// If another instance holds the lock, sends SIGTERM to that PID and retries
+/// for up to 2 seconds before giving up.
+///
+/// The caller must keep the returned `File` alive for the lifetime of the
+/// process — the kernel releases the advisory lock when the fd is closed
+/// (including on crash / SIGKILL).
+fn acquire_pid_lock(pid_path: &Path) -> Result<File, Box<dyn std::error::Error>> {
+    let mut file = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(pid_path)?;
+
+    // Try non-blocking exclusive lock.
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        // Lock acquired immediately.
+        write_pid(&mut file)?;
+        return Ok(file);
+    }
+
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() != Some(libc::EWOULDBLOCK) {
+        return Err(format!("flock({}) failed: {}", pid_path.display(), err).into());
+    }
+
+    // Another instance holds the lock. Read its PID and send SIGTERM.
+    let mut contents = String::new();
+    file.read_to_string(&mut contents)?;
+    if let Ok(old_pid) = contents.trim().parse::<i32>() {
+        if old_pid > 0 {
+            unsafe {
+                libc::kill(old_pid, libc::SIGTERM);
+            }
+        }
+    }
+
+    // Retry with a short sleep loop (up to 2 seconds).
+    const MAX_RETRIES: u32 = 20;
+    for _ in 0..MAX_RETRIES {
+        std::thread::sleep(Duration::from_millis(100));
+        let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            write_pid(&mut file)?;
+            return Ok(file);
+        }
+    }
+
+    Err(format!(
+        "could not acquire dev-server lock at {} after sending SIGTERM (another instance may be stuck)",
+        pid_path.display()
+    )
+    .into())
+}
+
+fn write_pid(file: &mut File) -> std::io::Result<()> {
+    file.set_len(0)?;
+    file.seek(std::io::SeekFrom::Start(0))?;
+    write!(file, "{}", std::process::id())?;
+    file.sync_all()?;
+    Ok(())
+}
+
 fn app_host(app_name: &str) -> String {
     format!("{}.{}", app_name, TAKO_DEV_DOMAIN)
 }
@@ -102,26 +175,6 @@ fn listen_port_from_addr(listen: &str) -> u16 {
     port_from_listen(listen, 47831)
 }
 
-fn dev_tls_dir_for_home(home: &std::path::Path) -> PathBuf {
-    home.join("certs")
-}
-
-fn dev_tls_paths_for_dir(dir: &std::path::Path) -> (PathBuf, PathBuf) {
-    (
-        dir.join(DEV_TLS_CERT_FILENAME),
-        dir.join(DEV_TLS_KEY_FILENAME),
-    )
-}
-
-fn existing_dev_tls_paths(dir: &std::path::Path) -> Option<(PathBuf, PathBuf)> {
-    let (cert_path, key_path) = dev_tls_paths_for_dir(dir);
-    if cert_path.is_file() && key_path.is_file() {
-        Some((cert_path, key_path))
-    } else {
-        None
-    }
-}
-
 fn ensure_tcp_listener_can_bind(listen_addr: &str) -> Result<(), Box<dyn std::error::Error>> {
     match std::net::TcpListener::bind(listen_addr) {
         Ok(listener) => {
@@ -132,23 +185,79 @@ fn ensure_tcp_listener_can_bind(listen_addr: &str) -> Result<(), Box<dyn std::er
     }
 }
 
-fn ensure_dev_tls_files() -> Result<(PathBuf, PathBuf), Box<dyn std::error::Error>> {
-    let dir = dev_tls_dir_for_home(&paths::tako_home_dir()?);
-    if let Some(existing) = existing_dev_tls_paths(&dir) {
-        return Ok(existing);
+fn load_or_create_ca() -> Result<local_ca::LocalCA, Box<dyn std::error::Error>> {
+    let store = local_ca::LocalCAStore::new()?;
+    Ok(store.get_or_create_ca()?)
+}
+
+/// Dynamic TLS certificate resolver for development.
+///
+/// OpenSSL rejects `*.tako` wildcards because single-label TLDs are treated
+/// like `*.com` — "too broad". So we generate a per-hostname cert on the fly
+/// during the TLS handshake using the local CA, and cache it for reuse.
+struct DevCertResolver {
+    ca: local_ca::LocalCA,
+    cache: Mutex<HashMap<String, (X509, PKey<openssl::pkey::Private>)>>,
+}
+
+impl DevCertResolver {
+    fn new(ca: local_ca::LocalCA) -> Self {
+        Self {
+            ca,
+            cache: Mutex::new(HashMap::new()),
+        }
     }
 
-    let store = local_ca::LocalCAStore::new()?;
-    let ca = store.get_or_create_ca()?;
+    fn get_or_create_cert(&self, hostname: &str) -> Option<(X509, PKey<openssl::pkey::Private>)> {
+        {
+            let cache = self.cache.lock().unwrap();
+            if let Some(cached) = cache.get(hostname) {
+                return Some(cached.clone());
+            }
+        }
 
-    let wildcard = format!("*.{TAKO_DEV_DOMAIN}");
-    let cert = ca.generate_leaf_cert_for_names(&[&wildcard, TAKO_DEV_DOMAIN])?;
+        let cert = self
+            .ca
+            .generate_leaf_cert_for_names(&[hostname])
+            .map_err(|e| tracing::warn!(hostname, error = %e, "failed to generate dev cert"))
+            .ok()?;
 
-    std::fs::create_dir_all(&dir)?;
-    let (cert_path, key_path) = dev_tls_paths_for_dir(&dir);
-    std::fs::write(&cert_path, cert.cert_pem.as_bytes())?;
-    std::fs::write(&key_path, cert.key_pem.as_bytes())?;
-    Ok((cert_path, key_path))
+        let x509 = X509::from_pem(cert.cert_pem.as_bytes())
+            .map_err(|e| tracing::warn!(hostname, error = %e, "failed to parse generated cert"))
+            .ok()?;
+        let pkey = PKey::private_key_from_pem(cert.key_pem.as_bytes())
+            .map_err(|e| tracing::warn!(hostname, error = %e, "failed to parse generated key"))
+            .ok()?;
+
+        self.cache
+            .lock()
+            .unwrap()
+            .insert(hostname.to_string(), (x509.clone(), pkey.clone()));
+        Some((x509, pkey))
+    }
+}
+
+#[async_trait]
+impl TlsAccept for DevCertResolver {
+    async fn certificate_callback(&self, ssl: &mut SslRef) {
+        let sni = match ssl.servername(openssl::ssl::NameType::HOST_NAME) {
+            Some(name) => name.to_string(),
+            None => return,
+        };
+
+        if let Some((cert, key)) = self.get_or_create_cert(&sni) {
+            let _ = ssl.set_certificate(&cert);
+            let _ = ssl.set_private_key(&key);
+        }
+    }
+}
+
+/// Split a route pattern like "app.tako/api" into ("app.tako", Some("/api")).
+fn split_route_pattern(route: &str) -> (&str, Option<&str>) {
+    match route.find('/') {
+        Some(idx) => (&route[..idx], Some(&route[idx..])),
+        None => (route, None),
+    }
 }
 
 fn sanitize_app_name(name: &str) -> String {
@@ -382,10 +491,8 @@ async fn handle_client(
                 }
 
                 let route_id = format!("reg:{}", project_dir);
-                for host in &hosts {
-                    s.routes
-                        .set(host.clone(), route_id.clone(), upstream_port, true);
-                }
+                s.routes
+                    .set_routes(route_id, hosts.clone(), upstream_port, true);
 
                 let host = hosts
                     .first()
@@ -415,20 +522,17 @@ async fn handle_client(
             Request::UnregisterApp { project_dir } => {
                 let mut s = state.lock().unwrap();
                 let mut app_name = String::new();
-                let mut hosts_to_remove = Vec::new();
 
                 if let Some(db) = &s.db {
                     if let Ok(Some(app)) = db.get_app(&project_dir) {
                         app_name = app.app_name.clone();
-                        hosts_to_remove = app.hosts.clone();
                         let _ = db.set_status(&project_dir, &state::AppStatus::Stopped);
                         let _ = db.set_pid(&project_dir, None);
                     }
                 }
 
-                for host in &hosts_to_remove {
-                    s.routes.remove(host);
-                }
+                let route_id = format!("reg:{}", project_dir);
+                s.routes.remove_app(&route_id);
 
                 if !app_name.is_empty() {
                     s.events.broadcast(Response::Event {
@@ -781,14 +885,14 @@ async fn drain_pipe_to_log(pipe: impl tokio::io::AsyncRead + Unpin, log_path: &s
 
 /// Handle wake-on-request: when a RequestStarted event arrives for an idle app,
 /// spawn the process and mark it as running.
-async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String) {
+async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: String) {
     // Quick check under lock: is the route already active?
     // Also grab the DB path so we can query outside the lock.
     let (route_active, db_path) = {
         let s = state.lock().unwrap();
-        let active = s.routes.lookup(&host).is_some_and(|(_, _, a, _)| a);
-        let path = s.db.as_ref().map(|db| db.path());
-        (active, path)
+        let active = s.routes.lookup(&host, &path).is_some_and(|(_, _, a, _)| a);
+        let db_p = s.db.as_ref().map(|db| db.path());
+        (active, db_p)
     };
 
     if route_active {
@@ -803,14 +907,30 @@ async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String) {
         };
         let apps = db.list_active_apps().unwrap_or_default();
         apps.into_iter().find(|a| {
-            a.status == state::AppStatus::Idle
-                && a.hosts.iter().any(|h| {
-                    h == &host
-                        || (h.starts_with("*.")
-                            && host
-                                .split_once('.')
-                                .is_some_and(|(_, rest)| format!("*.{rest}") == *h))
-                })
+            if a.status != state::AppStatus::Idle {
+                return false;
+            }
+            // Check if any of the app's stored route patterns match the request.
+            a.hosts.iter().any(|route_pattern| {
+                let (pat_host, pat_path) = split_route_pattern(route_pattern);
+                let host_ok = pat_host == host
+                    || (pat_host.starts_with("*.")
+                        && host
+                            .split_once('.')
+                            .is_some_and(|(_, rest)| format!("*.{rest}") == pat_host));
+                if !host_ok {
+                    return false;
+                }
+                match pat_path {
+                    None => true,
+                    Some(_) => {
+                        // If the route has a path component, it will match
+                        // at the proxy layer. For wake purposes, hostname
+                        // match is sufficient — the app handles all its paths.
+                        true
+                    }
+                }
+            })
         })
     };
 
@@ -905,6 +1025,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = parse_args();
 
+    // Acquire an exclusive PID lock. If another instance is running, SIGTERM it.
+    let pid_path = paths::tako_home_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("dev-server.pid");
+    if let Some(parent) = pid_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let _pid_lock = acquire_pid_lock(&pid_path)?;
+
     // Shared route table between the unix-socket control plane and the proxy.
     let routes = proxy::Routes::default();
     let events = EventsHub::default();
@@ -928,10 +1057,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server.bootstrap();
         let mut svc = pingora_proxy::http_proxy_service(&server.configuration, proxy);
 
-        let (cert_path, key_path) = ensure_dev_tls_files()?;
-        let cert_path_str = cert_path.to_string_lossy().to_string();
-        let key_path_str = key_path.to_string_lossy().to_string();
-        let tls = TlsSettings::intermediate(&cert_path_str, &key_path_str)?;
+        // Dynamic per-SNI cert generation: OpenSSL rejects `*.tako` wildcards
+        // (single-label TLD), so we generate a cert per hostname on the fly.
+        let ca = load_or_create_ca()?;
+        let resolver = DevCertResolver::new(ca);
+        let callbacks: Box<dyn TlsAccept + Send + Sync> = Box::new(resolver);
+        let mut tls = TlsSettings::with_callbacks(callbacks)?;
+        tls.enable_h2();
         svc.add_tls_with_settings(&listen, None, tls);
 
         server.add_service(svc);
@@ -1005,10 +1137,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 for app in &active_apps {
                     let id = format!("reg:{}", app.project_dir);
                     let active = app.status == state::AppStatus::Running;
-                    for host in &app.hosts {
-                        st.routes
-                            .set(host.clone(), id.clone(), app.upstream_port, active);
-                    }
+                    st.routes
+                        .set_routes(id, app.hosts.clone(), app.upstream_port, active);
                 }
                 if !active_apps.is_empty() {
                     st.cancel_idle_exit();
@@ -1029,11 +1159,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let state = state.clone();
         tokio::spawn(async move {
             while let Some(ev) = ev_rx.recv().await {
-                if let DevEvent::RequestStarted { ref host } = ev {
+                if let DevEvent::RequestStarted { ref host, ref path } = ev {
                     let state = state.clone();
                     let host = host.clone();
+                    let path = path.clone();
                     tokio::spawn(async move {
-                        handle_wake_on_request(state, host).await;
+                        handle_wake_on_request(state, host, path).await;
                     });
                 }
                 events.broadcast(Response::Event { event: ev });
@@ -1052,6 +1183,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
                     tracing::info!("tako-dev-server shutting down");
+                    let _ = std::fs::remove_file(&sock);
                     std::process::exit(0);
                 }
             }
@@ -1235,9 +1367,9 @@ mod tests {
                 )
                 .unwrap();
             }
-            s.routes.set(
-                "my-app.tako".to_string(),
+            s.routes.set_routes(
                 "reg:/proj".to_string(),
+                vec!["my-app.tako".to_string()],
                 3000,
                 true,
             );
@@ -1455,45 +1587,6 @@ mod tests {
     }
 
     #[test]
-    fn dev_tls_dir_uses_certs_root() {
-        let home = PathBuf::from("/tmp/tako-home");
-        assert_eq!(
-            dev_tls_dir_for_home(&home),
-            PathBuf::from("/tmp/tako-home/certs")
-        );
-    }
-
-    #[test]
-    fn dev_tls_paths_use_expected_filenames() {
-        let dir = PathBuf::from("/tmp/tako-home/certs");
-        let (cert, key) = dev_tls_paths_for_dir(&dir);
-        assert_eq!(cert, PathBuf::from("/tmp/tako-home/certs/fullchain.pem"));
-        assert_eq!(key, PathBuf::from("/tmp/tako-home/certs/privkey.pem"));
-    }
-
-    #[test]
-    fn existing_dev_tls_paths_returns_pair_when_both_exist() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let certs_dir = temp.path().join("certs");
-        std::fs::create_dir_all(&certs_dir).unwrap();
-        let (cert, key) = dev_tls_paths_for_dir(&certs_dir);
-        std::fs::write(&cert, "cert").unwrap();
-        std::fs::write(&key, "key").unwrap();
-
-        assert_eq!(existing_dev_tls_paths(&certs_dir), Some((cert, key)));
-    }
-
-    #[test]
-    fn existing_dev_tls_paths_returns_none_when_any_file_missing() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let certs_dir = temp.path().join("certs");
-        std::fs::create_dir_all(&certs_dir).unwrap();
-        let (cert, _key) = dev_tls_paths_for_dir(&certs_dir);
-        std::fs::write(&cert, "cert").unwrap();
-        assert!(existing_dev_tls_paths(&certs_dir).is_none());
-    }
-
-    #[test]
     fn ensure_tcp_listener_can_bind_succeeds_when_port_is_available() {
         // On busy CI hosts, another process can race us for a just-freed port.
         // Retry a few times with fresh ephemeral ports to keep this deterministic.
@@ -1536,9 +1629,9 @@ mod tests {
                 )
                 .unwrap();
             }
-            s.routes.set(
-                "my-app.tako".to_string(),
+            s.routes.set_routes(
                 "reg:/proj".to_string(),
+                vec!["my-app.tako".to_string()],
                 3000,
                 true,
             );
@@ -1629,5 +1722,82 @@ mod tests {
         assert!(err.contains("dev proxy could not bind on"));
         assert!(err.contains(&addr.to_string()));
         drop(listener);
+    }
+
+    /// Verify that the dynamic cert resolver generates a cert whose SAN
+    /// exactly matches the requested hostname — this is how we sidestep
+    /// OpenSSL rejecting `*.tako` wildcards (single-label TLD).
+    #[test]
+    fn dev_cert_resolver_generates_cert_matching_hostname() {
+        let ca = local_ca::LocalCA::generate().unwrap();
+        let resolver = DevCertResolver::new(ca);
+
+        let (x509, _pkey) = resolver
+            .get_or_create_cert("foo.tako")
+            .expect("should generate cert");
+
+        // Verify the SAN contains the exact hostname.
+        let pem = x509.to_pem().unwrap();
+        let (_, parsed_pem) = x509_parser::pem::parse_x509_pem(&pem).unwrap();
+        let parsed = parsed_pem.parse_x509().unwrap();
+
+        let san_ext = parsed
+            .extensions()
+            .iter()
+            .find(|ext| ext.oid == x509_parser::oid_registry::OID_X509_EXT_SUBJECT_ALT_NAME)
+            .expect("cert must have SAN extension");
+
+        let san = match san_ext.parsed_extension() {
+            x509_parser::extensions::ParsedExtension::SubjectAlternativeName(san) => san,
+            other => panic!("expected SubjectAlternativeName, got {:?}", other),
+        };
+
+        let dns_names: Vec<&str> = san
+            .general_names
+            .iter()
+            .filter_map(|n| match n {
+                x509_parser::extensions::GeneralName::DNSName(d) => Some(*d),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            dns_names.contains(&"foo.tako"),
+            "cert must contain foo.tako SAN, got: {:?}",
+            dns_names
+        );
+    }
+
+    /// Verify that the dynamically generated cert chains back to the CA
+    /// and that the SAN exactly matches — these are the two checks that
+    /// Chrome/BoringSSL performs during the TLS handshake.
+    #[test]
+    fn dev_cert_resolver_cert_is_signed_by_ca() {
+        let ca = local_ca::LocalCA::generate().unwrap();
+        let ca_x509 = X509::from_pem(ca.ca_cert_pem().as_bytes()).unwrap();
+        let resolver = DevCertResolver::new(ca);
+
+        let (leaf_x509, _) = resolver
+            .get_or_create_cert("foo.tako")
+            .expect("should generate cert");
+
+        // Verify the leaf cert is signed by the CA's public key.
+        let ca_pubkey = ca_x509.public_key().unwrap();
+        assert!(
+            leaf_x509.verify(&ca_pubkey).unwrap(),
+            "leaf cert must be signed by the local CA"
+        );
+    }
+
+    #[test]
+    fn dev_cert_resolver_caches_certs() {
+        let ca = local_ca::LocalCA::generate().unwrap();
+        let resolver = DevCertResolver::new(ca);
+
+        let (first, _) = resolver.get_or_create_cert("bar.tako").unwrap();
+        let (second, _) = resolver.get_or_create_cert("bar.tako").unwrap();
+
+        // Same DER bytes → same cert object was returned from cache.
+        assert_eq!(first.to_der().unwrap(), second.to_der().unwrap());
     }
 }

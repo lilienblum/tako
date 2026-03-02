@@ -68,6 +68,11 @@ impl LocalCA {
         }
     }
 
+    #[cfg(test)]
+    pub fn ca_cert_pem(&self) -> &str {
+        &self.ca_cert_pem
+    }
+
     pub fn generate() -> Result<Self> {
         let mut params = CertificateParams::default();
 
