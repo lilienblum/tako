@@ -1415,9 +1415,10 @@ async fn run_release_install_command(
             env.iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
         )
-        // Auto-approve mise trust prompts — the deployed content is user-controlled
-        // so no interactive trust prompt should block installation.
-        .env("MISE_YES", "1")
+        // Trust mise configs in the release dir — the deployed content is user-controlled.
+        // MISE_TRUSTED_CONFIG_PATHS marks all configs under this path as trusted so mise
+        // doesn't error out in non-interactive mode (MISE_YES does not help here).
+        .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str())
         .output()
         .await
         .map_err(|e| {
@@ -1499,9 +1500,10 @@ async fn install_bun_dependencies_for_release(
             env.iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
         )
-        // Auto-approve mise trust prompts — the deployed content is user-controlled
-        // so no interactive trust prompt should block installation.
-        .env("MISE_YES", "1");
+        // Trust mise configs in the release dir — the deployed content is user-controlled.
+        // MISE_TRUSTED_CONFIG_PATHS marks all configs under this path as trusted so mise
+        // doesn't error out in non-interactive mode (MISE_YES does not help here).
+        .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str());
 
     let output = cmd.output().await.map_err(|e| {
         format!(
