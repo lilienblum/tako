@@ -765,13 +765,18 @@ fn format_installer_failure(output: &crate::ssh::CommandOutput) -> String {
 async fn wait_for_primary_ready(
     ssh: &mut crate::ssh::SshClient,
     timeout: Duration,
+    old_pid: u32,
 ) -> Result<ServerRuntimeInfo, String> {
     let start = std::time::Instant::now();
     let mut last_err = String::new();
     while start.elapsed() < timeout {
         ssh.clear_tako_hello_cache();
         match ssh.tako_server_info().await {
-            Ok(info) => return Ok(info),
+            Ok(info) if info.pid != old_pid => return Ok(info),
+            Ok(_) => {
+                // Still the old process — keep polling
+                tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
+            }
             Err(e) => {
                 last_err = e.to_string();
                 tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
@@ -779,8 +784,7 @@ async fn wait_for_primary_ready(
         }
     }
     Err(format!(
-        "timed out waiting for primary service after restart: {}",
-        last_err
+        "timed out waiting for new server process (old pid {old_pid}): {last_err}",
     ))
 }
 
@@ -878,6 +882,15 @@ pub(crate) async fn upgrade_server(
         upgrade_mode_entered = true;
         output::success("Upgrading mode enabled");
 
+        // Capture the current (old) PID before reload so we can detect when
+        // the new process has taken over the management socket.
+        let old_info =
+            output::with_spinner_async("Reading active runtime config...", ssh.tako_server_info())
+                .await
+                .map_err(|e| format!("Failed to read runtime config: {}", e))?
+                .map_err(|e| format!("Failed to read runtime config: {}", e))?;
+        let old_pid = old_info.pid;
+
         // Trigger zero-downtime reload: SIGHUP → new binary spawns → SIGUSR1 → old drains
         output::with_spinner_async(
             "Reloading tako-server (zero-downtime)...",
@@ -887,23 +900,17 @@ pub(crate) async fn upgrade_server(
         .map_err(|e| format!("Reload failed: {}", e))?
         .map_err(|e| format!("Reload failed: {}", e))?;
 
-        // Wait for the new process to bind the management socket
-        let active_info =
-            output::with_spinner_async("Reading active runtime config...", ssh.tako_server_info())
-                .await
-                .map_err(|e| format!("Failed to read runtime config: {}", e))?
-                .map_err(|e| format!("Failed to read runtime config: {}", e))?;
-
-        output::with_spinner_async(
+        // Poll until a *new* process (different PID) responds on the socket
+        let new_info = output::with_spinner_async(
             "Waiting for new server to be ready...",
-            wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT),
+            wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid),
         )
         .await
         .map_err(|e| format!("Readiness check failed: {}", e))?
         .map_err(|e| format!("Readiness check failed: {}", e))?;
         output::success(&format!(
-            "New server is ready (socket: {})",
-            active_info.socket
+            "New server is ready (pid: {} → {}, socket: {})",
+            old_pid, new_info.pid, new_info.socket
         ));
 
         output::with_spinner_async("Exiting upgrading mode...", ssh.tako_exit_upgrading(&owner))
@@ -918,7 +925,9 @@ pub(crate) async fn upgrade_server(
     .await;
 
     if upgrade_result.is_err() && upgrade_mode_entered {
-        let _ = wait_for_primary_ready(&mut ssh, Duration::from_secs(30)).await;
+        // Best-effort: wait for *any* server to respond, then exit upgrading mode.
+        // Use pid 0 so any responding process satisfies the check.
+        let _ = wait_for_primary_ready(&mut ssh, Duration::from_secs(30), 0).await;
         let _ = ssh.tako_exit_upgrading(&owner).await;
     }
 

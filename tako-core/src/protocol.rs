@@ -88,6 +88,7 @@ pub enum UpgradeMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerRuntimeInfo {
+    pub pid: u32,
     pub mode: UpgradeMode,
     pub socket: String,
     pub data_dir: String,
@@ -425,5 +426,25 @@ mod tests {
         let mode = UpgradeMode::Upgrading;
         let json = serde_json::to_string(&mode).unwrap();
         assert_eq!(json, r#""upgrading""#);
+    }
+
+    #[test]
+    fn test_server_runtime_info_pid_roundtrip() {
+        let info = ServerRuntimeInfo {
+            pid: 42,
+            mode: UpgradeMode::Normal,
+            socket: "/var/run/tako/tako.sock".to_string(),
+            data_dir: "/var/lib/tako".to_string(),
+            http_port: 80,
+            https_port: 443,
+            no_acme: false,
+            acme_staging: false,
+            acme_email: None,
+            renewal_interval_hours: 12,
+            instance_port_offset: 0,
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let parsed: ServerRuntimeInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.pid, 42);
     }
 }

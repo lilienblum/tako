@@ -490,6 +490,89 @@ mod health_check {
     }
 }
 
+mod server_info {
+    use super::*;
+
+    #[test]
+    fn test_server_info_includes_pid() {
+        if !require_localhost_bind() {
+            return;
+        }
+
+        let server = TestServer::start();
+        let response = server.send_command(&serde_json::json!({ "command": "server_info" }));
+        assert_eq!(response.get("status").and_then(|s| s.as_str()), Some("ok"));
+
+        let pid = response
+            .get("data")
+            .and_then(|d| d.get("pid"))
+            .and_then(|p| p.as_u64())
+            .expect("server_info response should include data.pid");
+
+        // The PID should match the child process we spawned
+        let child_pid = server.child.as_ref().unwrap().id();
+        assert_eq!(pid, child_pid as u64);
+    }
+
+    #[test]
+    fn test_sighup_reload_replaces_process() {
+        if !require_localhost_bind() {
+            return;
+        }
+
+        let server = TestServer::start();
+
+        // Read initial PID from server_info
+        let response = server.send_command(&serde_json::json!({ "command": "server_info" }));
+        let old_pid = response
+            .get("data")
+            .and_then(|d| d.get("pid"))
+            .and_then(|p| p.as_u64())
+            .expect("initial server_info should include pid") as u32;
+
+        // Send SIGHUP to trigger zero-downtime reload
+        let child_pid = server.child.as_ref().unwrap().id();
+        assert_eq!(old_pid, child_pid);
+        unsafe {
+            libc::kill(child_pid as i32, libc::SIGHUP);
+        }
+
+        // Poll server_info until PID changes (new process takes over the socket)
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let mut new_pid = None;
+        while std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(500));
+            let resp = server.send_command(&serde_json::json!({ "command": "server_info" }));
+            if let Some(pid) = resp
+                .get("data")
+                .and_then(|d| d.get("pid"))
+                .and_then(|p| p.as_u64())
+            {
+                if pid as u32 != old_pid {
+                    new_pid = Some(pid as u32);
+                    break;
+                }
+            }
+        }
+
+        let new_pid = new_pid.expect("new server process should have a different PID after SIGHUP");
+        assert_ne!(old_pid, new_pid);
+
+        // Verify the new process responds to commands
+        let list_response = server.send_command(&serde_json::json!({ "command": "list" }));
+        assert_eq!(
+            list_response.get("status").and_then(|s| s.as_str()),
+            Some("ok"),
+            "new process should respond to list command"
+        );
+
+        // Clean up the new child process (not tracked by TestServer)
+        unsafe {
+            libc::kill(new_pid as i32, libc::SIGTERM);
+        }
+    }
+}
+
 mod protocol {
 
     #[test]

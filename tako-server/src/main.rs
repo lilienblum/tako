@@ -103,6 +103,7 @@ pub struct Args {
 
 #[derive(Debug, Clone)]
 pub struct ServerRuntimeConfig {
+    pid: u32,
     socket: String,
     data_dir: PathBuf,
     http_port: u16,
@@ -117,6 +118,7 @@ pub struct ServerRuntimeConfig {
 impl ServerRuntimeConfig {
     fn for_defaults(data_dir: PathBuf) -> Self {
         Self {
+            pid: std::process::id(),
             socket: "/var/run/tako/tako.sock".to_string(),
             data_dir,
             http_port: 80,
@@ -131,6 +133,7 @@ impl ServerRuntimeConfig {
 
     fn to_runtime_info(&self, mode: UpgradeMode) -> ServerRuntimeInfo {
         ServerRuntimeInfo {
+            pid: self.pid,
             mode,
             socket: self.socket.clone(),
             data_dir: self.data_dir.to_string_lossy().to_string(),
@@ -1875,6 +1878,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create server state
     let runtime = ServerRuntimeConfig {
+        pid: std::process::id(),
         socket: socket.clone(),
         data_dir: data_dir.clone(),
         http_port: args.port,
@@ -2979,6 +2983,7 @@ exit 1
             ..Default::default()
         }));
         let runtime = ServerRuntimeConfig {
+            pid: std::process::id(),
             socket: "/var/run/tako/tako-custom.sock".to_string(),
             data_dir: temp.path().to_path_buf(),
             http_port: 8080,
@@ -3001,6 +3006,10 @@ exit 1
         let Response::Ok { data } = response else {
             panic!("expected server info response");
         };
+        assert_eq!(
+            data.get("pid").and_then(Value::as_u64),
+            Some(std::process::id() as u64)
+        );
         assert_eq!(data.get("mode").and_then(Value::as_str), Some("upgrading"));
         assert_eq!(
             data.get("socket").and_then(Value::as_str),
@@ -3173,6 +3182,7 @@ exit 1
         drop(state_a);
 
         let runtime = ServerRuntimeConfig {
+            pid: std::process::id(),
             socket: "/var/run/tako/tako.sock".to_string(),
             data_dir: temp.path().to_path_buf(),
             http_port: 80,
