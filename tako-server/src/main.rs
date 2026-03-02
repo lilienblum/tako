@@ -1415,9 +1415,9 @@ async fn run_release_install_command(
             env.iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
         )
-        // Trust mise configs in the release dir — the deployed content is user-controlled
+        // Auto-approve mise trust prompts — the deployed content is user-controlled
         // so no interactive trust prompt should block installation.
-        .env("MISE_TRUST_ALL", "1")
+        .env("MISE_YES", "1")
         .output()
         .await
         .map_err(|e| {
@@ -1499,9 +1499,9 @@ async fn install_bun_dependencies_for_release(
             env.iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
         )
-        // Trust mise configs in the release dir — the deployed content is user-controlled
+        // Auto-approve mise trust prompts — the deployed content is user-controlled
         // so no interactive trust prompt should block installation.
-        .env("MISE_TRUST_ALL", "1");
+        .env("MISE_YES", "1");
 
     let output = cmd.output().await.map_err(|e| {
         format!(

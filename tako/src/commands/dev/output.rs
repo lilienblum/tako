@@ -1074,15 +1074,15 @@ pub async fn run_dev_output(
     // Build the exit value (now that log_rx/event_rx are no longer borrowed).
     let exit = match loop_exit {
         LoopExit::Terminate => {
-            print!("{DIM}{app_name} stopped{RESET}");
+            println!("{DIM}{app_name} stopped{RESET}");
             DevOutputExit::Terminate
         }
         LoopExit::Detach => {
-            print!("{DIM}{app_name} detached — run `tako dev` to re-attach{RESET}");
+            println!("{DIM}{app_name} detached — run `tako dev` to re-attach{RESET}");
             DevOutputExit::Detach { log_rx, event_rx }
         }
         LoopExit::Message(msg) => {
-            print!("{DIM}{app_name} {msg}{RESET}");
+            println!("{DIM}{app_name} {msg}{RESET}");
             DevOutputExit::Terminate
         }
     };
