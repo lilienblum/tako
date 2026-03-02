@@ -1122,7 +1122,7 @@ assets = ["dist/client"]
         apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
 
         assert_eq!(preset.main.as_deref(), Some("dist/server/tako-entry.mjs"));
-        assert_eq!(preset.dev, vec!["bun", "run", "dev"]);
+        assert_eq!(preset.dev, vec!["bun", "--hot", "{main}"]);
         assert!(preset.install.is_some());
         assert!(!preset.start.is_empty());
         assert_eq!(preset.build.exclude, vec!["node_modules/".to_string()]);
@@ -1233,7 +1233,7 @@ exclude = ["dist/**/*.map", "node_modules/"]
 name = "bun"
 main = "index.ts"
 
-dev = ["bun", "run", "dev"]
+dev = ["bun", "--hot", "{main}"]
 install = "bun install --production --frozen-lockfile"
 start = ["bun", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
 
@@ -1255,7 +1255,7 @@ targets = ["linux-x86_64-glibc", "linux-aarch64-musl"]
                 "linux-aarch64-musl".to_string()
             ]
         );
-        assert_eq!(preset.dev, vec!["bun", "run", "dev"]);
+        assert_eq!(preset.dev, vec!["bun", "--hot", "{main}"]);
         assert_eq!(
             preset.start,
             vec![

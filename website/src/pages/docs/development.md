@@ -7,7 +7,7 @@ current: development
 
 # Development (Local)
 
-This guide covers local development with Tako: trusted HTTPS, `.tako.local` URLs, and what `tako dev` is doing behind the scenes.
+This guide covers local development with Tako: trusted HTTPS, `.tako` URLs, and what `tako dev` is doing behind the scenes.
 
 CLI output follows shared conventions: concise by default, technical detail with `--verbose`, and spinner progress for long interactive steps.
 
@@ -17,8 +17,9 @@ CLI output follows shared conventions: concise by default, technical detail with
 - Installed CLI distributions include both `tako` and `tako-dev-server`.
 - When running from source, the daemon binary is built from the `tako` package (`cargo build -p tako --bin tako-dev-server`).
 - `tako dev` owns your app process lifecycle and spawns the app locally on an ephemeral port.
-- `tako-dev-server` terminates HTTPS and routes by `Host` to that app port.
-- The client registers a **lease** with the daemon (TTL + heartbeat). If heartbeats stop, the route expires.
+- `tako-dev-server` terminates HTTPS and routes by `Host` to that app port. App state is persisted in SQLite (`~/.tako/dev-server.db`).
+- The client **registers** the app with the daemon (project directory is the unique key). App statuses: `running`, `idle`, `stopped`.
+- Press `b` to background the app — the CLI exits but the daemon keeps the process alive and routes active. Press `Ctrl+c` to stop the app.
 - `tako dev` watches [`tako.toml`](/docs/tako-toml) for changes. If dev env vars change, it restarts the app. If `[envs.development]` routes change, it re-registers routes with the daemon.
 
 ## Files Created
@@ -43,29 +44,28 @@ From an app directory:
 tako dev
 ```
 
-`tako dev` resolves app name from top-level `name` when set, otherwise from sanitized project directory name. This name is used for `{app}.tako.local`.
+`tako dev` resolves app name from top-level `name` when set, otherwise from sanitized project directory name. This name is used for `{app}.tako`.
 
-If `[envs.development]` omits routes, `tako dev` defaults to `{app}.tako.local`.
+If `[envs.development]` omits routes, `tako dev` defaults to `{app}.tako`.
 
 Useful commands:
 
 - `tako doctor`
-- `tako dev` (starts the interactive dashboard by default)
-- `tako dev --no-tui` (disable the dashboard)
+- `tako dev` (streams logs directly to stdout in interactive terminals)
 - `tako dev <DIR>` (run as if invoked from another project directory)
 - `tako releases ls --env <environment>` (inspect remote release history after deploys)
 
 Default URL:
 
-- macOS (with local forwarding): `https://{app}.tako.local/`
-- Other platforms: `https://{app}.tako.local:47831/`
+- macOS (with local forwarding): `https://{app}.tako/`
+- Other platforms: `https://{app}.tako:47831/`
 
 ## Vite Apps
 
 If your app runs `vite dev` under `tako dev` and uses `tako.sh/vite`:
 
 - configure Vite with `import { tako } from "tako.sh/vite"` and `plugins: [tako()]`
-- the plugin adds `.tako.local` to Vite `server.allowedHosts` so local Tako hosts are accepted
+- the plugin adds `.tako` to Vite `server.allowedHosts` so local Tako hosts are accepted
 - when `PORT` is set by `tako dev`, Vite binds to `127.0.0.1:$PORT` with `strictPort: true`
 
 ## Local Workflow Checklist
@@ -76,7 +76,7 @@ Fastest happy-path loop:
 2. Run `tako dev` from your app directory.
 3. Open the development URL and verify app responses.
 4. Make code/config edits while `tako dev` stays running.
-5. Use `tako dev --no-tui` when you want logs in a non-interactive terminal.
+5. Pipe or redirect stdout for non-interactive use (e.g. `tako dev | grep error`).
 
 ## Trusted HTTPS (Local CA)
 
@@ -119,10 +119,10 @@ When deploy targets private/local route hostnames (for example `*.local`), `tako
 If no cert matches an SNI hostname yet, `tako-server` serves a fallback self-signed default cert so HTTPS still completes and unmatched hosts/routes return `404`.
 Remote edge proxy response caching stores proxied `GET`/`HEAD` responses only when response `Cache-Control` / `Expires` headers explicitly allow caching.
 
-Name resolution for `.tako.local` is done via local split DNS:
+Name resolution for `.tako` is done via local split DNS:
 
-- `tako dev` installs `/etc/resolver/tako.local` (one-time sudo) pointing to `127.0.0.1:53535`.
-- `tako-dev-server` answers `*.tako.local` queries for active lease hosts and maps them to loopback.
+- `tako dev` installs `/etc/resolver/tako` (one-time sudo) pointing to `127.0.0.1:53535`.
+- `tako-dev-server` answers `*.tako` queries for registered app hosts and maps them to loopback.
 
 ## Environment Variables
 
@@ -145,7 +145,7 @@ These are the environment variables Tako components read and/or set.
 `tako dev` configures this automatically when missing:
 
 ```text
-/etc/resolver/tako.local
+/etc/resolver/tako
   nameserver 127.0.0.1
   port 53535
 ```
@@ -160,6 +160,6 @@ tako doctor
 
 If resolution fails:
 
-- Verify `/etc/resolver/tako.local` exists and points to `127.0.0.1:53535`.
+- Verify `/etc/resolver/tako` exists and points to `127.0.0.1:53535`.
 - Ensure `tako dev` is running and your app is listed in `tako doctor`.
 - Confirm no local process is conflicting on UDP `127.0.0.1:53535`.

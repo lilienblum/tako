@@ -27,10 +27,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 console = "0.16"
 demand = "1.8"
 termcolor = "1.4"
-ratatui = "0.30"
 crossterm = "0.29"
 sysinfo = "0.38"
-unicode-width = "0.2"
 base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -80,6 +78,10 @@ ignore = "0.4"
 # Encryption for secrets
 aes-gcm = "0.10"
 getrandom = "0.4"
+
+# SQLite state store for dev-server
+rusqlite = { version = "0.32", features = ["bundled"] }
+
 
 [dev-dependencies]
 tempfile = "3.25"

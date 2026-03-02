@@ -1,7 +1,6 @@
-//! Local authoritative DNS for `*.tako.local` development hosts.
+//! Local authoritative DNS for `*.tako` development hosts.
 //!
-//! This avoids relying on multicast `.local` behavior by answering queries
-//! directly from the current lease host table.
+//! Answers queries directly from the current app host table.
 
 use std::net::{Ipv4Addr, SocketAddr};
 
@@ -12,10 +11,8 @@ use hickory_proto::{
 
 use tokio::net::UdpSocket;
 
-use crate::proxy;
-
 const DNS_TTL_SECS: u32 = 30;
-const TAKO_LOCAL_SUFFIX: &str = ".tako.local";
+const TAKO_DEV_SUFFIX: &str = ".tako";
 
 #[derive(Debug, Clone)]
 struct ParsedDnsQuery {
@@ -41,8 +38,9 @@ impl LocalDns {
     }
 }
 
-fn is_tako_local_host(host: &str) -> bool {
-    host.to_ascii_lowercase().ends_with(TAKO_LOCAL_SUFFIX)
+fn is_tako_dev_host(host: &str) -> bool {
+    let h = host.to_ascii_lowercase();
+    h == "tako" || h.ends_with(TAKO_DEV_SUFFIX)
 }
 
 fn parse_dns_query(packet: &[u8]) -> Option<ParsedDnsQuery> {
@@ -78,10 +76,10 @@ fn response_with_record(
     }
 }
 
-fn build_dns_response(packet: &[u8], known_host: bool, loopback_ip: Ipv4Addr) -> Option<Vec<u8>> {
+fn build_dns_response(packet: &[u8], loopback_ip: Ipv4Addr) -> Option<Vec<u8>> {
     let q = parse_dns_query(packet)?;
     let mut response = Message::new();
-    let in_zone = is_tako_local_host(&q.qname);
+    let in_zone = is_tako_dev_host(&q.qname);
 
     response.set_id(q.request.id());
     response.set_message_type(MessageType::Response);
@@ -92,8 +90,8 @@ fn build_dns_response(packet: &[u8], known_host: bool, loopback_ip: Ipv4Addr) ->
         response.add_query(query.clone());
     }
 
-    if !in_zone || !known_host {
-        response.set_response_code(ResponseCode::NXDomain);
+    if !in_zone {
+        response.set_response_code(ResponseCode::Refused);
         return response.to_vec().ok();
     }
 
@@ -113,7 +111,6 @@ fn build_dns_response(packet: &[u8], known_host: bool, loopback_ip: Ipv4Addr) ->
 }
 
 pub async fn start(
-    routes: proxy::Routes,
     listen_addr: &str,
     loopback_ip: Ipv4Addr,
 ) -> Result<LocalDns, Box<dyn std::error::Error>> {
@@ -121,7 +118,7 @@ pub async fn start(
     let bound = socket.local_addr()?;
 
     tokio::spawn(async move {
-        let mut buf = [0u8; 512];
+        let mut buf = [0u8; 4096];
         loop {
             let (len, peer) = match socket.recv_from(&mut buf).await {
                 Ok(v) => v,
@@ -132,13 +129,7 @@ pub async fn start(
             };
 
             let packet = &buf[..len];
-            let parsed = match parse_dns_query(packet) {
-                Some(q) => q,
-                None => continue,
-            };
-
-            let known = routes.lookup(&parsed.qname).is_some();
-            let Some(resp) = build_dns_response(packet, known, loopback_ip) else {
+            let Some(resp) = build_dns_response(packet, loopback_ip) else {
                 continue;
             };
 
@@ -198,16 +189,16 @@ mod tests {
 
     #[test]
     fn parses_dns_question_name() {
-        let q = build_query("app.tako.local", DNS_TYPE_A);
+        let q = build_query("app.tako", DNS_TYPE_A);
         let parsed = parse_dns_query(&q).expect("query should parse");
-        assert_eq!(parsed.qname, "app.tako.local");
+        assert_eq!(parsed.qname, "app.tako");
         assert_eq!(parsed.qtype, RecordType::A);
     }
 
     #[test]
     fn returns_a_record_for_known_host() {
-        let q = build_query("app.tako.local", DNS_TYPE_A);
-        let resp = build_dns_response(&q, true, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
+        let q = build_query("app.tako", DNS_TYPE_A);
+        let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
         assert_eq!(rcode(&resp), 0);
         assert_eq!(ancount(&resp), 1);
         assert!(resp.ends_with(&[127, 77, 0, 1]));
@@ -215,41 +206,51 @@ mod tests {
 
     #[test]
     fn returns_empty_answer_for_aaaa_known_host() {
-        let q = build_query("app.tako.local", DNS_TYPE_AAAA);
-        let resp = build_dns_response(&q, true, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
+        let q = build_query("app.tako", DNS_TYPE_AAAA);
+        let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
         assert_eq!(rcode(&resp), 0);
         assert_eq!(ancount(&resp), 0);
     }
 
     #[test]
     fn returns_only_a_record_for_any_query() {
-        let q = build_query("app.tako.local", 255);
-        let resp = build_dns_response(&q, true, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
+        let q = build_query("app.tako", 255);
+        let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
         assert_eq!(rcode(&resp), 0);
         assert_eq!(ancount(&resp), 1);
         assert!(resp.ends_with(&[127, 77, 0, 1]));
     }
 
     #[test]
-    fn returns_nxdomain_for_unknown_tako_host() {
-        let q = build_query("missing.tako.local", DNS_TYPE_A);
-        let resp = build_dns_response(&q, false, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
-        assert_eq!(rcode(&resp), 3);
-        assert_eq!(ancount(&resp), 0);
+    fn resolves_any_tako_subdomain() {
+        let q = build_query("anything.tako", DNS_TYPE_A);
+        let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
+        assert_eq!(rcode(&resp), 0);
+        assert_eq!(ancount(&resp), 1);
+        assert!(resp.ends_with(&[127, 77, 0, 1]));
     }
 
     #[test]
-    fn returns_nxdomain_for_outside_zone() {
+    fn resolves_bare_tako() {
+        let q = build_query("tako", DNS_TYPE_A);
+        let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
+        assert_eq!(rcode(&resp), 0);
+        assert_eq!(ancount(&resp), 1);
+        assert!(resp.ends_with(&[127, 77, 0, 1]));
+    }
+
+    #[test]
+    fn returns_refused_for_outside_zone() {
         let q = build_query("example.com", DNS_TYPE_A);
-        let resp = build_dns_response(&q, true, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
-        assert_eq!(rcode(&resp), 3);
+        let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
+        assert_eq!(rcode(&resp), 5); // REFUSED
     }
 
     #[test]
     fn echoes_opcode_in_response_flags() {
         // STATUS opcode with RD bit set.
-        let q = build_query_with_flags("app.tako.local", DNS_TYPE_A, (2 << 11) | 0x0100);
-        let resp = build_dns_response(&q, true, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
+        let q = build_query_with_flags("app.tako", DNS_TYPE_A, (2 << 11) | 0x0100);
+        let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
         assert_eq!(opcode(resp_flags(&resp)), 2);
     }
 }

@@ -395,9 +395,9 @@ name = "{app_name}"
 [envs.production]
 route = "{production_route}"
 
-# Development routes are optional; default is `{app_name}.tako.local`.
+# Development routes are optional; default is `{app_name}.tako`.
 # [envs.development]
-# route = "{app_name}.tako.local"
+# route = "{app_name}.tako"
 
 # Optional: use multiple routes instead of `route`.
 # routes = ["{app_name}.example.com", "www.{app_name}.example.com"]
@@ -487,7 +487,7 @@ mod tests {
             "expected development environment section to be optional/commented by default"
         );
         assert!(
-            !rendered.contains("[envs.development]\nroute = \"demo-app.tako.local\""),
+            !rendered.contains("[envs.development]\nroute = \"demo-app.tako\""),
             "expected development route not to be uncommented in minimal template"
         );
 

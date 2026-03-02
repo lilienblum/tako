@@ -5,42 +5,41 @@ use serde::{Deserialize, Serialize};
 pub enum Request {
     Ping,
     Info,
-    GetToken,
-    /// Register (or refresh) a lease for an app.
-    ///
-    /// - `app_name` must be a DNS-safe label (used for `{app}.tako.local`).
-    /// - `upstream_port` is where the app is listening on the host.
-    /// - `ttl_ms` is the lease TTL; the client must renew before it expires.
-    RegisterLease {
-        token: String,
+    /// Register a persistent app by project directory.
+    RegisterApp {
+        project_dir: String,
         app_name: String,
-        /// Hostnames to register for this app.
-        /// If empty, defaults to `{app_name}.tako.local`.
         #[serde(default)]
         hosts: Vec<String>,
         upstream_port: u16,
+        command: Vec<String>,
+        env: std::collections::HashMap<String, String>,
+        log_path: String,
         #[serde(default)]
-        active: bool,
-        ttl_ms: u64,
+        client_pid: Option<u32>,
     },
-    SetLeaseActive {
-        token: String,
-        lease_id: String,
-        active: bool,
+    /// Unregister (stop) an app by project directory.
+    UnregisterApp {
+        project_dir: String,
     },
-    RenewLease {
-        token: String,
-        lease_id: String,
-        ttl_ms: u64,
+    /// Update an app's status (running/idle/stopped).
+    SetAppStatus {
+        project_dir: String,
+        status: String,
     },
-    UnregisterLease {
-        token: String,
-        lease_id: String,
+    /// Hand off a running process PID to the daemon.
+    HandoffApp {
+        project_dir: String,
+        pid: u32,
     },
+    /// Request an app restart (relayed to the owning client via events).
+    RestartApp {
+        project_dir: String,
+    },
+    /// List all registered apps.
+    ListRegisteredApps,
     ListApps,
-    SubscribeEvents {
-        token: String,
-    },
+    SubscribeEvents,
     StopServer,
 }
 
@@ -54,21 +53,26 @@ pub enum Response {
     Info {
         info: DevInfo,
     },
-    Token {
-        token: String,
-    },
-    LeaseRegistered {
+    AppRegistered {
         app_name: String,
-        lease_id: String,
-        expires_in_ms: u64,
+        project_dir: String,
         url: String,
     },
-    LeaseRenewed {
-        lease_id: String,
-        expires_in_ms: u64,
+    AppUnregistered {
+        project_dir: String,
     },
-    LeaseUnregistered {
-        lease_id: String,
+    AppStatusUpdated {
+        project_dir: String,
+        status: String,
+    },
+    AppRestarting {
+        project_dir: String,
+    },
+    AppHandedOff {
+        project_dir: String,
+    },
+    RegisteredApps {
+        apps: Vec<RegisteredAppInfo>,
     },
     Subscribed,
     Event {
@@ -83,15 +87,36 @@ pub enum Response {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "type")]
 pub enum DevEvent {
-    RequestStarted { host: String },
-    RequestFinished { host: String },
+    RequestStarted {
+        host: String,
+    },
+    RequestFinished {
+        host: String,
+    },
+    AppStatusChanged {
+        project_dir: String,
+        app_name: String,
+        status: String,
+    },
+    RestartRequested {
+        project_dir: String,
+        app_name: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RegisteredAppInfo {
+    pub project_dir: String,
+    pub app_name: String,
+    pub hosts: Vec<String>,
+    pub upstream_port: u16,
+    pub status: String,
+    pub pid: Option<u32>,
+    pub client_pid: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppInfo {
-    /// Opaque lease identifier.
-    #[serde(default)]
-    pub lease_id: String,
     pub app_name: String,
     #[serde(default)]
     pub hosts: Vec<String>,
@@ -104,7 +129,7 @@ pub struct DevInfo {
     /// Where the daemon proxy is currently listening.
     pub listen: String,
     pub port: u16,
-    /// IP currently advertised for `.tako.local` hostnames.
+    /// IP currently advertised for `.tako` hostnames.
     pub advertised_ip: String,
     #[serde(default)]
     pub local_dns_enabled: bool,
@@ -132,52 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn serde_roundtrip_up_app_and_list() {
-        let req = Request::RegisterLease {
-            token: "t".to_string(),
-            app_name: "my-app".to_string(),
-            hosts: vec!["my-app.tako.local".to_string()],
-            upstream_port: 1234,
-            active: true,
-            ttl_ms: 30_000,
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
-
-        let resp = Response::LeaseRegistered {
-            app_name: "my-app".to_string(),
-            lease_id: "lease".to_string(),
-            expires_in_ms: 30_000,
-            url: "https://my-app.tako.local/".to_string(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
-
-        let resp = Response::Apps {
-            apps: vec![AppInfo {
-                lease_id: "lease".to_string(),
-                app_name: "a".to_string(),
-                hosts: vec!["a.tako.local".to_string()],
-                upstream_port: 1234,
-                pid: Some(1),
-            }],
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
-    }
-
-    #[test]
-    fn serde_roundtrip_down_and_stop() {
-        let req = Request::GetToken;
-        let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
-
-        let resp = Response::Token {
-            token: "t".to_string(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
-
+    fn serde_roundtrip_stop() {
         let req = Request::StopServer;
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
@@ -188,49 +168,8 @@ mod tests {
     }
 
     #[test]
-    fn serde_roundtrip_logs_requests() {
-        let req = Request::RenewLease {
-            token: "t".to_string(),
-            lease_id: "lease".to_string(),
-            ttl_ms: 30_000,
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
-
-        let req = Request::UnregisterLease {
-            token: "t".to_string(),
-            lease_id: "lease".to_string(),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
-
-        let resp = Response::LeaseRenewed {
-            lease_id: "lease".to_string(),
-            expires_in_ms: 30_000,
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
-
-        let resp = Response::LeaseUnregistered {
-            lease_id: "lease".to_string(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
-    }
-
-    #[test]
     fn serde_roundtrip_events() {
-        let req = Request::SubscribeEvents {
-            token: "t".to_string(),
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
-
-        let req = Request::SetLeaseActive {
-            token: "t".to_string(),
-            lease_id: "lease".to_string(),
-            active: true,
-        };
+        let req = Request::SubscribeEvents;
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
 
@@ -240,7 +179,7 @@ mod tests {
 
         let resp = Response::Event {
             event: DevEvent::RequestStarted {
-                host: "a.tako.local".to_string(),
+                host: "a.tako".to_string(),
             },
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -248,7 +187,7 @@ mod tests {
 
         let resp = Response::Event {
             event: DevEvent::RequestFinished {
-                host: "a.tako.local".to_string(),
+                host: "a.tako".to_string(),
             },
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -269,6 +208,142 @@ mod tests {
                 local_dns_enabled: true,
                 local_dns_port: 53535,
                 control_clients: 1,
+            },
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_register_app() {
+        let req = Request::RegisterApp {
+            project_dir: "/home/user/proj".to_string(),
+            app_name: "my-app".to_string(),
+            hosts: vec!["my-app.tako".to_string()],
+            upstream_port: 3000,
+            command: vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()],
+            env: std::collections::HashMap::from([(
+                "NODE_ENV".to_string(),
+                "development".to_string(),
+            )]),
+            log_path: "/home/user/.tako/dev/logs/my-app.jsonl".to_string(),
+            client_pid: Some(1234),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
+
+        let resp = Response::AppRegistered {
+            app_name: "my-app".to_string(),
+            project_dir: "/home/user/proj".to_string(),
+            url: "https://my-app.tako/".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_unregister_app() {
+        let req = Request::UnregisterApp {
+            project_dir: "/proj".to_string(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
+
+        let resp = Response::AppUnregistered {
+            project_dir: "/proj".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_set_app_status() {
+        let req = Request::SetAppStatus {
+            project_dir: "/proj".to_string(),
+            status: "idle".to_string(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
+
+        let resp = Response::AppStatusUpdated {
+            project_dir: "/proj".to_string(),
+            status: "idle".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_handoff_app() {
+        let req = Request::HandoffApp {
+            project_dir: "/proj".to_string(),
+            pid: 12345,
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
+
+        let resp = Response::AppHandedOff {
+            project_dir: "/proj".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_list_registered_apps() {
+        let req = Request::ListRegisteredApps;
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
+
+        let resp = Response::RegisteredApps {
+            apps: vec![RegisteredAppInfo {
+                project_dir: "/proj".to_string(),
+                app_name: "app".to_string(),
+                hosts: vec!["app.tako".to_string()],
+                upstream_port: 3000,
+                status: "running".to_string(),
+                pid: Some(111),
+                client_pid: Some(222),
+            }],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_app_status_changed_event() {
+        let resp = Response::Event {
+            event: DevEvent::AppStatusChanged {
+                project_dir: "/proj".to_string(),
+                app_name: "app".to_string(),
+                status: "idle".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_restart_app() {
+        let req = Request::RestartApp {
+            project_dir: "/proj".to_string(),
+        };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
+
+        let resp = Response::AppRestarting {
+            project_dir: "/proj".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_restart_requested_event() {
+        let resp = Response::Event {
+            event: DevEvent::RestartRequested {
+                project_dir: "/proj".to_string(),
+                app_name: "app".to_string(),
             },
         };
         let json = serde_json::to_string(&resp).unwrap();

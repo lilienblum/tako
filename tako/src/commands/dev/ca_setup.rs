@@ -20,7 +20,7 @@ struct CaSetupPlan {
 fn sudo_trust_explanation_lines() -> [&'static str; 3] {
     [
         "One-time sudo required to trust the Tako local CA.",
-        "This enables trusted https://*.tako.local without browser warnings.",
+        "This enables trusted https://*.tako without browser warnings.",
         "Tako only updates the system trust entry and then continues startup.",
     ]
 }
@@ -124,6 +124,6 @@ mod tests {
     fn sudo_trust_explanation_mentions_trusted_local_domains() {
         let lines = sudo_trust_explanation_lines();
         assert!(lines[0].contains("sudo"));
-        assert!(lines[1].contains("https://*.tako.local"));
+        assert!(lines[1].contains("https://*.tako"));
     }
 }

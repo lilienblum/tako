@@ -82,12 +82,6 @@ impl LineClient {
 }
 
 #[derive(Debug, Clone)]
-pub struct LeaseInfo {
-    pub lease_id: String,
-    pub url: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct ListedApp {
     pub app_name: String,
     pub hosts: Vec<String>,
@@ -252,106 +246,32 @@ async fn ping(c: &mut LineClient) -> Result<(), Box<dyn std::error::Error>> {
     Err(format!("unexpected response: {}", line).into())
 }
 
-pub async fn get_token() -> Result<String, Box<dyn std::error::Error>> {
-    let sock = socket_path()?;
-    let stream = UnixStream::connect(&sock).await?;
-    let mut c = LineClient::new(stream);
-    c.send_line(r#"{"type":"GetToken"}"#).await?;
-    let line = c.read_line().await?;
-    let v: serde_json::Value = serde_json::from_str(&line)?;
-    match v.get("type").and_then(|t| t.as_str()) {
-        Some("Token") => Ok(v
-            .get("token")
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_string()),
-        Some("Error") => Err(format!("dev-server error: {}", v).into()),
-        _ => Err(format!("unexpected response: {}", line).into()),
-    }
-}
-
-pub async fn register_lease(
-    token: &str,
-    app_name: &str,
-    hosts: &[String],
-    upstream_port: u16,
-    active: bool,
-    ttl_ms: u64,
-) -> Result<LeaseInfo, Box<dyn std::error::Error>> {
-    let sock = socket_path()?;
-    let stream = UnixStream::connect(&sock).await?;
-    let mut c = LineClient::new(stream);
-    let req = serde_json::json!({
-        "type": "RegisterLease",
-        "token": token,
-        "app_name": app_name,
-        "hosts": hosts,
-        "upstream_port": upstream_port,
-        "active": active,
-        "ttl_ms": ttl_ms,
-    });
-    c.send_line(&req.to_string()).await?;
-    let line = c.read_line().await?;
-    let v: serde_json::Value = serde_json::from_str(&line)?;
-    match v.get("type").and_then(|t| t.as_str()) {
-        Some("LeaseRegistered") => Ok(LeaseInfo {
-            lease_id: v
-                .get("lease_id")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string(),
-            url: v
-                .get("url")
-                .and_then(|x| x.as_str())
-                .unwrap_or("")
-                .to_string(),
-        }),
-        Some("Error") => Err(format!("dev-server error: {}", v).into()),
-        _ => Err(format!("unexpected response: {}", line).into()),
-    }
-}
-
-pub async fn set_lease_active(
-    token: &str,
-    lease_id: &str,
-    active: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let sock = socket_path()?;
-    let stream = UnixStream::connect(&sock).await?;
-    let mut c = LineClient::new(stream);
-    let req = serde_json::json!({
-        "type": "SetLeaseActive",
-        "token": token,
-        "lease_id": lease_id,
-        "active": active,
-    });
-    c.send_line(&req.to_string()).await?;
-    let line = c.read_line().await?;
-    let v: serde_json::Value = serde_json::from_str(&line)?;
-    match v.get("type").and_then(|t| t.as_str()) {
-        Some("LeaseRenewed") => Ok(()),
-        Some("Error") => Err(format!("dev-server error: {}", v).into()),
-        _ => Err(format!("unexpected response: {}", line).into()),
-    }
-}
-
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum DevServerEvent {
-    RequestStarted { host: String },
-    RequestFinished { host: String },
+    RequestStarted {
+        host: String,
+    },
+    RequestFinished {
+        host: String,
+    },
+    AppStatusChanged {
+        project_dir: String,
+        app_name: String,
+        status: String,
+    },
+    RestartRequested {
+        project_dir: String,
+        app_name: String,
+    },
 }
 
-pub async fn subscribe_events(
-    token: &str,
-) -> Result<tokio::sync::mpsc::UnboundedReceiver<DevServerEvent>, Box<dyn std::error::Error>> {
+pub async fn subscribe_events()
+-> Result<tokio::sync::mpsc::UnboundedReceiver<DevServerEvent>, Box<dyn std::error::Error>> {
     let sock = socket_path()?;
     let stream = UnixStream::connect(&sock).await?;
     let mut c = LineClient::new(stream);
-    let req = serde_json::json!({
-        "type": "SubscribeEvents",
-        "token": token,
-    });
-    c.send_line(&req.to_string()).await?;
+    c.send_line(r#"{"type":"SubscribeEvents"}"#).await?;
 
     // Wait for Subscribed.
     let line = c.read_line().await?;
@@ -402,6 +322,41 @@ pub async fn subscribe_events(
                         .to_string();
                     DevServerEvent::RequestFinished { host }
                 }
+                Some("AppStatusChanged") => {
+                    let event = v.get("event").unwrap();
+                    DevServerEvent::AppStatusChanged {
+                        project_dir: event
+                            .get("project_dir")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        app_name: event
+                            .get("app_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        status: event
+                            .get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    }
+                }
+                Some("RestartRequested") => {
+                    let event = v.get("event").unwrap();
+                    DevServerEvent::RestartRequested {
+                        project_dir: event
+                            .get("project_dir")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        app_name: event
+                            .get("app_name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    }
+                }
                 _ => continue,
             };
             let _ = tx.send(ev);
@@ -409,52 +364,6 @@ pub async fn subscribe_events(
     });
 
     Ok(rx)
-}
-
-pub async fn renew_lease(
-    token: &str,
-    lease_id: &str,
-    ttl_ms: u64,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let sock = socket_path()?;
-    let stream = UnixStream::connect(&sock).await?;
-    let mut c = LineClient::new(stream);
-    let req = serde_json::json!({
-        "type": "RenewLease",
-        "token": token,
-        "lease_id": lease_id,
-        "ttl_ms": ttl_ms,
-    });
-    c.send_line(&req.to_string()).await?;
-    let line = c.read_line().await?;
-    let v: serde_json::Value = serde_json::from_str(&line)?;
-    match v.get("type").and_then(|t| t.as_str()) {
-        Some("LeaseRenewed") => Ok(()),
-        Some("Error") => Err(format!("dev-server error: {}", v).into()),
-        _ => Err(format!("unexpected response: {}", line).into()),
-    }
-}
-
-pub async fn unregister_lease(
-    token: &str,
-    lease_id: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let sock = socket_path()?;
-    let stream = UnixStream::connect(&sock).await?;
-    let mut c = LineClient::new(stream);
-    let req = serde_json::json!({
-        "type": "UnregisterLease",
-        "token": token,
-        "lease_id": lease_id,
-    });
-    c.send_line(&req.to_string()).await?;
-    let line = c.read_line().await?;
-    let v: serde_json::Value = serde_json::from_str(&line)?;
-    match v.get("type").and_then(|t| t.as_str()) {
-        Some("LeaseUnregistered") => Ok(()),
-        Some("Error") => Err(format!("dev-server error: {}", v).into()),
-        _ => Err(format!("unexpected response: {}", line).into()),
-    }
 }
 
 pub async fn list_apps() -> Result<Vec<ListedApp>, Box<dyn std::error::Error>> {
@@ -489,6 +398,179 @@ pub async fn list_apps() -> Result<Vec<ListedApp>, Box<dyn std::error::Error>> {
                 hosts,
                 upstream_port: a.get("upstream_port")?.as_u64()? as u16,
                 pid: a.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32),
+            })
+        })
+        .collect())
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct RegisteredAppInfo {
+    pub project_dir: String,
+    pub app_name: String,
+    pub hosts: Vec<String>,
+    pub upstream_port: u16,
+    pub status: String,
+    pub pid: Option<u32>,
+    pub client_pid: Option<u32>,
+}
+
+pub async fn register_app(
+    project_dir: &str,
+    app_name: &str,
+    hosts: &[String],
+    upstream_port: u16,
+    command: &[String],
+    env: &std::collections::HashMap<String, String>,
+    log_path: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let sock = socket_path()?;
+    let stream = UnixStream::connect(&sock).await?;
+    let mut c = LineClient::new(stream);
+    let req = serde_json::json!({
+        "type": "RegisterApp",
+        "project_dir": project_dir,
+        "app_name": app_name,
+        "hosts": hosts,
+        "upstream_port": upstream_port,
+        "command": command,
+        "env": env,
+        "log_path": log_path,
+        "client_pid": std::process::id(),
+    });
+    c.send_line(&req.to_string()).await?;
+    let line = c.read_line().await?;
+    let v: serde_json::Value = serde_json::from_str(&line)?;
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("AppRegistered") => Ok(v
+            .get("url")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string()),
+        Some("Error") => Err(format!("dev-server error: {}", v).into()),
+        _ => Err(format!("unexpected response: {}", line).into()),
+    }
+}
+
+pub async fn unregister_app(project_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let sock = socket_path()?;
+    let stream = UnixStream::connect(&sock).await?;
+    let mut c = LineClient::new(stream);
+    let req = serde_json::json!({
+        "type": "UnregisterApp",
+        "project_dir": project_dir,
+    });
+    c.send_line(&req.to_string()).await?;
+    let line = c.read_line().await?;
+    let v: serde_json::Value = serde_json::from_str(&line)?;
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("AppUnregistered") => Ok(()),
+        Some("Error") => Err(format!("dev-server error: {}", v).into()),
+        _ => Err(format!("unexpected response: {}", line).into()),
+    }
+}
+
+pub async fn restart_app(project_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let sock = socket_path()?;
+    let stream = UnixStream::connect(&sock).await?;
+    let mut c = LineClient::new(stream);
+    let req = serde_json::json!({
+        "type": "RestartApp",
+        "project_dir": project_dir,
+    });
+    c.send_line(&req.to_string()).await?;
+    let line = c.read_line().await?;
+    let v: serde_json::Value = serde_json::from_str(&line)?;
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("AppRestarting") => Ok(()),
+        Some("Error") => Err(format!("dev-server error: {}", v).into()),
+        _ => Err(format!("unexpected response: {}", line).into()),
+    }
+}
+
+pub async fn set_app_status(
+    project_dir: &str,
+    status: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sock = socket_path()?;
+    let stream = UnixStream::connect(&sock).await?;
+    let mut c = LineClient::new(stream);
+    let req = serde_json::json!({
+        "type": "SetAppStatus",
+        "project_dir": project_dir,
+        "status": status,
+    });
+    c.send_line(&req.to_string()).await?;
+    let line = c.read_line().await?;
+    let v: serde_json::Value = serde_json::from_str(&line)?;
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("AppStatusUpdated") => Ok(()),
+        Some("Error") => Err(format!("dev-server error: {}", v).into()),
+        _ => Err(format!("unexpected response: {}", line).into()),
+    }
+}
+
+pub async fn handoff_app(project_dir: &str, pid: u32) -> Result<(), Box<dyn std::error::Error>> {
+    let sock = socket_path()?;
+    let stream = UnixStream::connect(&sock).await?;
+    let mut c = LineClient::new(stream);
+    let req = serde_json::json!({
+        "type": "HandoffApp",
+        "project_dir": project_dir,
+        "pid": pid,
+    });
+    c.send_line(&req.to_string()).await?;
+    let line = c.read_line().await?;
+    let v: serde_json::Value = serde_json::from_str(&line)?;
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("AppHandedOff") => Ok(()),
+        Some("Error") => Err(format!("dev-server error: {}", v).into()),
+        _ => Err(format!("unexpected response: {}", line).into()),
+    }
+}
+
+pub async fn list_registered_apps() -> Result<Vec<RegisteredAppInfo>, Box<dyn std::error::Error>> {
+    let sock = socket_path()?;
+    let stream = UnixStream::connect(&sock).await?;
+    let mut c = LineClient::new(stream);
+    c.send_line(r#"{"type":"ListRegisteredApps"}"#).await?;
+    let line = c.read_line().await?;
+    let v: serde_json::Value = serde_json::from_str(&line)?;
+    if v.get("type").and_then(|t| t.as_str()) != Some("RegisteredApps") {
+        return Err(format!("unexpected response: {}", line).into());
+    }
+    let apps = v
+        .get("apps")
+        .and_then(|a| a.as_array())
+        .cloned()
+        .unwrap_or_default();
+    Ok(apps
+        .into_iter()
+        .filter_map(|a| {
+            let hosts = a
+                .get("hosts")
+                .and_then(|h| h.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            Some(RegisteredAppInfo {
+                project_dir: a.get("project_dir")?.as_str()?.to_string(),
+                app_name: a.get("app_name")?.as_str()?.to_string(),
+                hosts,
+                upstream_port: a.get("upstream_port")?.as_u64()? as u16,
+                status: a
+                    .get("status")
+                    .and_then(|s| s.as_str())
+                    .unwrap_or("stopped")
+                    .to_string(),
+                pid: a.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32),
+                client_pid: a
+                    .get("client_pid")
+                    .and_then(|p| p.as_u64())
+                    .map(|p| p as u32),
             })
         })
         .collect())

@@ -25,7 +25,7 @@ CLI output conventions across commands:
 | Component          | Runs where      | Main role                                                                        |
 | ------------------ | --------------- | -------------------------------------------------------------------------------- |
 | `tako` CLI         | Your machine    | Project setup, dev client, build/deploy orchestration, server/secrets management |
-| `tako-dev-server`  | Your machine    | Local HTTPS ingress for `*.tako.local`, local app lifecycle                      |
+| `tako-dev-server`  | Your machine    | Local HTTPS ingress for `*.tako`, local app lifecycle                            |
 | `tako-server`      | Deployment host | Remote app lifecycle, routing, health checks, load balancing, TLS                |
 | Your app instances | Local or remote | Serve your app logic                                                             |
 
@@ -42,7 +42,7 @@ Key config rules:
 - Non-development environments must define `route` or `routes`.
 - Each environment can use `route` or `routes`, not both.
 - Route values must include a hostname.
-- Development routes must be `{app}.tako.local` or a subdomain of it.
+- Development routes must be `{app}.tako` or a subdomain of it.
 
 See full config details in [`tako.toml` Reference](/docs/tako-toml).
 
@@ -55,12 +55,12 @@ When you run `tako dev`, the CLI behaves like a client for a persistent local da
   - Source-checkout runs can build `tako-dev-server` from the `tako` crate when needed.
 - It registers the current app directory with the daemon.
 - It starts one local instance immediately.
-- It exposes HTTPS routes on `*.tako.local` with a fixed daemon listen port (`127.0.0.1:47831`).
+- It exposes HTTPS routes on `*.tako` with a fixed daemon listen port (`127.0.0.1:47831`).
 
 Default route behavior:
 
 - If `[envs.development]` routes are configured, those are used.
-- Otherwise, Tako uses `{app}.tako.local`.
+- Otherwise, Tako uses `{app}.tako`.
 - App identity comes from top-level `name` when set, otherwise from sanitized project directory name.
 
 macOS local networking behavior:

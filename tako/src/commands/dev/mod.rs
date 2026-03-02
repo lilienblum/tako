@@ -1,22 +1,19 @@
 //! Tako Dev Server
 //!
 //! Local development server with:
-//! - HTTPS via local CA (`{app-name}.tako.local`)
-//! - Local authoritative DNS for `*.tako.local`
+//! - HTTPS via local CA (`{app-name}.tako`)
+//! - Local authoritative DNS for `*.tako`
 //! - `tako.toml` watching for env/route updates
-//! - TUI with logs, status, and resource monitoring
+//! - Streaming logs, status, and resource monitoring
 //! - Idle timeout (stops app process after inactivity)
 
 mod ca_setup;
-mod tui;
+mod output;
 mod watcher;
 
 use std::env::current_dir;
 use std::io::IsTerminal;
-use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
-use std::process::Command;
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -26,8 +23,6 @@ use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
 
 use sha2::Digest;
-use std::fs::OpenOptions;
-use std::io::Write;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -43,8 +38,6 @@ use crate::build::{
 };
 use crate::config::TakoToml;
 use crate::dev::LocalCA;
-#[cfg(target_os = "macos")]
-use crate::dev::LocalCAStore;
 use crate::validation::validate_dev_route;
 
 pub use ca_setup::setup_local_ca;
@@ -141,10 +134,20 @@ impl ScopedLog {
     pub fn error(scope: impl Into<String>, message: impl Into<String>) -> Self {
         Self::at(LogLevel::Error, scope, message)
     }
+
+    pub fn divider() -> Self {
+        Self {
+            timestamp: String::new(),
+            level: LogLevel::Info,
+            scope: DIVIDER_SCOPE.to_string(),
+            message: String::new(),
+        }
+    }
 }
 
 const DEV_SERVER_SCOPE: &str = "tako";
 const APP_SCOPE: &str = "app";
+pub const DIVIDER_SCOPE: &str = "__divider__";
 
 fn dev_server_starting_log() -> ScopedLog {
     ScopedLog::info(DEV_SERVER_SCOPE, "Starting dev server")
@@ -161,35 +164,40 @@ fn app_log_scope() -> String {
     APP_SCOPE.to_string()
 }
 
-const LEASE_TTL_MS: u64 = 30_000;
-const LEASE_HEARTBEAT_SECS: u64 = 5;
 const DEV_INITIAL_INSTANCE_COUNT: usize = 1;
 const DEV_IDLE_TIMEOUT_SECS: u64 = 30 * 60;
-const DEV_DISCONNECT_GRACE_RELEASE_SECS: u64 = 10 * 60;
-const DEV_DISCONNECT_GRACE_DEBUG_SECS: u64 = 10;
-const LOCALHOST_443_HTTPS_PROBE_ATTEMPTS: usize = 12;
-const LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS: u64 = 500;
-const LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS: u64 = 150;
-const LOOPBACK_PORT_PROBE_ATTEMPTS: usize = 10;
-const LOOPBACK_PORT_PROBE_TIMEOUT_MS: u64 = 150;
-const LOOPBACK_PORT_PROBE_RETRY_DELAY_MS: u64 = 50;
 const DEV_LOG_TAIL_POLL_MS: u64 = 120;
 const DEV_LOG_CLEAR_MARKER_TYPE: &str = "clear_logs";
 const DEV_LOG_APP_EVENT_MARKER_TYPE: &str = "app_event";
-const DEV_LOCK_ACQUIRE_TIMEOUT_MS: u64 = 1_200;
-const DEV_LOCK_RETRY_POLL_MS: u64 = 20;
-const DEV_LOCK_INCOMPLETE_STALE_AGE_MS: u64 = 2_000;
 const LOCAL_DNS_PORT: u16 = 53535;
 #[cfg(any(target_os = "macos", test))]
 const RESOLVER_DIR: &str = "/etc/resolver";
 #[cfg(any(target_os = "macos", test))]
-const TAKO_RESOLVER_FILE: &str = "/etc/resolver/tako.local";
-const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
-#[cfg(any(target_os = "macos", test))]
-const LOCAL_HTTP_REDIRECT_PORT: u16 = 47830;
+const TAKO_RESOLVER_FILE: &str = "/etc/resolver/tako";
 const DEV_TLS_CERT_FILENAME: &str = "fullchain.pem";
 const DEV_TLS_KEY_FILENAME: &str = "privkey.pem";
 const DEV_TLS_NAMES_FILENAME: &str = "names.json";
+const LOCALHOST_443_HTTPS_PROBE_ATTEMPTS: usize = 12;
+const LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS: u64 = 500;
+const LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS: u64 = 150;
+const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
+
+#[cfg(target_os = "macos")]
+const PF_ANCHOR_NAME: &str = "tako";
+#[cfg(target_os = "macos")]
+const PF_ANCHOR_FILE: &str = "/etc/pf.anchors/tako";
+#[cfg(target_os = "macos")]
+const PF_CONF_FILE: &str = "/etc/pf.conf";
+#[cfg(any(target_os = "macos", test))]
+const PF_HOOK_BEGIN: &str = "# >>> tako >>>";
+#[cfg(any(target_os = "macos", test))]
+const PF_HOOK_END: &str = "# <<< tako <<<";
+/// Fixed HTTPS port tako-dev-server listens on (matches DEV_PUBLIC_PORT in cli.rs).
+#[cfg(target_os = "macos")]
+const DEV_HTTPS_LISTEN_PORT: u16 = 47831;
+/// Fixed port for the HTTP→HTTPS redirect server inside tako-dev-server.
+#[cfg(target_os = "macos")]
+const DEV_HTTP_REDIRECT_PORT: u16 = 47830;
 
 fn dev_initial_instance_count() -> usize {
     DEV_INITIAL_INSTANCE_COUNT
@@ -199,36 +207,26 @@ fn dev_idle_timeout() -> Duration {
     Duration::from_secs(DEV_IDLE_TIMEOUT_SECS)
 }
 
-fn dev_disconnect_grace_secs() -> u64 {
-    if cfg!(debug_assertions) {
-        DEV_DISCONNECT_GRACE_DEBUG_SECS
-    } else {
-        DEV_DISCONNECT_GRACE_RELEASE_SECS
-    }
-}
-
-fn dev_disconnect_grace() -> Duration {
-    Duration::from_secs(dev_disconnect_grace_secs())
-}
-
-fn dev_disconnect_grace_ttl_ms() -> u64 {
-    dev_disconnect_grace_secs().saturating_mul(1000)
-}
-
-fn dev_disconnect_grace_label() -> &'static str {
-    if cfg!(debug_assertions) {
-        "10 seconds"
-    } else {
-        "10 minutes"
-    }
-}
-
-fn should_linger_after_disconnect(terminate_requested: bool, app_was_running: bool) -> bool {
-    !terminate_requested && app_was_running
-}
-
 fn load_dev_tako_toml(project_dir: &Path) -> crate::config::Result<TakoToml> {
     TakoToml::load_from_dir(project_dir)
+}
+
+/// Routes shown in the terminal panel — always includes the default host, then
+/// all configured routes verbatim (including wildcards and paths).
+fn compute_display_routes(cfg: &TakoToml, default_host: &str) -> Vec<String> {
+    let mut out = vec![default_host.to_string()];
+    if let Some(routes) = cfg.get_routes("development") {
+        for route in routes {
+            // Trim trailing slash so "foo.tako/" == "foo.tako".
+            if route.trim_end_matches('/') != default_host {
+                out.push(route);
+            }
+        }
+    }
+    // Dedup preserving order.
+    let mut seen = std::collections::HashSet::new();
+    out.retain(|r| seen.insert(r.clone()));
+    out
 }
 
 fn compute_dev_hosts(
@@ -245,10 +243,6 @@ fn compute_dev_hosts(
     for r in routes {
         validate_dev_route(&r, app_name).map_err(|e| e.to_string())?;
         let host = r.split('/').next().unwrap_or("");
-        if host.starts_with("*.") || host.contains('*') {
-            // The dev server currently does exact Host matching only.
-            continue;
-        }
         if !host.is_empty() {
             out.push(host.to_string());
         }
@@ -257,10 +251,7 @@ fn compute_dev_hosts(
     out.sort();
     out.dedup();
     if out.is_empty() {
-        Err(
-            "development routes are configured but none are exact hostnames; wildcard hosts are not supported in `tako dev` yet"
-                .to_string(),
-        )
+        Ok(vec![default_host.to_string()])
     } else {
         Ok(out)
     }
@@ -444,17 +435,6 @@ fn preferred_public_url(
 }
 
 #[cfg(any(target_os = "macos", test))]
-const PF_FORWARDING_ANCHOR_NAME: &str = "tako";
-#[cfg(any(target_os = "macos", test))]
-const PF_FORWARDING_ANCHOR_FILE: &str = "/etc/pf.anchors/tako";
-#[cfg(any(target_os = "macos", test))]
-const PF_CONF_FILE: &str = "/etc/pf.conf";
-#[cfg(any(target_os = "macos", test))]
-const PF_FORWARDING_MARK_BEGIN: &str = "# >>> tako >>>";
-#[cfg(any(target_os = "macos", test))]
-const PF_FORWARDING_MARK_END: &str = "# <<< tako <<<";
-
-#[cfg(any(target_os = "macos", test))]
 fn local_dns_resolver_contents(port: u16) -> String {
     format!("nameserver 127.0.0.1\nport {port}\n")
 }
@@ -500,11 +480,12 @@ fn dev_server_tls_names_path_for_home(home: &Path) -> PathBuf {
 }
 
 fn default_dev_tls_names_for_app(app_name: &str) -> Vec<String> {
+    let d = crate::dev::TAKO_DEV_DOMAIN;
     vec![
-        "*.tako.local".to_string(),
-        "tako.local".to_string(),
-        format!("{}.tako.local", app_name),
-        format!("*.{}.tako.local", app_name),
+        format!("*.{d}"),
+        d.to_string(),
+        format!("{app_name}.{d}"),
+        format!("*.{app_name}.{d}"),
     ]
 }
 
@@ -567,170 +548,15 @@ fn ensure_dev_server_tls_material(
     ensure_dev_server_tls_material_for_home(ca, &home, app_name)
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn pf_conf_forwarding_hook_block() -> String {
-    format!(
-        "{PF_FORWARDING_MARK_BEGIN}\nrdr-anchor \"{PF_FORWARDING_ANCHOR_NAME}\"\nload anchor \"{PF_FORWARDING_ANCHOR_NAME}\" from \"{PF_FORWARDING_ANCHOR_FILE}\"\n{PF_FORWARDING_MARK_END}\n"
-    )
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn pf_conf_with_forwarding_hook(existing: &str) -> String {
-    let block_lines: Vec<String> = pf_conf_forwarding_hook_block()
-        .trim_end_matches('\n')
-        .lines()
-        .map(|line| line.to_string())
-        .collect();
-
-    // Replace any previously managed block (including older managed content) to keep
-    // the hook definition up to date while staying idempotent.
-    let base_without_managed_block = if let Some(start) = existing.find(PF_FORWARDING_MARK_BEGIN) {
-        if let Some(end_rel) = existing[start..].find(PF_FORWARDING_MARK_END) {
-            let end = start + end_rel + PF_FORWARDING_MARK_END.len();
-            let after = if existing[end..].starts_with('\n') {
-                end + 1
-            } else {
-                end
-            };
-            let mut rebuilt = String::new();
-            let before = existing[..start].trim_end_matches('\n');
-            let after_block = existing[after..].trim_start_matches('\n');
-            if !before.is_empty() {
-                rebuilt.push_str(before);
-            }
-            if !before.is_empty() && !after_block.is_empty() {
-                rebuilt.push_str("\n\n");
-            }
-            if !after_block.is_empty() {
-                rebuilt.push_str(after_block);
-            }
-            rebuilt
-        } else {
-            existing.to_string()
-        }
-    } else {
-        existing.to_string()
-    };
-
-    let mut lines: Vec<String> = base_without_managed_block
-        .trim_end_matches('\n')
-        .lines()
-        .map(|line| line.to_string())
-        .collect();
-
-    let insert_at = lines
-        .iter()
-        .rposition(|line| line.trim_start().starts_with("rdr-anchor "))
-        .map(|idx| idx + 1)
-        .or_else(|| {
-            lines
-                .iter()
-                .position(|line| line.trim_start().starts_with("anchor "))
-        })
-        .unwrap_or(lines.len());
-
-    let mut to_insert = block_lines;
-    if !lines.is_empty() {
-        if insert_at > 0 && !lines[insert_at - 1].trim().is_empty() {
-            to_insert.insert(0, String::new());
-        }
-        if insert_at < lines.len() && !lines[insert_at].trim().is_empty() {
-            to_insert.push(String::new());
-        }
-    }
-
-    lines.splice(insert_at..insert_at, to_insert);
-
-    let mut out = lines.join("\n");
-    if !out.ends_with('\n') {
-        out.push('\n');
-    }
-    out
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn pf_anchor_maps_loopback_port(
-    anchor_rules: &str,
-    loopback_addr: &str,
-    incoming_port: u16,
-    target_port: u16,
-) -> bool {
-    let target_a = format!("port {}", target_port);
-    let target_b = format!("port = {}", target_port);
-    let loopback_a = format!("to {}", loopback_addr);
-    let loopback_b = format!("to = {}", loopback_addr);
-    anchor_rules.lines().any(|line| {
-        let line = line.trim().to_ascii_lowercase();
-        let incoming_port_match = match incoming_port {
-            443 => {
-                line.contains("port 443")
-                    || line.contains("port = 443")
-                    || line.contains("port https")
-                    || line.contains("port = https")
-            }
-            80 => {
-                line.contains("port 80")
-                    || line.contains("port = 80")
-                    || line.contains("port http")
-                    || line.contains("port = http")
-            }
-            _ => line.contains(&format!("port {}", incoming_port)),
-        };
-        let target_match = line.contains(&target_a) || line.contains(&target_b);
-        let loopback_match = line.contains(&loopback_a) || line.contains(&loopback_b);
-        !line.is_empty()
-            && !line.starts_with('#')
-            && loopback_match
-            && line.contains("-> 127.0.0.1")
-            && incoming_port_match
-            && target_match
-    })
-}
-
-#[cfg(target_os = "macos")]
-fn has_pf_https_forwarding(public_port: u16) -> bool {
-    let Ok(anchor_rules) = std::fs::read_to_string(PF_FORWARDING_ANCHOR_FILE) else {
-        return false;
-    };
-    pf_anchor_maps_loopback_port(&anchor_rules, DEV_LOOPBACK_ADDR, 443, public_port)
-}
-
-#[cfg(target_os = "macos")]
-fn has_pf_http_redirect_forwarding() -> bool {
-    let Ok(anchor_rules) = std::fs::read_to_string(PF_FORWARDING_ANCHOR_FILE) else {
-        return false;
-    };
-    pf_anchor_maps_loopback_port(
-        &anchor_rules,
-        DEV_LOOPBACK_ADDR,
-        80,
-        LOCAL_HTTP_REDIRECT_PORT,
-    )
-}
-
 #[cfg(target_os = "macos")]
 fn sudo_run_checked(args: &[&str], context: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use std::process::Command;
     let status = Command::new("sudo").args(args).status()?;
     if status.success() {
         Ok(())
     } else {
         Err(format!("{context} failed").into())
     }
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn pfctl_args<'a>(args: &'a [&'a str]) -> Vec<&'a str> {
-    let mut out = Vec::with_capacity(args.len() + 2);
-    out.push("pfctl");
-    out.push("-q");
-    out.extend_from_slice(args);
-    out
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn pfctl_shell_command(args: &[&str]) -> String {
-    let argv = pfctl_args(args);
-    format!("{} >/dev/null 2>&1", argv.join(" "))
 }
 
 #[cfg(target_os = "macos")]
@@ -743,7 +569,7 @@ fn write_system_file_with_sudo(
         .map(|d| d.as_nanos())
         .unwrap_or(0);
     let tmp = std::env::temp_dir().join(format!(
-        "tako-local-forwarding-{}-{}",
+        "tako-dns-resolver-{}-{}",
         std::process::id(),
         unique
     ));
@@ -778,7 +604,7 @@ fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::er
     }
 
     crate::output::warning("Sudo password required.");
-    crate::output::muted("One-time sudo required to configure local DNS for *.tako.local.");
+    crate::output::muted("One-time sudo required to configure local DNS for *.tako.");
     crate::output::muted(&format!(
         "This writes {TAKO_RESOLVER_FILE} -> nameserver 127.0.0.1 port {port}."
     ));
@@ -794,7 +620,7 @@ fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::er
         return Err("local DNS resolver setup verification failed".into());
     }
 
-    crate::output::success("Local DNS resolver configured for *.tako.local.");
+    crate::output::success("Local DNS resolver configured for *.tako.");
     Ok(())
 }
 
@@ -803,175 +629,105 @@ fn ensure_local_dns_resolver_configured(_port: u16) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
+/// Content for the pf anchor file that redirects loopback 443/80 → tako ports.
+/// macOS routes all of 127.0.0.0/8 to lo0, so no ifconfig alias is needed.
+#[cfg(any(target_os = "macos", test))]
+fn pf_anchor_content() -> String {
+    format!(
+        "rdr pass on lo0 proto tcp from any to {DEV_LOOPBACK_ADDR} port 443 -> 127.0.0.1 port {DEV_HTTPS_LISTEN_PORT}\n\
+         rdr pass on lo0 proto tcp from any to {DEV_LOOPBACK_ADDR} port 80 -> 127.0.0.1 port {DEV_HTTP_REDIRECT_PORT}\n"
+    )
+}
+
+/// Insert or replace the tako hook block in the pf.conf content.
+#[cfg(any(target_os = "macos", test))]
+fn pf_conf_with_hook(pf_conf: &str) -> String {
+    let hook = format!(
+        "{PF_HOOK_BEGIN}\nrdr-anchor \"{PF_ANCHOR_NAME}\"\nload anchor \"{PF_ANCHOR_NAME}\" from \"{PF_ANCHOR_FILE}\"\n{PF_HOOK_END}\n"
+    );
+    if let Some(start) = pf_conf.find(PF_HOOK_BEGIN) {
+        if let Some(rel_end) = pf_conf[start..].find(PF_HOOK_END) {
+            let end = start + rel_end + PF_HOOK_END.len();
+            // consume trailing newline if present
+            let end = if pf_conf.as_bytes().get(end) == Some(&b'\n') {
+                end + 1
+            } else {
+                end
+            };
+            return format!("{}{}{}", &pf_conf[..start], hook, &pf_conf[end..]);
+        }
+        // Begin marker exists but end marker is missing (truncated/hand-edited).
+        // Replace from the begin marker to end of file.
+        return format!("{}{}", &pf_conf[..start], hook);
+    }
+    let trimmed = pf_conf.trim_end_matches('\n');
+    format!("{trimmed}\n{hook}")
+}
+
+/// Returns true if the pf anchor file and pf.conf hook are in place.
+/// Rules written to /etc/pf.conf persist across reboots (pf loads them at boot).
 #[cfg(target_os = "macos")]
-fn apply_local_80_443_forwarding(
-    public_port: u16,
-    repairing: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    if !repairing && has_local_80_443_forwarding(public_port) {
+fn pf_rules_active() -> bool {
+    let anchor_ok = std::fs::read_to_string(PF_ANCHOR_FILE)
+        .map(|a| a == pf_anchor_content())
+        .unwrap_or(false);
+    let conf_ok = std::fs::read_to_string(PF_CONF_FILE)
+        .map(|c| c.contains(PF_HOOK_BEGIN))
+        .unwrap_or(false);
+    anchor_ok && conf_ok
+}
+
+/// Ensure pf forwarding rules redirect 127.77.0.1:443/80 → tako's dev ports.
+///
+/// On first run (or if macOS reset /etc/pf.conf), writes the anchor file and
+/// updates pf.conf, then reloads pf — all via a single sudo prompt.
+/// Rules persist across reboots; subsequent runs return immediately.
+#[cfg(target_os = "macos")]
+fn ensure_pf_forwarding() -> Result<(), Box<dyn std::error::Error>> {
+    if pf_rules_active() {
         return Ok(());
     }
 
     if !crate::output::is_interactive() {
         return Err(
-            "local 80/443 forwarding is not configured; run `tako dev` interactively once to install pf rules"
-                .into(),
+            "pf forwarding rules are not configured; run `tako dev` interactively once to set them up".into()
         );
     }
 
-    if repairing {
-        crate::output::warning("Local 80/443 forwarding looks inactive.");
-        crate::output::muted("Re-applying local pf rules (sudo)...");
-        for line in forwarding_repair_diagnostic_lines(
-            public_port,
-            has_pf_https_forwarding(public_port),
-            has_pf_http_redirect_forwarding(),
-            loopback_tcp_port_open(443, LOOPBACK_PORT_PROBE_TIMEOUT_MS),
-            loopback_tcp_port_open(80, LOOPBACK_PORT_PROBE_TIMEOUT_MS),
-            localhost_tcp_port_open(443, LOOPBACK_PORT_PROBE_TIMEOUT_MS),
-            localhost_tcp_port_open(80, LOOPBACK_PORT_PROBE_TIMEOUT_MS),
-        ) {
-            crate::output::muted(&line);
-        }
-    } else {
-        crate::output::warning("Sudo password required.");
-        crate::output::muted("One-time sudo required to enable local HTTPS forwarding (80/443).");
-        crate::output::muted(&format!(
-            "This redirects {DEV_LOOPBACK_ADDR}:443 to 127.0.0.1:{public_port} and {DEV_LOOPBACK_ADDR}:80 to 127.0.0.1:{LOCAL_HTTP_REDIRECT_PORT}."
-        ));
-        crate::output::step("Enabling local 80/443 forwarding (sudo)...");
-    }
+    crate::output::warning("Sudo password required.");
+    crate::output::muted("One-time sudo required to configure local 443/80 forwarding via pf.");
+    crate::output::muted(&format!(
+        "Writes {PF_ANCHOR_FILE} and adds a hook to {PF_CONF_FILE}. \
+         Rules persist across reboots."
+    ));
 
-    let anchor_rule = format!(
-        "rdr pass on lo0 inet proto tcp from any to {DEV_LOOPBACK_ADDR} port 443 -> 127.0.0.1 port {public_port}\nrdr pass on lo0 inet proto tcp from any to {DEV_LOOPBACK_ADDR} port 80 -> 127.0.0.1 port {LOCAL_HTTP_REDIRECT_PORT}\n"
-    );
-    write_system_file_with_sudo(PF_FORWARDING_ANCHOR_FILE, &anchor_rule)?;
+    crate::output::step("Configuring local 80/443 forwarding (sudo)...");
 
-    let current_pf_conf = std::fs::read_to_string(PF_CONF_FILE)
-        .map_err(|e| format!("failed to read {PF_CONF_FILE}: {e}"))?;
-    let updated_pf_conf = pf_conf_with_forwarding_hook(&current_pf_conf);
-    if updated_pf_conf != current_pf_conf {
-        write_system_file_with_sudo(PF_CONF_FILE, &updated_pf_conf)?;
-    }
+    // Write anchor file.
+    write_system_file_with_sudo(PF_ANCHOR_FILE, &pf_anchor_content())?;
 
-    let reload_cmd = pfctl_shell_command(&["-f", PF_CONF_FILE]);
-    sudo_run_checked(&["sh", "-c", reload_cmd.as_str()], "reloading pf.conf")?;
-    let enable_cmd = pfctl_shell_command(&["-e"]);
-    let _ = sudo_run_checked(&["sh", "-c", enable_cmd.as_str()], "enabling pf");
+    // Read current pf.conf, insert/update our hook, write back.
+    let current_conf = std::fs::read_to_string(PF_CONF_FILE).unwrap_or_default();
+    let new_conf = pf_conf_with_hook(&current_conf);
+    write_system_file_with_sudo(PF_CONF_FILE, &new_conf)?;
 
-    let show_args = pfctl_args(&["-a", PF_FORWARDING_ANCHOR_NAME, "-sn"]);
-    let output = Command::new("sudo").args(&show_args).output()?;
-    if !output.status.success() {
-        return Err("reading pf anchor rules failed".into());
-    }
+    // Load rules (reload if pf already enabled).
+    sudo_run_checked(&["pfctl", "-f", PF_CONF_FILE], "loading pf rules")?;
+    // Enable pf — ignore exit code 1 ("pf already enabled").
+    let _ = sudo_run_checked(&["pfctl", "-e"], "enabling pf");
 
-    let rules = String::from_utf8_lossy(&output.stdout);
-    let has_https = pf_anchor_maps_loopback_port(&rules, DEV_LOOPBACK_ADDR, 443, public_port);
-    let has_http =
-        pf_anchor_maps_loopback_port(&rules, DEV_LOOPBACK_ADDR, 80, LOCAL_HTTP_REDIRECT_PORT);
-    if !has_https || !has_http {
-        crate::output::warning(
-            "Could not confirm pf anchor mappings from pfctl output; will verify using loopback 80/443 reachability.",
-        );
+    if !pf_rules_active() {
+        return Err("pf forwarding rules were not applied successfully".into());
     }
 
     crate::output::success(&format!(
-        "Local 80/443 forwarding enabled ({DEV_LOOPBACK_ADDR}:443 -> 127.0.0.1:{public_port}, {DEV_LOOPBACK_ADDR}:80 -> 127.0.0.1:{LOCAL_HTTP_REDIRECT_PORT})."
+        "Local 443/80 forwarding active ({DEV_LOOPBACK_ADDR}:443/80 → 127.0.0.1:{DEV_HTTPS_LISTEN_PORT}/{DEV_HTTP_REDIRECT_PORT})."
     ));
     Ok(())
 }
 
-#[cfg(not(target_os = "macos"))]
-fn ensure_local_80_443_forwarding(_public_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn ensure_local_80_443_forwarding(public_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    apply_local_80_443_forwarding(public_port, false)
-}
-
-#[cfg(target_os = "macos")]
-fn repair_local_80_443_forwarding(public_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    apply_local_80_443_forwarding(public_port, true)
-}
-
-#[cfg(not(target_os = "macos"))]
-fn repair_local_80_443_forwarding(_public_port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn has_local_80_443_forwarding(public_port: u16) -> bool {
-    has_pf_https_forwarding(public_port) && has_pf_http_redirect_forwarding()
-}
-
-#[cfg(not(target_os = "macos"))]
-fn has_local_80_443_forwarding(_public_port: u16) -> bool {
-    false
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn forwarding_repair_diagnostic_lines(
-    public_port: u16,
-    https_pf_ok: bool,
-    http_pf_ok: bool,
-    https_loopback_ok: bool,
-    http_loopback_ok: bool,
-    localhost_443_open: bool,
-    localhost_80_open: bool,
-) -> Vec<String> {
-    let mut lines = vec!["Checking why sudo is needed now:".to_string()];
-
-    if !https_pf_ok {
-        lines.push(format!(
-            "pf rule is missing for {DEV_LOOPBACK_ADDR}:443 -> 127.0.0.1:{public_port} in {PF_FORWARDING_ANCHOR_FILE}."
-        ));
-    }
-    if !http_pf_ok {
-        lines.push(format!(
-            "pf rule is missing for {DEV_LOOPBACK_ADDR}:80 -> 127.0.0.1:{LOCAL_HTTP_REDIRECT_PORT} in {PF_FORWARDING_ANCHOR_FILE}."
-        ));
-    }
-
-    if https_pf_ok && http_pf_ok && (!https_loopback_ok || !http_loopback_ok) {
-        lines.push(
-            "pf rules are present on disk but forwarding is inactive at runtime (common after reboot or pf reset).".to_string(),
-        );
-    } else {
-        if !https_loopback_ok {
-            lines.push(format!(
-                "TCP probe to {DEV_LOOPBACK_ADDR}:443 is unreachable."
-            ));
-        }
-        if !http_loopback_ok {
-            lines.push(format!(
-                "TCP probe to {DEV_LOOPBACK_ADDR}:80 is unreachable."
-            ));
-        }
-    }
-
-    if localhost_443_open && localhost_80_open {
-        lines.push(
-            "127.0.0.1:80/443 already has a listener; local services can interfere with forwarding."
-                .to_string(),
-        );
-    } else if localhost_443_open {
-        lines.push(
-            "127.0.0.1:443 already has a listener; it may interfere with local HTTPS forwarding."
-                .to_string(),
-        );
-    } else if localhost_80_open {
-        lines.push(
-            "127.0.0.1:80 already has a listener; it may interfere with local HTTP redirect forwarding."
-                .to_string(),
-        );
-    }
-
-    lines
-}
-
 fn tcp_port_open(ip: &str, port: u16, timeout_ms: u64) -> bool {
+    use std::net::{Ipv4Addr, SocketAddr};
     let Ok(ipv4) = ip.parse::<Ipv4Addr>() else {
         return false;
     };
@@ -979,38 +735,14 @@ fn tcp_port_open(ip: &str, port: u16, timeout_ms: u64) -> bool {
     std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).is_ok()
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn localhost_tcp_port_open(port: u16, timeout_ms: u64) -> bool {
-    tcp_port_open("127.0.0.1", port, timeout_ms)
-}
-
-fn loopback_tcp_port_open(port: u16, timeout_ms: u64) -> bool {
-    tcp_port_open(DEV_LOOPBACK_ADDR, port, timeout_ms)
-}
-
-fn selected_public_url_port(
-    configured_public_port: u16,
-    current_public_url_port: u16,
-    forwarding_https_probe_ok: bool,
-    require_loopback_https: bool,
-) -> u16 {
-    if require_loopback_https {
-        return current_public_url_port;
-    }
-    if current_public_url_port == 443 && !forwarding_https_probe_ok {
-        configured_public_port
-    } else {
-        current_public_url_port
-    }
-}
-
 #[cfg(target_os = "macos")]
 async fn localhost_https_host_reachable_via_ip(
     host: &str,
-    connect_ip: Ipv4Addr,
+    connect_ip: std::net::Ipv4Addr,
     port: u16,
     timeout_ms: u64,
 ) -> Result<(), String> {
+    use crate::dev::LocalCAStore;
     let store = match LocalCAStore::new() {
         Ok(store) => store,
         Err(e) => return Err(format!("failed to open local CA store: {e}")),
@@ -1031,7 +763,7 @@ async fn localhost_https_host_reachable_via_ip(
     }
     base_url.push('/');
 
-    let addr = SocketAddr::from((connect_ip, port));
+    let addr = std::net::SocketAddr::from((connect_ip, port));
     let client = match reqwest::Client::builder()
         .add_root_certificate(cert)
         .connect_timeout(Duration::from_millis(timeout_ms))
@@ -1054,7 +786,7 @@ async fn localhost_https_host_reachable_via_ip(
 #[cfg(not(target_os = "macos"))]
 async fn localhost_https_host_reachable_via_ip(
     _host: &str,
-    _connect_ip: Ipv4Addr,
+    _connect_ip: std::net::Ipv4Addr,
     _port: u16,
     _timeout_ms: u64,
 ) -> Result<(), String> {
@@ -1063,7 +795,7 @@ async fn localhost_https_host_reachable_via_ip(
 
 async fn wait_for_https_host_reachable_via_ip(
     host: &str,
-    connect_ip: Ipv4Addr,
+    connect_ip: std::net::Ipv4Addr,
     port: u16,
     attempts: usize,
     timeout_ms: u64,
@@ -1086,52 +818,21 @@ fn local_https_probe_error(
     host: &str,
     public_port: u16,
     loopback_error: &str,
-    daemon_reachable_directly: bool,
+    server_directly_reachable: bool,
 ) -> String {
-    if daemon_reachable_directly {
+    if server_directly_reachable {
         format!(
-            "Local HTTPS endpoint is unreachable at https://{host}/ ({loopback_error}). Tako dev daemon is reachable on 127.0.0.1:{public_port}, so local :443 traffic is likely intercepted before reaching Tako (for example another listener on :443 or pf loopback skip). Check `lsof -nP -iTCP:443 -sTCP:LISTEN` and pf forwarding, then re-run `tako dev`."
+            "Local HTTPS endpoint is unreachable at https://{host}/ ({loopback_error}). \
+             Tako dev server is reachable directly on 127.0.0.1:{public_port}, so port 443 \
+             is likely intercepted by another listener. \
+             Check `lsof -nP -iTCP:443 -sTCP:LISTEN`, then re-run `tako dev`."
         )
     } else {
         format!(
-            "Local HTTPS endpoint is unreachable at https://{host}/ ({loopback_error}). Check local 80/443 forwarding and try again."
+            "Local HTTPS endpoint is unreachable at https://{host}/ ({loopback_error}). \
+             Check that pf forwarding rules are active (`tako doctor`) and try again."
         )
     }
-}
-
-#[cfg(test)]
-async fn wait_for_localhost_tcp_port_open(
-    port: u16,
-    attempts: usize,
-    timeout_ms: u64,
-    retry_delay_ms: u64,
-) -> bool {
-    for attempt in 0..attempts {
-        if localhost_tcp_port_open(port, timeout_ms) {
-            return true;
-        }
-        if attempt + 1 < attempts {
-            tokio::time::sleep(Duration::from_millis(retry_delay_ms)).await;
-        }
-    }
-    false
-}
-
-async fn wait_for_loopback_tcp_port_open(
-    port: u16,
-    attempts: usize,
-    timeout_ms: u64,
-    retry_delay_ms: u64,
-) -> bool {
-    for attempt in 0..attempts {
-        if loopback_tcp_port_open(port, timeout_ms) {
-            return true;
-        }
-        if attempt + 1 < attempts {
-            tokio::time::sleep(Duration::from_millis(retry_delay_ms)).await;
-        }
-    }
-    false
 }
 
 fn port_from_listen(listen: &str) -> Option<u16> {
@@ -1176,35 +877,22 @@ fn doctor_dev_server_lines(
     lines
 }
 
-fn doctor_dev_server_unavailable_lines() -> Vec<String> {
-    vec![
-        "dev-server:".to_string(),
-        "  status: not running".to_string(),
-    ]
-}
-
 #[cfg(any(target_os = "macos", test))]
 fn doctor_local_forwarding_preflight_lines(
     advertised_ip: &str,
-    listen_port: u16,
-    https_pf_ok: bool,
-    http_pf_ok: bool,
+    pf_active: bool,
     https_tcp_ok: bool,
     http_tcp_ok: bool,
 ) -> Vec<String> {
     vec![
         "preflight:".to_string(),
         format!(
-            "- pf {}:443 -> 127.0.0.1:{} ({})",
-            advertised_ip,
-            listen_port,
-            if https_pf_ok { "ok" } else { "missing" }
-        ),
-        format!(
-            "- pf {}:80 -> 127.0.0.1:{} ({})",
-            advertised_ip,
-            LOCAL_HTTP_REDIRECT_PORT,
-            if http_pf_ok { "ok" } else { "missing" }
+            "- pf forwarding ({})",
+            if pf_active {
+                "active"
+            } else {
+                "not configured"
+            }
         ),
         format!(
             "- tcp {}:443 ({})",
@@ -1216,6 +904,13 @@ fn doctor_local_forwarding_preflight_lines(
             advertised_ip,
             if http_tcp_ok { "ok" } else { "unreachable" }
         ),
+    ]
+}
+
+fn doctor_dev_server_unavailable_lines() -> Vec<String> {
+    vec![
+        "dev-server:".to_string(),
+        "  status: not running".to_string(),
     ]
 }
 
@@ -1260,23 +955,19 @@ fn local_dns_resolver_values() -> Option<(String, u16)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DevEvent, LogLevel, ScopedLog, StoredLogEvent, app_log_scope, child_log_level_and_message,
-        compute_dev_hosts, dev_disconnect_grace, dev_disconnect_grace_label,
-        dev_disconnect_grace_ttl_ms, dev_idle_timeout, dev_initial_instance_count,
-        dev_server_ready_log, dev_server_starting_log, dev_server_tls_names_path_for_home,
-        dev_server_tls_paths_for_home, dev_startup_lines, doctor_dev_server_lines,
-        doctor_dev_server_unavailable_lines, doctor_local_forwarding_preflight_lines,
-        ensure_dev_server_tls_material_for_home, ensure_local_80_443_forwarding,
-        ensure_local_dns_resolver_configured, forwarding_repair_diagnostic_lines,
-        host_and_port_from_url, is_dev_server_unavailable_error_message, listed_apps_contain_app,
-        local_dns_resolver_contents, local_https_probe_error, parse_local_dns_resolver,
-        parse_stored_log_line, pf_anchor_maps_loopback_port, pf_conf_forwarding_hook_block,
-        pf_conf_with_forwarding_hook, pfctl_args, pfctl_shell_command, port_from_listen,
-        preferred_public_url, replay_and_follow_logs, resolve_dev_preset_ref,
-        resolve_dev_run_command, resolve_effective_dev_build_adapter,
-        restart_required_for_requested_listen, selected_public_url_port,
-        should_drop_child_log_line, should_linger_after_disconnect, tcp_probe,
-        trim_child_log_message, wait_for_localhost_tcp_port_open,
+        DevEvent, LogLevel, PF_HOOK_BEGIN, PF_HOOK_END, ScopedLog, StoredLogEvent, app_log_scope,
+        child_log_level_and_message, compute_dev_hosts, compute_display_routes, dev_idle_timeout,
+        dev_initial_instance_count, dev_server_ready_log, dev_server_starting_log,
+        dev_server_tls_names_path_for_home, dev_server_tls_paths_for_home, dev_startup_lines,
+        doctor_dev_server_lines, doctor_dev_server_unavailable_lines,
+        doctor_local_forwarding_preflight_lines, ensure_dev_server_tls_material_for_home,
+        ensure_local_dns_resolver_configured, host_and_port_from_url,
+        is_dev_server_unavailable_error_message, local_dns_resolver_contents,
+        local_https_probe_error, parse_local_dns_resolver, parse_stored_log_line,
+        pf_anchor_content, pf_conf_with_hook, port_from_listen, preferred_public_url,
+        replay_and_follow_logs, resolve_dev_preset_ref, resolve_dev_run_command,
+        resolve_effective_dev_build_adapter, restart_required_for_requested_listen,
+        should_drop_child_log_line, tcp_probe, trim_child_log_message,
     };
     use crate::build::{BuildAdapter, parse_and_validate_preset};
     use crate::config::TakoToml;
@@ -1285,15 +976,6 @@ mod tests {
     use std::time::Duration;
     use tempfile::TempDir;
     use tokio::sync::{mpsc, watch};
-
-    fn listed_app(app_name: &str) -> crate::dev_server_client::ListedApp {
-        crate::dev_server_client::ListedApp {
-            app_name: app_name.to_string(),
-            hosts: Vec::new(),
-            upstream_port: 0,
-            pid: None,
-        }
-    }
 
     #[test]
     fn resolve_dev_preset_ref_uses_build_adapter_override_when_preset_is_missing() {
@@ -1405,9 +1087,9 @@ dev = ["bun", "run", "dev"]
             "app",
             "fake",
             Path::new("index.ts"),
-            "https://app.tako.local:8443/",
+            "https://app.tako:8443/",
         );
-        assert_eq!(lines[0], "https://app.tako.local:8443/");
+        assert_eq!(lines[0], "https://app.tako:8443/");
         assert!(lines.iter().all(|l| !l.contains("Tako Dev Server")));
     }
 
@@ -1418,7 +1100,7 @@ dev = ["bun", "run", "dev"]
             "app",
             "fake",
             Path::new("index.ts"),
-            "https://app.tako.local:8443/",
+            "https://app.tako:8443/",
         );
         assert!(lines.iter().any(|l| l == "Tako Dev Server"));
         assert!(lines.iter().any(|l| l.starts_with("URL:")));
@@ -1444,7 +1126,7 @@ dev = ["bun", "run", "dev"]
     }
 
     #[tokio::test]
-    async fn wait_for_localhost_port_open_retries_until_port_is_open() {
+    async fn tcp_probe_retries_until_port_is_open() {
         let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
             return;
         };
@@ -1459,12 +1141,20 @@ dev = ["bun", "run", "dev"]
             let _ = listener.accept().await;
         });
 
-        assert!(wait_for_localhost_tcp_port_open(port, 10, 10, 25).await);
+        let mut ok = false;
+        for _ in 0..10 {
+            if tcp_probe(("127.0.0.1", port), 10).await {
+                ok = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        assert!(ok);
     }
 
     #[tokio::test]
-    async fn wait_for_localhost_port_open_returns_false_when_port_stays_closed() {
-        assert!(!wait_for_localhost_tcp_port_open(0, 3, 10, 5).await);
+    async fn tcp_probe_returns_false_for_closed_port() {
+        assert!(!tcp_probe(("127.0.0.1", 0), 10).await);
     }
 
     #[test]
@@ -1500,53 +1190,6 @@ dev = ["bun", "run", "dev"]
     #[test]
     fn dev_idle_timeout_is_thirty_minutes() {
         assert_eq!(dev_idle_timeout(), Duration::from_secs(30 * 60));
-    }
-
-    #[test]
-    fn dev_disconnect_grace_matches_build_profile() {
-        let expected_secs = if cfg!(debug_assertions) { 10 } else { 10 * 60 };
-        assert_eq!(dev_disconnect_grace(), Duration::from_secs(expected_secs));
-    }
-
-    #[test]
-    fn dev_disconnect_grace_ttl_matches_duration() {
-        assert_eq!(
-            dev_disconnect_grace_ttl_ms(),
-            (dev_disconnect_grace().as_secs() * 1000) as u64
-        );
-    }
-
-    #[test]
-    fn dev_disconnect_grace_label_matches_duration() {
-        let expected = if cfg!(debug_assertions) {
-            "10 seconds"
-        } else {
-            "10 minutes"
-        };
-        assert_eq!(dev_disconnect_grace_label(), expected);
-    }
-
-    #[test]
-    fn listed_apps_contain_app_matches_on_app_name() {
-        let apps = vec![listed_app("one"), listed_app("two")];
-        assert!(listed_apps_contain_app(&apps, "one"));
-        assert!(listed_apps_contain_app(&apps, "two"));
-        assert!(!listed_apps_contain_app(&apps, "three"));
-    }
-
-    #[test]
-    fn regular_exit_with_running_app_enters_disconnect_grace() {
-        assert!(should_linger_after_disconnect(false, true));
-    }
-
-    #[test]
-    fn terminate_request_disables_disconnect_grace() {
-        assert!(!should_linger_after_disconnect(true, true));
-    }
-
-    #[test]
-    fn no_running_app_disables_disconnect_grace() {
-        assert!(!should_linger_after_disconnect(false, false));
     }
 
     #[test]
@@ -1872,46 +1515,13 @@ dev = ["bun", "run", "dev"]
     #[test]
     fn host_and_port_parser_handles_default_and_explicit_ports() {
         assert_eq!(
-            host_and_port_from_url("https://app.tako.local/"),
-            Some(("app.tako.local".to_string(), 443))
+            host_and_port_from_url("https://app.tako/"),
+            Some(("app.tako".to_string(), 443))
         );
         assert_eq!(
-            host_and_port_from_url("https://app.tako.local:47831/"),
-            Some(("app.tako.local".to_string(), 47831))
+            host_and_port_from_url("https://app.tako:47831/"),
+            Some(("app.tako".to_string(), 47831))
         );
-    }
-
-    #[test]
-    fn selected_public_url_port_falls_back_when_forwarding_probe_fails() {
-        assert_eq!(selected_public_url_port(47831, 443, false, false), 47831);
-    }
-
-    #[test]
-    fn selected_public_url_port_keeps_https_when_forwarding_probe_succeeds() {
-        assert_eq!(selected_public_url_port(47831, 443, true, false), 443);
-    }
-
-    #[test]
-    fn selected_public_url_port_keeps_explicit_port() {
-        assert_eq!(selected_public_url_port(47831, 47831, false, false), 47831);
-    }
-
-    #[test]
-    fn selected_public_url_port_keeps_https_when_required() {
-        assert_eq!(selected_public_url_port(47831, 443, false, true), 443);
-    }
-
-    #[test]
-    fn local_https_probe_error_mentions_interception_when_daemon_is_reachable() {
-        let msg = local_https_probe_error("bun-example.tako.local", 47831, "timed out", true);
-        assert!(msg.contains("likely intercepted"));
-        assert!(msg.contains("127.0.0.1:47831"));
-    }
-
-    #[test]
-    fn local_https_probe_error_mentions_forwarding_when_daemon_is_not_reachable() {
-        let msg = local_https_probe_error("bun-example.tako.local", 47831, "timed out", false);
-        assert!(msg.contains("Check local 80/443 forwarding"));
     }
 
     #[test]
@@ -1933,11 +1543,20 @@ dev = ["bun", "run", "dev"]
     }
 
     #[test]
-    fn doctor_preflight_lines_include_clear_failure_reasons() {
-        let lines =
-            doctor_local_forwarding_preflight_lines("127.77.0.1", 47831, false, true, false, true);
-        assert!(lines.iter().any(|line| line.contains("pf 127.77.0.1:443")));
-        assert!(lines.iter().any(|line| line.contains("(missing)")));
+    fn doctor_reports_not_running_when_dev_server_is_unavailable() {
+        assert_eq!(
+            doctor_dev_server_unavailable_lines(),
+            vec![
+                "dev-server:".to_string(),
+                "  status: not running".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn doctor_preflight_lines_show_pf_not_configured() {
+        let lines = doctor_local_forwarding_preflight_lines("127.77.0.1", false, false, true);
+        assert!(lines.iter().any(|line| line.contains("not configured")));
         assert!(
             lines
                 .iter()
@@ -1951,57 +1570,61 @@ dev = ["bun", "run", "dev"]
     }
 
     #[test]
-    fn forwarding_repair_diagnostics_explain_runtime_reset_when_rules_exist() {
-        let lines =
-            forwarding_repair_diagnostic_lines(47831, true, true, false, false, false, false);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("why sudo is needed now"))
-        );
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("rules are present on disk but forwarding is inactive"))
-        );
-        assert!(lines.iter().any(|line| line.contains("reboot")));
+    fn doctor_preflight_lines_show_pf_active() {
+        let lines = doctor_local_forwarding_preflight_lines("127.77.0.1", true, true, true);
+        assert!(lines.iter().any(|line| line.contains("active")));
     }
 
     #[test]
-    fn forwarding_repair_diagnostics_explain_missing_anchor_rules() {
-        let lines =
-            forwarding_repair_diagnostic_lines(47831, false, true, false, false, false, false);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("pf rule is missing for 127.77.0.1:443"))
-        );
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("/etc/pf.anchors/tako"))
-        );
+    fn local_https_probe_error_mentions_interception_when_server_directly_reachable() {
+        let msg = local_https_probe_error("bun-example.tako", 47831, "timed out", true);
+        assert!(msg.contains("intercepted") || msg.contains("listener"));
     }
 
     #[test]
-    fn forwarding_repair_diagnostics_warn_about_existing_local_listeners() {
-        let lines = forwarding_repair_diagnostic_lines(47831, true, true, false, false, true, true);
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("127.0.0.1:80/443 already has a listener"))
-        );
+    fn local_https_probe_error_mentions_pf_when_server_not_directly_reachable() {
+        let msg = local_https_probe_error("bun-example.tako", 47831, "timed out", false);
+        assert!(msg.contains("pf"));
     }
 
     #[test]
-    fn doctor_reports_not_running_when_dev_server_is_unavailable() {
-        assert_eq!(
-            doctor_dev_server_unavailable_lines(),
-            vec![
-                "dev-server:".to_string(),
-                "  status: not running".to_string()
-            ]
-        );
+    fn pf_anchor_content_contains_loopback_and_ports() {
+        let content = pf_anchor_content();
+        assert!(content.contains("127.77.0.1"));
+        assert!(content.contains("port 443"));
+        assert!(content.contains("port 80"));
+        assert!(content.contains("47831"));
+        assert!(content.contains("47830"));
+    }
+
+    #[test]
+    fn pf_conf_with_hook_appends_when_no_existing_block() {
+        let conf = "set skip on lo0\npass all\n";
+        let result = pf_conf_with_hook(conf);
+        assert!(result.contains(PF_HOOK_BEGIN));
+        assert!(result.contains(PF_HOOK_END));
+        assert!(result.contains("rdr-anchor"));
+        assert!(result.starts_with(conf.trim_end_matches('\n')));
+    }
+
+    #[test]
+    fn pf_conf_with_hook_replaces_existing_block() {
+        let conf = format!("pass all\n{PF_HOOK_BEGIN}\nold stuff\n{PF_HOOK_END}\nother rules\n");
+        let result = pf_conf_with_hook(&conf);
+        assert!(!result.contains("old stuff"));
+        assert!(result.contains("rdr-anchor"));
+        assert!(result.contains("other rules"));
+        // Exactly one begin/end block.
+        assert_eq!(result.matches(PF_HOOK_BEGIN).count(), 1);
+        assert_eq!(result.matches(PF_HOOK_END).count(), 1);
+    }
+
+    #[test]
+    fn pf_conf_with_hook_is_idempotent() {
+        let conf = "pass all\n";
+        let once = pf_conf_with_hook(conf);
+        let twice = pf_conf_with_hook(&once);
+        assert_eq!(once, twice);
     }
 
     #[test]
@@ -2059,7 +1682,7 @@ dev = ["bun", "run", "dev"]
         let names = std::fs::read_to_string(names_path).unwrap();
         assert!(cert.contains("BEGIN CERTIFICATE"));
         assert!(key.contains("BEGIN PRIVATE KEY"));
-        assert!(names.contains("*.demo.tako.local"));
+        assert!(names.contains("*.demo.tako"));
     }
 
     #[test]
@@ -2073,10 +1696,10 @@ dev = ["bun", "run", "dev"]
         std::fs::write(
             &names_path,
             r#"[
-  "*.tako.local",
-  "tako.local",
-  "demo.tako.local",
-  "*.demo.tako.local"
+  "*.tako",
+  "tako",
+  "demo.tako",
+  "*.demo.tako"
 ]"#,
         )
         .unwrap();
@@ -2109,7 +1732,7 @@ dev = ["bun", "run", "dev"]
             std::fs::read_to_string(dev_server_tls_names_path_for_home(temp.path())).unwrap();
         assert!(cert.contains("BEGIN CERTIFICATE"));
         assert!(key.contains("BEGIN PRIVATE KEY"));
-        assert!(names.contains("*.demo.tako.local"));
+        assert!(names.contains("*.demo.tako"));
     }
 
     #[test]
@@ -2125,8 +1748,8 @@ dev = ["bun", "run", "dev"]
 
         let names =
             std::fs::read_to_string(dev_server_tls_names_path_for_home(temp.path())).unwrap();
-        assert!(names.contains("*.alpha.tako.local"));
-        assert!(names.contains("*.beta.tako.local"));
+        assert!(names.contains("*.alpha.tako"));
+        assert!(names.contains("*.beta.tako"));
     }
 
     #[test]
@@ -2161,232 +1784,101 @@ dev = ["bun", "run", "dev"]
         let err = ensure_local_dns_resolver_configured(65535)
             .expect_err("non-interactive setup should fail when resolver is not configured");
         let text = err.to_string();
-        assert!(text.contains("/etc/resolver/tako.local"));
+        assert!(text.contains("/etc/resolver/tako"));
         assert!(text.contains("run `tako dev` interactively once"));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn ensure_local_forwarding_non_interactive_error_is_actionable() {
-        let err = ensure_local_80_443_forwarding(65535)
-            .expect_err("non-interactive setup should fail when forwarding is not configured");
-        let text = err.to_string();
-        assert!(text.contains("local 80/443 forwarding is not configured"));
-        assert!(text.contains("run `tako dev` interactively once"));
-    }
-
-    #[test]
-    fn detects_pf_anchor_rule_for_requested_port_and_loopback_address() {
-        let rules = "rdr pass on lo0 inet proto tcp from any to 127.77.0.1 port 443 -> 127.0.0.1 port 47831";
-        assert!(pf_anchor_maps_loopback_port(
-            rules,
-            "127.77.0.1",
-            443,
-            47831
-        ));
-    }
-
-    #[test]
-    fn detects_pf_anchor_rule_for_http_redirect_port() {
-        let rules =
-            "rdr pass on lo0 inet proto tcp from any to 127.77.0.1 port 80 -> 127.0.0.1 port 47830";
-        assert!(pf_anchor_maps_loopback_port(rules, "127.77.0.1", 80, 47830));
-    }
-
-    #[test]
-    fn ignores_pf_anchor_rule_for_different_port() {
-        let rules = "rdr pass on lo0 inet proto tcp from any to 127.77.0.1 port 443 -> 127.0.0.1 port 47831";
-        assert!(!pf_anchor_maps_loopback_port(
-            rules,
-            "127.77.0.1",
-            443,
-            8443
-        ));
-    }
-
-    #[test]
-    fn ignores_pf_anchor_rule_for_different_loopback_address() {
-        let rules =
-            "rdr pass on lo0 inet proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port 47831";
-        assert!(!pf_anchor_maps_loopback_port(
-            rules,
-            "127.77.0.1",
-            443,
-            47831
-        ));
-    }
-
-    #[test]
-    fn ignores_pf_anchor_without_443_redirect() {
-        let rules =
-            "rdr pass on lo0 inet proto tcp from any to 127.77.0.1 port 80 -> 127.0.0.1 port 47831";
-        assert!(!pf_anchor_maps_loopback_port(
-            rules,
-            "127.77.0.1",
-            443,
-            47831
-        ));
-    }
-
-    #[test]
-    fn pfctl_args_include_quiet_flag() {
-        assert_eq!(
-            pfctl_args(&["-f", "/etc/pf.conf"]),
-            vec!["pfctl", "-q", "-f", "/etc/pf.conf"]
-        );
-    }
-
-    #[test]
-    fn pfctl_shell_command_redirects_output_to_dev_null() {
-        assert_eq!(pfctl_shell_command(&["-e"]), "pfctl -q -e >/dev/null 2>&1");
     }
 
     #[test]
     fn prefers_local_url_when_80_443_forwarding_is_detected() {
         let url = preferred_public_url(
-            "bun-example.tako.local",
-            "https://bun-example.tako.local:47831/",
+            "bun-example.tako",
+            "https://bun-example.tako:47831/",
             47831,
             443,
         );
-        assert_eq!(url, "https://bun-example.tako.local/");
+        assert_eq!(url, "https://bun-example.tako/");
     }
 
     #[test]
     fn prefers_daemon_url_when_display_and_listen_ports_match() {
         let url = preferred_public_url(
-            "bun-example.tako.local",
-            "https://bun-example.tako.local:47831/",
+            "bun-example.tako",
+            "https://bun-example.tako:47831/",
             47831,
             47831,
         );
-        assert_eq!(url, "https://bun-example.tako.local:47831/");
+        assert_eq!(url, "https://bun-example.tako:47831/");
+    }
+
+    #[test]
+    fn display_routes_always_includes_default() {
+        let cfg = TakoToml::default();
+        let routes = compute_display_routes(&cfg, "app.tako");
+        assert_eq!(routes, vec!["app.tako"]);
+    }
+
+    #[test]
+    fn display_routes_includes_default_plus_all_configured() {
+        let cfg =
+            TakoToml::parse("[envs.development]\nroutes = [\"app.tako/bun\", \"*.app.tako\"]\n")
+                .unwrap();
+        let routes = compute_display_routes(&cfg, "app.tako");
+        assert_eq!(routes, vec!["app.tako", "app.tako/bun", "*.app.tako"]);
+    }
+
+    #[test]
+    fn display_routes_deduplicates_default_when_route_matches() {
+        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.tako\"]\n").unwrap();
+        let routes = compute_display_routes(&cfg, "app.tako");
+        assert_eq!(routes, vec!["app.tako"]);
     }
 
     #[test]
     fn falls_back_to_default_host_when_development_routes_are_missing() {
         let cfg = TakoToml::default();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako.local").unwrap();
-        assert_eq!(hosts, vec!["app.tako.local".to_string()]);
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
+        assert_eq!(hosts, vec!["app.tako".to_string()]);
     }
 
     #[test]
     fn falls_back_to_default_host_when_development_routes_are_empty() {
         let cfg = TakoToml::parse("[envs.development]\nroutes = []\n").unwrap();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako.local").unwrap();
-        assert_eq!(hosts, vec!["app.tako.local".to_string()]);
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
+        assert_eq!(hosts, vec!["app.tako".to_string()]);
     }
 
     #[test]
     fn keeps_hosts_unchanged_when_dev_routes_are_explicit() {
-        let cfg =
-            TakoToml::parse("[envs.development]\nroutes = [\"api.app.tako.local\"]\n").unwrap();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako.local").unwrap();
-        assert_eq!(hosts, vec!["api.app.tako.local".to_string()]);
+        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"api.app.tako\"]\n").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
+        assert_eq!(hosts, vec!["api.app.tako".to_string()]);
     }
 
     #[test]
-    fn explicit_dev_routes_do_not_fallback_to_default_when_only_wildcards_are_set() {
-        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"*.app.tako.local\"]\n").unwrap();
-        let err = compute_dev_hosts("app", &cfg, "app.tako.local").unwrap_err();
-        assert!(err.contains("none are exact hostnames"));
+    fn wildcard_only_routes_are_accepted() {
+        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"*.app.tako\"]\n").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
+        assert_eq!(hosts, vec!["*.app.tako"]);
     }
 
+    /// Both owner and attached clients must show the same routes. The owner
+    /// uses `compute_display_routes` (wildcards + paths) while the daemon
+    /// only stores routing hosts (exact hostnames from `compute_dev_hosts`).
+    /// An attached client must use `compute_display_routes` too, not the
+    /// daemon's host list.
     #[test]
-    fn pf_conf_hook_block_contains_rdr_anchor_and_load_lines() {
-        let block = pf_conf_forwarding_hook_block();
-        assert!(block.contains("rdr-anchor \"tako\""));
-        assert!(block.contains("load anchor \"tako\""));
-    }
+    fn display_routes_include_wildcards_and_paths_that_dev_hosts_omit() {
+        let cfg = TakoToml::parse(
+            "[envs.development]\nroutes = [\"app.tako\", \"app.tako/api\", \"*.app.tako\"]\n",
+        )
+        .unwrap();
+        let display = compute_display_routes(&cfg, "app.tako");
+        let routing = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
 
-    #[test]
-    fn pf_conf_with_forwarding_hook_is_idempotent() {
-        let existing = "set skip on lo0\n";
-        let once = pf_conf_with_forwarding_hook(existing);
-        let twice = pf_conf_with_forwarding_hook(&once);
-        assert_eq!(once, twice);
-    }
-
-    #[test]
-    fn pf_conf_with_forwarding_hook_appends_when_missing() {
-        let existing = "set skip on lo0\n";
-        let updated = pf_conf_with_forwarding_hook(existing);
-        assert!(updated.starts_with("set skip on lo0"));
-        assert!(updated.contains("# >>> tako >>>"));
-    }
-
-    #[test]
-    fn pf_conf_with_forwarding_hook_replaces_old_anchor_block() {
-        let existing = r#"scrub-anchor "com.apple/*"
-
-# >>> tako >>>
-anchor "tako.portless"
-load anchor "tako.portless" from "/etc/pf.anchors/tako.portless"
-# <<< tako <<<
-"#;
-        let updated = pf_conf_with_forwarding_hook(existing);
-        assert!(updated.contains(r#"rdr-anchor "tako""#));
-        assert!(!updated.contains("\nanchor \"tako.portless\"\n"));
-        assert!(!updated.contains("tako.portless"));
-        assert_eq!(updated.matches("# >>> tako >>>").count(), 1);
-    }
-
-    #[test]
-    fn pf_conf_with_forwarding_hook_inserts_after_rdr_anchor_section() {
-        let existing = r#"scrub-anchor "com.apple/*"
-nat-anchor "com.apple/*"
-rdr-anchor "com.apple/*"
-dummynet-anchor "com.apple/*"
-anchor "com.apple/*"
-load anchor "com.apple" from "/etc/pf.anchors/com.apple"
-"#;
-        let updated = pf_conf_with_forwarding_hook(existing);
-
-        let lines: Vec<&str> = updated.lines().collect();
-        let tako_block_pos = lines
-            .iter()
-            .position(|line| line.trim() == "# >>> tako >>>")
-            .unwrap();
-        let rdr_anchor_pos = lines
-            .iter()
-            .position(|line| line.trim() == "rdr-anchor \"com.apple/*\"")
-            .unwrap();
-        let filter_anchor_pos = lines
-            .iter()
-            .position(|line| line.trim() == "anchor \"com.apple/*\"")
-            .unwrap();
-
-        assert!(
-            tako_block_pos > rdr_anchor_pos,
-            "tako block should appear after existing rdr anchors"
-        );
-        assert!(
-            tako_block_pos < filter_anchor_pos,
-            "tako block should be inserted before filter anchors"
-        );
-    }
-
-    #[test]
-    fn pf_conf_with_forwarding_hook_falls_back_to_before_filter_anchor_when_no_rdr_anchor_exists() {
-        let existing = r#"set block-policy drop
-anchor "com.apple/*"
-load anchor "com.apple" from "/etc/pf.anchors/com.apple"
-"#;
-        let updated = pf_conf_with_forwarding_hook(existing);
-
-        let lines: Vec<&str> = updated.lines().collect();
-        let tako_block_pos = lines
-            .iter()
-            .position(|line| line.trim() == "# >>> tako >>>")
-            .unwrap();
-        let filter_anchor_pos = lines
-            .iter()
-            .position(|line| line.trim() == "anchor \"com.apple/*\"")
-            .unwrap();
-        assert!(
-            tako_block_pos < filter_anchor_pos,
-            "tako block should be inserted before filter anchors"
-        );
+        // Display includes wildcard and path routes.
+        assert_eq!(display, vec!["app.tako", "app.tako/api", "*.app.tako"]);
+        // Routing hosts now include wildcards (but still not paths).
+        assert_eq!(routing, vec!["*.app.tako", "app.tako"]);
     }
 }
 
@@ -2417,11 +1909,6 @@ pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|v| v.as_str())
         .unwrap_or("(unknown)");
     let port = i.get("port").and_then(|v| v.as_u64()).unwrap_or(0);
-    #[cfg(target_os = "macos")]
-    let advertised_ip = i
-        .get("advertised_ip")
-        .and_then(|v| v.as_str())
-        .unwrap_or(DEV_LOOPBACK_ADDR);
     let local_dns_enabled = i
         .get("local_dns_enabled")
         .and_then(|b| b.as_bool())
@@ -2431,31 +1918,22 @@ pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|v| v.as_u64())
         .and_then(|v| u16::try_from(v).ok())
         .unwrap_or(LOCAL_DNS_PORT);
+    let advertised_ip = i
+        .get("advertised_ip")
+        .and_then(|v| v.as_str())
+        .unwrap_or("127.0.0.1");
     #[cfg(target_os = "macos")]
-    let listen_port = port_from_listen(listen).unwrap_or_default();
-    #[cfg(target_os = "macos")]
-    let (
-        https_pf_ok,
-        http_pf_ok,
-        https_tcp_ok,
-        http_tcp_ok,
-        local_443_forwarding,
-        local_80_forwarding,
-    ) = if listen_port > 0 {
-        let https_pf_ok = has_pf_https_forwarding(listen_port);
-        let http_pf_ok = has_pf_http_redirect_forwarding();
+    let (pf_active, https_tcp_ok, http_tcp_ok, local_443_forwarding, local_80_forwarding) = {
+        let pf_active = pf_rules_active();
         let https_tcp_ok = tcp_port_open(advertised_ip, 443, 150);
         let http_tcp_ok = tcp_port_open(advertised_ip, 80, 150);
         (
-            https_pf_ok,
-            http_pf_ok,
+            pf_active,
             https_tcp_ok,
             http_tcp_ok,
-            https_pf_ok && https_tcp_ok,
-            http_pf_ok && http_tcp_ok,
+            https_tcp_ok,
+            http_tcp_ok,
         )
-    } else {
-        (false, false, false, false, false, false)
     };
     #[cfg(not(target_os = "macos"))]
     let (local_443_forwarding, local_80_forwarding) = (false, false);
@@ -2476,9 +1954,7 @@ pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
         println!();
         for line in doctor_local_forwarding_preflight_lines(
             advertised_ip,
-            listen_port,
-            https_pf_ok,
-            http_pf_ok,
+            pf_active,
             https_tcp_ok,
             http_tcp_ok,
         ) {
@@ -2516,7 +1992,6 @@ pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(target_os = "macos")]
     {
         if dns {
-            let expected_ip = advertised_ip;
             println!();
             println!("local-dns:");
 
@@ -2544,13 +2019,13 @@ pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     a.hosts.clone()
                 };
-                for host in hosts.into_iter().filter(|h| h.ends_with(".tako.local")) {
+                for host in hosts.into_iter().filter(|h| h.ends_with(".tako")) {
                     match system_resolver_ipv4(&host) {
-                        Some(ip) if ip == expected_ip => {
+                        Some(ip) if ip == "127.0.0.1" => {
                             println!("- {} -> {} (ok)", host, ip);
                         }
                         Some(ip) => {
-                            println!("- {} -> {} (conflict; expected {})", host, ip, expected_ip);
+                            println!("- {} -> {} (conflict; expected 127.0.0.1)", host, ip);
                         }
                         None => {
                             println!("- {} -> (no answer)", host);
@@ -2565,10 +2040,86 @@ pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Run the dev server
+pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let apps = crate::dev_server_client::list_registered_apps().await?;
+
+    if all {
+        if apps.is_empty() {
+            crate::output::muted("No registered dev apps.");
+            return Ok(());
+        }
+        for app in &apps {
+            let _ = crate::dev_server_client::unregister_app(&app.project_dir).await;
+            crate::output::success(&format!("Stopped {}", app.app_name));
+        }
+        return Ok(());
+    }
+
+    let target_name = match name {
+        Some(n) => n,
+        None => {
+            let project_dir = current_dir()?;
+            let canonical =
+                std::fs::canonicalize(&project_dir).unwrap_or_else(|_| project_dir.clone());
+            let canonical_str = canonical.to_string_lossy().to_string();
+            // Find by project_dir first.
+            if let Some(app) = apps.iter().find(|a| a.project_dir == canonical_str) {
+                let _ = crate::dev_server_client::unregister_app(&app.project_dir).await;
+                crate::output::success(&format!("Stopped {}", app.app_name));
+                return Ok(());
+            }
+            // Fall back to app name resolution.
+            resolve_app_name(&project_dir)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?
+        }
+    };
+
+    let app = apps.iter().find(|a| a.app_name == target_name);
+    match app {
+        Some(a) => {
+            let _ = crate::dev_server_client::unregister_app(&a.project_dir).await;
+            crate::output::success(&format!("Stopped {}", a.app_name));
+        }
+        None => {
+            return Err(format!("No registered dev app named '{}'", target_name).into());
+        }
+    }
+    Ok(())
+}
+
+pub async fn ls() -> Result<(), Box<dyn std::error::Error>> {
+    let apps = match crate::dev_server_client::list_registered_apps().await {
+        Ok(apps) => apps,
+        Err(_) => {
+            crate::output::muted("No dev server running.");
+            return Ok(());
+        }
+    };
+
+    if apps.is_empty() {
+        crate::output::muted("No registered dev apps.");
+        return Ok(());
+    }
+
+    // Print as a simple table.
+    println!("{:<20} {:<10} {:<30} {}", "NAME", "STATUS", "URL", "DIR");
+    for app in &apps {
+        let url = if let Some(host) = app.hosts.first() {
+            format!("https://{}/", host)
+        } else {
+            String::new()
+        };
+        println!(
+            "{:<20} {:<10} {:<30} {}",
+            app.app_name, app.status, url, app.project_dir
+        );
+    }
+    Ok(())
+}
+
 pub async fn run(
     public_port: u16,
-    tui: bool,
-    no_tui: bool,
+    name_override: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
     let cfg = load_dev_tako_toml(&project_dir)?;
@@ -2590,26 +2141,21 @@ pub async fn run(
 
     let runtime_name = build_preset.name.clone();
 
-    let app_name = resolve_app_name(&project_dir)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+    let app_name = if let Some(name) = name_override {
+        name
+    } else {
+        resolve_app_name(&project_dir)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?
+    };
     let domain = LocalCA::app_domain(&app_name);
     let local_ca = setup_local_ca().await?;
     let tls_material_updated = ensure_dev_server_tls_material(&local_ca, &app_name)?;
     ensure_local_dns_resolver_configured(LOCAL_DNS_PORT)?;
 
-    let require_loopback_https = cfg!(target_os = "macos");
-    if require_loopback_https {
-        ensure_local_80_443_forwarding(public_port)?;
-    } else if let Err(e) = ensure_local_80_443_forwarding(public_port) {
-        crate::output::warning(&format!(
-            "Could not enable local 80/443 forwarding automatically: {}",
-            e
-        ));
-        crate::output::muted("Continuing with explicit dev port URL.");
-    }
+    #[cfg(target_os = "macos")]
+    ensure_pf_forwarding()?;
 
-    let mut public_url_port = if require_loopback_https || has_local_80_443_forwarding(public_port)
-    {
+    let mut public_url_port: u16 = if cfg!(target_os = "macos") {
         443
     } else {
         public_port
@@ -2664,13 +2210,8 @@ pub async fn run(
                 "A dev server is already running with {}.",
                 restart_reason
             ));
-            let should_restart = crate::output::confirm(
-                &format!(
-                    "Restart it with listen {} and DNS {}?",
-                    listen_addr, daemon_dns_ip
-                ),
-                true,
-            )?;
+            let should_restart =
+                crate::output::confirm(&format!("Restart it with listen {}?", listen_addr), true)?;
             if !should_restart {
                 return Err(format!("Kept existing dev server on {}.", current_listen).into());
             }
@@ -2684,8 +2225,8 @@ pub async fn run(
             }
         } else {
             return Err(format!(
-                "A dev server is already running with listen {} and DNS {}. Stop it first and re-run `tako dev`.",
-                current_listen, current_dns_ip
+                "A dev server is already running with listen {}. Stop it first and re-run `tako dev`.",
+                current_listen
             )
             .into());
         }
@@ -2694,7 +2235,11 @@ pub async fn run(
     // Compute initial dev config snapshot from tako.toml.
     let dev_hosts = compute_dev_hosts(&app_name, &cfg, &domain)
         .map_err(|e| format!("invalid development routes: {}", e))?;
-    let primary_host = dev_hosts.first().cloned().unwrap_or_else(|| domain.clone());
+    let primary_host = dev_hosts
+        .iter()
+        .find(|h| !h.starts_with("*."))
+        .cloned()
+        .unwrap_or_else(|| domain.clone());
 
     let hosts_state = Arc::new(tokio::sync::Mutex::new(dev_hosts.clone()));
     let env = compute_dev_env(&cfg);
@@ -2704,18 +2249,11 @@ pub async fn run(
     let (log_tx, log_rx) = mpsc::channel::<ScopedLog>(1000);
     let (event_tx, event_rx) = mpsc::channel::<DevEvent>(100);
 
-    let (control_tx, mut control_rx) = mpsc::channel::<tui::ControlCmd>(32);
+    let (control_tx, mut control_rx) = mpsc::channel::<output::ControlCmd>(32);
     let (should_exit_tx, mut should_exit_rx) = watch::channel(false);
     let terminate_requested = Arc::new(AtomicBool::new(false));
 
     let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let use_tui = if no_tui {
-        false
-    } else if tui {
-        true
-    } else {
-        interactive
-    };
 
     // Allocate an ephemeral port for the app.
     let (upstream_port, reserve_listener) = reserve_ephemeral_port()?;
@@ -2727,10 +2265,11 @@ pub async fn run(
     )
     .map_err(|e| format!("Invalid dev start command: {}", e))?;
 
-    // Keep receivers optional until we decide whether to launch the TUI.
+    // Keep receivers optional until we decide whether to launch interactive output.
     let mut log_rx_opt = Some(log_rx);
     let mut event_rx_opt = Some(event_rx);
-    let mut tui_handle = None;
+    let mut output_handle: Option<tokio::task::JoinHandle<Result<output::DevOutputExit, String>>> =
+        None;
 
     // Ensure the dev daemon is running.
 
@@ -2741,7 +2280,7 @@ pub async fn run(
         let _ = log_tx
             .send(ScopedLog::error(
                 "tako",
-                format!("✗ dev server failed to start: {}", msg),
+                format!("dev server failed to start: {}", msg),
             ))
             .await;
         let _ = event_tx.send(DevEvent::AppError(msg.clone())).await;
@@ -2752,83 +2291,13 @@ pub async fn run(
     let _ = log_tx.send(dev_server_ready_log(public_port)).await;
 
     if public_url_port == 443 {
-        let https_ready = wait_for_loopback_tcp_port_open(
-            443,
-            LOOPBACK_PORT_PROBE_ATTEMPTS,
-            LOOPBACK_PORT_PROBE_TIMEOUT_MS,
-            LOOPBACK_PORT_PROBE_RETRY_DELAY_MS,
-        )
-        .await;
-        let http_ready = wait_for_loopback_tcp_port_open(
-            80,
-            LOOPBACK_PORT_PROBE_ATTEMPTS,
-            LOOPBACK_PORT_PROBE_TIMEOUT_MS,
-            LOOPBACK_PORT_PROBE_RETRY_DELAY_MS,
-        )
-        .await;
-
-        if !https_ready || !http_ready {
-            if let Err(e) = repair_local_80_443_forwarding(public_port) {
-                if require_loopback_https {
-                    return Err(format!(
-                        "Could not repair local 80/443 forwarding automatically: {}",
-                        e
-                    )
-                    .into());
-                } else {
-                    crate::output::warning(&format!(
-                        "Could not repair local 80/443 forwarding automatically: {}",
-                        e
-                    ));
-                    crate::output::muted("Continuing with explicit dev port URL.");
-                    public_url_port = public_port;
-                }
-            } else {
-                let repaired_https_ready = wait_for_loopback_tcp_port_open(
-                    443,
-                    LOOPBACK_PORT_PROBE_ATTEMPTS,
-                    LOOPBACK_PORT_PROBE_TIMEOUT_MS,
-                    LOOPBACK_PORT_PROBE_RETRY_DELAY_MS,
-                )
-                .await;
-                let repaired_http_ready = wait_for_loopback_tcp_port_open(
-                    80,
-                    LOOPBACK_PORT_PROBE_ATTEMPTS,
-                    LOOPBACK_PORT_PROBE_TIMEOUT_MS,
-                    LOOPBACK_PORT_PROBE_RETRY_DELAY_MS,
-                )
-                .await;
-                if !repaired_https_ready || !repaired_http_ready {
-                    if require_loopback_https {
-                        return Err(format!(
-                            "Local 80/443 forwarding is configured but {DEV_LOOPBACK_ADDR}:80/443 is unreachable."
-                        )
-                        .into());
-                    } else {
-                        crate::output::warning(&format!(
-                            "Local 80/443 forwarding is configured but {DEV_LOOPBACK_ADDR}:80/443 is unreachable."
-                        ));
-                        crate::output::muted("Continuing with explicit dev port URL.");
-                        public_url_port = public_port;
-                    }
-                }
-            }
-        }
-    } else if has_local_80_443_forwarding(public_port)
-        && loopback_tcp_port_open(443, 150)
-        && loopback_tcp_port_open(80, 150)
-    {
-        // Accept pre-existing local forwarding (e.g. configured outside Tako)
-        // so displayed URLs stay truly reachable without requiring a re-setup.
-        public_url_port = 443;
-    }
-
-    if public_url_port == 443 {
-        let Ok(loopback_ip) = DEV_LOOPBACK_ADDR.parse::<Ipv4Addr>() else {
+        let Ok(loopback_ip) = DEV_LOOPBACK_ADDR.parse::<std::net::Ipv4Addr>() else {
             return Err(format!("Invalid loopback address: {DEV_LOOPBACK_ADDR}").into());
         };
+        // Probe the dev server's health endpoint via the loopback address to
+        // verify the full pf forwarding chain (DNS → 127.77.0.1:443 → dev server).
         let probe_result = wait_for_https_host_reachable_via_ip(
-            &primary_host,
+            "tako",
             loopback_ip,
             443,
             LOCALHOST_443_HTTPS_PROBE_ATTEMPTS,
@@ -2836,10 +2305,10 @@ pub async fn run(
             LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS,
         )
         .await;
-        if require_loopback_https && let Err(loopback_error) = probe_result.as_ref() {
-            let daemon_reachable_directly = wait_for_https_host_reachable_via_ip(
-                &primary_host,
-                Ipv4Addr::new(127, 0, 0, 1),
+        if let Err(loopback_error) = probe_result.as_ref() {
+            let server_directly_reachable = wait_for_https_host_reachable_via_ip(
+                "tako",
+                std::net::Ipv4Addr::new(127, 0, 0, 1),
                 public_port,
                 LOCALHOST_443_HTTPS_PROBE_ATTEMPTS,
                 LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS,
@@ -2847,28 +2316,21 @@ pub async fn run(
             )
             .await
             .is_ok();
-            return Err(local_https_probe_error(
-                &primary_host,
-                public_port,
-                loopback_error,
-                daemon_reachable_directly,
-            )
-            .into());
-        }
-
-        let probe_ok = probe_result.is_ok();
-        let next_port = selected_public_url_port(
-            public_port,
-            public_url_port,
-            probe_ok,
-            require_loopback_https,
-        );
-        if next_port != public_url_port {
-            crate::output::warning(
-                "Local 80/443 forwarding is configured but the dev HTTPS endpoint is unreachable.",
-            );
-            crate::output::muted("Continuing with explicit dev port URL.");
-            public_url_port = next_port;
+            if cfg!(target_os = "macos") {
+                return Err(local_https_probe_error(
+                    "tako",
+                    public_port,
+                    loopback_error,
+                    server_directly_reachable,
+                )
+                .into());
+            } else {
+                crate::output::warning(
+                    "Local 80/443 forwarding is configured but the dev HTTPS endpoint is unreachable.",
+                );
+                crate::output::muted("Continuing with explicit dev port URL.");
+                public_url_port = public_port;
+            }
         }
     }
 
@@ -2890,7 +2352,7 @@ pub async fn run(
             let _ = log_tx
                 .send(ScopedLog::error(
                     "tako",
-                    format!("✗ dev server failed to start: {}", msg),
+                    format!("dev server failed to start: {}", msg),
                 ))
                 .await;
             let _ = event_tx.send(DevEvent::AppError(msg.clone())).await;
@@ -2899,22 +2361,54 @@ pub async fn run(
     }
 
     let tako_home = crate::paths::tako_home_dir()?;
-    let (lock_guard, log_store_path) = match acquire_dev_lock(
-        &tako_home,
-        &project_dir,
-        &app_name,
-        &primary_host,
-        public_url_port,
-    )? {
-        DevLockAcquire::Owned(lock) => {
-            let log_store_path = lock.log_path.clone();
-            (lock, log_store_path)
+
+    // Check daemon for existing registration instead of lock files.
+    let canonical_project_dir =
+        std::fs::canonicalize(&project_dir).unwrap_or_else(|_| project_dir.clone());
+    let canonical_project_dir_str = canonical_project_dir.to_string_lossy().to_string();
+
+    if let Ok(apps) = crate::dev_server_client::list_registered_apps().await {
+        if let Some(existing) = apps
+            .iter()
+            .find(|a| a.project_dir == canonical_project_dir_str)
+        {
+            match existing.status.as_str() {
+                "running" => {
+                    // Attach to existing running app.
+                    let log_dir = tako_home.join("dev").join("logs");
+                    std::fs::create_dir_all(&log_dir)?;
+                    let suffix = dev_client_suffix(&project_dir);
+                    let log_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));
+                    let url = if let Some(host) = existing.hosts.first() {
+                        let port = if public_url_port == 443 {
+                            String::new()
+                        } else {
+                            format!(":{}", public_url_port)
+                        };
+                        format!("https://{}{}/", host, port)
+                    } else {
+                        dev_url(&primary_host, public_url_port)
+                    };
+                    let session = AttachedDevClient {
+                        project_dir: canonical_project_dir_str.clone(),
+                        url,
+                        log_path,
+                    };
+                    let display_hosts = compute_display_routes(&cfg, &domain);
+                    return run_attached_dev_client(&app_name, interactive, session, display_hosts)
+                        .await;
+                }
+                // idle or stopped — register fresh below
+                _ => {}
+            }
         }
-        DevLockAcquire::Attached(session) => {
-            return run_attached_dev_client(&app_name, use_tui, session).await;
-        }
-    };
-    let _lock = lock_guard;
+    }
+
+    // Compute log store path (still use lock dir scheme for log files).
+    let log_dir = tako_home.join("dev").join("logs");
+    std::fs::create_dir_all(&log_dir)?;
+    let suffix = dev_client_suffix(&project_dir);
+    let log_store_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));
 
     prepare_shared_log_store_for_new_owner(&log_store_path).await;
     let (log_watch_stop_tx, log_watch_stop_rx) = watch::channel(false);
@@ -2933,11 +2427,10 @@ pub async fn run(
         });
     }
 
-    let token = crate::dev_server_client::get_token().await?;
-
     // Keep one app process running on startup.
     let child_state = std::sync::Arc::new(tokio::sync::Mutex::new(None::<tokio::process::Child>));
     let reserve_state = std::sync::Arc::new(tokio::sync::Mutex::new(Some(reserve_listener)));
+    let app_started_once = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     if dev_initial_instance_count() > 0 {
         // Free the reserved port so the app process can bind immediately.
         let _ = reserve_state.lock().await.take();
@@ -2959,6 +2452,7 @@ pub async fn run(
                         .await;
                 }
                 *child_state.lock().await = Some(child);
+                app_started_once.store(true, std::sync::atomic::Ordering::Relaxed);
                 emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppStarted).await;
             }
             Err(e) => {
@@ -2966,7 +2460,7 @@ pub async fn run(
                 let _ = log_tx
                     .send(ScopedLog::error(
                         "tako",
-                        format!("✗ failed to start app: {}", msg),
+                        format!("failed to start app: {}", msg),
                     ))
                     .await;
                 emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppError(msg)).await;
@@ -2974,22 +2468,23 @@ pub async fn run(
         }
     }
 
-    // Register the lease (daemon routes by Host header).
-    let lease_hosts = hosts_state.lock().await.clone();
-    let lease_active = child_state.lock().await.is_some();
-    let lease = crate::dev_server_client::register_lease(
-        &token,
+    // Register the app with the daemon (persistent, no TTL).
+    let reg_hosts = hosts_state.lock().await.clone();
+    let env_snapshot = env_state.lock().await.clone();
+    let reg_url = crate::dev_server_client::register_app(
+        &canonical_project_dir_str,
         &app_name,
-        &lease_hosts,
+        &reg_hosts,
         upstream_port,
-        lease_active,
-        LEASE_TTL_MS,
+        &cmd,
+        &env_snapshot,
+        &log_store_path.to_string_lossy(),
     )
     .await?;
 
-    if lease_hosts
+    if reg_hosts
         .iter()
-        .any(|h| h.ends_with(&format!(".{}", crate::dev::TAKO_LOCAL_DOMAIN)))
+        .any(|h| h.ends_with(&format!(".{}", crate::dev::TAKO_DEV_DOMAIN)))
         && let Ok(info) = crate::dev_server_client::info().await
     {
         let local_dns_enabled = info
@@ -2998,34 +2493,33 @@ pub async fn run(
             .and_then(|b| b.as_bool())
             .unwrap_or(false);
         if !local_dns_enabled {
-            crate::output::warning(
-                "Local DNS is unavailable; .tako.local hostnames may not resolve.",
-            );
+            crate::output::warning("Local DNS is unavailable; .tako hostnames may not resolve.");
             crate::output::muted("Run `tako doctor` for diagnostics.");
         }
     }
-    let lease_id = std::sync::Arc::new(tokio::sync::Mutex::new(lease.lease_id));
 
-    if use_tui {
-        let public_port_for_tui = public_url_port;
-        let hosts = hosts_state.lock().await.clone();
-        let app_name_for_tui = app_name.clone();
-        let adapter_name_for_tui = runtime_name.clone();
-        let control_tx_for_tui = control_tx.clone();
-        let log_store_for_tui = log_store_path.clone();
+    if interactive {
+        let public_port_for_output = public_url_port;
+        // Display all routes (default + configured, including wildcards/paths).
+        // `dev_hosts` / `hosts_state` is routing-only (no wildcards); display is separate.
+        let hosts = compute_display_routes(&cfg, &domain);
+        let app_name_for_output = app_name.clone();
+        let adapter_name_for_output = runtime_name.clone();
+        let control_tx_for_output = control_tx.clone();
+        let log_store_for_output = log_store_path.clone();
         let log_rx = log_rx_opt.take().unwrap();
         let event_rx = event_rx_opt.take().unwrap();
-        tui_handle = Some(tokio::spawn(async move {
-            tui::run_dev_tui(
-                app_name_for_tui,
-                adapter_name_for_tui,
+        output_handle = Some(tokio::spawn(async move {
+            output::run_dev_output(
+                app_name_for_output,
+                adapter_name_for_output,
                 hosts,
-                public_port_for_tui,
+                public_port_for_output,
                 upstream_port,
                 log_rx,
                 event_rx,
-                control_tx_for_tui,
-                Some(log_store_for_tui),
+                control_tx_for_output,
+                Some(log_store_for_output),
             )
             .await
             .map_err(|e| e.to_string())
@@ -3033,8 +2527,8 @@ pub async fn run(
     }
 
     let verbose = crate::output::is_verbose();
-    let url = preferred_public_url(&primary_host, &lease.url, public_port, public_url_port);
-    if !use_tui {
+    let url = preferred_public_url(&primary_host, &reg_url, public_port, public_url_port);
+    if !interactive {
         for line in dev_startup_lines(
             verbose,
             &app_name,
@@ -3046,66 +2540,11 @@ pub async fn run(
         }
     }
 
-    // Lease heartbeat loop.
-    let (hb_stop_tx, mut hb_stop_rx) = watch::channel(false);
-    {
-        let token = token.clone();
-        let app_name = app_name.clone();
-        let lease_id = lease_id.clone();
-        let log_tx = log_tx.clone();
-        let hosts_state = hosts_state.clone();
-        tokio::spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(LEASE_HEARTBEAT_SECS));
-            loop {
-                tokio::select! {
-                    _ = ticker.tick() => {
-                        let id = lease_id.lock().await.clone();
-                        let err_msg = match crate::dev_server_client::renew_lease(&token, &id, LEASE_TTL_MS).await {
-                            Ok(()) => None,
-                            Err(e) => Some(e.to_string()),
-                        };
-                        if let Some(msg) = err_msg {
-                            // If the lease got lost (daemon restart), try to re-register.
-                            let hosts = hosts_state.lock().await.clone();
-                            let new_id = crate::dev_server_client::register_lease(
-                                &token,
-                                &app_name,
-                                &hosts,
-                                upstream_port,
-                                false,
-                                LEASE_TTL_MS,
-                            )
-                            .await
-                            .ok()
-                            .map(|info| info.lease_id);
-
-                            if let Some(new_id) = new_id {
-                                *lease_id.lock().await = new_id;
-                            } else {
-                                        let _ = log_tx
-                                            .send(ScopedLog::warn(
-                                                "tako",
-                                                format!("✗ lease heartbeat failed: {}", msg),
-                                            ))
-                                            .await;
-                            }
-                        }
-                    }
-                    _ = hb_stop_rx.changed() => {
-                        if *hb_stop_rx.borrow() {
-                            break;
-                        }
-                    }
-                }
-            }
-        });
-    }
-
     // Watch tako.toml for config changes (env vars + dev routes).
     let (cfg_tx, cfg_rx) = mpsc::channel::<()>(8);
     let _cfg_handle = watcher::ConfigWatcher::new(project_dir.clone(), cfg_tx)?.start()?;
 
-    if verbose && !use_tui {
+    if verbose && !interactive {
         println!(
             "Starting server at {}...",
             dev_url(&primary_host, public_url_port)
@@ -3118,26 +2557,37 @@ pub async fn run(
     {
         let child_state = child_state.clone();
         let reserve_state = reserve_state.clone();
-        let token = token.clone();
-        let lease_id = lease_id.clone();
+        let project_dir_str = canonical_project_dir_str.clone();
         let cmd = cmd.clone();
         let env_state = env_state.clone();
         let project_dir = project_dir.clone();
-        let app_name = app_name.clone();
         let log_tx = log_tx.clone();
         let event_tx = event_tx.clone();
         let log_store_path = log_store_path.clone();
         let should_exit_tx = should_exit_tx.clone();
         let terminate_requested = terminate_requested.clone();
+        let app_started_once = app_started_once.clone();
+
         tokio::spawn(async move {
             while let Some(cmd_in) = control_rx.recv().await {
                 match cmd_in {
-                    tui::ControlCmd::Restart => {
+                    output::ControlCmd::Restart => {
                         let mut lock = child_state.lock().await;
                         if let Some(mut child) = lock.take() {
                             let _ = child.kill().await;
                             let _ = child.wait().await;
                         }
+
+                        if app_started_once.load(std::sync::atomic::Ordering::Relaxed) {
+                            let _ = log_tx.send(ScopedLog::divider()).await;
+                        }
+
+                        emit_persisted_app_event(
+                            &event_tx,
+                            &log_store_path,
+                            DevEvent::AppLaunching,
+                        )
+                        .await;
 
                         // Ensure the reserved port is free for the app.
                         let _ = reserve_state.lock().await.take();
@@ -3155,10 +2605,11 @@ pub async fn run(
                         .map_err(|e| e.to_string());
                         match restarted {
                             Ok(child) => {
-                                let id = lease_id.lock().await.clone();
-                                let _ =
-                                    crate::dev_server_client::set_lease_active(&token, &id, true)
-                                        .await;
+                                let _ = crate::dev_server_client::set_app_status(
+                                    &project_dir_str,
+                                    "running",
+                                )
+                                .await;
                                 if let Some(pid) = child.id() {
                                     emit_persisted_app_event(
                                         &event_tx,
@@ -3168,6 +2619,7 @@ pub async fn run(
                                     .await;
                                 }
                                 *lock = Some(child);
+                                app_started_once.store(true, std::sync::atomic::Ordering::Relaxed);
                                 emit_persisted_app_event(
                                     &event_tx,
                                     &log_store_path,
@@ -3179,7 +2631,7 @@ pub async fn run(
                                 let _ = log_tx
                                     .send(ScopedLog::error(
                                         "tako",
-                                        format!("✗ restart failed: {}", msg),
+                                        format!("restart failed: {}", msg),
                                     ))
                                     .await;
                                 emit_persisted_app_event(
@@ -3191,43 +2643,35 @@ pub async fn run(
                             }
                         }
                     }
-                    tui::ControlCmd::Terminate => {
+                    output::ControlCmd::Terminate => {
                         terminate_requested.store(true, Ordering::Relaxed);
                         let mut lock = child_state.lock().await;
                         if let Some(mut child) = lock.take() {
                             let _ = child.kill().await;
                             let _ = child.wait().await;
                         }
-                        let id = lease_id.lock().await.clone();
-                        let _ =
-                            crate::dev_server_client::set_lease_active(&token, &id, false).await;
+                        let _ = crate::dev_server_client::set_app_status(&project_dir_str, "idle")
+                            .await;
                         emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppStopped)
                             .await;
                         let _ = should_exit_tx.send(true);
                         break;
                     }
-                    tui::ControlCmd::ClearLogs => {
-                        append_clear_logs_marker_to_store(&log_store_path).await;
-                        let _ = event_tx.send(DevEvent::LogsCleared).await;
-                    }
                 }
             }
-
-            // Keep lints happy.
-            let _ = app_name;
         });
     }
 
-    // Config change loop (tako.toml): update env + routing.
+    // Config change loop: reload tako.toml, update state, always restart the app.
     {
         let project_dir = project_dir.clone();
+        let project_dir_str = canonical_project_dir_str.clone();
         let app_name = app_name.clone();
         let domain = domain.clone();
         let env_state = env_state.clone();
         let hosts_state = hosts_state.clone();
-        let token = token.clone();
-        let lease_id = lease_id.clone();
-        let child_state = child_state.clone();
+        let cmd = cmd.clone();
+        let log_store_path = log_store_path.clone();
         let log_tx = log_tx.clone();
         let mut cfg_rx = cfg_rx;
         let control_tx = control_tx.clone();
@@ -3236,26 +2680,16 @@ pub async fn run(
                 let cfg = match load_dev_tako_toml(&project_dir) {
                     Ok(c) => c,
                     Err(e) => {
-                        let msg = e.to_string();
                         let _ = log_tx
-                            .send(ScopedLog::error(
-                                "tako",
-                                format!("✗ tako.toml parse error: {}", msg),
-                            ))
+                            .send(ScopedLog::error("tako", format!("tako.toml error: {}", e)))
                             .await;
                         continue;
                     }
                 };
 
+                // Update env and hosts state unconditionally.
                 let new_env = compute_dev_env(&cfg);
-                let mut restart_needed = false;
-                {
-                    let mut cur = env_state.lock().await;
-                    if *cur != new_env {
-                        *cur = new_env;
-                        restart_needed = true;
-                    }
-                }
+                *env_state.lock().await = new_env.clone();
 
                 let new_hosts = match compute_dev_hosts(&app_name, &cfg, &domain) {
                     Ok(hosts) => hosts,
@@ -3263,65 +2697,47 @@ pub async fn run(
                         let _ = log_tx
                             .send(ScopedLog::error(
                                 "tako",
-                                format!("✗ invalid development routes: {}", msg),
+                                format!("tako.toml invalid routes: {}", msg),
                             ))
                             .await;
                         continue;
                     }
                 };
                 let hosts_changed = {
-                    let mut cur_hosts = hosts_state.lock().await;
-                    if *cur_hosts != new_hosts {
-                        *cur_hosts = new_hosts.clone();
-                        true
-                    } else {
-                        false
-                    }
+                    let mut cur = hosts_state.lock().await;
+                    let changed = *cur != new_hosts;
+                    *cur = new_hosts.clone();
+                    changed
                 };
 
+                // Re-register app if routing changed.
                 if hosts_changed {
-                    let is_active = child_state.lock().await.is_some();
-                    let r = crate::dev_server_client::register_lease(
-                        &token,
+                    let reg_result = crate::dev_server_client::register_app(
+                        &project_dir_str,
                         &app_name,
                         &new_hosts,
                         upstream_port,
-                        is_active,
-                        LEASE_TTL_MS,
+                        &cmd,
+                        &new_env,
+                        &log_store_path.to_string_lossy(),
                     )
                     .await
                     .map_err(|e| e.to_string());
-
-                    match r {
-                        Ok(info) => {
-                            *lease_id.lock().await = info.lease_id;
-                            let _ = log_tx
-                                .send(ScopedLog::info(
-                                    "tako",
-                                    "✓ updated dev routing from tako.toml",
-                                ))
-                                .await;
-                        }
-                        Err(msg) => {
-                            let _ = log_tx
-                                .send(ScopedLog::warn(
-                                    "tako",
-                                    format!("✗ failed to update dev routing: {}", msg),
-                                ))
-                                .await;
-                        }
+                    if let Err(msg) = reg_result {
+                        let _ = log_tx
+                            .send(ScopedLog::warn(
+                                "tako",
+                                format!("failed to update routing: {}", msg),
+                            ))
+                            .await;
                     }
                 }
 
-                if restart_needed {
-                    let _ = log_tx
-                        .send(ScopedLog::info(
-                            "tako",
-                            "✓ env changed in tako.toml; restarting",
-                        ))
-                        .await;
-                    let _ = control_tx.send(tui::ControlCmd::Restart).await;
-                }
+                // Always restart — runtime, preset, env, routes: any change may matter.
+                let _ = log_tx
+                    .send(ScopedLog::info("tako", "tako.toml changed, restarting…"))
+                    .await;
+                let _ = control_tx.send(output::ControlCmd::Restart).await;
             }
         });
     }
@@ -3333,9 +2749,8 @@ pub async fn run(
         let last_req2 = last_req.clone();
 
         {
-            let token = token.clone();
-            let lease_id = lease_id.clone();
-            let lease_hosts = lease_hosts.clone();
+            let project_dir_str = canonical_project_dir_str.clone();
+            let app_hosts = hosts_state.lock().await.clone();
             let child_state = child_state.clone();
             let reserve_state = reserve_state.clone();
             let cmd = cmd.clone();
@@ -3346,14 +2761,17 @@ pub async fn run(
             let log_store_path = log_store_path.clone();
             let last_req = last_req.clone();
             let inflight = inflight.clone();
+            let app_started_once = app_started_once.clone();
+            let control_tx = control_tx.clone();
+            let should_exit_tx = should_exit_tx.clone();
 
-            let mut ev_rx = match crate::dev_server_client::subscribe_events(&token).await {
+            let mut ev_rx = match crate::dev_server_client::subscribe_events().await {
                 Ok(rx) => Some(rx),
                 Err(e) => {
                     let _ = log_tx
                         .send(ScopedLog::warn(
                             "tako",
-                            format!("✗ failed to subscribe to dev server events: {}", e),
+                            format!("failed to subscribe to dev server events: {}", e),
                         ))
                         .await;
                     None
@@ -3365,7 +2783,7 @@ pub async fn run(
                     while let Some(ev) = ev_rx.recv().await {
                         match ev {
                             crate::dev_server_client::DevServerEvent::RequestStarted { host } => {
-                                if !lease_hosts.iter().any(|h| h == &host) {
+                                if !app_hosts.iter().any(|h| h == &host) {
                                     continue;
                                 }
 
@@ -3374,6 +2792,9 @@ pub async fn run(
 
                                 let mut lock = child_state.lock().await;
                                 if lock.is_none() {
+                                    if app_started_once.load(std::sync::atomic::Ordering::Relaxed) {
+                                        let _ = log_tx.send(ScopedLog::divider()).await;
+                                    }
                                     emit_persisted_app_event(
                                         &event_tx,
                                         &log_store_path,
@@ -3402,9 +2823,9 @@ pub async fn run(
                                     .await
                                     {
                                         Ok(child) => {
-                                            let id = lease_id.lock().await.clone();
-                                            let _ = crate::dev_server_client::set_lease_active(
-                                                &token, &id, true,
+                                            let _ = crate::dev_server_client::set_app_status(
+                                                &project_dir_str,
+                                                "running",
                                             )
                                             .await;
                                             if let Some(pid) = child.id() {
@@ -3416,6 +2837,8 @@ pub async fn run(
                                                 .await;
                                             }
                                             *lock = Some(child);
+                                            app_started_once
+                                                .store(true, std::sync::atomic::Ordering::Relaxed);
                                             emit_persisted_app_event(
                                                 &event_tx,
                                                 &log_store_path,
@@ -3429,7 +2852,7 @@ pub async fn run(
                                             let _ = log_tx
                                                 .send(ScopedLog::error(
                                                     "tako",
-                                                    format!("✗ failed to start app: {}", msg),
+                                                    format!("failed to start app: {}", msg),
                                                 ))
                                                 .await;
                                             emit_persisted_app_event(
@@ -3443,7 +2866,7 @@ pub async fn run(
                                 }
                             }
                             crate::dev_server_client::DevServerEvent::RequestFinished { host } => {
-                                if !lease_hosts.iter().any(|h| h == &host) {
+                                if !app_hosts.iter().any(|h| h == &host) {
                                     continue;
                                 }
                                 inflight
@@ -3454,6 +2877,28 @@ pub async fn run(
                                     )
                                     .ok();
                             }
+                            crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                                ref project_dir,
+                                ref status,
+                                ..
+                            } => {
+                                if project_dir == &project_dir_str && status == "stopped" {
+                                    // Send ExitWithMessage so the output loop
+                                    // can exit cleanly (erase footer + print message).
+                                    let _ = event_tx
+                                        .send(DevEvent::ExitWithMessage(
+                                            "stopped by another client".to_string(),
+                                        ))
+                                        .await;
+                                    let _ = should_exit_tx.send(true);
+                                    break;
+                                }
+                            }
+                            crate::dev_server_client::DevServerEvent::RestartRequested {
+                                ..
+                            } => {
+                                let _ = control_tx.send(output::ControlCmd::Restart).await;
+                            }
                         }
                     }
                 });
@@ -3461,8 +2906,7 @@ pub async fn run(
         }
 
         {
-            let token = token.clone();
-            let lease_id = lease_id.clone();
+            let project_dir_str = canonical_project_dir_str.clone();
             let child_state = child_state.clone();
             let reserve_state = reserve_state.clone();
             let event_tx = event_tx.clone();
@@ -3494,8 +2938,8 @@ pub async fn run(
                     emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppStopped)
                         .await;
 
-                    let id = lease_id.lock().await.clone();
-                    let _ = crate::dev_server_client::set_lease_active(&token, &id, false).await;
+                    let _ =
+                        crate::dev_server_client::set_app_status(&project_dir_str, "idle").await;
 
                     // Re-reserve the upstream port.
                     if reserve_state.lock().await.is_none()
@@ -3554,12 +2998,16 @@ pub async fn run(
         });
     }
 
-    if use_tui {
-        if let Some(mut handle) = tui_handle.take() {
-            let mut tui_result = None;
+    if interactive {
+        if let Some(mut handle) = output_handle.take() {
+            let mut dev_exit: Option<output::DevOutputExit> = None;
             tokio::select! {
                 r = &mut handle => {
-                    tui_result = Some(r);
+                    match r {
+                        Ok(Ok(exit)) => dev_exit = Some(exit),
+                        Ok(Err(msg)) => return Err(msg.into()),
+                        Err(e) => return Err(format!("dev output task failed: {}", e).into()),
+                    }
                 }
                 _ = async {
                     while should_exit_rx.changed().await.is_ok() {
@@ -3567,28 +3015,44 @@ pub async fn run(
                             break;
                         }
                     }
-                } => {}
-            }
-
-            if let Some(r) = tui_result {
-                match r {
-                    Ok(r) => {
-                        if let Err(msg) = r {
-                            return Err(msg.into());
+                } => {
+                    // Give the output loop a moment to receive ExitWithMessage
+                    // and exit cleanly (erasing the footer). If it doesn't
+                    // finish promptly, abort it.
+                    match tokio::time::timeout(Duration::from_millis(500), &mut handle).await {
+                        Ok(Ok(Ok(exit))) => dev_exit = Some(exit),
+                        _ => {
+                            handle.abort();
+                            let _ = handle.await;
                         }
                     }
-                    Err(e) => {
-                        return Err(format!("tui task failed: {}", e).into());
-                    }
                 }
-            } else {
-                handle.abort();
-                let _ = handle.await;
+            }
+
+            // When the user pressed `b`, hand off the running process to the
+            // daemon and exit the CLI immediately.
+            if let Some(output::DevOutputExit::Detach { .. }) = dev_exit {
+                let child_pid = {
+                    let lock = child_state.lock().await;
+                    lock.as_ref().and_then(|c| c.id())
+                };
+                if let Some(pid) = child_pid {
+                    let _ = crate::dev_server_client::handoff_app(&canonical_project_dir_str, pid)
+                        .await;
+                    // Detach the child so cleanup doesn't kill it.
+                    let _ = child_state.lock().await.take();
+                }
+                let _ = log_watch_stop_tx.send(true);
+                return Ok(());
             }
         }
     } else {
-        let mut log_rx = log_rx_opt.take().expect("non-TUI should have log rx");
-        let mut event_rx = event_rx_opt.take().expect("non-TUI should have event rx");
+        let mut log_rx = log_rx_opt
+            .take()
+            .expect("non-interactive should have log rx");
+        let mut event_rx = event_rx_opt
+            .take()
+            .expect("non-interactive should have event rx");
         let log_store_path_for_stdout = log_store_path.clone();
         // Handle events and logs (plain stdout)
         tokio::select! {
@@ -3617,12 +3081,16 @@ pub async fn run(
                                     // No-op in non-TUI mode.
                                 }
                                 DevEvent::AppError(e) => {
-                                    eprintln!("✗ App error: {}", e);
+                                    eprintln!("App error: {}", e);
                                 }
                                 DevEvent::LogsCleared => {
                                     println!("logs cleared");
                                 }
                                 DevEvent::LogsReady => {}
+                                DevEvent::ExitWithMessage(msg) => {
+                                    println!("{}", msg);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -3639,61 +3107,14 @@ pub async fn run(
     }
 
     // Cleanup.
-    let _ = hb_stop_tx.send(true);
-    let id = lease_id.lock().await.clone();
-    let mut child = {
-        let mut lock = child_state.lock().await;
-        lock.take()
-    };
-    let app_was_running = child.is_some();
-    if let Some(mut child) = child.take() {
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-    }
-    let mut kept_alive = false;
-    if should_linger_after_disconnect(terminate_requested.load(Ordering::Relaxed), app_was_running)
     {
-        let env = env_state.lock().await.clone();
-        let lease_renewed =
-            crate::dev_server_client::renew_lease(&token, &id, dev_disconnect_grace_ttl_ms())
-                .await
-                .is_ok();
-        let lease_reactivated = crate::dev_server_client::set_lease_active(&token, &id, true)
-            .await
-            .is_ok();
-
-        if lease_renewed && lease_reactivated {
-            match spawn_lingering_app_process(
-                &cmd,
-                &env,
-                &project_dir,
-                upstream_port,
-                dev_disconnect_grace(),
-            ) {
-                Ok(_) => {
-                    kept_alive = true;
-                    crate::output::muted(&format!(
-                        "Session ended. Keeping app and routes alive for {}.",
-                        dev_disconnect_grace_label()
-                    ));
-                }
-                Err(e) => {
-                    crate::output::warning(&format!(
-                        "Could not keep app alive after disconnect: {}",
-                        e
-                    ));
-                }
-            }
-        } else {
-            crate::output::warning(
-                "Could not extend dev lease after disconnect; stopping app immediately.",
-            );
+        let mut lock = child_state.lock().await;
+        if let Some(mut child) = lock.take() {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
         }
     }
-
-    if !kept_alive {
-        let _ = crate::dev_server_client::unregister_lease(&token, &id).await;
-    }
+    let _ = crate::dev_server_client::unregister_app(&canonical_project_dir_str).await;
     let _ = log_watch_stop_tx.send(true);
     if verbose {
         println!("Goodbye!");
@@ -3709,183 +3130,20 @@ fn reserve_ephemeral_port() -> Result<(u16, TcpListener), Box<dyn std::error::Er
     Ok((port, listener))
 }
 
-#[derive(Debug)]
-struct DevLock {
-    path: std::path::PathBuf,
-    log_path: std::path::PathBuf,
-}
-
 #[derive(Debug, Clone)]
-struct AttachedDevSession {
-    owner_pid: u32,
+struct AttachedDevClient {
+    project_dir: String,
     url: String,
     log_path: std::path::PathBuf,
 }
 
-#[derive(Debug)]
-enum DevLockAcquire {
-    Owned(DevLock),
-    Attached(AttachedDevSession),
-}
-
-#[derive(Debug, Default)]
-struct LockFileMetadata {
-    pid: Option<u32>,
-    url: Option<String>,
-    log_path: Option<std::path::PathBuf>,
-}
-
-impl Drop for DevLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.path);
-    }
-}
-
-fn acquire_dev_lock(
-    tako_home: &std::path::Path,
-    project_dir: &std::path::Path,
-    app_name: &str,
-    domain: &str,
-    public_port: u16,
-) -> Result<DevLockAcquire, Box<dyn std::error::Error>> {
-    let lock_dir = tako_home.join("dev").join("locks");
-    let log_dir = tako_home.join("dev").join("logs");
-    std::fs::create_dir_all(&lock_dir)?;
-    std::fs::create_dir_all(&log_dir)?;
-
-    let suffix = dev_session_suffix(project_dir);
-    let path = lock_dir.join(format!("{}-{}.lock", app_name, suffix));
-    let log_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));
-    let default_url = dev_url(domain, public_port);
-    let deadline = std::time::Instant::now() + Duration::from_millis(DEV_LOCK_ACQUIRE_TIMEOUT_MS);
-    let poll_interval = Duration::from_millis(DEV_LOCK_RETRY_POLL_MS);
-    let incomplete_stale_age = Duration::from_millis(DEV_LOCK_INCOMPLETE_STALE_AGE_MS);
-
-    loop {
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut f) => {
-                let pid = std::process::id();
-                let lock_contents = format!(
-                    "pid={pid}\nurl={default_url}\nlog_path={}\n",
-                    log_path.display()
-                );
-                f.write_all(lock_contents.as_bytes())?;
-                return Ok(DevLockAcquire::Owned(DevLock {
-                    path,
-                    log_path: log_path.clone(),
-                }));
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                let contents = std::fs::read_to_string(&path).unwrap_or_default();
-                let meta = parse_lock_file_metadata(
-                    &contents,
-                    fallback_log_path_for_lock_file(&path, &log_dir),
-                );
-
-                if let Some(pid) = meta.pid
-                    && process_is_running(pid)
-                {
-                    return Ok(DevLockAcquire::Attached(AttachedDevSession {
-                        owner_pid: pid,
-                        url: meta.url.unwrap_or_else(|| default_url.clone()),
-                        log_path: meta.log_path.unwrap_or_else(|| log_path.clone()),
-                    }));
-                }
-
-                if meta.pid.is_some() {
-                    // Stale lock with dead owner PID.
-                    let _ = std::fs::remove_file(&path);
-                    continue;
-                }
-
-                // Lock file can be temporarily incomplete while another process is writing it.
-                if lock_file_older_than(&path, incomplete_stale_age) {
-                    let _ = std::fs::remove_file(&path);
-                    continue;
-                }
-
-                if std::time::Instant::now() >= deadline {
-                    break;
-                }
-                std::thread::sleep(poll_interval);
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-
-    Err("could not acquire dev lock".into())
-}
-
-fn lock_file_older_than(path: &Path, age: Duration) -> bool {
-    let modified = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
-    modified
-        .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
-        .is_some_and(|elapsed| elapsed >= age)
-}
-
-fn listed_apps_contain_app(apps: &[crate::dev_server_client::ListedApp], app_name: &str) -> bool {
-    apps.iter().any(|app| app.app_name == app_name)
-}
-
-async fn attached_app_still_registered(app_name: &str) -> bool {
-    crate::dev_server_client::list_apps()
-        .await
-        .ok()
-        .is_some_and(|apps| listed_apps_contain_app(&apps, app_name))
-}
-
-fn dev_session_suffix(project_dir: &Path) -> String {
+fn dev_client_suffix(project_dir: &Path) -> String {
     let canonical =
         std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
     let mut h = sha2::Sha256::new();
     h.update(canonical.to_string_lossy().as_bytes());
     let digest = h.finalize();
     hex::encode(&digest[..4])
-}
-
-fn fallback_log_path_for_lock_file(lock_path: &Path, log_dir: &Path) -> PathBuf {
-    let stem = lock_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("dev-session");
-    log_dir.join(format!("{stem}.jsonl"))
-}
-
-fn parse_lock_file_metadata(contents: &str, fallback_log_path: PathBuf) -> LockFileMetadata {
-    let mut meta = LockFileMetadata::default();
-    for line in contents.lines() {
-        if let Some(v) = line.strip_prefix("pid=") {
-            meta.pid = v.parse::<u32>().ok();
-            continue;
-        }
-        if let Some(v) = line.strip_prefix("url=") {
-            let trimmed = v.trim();
-            if !trimmed.is_empty() {
-                meta.url = Some(trimmed.to_string());
-            }
-            continue;
-        }
-        if let Some(v) = line.strip_prefix("log_path=") {
-            let trimmed = v.trim();
-            if !trimmed.is_empty() {
-                meta.log_path = Some(PathBuf::from(trimmed));
-            }
-        }
-    }
-
-    if meta.log_path.is_none() {
-        meta.log_path = Some(fallback_log_path);
-    }
-    meta
-}
-
-fn process_is_running(pid: u32) -> bool {
-    let mut sys = sysinfo::System::new();
-    sys.refresh_processes(
-        sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
-        false,
-    );
-    sys.process(sysinfo::Pid::from_u32(pid)).is_some()
 }
 
 #[derive(Debug)]
@@ -3939,7 +3197,7 @@ fn app_event_marker_payload(event: &DevEvent) -> Option<serde_json::Value> {
             "event": "error",
             "message": message,
         })),
-        DevEvent::LogsCleared | DevEvent::LogsReady => None,
+        DevEvent::LogsCleared | DevEvent::LogsReady | DevEvent::ExitWithMessage(_) => None,
     }
 }
 
@@ -4024,22 +3282,6 @@ async fn append_log_to_store(log_path: &Path, line: &ScopedLog) {
         return;
     };
     let _ = file.write_all(encoded.as_bytes()).await;
-}
-
-async fn append_clear_logs_marker_to_store(log_path: &Path) {
-    let mut marker = format!(r#"{{"type":"{}"}}"#, DEV_LOG_CLEAR_MARKER_TYPE);
-    marker.push('\n');
-    let file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .await;
-
-    let Ok(mut file) = file else {
-        return;
-    };
-
-    let _ = file.write_all(marker.as_bytes()).await;
 }
 
 async fn append_app_event_marker_to_store(log_path: &Path, event: &DevEvent) {
@@ -4133,9 +3375,9 @@ async fn replay_and_follow_logs(
                                     }
                                 }
                                 Some(StoredLogEvent::AppEvent(event)) => {
-                                    // The owning session receives app lifecycle events directly
-                                    // from the supervisor; only attached sessions should rebuild
-                                    // app state from persisted markers.
+                                    // The owning client receives app lifecycle events directly
+                                    // from the supervisor; attached clients rebuild app state
+                                    // from persisted markers.
                                     if !start_from_end
                                         && let Some(tx) = event_tx.as_ref()
                                     {
@@ -4172,40 +3414,12 @@ fn host_and_port_from_url(url: &str) -> Option<(String, u16)> {
     Some((host_port.to_string(), 443))
 }
 
-async fn send_terminate_to_owner(pid: u32) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(unix)]
-    {
-        let status = tokio::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()
-            .await?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("failed to send SIGTERM to pid {pid}").into())
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        let status = tokio::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T"])
-            .status()
-            .await?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("failed to terminate pid {pid}").into())
-        }
-    }
-}
-
 async fn run_attached_dev_client(
     app_name: &str,
-    use_tui: bool,
-    session: AttachedDevSession,
+    interactive: bool,
+    session: AttachedDevClient,
+    display_hosts: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mut hosts = Vec::new();
     let mut public_port = host_and_port_from_url(&session.url)
         .map(|(_, p)| p)
         .unwrap_or(443);
@@ -4223,28 +3437,59 @@ async fn run_attached_dev_client(
     if let Ok(apps) = crate::dev_server_client::list_apps().await
         && let Some(app) = apps.into_iter().find(|a| a.app_name == app_name)
     {
-        if !app.hosts.is_empty() {
-            hosts = app.hosts;
-        }
         upstream_port = app.upstream_port;
     }
 
-    if hosts.is_empty()
-        && let Some((host, _)) = host_and_port_from_url(&session.url)
-    {
-        hosts.push(host);
-    }
+    let hosts = display_hosts;
 
     let (log_tx, log_rx) = mpsc::channel::<ScopedLog>(1000);
     let (event_tx, event_rx) = mpsc::channel::<DevEvent>(32);
-    let (control_tx, mut control_rx) = mpsc::channel::<tui::ControlCmd>(32);
+    let (control_tx, mut control_rx) = mpsc::channel::<output::ControlCmd>(32);
     let (stop_tx, stop_rx) = watch::channel(false);
 
-    // Count attached sessions as control clients by keeping an events subscription open.
-    if let Ok(token) = crate::dev_server_client::get_token().await
-        && let Ok(mut ev_rx) = crate::dev_server_client::subscribe_events(&token).await
+    // Subscribe to dev-server events. This both counts as a control client
+    // (preventing premature idle-exit) and lets us detect when the app is
+    // unregistered — a much more reliable exit trigger than PID polling.
     {
-        tokio::spawn(async move { while ev_rx.recv().await.is_some() {} });
+        let event_tx = event_tx.clone();
+        let stop_tx = stop_tx.clone();
+        let app_name_sub = app_name.to_string();
+        tokio::spawn(async move {
+            let mut got_stop = false;
+
+            let connected = async {
+                let ev_rx = crate::dev_server_client::subscribe_events().await.ok()?;
+                Some(ev_rx)
+            };
+
+            if let Some(mut ev_rx) = connected.await {
+                while let Some(ev) = ev_rx.recv().await {
+                    if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                        ref app_name,
+                        ref status,
+                        ..
+                    } = ev
+                    {
+                        if app_name == &app_name_sub && status == "stopped" {
+                            got_stop = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Always signal exit — either we got a "stopped" event, the
+            // subscription disconnected (dev-server exited), or we failed
+            // to connect at all. In every case the attached client should
+            // exit cleanly with footer removal.
+            let _ = stop_tx.send(true);
+            let msg = if got_stop {
+                "stopped by another client".to_string()
+            } else {
+                "disconnected from dev server".to_string()
+            };
+            let _ = event_tx.send(DevEvent::ExitWithMessage(msg)).await;
+        });
     }
 
     {
@@ -4259,74 +3504,34 @@ async fn run_attached_dev_client(
 
     {
         let log_tx = log_tx.clone();
-        let event_tx = event_tx.clone();
         let stop_tx = stop_tx.clone();
-        let owner_pid = session.owner_pid;
-        let app_name = app_name.to_string();
-        tokio::spawn(async move {
-            let mut owner_exit_logged = false;
-            loop {
-                tokio::time::sleep(Duration::from_millis(500)).await;
-                if !process_is_running(owner_pid) {
-                    if !owner_exit_logged {
-                        owner_exit_logged = true;
-                        let _ = log_tx
-                            .send(ScopedLog::info(
-                                "tako",
-                                "owning dev session ended; waiting for app shutdown",
-                            ))
-                            .await;
-                    }
-
-                    if attached_app_still_registered(&app_name).await {
-                        continue;
-                    }
-
-                    let _ = log_tx
-                        .send(ScopedLog::info("tako", "dev session terminated"))
-                        .await;
-                    let _ = event_tx.send(DevEvent::AppStopped).await;
-                    let _ = stop_tx.send(true);
-                    break;
-                }
-            }
-        });
-    }
-
-    {
-        let log_tx = log_tx.clone();
-        let stop_tx = stop_tx.clone();
-        let owner_pid = session.owner_pid;
-        let log_path = session.log_path.clone();
+        let project_dir = session.project_dir.clone();
         tokio::spawn(async move {
             while let Some(cmd) = control_rx.recv().await {
                 match cmd {
-                    tui::ControlCmd::Restart => {
-                        let _ = log_tx
-                            .send(ScopedLog::info(
-                                "tako",
-                                "restart is only available in the owning session",
-                            ))
-                            .await;
+                    output::ControlCmd::Restart => {
+                        let result = crate::dev_server_client::restart_app(&project_dir)
+                            .await
+                            .map_err(|e| e.to_string());
+                        if let Err(msg) = result {
+                            let _ = log_tx
+                                .send(ScopedLog::error("tako", format!("restart failed: {}", msg)))
+                                .await;
+                        }
                     }
-                    tui::ControlCmd::Terminate => {
-                        let msg = match send_terminate_to_owner(owner_pid).await {
-                            Ok(()) => "sent terminate signal".to_string(),
-                            Err(e) => format!("failed to terminate owner: {}", e),
-                        };
-                        let _ = log_tx.send(ScopedLog::info("tako", msg)).await;
+                    output::ControlCmd::Terminate => {
+                        let _ = crate::dev_server_client::unregister_app(&project_dir)
+                            .await
+                            .map_err(|e| e.to_string());
                         let _ = stop_tx.send(true);
                         break;
-                    }
-                    tui::ControlCmd::ClearLogs => {
-                        append_clear_logs_marker_to_store(&log_path).await;
                     }
                 }
             }
         });
     }
 
-    if use_tui {
+    if interactive {
         let adapter_name = if let Ok(project_dir) = std::env::current_dir() {
             if let Ok(cfg) = load_dev_tako_toml(&project_dir) {
                 if let Ok(preset_ref) = resolve_dev_preset_ref(&project_dir, &cfg) {
@@ -4344,7 +3549,7 @@ async fn run_attached_dev_client(
             String::new()
         };
 
-        tui::run_dev_tui(
+        output::run_dev_output(
             app_name.to_string(),
             adapter_name,
             hosts,
@@ -4358,7 +3563,7 @@ async fn run_attached_dev_client(
         .await?;
     } else {
         println!("{}", session.url);
-        println!("Attached to existing dev session for '{}'.", app_name);
+        println!("Attached to running dev app '{}'.", app_name);
 
         let mut log_rx = log_rx;
         let mut event_rx = event_rx;
@@ -4376,8 +3581,12 @@ async fn run_attached_dev_client(
                         Some(event) = event_rx.recv() => {
                             match event {
                                 DevEvent::AppStopped => println!("○ App stopped (idle)"),
-                                DevEvent::AppError(e) => eprintln!("✗ App error: {}", e),
+                                DevEvent::AppError(e) => eprintln!("App error: {}", e),
                                 DevEvent::LogsCleared => println!("logs cleared"),
+                                DevEvent::ExitWithMessage(msg) => {
+                                    println!("{}", msg);
+                                    break;
+                                }
                                 DevEvent::AppLaunching
                                 | DevEvent::AppStarted
                                 | DevEvent::AppPid(_)
@@ -4406,112 +3615,6 @@ async fn run_attached_dev_client(
 #[cfg(test)]
 mod dev_lock_tests {
     use super::*;
-
-    #[test]
-    fn dev_lock_attaches_second_instance() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path();
-
-        let project_dir = dir.path().join("proj");
-        std::fs::create_dir_all(&project_dir).unwrap();
-
-        let first = acquire_dev_lock(home, &project_dir, "app", "app.tako.local", 443).unwrap();
-        let _first_lock = match first {
-            DevLockAcquire::Owned(lock) => lock,
-            DevLockAcquire::Attached(_) => panic!("first lock should be owned"),
-        };
-
-        let second = acquire_dev_lock(home, &project_dir, "app", "app.tako.local", 443).unwrap();
-        match second {
-            DevLockAcquire::Owned(_) => panic!("second lock should attach"),
-            DevLockAcquire::Attached(session) => {
-                assert_eq!(session.owner_pid, std::process::id());
-                assert_eq!(session.url, "https://app.tako.local/");
-                assert!(
-                    session
-                        .log_path
-                        .file_name()
-                        .and_then(|f| f.to_str())
-                        .map(|f| f.starts_with("app-") && f.ends_with(".jsonl"))
-                        .unwrap_or(false),
-                    "expected app log store path, got: {}",
-                    session.log_path.display()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn dev_lock_waits_for_inflight_metadata_write_and_attaches() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path();
-
-        let project_dir = dir.path().join("proj");
-        std::fs::create_dir_all(&project_dir).unwrap();
-
-        let lock_dir = home.join("dev").join("locks");
-        let log_dir = home.join("dev").join("logs");
-        std::fs::create_dir_all(&lock_dir).unwrap();
-        std::fs::create_dir_all(&log_dir).unwrap();
-
-        let suffix = dev_session_suffix(&project_dir);
-        let lock_path = lock_dir.join(format!("app-{suffix}.lock"));
-        let log_path = log_dir.join(format!("app-{suffix}.jsonl"));
-        std::fs::write(&lock_path, b"").unwrap();
-
-        let owner_pid = std::process::id();
-        let lock_path_for_writer = lock_path.clone();
-        let log_path_for_writer = log_path.clone();
-        let writer = std::thread::spawn(move || {
-            std::thread::sleep(Duration::from_millis(40));
-            let contents = format!(
-                "pid={owner_pid}\nurl=https://app.tako.local/\nlog_path={}\n",
-                log_path_for_writer.display()
-            );
-            std::fs::write(lock_path_for_writer, contents).unwrap();
-        });
-
-        let acquired = acquire_dev_lock(home, &project_dir, "app", "app.tako.local", 443).unwrap();
-        writer.join().unwrap();
-
-        match acquired {
-            DevLockAcquire::Owned(_) => {
-                panic!("expected to attach while lock metadata was being written")
-            }
-            DevLockAcquire::Attached(session) => {
-                assert_eq!(session.owner_pid, owner_pid);
-                assert_eq!(session.log_path, log_path);
-            }
-        }
-    }
-
-    #[test]
-    fn dev_lock_allows_same_app_in_different_dirs() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = dir.path();
-
-        let p1 = dir.path().join("proj1");
-        let p2 = dir.path().join("proj2");
-        std::fs::create_dir_all(&p1).unwrap();
-        std::fs::create_dir_all(&p2).unwrap();
-
-        let l1 = acquire_dev_lock(home, &p1, "app", "app.tako.local", 443).unwrap();
-        let l2 = acquire_dev_lock(home, &p2, "app", "app.tako.local", 443).unwrap();
-
-        assert!(matches!(l1, DevLockAcquire::Owned(_)));
-        assert!(matches!(l2, DevLockAcquire::Owned(_)));
-    }
-
-    #[test]
-    fn lock_metadata_uses_fallback_log_path_when_missing() {
-        let fallback = PathBuf::from("/tmp/fallback.jsonl");
-        let meta =
-            parse_lock_file_metadata("pid=42\nurl=https://app.tako.local/\n", fallback.clone());
-
-        assert_eq!(meta.pid, Some(42));
-        assert_eq!(meta.url.as_deref(), Some("https://app.tako.local/"));
-        assert_eq!(meta.log_path, Some(fallback));
-    }
 
     #[tokio::test]
     async fn ensure_shared_log_store_preserves_existing_contents() {
@@ -4563,112 +3666,239 @@ mod dev_lock_tests {
             format!(r#"{{"type":"{}"}}"#, DEV_LOG_CLEAR_MARKER_TYPE) + "\n"
         );
     }
-}
 
-fn spawn_lingering_app_process(
-    cmd: &[String],
-    env: &std::collections::HashMap<String, String>,
-    project_dir: &Path,
-    port: u16,
-    grace: Duration,
-) -> Result<u32, Box<dyn std::error::Error>> {
-    let pid = spawn_detached_app_process(cmd, env, project_dir, port)?;
-    if let Err(e) = spawn_linger_reaper(pid, grace) {
-        let _ = terminate_process_by_pid(pid);
-        return Err(e);
-    }
-    Ok(pid)
-}
+    #[tokio::test]
+    async fn exit_with_message_event_breaks_output_loop() {
+        // Simulates the cross-client stop scenario: another client sends
+        // ExitWithMessage, and the output loop should deliver it promptly.
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
 
-fn spawn_detached_app_process(
-    cmd: &[String],
-    env: &std::collections::HashMap<String, String>,
-    project_dir: &Path,
-    port: u16,
-) -> Result<u32, Box<dyn std::error::Error>> {
-    if cmd.is_empty() {
-        return Err("runtime returned empty run command".into());
-    }
+        // Send ExitWithMessage.
+        event_tx
+            .send(DevEvent::ExitWithMessage(
+                "stopped by another client".to_string(),
+            ))
+            .await
+            .unwrap();
 
-    let mut c = std::process::Command::new(&cmd[0]);
-    if cmd.len() > 1 {
-        c.args(&cmd[1..]);
-    }
-    c.current_dir(project_dir)
-        .env("PORT", port.to_string())
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
+        // The receiver should get it immediately.
+        let event = timeout(Duration::from_millis(100), event_rx.recv())
+            .await
+            .expect("should not time out")
+            .expect("channel should not be closed");
 
-    for (k, v) in env {
-        c.env(k, v);
-    }
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        c.process_group(0);
-    }
-
-    let child = c.spawn()?;
-    Ok(child.id())
-}
-
-fn spawn_linger_reaper(pid: u32, grace: Duration) -> Result<(), Box<dyn std::error::Error>> {
-    let secs = grace.as_secs().max(1);
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        let script = format!(
-            "sleep {secs}; kill -TERM {pid} >/dev/null 2>&1; sleep 2; kill -KILL {pid} >/dev/null 2>&1 || true"
-        );
-        let mut c = std::process::Command::new("sh");
-        c.args(["-c", &script])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .process_group(0);
-        let _ = c.spawn()?;
-    }
-
-    #[cfg(not(unix))]
-    {
-        let script =
-            format!("timeout /T {secs} /NOBREAK >NUL & taskkill /PID {pid} /T /F >NUL 2>&1");
-        let mut c = std::process::Command::new("cmd");
-        c.args(["/C", &script])
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        let _ = c.spawn()?;
-    }
-
-    Ok(())
-}
-
-fn terminate_process_by_pid(pid: u32) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(unix)]
-    {
-        let status = std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .status()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("failed to terminate pid {pid}").into())
+        match event {
+            DevEvent::ExitWithMessage(msg) => {
+                assert_eq!(msg, "stopped by another client");
+            }
+            other => panic!("unexpected event: {:?}", other),
         }
     }
 
-    #[cfg(not(unix))]
-    {
-        let status = std::process::Command::new("taskkill")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .status()?;
-        if status.success() {
-            Ok(())
-        } else {
-            Err(format!("failed to terminate pid {pid}").into())
+    #[tokio::test]
+    async fn event_subscription_sends_exit_when_channel_closes() {
+        // Simulates the dev-server disconnecting: the subscription channel
+        // closes, and the task should send ExitWithMessage as a fallback.
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+        let (stop_tx, _stop_rx) = watch::channel(false);
+
+        // Simulate event subscription task behavior when subscription drops.
+        let event_tx_clone = event_tx.clone();
+        let stop_tx_clone = stop_tx.clone();
+        tokio::spawn(async move {
+            // Simulate: no "stopped" event received, subscription just closes.
+            let got_stop = false;
+
+            let _ = stop_tx_clone.send(true);
+            let msg = if got_stop {
+                "stopped by another client".to_string()
+            } else {
+                "disconnected from dev server".to_string()
+            };
+            let _ = event_tx_clone.send(DevEvent::ExitWithMessage(msg)).await;
+        });
+
+        let event = timeout(Duration::from_millis(200), event_rx.recv())
+            .await
+            .expect("should not time out")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::ExitWithMessage(msg) => {
+                assert_eq!(msg, "disconnected from dev server");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn event_subscription_sends_exit_on_stopped_status() {
+        // Simulates receiving AppStatusChanged { status: "stopped" } from
+        // the dev-server — the task should send ExitWithMessage.
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+        let (stop_tx, _stop_rx) = watch::channel(false);
+
+        let event_tx_clone = event_tx.clone();
+        let stop_tx_clone = stop_tx.clone();
+        let app_name_sub = "my-app".to_string();
+
+        // Simulate the event subscription task receiving a "stopped" event.
+        tokio::spawn(async move {
+            let mut got_stop = false;
+
+            // Simulate receiving an AppStatusChanged event.
+            let events = vec![crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                project_dir: "/proj".to_string(),
+                app_name: "my-app".to_string(),
+                status: "stopped".to_string(),
+            }];
+
+            for ev in events {
+                if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                    ref app_name,
+                    ref status,
+                    ..
+                } = ev
+                {
+                    if app_name == &app_name_sub && status == "stopped" {
+                        got_stop = true;
+                        break;
+                    }
+                }
+            }
+
+            let _ = stop_tx_clone.send(true);
+            let msg = if got_stop {
+                "stopped by another client".to_string()
+            } else {
+                "disconnected from dev server".to_string()
+            };
+            let _ = event_tx_clone.send(DevEvent::ExitWithMessage(msg)).await;
+        });
+
+        let event = timeout(Duration::from_millis(200), event_rx.recv())
+            .await
+            .expect("should not time out")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::ExitWithMessage(msg) => {
+                assert_eq!(msg, "stopped by another client");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn event_subscription_ignores_non_matching_app_name() {
+        // ExitWithMessage should NOT be sent for a different app name.
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+        let (stop_tx, _stop_rx) = watch::channel(false);
+
+        let event_tx_clone = event_tx.clone();
+        let stop_tx_clone = stop_tx.clone();
+        let app_name_sub = "my-app".to_string();
+
+        tokio::spawn(async move {
+            let mut got_stop = false;
+
+            let events = vec![crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                project_dir: "/proj".to_string(),
+                app_name: "other-app".to_string(), // Different app
+                status: "stopped".to_string(),
+            }];
+
+            for ev in events {
+                if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                    ref app_name,
+                    ref status,
+                    ..
+                } = ev
+                {
+                    if app_name == &app_name_sub && status == "stopped" {
+                        got_stop = true;
+                        break;
+                    }
+                }
+            }
+
+            // No matching event — falls through as disconnected.
+            let _ = stop_tx_clone.send(true);
+            let msg = if got_stop {
+                "stopped by another client".to_string()
+            } else {
+                "disconnected from dev server".to_string()
+            };
+            let _ = event_tx_clone.send(DevEvent::ExitWithMessage(msg)).await;
+        });
+
+        let event = timeout(Duration::from_millis(200), event_rx.recv())
+            .await
+            .expect("should not time out")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::ExitWithMessage(msg) => {
+                // Should NOT be "stopped by another client" since app name didn't match.
+                assert_eq!(msg, "disconnected from dev server");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn event_subscription_ignores_idle_status() {
+        // "idle" status should not trigger exit — only "stopped".
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+        let (stop_tx, _stop_rx) = watch::channel(false);
+
+        let event_tx_clone = event_tx.clone();
+        let stop_tx_clone = stop_tx.clone();
+        let app_name_sub = "my-app".to_string();
+
+        tokio::spawn(async move {
+            let mut got_stop = false;
+
+            let events = vec![crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                project_dir: "/proj".to_string(),
+                app_name: "my-app".to_string(),
+                status: "idle".to_string(), // Not "stopped"
+            }];
+
+            for ev in events {
+                if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                    ref app_name,
+                    ref status,
+                    ..
+                } = ev
+                {
+                    if app_name == &app_name_sub && status == "stopped" {
+                        got_stop = true;
+                        break;
+                    }
+                }
+            }
+
+            let _ = stop_tx_clone.send(true);
+            let msg = if got_stop {
+                "stopped by another client".to_string()
+            } else {
+                "disconnected from dev server".to_string()
+            };
+            let _ = event_tx_clone.send(DevEvent::ExitWithMessage(msg)).await;
+        });
+
+        let event = timeout(Duration::from_millis(200), event_rx.recv())
+            .await
+            .expect("should not time out")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::ExitWithMessage(msg) => {
+                // "idle" is not "stopped", so should be treated as disconnect.
+                assert_eq!(msg, "disconnected from dev server");
+            }
+            other => panic!("unexpected event: {:?}", other),
         }
     }
 }
@@ -4691,7 +3921,7 @@ async fn spawn_app_process(
     }
     c.current_dir(project_dir)
         .env("PORT", port.to_string())
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::inherit())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
@@ -4710,6 +3940,7 @@ async fn spawn_app_process(
         let scope = scope.clone();
         tokio::spawn(async move { read_child_lines(stderr, tx, scope, LogLevel::Warn).await });
     }
+
     Ok(child)
 }
 
@@ -4826,4 +4057,6 @@ pub enum DevEvent {
     AppError(String),
     LogsCleared,
     LogsReady,
+    /// Another client stopped the app — exit cleanly.
+    ExitWithMessage(String),
 }

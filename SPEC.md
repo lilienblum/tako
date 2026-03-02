@@ -32,7 +32,7 @@ App names must be URL-friendly (DNS hostname compatible):
 - **Must start with:** lowercase letter
 - **Examples:** `my-app`, `api-server`, `web-frontend`
 
-This ensures names work in DNS (`{app-name}.tako.local` by default), URLs, and environment variables.
+This ensures names work in DNS (`{app-name}.tako` by default), URLs, and environment variables.
 `name` is optional in `tako.toml`. If omitted, Tako resolves app name from the project directory name.
 Using top-level `name` is recommended for stability: it must be unique per server. Renaming it later creates a new app identity/path; delete the old deployment manually.
 
@@ -364,7 +364,7 @@ CLI upgrade strategy:
 - `--stable`: forces stable channel and persists it as default
 - Without channel flags, `tako upgrade` uses persisted `upgrade_channel` from global config (default: `stable`)
 
-### tako dev [--tui|--no-tui] [DIR]
+### tako dev [DIR]
 
 Start (or attach to) a local development session for the current app, backed by a persistent dev daemon.
 
@@ -377,22 +377,20 @@ Start (or attach to) a local development session for the current app, backed by 
   - If daemon startup fails, `tako dev` reports the last lines from `{TAKO_HOME}/dev-server.log`.
   - `tako dev` waits up to ~15 seconds for the daemon socket after spawn before reporting startup failure.
   - The daemon performs an upfront bind-availability check for its HTTPS listen address and exits immediately with an explicit error when that address is unavailable.
-- `tako dev` registers a **lease** with the daemon (TTL + heartbeat).
-- The app starts immediately when `tako dev` starts (1 local instance) and is stopped after 30 minutes of no requests.
-  - After an idle stop, the next request starts the app again.
+- `tako dev` **registers** the app with the daemon (project directory is the unique key, state is persisted in SQLite at `{TAKO_HOME}/dev-server.db`).
+- App statuses: `running` (actively serving), `idle` (process stopped, routes retained for wake-on-request), `stopped` (unregistered, routes removed).
+- The app starts immediately when `tako dev` starts (1 local instance) and transitions to idle after 10 minutes of no attached CLI clients.
+  - After an idle transition, the next HTTP request triggers wake-on-request: the daemon spawns the app process and routes the request once the app is healthy.
   - Idle shutdown is suppressed while there are in-flight requests.
-  - When the owning session exits normally while the app is running (for example, terminal disconnect or `Ctrl+c`), Tako keeps the app process and routes alive for a disconnect grace period, then stops that process and removes the lease/routes.
-    - Release builds use a 10-minute grace period.
-    - Debug builds use a 10-second grace period for faster local iteration.
-  - If the app is already stopped (idle) when the owning session exits, Tako removes the lease/routes immediately.
-  - `tako dev` uses a per-project lock file under `{TAKO_HOME}/dev/locks/` to keep a single owning session per app/directory.
-  - Running `tako dev` again from the same directory attaches as an additional client instead of starting a second local app process.
+  - When `Ctrl+c` is pressed, Tako unregisters the app (sets status to stopped, removes routes, kills the process).
+  - Pressing `b` (background) hands the running process off to the daemon and exits the CLI. The daemon monitors the process and keeps routes active.
+  - Running `tako dev` again from the same directory attaches to the existing session if the app is running or idle.
   - Dev logs are written to a shared per-app/per-project stream at `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl`.
   - Each persisted log record stores a single `timestamp` token (`hh:mm:ss`) instead of split hour/minute/second fields.
   - When a new owning session starts, Tako truncates that shared stream before writing fresh logs for the new session.
   - Attached clients replay the existing file contents, then follow new lines from the same stream.
   - App lifecycle state (`starting`, `running`, `stopped`, app PID, and startup errors) is persisted to the same shared stream, so attached sessions reconstruct the same status/CPU/RAM view as the owning session.
-- The daemon supports **multiple concurrent apps** and maintains hostname-based routing for `*.tako.local`.
+- The daemon supports **multiple concurrent apps** and maintains hostname-based routing for `*.tako`.
 - Utility flags:
   - `tako doctor`: print a diagnostic report and exit.
     - Reports dev daemon listen info, local 80/443 forwarding status, and local DNS status.
@@ -401,40 +399,19 @@ Start (or attach to) a local development session for the current app, backed by 
       - pf redirect rule for `{loopback-address}:80 -> 127.0.0.1:<http-redirect-port>`
       - TCP reachability on `{loopback-address}:443` and `{loopback-address}:80`
     - If the local dev daemon is not running (missing/stale socket), doctor reports `status: not running` with a hint to start `tako dev`, and exits successfully.
-- The TUI dashboard is enabled by default when running in an interactive terminal.
-  - Use `--no-tui` to disable it.
-  - Default color theme uses Tako's brand palette (primary `#E88783`, secondary `#9BC4B6`), with slate-muted adapter text and compact `CPU`/`RAM`/`Sessions` labels.
-  - Log levels are fixed to `DEBUG`, `INFO`, `WARN`, `ERROR`, and `FATAL`; only the level token is colorized in the logs panel using pastel colors (electric blue, green, yellow, red, and purple respectively).
-  - The timestamp token (`hh:mm:ss`) is rendered in the muted text color.
-  - The top header is split into two separate panels: a flexible left panel (app + status, adapter, URLs) and a compact fixed right panel for `CPU`/`RAM` plus control-client count.
-    - `CPU` is shown as a percentage value.
-    - `RAM` is shown in `MB` below 1 GB, and in `GB` with one decimal at or above 1 GB (for example, `1.2 GB`).
-    - `Sessions` shows the number of currently connected dev control clients (for example, owning/attached `tako dev` sessions), not browser/app request clients.
-    - Metric values in the right panel are right-aligned for easier scanning.
-  - The top-left panel uses two columns: a compact 3-row solid block-glyph `TAKO` logo on the left and three info lines on the right: app name with lowercase status value (no `Status` caption), adapter as muted `{adapter} application`, and primary public URL.
-    - On narrow terminals, Tako hides the logo so the info column can use the full left-panel width (prioritizing URL readability).
-  - The logs panel has a simple top-left `Logs` caption row.
-  - While the logs panel is empty during initial log replay, it shows a `Loading logs...` spinner line directly below the caption row. After replay completes and no lines are available yet, the line changes to `Waiting for logs...`; either hint disappears once logs are rendered.
-  - Quitting the TUI uses the same disconnect grace as non-TUI exit: if the app is running, Tako keeps app/routes alive for the build-profile grace period before final cleanup (10 minutes in release, 10 seconds in debug).
-  - The header panels show a single primary public URL (e.g. `https://my-app.tako.local`) and the local app URL (e.g. `http://localhost:12345`) without a trailing slash.
-    - If multiple public routes exist, the primary URL is shown with a muted `(and N more)` suffix.
-    - The primary URL prefers `{app}.tako.local` when present; otherwise it uses the first configured URL.
-    - Public URLs are rendered with the secondary accent color.
-  - Clicking the displayed primary public URL in the TUI copies it to the clipboard and shows feedback in the footer.
-  - Keyboard shortcuts:
-    - `q` quit
-    - `Enter` copy only the focused log message text (without timestamp/level/scope) and show `message copied`
-    - `Ctrl+c` quits the TUI session on all platforms
-    - `r` restart (only when the app currently has a running instance)
-    - `t` terminate (press once to arm confirmation, then press `t` or `y` within 3 seconds to confirm; `n`/`Esc` cancels)
-      - Confirmation stops the owning `tako dev` session immediately, without disconnect grace.
-    - `e` or `End` jump to the latest log line and re-enable follow-end mode
-    - `c` clear logs across all attached sessions for the same app/project
-    - If the app has 0 instances (not started or idle), pressing `r` is a no-op and the TUI shows an info message.
+- When running in an interactive terminal, `tako dev` prints a branded header (logo + version + app info) once at startup, then streams logs and status updates directly to stdout.
+  - Native terminal features (scrollback, search, copy/paste, clickable links) are preserved — no alternate screen is used.
+  - Log levels are `DEBUG`, `INFO`, `WARN`, `ERROR`, and `FATAL`; the level token is colorized using pastel colors (electric blue, green, yellow, red, and purple respectively).
+  - The timestamp token (`hh:mm:ss`) is rendered in a muted color.
   - Log lines are prefixed as `hh:mm:ss LEVEL [scope] message`.
     - Common scopes: `tako` (local dev daemon) and `app` (the app process).
     - For app-process output, Tako infers the level from leading tokens like `DEBUG`, `INFO`, `WARN`/`WARNING`, `ERROR`, and `FATAL` (including bracketed forms such as `[DEBUG]`), and maps `TRACE` to `DEBUG`.
-    - Consecutive duplicate log records (same level/scope/message) are collapsed into one full line plus a muted follow-up line such as `also N more times`.
+  - App lifecycle state changes (starting, stopped, errors) are printed inline as `── {status} ──` lines in the log stream.
+  - Keyboard shortcuts (interactive terminal only):
+    - `r` restart the app process
+    - `b` background the app (hand off to daemon, CLI exits)
+    - `Ctrl+c` stop the app and quit
+  - When stdout is not a terminal (piped or redirected), `tako dev` falls back to plain `println`-style output with no color or raw mode.
   - `tako dev` always watches `tako.toml` and:
   - restarts the app when effective dev environment variables change
   - updates dev routing when `[envs.development].route(s)` changes
@@ -443,21 +420,21 @@ Start (or attach to) a local development session for the current app, backed by 
 - `tako dev` ensures daemon TLS files exist at `{TAKO_HOME}/certs/fullchain.pem` and `{TAKO_HOME}/certs/privkey.pem` before spawning the daemon.
   - The daemon reuses existing TLS files when present.
 - `tako dev` listens on `127.0.0.1:47831` in HTTPS mode.
-- By default, Tako registers `https://{app}.tako.local:47831/` on non-macOS and `https://{app}.tako.local/` on macOS.
-  - On macOS, Tako configures split DNS for `tako.local` by writing `/etc/resolver/tako.local` (one-time sudo), pointing to a local DNS listener on `127.0.0.1:53535`.
-  - The dev daemon answers `A` queries for active `*.tako.local` hosts.
+- By default, Tako registers `https://{app}.tako:47831/` on non-macOS and `https://{app}.tako/` on macOS.
+  - On macOS, Tako configures split DNS for `tako` by writing `/etc/resolver/tako` (one-time sudo), pointing to a local DNS listener on `127.0.0.1:53535`.
+  - The dev daemon answers `A` queries for active `*.tako` hosts.
     - On macOS, it maps to a dedicated loopback address (`127.77.0.1`) used by pf forwarding.
     - On non-macOS, it maps to `127.0.0.1`.
   - On macOS, `tako dev` automatically tries to enable scoped local forwarding when missing (one-time sudo prompt):
     - `127.77.0.1:443 -> 127.0.0.1:47831`
     - `127.77.0.1:80 -> 127.0.0.1:47830` (HTTP redirect to HTTPS)
   - If forwarding later appears inactive, `tako dev` explains why it is re-requesting sudo before repair (missing pf rules, runtime forwarding reset after reboot/pf reset, or conflicting local listeners on `127.0.0.1:80/443`).
-  - On macOS, Tako always requires this forwarding and always advertises `https://{app}.tako.local/` (no explicit port).
+  - On macOS, Tako always requires this forwarding and always advertises `https://{app}.tako/` (no explicit port).
   - After applying or repairing local forwarding, Tako retries loopback 80/443 reachability and fails startup if those endpoints remain unreachable.
   - On macOS, Tako probes HTTPS for the app host via loopback and fails startup if that probe does not succeed.
-  - If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.tako.local/` still fails, Tako reports a targeted hint that local `:443` traffic is being intercepted/bypassed before reaching Tako.
-  - `tako dev` uses routes from `[envs.development]` when configured; otherwise it defaults to `{app}.tako.local`.
-    - Dev routes must be `{app}.tako.local` or a subdomain of it.
+  - If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.tako/` still fails, Tako reports a targeted hint that local `:443` traffic is being intercepted/bypassed before reaching Tako.
+  - `tako dev` uses routes from `[envs.development]` when configured; otherwise it defaults to `{app}.tako`.
+    - Dev routes must be `{app}.tako` or a subdomain of it.
     - Dev routing matches exact hostnames only; wildcard host entries are ignored.
     - If configured dev routes contain no exact hostnames, `tako dev` fails with an invalid route error.
   - The HTTPS daemon listen port for `tako dev` is fixed at `47831`.
@@ -902,7 +879,7 @@ Apps specify routes at environment level (not per-server). Routes support:
 - `[envs.{env}]` accepts only route keys (`route`/`routes`); env vars belong in `[vars]` / `[vars.{env}]`
 - Each non-development environment must define `route` or `routes`
 - Empty route lists are invalid for non-development environments
-- Development routes must be `{app-name}.tako.local` or a subdomain of it
+- Development routes must be `{app-name}.tako` or a subdomain of it
 
 ### Multi-App Scenarios
 
@@ -1286,7 +1263,7 @@ import { tako } from "tako.sh/vite";
 
 - `tako.sh/vite` provides a plugin that prepares a deploy entry wrapper in Vite output.
 - It emits `<outDir>/tako-entry.mjs`, which normalizes the compiled server module to a default-exported fetch handler.
-- During `vite dev`, it adds `.tako.local` to `server.allowedHosts`.
+- During `vite dev`, it adds `.tako` to `server.allowedHosts`.
 - During `vite dev`, when `PORT` is set, it binds Vite to `127.0.0.1:$PORT` with `strictPort: true`.
 - Deploy does not read Vite metadata files.
 - To use the generated wrapper as deploy entry, set `main` in `tako.toml` to the generated file (for example `dist/server/tako-entry.mjs`) or define preset top-level `main`.

@@ -6,10 +6,10 @@
 //! - Optional path suffix allowed: `api.example.com/admin/*`
 //!
 //! Development-Specific Rules (`[envs.development]`):
-//! - Routes are optional in config; if omitted, `tako dev` defaults to `{app-name}.tako.local`
-//! - Routes must be `{app-name}.tako.local` or a subdomain of it
-//! - Examples valid: `"my-app.tako.local"`, `"*.my-app.tako.local"`, `"api.my-app.tako.local"`
-//! - Examples invalid: `"other.tako.local"` (wrong app domain), `"/api/*"` (path-only)
+//! - Routes are optional in config; if omitted, `tako dev` defaults to `{app-name}.tako`
+//! - Routes must be `{app-name}.tako` or a subdomain of it
+//! - Examples valid: `"my-app.tako"`, `"*.my-app.tako"`, `"api.my-app.tako"`
+//! - Examples invalid: `"other.tako"` (wrong app domain), `"/api/*"` (path-only)
 
 use thiserror::Error;
 
@@ -24,9 +24,7 @@ pub enum RouteValidationError {
     #[error("Invalid route pattern: '{0}'. {1}")]
     InvalidPattern(String, String),
 
-    #[error(
-        "Development route must use .tako.local domain: '{0}'. Use '{1}.tako.local' or a subdomain of it"
-    )]
+    #[error("Development route must use .tako domain: '{0}'. Use '{1}.tako' or a subdomain of it")]
     InvalidDevDomain(String, String),
 
     #[error("Empty route is not allowed")]
@@ -67,7 +65,7 @@ pub fn validate_route(route: &str) -> RouteResult<()> {
 /// Validates a route pattern for development environment
 ///
 /// Additional rules for development:
-/// - Must be exactly `{app-name}.tako.local`, or a subdomain of it
+/// - Must be exactly `{app-name}.tako`, or a subdomain of it
 pub fn validate_dev_route(route: &str, app_name: &str) -> RouteResult<()> {
     // First, apply general validation
     validate_route(route)?;
@@ -90,7 +88,7 @@ pub fn validate_dev_route(route: &str, app_name: &str) -> RouteResult<()> {
 
 /// Generates the default development route for an app
 pub fn default_dev_route(app_name: &str) -> String {
-    format!("{}.tako.local", app_name)
+    format!("{}.{}", app_name, crate::dev::TAKO_DEV_DOMAIN)
 }
 
 /// Splits a route into hostname and optional path components
@@ -359,27 +357,27 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_dev_route_requires_tako_local_domain() {
+    fn test_validate_dev_route_requires_tako_domain() {
         let err = validate_dev_route("api.example.com", "my-app").unwrap_err();
         assert!(matches!(err, RouteValidationError::InvalidDevDomain(_, _)));
     }
 
     #[test]
     fn test_validate_dev_route_rejects_other_app_domain() {
-        let err = validate_dev_route("other.tako.local", "my-app").unwrap_err();
+        let err = validate_dev_route("other.tako", "my-app").unwrap_err();
         assert!(matches!(err, RouteValidationError::InvalidDevDomain(_, _)));
     }
 
     #[test]
-    fn test_validate_dev_route_accepts_tako_local_domain_and_wildcard() {
-        validate_dev_route("my-app.tako.local", "my-app").unwrap();
-        validate_dev_route("*.my-app.tako.local", "my-app").unwrap();
-        validate_dev_route("api.my-app.tako.local", "my-app").unwrap();
+    fn test_validate_dev_route_accepts_tako_domain_and_wildcard() {
+        validate_dev_route("my-app.tako", "my-app").unwrap();
+        validate_dev_route("*.my-app.tako", "my-app").unwrap();
+        validate_dev_route("api.my-app.tako", "my-app").unwrap();
     }
 
     #[test]
     fn test_default_dev_route_uses_app_name() {
-        assert_eq!(default_dev_route("dashboard"), "dashboard.tako.local");
+        assert_eq!(default_dev_route("dashboard"), "dashboard.tako");
     }
 
     #[test]

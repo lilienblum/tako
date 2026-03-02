@@ -474,6 +474,90 @@ mod tests {
     }
 
     #[test]
+    fn dev_default_parses_without_subcommand() {
+        let cli = Cli::try_parse_from(["tako", "dev"]).unwrap();
+        let Commands::Dev { command, args } = cli.command.expect("command") else {
+            panic!("expected Dev");
+        };
+        assert!(command.is_none());
+        assert!(args.dir.is_none());
+        assert!(args.name.is_none());
+    }
+
+    #[test]
+    fn dev_parses_name_flag() {
+        let cli = Cli::try_parse_from(["tako", "dev", "--name", "my-app"]).unwrap();
+        let Commands::Dev { command, args } = cli.command.expect("command") else {
+            panic!("expected Dev");
+        };
+        assert!(command.is_none());
+        assert_eq!(args.name.as_deref(), Some("my-app"));
+    }
+
+    #[test]
+    fn dev_stop_parses() {
+        let cli = Cli::try_parse_from(["tako", "dev", "stop"]).unwrap();
+        let Commands::Dev { command, .. } = cli.command.expect("command") else {
+            panic!("expected Dev");
+        };
+        match command {
+            Some(DevSubcommands::Stop { name, all }) => {
+                assert!(name.is_none());
+                assert!(!all);
+            }
+            other => panic!("expected Stop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dev_stop_with_name_parses() {
+        let cli = Cli::try_parse_from(["tako", "dev", "stop", "my-app"]).unwrap();
+        let Commands::Dev { command, .. } = cli.command.expect("command") else {
+            panic!("expected Dev");
+        };
+        match command {
+            Some(DevSubcommands::Stop { name, all }) => {
+                assert_eq!(name.as_deref(), Some("my-app"));
+                assert!(!all);
+            }
+            other => panic!("expected Stop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dev_stop_all_parses() {
+        let cli = Cli::try_parse_from(["tako", "dev", "stop", "--all"]).unwrap();
+        let Commands::Dev { command, .. } = cli.command.expect("command") else {
+            panic!("expected Dev");
+        };
+        match command {
+            Some(DevSubcommands::Stop { name, all }) => {
+                assert!(name.is_none());
+                assert!(all);
+            }
+            other => panic!("expected Stop, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dev_ls_parses() {
+        let cli = Cli::try_parse_from(["tako", "dev", "ls"]).unwrap();
+        let Commands::Dev { command, .. } = cli.command.expect("command") else {
+            panic!("expected Dev");
+        };
+        assert!(matches!(command, Some(DevSubcommands::Ls)));
+    }
+
+    #[test]
+    fn dev_list_alias_parses() {
+        let cli = Cli::try_parse_from(["tako", "dev", "list"]).unwrap();
+        let Commands::Dev { command, .. } = cli.command.expect("command") else {
+            panic!("expected Dev");
+        };
+        assert!(matches!(command, Some(DevSubcommands::Ls)));
+    }
+
+    #[test]
     fn init_parses_runtime_flag() {
         let cli = Cli::try_parse_from(["tako", "init", "--runtime", "deno"]).unwrap();
         let Commands::Init { runtime, .. } = cli.command.expect("command") else {
@@ -519,6 +603,32 @@ mod tests {
     }
 }
 
+#[derive(clap::Args, Debug)]
+pub struct DevArgs {
+    /// Run as if invoked from this directory
+    #[arg(value_name = "DIR")]
+    pub dir: Option<std::path::PathBuf>,
+
+    /// Override app name (used for domain and display)
+    #[arg(long)]
+    pub name: Option<String>,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum DevSubcommands {
+    /// Stop a running dev app
+    Stop {
+        /// App name (defaults to current directory's app)
+        name: Option<String>,
+        /// Stop all registered apps
+        #[arg(long)]
+        all: bool,
+    },
+    /// List registered dev apps
+    #[command(visible_alias = "list")]
+    Ls,
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Initialize a new tako project
@@ -544,21 +654,16 @@ pub enum Commands {
     },
 
     /// Start development server with hot reloading
+    #[command(args_conflicts_with_subcommands = true)]
     Dev {
-        /// Force-enable the interactive TUI dashboard (Ratatui)
-        #[arg(long, conflicts_with = "no_tui")]
-        tui: bool,
+        #[command(subcommand)]
+        command: Option<DevSubcommands>,
 
-        /// Disable the interactive TUI dashboard
-        #[arg(long, conflicts_with = "tui")]
-        no_tui: bool,
-
-        /// Run as if invoked from this directory (alternative to global `--dir`)
-        #[arg(value_name = "DIR")]
-        dir: Option<std::path::PathBuf>,
+        #[command(flatten)]
+        args: DevArgs,
     },
 
-    /// Print a diagnostic report about the local dev server (socket, listener, leases)
+    /// Print a diagnostic report about the local dev server (socket, listener, apps)
     Doctor,
 
     /// Server management commands
@@ -641,15 +746,20 @@ impl Cli {
                 commands::init::run(force, runtime.as_deref())
             }
             Commands::Logs { env } => commands::logs::run(&env),
-            Commands::Dev { tui, no_tui, dir } => {
-                // Dev command needs async runtime
+            Commands::Dev { command, args } => {
                 let rt = tokio::runtime::Runtime::new()?;
 
-                if let Some(dir) = dir {
+                if let Some(dir) = args.dir {
                     std::env::set_current_dir(dir)?;
                 }
 
-                rt.block_on(commands::dev::run(DEV_PUBLIC_PORT, tui, no_tui))
+                match command {
+                    None => rt.block_on(commands::dev::run(DEV_PUBLIC_PORT, args.name)),
+                    Some(DevSubcommands::Stop { name, all }) => {
+                        rt.block_on(commands::dev::stop(name, all))
+                    }
+                    Some(DevSubcommands::Ls) => rt.block_on(commands::dev::ls()),
+                }
             }
             Commands::Doctor => {
                 let rt = tokio::runtime::Runtime::new()?;

@@ -1,7 +1,7 @@
 //! Local Certificate Authority for Development
 //!
 //! Generates and manages a local CA for trusted HTTPS in development.
-//! Apps are accessible at `https://{app-name}.tako.local` with certificates
+//! Apps are accessible at `https://{app-name}.tako` with certificates
 //! signed by the local CA.
 //!
 //! Security model:
@@ -22,7 +22,7 @@ use std::process::Command;
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
 
-use super::domain::TAKO_LOCAL_DOMAIN;
+use super::domain::TAKO_DEV_DOMAIN;
 
 /// Root CA certificate validity period (10 years)
 const CA_VALIDITY_DAYS: i64 = 3650;
@@ -147,7 +147,7 @@ impl LocalCA {
 
     /// Generate a leaf certificate for a domain
     ///
-    /// The domain should be in the format `{app-name}.tako.local`
+    /// The domain should be in the format `{app-name}.tako`
     pub fn generate_leaf_cert(&self, domain: &str) -> Result<Certificate> {
         // Parse the CA key
         let ca_key = KeyPair::from_pem(&self.ca_key_pem)
@@ -218,7 +218,7 @@ impl LocalCA {
 
     /// Get the domain for an app name
     pub fn app_domain(app_name: &str) -> String {
-        format!("{}.{}", app_name, TAKO_LOCAL_DOMAIN)
+        format!("{}.{}", app_name, TAKO_DEV_DOMAIN)
     }
 
     /// Generate a leaf certificate with multiple SANs (DNS names and/or IPs).
@@ -699,7 +699,7 @@ mod tests {
     #[test]
     fn test_generate_leaf_cert() {
         let ca = LocalCA::generate().unwrap();
-        let domain = "my-app.tako.local";
+        let domain = "my-app.tako";
 
         let leaf = ca.generate_leaf_cert(domain).unwrap();
 
@@ -711,8 +711,8 @@ mod tests {
     fn test_generate_multiple_leaf_certs() {
         let ca = LocalCA::generate().unwrap();
 
-        let leaf1 = ca.generate_leaf_cert("app1.tako.local").unwrap();
-        let leaf2 = ca.generate_leaf_cert("app2.tako.local").unwrap();
+        let leaf1 = ca.generate_leaf_cert("app1.tako").unwrap();
+        let leaf2 = ca.generate_leaf_cert("app2.tako").unwrap();
 
         // Each leaf cert should be unique
         assert_ne!(leaf1.cert_pem, leaf2.cert_pem);
@@ -721,8 +721,8 @@ mod tests {
 
     #[test]
     fn test_app_domain() {
-        assert_eq!(LocalCA::app_domain("my-app"), "my-app.tako.local");
-        assert_eq!(LocalCA::app_domain("dashboard"), "dashboard.tako.local");
+        assert_eq!(LocalCA::app_domain("my-app"), "my-app.tako");
+        assert_eq!(LocalCA::app_domain("dashboard"), "dashboard.tako");
     }
 
     #[test]
@@ -795,7 +795,7 @@ mod tests {
     #[test]
     fn test_leaf_cert_has_correct_san() {
         let ca = LocalCA::generate().unwrap();
-        let domain = "test-app.tako.local";
+        let domain = "test-app.tako";
         let leaf = ca.generate_leaf_cert(domain).unwrap();
 
         // Parse the certificate to verify SAN

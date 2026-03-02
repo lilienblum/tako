@@ -39,8 +39,10 @@ Directory selection is command-scoped:
 - `tako help`: show all commands with brief descriptions.
 - `tako upgrade [--canary|--stable]`: upgrade local CLI installation.
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
-- `tako dev [--tui | --no-tui] [DIR]`: run local development mode.
-- `tako doctor`: print local dev diagnostics (DNS, socket, listener, leases, and local forwarding preflight checks).
+- `tako dev [DIR]`: run local development mode.
+- `tako dev stop [NAME] [--all]`: stop a running/idle dev app (defaults to current directory's app).
+- `tako dev ls`: list all registered dev apps with status.
+- `tako doctor`: print local dev diagnostics (DNS, socket, listener, apps, and local forwarding preflight checks).
 - `tako deploy [--env <ENV>] [-y|--yes] [DIR]`: build and deploy app.
 - `tako releases <subcommand>`: list release history and roll back to a previous release.
 - `tako delete [--env <ENV>] [-y|--yes] [DIR]`: delete deployed app (single-server interactive deletes show spinner progress; multi-server deletes use line-based status).
@@ -226,10 +228,10 @@ tako init
 
 `tako init` prompts for app name and production route, prompts for runtime (top-level `runtime`), fetches family presets (`Fetching presets...`) and offers base runtime preset + fetched family presets + a custom option; when no family presets are available it skips preset selection and uses the runtime base preset. It only prompts for `main` when neither adapter inference nor preset default provides it. The detailed "Detected" block is shown with `--verbose`.
 
-Run local app with non-interactive output:
+Run local app (streams logs directly to stdout in interactive terminals):
 
 ```bash
-tako dev --no-tui
+tako dev
 ```
 
 Deploy staging and skip confirmation:

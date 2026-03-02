@@ -17,7 +17,7 @@ impl PresetFamily {
 }
 
 const BUILTIN_BUN_PRESET_CONTENT: &str = r#"main = "src/index.ts"
-dev = ["bun", "run", "dev"]
+dev = ["bun", "--hot", "{main}"]
 install = '''
 if command -v mise >/dev/null 2>&1; then
   mise install >/dev/null 2>&1 || true

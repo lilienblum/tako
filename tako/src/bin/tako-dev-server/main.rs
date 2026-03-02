@@ -3,14 +3,13 @@ mod local_dns;
 mod paths;
 mod protocol;
 mod proxy;
+mod state;
 
-use std::collections::HashMap;
 use std::net::Ipv4Addr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use base64::Engine;
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::prelude::Server;
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
@@ -25,7 +24,7 @@ use protocol::{AppInfo, Request, Response};
 use tracing_subscriber::EnvFilter;
 
 const IDLE_EXIT_DELAY: Duration = Duration::from_secs(2);
-const TAKO_LOCAL_DOMAIN: &str = "tako.local";
+const TAKO_DEV_DOMAIN: &str = "tako";
 const LOCAL_DNS_LISTEN_ADDR: &str = "127.0.0.1:53535";
 const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
 const HTTP_REDIRECT_LISTEN_ADDR: &str = "127.0.0.1:47830";
@@ -70,7 +69,7 @@ fn parse_args() -> Args {
 }
 
 fn app_host(app_name: &str) -> String {
-    format!("{}.{}", app_name, TAKO_LOCAL_DOMAIN)
+    format!("{}.{}", app_name, TAKO_DEV_DOMAIN)
 }
 
 fn default_hosts(app_name: &str) -> Vec<String> {
@@ -78,7 +77,11 @@ fn default_hosts(app_name: &str) -> Vec<String> {
 }
 
 fn advertised_https_port(s: &State) -> u16 {
-    s.listen_port
+    if s.advertised_ip == DEV_LOOPBACK_ADDR {
+        443
+    } else {
+        s.listen_port
+    }
 }
 
 fn default_socket_path() -> PathBuf {
@@ -138,7 +141,8 @@ fn ensure_dev_tls_files() -> Result<(PathBuf, PathBuf), Box<dyn std::error::Erro
     let store = local_ca::LocalCAStore::new()?;
     let ca = store.get_or_create_ca()?;
 
-    let cert = ca.generate_leaf_cert_for_names(&["*.tako.local", "tako.local"])?;
+    let wildcard = format!("*.{TAKO_DEV_DOMAIN}");
+    let cert = ca.generate_leaf_cert_for_names(&[&wildcard, TAKO_DEV_DOMAIN])?;
 
     std::fs::create_dir_all(&dir)?;
     let (cert_path, key_path) = dev_tls_paths_for_dir(&dir);
@@ -169,15 +173,6 @@ fn sanitize_app_name(name: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone)]
-struct Lease {
-    app_name: String,
-    hosts: Vec<String>,
-    upstream_port: u16,
-    active: bool,
-    expires_at: std::time::Instant,
-}
-
 #[derive(Clone, Default)]
 struct EventsHub {
     subs: Arc<Mutex<Vec<mpsc::UnboundedSender<Response>>>>,
@@ -197,10 +192,6 @@ impl EventsHub {
 }
 
 struct State {
-    leases: HashMap<String, Lease>,
-    lease_by_app: HashMap<String, String>,
-    server_token: String,
-
     events: EventsHub,
 
     shutdown_tx: watch::Sender<bool>,
@@ -214,6 +205,8 @@ struct State {
     listen_addr: String,
     advertised_ip: String,
     control_clients: u32,
+
+    db: Option<state::DevStateStore>,
 }
 
 impl State {
@@ -228,15 +221,7 @@ impl State {
         listen_addr: String,
         advertised_ip: String,
     ) -> Self {
-        let mut tok_bytes = [0u8; 32];
-        getrandom::fill(&mut tok_bytes).expect("operating system RNG unavailable");
-        let server_token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(tok_bytes);
-
         Self {
-            leases: HashMap::new(),
-            lease_by_app: HashMap::new(),
-            server_token,
-
             events,
 
             shutdown_tx,
@@ -250,6 +235,8 @@ impl State {
             listen_addr,
             advertised_ip,
             control_clients: 0,
+
+            db: None,
         }
     }
 
@@ -298,72 +285,6 @@ impl Drop for ControlClientSubscription {
     }
 }
 
-fn set_routes_for_hosts(
-    s: &mut State,
-    hosts: &[String],
-    lease_id: &str,
-    upstream_port: u16,
-    active: bool,
-) {
-    for host in hosts {
-        s.routes
-            .set(host.clone(), lease_id.to_string(), upstream_port, active);
-    }
-}
-
-fn remove_routes_for_hosts(s: &mut State, hosts: &[String]) {
-    for host in hosts {
-        s.routes.remove(host);
-    }
-}
-
-fn new_lease_id() -> String {
-    let mut bytes = [0u8; 16];
-    getrandom::fill(&mut bytes).expect("operating system RNG unavailable");
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
-}
-
-async fn expire_leases_loop(state: Arc<Mutex<State>>) {
-    let mut ticker = tokio::time::interval(Duration::from_millis(200));
-    loop {
-        ticker.tick().await;
-
-        // Phase 1: collect expired leases.
-        let expired = {
-            let mut s = match state.lock() {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            let now = std::time::Instant::now();
-            let mut expired: Vec<(String, String)> = Vec::new();
-            for (lease_id, lease) in &s.leases {
-                if now >= lease.expires_at {
-                    expired.push((lease_id.clone(), lease.app_name.clone()));
-                }
-            }
-
-            if !expired.is_empty() {
-                for (lease_id, app_name) in &expired {
-                    if let Some(lease) = s.leases.remove(lease_id) {
-                        s.lease_by_app.remove(app_name);
-                        remove_routes_for_hosts(&mut s, &lease.hosts);
-                    }
-                }
-
-                let empty = s.leases.is_empty();
-                if empty {
-                    s.schedule_idle_exit();
-                }
-            }
-            expired
-        };
-
-        if expired.is_empty() {
-            continue;
-        }
-    }
-}
-
 async fn handle_client(
     stream: UnixStream,
     state: Arc<Mutex<State>>,
@@ -391,195 +312,14 @@ async fn handle_client(
 
         let resp = match req {
             Request::Ping => Response::Pong,
-            Request::GetToken => {
-                let s = state.lock().unwrap();
-                Response::Token {
-                    token: s.server_token.clone(),
-                }
-            }
-            Request::RegisterLease {
-                token,
-                app_name,
-                hosts,
-                upstream_port,
-                active,
-                ttl_ms,
-            } => {
-                if ttl_ms == 0 {
-                    Response::Error {
-                        message: "ttl_ms must be > 0".to_string(),
-                    }
-                } else {
-                    let app_name = sanitize_app_name(&app_name);
-                    let out = {
-                        let mut s = state.lock().unwrap();
-                        s.cancel_idle_exit();
-
-                        if token != s.server_token {
-                            None
-                        } else {
-                            let hosts = if hosts.is_empty() {
-                                default_hosts(&app_name)
-                            } else {
-                                hosts
-                            };
-
-                            let lease_id = s
-                                .lease_by_app
-                                .get(&app_name)
-                                .cloned()
-                                .unwrap_or_else(new_lease_id);
-
-                            let expires_at =
-                                std::time::Instant::now() + Duration::from_millis(ttl_ms);
-
-                            // If we're replacing an existing lease for this app, remove old routes first.
-                            if let Some(existing) = s.leases.get(&lease_id) {
-                                let old_hosts = existing.hosts.clone();
-                                remove_routes_for_hosts(&mut s, &old_hosts);
-                            }
-
-                            s.leases.insert(
-                                lease_id.clone(),
-                                Lease {
-                                    app_name: app_name.clone(),
-                                    hosts: hosts.clone(),
-                                    upstream_port,
-                                    active,
-                                    expires_at,
-                                },
-                            );
-                            s.lease_by_app.insert(app_name.clone(), lease_id.clone());
-
-                            set_routes_for_hosts(&mut s, &hosts, &lease_id, upstream_port, active);
-
-                            let host = hosts
-                                .first()
-                                .cloned()
-                                .unwrap_or_else(|| app_host(&app_name));
-                            let public_port = advertised_https_port(&s);
-                            Some((lease_id, host, public_port))
-                        }
-                    };
-
-                    match out {
-                        None => Response::Error {
-                            message: "invalid token".to_string(),
-                        },
-                        Some((lease_id, host, public_port)) => {
-                            let url = if public_port == 443 {
-                                format!("https://{}/", host)
-                            } else {
-                                format!("https://{}:{}/", host, public_port)
-                            };
-
-                            Response::LeaseRegistered {
-                                app_name,
-                                lease_id,
-                                expires_in_ms: ttl_ms,
-                                url,
-                            }
-                        }
-                    }
-                }
-            }
-            Request::RenewLease {
-                token,
-                lease_id,
-                ttl_ms,
-            } => {
-                if ttl_ms == 0 {
-                    Response::Error {
-                        message: "ttl_ms must be > 0".to_string(),
-                    }
-                } else {
-                    let mut s = state.lock().unwrap();
-                    if token != s.server_token {
-                        Response::Error {
-                            message: "invalid token".to_string(),
-                        }
-                    } else if let Some(lease) = s.leases.get_mut(&lease_id) {
-                        lease.expires_at =
-                            std::time::Instant::now() + Duration::from_millis(ttl_ms);
-                        Response::LeaseRenewed {
-                            lease_id,
-                            expires_in_ms: ttl_ms,
-                        }
-                    } else {
-                        Response::Error {
-                            message: "unknown lease".to_string(),
-                        }
-                    }
-                }
-            }
-            Request::SetLeaseActive {
-                token,
-                lease_id,
-                active,
-            } => {
-                let mut s = state.lock().unwrap();
-                if token != s.server_token {
-                    Response::Error {
-                        message: "invalid token".to_string(),
-                    }
-                } else if let Some(lease) = s.leases.get_mut(&lease_id) {
-                    lease.active = active;
-                    let expires_in_ms = lease
-                        .expires_at
-                        .saturating_duration_since(std::time::Instant::now())
-                        .as_millis() as u64;
-                    let _ = lease;
-                    s.routes.set_active(&lease_id, active);
-                    Response::LeaseRenewed {
-                        lease_id,
-                        expires_in_ms,
-                    }
-                } else {
-                    Response::Error {
-                        message: "unknown lease".to_string(),
-                    }
-                }
-            }
-            Request::UnregisterLease { token, lease_id } => {
-                let mut s = state.lock().unwrap();
-                if token != s.server_token {
-                    Response::Error {
-                        message: "invalid token".to_string(),
-                    }
-                } else {
-                    if let Some(lease) = s.leases.remove(&lease_id) {
-                        s.lease_by_app.remove(&lease.app_name);
-                        remove_routes_for_hosts(&mut s, &lease.hosts);
-                    }
-
-                    if s.leases.is_empty() {
-                        s.schedule_idle_exit();
-                    }
-                    Response::LeaseUnregistered { lease_id }
-                }
-            }
-            Request::SubscribeEvents { token } => {
-                let (ok, rx) = {
+            Request::SubscribeEvents => {
+                let rx = {
                     let s = state.lock().unwrap();
-                    if token == s.server_token {
-                        (true, Some(s.events.subscribe()))
-                    } else {
-                        (false, None)
-                    }
+                    s.events.subscribe()
                 };
-                if !ok {
-                    write_resp(
-                        &mut w,
-                        &Response::Error {
-                            message: "invalid token".to_string(),
-                        },
-                    )
-                    .await?;
-                    return Ok(());
-                }
 
                 let _control_client = ControlClientSubscription::register(&state);
-                let mut rx = rx.expect("subscription exists after token check");
+                let mut rx = rx;
                 if write_resp(&mut w, &Response::Subscribed).await.is_err() {
                     return Ok(());
                 }
@@ -607,22 +347,223 @@ async fn handle_client(
                 }
                 return Ok(());
             }
+            Request::RegisterApp {
+                project_dir,
+                app_name,
+                hosts,
+                upstream_port,
+                command,
+                env,
+                log_path,
+                client_pid,
+            } => {
+                let app_name = sanitize_app_name(&app_name);
+                let mut s = state.lock().unwrap();
+                s.cancel_idle_exit();
+
+                let hosts = if hosts.is_empty() {
+                    default_hosts(&app_name)
+                } else {
+                    hosts
+                };
+
+                if let Some(db) = &s.db {
+                    let _ = db.register_app(
+                        &project_dir,
+                        &app_name,
+                        &hosts,
+                        upstream_port,
+                        &state::AppStatus::Running,
+                        &command,
+                        &env,
+                        &log_path,
+                        client_pid,
+                    );
+                }
+
+                let route_id = format!("reg:{}", project_dir);
+                for host in &hosts {
+                    s.routes
+                        .set(host.clone(), route_id.clone(), upstream_port, true);
+                }
+
+                let host = hosts
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| app_host(&app_name));
+                let public_port = advertised_https_port(&s);
+                let url = if public_port == 443 {
+                    format!("https://{}/", host)
+                } else {
+                    format!("https://{}:{}/", host, public_port)
+                };
+
+                s.events.broadcast(Response::Event {
+                    event: protocol::DevEvent::AppStatusChanged {
+                        project_dir: project_dir.clone(),
+                        app_name: app_name.clone(),
+                        status: "running".to_string(),
+                    },
+                });
+
+                Response::AppRegistered {
+                    app_name,
+                    project_dir,
+                    url,
+                }
+            }
+            Request::UnregisterApp { project_dir } => {
+                let mut s = state.lock().unwrap();
+                let mut app_name = String::new();
+                let mut hosts_to_remove = Vec::new();
+
+                if let Some(db) = &s.db {
+                    if let Ok(Some(app)) = db.get_app(&project_dir) {
+                        app_name = app.app_name.clone();
+                        hosts_to_remove = app.hosts.clone();
+                        let _ = db.set_status(&project_dir, &state::AppStatus::Stopped);
+                        let _ = db.set_pid(&project_dir, None);
+                    }
+                }
+
+                for host in &hosts_to_remove {
+                    s.routes.remove(host);
+                }
+
+                if !app_name.is_empty() {
+                    s.events.broadcast(Response::Event {
+                        event: protocol::DevEvent::AppStatusChanged {
+                            project_dir: project_dir.clone(),
+                            app_name: app_name.clone(),
+                            status: "stopped".to_string(),
+                        },
+                    });
+                }
+
+                // Check if daemon should idle-exit.
+                if let Some(db) = &s.db {
+                    if db.list_active_apps().ok().is_none_or(|a| a.is_empty()) {
+                        s.schedule_idle_exit();
+                    }
+                }
+
+                Response::AppUnregistered { project_dir }
+            }
+            Request::RestartApp { project_dir } => {
+                let s = state.lock().unwrap();
+                let app_name =
+                    s.db.as_ref()
+                        .and_then(|db| db.get_app(&project_dir).ok().flatten())
+                        .map(|a| a.app_name.clone())
+                        .unwrap_or_default();
+                s.events.broadcast(Response::Event {
+                    event: protocol::DevEvent::RestartRequested {
+                        project_dir: project_dir.clone(),
+                        app_name,
+                    },
+                });
+                Response::AppRestarting { project_dir }
+            }
+            Request::SetAppStatus {
+                project_dir,
+                status,
+            } => {
+                let s = state.lock().unwrap();
+                let parsed = state::AppStatus::from_str(&status);
+                match parsed {
+                    None => Response::Error {
+                        message: format!("unknown status: {status}"),
+                    },
+                    Some(app_status) => {
+                        if let Some(db) = &s.db {
+                            let _ = db.set_status(&project_dir, &app_status);
+                        }
+
+                        let route_id = format!("reg:{}", project_dir);
+                        let active = app_status == state::AppStatus::Running;
+                        s.routes.set_active(&route_id, active);
+
+                        let mut app_name = String::new();
+                        if let Some(db) = &s.db {
+                            if let Ok(Some(app)) = db.get_app(&project_dir) {
+                                app_name = app.app_name.clone();
+                            }
+                        }
+
+                        if !app_name.is_empty() {
+                            s.events.broadcast(Response::Event {
+                                event: protocol::DevEvent::AppStatusChanged {
+                                    project_dir: project_dir.clone(),
+                                    app_name,
+                                    status: status.clone(),
+                                },
+                            });
+                        }
+
+                        Response::AppStatusUpdated {
+                            project_dir,
+                            status,
+                        }
+                    }
+                }
+            }
+            Request::HandoffApp { project_dir, pid } => {
+                let s = state.lock().unwrap();
+                if let Some(db) = &s.db {
+                    let _ = db.set_pid(&project_dir, Some(pid));
+                    let _ = db.set_status(&project_dir, &state::AppStatus::Running);
+                }
+
+                // Spawn a PID monitor: if the process dies, mark as idle.
+                let state_for_monitor = state.clone();
+                let dir_for_monitor = project_dir.clone();
+                tokio::spawn(async move {
+                    monitor_handoff_pid(state_for_monitor, dir_for_monitor, pid).await;
+                });
+
+                Response::AppHandedOff { project_dir }
+            }
+            Request::ListRegisteredApps => {
+                let s = state.lock().unwrap();
+                let apps = if let Some(db) = &s.db {
+                    db.list_apps()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|a| protocol::RegisteredAppInfo {
+                            project_dir: a.project_dir,
+                            app_name: a.app_name,
+                            hosts: a.hosts,
+                            upstream_port: a.upstream_port,
+                            status: match a.status {
+                                state::AppStatus::Running => "running".to_string(),
+                                state::AppStatus::Idle => "idle".to_string(),
+                                state::AppStatus::Stopped => "stopped".to_string(),
+                            },
+                            pid: a.pid,
+                            client_pid: a.client_pid,
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                Response::RegisteredApps { apps }
+            }
             Request::ListApps => {
                 let s = state.lock().unwrap();
-                let apps = s
-                    .lease_by_app
-                    .iter()
-                    .filter_map(|(app_name, lease_id)| {
-                        let lease = s.leases.get(lease_id)?;
-                        Some(AppInfo {
-                            lease_id: lease_id.clone(),
-                            app_name: app_name.clone(),
-                            hosts: lease.hosts.clone(),
-                            upstream_port: lease.upstream_port,
-                            pid: None,
+                let apps = if let Some(db) = &s.db {
+                    db.list_active_apps()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|a| AppInfo {
+                            app_name: a.app_name,
+                            hosts: a.hosts,
+                            upstream_port: a.upstream_port,
+                            pid: a.pid,
                         })
-                    })
-                    .collect::<Vec<_>>();
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 Response::Apps { apps }
             }
             Request::Info => {
@@ -639,15 +580,7 @@ async fn handle_client(
                 }
             }
             Request::StopServer => {
-                let mut s = state.lock().unwrap();
-                // Remove all leases and clean up routes/forwarders.
-                let lease_ids: Vec<String> = s.leases.keys().cloned().collect();
-                for lease_id in lease_ids {
-                    if let Some(lease) = s.leases.remove(&lease_id) {
-                        remove_routes_for_hosts(&mut s, &lease.hosts);
-                    }
-                }
-                s.lease_by_app.clear();
+                let s = state.lock().unwrap();
                 let _ = s.shutdown_tx.send(true);
                 Response::Stopping
             }
@@ -754,6 +687,212 @@ async fn start_http_redirect_server(
     Ok(())
 }
 
+/// Monitor a handed-off process by PID. When the process exits, mark the app as idle.
+async fn monitor_handoff_pid(state: Arc<Mutex<State>>, project_dir: String, pid: u32) {
+    let sysinfo_pid = sysinfo::Pid::from_u32(pid);
+    let mut sys = sysinfo::System::new();
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]), false);
+        if sys.process(sysinfo_pid).is_none() {
+            let s = state.lock().unwrap();
+            if let Some(db) = &s.db {
+                let _ = db.set_status(&project_dir, &state::AppStatus::Idle);
+                let _ = db.set_pid(&project_dir, None);
+            }
+            let route_id = format!("reg:{}", project_dir);
+            s.routes.set_active(&route_id, false);
+            tracing::info!(project_dir = %project_dir, pid = pid, "handoff'd process exited, marking idle");
+            break;
+        }
+    }
+}
+
+/// Spawn an app process for wake-on-request. Returns the child PID on success.
+async fn spawn_app_for_wake(
+    app: &state::DevApp,
+) -> Result<tokio::process::Child, Box<dyn std::error::Error + Send + Sync>> {
+    if app.command.is_empty() {
+        return Err("app has empty command".into());
+    }
+
+    let mut cmd = tokio::process::Command::new(&app.command[0]);
+    if app.command.len() > 1 {
+        cmd.args(&app.command[1..]);
+    }
+    cmd.current_dir(&app.project_dir)
+        .env("PORT", app.upstream_port.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    for (k, v) in &app.env {
+        cmd.env(k, v);
+    }
+
+    let mut child = cmd.spawn()?;
+
+    // Drain stdout/stderr to the app's JSONL log store.
+    let log_path = std::path::PathBuf::from(&app.log_path);
+    if let Some(stdout) = child.stdout.take() {
+        let log_path = log_path.clone();
+        tokio::spawn(async move {
+            drain_pipe_to_log(stdout, &log_path).await;
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        let log_path = log_path.clone();
+        tokio::spawn(async move {
+            drain_pipe_to_log(stderr, &log_path).await;
+        });
+    }
+
+    Ok(child)
+}
+
+async fn drain_pipe_to_log(pipe: impl tokio::io::AsyncRead + Unpin, log_path: &std::path::Path) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let Ok(mut file) = tokio::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(log_path)
+        .await
+    else {
+        return;
+    };
+    let reader = tokio::io::BufReader::new(pipe);
+    let mut lines = reader.lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let ts = time::OffsetDateTime::now_utc()
+            .format(&time::format_description::well_known::Rfc3339)
+            .unwrap_or_default();
+        let json = serde_json::json!({
+            "timestamp": ts,
+            "level": "Info",
+            "scope": "app",
+            "message": line,
+        });
+        let mut encoded = json.to_string();
+        encoded.push('\n');
+        let _ = file.write_all(encoded.as_bytes()).await;
+    }
+}
+
+/// Handle wake-on-request: when a RequestStarted event arrives for an idle app,
+/// spawn the process and mark it as running.
+async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String) {
+    // Quick check under lock: is the route already active?
+    // Also grab the DB path so we can query outside the lock.
+    let (route_active, db_path) = {
+        let s = state.lock().unwrap();
+        let active = s.routes.lookup(&host).is_some_and(|(_, _, a, _)| a);
+        let path = s.db.as_ref().map(|db| db.path());
+        (active, path)
+    };
+
+    if route_active {
+        return;
+    }
+    let Some(db_path) = db_path else { return };
+
+    // Query SQLite outside the mutex to avoid holding the lock during I/O.
+    let app_info = {
+        let Ok(db) = state::DevStateStore::open(&db_path) else {
+            return;
+        };
+        let apps = db.list_active_apps().unwrap_or_default();
+        apps.into_iter().find(|a| {
+            a.status == state::AppStatus::Idle
+                && a.hosts.iter().any(|h| {
+                    h == &host
+                        || (h.starts_with("*.")
+                            && host
+                                .split_once('.')
+                                .is_some_and(|(_, rest)| format!("*.{rest}") == *h))
+                })
+        })
+    };
+
+    let Some(app) = app_info else { return };
+
+    tracing::info!(
+        app_name = %app.app_name,
+        host = %host,
+        "waking idle app on request"
+    );
+
+    match spawn_app_for_wake(&app).await {
+        Ok(mut child) => {
+            let pid = child.id();
+            let project_dir = app.project_dir.clone();
+
+            {
+                let s = state.lock().unwrap();
+                if let Some(db) = &s.db {
+                    let _ = db.set_status(&project_dir, &state::AppStatus::Running);
+                    if let Some(pid) = pid {
+                        let _ = db.set_pid(&project_dir, Some(pid));
+                    }
+                }
+                let route_id = format!("reg:{}", project_dir);
+                s.routes.set_active(&route_id, true);
+            }
+
+            // Monitor the spawned process.
+            if let Some(pid) = pid {
+                let state = state.clone();
+                let project_dir = project_dir.clone();
+                tokio::spawn(async move {
+                    let _ = child.wait().await;
+                    let s = state.lock().unwrap();
+                    if let Some(db) = &s.db {
+                        let _ = db.set_status(&project_dir, &state::AppStatus::Idle);
+                        let _ = db.set_pid(&project_dir, None);
+                    }
+                    let route_id = format!("reg:{}", project_dir);
+                    s.routes.set_active(&route_id, false);
+                    tracing::info!(project_dir = %project_dir, pid = pid, "wake-spawned process exited, marking idle");
+                });
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                app_name = %app.app_name,
+                error = %e,
+                "failed to spawn app for wake-on-request"
+            );
+        }
+    }
+}
+
+/// Periodic cleanup: remove apps whose project_dir no longer has a tako.toml.
+async fn stale_app_cleanup_loop(state: Arc<Mutex<State>>) {
+    let mut ticker = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        ticker.tick().await;
+        // Get the DB path under lock, then do the (potentially slow) FS cleanup outside it.
+        let db_path = {
+            let s = state.lock().unwrap();
+            s.db.as_ref().map(|db| db.path())
+        };
+        let Some(db_path) = db_path else { continue };
+        let Ok(db) = state::DevStateStore::open(&db_path) else {
+            continue;
+        };
+        if let Ok(removed) = db.cleanup_stale() {
+            if !removed.is_empty() {
+                let s = state.lock().unwrap();
+                for dir in &removed {
+                    let route_id = format!("reg:{}", dir);
+                    s.routes.set_active(&route_id, false);
+                }
+                tracing::info!(count = removed.len(), "cleaned up stale app registrations");
+            }
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()
@@ -771,15 +910,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let events = EventsHub::default();
 
     // Events channel from Pingora runtime -> control-plane subscribers.
+    // Also triggers wake-on-request for idle registered apps.
     let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<DevEvent>();
-    {
-        let events = events.clone();
-        tokio::spawn(async move {
-            while let Some(ev) = ev_rx.recv().await {
-                events.broadcast(Response::Event { event: ev });
-            }
-        });
-    }
 
     // Start the Pingora proxy in a dedicated thread.
     // We exit the whole process when the control-plane tells us to shut down.
@@ -812,7 +944,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let listen_port = listen_port_from_addr(&listen_addr);
 
     let loopback_ip = args.dns_ip.parse::<Ipv4Addr>()?;
-    let local_dns = local_dns::start(routes.clone(), LOCAL_DNS_LISTEN_ADDR, loopback_ip).await?;
+    let local_dns = local_dns::start(LOCAL_DNS_LISTEN_ADDR, loopback_ip).await?;
     tracing::info!(listen = %local_dns.listen_addr(), "local DNS server listening");
 
     let sock = default_socket_path();
@@ -851,7 +983,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
     start_http_redirect_server(HTTP_REDIRECT_LISTEN_ADDR, shutdown_rx.clone()).await?;
     tracing::info!(listen = %HTTP_REDIRECT_LISTEN_ADDR, "http redirect server listening");
-    let st = State::new(
+    let events_for_relay = events.clone();
+    let mut st = State::new(
         shutdown_tx,
         routes,
         events,
@@ -862,12 +995,56 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.dns_ip,
     );
 
+    // Open the SQLite state store and populate routes from persisted apps.
+    let db_path = paths::tako_home_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("dev-server.db");
+    match state::DevStateStore::open(db_path) {
+        Ok(db) => {
+            if let Ok(active_apps) = db.list_active_apps() {
+                for app in &active_apps {
+                    let id = format!("reg:{}", app.project_dir);
+                    let active = app.status == state::AppStatus::Running;
+                    for host in &app.hosts {
+                        st.routes
+                            .set(host.clone(), id.clone(), app.upstream_port, active);
+                    }
+                }
+                if !active_apps.is_empty() {
+                    st.cancel_idle_exit();
+                }
+            }
+            st.db = Some(db);
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to open dev state store; registration disabled");
+        }
+    }
+
     let state = Arc::new(Mutex::new(st));
 
-    // Lease cleanup loop.
+    // Events relay: broadcast to subscribers + trigger wake-on-request.
+    {
+        let events = events_for_relay;
+        let state = state.clone();
+        tokio::spawn(async move {
+            while let Some(ev) = ev_rx.recv().await {
+                if let DevEvent::RequestStarted { ref host } = ev {
+                    let state = state.clone();
+                    let host = host.clone();
+                    tokio::spawn(async move {
+                        handle_wake_on_request(state, host).await;
+                    });
+                }
+                events.broadcast(Response::Event { event: ev });
+            }
+        });
+    }
+
+    // Stale app cleanup loop.
     {
         let state = state.clone();
-        tokio::spawn(async move { expire_leases_loop(state).await });
+        tokio::spawn(async move { stale_app_cleanup_loop(state).await });
     }
 
     loop {
@@ -919,7 +1096,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn token_then_register_lease_roundtrip() {
+    async fn register_app_roundtrip() {
         let (a, b) = tokio::net::UnixStream::pair().unwrap();
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
         let st = State::new(
@@ -936,22 +1113,17 @@ mod tests {
         let h = tokio::spawn(async move { handle_client(a, state).await });
 
         let (r, mut w) = b.into_split();
-        w.write_all(b"{\"type\":\"GetToken\"}\n").await.unwrap();
         let mut lines = BufReader::new(r).lines();
-        let tok_line = lines.next_line().await.unwrap().unwrap();
-        let tok_resp: Response = serde_json::from_str(&tok_line).unwrap();
-        let token = match tok_resp {
-            Response::Token { token } => token,
-            other => panic!("unexpected: {other:?}"),
-        };
 
         let req = serde_json::json!({
-            "type": "RegisterLease",
-            "token": token,
+            "type": "RegisterApp",
+            "project_dir": "/tmp/test-proj",
             "app_name": "my-app",
-            "hosts": ["my-app.tako.local"],
+            "hosts": ["my-app.tako"],
             "upstream_port": 1234,
-            "ttl_ms": 1000
+            "command": ["node", "index.js"],
+            "env": {},
+            "log_path": "/tmp/test.jsonl"
         });
         w.write_all(req.to_string().as_bytes()).await.unwrap();
         w.write_all(b"\n").await.unwrap();
@@ -959,58 +1131,15 @@ mod tests {
         let reg_line = lines.next_line().await.unwrap().unwrap();
         let reg: Response = serde_json::from_str(&reg_line).unwrap();
         match reg {
-            Response::LeaseRegistered {
+            Response::AppRegistered {
                 app_name,
-                lease_id,
-                expires_in_ms,
+                project_dir,
                 url,
             } => {
                 assert_eq!(app_name, "my-app");
-                assert!(!lease_id.is_empty());
-                assert_eq!(expires_in_ms, 1000);
-                assert!(url.contains("my-app.tako.local"));
+                assert_eq!(project_dir, "/tmp/test-proj");
+                assert!(url.contains("my-app.tako"));
             }
-            other => panic!("unexpected: {other:?}"),
-        }
-
-        drop(w);
-        h.await.unwrap().unwrap();
-    }
-
-    #[tokio::test]
-    async fn register_lease_rejects_invalid_token() {
-        let (a, b) = tokio::net::UnixStream::pair().unwrap();
-        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
-        let st = State::new(
-            shutdown_tx,
-            proxy::Routes::default(),
-            EventsHub::default(),
-            true,
-            53535,
-            8443,
-            "127.0.0.1:8443".to_string(),
-            "127.0.0.1".to_string(),
-        );
-        let state = Arc::new(Mutex::new(st));
-        let h = tokio::spawn(async move { handle_client(a, state).await });
-
-        let (r, mut w) = b.into_split();
-        let req = serde_json::json!({
-            "type": "RegisterLease",
-            "token": "bad",
-            "app_name": "a",
-            "hosts": ["a.tako.local"],
-            "upstream_port": 1234,
-            "ttl_ms": 1000
-        });
-        w.write_all(req.to_string().as_bytes()).await.unwrap();
-        w.write_all(b"\n").await.unwrap();
-
-        let mut lines = BufReader::new(r).lines();
-        let line = lines.next_line().await.unwrap().unwrap();
-        let resp: Response = serde_json::from_str(&line).unwrap();
-        match resp {
-            Response::Error { message } => assert!(message.contains("token")),
             other => panic!("unexpected: {other:?}"),
         }
 
@@ -1040,20 +1169,9 @@ mod tests {
 
         let (r, mut w) = b.into_split();
         let mut lines = BufReader::new(r).lines();
-        w.write_all(b"{\"type\":\"GetToken\"}\n").await.unwrap();
-        let tok_line = lines.next_line().await.unwrap().unwrap();
-        let tok_resp: Response = serde_json::from_str(&tok_line).unwrap();
-        let token = match tok_resp {
-            Response::Token { token } => token,
-            other => panic!("unexpected: {other:?}"),
-        };
-
-        let req = serde_json::json!({
-            "type": "SubscribeEvents",
-            "token": token,
-        });
-        w.write_all(req.to_string().as_bytes()).await.unwrap();
-        w.write_all(b"\n").await.unwrap();
+        w.write_all(b"{\"type\":\"SubscribeEvents\"}\n")
+            .await
+            .unwrap();
 
         let sub_line = lines.next_line().await.unwrap().unwrap();
         let sub_resp: Response = serde_json::from_str(&sub_line).unwrap();
@@ -1075,16 +1193,265 @@ mod tests {
         assert_eq!(clients, 0);
     }
 
+    /// Helper: create a test State with a temp SQLite DB and return (state, _tmpdir).
+    fn test_state() -> (Arc<Mutex<State>>, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let db_path = tmp.path().join("dev-server.db");
+        let db = state::DevStateStore::open(db_path).unwrap();
+
+        let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+        let mut st = State::new(
+            shutdown_tx,
+            proxy::Routes::default(),
+            EventsHub::default(),
+            true,
+            53535,
+            8443,
+            "127.0.0.1:8443".to_string(),
+            "127.0.0.1".to_string(),
+        );
+        st.db = Some(db);
+        (Arc::new(Mutex::new(st)), tmp)
+    }
+
+    #[tokio::test]
+    async fn unregister_app_broadcasts_stopped_event_to_subscriber() {
+        let (state, _tmp) = test_state();
+
+        // Register an app first.
+        {
+            let s = state.lock().unwrap();
+            if let Some(db) = &s.db {
+                db.register_app(
+                    "/proj",
+                    "my-app",
+                    &["my-app.tako".to_string()],
+                    3000,
+                    &state::AppStatus::Running,
+                    &["bun".to_string()],
+                    &std::collections::HashMap::new(),
+                    "/log",
+                    None,
+                )
+                .unwrap();
+            }
+            s.routes.set(
+                "my-app.tako".to_string(),
+                "reg:/proj".to_string(),
+                3000,
+                true,
+            );
+        }
+
+        // Subscribe to events.
+        let mut ev_rx = {
+            let s = state.lock().unwrap();
+            s.events.subscribe()
+        };
+
+        // Unregister the app on a client connection.
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let state_for_handler = state.clone();
+        let h = tokio::spawn(async move { handle_client(a, state_for_handler).await });
+
+        let (r, mut w) = b.into_split();
+        let req = serde_json::json!({
+            "type": "UnregisterApp",
+
+            "project_dir": "/proj",
+        });
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        let mut lines = BufReader::new(r).lines();
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        assert!(matches!(resp, Response::AppUnregistered { .. }));
+
+        drop(w);
+        drop(lines);
+        h.await.unwrap().unwrap();
+
+        // The subscriber should have received an AppStatusChanged event.
+        let event = tokio::time::timeout(Duration::from_millis(100), ev_rx.recv())
+            .await
+            .expect("should not time out")
+            .unwrap();
+
+        match event {
+            Response::Event {
+                event:
+                    protocol::DevEvent::AppStatusChanged {
+                        project_dir,
+                        app_name,
+                        status,
+                    },
+            } => {
+                assert_eq!(project_dir, "/proj");
+                assert_eq!(app_name, "my-app");
+                assert_eq!(status, "stopped");
+            }
+            other => panic!("expected AppStatusChanged, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn restart_app_broadcasts_restart_requested_event() {
+        let (state, _tmp) = test_state();
+
+        // Register an app.
+        {
+            let s = state.lock().unwrap();
+            if let Some(db) = &s.db {
+                db.register_app(
+                    "/proj",
+                    "my-app",
+                    &["my-app.tako".to_string()],
+                    3000,
+                    &state::AppStatus::Running,
+                    &["bun".to_string()],
+                    &std::collections::HashMap::new(),
+                    "/log",
+                    None,
+                )
+                .unwrap();
+            }
+        }
+
+        // Subscribe to events.
+        let mut ev_rx = {
+            let s = state.lock().unwrap();
+            s.events.subscribe()
+        };
+
+        // Send RestartApp.
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let state_for_handler = state.clone();
+        let h = tokio::spawn(async move { handle_client(a, state_for_handler).await });
+
+        let (r, mut w) = b.into_split();
+        let req = serde_json::json!({
+            "type": "RestartApp",
+
+            "project_dir": "/proj",
+        });
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        let mut lines = BufReader::new(r).lines();
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        assert!(matches!(resp, Response::AppRestarting { .. }));
+
+        drop(w);
+        drop(lines);
+        h.await.unwrap().unwrap();
+
+        // Subscriber should have received RestartRequested.
+        let event = tokio::time::timeout(Duration::from_millis(100), ev_rx.recv())
+            .await
+            .expect("should not time out")
+            .unwrap();
+
+        match event {
+            Response::Event {
+                event:
+                    protocol::DevEvent::RestartRequested {
+                        project_dir,
+                        app_name,
+                    },
+            } => {
+                assert_eq!(project_dir, "/proj");
+                assert_eq!(app_name, "my-app");
+            }
+            other => panic!("expected RestartRequested, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn set_app_status_broadcasts_status_changed_event() {
+        let (state, _tmp) = test_state();
+
+        // Register an app.
+        {
+            let s = state.lock().unwrap();
+            if let Some(db) = &s.db {
+                db.register_app(
+                    "/proj",
+                    "my-app",
+                    &["my-app.tako".to_string()],
+                    3000,
+                    &state::AppStatus::Running,
+                    &["bun".to_string()],
+                    &std::collections::HashMap::new(),
+                    "/log",
+                    None,
+                )
+                .unwrap();
+            }
+        }
+
+        let mut ev_rx = {
+            let s = state.lock().unwrap();
+            s.events.subscribe()
+        };
+
+        // Send SetAppStatus.
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let state_for_handler = state.clone();
+        let h = tokio::spawn(async move { handle_client(a, state_for_handler).await });
+
+        let (r, mut w) = b.into_split();
+        let req = serde_json::json!({
+            "type": "SetAppStatus",
+
+            "project_dir": "/proj",
+            "status": "idle",
+        });
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        let mut lines = BufReader::new(r).lines();
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        assert!(matches!(resp, Response::AppStatusUpdated { .. }));
+
+        drop(w);
+        drop(lines);
+        h.await.unwrap().unwrap();
+
+        let event = tokio::time::timeout(Duration::from_millis(100), ev_rx.recv())
+            .await
+            .expect("should not time out")
+            .unwrap();
+
+        match event {
+            Response::Event {
+                event:
+                    protocol::DevEvent::AppStatusChanged {
+                        project_dir,
+                        app_name,
+                        status,
+                    },
+            } => {
+                assert_eq!(project_dir, "/proj");
+                assert_eq!(app_name, "my-app");
+                assert_eq!(status, "idle");
+            }
+            other => panic!("expected AppStatusChanged, got: {other:?}"),
+        }
+    }
+
     #[test]
     fn redirect_location_strips_default_http_port() {
-        let location = redirect_location("bun-example.tako.local:80", "/hello");
-        assert_eq!(location, "https://bun-example.tako.local/hello");
+        let location = redirect_location("bun-example.tako:80", "/hello");
+        assert_eq!(location, "https://bun-example.tako/hello");
     }
 
     #[test]
     fn redirect_location_keeps_non_default_port() {
-        let location = redirect_location("bun-example.tako.local:8080", "/");
-        assert_eq!(location, "https://bun-example.tako.local:8080/");
+        let location = redirect_location("bun-example.tako:8080", "/");
+        assert_eq!(location, "https://bun-example.tako:8080/");
     }
 
     #[test]
@@ -1141,6 +1508,113 @@ mod tests {
             }
         }
         panic!("failed to find an available loopback port after retries");
+    }
+
+    /// End-to-end test: client B subscribes to events via a real socket
+    /// handler, client A unregisters an app via a separate socket handler,
+    /// and client B must receive the AppStatusChanged{stopped} event over
+    /// the wire. This exercises the exact codepath that the attached dev
+    /// client uses to detect when the owner stops the app.
+    #[tokio::test]
+    async fn subscriber_receives_stopped_event_over_socket_when_app_unregistered() {
+        let (state, _tmp) = test_state();
+
+        // Register an app.
+        {
+            let s = state.lock().unwrap();
+            if let Some(db) = &s.db {
+                db.register_app(
+                    "/proj",
+                    "my-app",
+                    &["my-app.tako".to_string()],
+                    3000,
+                    &state::AppStatus::Running,
+                    &["bun".to_string()],
+                    &std::collections::HashMap::new(),
+                    "/log",
+                    None,
+                )
+                .unwrap();
+            }
+            s.routes.set(
+                "my-app.tako".to_string(),
+                "reg:/proj".to_string(),
+                3000,
+                true,
+            );
+        }
+
+        // Client B: subscribe to events via a real socket handler.
+        let (sub_a, sub_b) = tokio::net::UnixStream::pair().unwrap();
+        let sub_handler = tokio::spawn({
+            let state = state.clone();
+            async move { handle_client(sub_a, state).await }
+        });
+        let (sub_r, mut sub_w) = sub_b.into_split();
+        let mut sub_lines = BufReader::new(sub_r).lines();
+
+        sub_w
+            .write_all(b"{\"type\":\"SubscribeEvents\"}\n")
+            .await
+            .unwrap();
+        let resp_line = sub_lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&resp_line).unwrap();
+        assert!(matches!(resp, Response::Subscribed));
+
+        // Client A: unregister the app via a separate socket handler.
+        let (unreg_a, unreg_b) = tokio::net::UnixStream::pair().unwrap();
+        let unreg_handler = tokio::spawn({
+            let state = state.clone();
+            async move { handle_client(unreg_a, state).await }
+        });
+        let (unreg_r, mut unreg_w) = unreg_b.into_split();
+
+        let req = serde_json::json!({
+            "type": "UnregisterApp",
+            "project_dir": "/proj",
+        });
+        unreg_w
+            .write_all(format!("{}\n", req).as_bytes())
+            .await
+            .unwrap();
+
+        let mut unreg_lines = BufReader::new(unreg_r).lines();
+        let unreg_resp_line = unreg_lines.next_line().await.unwrap().unwrap();
+        let unreg_resp: Response = serde_json::from_str(&unreg_resp_line).unwrap();
+        assert!(matches!(unreg_resp, Response::AppUnregistered { .. }));
+
+        // Clean up unregister handler.
+        drop(unreg_w);
+        drop(unreg_lines);
+        unreg_handler.await.unwrap().unwrap();
+
+        // Client B should receive the AppStatusChanged event.
+        let event_line = tokio::time::timeout(Duration::from_millis(500), sub_lines.next_line())
+            .await
+            .expect("subscriber should receive event within 500ms")
+            .unwrap()
+            .unwrap();
+        let event_resp: Response = serde_json::from_str(&event_line).unwrap();
+        match event_resp {
+            Response::Event {
+                event:
+                    protocol::DevEvent::AppStatusChanged {
+                        project_dir,
+                        app_name,
+                        status,
+                    },
+            } => {
+                assert_eq!(project_dir, "/proj");
+                assert_eq!(app_name, "my-app");
+                assert_eq!(status, "stopped");
+            }
+            other => panic!("expected AppStatusChanged stopped, got: {other:?}"),
+        }
+
+        // Clean up subscriber.
+        drop(sub_w);
+        drop(sub_lines);
+        let _ = tokio::time::timeout(Duration::from_secs(1), sub_handler).await;
     }
 
     #[test]

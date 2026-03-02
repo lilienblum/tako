@@ -19,7 +19,8 @@ pub type Result<T> = std::result::Result<T, AppNameError>;
 ///
 /// Resolution order:
 /// 1. tako.toml top-level `name` field
-/// 2. Directory name as fallback
+/// 2. package.json `name` field
+/// 3. Directory name as fallback
 pub fn resolve_app_name<P: AsRef<Path>>(dir: P) -> Result<String> {
     let dir = dir.as_ref();
 
@@ -28,7 +29,12 @@ pub fn resolve_app_name<P: AsRef<Path>>(dir: P) -> Result<String> {
         return validate_and_sanitize_app_name(&name);
     }
 
-    // 2. Fallback to directory name
+    // 2. Check package.json
+    if let Some(name) = get_name_from_package_json(dir) {
+        return validate_and_sanitize_app_name(&name);
+    }
+
+    // 3. Fallback to directory name
     let dir_name = dir
         .file_name()
         .and_then(|n| n.to_str())
@@ -47,6 +53,19 @@ fn get_name_from_tako_toml<P: AsRef<Path>>(dir: P) -> Option<String> {
 
     let toml: toml::Value = toml::from_str(&content).ok()?;
     toml.get("name")?.as_str().map(|s| s.to_string())
+}
+
+/// Get name from package.json
+fn get_name_from_package_json<P: AsRef<Path>>(dir: P) -> Option<String> {
+    let path = dir.as_ref().join("package.json");
+    let content = fs::read_to_string(&path).ok()?;
+    let parsed: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let name = parsed.get("name")?.as_str()?.trim();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name.to_string())
+    }
 }
 
 /// Validate and sanitize app name
@@ -137,6 +156,31 @@ mod tests {
     use tempfile::TempDir;
 
     // ==================== Resolution Tests ====================
+
+    #[test]
+    fn test_resolve_from_package_json() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(
+            temp_dir.path().join("package.json"),
+            r#"{"name":"bun-example"}"#,
+        )
+        .unwrap();
+        let name = resolve_app_name(temp_dir.path()).unwrap();
+        assert_eq!(name, "bun-example");
+    }
+
+    #[test]
+    fn test_tako_toml_takes_priority_over_package_json() {
+        let temp_dir = TempDir::new().unwrap();
+        fs::write(temp_dir.path().join("tako.toml"), "name = \"tako-name\"\n").unwrap();
+        fs::write(
+            temp_dir.path().join("package.json"),
+            r#"{"name":"pkg-name"}"#,
+        )
+        .unwrap();
+        let name = resolve_app_name(temp_dir.path()).unwrap();
+        assert_eq!(name, "tako-name");
+    }
 
     #[test]
     fn test_resolve_from_tako_toml() {

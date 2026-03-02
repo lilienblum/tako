@@ -6,7 +6,8 @@ mod test 'just/test.just'
 export TAKO_HOME := "local-dev/.tako"
 
 tako *arguments:
-    TAKO_HOME="$(pwd)/{{ TAKO_HOME }}" cargo run -p tako --bin tako --release -- {{ arguments }}
+    cargo build -p tako --release
+    TAKO_HOME="$(pwd)/{{ TAKO_HOME }}" ./target/release/tako {{ arguments }}
 
 fmt:
     cargo fmt

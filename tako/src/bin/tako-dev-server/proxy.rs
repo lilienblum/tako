@@ -13,22 +13,22 @@ use crate::protocol;
 #[derive(Clone, Default)]
 pub struct Routes {
     by_host: Arc<Mutex<HashMap<String, String>>>,
-    leases: Arc<Mutex<HashMap<String, LeaseRoute>>>,
+    apps: Arc<Mutex<HashMap<String, AppRoute>>>,
 }
 
 #[derive(Clone)]
-struct LeaseRoute {
+struct AppRoute {
     upstream_port: u16,
     active: bool,
     notify: Arc<Notify>,
 }
 
 impl Routes {
-    pub fn set(&self, host: String, lease_id: String, upstream_port: u16, active: bool) {
-        self.by_host.lock().unwrap().insert(host, lease_id.clone());
+    pub fn set(&self, host: String, app_id: String, upstream_port: u16, active: bool) {
+        self.by_host.lock().unwrap().insert(host, app_id.clone());
 
-        let mut leases = self.leases.lock().unwrap();
-        let entry = leases.entry(lease_id).or_insert_with(|| LeaseRoute {
+        let mut apps = self.apps.lock().unwrap();
+        let entry = apps.entry(app_id).or_insert_with(|| AppRoute {
             upstream_port,
             active,
             notify: Arc::new(Notify::new()),
@@ -38,60 +38,72 @@ impl Routes {
         if active {
             entry.notify.notify_waiters();
         }
+        drop(apps);
     }
 
     pub fn remove(&self, host: &str) {
-        let lease_id = self.by_host.lock().unwrap().remove(host);
-        let Some(lease_id) = lease_id else { return };
-
-        // Garbage collect lease entry if no hosts refer to it.
-        let mut hosts_left = false;
-        for v in self.by_host.lock().unwrap().values() {
-            if v == &lease_id {
-                hosts_left = true;
-                break;
-            }
-        }
+        let mut by_host = self.by_host.lock().unwrap();
+        let Some(app_id) = by_host.remove(host) else {
+            return;
+        };
+        // Garbage collect app entry if no hosts refer to it.
+        let hosts_left = by_host.values().any(|v| v == &app_id);
+        drop(by_host);
         if !hosts_left {
-            self.leases.lock().unwrap().remove(&lease_id);
+            self.apps.lock().unwrap().remove(&app_id);
         }
     }
 
-    pub fn set_active(&self, lease_id: &str, active: bool) {
-        if let Some(l) = self.leases.lock().unwrap().get_mut(lease_id) {
-            l.active = active;
+    pub fn set_active(&self, app_id: &str, active: bool) {
+        if let Some(r) = self.apps.lock().unwrap().get_mut(app_id) {
+            r.active = active;
             if active {
-                l.notify.notify_waiters();
+                r.notify.notify_waiters();
             }
         }
     }
 
     pub fn lookup(&self, host: &str) -> Option<(String, u16, bool, Arc<Notify>)> {
-        let lease_id = self.by_host.lock().unwrap().get(host).cloned()?;
-        let leases = self.leases.lock().unwrap();
-        let l = leases.get(&lease_id)?.clone();
-        Some((lease_id, l.upstream_port, l.active, l.notify))
+        let by_host = self.by_host.lock().unwrap();
+        let app_id = by_host
+            .get(host)
+            .or_else(|| {
+                // Wildcard fallback: strip the first label and look up `*.{rest}`.
+                let rest = host.split_once('.')?.1;
+                let wildcard = format!("*.{rest}");
+                by_host.get(&wildcard)
+            })
+            .cloned()?;
+        drop(by_host);
+        let apps = self.apps.lock().unwrap();
+        let r = apps.get(&app_id)?.clone();
+        Some((app_id, r.upstream_port, r.active, r.notify))
     }
 
     pub fn hosts(&self) -> Vec<String> {
         self.by_host.lock().unwrap().keys().cloned().collect()
     }
 
-    pub async fn wait_for_active(&self, lease_id: &str, timeout: std::time::Duration) -> bool {
+    pub async fn wait_for_active(&self, app_id: &str, timeout: std::time::Duration) -> bool {
         let notify = {
-            let leases = self.leases.lock().unwrap();
-            let Some(l) = leases.get(lease_id) else {
+            let apps = self.apps.lock().unwrap();
+            let Some(r) = apps.get(app_id) else {
                 return false;
             };
-            if l.active {
+            if r.active {
                 return true;
             }
-            l.notify.clone()
+            r.notify.clone()
         };
 
-        let _ = tokio::time::timeout(timeout, notify.notified()).await;
-        let leases = self.leases.lock().unwrap();
-        leases.get(lease_id).is_some_and(|l| l.active)
+        // Register interest before awaiting so a notify_waiters() that fires
+        // between the lock release above and the await below is not lost.
+        let notified = notify.notified();
+        tokio::pin!(notified);
+        notified.as_mut().enable();
+        let _ = tokio::time::timeout(timeout, notified).await;
+        let apps = self.apps.lock().unwrap();
+        apps.get(app_id).is_some_and(|r| r.active)
     }
 }
 
@@ -136,7 +148,7 @@ impl ProxyHttp for DevProxy {
             host: hostname.clone(),
         });
 
-        let Some((lease_id, port, active, _notify)) = self.routes.lookup(&hostname) else {
+        let Some((app_id, port, active, _notify)) = self.routes.lookup(&hostname) else {
             let mut header = ResponseHeader::build(404, None)?;
             header.insert_header("Content-Type", "text/plain")?;
             session
@@ -164,12 +176,9 @@ impl ProxyHttp for DevProxy {
         if !active {
             let ready = self
                 .routes
-                .wait_for_active(&lease_id, std::time::Duration::from_secs(30))
+                .wait_for_active(&app_id, std::time::Duration::from_secs(30))
                 .await;
             if !ready {
-                let _ = self
-                    .events
-                    .send(protocol::DevEvent::RequestFinished { host: hostname });
                 let mut header = ResponseHeader::build(503, None)?;
                 header.insert_header("Content-Type", "text/plain")?;
                 session
@@ -218,20 +227,37 @@ impl ProxyHttp for DevProxy {
 mod tests {
     use super::*;
 
+    #[test]
+    fn lookup_matches_wildcard_route() {
+        let routes = Routes::default();
+        routes.set("*.app.tako".to_string(), "app".to_string(), 3000, true);
+
+        // Exact wildcard key doesn't match a real request.
+        let hit = routes.lookup("foo.app.tako");
+        assert!(hit.is_some());
+        let (app_id, port, active, _) = hit.unwrap();
+        assert_eq!(app_id, "app");
+        assert_eq!(port, 3000);
+        assert!(active);
+
+        // Unrelated host should not match.
+        assert!(routes.lookup("foo.other.tako").is_none());
+    }
+
     #[tokio::test]
     async fn routes_waits_for_active() {
         let routes = Routes::default();
-        routes.set("a.tako.local".to_string(), "lease".to_string(), 1234, false);
+        routes.set("a.tako".to_string(), "app".to_string(), 1234, false);
 
         let r2 = routes.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-            r2.set_active("lease", true);
+            r2.set_active("app", true);
         });
 
         assert!(
             routes
-                .wait_for_active("lease", std::time::Duration::from_secs(1))
+                .wait_for_active("app", std::time::Duration::from_secs(1))
                 .await
         );
     }

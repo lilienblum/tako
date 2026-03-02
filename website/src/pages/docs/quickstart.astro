@@ -77,11 +77,11 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
   <Snippet code="tako dev" lang="bash" />
   <p>
     On your first <code>tako dev</code> run, Tako will ask for your <code>sudo</code> password to set up local no-port HTTPS
-    and custom <code>*.tako.local</code> URLs. This happens once and is reused for other apps.
+    and custom <code>*.tako</code> URLs. This happens once and is reused for other apps.
   </p>
   <p>
-    Open the URL shown in the terminal UI (TUI). By default, Tako uses
-    <code>{"{app}.tako.local"}</code>, where <code>{`{app}`}</code> is your app name.
+    Open the URL shown in the terminal header. By default, Tako uses
+    <code>{"{app}.tako"}</code>, where <code>{`{app}`}</code> is your app name.
   </p>
 
   <h2 id="remote-setup">Remote setup</h2>
@@ -104,7 +104,7 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
   </p>
 
   <p>
-    <code>tako dev</code> uses <code>{"{app}.tako.local"}</code> by default. Add <code>[envs.development]</code> only when
+    <code>tako dev</code> uses <code>{"{app}.tako"}</code> by default. Add <code>[envs.development]</code> only when
     you want custom local routes.
   </p>
 

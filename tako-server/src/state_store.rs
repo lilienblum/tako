@@ -1,64 +1,10 @@
 use crate::instances::AppConfig;
-use std::ffi::{CStr, CString, c_void};
-use std::os::raw::{c_char, c_int};
+use rusqlite::OptionalExtension;
 use std::path::{Path, PathBuf};
-use std::ptr::{self, null_mut};
 use std::time::Duration;
 use tako_core::UpgradeMode;
 
 pub const CURRENT_SCHEMA_VERSION: i32 = 2;
-
-const SQLITE_OK: c_int = 0;
-const SQLITE_ROW: c_int = 100;
-const SQLITE_DONE: c_int = 101;
-
-#[repr(C)]
-struct Sqlite3 {
-    _private: [u8; 0],
-}
-
-#[repr(C)]
-struct Sqlite3Stmt {
-    _private: [u8; 0],
-}
-
-type SqliteDestructor = Option<unsafe extern "C" fn(*mut c_void)>;
-
-#[link(name = "sqlite3")]
-unsafe extern "C" {
-    fn sqlite3_open(filename: *const c_char, pp_db: *mut *mut Sqlite3) -> c_int;
-    fn sqlite3_close(db: *mut Sqlite3) -> c_int;
-    fn sqlite3_exec(
-        db: *mut Sqlite3,
-        sql: *const c_char,
-        callback: Option<unsafe extern "C" fn()>,
-        arg: *mut c_void,
-        errmsg: *mut *mut c_char,
-    ) -> c_int;
-    fn sqlite3_free(ptr: *mut c_void);
-    fn sqlite3_errmsg(db: *mut Sqlite3) -> *const c_char;
-    fn sqlite3_prepare_v2(
-        db: *mut Sqlite3,
-        sql: *const c_char,
-        n_byte: c_int,
-        pp_stmt: *mut *mut Sqlite3Stmt,
-        pz_tail: *mut *const c_char,
-    ) -> c_int;
-    fn sqlite3_step(stmt: *mut Sqlite3Stmt) -> c_int;
-    fn sqlite3_finalize(stmt: *mut Sqlite3Stmt) -> c_int;
-    fn sqlite3_bind_text(
-        stmt: *mut Sqlite3Stmt,
-        index: c_int,
-        value: *const c_char,
-        n: c_int,
-        destructor: SqliteDestructor,
-    ) -> c_int;
-    fn sqlite3_bind_int(stmt: *mut Sqlite3Stmt, index: c_int, value: c_int) -> c_int;
-    fn sqlite3_bind_int64(stmt: *mut Sqlite3Stmt, index: c_int, value: i64) -> c_int;
-    fn sqlite3_column_int(stmt: *mut Sqlite3Stmt, i_col: c_int) -> c_int;
-    fn sqlite3_column_int64(stmt: *mut Sqlite3Stmt, i_col: c_int) -> i64;
-    fn sqlite3_column_text(stmt: *mut Sqlite3Stmt, i_col: c_int) -> *const u8;
-}
 
 #[derive(Debug, Clone)]
 pub struct PersistedApp {
@@ -78,170 +24,9 @@ pub enum StateStoreError {
     UnsupportedSchemaVersion { found: i32 },
 }
 
-struct RawConnection {
-    db: *mut Sqlite3,
-}
-
-impl RawConnection {
-    fn open(path: &Path) -> Result<Self, StateStoreError> {
-        let mut db: *mut Sqlite3 = null_mut();
-        let c_path = CString::new(path.to_string_lossy().as_bytes())
-            .map_err(|e| StateStoreError::Sqlite(e.to_string()))?;
-        let rc = unsafe { sqlite3_open(c_path.as_ptr(), &mut db) };
-        if rc != SQLITE_OK {
-            let message = if db.is_null() {
-                "failed to open sqlite database".to_string()
-            } else {
-                unsafe { c_str_from_ptr(sqlite3_errmsg(db)) }
-            };
-            if !db.is_null() {
-                let _ = unsafe { sqlite3_close(db) };
-            }
-            return Err(StateStoreError::Sqlite(message));
-        }
-        Ok(Self { db })
-    }
-
-    fn exec(&self, sql: &str) -> Result<(), StateStoreError> {
-        let c_sql = CString::new(sql).map_err(|e| StateStoreError::Sqlite(e.to_string()))?;
-        let mut err_ptr: *mut c_char = null_mut();
-        let rc =
-            unsafe { sqlite3_exec(self.db, c_sql.as_ptr(), None, ptr::null_mut(), &mut err_ptr) };
-        if rc != SQLITE_OK {
-            let message = if !err_ptr.is_null() {
-                let msg = unsafe { c_str_from_ptr(err_ptr) };
-                unsafe { sqlite3_free(err_ptr as *mut c_void) };
-                msg
-            } else {
-                self.errmsg()
-            };
-            return Err(StateStoreError::Sqlite(message));
-        }
-        Ok(())
-    }
-
-    fn prepare(&self, sql: &str) -> Result<RawStatement, StateStoreError> {
-        let c_sql = CString::new(sql).map_err(|e| StateStoreError::Sqlite(e.to_string()))?;
-        let mut stmt: *mut Sqlite3Stmt = null_mut();
-        let rc =
-            unsafe { sqlite3_prepare_v2(self.db, c_sql.as_ptr(), -1, &mut stmt, ptr::null_mut()) };
-        if rc != SQLITE_OK {
-            return Err(StateStoreError::Sqlite(self.errmsg()));
-        }
-        Ok(RawStatement { db: self.db, stmt })
-    }
-
-    fn query_user_version(&self) -> Result<i32, StateStoreError> {
-        let mut stmt = self.prepare("PRAGMA user_version;")?;
-        match stmt.step()? {
-            Step::Row => stmt.column_int(0),
-            Step::Done => Ok(0),
-        }
-    }
-
-    fn errmsg(&self) -> String {
-        unsafe { c_str_from_ptr(sqlite3_errmsg(self.db)) }
-    }
-}
-
-impl Drop for RawConnection {
-    fn drop(&mut self) {
-        if !self.db.is_null() {
-            let _ = unsafe { sqlite3_close(self.db) };
-            self.db = null_mut();
-        }
-    }
-}
-
-enum Step {
-    Row,
-    Done,
-}
-
-struct RawStatement {
-    db: *mut Sqlite3,
-    stmt: *mut Sqlite3Stmt,
-}
-
-impl RawStatement {
-    fn bind_text(&mut self, index: c_int, value: &str) -> Result<(), StateStoreError> {
-        let c = CString::new(value).map_err(|e| StateStoreError::Sqlite(e.to_string()))?;
-        let rc = unsafe {
-            sqlite3_bind_text(
-                self.stmt,
-                index,
-                c.as_ptr(),
-                -1,
-                sqlite_transient_destructor(),
-            )
-        };
-        if rc != SQLITE_OK {
-            return Err(StateStoreError::Sqlite(self.errmsg()));
-        }
-        Ok(())
-    }
-
-    fn bind_int(&mut self, index: c_int, value: i32) -> Result<(), StateStoreError> {
-        let rc = unsafe { sqlite3_bind_int(self.stmt, index, value) };
-        if rc != SQLITE_OK {
-            return Err(StateStoreError::Sqlite(self.errmsg()));
-        }
-        Ok(())
-    }
-
-    fn bind_int64(&mut self, index: c_int, value: i64) -> Result<(), StateStoreError> {
-        let rc = unsafe { sqlite3_bind_int64(self.stmt, index, value) };
-        if rc != SQLITE_OK {
-            return Err(StateStoreError::Sqlite(self.errmsg()));
-        }
-        Ok(())
-    }
-
-    fn step(&mut self) -> Result<Step, StateStoreError> {
-        let rc = unsafe { sqlite3_step(self.stmt) };
-        match rc {
-            SQLITE_ROW => Ok(Step::Row),
-            SQLITE_DONE => Ok(Step::Done),
-            _ => Err(StateStoreError::Sqlite(self.errmsg())),
-        }
-    }
-
-    fn execute_done(&mut self) -> Result<(), StateStoreError> {
-        match self.step()? {
-            Step::Done => Ok(()),
-            Step::Row => Err(StateStoreError::Sqlite(
-                "expected statement to complete without rows".to_string(),
-            )),
-        }
-    }
-
-    fn column_int(&self, col: c_int) -> Result<i32, StateStoreError> {
-        Ok(unsafe { sqlite3_column_int(self.stmt, col) })
-    }
-
-    fn column_int64(&self, col: c_int) -> Result<i64, StateStoreError> {
-        Ok(unsafe { sqlite3_column_int64(self.stmt, col) })
-    }
-
-    fn column_text(&self, col: c_int) -> Result<String, StateStoreError> {
-        let ptr = unsafe { sqlite3_column_text(self.stmt, col) };
-        if ptr.is_null() {
-            return Ok(String::new());
-        }
-        Ok(unsafe { c_str_from_u8_ptr(ptr) })
-    }
-
-    fn errmsg(&self) -> String {
-        unsafe { c_str_from_ptr(sqlite3_errmsg(self.db)) }
-    }
-}
-
-impl Drop for RawStatement {
-    fn drop(&mut self) {
-        if !self.stmt.is_null() {
-            let _ = unsafe { sqlite3_finalize(self.stmt) };
-            self.stmt = null_mut();
-        }
+impl From<rusqlite::Error> for StateStoreError {
+    fn from(e: rusqlite::Error) -> Self {
+        StateStoreError::Sqlite(e.to_string())
     }
 }
 
@@ -265,7 +50,10 @@ impl SqliteStateStore {
         }
 
         let conn = self.open_connection()?;
-        let version = conn.query_user_version()?;
+        let version: i32 = conn
+            .query_row("PRAGMA user_version;", [], |row| row.get(0))
+            .map_err(StateStoreError::from)?;
+
         if version > CURRENT_SCHEMA_VERSION {
             return Err(StateStoreError::UnsupportedSchemaVersion { found: version });
         }
@@ -282,114 +70,116 @@ impl SqliteStateStore {
 
     pub fn upsert_app(&self, config: &AppConfig, routes: &[String]) -> Result<(), StateStoreError> {
         let conn = self.open_connection()?;
-        conn.exec("BEGIN IMMEDIATE;")?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(StateStoreError::from)?;
 
-        let result = (|| {
-            let mut stmt = conn.prepare(
-                "INSERT INTO apps (
-                    name, version, path, cwd, command_json,
-                    min_instances, max_instances, base_port, idle_timeout_secs
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT(name) DO UPDATE SET
-                    version = excluded.version,
-                    path = excluded.path,
-                    cwd = excluded.cwd,
-                    command_json = excluded.command_json,
-                    min_instances = excluded.min_instances,
-                    max_instances = excluded.max_instances,
-                    base_port = excluded.base_port,
-                    idle_timeout_secs = excluded.idle_timeout_secs;",
-            )?;
-            stmt.bind_text(1, &config.name)?;
-            stmt.bind_text(2, &config.version)?;
-            stmt.bind_text(3, config.path.to_string_lossy().as_ref())?;
-            stmt.bind_text(4, config.cwd.to_string_lossy().as_ref())?;
-            let command_json = serde_json::to_string(&config.command)
-                .map_err(|e| StateStoreError::InvalidData(format!("serialize command: {e}")))?;
-            stmt.bind_text(5, &command_json)?;
-            stmt.bind_int64(6, config.min_instances as i64)?;
-            stmt.bind_int64(7, config.max_instances as i64)?;
-            stmt.bind_int64(8, i64::from(config.base_port))?;
-            stmt.bind_int64(9, config.idle_timeout.as_secs() as i64)?;
-            stmt.execute_done()?;
+        tx.execute(
+            "INSERT INTO apps (
+                name, version, path, cwd, command_json,
+                min_instances, max_instances, base_port, idle_timeout_secs
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(name) DO UPDATE SET
+                version = excluded.version,
+                path = excluded.path,
+                cwd = excluded.cwd,
+                command_json = excluded.command_json,
+                min_instances = excluded.min_instances,
+                max_instances = excluded.max_instances,
+                base_port = excluded.base_port,
+                idle_timeout_secs = excluded.idle_timeout_secs;",
+            rusqlite::params![
+                &config.name,
+                &config.version,
+                config.path.to_string_lossy().as_ref(),
+                config.cwd.to_string_lossy().as_ref(),
+                serde_json::to_string(&config.command)
+                    .map_err(|e| StateStoreError::InvalidData(format!("serialize command: {e}")))?,
+                config.min_instances as i64,
+                config.max_instances as i64,
+                i64::from(config.base_port),
+                config.idle_timeout.as_secs() as i64,
+            ],
+        )
+        .map_err(StateStoreError::from)?;
 
-            let mut clear_routes = conn.prepare("DELETE FROM app_routes WHERE app_name = ?1;")?;
-            clear_routes.bind_text(1, &config.name)?;
-            clear_routes.execute_done()?;
+        tx.execute(
+            "DELETE FROM app_routes WHERE app_name = ?1;",
+            rusqlite::params![&config.name],
+        )
+        .map_err(StateStoreError::from)?;
 
-            for route in routes {
-                let mut insert_route =
-                    conn.prepare("INSERT INTO app_routes (app_name, route) VALUES (?1, ?2);")?;
-                insert_route.bind_text(1, &config.name)?;
-                insert_route.bind_text(2, route)?;
-                insert_route.execute_done()?;
-            }
-
-            Ok(())
-        })();
-
-        match result {
-            Ok(()) => conn.exec("COMMIT;"),
-            Err(err) => {
-                let _ = conn.exec("ROLLBACK;");
-                Err(err)
-            }
+        for route in routes {
+            tx.execute(
+                "INSERT INTO app_routes (app_name, route) VALUES (?1, ?2);",
+                rusqlite::params![&config.name, route],
+            )
+            .map_err(StateStoreError::from)?;
         }
+
+        tx.commit().map_err(StateStoreError::from)?;
+        Ok(())
     }
 
     pub fn delete_app(&self, app_name: &str) -> Result<(), StateStoreError> {
         let conn = self.open_connection()?;
-        let mut delete = conn.prepare("DELETE FROM apps WHERE name = ?1;")?;
-        delete.bind_text(1, app_name)?;
-        delete.execute_done()?;
+        conn.execute(
+            "DELETE FROM apps WHERE name = ?1;",
+            rusqlite::params![app_name],
+        )
+        .map_err(StateStoreError::from)?;
         Ok(())
     }
 
     pub fn load_apps(&self) -> Result<Vec<PersistedApp>, StateStoreError> {
         let conn = self.open_connection()?;
 
-        let mut stmt = conn.prepare(
-            "SELECT
-                name, version, path, cwd, command_json,
-                min_instances, max_instances, base_port, idle_timeout_secs
-             FROM apps
-             ORDER BY name;",
-        )?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT
+                    name, version, path, cwd, command_json,
+                    min_instances, max_instances, base_port, idle_timeout_secs
+                 FROM apps
+                 ORDER BY name;",
+            )
+            .map_err(StateStoreError::from)?;
 
         let mut apps = Vec::new();
-        while let Step::Row = stmt.step()? {
-            let name = stmt.column_text(0)?;
-            let version = stmt.column_text(1)?;
-            let path = PathBuf::from(stmt.column_text(2)?);
-            let cwd = PathBuf::from(stmt.column_text(3)?);
-            let command_json = stmt.column_text(4)?;
-            let min_instances = to_u32(stmt.column_int64(5)?, "min_instances")?;
-            let max_instances = to_u32(stmt.column_int64(6)?, "max_instances")?;
-            let base_port = to_u16(stmt.column_int64(7)?, "base_port")?;
-            let idle_timeout_secs = to_u64(stmt.column_int64(8)?, "idle_timeout_secs")?;
+        let mut rows = stmt.query([]).map_err(StateStoreError::from)?;
+
+        while let Some(row) = rows.next().map_err(StateStoreError::from)? {
+            let name: String = row.get(0).map_err(StateStoreError::from)?;
+            let version: String = row.get(1).map_err(StateStoreError::from)?;
+            let path_str: String = row.get(2).map_err(StateStoreError::from)?;
+            let cwd_str: String = row.get(3).map_err(StateStoreError::from)?;
+            let command_json: String = row.get(4).map_err(StateStoreError::from)?;
+            let min_instances: i64 = row.get(5).map_err(StateStoreError::from)?;
+            let max_instances: i64 = row.get(6).map_err(StateStoreError::from)?;
+            let base_port: i64 = row.get(7).map_err(StateStoreError::from)?;
+            let idle_timeout_secs: i64 = row.get(8).map_err(StateStoreError::from)?;
 
             let command: Vec<String> = serde_json::from_str(&command_json)
                 .map_err(|e| StateStoreError::InvalidData(format!("deserialize command: {e}")))?;
 
-            let mut routes_stmt =
-                conn.prepare("SELECT route FROM app_routes WHERE app_name = ?1 ORDER BY route;")?;
-            routes_stmt.bind_text(1, &name)?;
-            let mut routes = Vec::new();
-            while let Step::Row = routes_stmt.step()? {
-                routes.push(routes_stmt.column_text(0)?);
-            }
+            let mut routes_stmt = conn
+                .prepare("SELECT route FROM app_routes WHERE app_name = ?1 ORDER BY route;")
+                .map_err(StateStoreError::from)?;
+            let routes: Vec<String> = routes_stmt
+                .query_map(rusqlite::params![&name], |r| r.get(0))
+                .map_err(StateStoreError::from)?
+                .collect::<Result<Vec<String>, _>>()
+                .map_err(StateStoreError::from)?;
 
-            // env_vars and secrets are loaded from files by the caller after restore
             let config = AppConfig {
                 name,
                 version,
-                path,
+                path: PathBuf::from(path_str),
                 command,
-                cwd,
-                min_instances,
-                max_instances,
-                base_port,
-                idle_timeout: Duration::from_secs(idle_timeout_secs),
+                cwd: PathBuf::from(cwd_str),
+                min_instances: to_u32(min_instances, "min_instances")?,
+                max_instances: to_u32(max_instances, "max_instances")?,
+                base_port: to_u16(base_port, "base_port")?,
+                idle_timeout: Duration::from_secs(to_u64(idle_timeout_secs, "idle_timeout_secs")?),
                 ..Default::default()
             };
 
@@ -401,132 +191,147 @@ impl SqliteStateStore {
 
     pub fn set_server_mode(&self, mode: UpgradeMode) -> Result<(), StateStoreError> {
         let conn = self.open_connection()?;
-        let mut stmt = conn.prepare(
-            "UPDATE server_state
-             SET server_mode = ?1
-             WHERE id = 1;",
-        )?;
-        stmt.bind_text(1, server_mode_to_str(mode))?;
-        stmt.execute_done()?;
+        conn.execute(
+            "UPDATE server_state SET server_mode = ?1 WHERE id = 1;",
+            rusqlite::params![server_mode_to_str(mode)],
+        )
+        .map_err(StateStoreError::from)?;
         Ok(())
     }
 
     pub fn server_mode(&self) -> Result<UpgradeMode, StateStoreError> {
         let conn = self.open_connection()?;
-        let mut stmt = conn.prepare("SELECT server_mode FROM server_state WHERE id = 1;")?;
-        match stmt.step()? {
-            Step::Row => server_mode_from_str(&stmt.column_text(0)?),
-            Step::Done => Ok(UpgradeMode::Normal),
+        let mode_str: Option<String> = conn
+            .query_row(
+                "SELECT server_mode FROM server_state WHERE id = 1;",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(StateStoreError::from)?;
+
+        match mode_str {
+            Some(s) => server_mode_from_str(&s),
+            None => Ok(UpgradeMode::Normal),
         }
     }
 
     pub fn try_acquire_upgrade_lock(&self, owner: &str) -> Result<bool, StateStoreError> {
         let conn = self.open_connection()?;
-        conn.exec("BEGIN IMMEDIATE;")?;
-        let result = (|| match self.upgrade_lock_owner_on_conn(&conn)? {
-            Some(existing) if existing == owner => Ok(true),
-            Some(_) => Ok(false),
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(StateStoreError::from)?;
+
+        let existing: Option<String> = tx
+            .query_row("SELECT owner FROM upgrade_lock WHERE id = 1;", [], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(StateStoreError::from)?;
+
+        let acquired = match existing {
+            Some(existing) if existing == owner => true,
+            Some(_) => false,
             None => {
-                let mut stmt = conn.prepare(
+                tx.execute(
                     "INSERT INTO upgrade_lock (id, owner, acquired_at_unix_secs)
-                         VALUES (1, ?1, strftime('%s','now'));",
-                )?;
-                stmt.bind_text(1, owner)?;
-                stmt.execute_done()?;
-                Ok(true)
+                     VALUES (1, ?1, strftime('%s','now'));",
+                    rusqlite::params![owner],
+                )
+                .map_err(StateStoreError::from)?;
+                true
             }
-        })();
-        match result {
-            Ok(acquired) => {
-                conn.exec("COMMIT;")?;
-                Ok(acquired)
-            }
-            Err(err) => {
-                let _ = conn.exec("ROLLBACK;");
-                Err(err)
-            }
-        }
+        };
+
+        tx.commit().map_err(StateStoreError::from)?;
+        Ok(acquired)
     }
 
     pub fn release_upgrade_lock(&self, owner: &str) -> Result<bool, StateStoreError> {
         let conn = self.open_connection()?;
-        conn.exec("BEGIN IMMEDIATE;")?;
-        let result = (|| match self.upgrade_lock_owner_on_conn(&conn)? {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(StateStoreError::from)?;
+
+        let existing: Option<String> = tx
+            .query_row("SELECT owner FROM upgrade_lock WHERE id = 1;", [], |row| {
+                row.get(0)
+            })
+            .optional()
+            .map_err(StateStoreError::from)?;
+
+        let released = match existing {
             Some(existing) if existing == owner => {
-                let mut stmt = conn.prepare("DELETE FROM upgrade_lock WHERE id = 1;")?;
-                stmt.execute_done()?;
-                Ok(true)
+                tx.execute("DELETE FROM upgrade_lock WHERE id = 1;", [])
+                    .map_err(StateStoreError::from)?;
+                true
             }
-            _ => Ok(false),
-        })();
-        match result {
-            Ok(released) => {
-                conn.exec("COMMIT;")?;
-                Ok(released)
-            }
-            Err(err) => {
-                let _ = conn.exec("ROLLBACK;");
-                Err(err)
-            }
-        }
+            _ => false,
+        };
+
+        tx.commit().map_err(StateStoreError::from)?;
+        Ok(released)
     }
 
     pub fn upgrade_lock_owner(&self) -> Result<Option<String>, StateStoreError> {
         let conn = self.open_connection()?;
-        self.upgrade_lock_owner_on_conn(&conn)
+        conn.query_row("SELECT owner FROM upgrade_lock WHERE id = 1;", [], |row| {
+            row.get(0)
+        })
+        .optional()
+        .map_err(StateStoreError::from)
     }
 
-    fn open_connection(&self) -> Result<RawConnection, StateStoreError> {
-        let conn = RawConnection::open(&self.path)?;
-        conn.exec("PRAGMA journal_mode = WAL;")?;
-        conn.exec("PRAGMA synchronous = NORMAL;")?;
-        conn.exec("PRAGMA foreign_keys = ON;")?;
-        conn.exec("PRAGMA busy_timeout = 5000;")?;
-        conn.exec("PRAGMA temp_store = MEMORY;")?;
-        conn.exec("PRAGMA wal_autocheckpoint = 1000;")?;
-        conn.exec("PRAGMA journal_size_limit = 67108864;")?;
-        conn.exec("PRAGMA cache_size = -20000;")?;
-        conn.exec("PRAGMA mmap_size = 134217728;")?;
-        conn.exec("PRAGMA trusted_schema = OFF;")?;
+    fn open_connection(&self) -> Result<rusqlite::Connection, StateStoreError> {
+        let conn = rusqlite::Connection::open(&self.path).map_err(StateStoreError::from)?;
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA foreign_keys = ON;
+             PRAGMA busy_timeout = 5000;
+             PRAGMA temp_store = MEMORY;
+             PRAGMA wal_autocheckpoint = 1000;
+             PRAGMA journal_size_limit = 67108864;
+             PRAGMA cache_size = -20000;
+             PRAGMA mmap_size = 134217728;
+             PRAGMA trusted_schema = OFF;",
+        )
+        .map_err(StateStoreError::from)?;
         Ok(conn)
     }
 
-    fn migrate(&self, conn: &RawConnection, from: i32) -> Result<(), StateStoreError> {
-        conn.exec("BEGIN IMMEDIATE;")?;
-        let result = (|| {
-            match from {
-                0 => {
-                    self.ensure_schema_objects(conn)?;
-                    conn.exec(&format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"))?;
-                    self.upsert_schema_meta(conn)?;
-                }
-                CURRENT_SCHEMA_VERSION => {}
-                other => return Err(StateStoreError::UnsupportedSchemaVersion { found: other }),
+    fn migrate(&self, conn: &rusqlite::Connection, from: i32) -> Result<(), StateStoreError> {
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(StateStoreError::from)?;
+        match from {
+            0 => {
+                self.ensure_schema_objects_on(&tx)?;
+                tx.execute_batch(&format!("PRAGMA user_version = {CURRENT_SCHEMA_VERSION};"))
+                    .map_err(StateStoreError::from)?;
+                self.upsert_schema_meta_on(&tx)?;
             }
-            Ok(())
-        })();
-
-        match result {
-            Ok(()) => conn.exec("COMMIT;"),
-            Err(err) => {
-                let _ = conn.exec("ROLLBACK;");
-                Err(err)
-            }
+            CURRENT_SCHEMA_VERSION => {}
+            other => return Err(StateStoreError::UnsupportedSchemaVersion { found: other }),
         }
+        tx.commit().map_err(StateStoreError::from)?;
+        Ok(())
     }
 
-    fn ensure_schema_objects(&self, conn: &RawConnection) -> Result<(), StateStoreError> {
-        conn.exec(
+    fn ensure_schema_objects(&self, conn: &rusqlite::Connection) -> Result<(), StateStoreError> {
+        self.ensure_schema_objects_on(conn)
+    }
+
+    fn ensure_schema_objects_on(&self, conn: &rusqlite::Connection) -> Result<(), StateStoreError> {
+        conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS schema_meta (
                 id INTEGER PRIMARY KEY CHECK(id = 1),
                 schema_version INTEGER NOT NULL,
                 min_binary_version TEXT NOT NULL,
                 created_by TEXT NOT NULL
-            );",
-        )?;
+            );
 
-        conn.exec(
-            "CREATE TABLE IF NOT EXISTS apps (
+            CREATE TABLE IF NOT EXISTS apps (
                 name TEXT PRIMARY KEY,
                 version TEXT NOT NULL,
                 path TEXT NOT NULL,
@@ -536,69 +341,59 @@ impl SqliteStateStore {
                 max_instances INTEGER NOT NULL,
                 base_port INTEGER NOT NULL,
                 idle_timeout_secs INTEGER NOT NULL
-            );",
-        )?;
+            );
 
-        conn.exec(
-            "CREATE TABLE IF NOT EXISTS app_routes (
+            CREATE TABLE IF NOT EXISTS app_routes (
                 app_name TEXT NOT NULL,
                 route TEXT NOT NULL,
                 PRIMARY KEY (app_name, route),
                 FOREIGN KEY(app_name) REFERENCES apps(name) ON DELETE CASCADE
-            );",
-        )?;
+            );
 
-        conn.exec(
-            "CREATE TABLE IF NOT EXISTS server_state (
+            CREATE TABLE IF NOT EXISTS server_state (
                 id INTEGER PRIMARY KEY CHECK(id = 1),
                 server_mode TEXT NOT NULL
-            );",
-        )?;
+            );
 
-        conn.exec(
-            "CREATE TABLE IF NOT EXISTS upgrade_lock (
+            CREATE TABLE IF NOT EXISTS upgrade_lock (
                 id INTEGER PRIMARY KEY CHECK(id = 1),
                 owner TEXT NOT NULL,
                 acquired_at_unix_secs INTEGER NOT NULL
             );",
-        )?;
-
+        )
+        .map_err(StateStoreError::from)?;
         Ok(())
     }
 
-    fn upsert_schema_meta(&self, conn: &RawConnection) -> Result<(), StateStoreError> {
-        let mut stmt = conn.prepare(
+    fn upsert_schema_meta(&self, conn: &rusqlite::Connection) -> Result<(), StateStoreError> {
+        self.upsert_schema_meta_on(conn)
+    }
+
+    fn upsert_schema_meta_on(&self, conn: &rusqlite::Connection) -> Result<(), StateStoreError> {
+        conn.execute(
             "INSERT INTO schema_meta (id, schema_version, min_binary_version, created_by)
              VALUES (1, ?1, ?2, ?3)
              ON CONFLICT(id) DO UPDATE SET
                 schema_version = excluded.schema_version,
                 min_binary_version = excluded.min_binary_version,
                 created_by = excluded.created_by;",
-        )?;
-        stmt.bind_int(1, CURRENT_SCHEMA_VERSION)?;
-        stmt.bind_text(2, env!("CARGO_PKG_VERSION"))?;
-        stmt.bind_text(3, "tako-server")?;
-        stmt.execute_done()?;
+            rusqlite::params![
+                CURRENT_SCHEMA_VERSION,
+                env!("CARGO_PKG_VERSION"),
+                "tako-server"
+            ],
+        )
+        .map_err(StateStoreError::from)?;
 
-        let mut mode_stmt = conn.prepare(
+        conn.execute(
             "INSERT INTO server_state (id, server_mode)
              VALUES (1, 'normal')
              ON CONFLICT(id) DO NOTHING;",
-        )?;
-        mode_stmt.execute_done()?;
+            [],
+        )
+        .map_err(StateStoreError::from)?;
 
         Ok(())
-    }
-
-    fn upgrade_lock_owner_on_conn(
-        &self,
-        conn: &RawConnection,
-    ) -> Result<Option<String>, StateStoreError> {
-        let mut stmt = conn.prepare("SELECT owner FROM upgrade_lock WHERE id = 1;")?;
-        match stmt.step()? {
-            Step::Row => Ok(Some(stmt.column_text(0)?)),
-            Step::Done => Ok(None),
-        }
     }
 }
 
@@ -618,26 +413,6 @@ fn to_u64(value: i64, field: &str) -> Result<u64, StateStoreError> {
     u64::try_from(value).map_err(|_| {
         StateStoreError::InvalidData(format!("field '{field}' out of range for u64: {value}"))
     })
-}
-
-unsafe fn c_str_from_ptr(ptr: *const c_char) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe { CStr::from_ptr(ptr) }.to_string_lossy().to_string()
-}
-
-unsafe fn c_str_from_u8_ptr(ptr: *const u8) -> String {
-    if ptr.is_null() {
-        return String::new();
-    }
-    unsafe { CStr::from_ptr(ptr as *const c_char) }
-        .to_string_lossy()
-        .to_string()
-}
-
-fn sqlite_transient_destructor() -> SqliteDestructor {
-    unsafe { std::mem::transmute::<isize, SqliteDestructor>(-1) }
 }
 
 fn server_mode_to_str(mode: UpgradeMode) -> &'static str {
@@ -691,26 +466,26 @@ mod tests {
         store.init().unwrap();
 
         let conn = store.open_connection().unwrap();
-        let user_version = conn.query_user_version().unwrap();
+        let user_version: i32 = conn
+            .query_row("PRAGMA user_version;", [], |row| row.get(0))
+            .unwrap();
         assert_eq!(user_version, CURRENT_SCHEMA_VERSION);
 
-        let mut stmt = conn
-            .prepare("SELECT min_binary_version FROM schema_meta WHERE id = 1;")
+        let min_binary: String = conn
+            .query_row(
+                "SELECT min_binary_version FROM schema_meta WHERE id = 1;",
+                [],
+                |row| row.get(0),
+            )
             .unwrap();
-        match stmt.step().unwrap() {
-            Step::Row => {
-                let min_binary = stmt.column_text(0).unwrap();
-                assert!(!min_binary.is_empty());
-            }
-            Step::Done => panic!("expected schema_meta row"),
-        }
+        assert!(!min_binary.is_empty());
     }
 
     #[test]
     fn init_rejects_newer_unknown_schema() {
         let (_temp, store) = temp_store();
         let conn = store.open_connection().unwrap();
-        conn.exec("PRAGMA user_version = 999;").unwrap();
+        conn.execute_batch("PRAGMA user_version = 999;").unwrap();
         drop(conn);
 
         let err = store.init().unwrap_err();
@@ -750,7 +525,7 @@ mod tests {
             app.config.command,
             vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()]
         );
-        // env_vars and secrets are no longer stored in SQLite; loaded from files after restore
+        // env_vars and secrets are loaded from files by the caller after restore
         assert!(app.config.env_vars.is_empty());
         assert!(app.config.secrets.is_empty());
         assert_eq!(app.config.min_instances, 2);
@@ -831,7 +606,7 @@ mod tests {
         let (_temp, store) = temp_store();
         // Bootstrap a v1 schema with env_json column
         let conn = store.open_connection().unwrap();
-        conn.exec(
+        conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS apps (
                 name TEXT PRIMARY KEY,
                 version TEXT NOT NULL,
@@ -846,11 +621,11 @@ mod tests {
             );",
         )
         .unwrap();
-        conn.exec(
+        conn.execute_batch(
             "INSERT INTO apps VALUES ('my-app','v1','/opt/tako','/opt/tako','[\"bun\",\"index.ts\"]','{\"KEY\":\"val\"}',1,4,3000,300);",
         )
         .unwrap();
-        conn.exec("PRAGMA user_version = 1;").unwrap();
+        conn.execute_batch("PRAGMA user_version = 1;").unwrap();
         drop(conn);
 
         let err = store.init().unwrap_err();

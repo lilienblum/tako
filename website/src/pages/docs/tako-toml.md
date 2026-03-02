@@ -141,8 +141,8 @@ route = "api.example.com"
 - Each environment can set `route` or `routes`, but not both.
 - Environment sections accept only `route`/`routes`. Put env vars in `[vars]` / `[vars.<environment>]`.
 - Every non-development environment must define `route` or `routes`.
-- `[envs.development]` may omit routes and defaults to `{app}.tako.local` for `tako dev`.
-- Development routes must be `{app}.tako.local` or a subdomain of it.
+- `[envs.development]` may omit routes and defaults to `{app}.tako` for `tako dev`.
+- Development routes must be `{app}.tako` or a subdomain of it.
 - Empty route sets are rejected for non-development environments. There is no implicit catch-all routing mode.
 - Routes must include a hostname (path-only routes are invalid).
 - `example.com` and `example.com/*` are equivalent and both match all paths on `example.com`.

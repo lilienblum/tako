@@ -189,15 +189,11 @@ impl FakeDevServer {
                     let typ = v.get("type").and_then(|t| t.as_str()).unwrap_or("");
                     let resp = match typ {
                         "Ping" => serde_json::json!({ "type": "Pong" }),
-                        "GetToken" => serde_json::json!({
-                            "type": "Token",
-                            "token": "t"
-                        }),
                         "ListApps" => serde_json::json!({
                             "type": "Apps",
                             "apps": [
-                                { "lease_id": "la", "app_name": "a", "hosts": ["a.tako.local"], "upstream_port": 1234, "pid": 111 },
-                                { "lease_id": "lb", "app_name": "b", "hosts": ["b.tako.local"], "upstream_port": 2222 }
+                                { "app_name": "a", "hosts": ["a.tako"], "upstream_port": 1234, "pid": 111 },
+                                { "app_name": "b", "hosts": ["b.tako"], "upstream_port": 2222 }
                             ]
                         }),
                         "Info" => serde_json::json!({
@@ -210,9 +206,32 @@ impl FakeDevServer {
                                 "local_dns_port": 53535
                             }
                         }),
-                        "UnregisterLease" => serde_json::json!({
-                            "type": "LeaseUnregistered",
-                            "lease_id": v.get("lease_id").and_then(|a| a.as_str()).unwrap_or(""),
+                        "UnregisterApp" => serde_json::json!({
+                            "type": "AppUnregistered",
+                            "project_dir": v.get("project_dir").and_then(|a| a.as_str()).unwrap_or(""),
+                        }),
+                        "RegisterApp" => serde_json::json!({
+                            "type": "AppRegistered",
+                            "app_name": v.get("app_name").and_then(|a| a.as_str()).unwrap_or(""),
+                            "project_dir": v.get("project_dir").and_then(|a| a.as_str()).unwrap_or(""),
+                            "url": format!("https://{}.tako/", v.get("app_name").and_then(|a| a.as_str()).unwrap_or("app")),
+                        }),
+                        "SetAppStatus" => serde_json::json!({
+                            "type": "AppStatusUpdated",
+                            "project_dir": v.get("project_dir").and_then(|a| a.as_str()).unwrap_or(""),
+                            "status": v.get("status").and_then(|a| a.as_str()).unwrap_or(""),
+                        }),
+                        "HandoffApp" => serde_json::json!({
+                            "type": "AppHandedOff",
+                            "project_dir": v.get("project_dir").and_then(|a| a.as_str()).unwrap_or(""),
+                        }),
+                        "ListRegisteredApps" => serde_json::json!({
+                            "type": "RegisteredApps",
+                            "apps": []
+                        }),
+                        "RestartApp" => serde_json::json!({
+                            "type": "AppRestarting",
+                            "project_dir": v.get("project_dir").and_then(|a| a.as_str()).unwrap_or(""),
                         }),
                         "StopServer" => {
                             running2.store(false, Ordering::SeqCst);
@@ -1652,27 +1671,6 @@ mod help_and_version {
         assert!(out.contains("delete"), "Should list delete command");
         assert!(out.contains("servers"), "Should list servers command");
         assert!(out.contains("secrets"), "Should list secrets command");
-    }
-
-    #[test]
-    fn test_dev_help_mentions_tui_flags() {
-        let temp = TempDir::new().unwrap();
-        let project_dir = temp.path().to_path_buf();
-
-        let output = run_tako(&["dev", "--help"], &project_dir);
-        assert!(output.status.success(), "dev help should succeed");
-
-        let out = stdout_str(&output);
-        assert!(
-            out.contains("--tui"),
-            "dev help should mention --tui: {}",
-            out
-        );
-        assert!(
-            out.contains("--no-tui"),
-            "dev help should mention --no-tui: {}",
-            out
-        );
     }
 
     #[test]

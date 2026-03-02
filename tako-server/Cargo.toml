@@ -28,6 +28,7 @@ pingora-proxy = { version = "0.7", default-features = false, features = ["openss
 pingora-http = "0.7"
 pingora-cache = "0.7"
 openssl = "0.10"
+rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "2.0"
 dashmap = "6.1"
 parking_lot = "0.12"
