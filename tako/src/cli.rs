@@ -28,10 +28,9 @@ fn format_display_version(base: &str, canary_sha: Option<&str>) -> String {
 #[command(name = "tako")]
 #[command(version, disable_version_flag = true)]
 #[command(about = "Tako - Modern application development, deployment, and runtime platform")]
-#[command(propagate_version = true)]
 pub struct Cli {
     /// Show version
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub version: bool,
 
     /// Show verbose output

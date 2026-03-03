@@ -655,7 +655,7 @@ impl ServerState {
         }
 
         // Read non-secret env vars from app.json in the release dir
-        let env_vars = env_vars_from_release_dir(&release_path).unwrap_or_else(|e| {
+        let mut env_vars = env_vars_from_release_dir(&release_path).unwrap_or_else(|e| {
             tracing::warn!(
                 app = app_name,
                 "Failed to read env vars from app.json: {}",
@@ -663,6 +663,15 @@ impl ServerState {
             );
             HashMap::new()
         });
+
+        // Trust mise configs in the release dir so mise shims don't error
+        // in non-interactive mode when resolving runtimes.
+        if release_path.join("mise.toml").exists() || release_path.join(".mise.toml").exists() {
+            env_vars.insert(
+                "MISE_TRUSTED_CONFIG_PATHS".to_string(),
+                release_path.to_string_lossy().to_string(),
+            );
+        }
 
         // Write secrets to per-app file (0600 permissions)
         let secrets_path = secrets_file_path(&self.runtime.data_dir, app_name);
@@ -2077,6 +2086,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         use tokio::signal::unix::{SignalKind, signal};
 
+        // Resolve the exe path now (at startup) so SIGHUP can find it even if
+        // the binary is replaced via rm + cp while the process is running.
+        // /proc/self/exe would point to a deleted file in that case.
+        let startup_exe = exe.clone();
+
         rt.spawn(async move {
             let mut sighup = match signal(SignalKind::hangup()) {
                 Ok(signal) => signal,
@@ -2089,12 +2103,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             tracing::info!(
                 "SIGHUP received — spawning new server process for zero-downtime reload"
             );
-            let exe = match std::env::current_exe() {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::error!("Failed to get current exe: {e}");
-                    return;
-                }
+            let exe = match &startup_exe {
+                Some(p) => p.clone(),
+                None => match std::env::current_exe() {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::error!("Failed to get current exe: {e}");
+                        return;
+                    }
+                },
             };
             let args: Vec<String> = std::env::args().skip(1).collect();
             match std::process::Command::new(&exe)

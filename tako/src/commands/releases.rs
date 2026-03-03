@@ -128,8 +128,8 @@ async fn list_releases(
     output::section("Releases");
     output::step(&format!(
         "{} ({})",
-        output::emphasized(app_name),
-        output::emphasized(env)
+        output::highlight(app_name),
+        output::highlight(env)
     ));
 
     let mut tasks = Vec::new();
@@ -179,7 +179,8 @@ async fn list_releases(
             }
             Err(error) => output::warning(&format!(
                 "{}: failed to load releases ({})",
-                server_name, error
+                output::highlight(&server_name),
+                error
             )),
         }
     }
@@ -219,9 +220,9 @@ async fn rollback_release(
         let confirmed = output::confirm(
             &format!(
                 "Rollback {} in {} to {}?",
-                output::emphasized(app_name),
-                output::emphasized(env),
-                output::emphasized(release)
+                output::highlight(app_name),
+                output::highlight(env),
+                output::highlight(release)
             ),
             false,
         )?;
@@ -233,9 +234,9 @@ async fn rollback_release(
     output::section("Rollback");
     output::step(&format!(
         "{} ({}) -> {}",
-        output::emphasized(app_name),
-        output::emphasized(env),
-        output::emphasized(release)
+        output::highlight(app_name),
+        output::highlight(env),
+        output::highlight(release)
     ));
 
     let mut tasks = Vec::new();
@@ -267,19 +268,17 @@ async fn rollback_release(
     )
     .await;
     for task in rollback_results {
-        let (server_name, server, result) = task?;
+        let (server_name, _server, result) = task?;
         match result {
             Ok(()) => {
-                output::bullet(&format!(
-                    "{} (tako@{}:{}) rolled back",
-                    server_name, server.host, server.port
-                ));
+                output::bullet(&format!("{} rolled back", output::highlight(&server_name)));
                 success_count += 1;
             }
             Err(error) => {
                 output::error(&format!(
-                    "{} (tako@{}:{}) rollback failed: {}",
-                    server_name, server.host, server.port, error
+                    "{} rollback failed: {}",
+                    output::highlight(&server_name),
+                    error
                 ));
                 errors.push(format!("{}: {}", server_name, error));
             }
@@ -291,8 +290,8 @@ async fn rollback_release(
         output::section("Summary");
         output::info(&format!(
             "Rolled back {} to {} on {} server(s)",
-            output::emphasized(app_name),
-            output::emphasized(release),
+            output::highlight(app_name),
+            output::highlight(release),
             success_count
         ));
         Ok(())
@@ -301,7 +300,7 @@ async fn rollback_release(
         output::section("Summary");
         output::warning(&format!(
             "Rollback partially failed: {}/{} servers succeeded",
-            success_count,
+            output::highlight(&success_count.to_string()),
             server_names.len()
         ));
         for error in errors {

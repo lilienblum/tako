@@ -260,12 +260,15 @@ async fn run_add_server_wizard(
             .parse()
             .map_err(|_| format!("Invalid SSH port '{}'", port_raw.trim()))?;
 
-        output::step(&format!("Host: {}", host));
-        output::step(&format!("Server name: {}", &name));
+        output::step(&format!("Host: {}", output::highlight(&host)));
+        output::step(&format!("Server name: {}", output::highlight(&name)));
         if !description.is_empty() {
-            output::step(&format!("Description: {}", description));
+            output::step(&format!("Description: {}", output::highlight(&description)));
         }
-        output::step(&format!("SSH port: {}", port));
+        output::step(&format!(
+            "SSH port: {}",
+            output::highlight(&port.to_string())
+        ));
         if default_test_ssh {
             output::muted("SSH connection test will run before saving.");
         } else {
@@ -339,7 +342,7 @@ pub async fn add_server(
                 servers.save()?;
                 output::success(&format!(
                     "Updated description for server {} (tako@{}:{})",
-                    output::emphasized(&server_name),
+                    output::highlight(&server_name),
                     host,
                     port
                 ));
@@ -349,7 +352,7 @@ pub async fn add_server(
 
             output::success(&format!(
                 "Server {} is already configured (tako@{}:{})",
-                output::emphasized(&server_name),
+                output::highlight(&server_name),
                 host,
                 port
             ));
@@ -360,8 +363,8 @@ pub async fn add_server(
         let confirm = output::confirm(
             &format!(
                 "Host {} already exists as {}. Override?",
-                output::emphasized(host),
-                output::emphasized(&existing_name)
+                output::highlight(host),
+                output::highlight(&existing_name)
             ),
             false,
         )?;
@@ -412,7 +415,10 @@ pub async fn add_server(
                 match ssh.is_tako_installed().await {
                     Ok(true) => {
                         if let Ok(Some(version)) = ssh.tako_version().await {
-                            output::success(&format!("tako-server installed ({})", version));
+                            output::success(&format!(
+                                "tako-server installed ({})",
+                                output::highlight(&version)
+                            ));
                         } else {
                             output::success("tako-server installed");
                         }
@@ -453,7 +459,7 @@ pub async fn add_server(
 
     output::success(&format!(
         "Added server {} (tako@{}:{})",
-        output::emphasized(&server_name),
+        output::highlight(&server_name),
         host,
         port
     ));
@@ -586,7 +592,7 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
     };
 
     let confirm = output::confirm(
-        &format!("Remove server {}?", output::emphasized(&name)),
+        &format!("Remove server {}?", output::highlight(&name)),
         false,
     )?;
 
@@ -598,7 +604,7 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
     servers.remove(&name)?;
     servers.save()?;
 
-    output::success(&format!("Removed server {}", output::emphasized(&name)));
+    output::success(&format!("Removed server {}", output::highlight(&name)));
 
     Ok(())
 }
@@ -612,7 +618,7 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
         output::warning("No servers configured");
         output::muted(&format!(
             "Run {} to add a server.",
-            output::emphasized("tako servers add")
+            output::highlight("tako servers add")
         ));
         return Ok(());
     }
@@ -661,7 +667,7 @@ async fn restart_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
     output::with_spinner_async(
-        &format!("Connecting to {}", output::emphasized(name)),
+        &format!("Connecting to {}", output::highlight(name)),
         "Connected",
         ssh.connect(),
     )
@@ -820,7 +826,7 @@ pub(crate) async fn upgrade_server(
     let channel = resolve_upgrade_channel(canary, stable)?;
     output::step(&format!(
         "You're on {} channel",
-        output::emphasized(channel.as_str())
+        output::highlight(channel.as_str())
     ));
 
     let servers = ServersToml::load()?;
@@ -831,7 +837,7 @@ pub(crate) async fn upgrade_server(
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
     output::with_spinner_async(
-        &format!("Connecting to {}", output::emphasized(name)),
+        &format!("Connecting to {}", output::highlight(name)),
         "Connected",
         ssh.connect(),
     )

@@ -145,14 +145,10 @@ pub fn muted(message: &str) {
     println!("{}", brand_muted(message));
 }
 
-pub fn emphasized(value: &str) -> String {
-    if cfg!(test) {
-        value.to_string()
-    } else if std::io::stdout().is_terminal() && colors_enabled() {
-        format!("\x1b[3m{}\x1b[23m", value)
-    } else {
-        value.to_string()
-    }
+/// Format a value in bold+accent. Use for dynamic names/values in output lines.
+/// e.g. `highlight("tako-demo")` → bold teal "tako-demo"
+pub fn highlight(value: &str) -> String {
+    bold(&brand_accent(value))
 }
 
 // ---------------------------------------------------------------------------
@@ -530,8 +526,8 @@ mod tests {
     }
 
     #[test]
-    fn emphasized_falls_back_to_plain_text_in_non_tty_context() {
-        assert_eq!(emphasized("production"), "production");
+    fn highlight_returns_plain_in_test() {
+        assert_eq!(highlight("production"), "production");
     }
 
     #[test]

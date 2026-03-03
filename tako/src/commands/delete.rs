@@ -130,8 +130,8 @@ async fn run_async(
     output::section("Delete");
     output::step(&format!(
         "Deleting {} from {}",
-        output::emphasized(&app_name),
-        output::emphasized(&env)
+        output::highlight(&app_name),
+        output::highlight(&env)
     ));
 
     let total_servers = server_names.len();
@@ -144,8 +144,8 @@ async fn run_async(
                 return Err(format_server_not_found_error(server_name).into());
             };
             let result = output::with_spinner_async(
-                &format!("Deleting from {}", output::emphasized(server_name)),
-                &format!("Deleted from {}", output::emphasized(server_name)),
+                &format!("Deleting from {}", output::highlight(server_name)),
+                &format!("Deleted from {}", output::highlight(server_name)),
                 delete_from_server(server, &app_name),
             )
             .await;
@@ -235,8 +235,8 @@ async fn run_async(
         output::section("Summary");
         output::info(&format!(
             "Deleted {} from {}",
-            output::emphasized(&app_name),
-            output::emphasized(&env)
+            output::highlight(&app_name),
+            output::highlight(&env)
         ));
         Ok(())
     } else {
@@ -719,25 +719,25 @@ fn parse_delete_response(response: Response) -> Result<(), String> {
 fn format_delete_confirm_prompt(app_name: &str, env: &str, server_count: usize) -> String {
     format!(
         "Please confirm you want to remove application {} from {} on {} server(s).",
-        output::emphasized(app_name),
-        output::emphasized(env),
+        output::highlight(app_name),
+        output::highlight(env),
         server_count
     )
 }
 
 fn format_delete_confirm_hint(app_name: &str, server_names: &[String]) -> String {
-    let app = output::emphasized(app_name);
+    let app = output::highlight(app_name);
     if server_names.len() == 1 {
         return format!(
             "This removes application {} from {}.",
             app,
-            output::emphasized(&server_names[0])
+            output::highlight(&server_names[0])
         );
     }
 
     let servers = server_names
         .iter()
-        .map(|name| output::emphasized(name))
+        .map(|name| output::highlight(name))
         .collect::<Vec<_>>()
         .join(", ");
     format!("This removes application {} from {}.", app, servers)

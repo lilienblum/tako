@@ -48,8 +48,8 @@ async fn run_async(env: &str) -> Result<(), Box<dyn std::error::Error>> {
     output::section("Logs");
     output::step(&format!(
         "Streaming logs for {} in {} (Ctrl+c to stop)",
-        output::emphasized(&app_name),
-        output::emphasized(env)
+        output::highlight(&app_name),
+        output::highlight(env)
     ));
 
     // Stream logs from all servers in parallel.

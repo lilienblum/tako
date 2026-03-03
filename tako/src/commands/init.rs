@@ -85,20 +85,23 @@ pub fn run(force: bool, runtime_override: Option<&str>) -> Result<(), Box<dyn st
 
     if should_render_init_detected_section(output::is_verbose()) {
         output::section("Detected");
-        output::step(&format!("Runtime: {}", adapter.id()));
+        output::step(&format!("Runtime: {}", output::highlight(adapter.id())));
         if let Some(preset_ref) = selected_preset_for_toml.as_deref() {
-            output::step(&format!("Preset: {}", preset_ref));
+            output::step(&format!("Preset: {}", output::highlight(preset_ref)));
         } else if selected_preset.as_deref() == Some(adapter.default_preset()) {
             output::step("Preset: runtime default (omitted in tako.toml)");
         } else {
             output::step("Preset: custom (unset in tako.toml)");
         }
-        output::step(&format!("App name: {}", app_name.trim()));
-        output::step(&format!("Production route: {}", production_route.trim()));
+        output::step(&format!("App name: {}", output::highlight(app_name.trim())));
+        output::step(&format!(
+            "Production route: {}",
+            output::highlight(production_route.trim())
+        ));
         if let Some(main) = main.as_deref() {
-            output::step(&format!("Main: {}", main.trim()));
+            output::step(&format!("Main: {}", output::highlight(main.trim())));
         } else if let Some(main) = preset_default_main.as_deref() {
-            output::step(&format!("Main: {} (from preset)", main));
+            output::step(&format!("Main: {} (from preset)", output::highlight(main)));
         }
     }
 
@@ -106,15 +109,15 @@ pub fn run(force: bool, runtime_override: Option<&str>) -> Result<(), Box<dyn st
     output::step("1. Edit tako.toml to configure environments and routes");
     output::step(&format!(
         "2. Run {} to add deployment servers",
-        output::emphasized("tako servers add <host>")
+        output::highlight("tako servers add")
     ));
     output::step(&format!(
         "3. Run {} to add secrets",
-        output::emphasized("tako secrets set --env production <NAME>")
+        output::highlight("tako secrets set")
     ));
     output::step(&format!(
         "4. Run {} to deploy your app",
-        output::emphasized("tako deploy")
+        output::highlight("tako deploy")
     ));
 
     Ok(())
@@ -266,7 +269,7 @@ fn fetch_family_presets_for_adapter(
             output::warning(&format!(
                 "Failed to fetch presets ({}). Using {} base preset.",
                 err,
-                adapter.default_preset()
+                output::highlight(adapter.default_preset())
             ));
             Ok(Vec::new())
         }

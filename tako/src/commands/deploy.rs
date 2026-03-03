@@ -299,13 +299,25 @@ async fn run_async(
     } else {
         None
     };
-    for line in format_deploy_overview_lines(
-        &app_name,
-        &env,
-        server_names.len(),
-        primary_target_and_server,
-    ) {
-        output::info(&line);
+    if output::is_verbose() {
+        for line in format_deploy_overview_lines(
+            &app_name,
+            &env,
+            server_names.len(),
+            primary_target_and_server,
+        ) {
+            output::info(&line);
+        }
+    } else if server_names.len() == 1 {
+        output::info(&format!(
+            "Deploying to {}",
+            output::highlight(&server_names[0])
+        ));
+    } else {
+        output::info(&format!(
+            "Deploying to {} servers",
+            output::highlight(&server_names.len().to_string())
+        ));
     }
 
     // ===== Build =====
@@ -375,11 +387,14 @@ async fn run_async(
     if output::is_verbose() {
         output::bullet(&format!(
             "Build preset: {} @ {}",
-            resolved_preset.preset_ref,
+            output::highlight(&resolved_preset.preset_ref),
             shorten_commit(&resolved_preset.commit)
         ));
     } else {
-        output::bullet(&format!("Build preset: {}", resolved_preset.preset_ref));
+        output::bullet(&format!(
+            "Build preset: {}",
+            output::highlight(&resolved_preset.preset_ref)
+        ));
     }
     output::bullet(&format_runtime_summary(&build_preset.name, None));
     let runtime_tool = resolve_runtime_tool_for_mise(&build_preset.name, &build_preset)
@@ -671,12 +686,18 @@ async fn run_async(
     if errors.is_empty() {
         output::success("Deploy");
         output::section("Summary");
-        output::info(&format!("Revision: {}", version));
+        output::info(&format!("Revision: {}", output::highlight(&version)));
         for (index, route) in routes.iter().enumerate() {
             if index == 0 {
-                output::info(&format!("URL     : https://{}", route));
+                output::info(&format!(
+                    "URL     : {}",
+                    output::highlight(&format!("https://{}", route))
+                ));
             } else {
-                output::info(&format!("          https://{}", route));
+                output::info(&format!(
+                    "          {}",
+                    output::highlight(&format!("https://{}", route))
+                ));
             }
         }
 
@@ -684,11 +705,19 @@ async fn run_async(
     } else {
         output::error("Deploy");
         output::section("Summary");
-        output::warning(&format!(
-            "Deployment partially failed: {}/{} servers succeeded",
-            success_count,
-            server_names.len()
-        ));
+        if success_count == 0 {
+            output::error(&format!(
+                "Deployment failed: {}/{} servers succeeded",
+                output::highlight("0"),
+                server_names.len()
+            ));
+        } else {
+            output::warning(&format!(
+                "Deployment partially failed: {}/{} servers succeeded",
+                output::highlight(&success_count.to_string()),
+                server_names.len()
+            ));
+        }
         for err in &errors {
             output::error(err);
         }
@@ -739,7 +768,7 @@ fn should_confirm_production_deploy(env: &str, assume_yes: bool, interactive: bo
 }
 
 fn format_production_deploy_confirm_prompt() -> String {
-    format!("Deploy to {} now?", output::emphasized("production"),)
+    format!("Deploy to {} now?", output::highlight("production"),)
 }
 
 fn format_production_deploy_confirm_hint() -> String {
@@ -753,7 +782,7 @@ fn confirm_production_deploy(env: &str, assume_yes: bool) -> Result<(), String> 
 
     output::warning(&format!(
         "You are deploying to {}.",
-        output::emphasized("production")
+        output::highlight("production")
     ));
     let hint = format_production_deploy_confirm_hint();
     let confirmed = output::confirm_with_description(
@@ -816,7 +845,7 @@ fn confirm_single_server_production_fallback(server_name: &str) -> Result<bool, 
 
     output::warning(&format!(
         "No server is mapped for {} in tako.toml.",
-        output::emphasized("production")
+        output::highlight("production")
     ));
     output::muted("Add this mapping manually:");
     for line in format_production_mapping_example(server_name).lines() {
@@ -838,7 +867,7 @@ fn format_production_mapping_example(server_name: &str) -> String {
 fn format_single_server_production_confirm_prompt(server_name: &str) -> String {
     format!(
         "Deploy to the only configured server ({}) and save this mapping to tako.toml?",
-        output::emphasized(server_name)
+        output::highlight(server_name)
     )
 }
 
@@ -856,8 +885,8 @@ async fn resolve_deploy_server_names_with_setup(
                 persist_server_env_mapping(project_dir, &names[0], env)?;
                 output::info(&format!(
                     "Mapped server {} to {} in tako.toml",
-                    output::emphasized(&names[0]),
-                    output::emphasized(env)
+                    output::highlight(&names[0]),
+                    output::highlight(env)
                 ));
             }
             Ok(names)
@@ -901,8 +930,8 @@ async fn resolve_deploy_server_names_with_setup(
             persist_server_env_mapping(project_dir, &selected_server, env)?;
             output::info(&format!(
                 "Mapped server {} to {} in tako.toml",
-                output::emphasized(&selected_server),
-                output::emphasized(env)
+                output::highlight(&selected_server),
+                output::highlight(env)
             ));
             Ok(vec![selected_server])
         }
@@ -944,8 +973,8 @@ async fn choose_or_add_production_server_after_single_fallback(
 fn format_declined_single_server_reason(server_name: &str) -> String {
     format!(
         "Skipped using {} for {}. Add a different server now and use it for production deploy.",
-        output::emphasized(server_name),
-        output::emphasized("production")
+        output::highlight(server_name),
+        output::highlight("production")
     )
 }
 
@@ -976,7 +1005,7 @@ fn select_production_server_for_mapping(servers: &ServersToml) -> Result<String,
 
 #[cfg(test)]
 fn format_prepare_deploy_section(env: &str) -> String {
-    format!("Preparing deployment for {}", output::emphasized(env))
+    format!("Preparing deployment for {}", output::highlight(env))
 }
 
 fn format_deploy_overview_lines(

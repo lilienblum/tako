@@ -5,6 +5,7 @@ use tako_core::Command;
 #[derive(Subcommand)]
 pub enum SecretCommands {
     /// Set a secret (creates or overwrites)
+    #[command(visible_alias = "add")]
     Set {
         /// Secret name (uppercase, underscores)
         name: String,
@@ -15,7 +16,7 @@ pub enum SecretCommands {
     },
 
     /// Remove a secret
-    #[command(visible_aliases = ["remove", "delete"])]
+    #[command(visible_aliases = ["remove", "delete", "del"])]
     Rm {
         /// Secret name
         name: String,
@@ -26,7 +27,7 @@ pub enum SecretCommands {
     },
 
     /// List all secrets
-    #[command(visible_alias = "list")]
+    #[command(visible_aliases = ["list", "show"])]
     Ls,
 
     /// Sync secrets to servers
@@ -127,21 +128,21 @@ async fn set_secret(name: &str, env: &str) -> Result<(), Box<dyn std::error::Err
     if exists {
         output::success(&format!(
             "Updated secret {} for environment {}",
-            output::emphasized(name),
-            output::emphasized(env)
+            output::highlight(name),
+            output::highlight(env)
         ));
     } else {
         output::success(&format!(
             "Set secret {} for environment {}",
-            output::emphasized(name),
-            output::emphasized(env)
+            output::highlight(name),
+            output::highlight(env)
         ));
     }
 
     if output::is_verbose() {
         output::muted(&format!(
             "Note: Run {} to push secrets to servers.",
-            output::emphasized("tako secrets sync")
+            output::highlight("tako secrets sync")
         ));
     }
 
@@ -164,8 +165,8 @@ async fn remove_secret(name: &str, env: Option<&str>) -> Result<(), Box<dyn std:
         let confirm = crate::output::confirm(
             &format!(
                 "Remove secret {} from {}?",
-                output::emphasized(name),
-                output::emphasized(env)
+                output::highlight(name),
+                output::highlight(env)
             ),
             false,
         )?;
@@ -178,15 +179,15 @@ async fn remove_secret(name: &str, env: Option<&str>) -> Result<(), Box<dyn std:
         secrets.remove(env, name)?;
         output::success(&format!(
             "Removed secret {} from environment {}",
-            output::emphasized(name),
-            output::emphasized(env)
+            output::highlight(name),
+            output::highlight(env)
         ));
     } else {
         // Remove from all environments
         let confirm = crate::output::confirm(
             &format!(
                 "Remove secret {} from ALL environments?",
-                output::emphasized(name)
+                output::highlight(name)
             ),
             false,
         )?;
@@ -199,7 +200,7 @@ async fn remove_secret(name: &str, env: Option<&str>) -> Result<(), Box<dyn std:
         let removed_from = secrets.remove_all(name)?;
         output::success(&format!(
             "Removed secret {} from environments: {}",
-            output::emphasized(name),
+            output::highlight(name),
             removed_from.join(", ")
         ));
     }
@@ -209,7 +210,7 @@ async fn remove_secret(name: &str, env: Option<&str>) -> Result<(), Box<dyn std:
     if output::is_verbose() {
         output::muted(&format!(
             "Note: Run {} to update servers.",
-            output::emphasized("tako secrets sync")
+            output::highlight("tako secrets sync")
         ));
     }
 
@@ -227,7 +228,7 @@ async fn list_secrets() -> Result<(), Box<dyn std::error::Error>> {
         output::warning("No secrets configured.");
         output::muted(&format!(
             "Run {} to add a secret.",
-            output::emphasized("tako secrets set --env <env> <NAME>")
+            output::highlight("tako secrets set")
         ));
         return Ok(());
     }
@@ -276,11 +277,11 @@ async fn list_secrets() -> Result<(), Box<dyn std::error::Error>> {
     if !discrepancies.is_empty() {
         output::warning(&format!(
             "{} secret(s) have discrepancies across environments.",
-            discrepancies.len()
+            output::highlight(&discrepancies.len().to_string())
         ));
         output::muted(&format!(
             "Run {} to sync secrets to servers.",
-            output::emphasized("tako secrets sync")
+            output::highlight("tako secrets sync")
         ));
     }
 
@@ -323,7 +324,7 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
         for d in &discrepancies {
             output::warning(&format!(
                 "{} missing in: {}",
-                d.name,
+                output::highlight(&d.name),
                 d.missing_in.join(", ")
             ));
         }
@@ -355,12 +356,12 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
         if server_names.is_empty() {
             output::warning(&format!(
                 "Skipping {} - no servers configured",
-                output::emphasized(env_name)
+                output::highlight(env_name)
             ));
             continue;
         }
 
-        output::section(&format!("Sync {}", output::emphasized(env_name)));
+        output::section(&format!("Sync {}", output::highlight(env_name)));
 
         // Get decrypted secrets for this environment
         let env_secrets = match secrets.get_env(env_name) {
@@ -375,7 +376,7 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
                         Err(e) => {
                             output::warning(&format!(
                                 "Failed to decrypt {}: {}",
-                                output::emphasized(name),
+                                output::highlight(name),
                                 e
                             ));
                         }
@@ -400,7 +401,7 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
                 None => {
                     output::error(&format!(
                         "{} - server not found in ~/.tako/config.toml [[servers]]",
-                        server_name
+                        output::highlight(&server_name)
                     ));
                     error_count += 1;
                     continue;
@@ -408,19 +409,19 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
             };
 
             let sync_result = output::with_spinner_async(
-                &format!("Syncing to {}", output::emphasized(&server_name)),
-                &format!("Synced to {}", output::emphasized(&server_name)),
+                &format!("Syncing to {}", output::highlight(&server_name)),
+                &format!("Synced to {}", output::highlight(&server_name)),
                 sync_to_server(&app_name, server, &env_secrets),
             )
             .await;
 
             match sync_result {
                 Ok(()) => {
-                    output::bullet(&format!("Synced {}", output::emphasized(&server_name)));
+                    output::bullet(&format!("Synced {}", output::highlight(&server_name)));
                     success_count += 1;
                 }
                 Err(e) => {
-                    output::error(&format!("{} ({})", e, server_name));
+                    output::error(&format!("{} ({})", e, output::highlight(&server_name)));
                     error_count += 1;
                 }
             }
@@ -432,14 +433,15 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
         output::section("Summary");
         output::info(&format!(
             "Synced secrets to {} server(s) successfully.",
-            success_count
+            output::highlight(&success_count.to_string())
         ));
     } else {
         output::error("Sync");
         output::section("Summary");
         output::warning(&format!(
             "Synced to {} server(s), {} failed.",
-            success_count, error_count
+            output::highlight(&success_count.to_string()),
+            output::highlight(&error_count.to_string())
         ));
     }
 
@@ -495,7 +497,7 @@ async fn import_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::
 
     output::success(&format!(
         "Imported key for environment {}.",
-        output::emphasized(env)
+        output::highlight(env)
     ));
 
     Ok(())
@@ -514,7 +516,7 @@ async fn export_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::
 
     output::success(&format!(
         "Copied key for environment {} to clipboard.",
-        output::emphasized(env)
+        output::highlight(env)
     ));
 
     Ok(())

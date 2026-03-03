@@ -57,7 +57,7 @@ pub fn run(canary: bool, stable: bool) -> Result<(), Box<dyn std::error::Error>>
     let channel = resolve_upgrade_channel(canary, stable)?;
     output::step(&format!(
         "You're on {} channel",
-        output::emphasized(channel.as_str())
+        output::highlight(channel.as_str())
     ));
     run_cli_upgrade(channel)?;
     output::success("Upgrade complete");
@@ -224,7 +224,7 @@ fn format_upgrade_start_message(
         return format!(
             "Installing latest {}tako CLI from {}",
             channel_label,
-            output::emphasized(install_url)
+            output::highlight(install_url)
         );
     }
     format!("Installing latest {}tako CLI", channel_label)

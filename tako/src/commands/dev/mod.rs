@@ -2088,7 +2088,10 @@ pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::er
         }
         for app in &apps {
             let _ = crate::dev_server_client::unregister_app(&app.project_dir).await;
-            crate::output::success(&format!("Stopped {}", app.app_name));
+            crate::output::success(&format!(
+                "Stopped {}",
+                crate::output::highlight(&app.app_name)
+            ));
         }
         return Ok(());
     }
@@ -2103,7 +2106,10 @@ pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::er
             // Find by project_dir first.
             if let Some(app) = apps.iter().find(|a| a.project_dir == canonical_str) {
                 let _ = crate::dev_server_client::unregister_app(&app.project_dir).await;
-                crate::output::success(&format!("Stopped {}", app.app_name));
+                crate::output::success(&format!(
+                    "Stopped {}",
+                    crate::output::highlight(&app.app_name)
+                ));
                 return Ok(());
             }
             // Fall back to app name resolution.
@@ -2116,7 +2122,10 @@ pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::er
     match app {
         Some(a) => {
             let _ = crate::dev_server_client::unregister_app(&a.project_dir).await;
-            crate::output::success(&format!("Stopped {}", a.app_name));
+            crate::output::success(&format!(
+                "Stopped {}",
+                crate::output::highlight(&a.app_name)
+            ));
         }
         None => {
             return Err(format!("No registered dev app named '{}'", target_name).into());
@@ -2246,10 +2255,15 @@ pub async fn run(
             crate::output::section("Dev Server");
             crate::output::warning(&format!(
                 "A dev server is already running with {}.",
-                restart_reason
+                crate::output::highlight(&restart_reason)
             ));
-            let should_restart =
-                crate::output::confirm(&format!("Restart it with listen {}?", listen_addr), true)?;
+            let should_restart = crate::output::confirm(
+                &format!(
+                    "Restart it with listen {}?",
+                    crate::output::highlight(&listen_addr)
+                ),
+                true,
+            )?;
             if !should_restart {
                 return Err(format!("Kept existing dev server on {}.", current_listen).into());
             }
