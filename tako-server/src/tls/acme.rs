@@ -1,7 +1,8 @@
 //! ACME client for Let's Encrypt certificate issuance
 //!
 //! Uses instant-acme for the ACME protocol implementation.
-//! Supports HTTP-01 challenges for domain validation.
+//! Supports HTTP-01 challenges for non-wildcard domains and
+//! DNS-01 challenges (via lego) for wildcard certificates.
 
 use super::manager::{CertError, CertInfo, CertManager};
 use instant_acme::{
@@ -56,6 +57,12 @@ pub enum AcmeError {
 
     #[error("HTTP-01 challenge not available")]
     NoHttp01Challenge,
+
+    #[error("Wildcard certificate requires a DNS provider (--dns-provider not configured)")]
+    NoDnsProvider,
+
+    #[error("lego DNS-01 challenge failed: {0}")]
+    LegoDns01Failed(String),
 }
 
 /// ACME configuration
@@ -73,6 +80,10 @@ pub struct AcmeConfig {
     pub max_attempts: u32,
     /// Delay between status checks
     pub check_delay: Duration,
+    /// DNS provider for lego DNS-01 challenges (e.g. "cloudflare", "route53")
+    pub dns_provider: Option<String>,
+    /// Server data directory (lego stores state under `<data_dir>/lego/`)
+    pub data_dir: PathBuf,
 }
 
 impl Default for AcmeConfig {
@@ -84,6 +95,8 @@ impl Default for AcmeConfig {
             timeout: Duration::from_secs(300),
             max_attempts: 30,
             check_delay: Duration::from_secs(5),
+            dns_provider: None,
+            data_dir: PathBuf::from("/opt/tako"),
         }
     }
 }
@@ -223,11 +236,18 @@ impl AcmeClient {
         Ok((account, credentials))
     }
 
-    /// Request a certificate for a domain using HTTP-01 challenge
+    /// Request a certificate for a domain.
+    ///
+    /// Wildcard domains (starting with `*.`) use DNS-01 via lego.
+    /// All other domains use HTTP-01 via instant-acme.
     pub async fn request_certificate(&self, domain: &str) -> Result<CertInfo, AcmeError> {
         // Validate domain
         if domain.is_empty() || domain.contains('/') || domain.starts_with('.') {
             return Err(AcmeError::InvalidDomain(domain.to_string()));
+        }
+
+        if domain.starts_with("*.") {
+            return self.request_certificate_dns01(domain).await;
         }
 
         let account = {
@@ -358,6 +378,122 @@ impl AcmeClient {
             cert_path = %cert_path.display(),
             expires_in_days = cert_info.days_until_expiry(),
             "Certificate issued successfully"
+        );
+
+        Ok(cert_info)
+    }
+
+    /// Request a wildcard certificate using DNS-01 challenge via lego.
+    async fn request_certificate_dns01(&self, domain: &str) -> Result<CertInfo, AcmeError> {
+        let provider = self
+            .config
+            .dns_provider
+            .as_deref()
+            .ok_or(AcmeError::NoDnsProvider)?;
+
+        let email = self
+            .config
+            .email
+            .as_deref()
+            .unwrap_or("admin@example.com");
+
+        let lego_dir = self.config.data_dir.join("lego");
+        std::fs::create_dir_all(&lego_dir)?;
+
+        // Determine whether to `run` (first time) or `renew` (cert already exists).
+        // lego stores certs under <path>/certificates/<domain>.crt
+        let lego_cert_path = lego_dir
+            .join("certificates")
+            .join(format!("{}.crt", domain));
+        let lego_action = if lego_cert_path.exists() {
+            "renew"
+        } else {
+            "run"
+        };
+
+        let mut cmd = tokio::process::Command::new("lego");
+        cmd.arg("--dns")
+            .arg(provider)
+            .arg("--domains")
+            .arg(domain)
+            .arg("--path")
+            .arg(&lego_dir)
+            .arg("--email")
+            .arg(email)
+            .arg("--accept-tos");
+
+        if self.config.staging {
+            cmd.arg("--server")
+                .arg("https://acme-staging-v02.api.letsencrypt.org/directory");
+        }
+
+        cmd.arg(lego_action);
+
+        tracing::info!(
+            domain = domain,
+            provider = provider,
+            action = lego_action,
+            "Running lego DNS-01 challenge"
+        );
+
+        let output = cmd.output().await.map_err(|e| {
+            AcmeError::LegoDns01Failed(format!("Failed to execute lego: {}", e))
+        })?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(AcmeError::LegoDns01Failed(format!(
+                "lego {} exited with {}: {}",
+                lego_action, output.status, stderr
+            )));
+        }
+
+        // lego writes cert to <path>/certificates/<domain>.crt and .key
+        let lego_key_path = lego_dir
+            .join("certificates")
+            .join(format!("{}.key", domain));
+
+        if !lego_cert_path.exists() || !lego_key_path.exists() {
+            return Err(AcmeError::LegoDns01Failed(
+                "lego completed but certificate files not found".to_string(),
+            ));
+        }
+
+        // Copy into our cert dir structure
+        let domain_dir = self.cert_manager.domain_cert_dir(domain);
+        std::fs::create_dir_all(&domain_dir)?;
+
+        let cert_path = domain_dir.join("fullchain.pem");
+        let key_path = domain_dir.join("privkey.pem");
+
+        std::fs::copy(&lego_cert_path, &cert_path)?;
+        std::fs::copy(&lego_key_path, &key_path)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))?;
+        }
+
+        let cert_pem = std::fs::read_to_string(&cert_path)?;
+        let expires_at = parse_cert_expiry(&cert_pem);
+
+        let cert_info = CertInfo {
+            domain: domain.to_string(),
+            cert_path: cert_path.clone(),
+            key_path: key_path.clone(),
+            expires_at,
+            is_wildcard: true,
+            is_self_signed: false,
+        };
+
+        self.cert_manager.add_cert(cert_info.clone());
+
+        tracing::info!(
+            domain = domain,
+            cert_path = %cert_path.display(),
+            expires_in_days = cert_info.days_until_expiry(),
+            "Wildcard certificate issued via lego DNS-01"
         );
 
         Ok(cert_info)
@@ -659,12 +795,23 @@ mod tests {
             timeout: Duration::from_secs(600),
             max_attempts: 50,
             check_delay: Duration::from_secs(10),
+            dns_provider: Some("cloudflare".to_string()),
+            data_dir: PathBuf::from("/custom/data"),
         };
 
         assert!(config.staging);
         assert_eq!(config.email, Some("admin@example.com".to_string()));
         assert_eq!(config.max_attempts, 50);
         assert!(config.directory_url().contains("staging"));
+        assert_eq!(config.dns_provider, Some("cloudflare".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_wildcard_requires_dns_provider() {
+        let (_temp, acme) = create_test_acme();
+        // dns_provider is None by default, so wildcard should fail with NoDnsProvider
+        let result = acme.request_certificate("*.example.com").await;
+        assert!(matches!(result, Err(AcmeError::NoDnsProvider)));
     }
 
     #[test]

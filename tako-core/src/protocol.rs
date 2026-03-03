@@ -99,6 +99,8 @@ pub struct ServerRuntimeInfo {
     pub acme_email: Option<String>,
     pub renewal_interval_hours: u64,
     pub instance_port_offset: u16,
+    #[serde(default)]
+    pub dns_provider: Option<String>,
 }
 
 /// Response from the server
@@ -442,9 +444,11 @@ mod tests {
             acme_email: None,
             renewal_interval_hours: 12,
             instance_port_offset: 0,
+            dns_provider: None,
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: ServerRuntimeInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.pid, 42);
+        assert!(parsed.dns_provider.is_none());
     }
 }

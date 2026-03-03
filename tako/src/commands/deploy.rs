@@ -3388,6 +3388,24 @@ async fn deploy_to_server(
         validate_no_route_conflicts(&existing, &config.app_name, &config.routes)
             .map_err(|e| format!("Route conflict: {}", e))?;
 
+        // Wildcard route validation: server must have a DNS provider configured
+        let has_wildcard = config.routes.iter().any(|r| r.starts_with("*."));
+        if has_wildcard {
+            let info = ssh.tako_server_info().await
+                .map_err(|e| format!("Failed to query server info: {}", e))?;
+            if info.dns_provider.is_none() {
+                let wildcard_routes: Vec<_> = config.routes.iter()
+                    .filter(|r| r.starts_with("*."))
+                    .collect();
+                return Err(format!(
+                    "Wildcard route {} requires DNS challenge support.\n\
+                     Run `tako servers dns-setup {}` to configure a DNS provider.",
+                    wildcard_routes.iter().map(|r| format!("`{}`", r)).collect::<Vec<_>>().join(", "),
+                    target_label,
+                ).into());
+            }
+        }
+
         // Create directories.
         run_deploy_step("Creating directories", "Directories created", use_spinner, async {
             ssh.mkdir(&release_dir).await?;

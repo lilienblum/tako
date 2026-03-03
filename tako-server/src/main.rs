@@ -92,6 +92,10 @@ pub struct Args {
     #[arg(long, default_value_t = 0)]
     pub instance_port_offset: u16,
 
+    /// DNS provider for lego DNS-01 wildcard certificate challenges (e.g. cloudflare, route53)
+    #[arg(long)]
+    pub dns_provider: Option<String>,
+
     /// Extract a `.tar.zst` archive into a destination directory and exit.
     #[arg(long, hide = true)]
     pub extract_zstd_archive: Option<String>,
@@ -113,6 +117,7 @@ pub struct ServerRuntimeConfig {
     acme_email: Option<String>,
     renewal_interval_hours: u64,
     instance_port_offset: u16,
+    dns_provider: Option<String>,
 }
 
 impl ServerRuntimeConfig {
@@ -128,6 +133,7 @@ impl ServerRuntimeConfig {
             acme_email: None,
             renewal_interval_hours: 12,
             instance_port_offset: 0,
+            dns_provider: None,
         }
     }
 
@@ -144,6 +150,7 @@ impl ServerRuntimeConfig {
             acme_email: self.acme_email.clone(),
             renewal_interval_hours: self.renewal_interval_hours,
             instance_port_offset: self.instance_port_offset,
+            dns_provider: self.dns_provider.clone(),
         }
     }
 
@@ -1860,6 +1867,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             staging: args.acme_staging,
             email: args.acme_email.clone(),
             account_dir: acme_dir,
+            dns_provider: args.dns_provider.clone(),
+            data_dir: data_dir.clone(),
             ..Default::default()
         };
 
@@ -1897,6 +1906,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         acme_email: args.acme_email.clone(),
         renewal_interval_hours: args.renewal_interval_hours,
         instance_port_offset: args.instance_port_offset,
+        dns_provider: args.dns_provider.clone(),
     };
     let state = Arc::new(ServerState::new_with_runtime(
         data_dir.clone(),
@@ -3010,6 +3020,7 @@ exit 1
             acme_email: Some("ops@example.com".to_string()),
             renewal_interval_hours: 24,
             instance_port_offset: 10000,
+            dns_provider: None,
         };
         let state =
             ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, runtime)
@@ -3209,6 +3220,7 @@ exit 1
             acme_email: None,
             renewal_interval_hours: 12,
             instance_port_offset: 10_000,
+            dns_provider: None,
         };
         let state_b =
             ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, runtime)

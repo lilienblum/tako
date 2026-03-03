@@ -67,6 +67,12 @@ pub enum ServerCommands {
     /// Show global deployment status across configured servers
     #[command(visible_alias = "info")]
     Status,
+
+    /// Configure DNS provider for wildcard TLS certificates
+    DnsSetup {
+        /// Server name
+        name: String,
+    },
 }
 
 pub fn run(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>> {
@@ -109,6 +115,7 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
             stable,
         } => upgrade_servers(name.as_deref(), canary, stable).await,
         ServerCommands::Status => crate::commands::status::run().await,
+        ServerCommands::DnsSetup { name } => dns_setup(&name).await,
     }
 }
 
@@ -942,6 +949,328 @@ pub(crate) async fn upgrade_server(
     upgrade_result.map_err(|e| e.into())
 }
 
+const DNS_PROVIDER_CONF: &str = "/opt/tako/dns-provider.conf";
+const DNS_CREDENTIALS_ENV: &str = "/opt/tako/dns-credentials.env";
+const LEGO_VERSION: &str = "4.21.0";
+
+/// Well-known DNS providers and their required environment variables.
+fn dns_provider_env_vars(provider: &str) -> &'static [(&'static str, &'static str)] {
+    match provider {
+        "cloudflare" => &[
+            ("CF_DNS_API_TOKEN", "Cloudflare API token (DNS edit permission)"),
+        ],
+        "route53" => &[
+            ("AWS_ACCESS_KEY_ID", "AWS access key ID"),
+            ("AWS_SECRET_ACCESS_KEY", "AWS secret access key"),
+            ("AWS_REGION", "AWS region (e.g. us-east-1)"),
+        ],
+        "digitalocean" => &[
+            ("DO_AUTH_TOKEN", "DigitalOcean API token"),
+        ],
+        "hetzner" => &[
+            ("HETZNER_API_KEY", "Hetzner DNS API token"),
+        ],
+        "vultr" => &[
+            ("VULTR_API_KEY", "Vultr API key"),
+        ],
+        "linode" => &[
+            ("LINODE_TOKEN", "Linode API token"),
+        ],
+        "namecheap" => &[
+            ("NAMECHEAP_API_USER", "Namecheap API user"),
+            ("NAMECHEAP_API_KEY", "Namecheap API key"),
+        ],
+        "gcloud" => &[
+            ("GCE_PROJECT", "Google Cloud project ID"),
+            ("GCE_SERVICE_ACCOUNT_FILE", "Path to service account JSON key file"),
+        ],
+        _ => &[],
+    }
+}
+
+fn lego_download_url(arch: &str) -> String {
+    let go_arch = match arch {
+        "aarch64" | "arm64" => "arm64",
+        _ => "amd64",
+    };
+    format!(
+        "https://github.com/go-acme/lego/releases/download/v{version}/lego_v{version}_linux_{arch}.tar.gz",
+        version = LEGO_VERSION,
+        arch = go_arch,
+    )
+}
+
+fn install_lego_command(arch: &str) -> String {
+    let url = lego_download_url(arch);
+    format!(
+        "set -e; \
+         if command -v lego >/dev/null 2>&1 && lego --version 2>&1 | grep -q '{version}'; then \
+           echo 'lego {version} already installed'; \
+         else \
+           tmp=$(mktemp -d); \
+           cd \"$tmp\"; \
+           curl -fsSL '{url}' -o lego.tar.gz; \
+           tar -xzf lego.tar.gz lego; \
+           install -m 0755 lego /usr/local/bin/lego; \
+           rm -rf \"$tmp\"; \
+           echo 'lego {version} installed'; \
+         fi",
+        version = LEGO_VERSION,
+        url = url,
+    )
+}
+
+async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::config::ServersToml;
+    use crate::ssh::{SshClient, SshConfig};
+
+    let servers = ServersToml::load()?;
+    let server = servers
+        .get(name)
+        .ok_or_else(|| format!("Server '{}' not found.", name))?;
+
+    output::step(&format!(
+        "Setting up DNS provider for wildcard certificates on {}",
+        output::highlight(name),
+    ));
+
+    let ssh_config = SshConfig::from_server(&server.host, server.port);
+    let mut ssh = SshClient::new(ssh_config);
+    output::with_spinner_async(
+        &format!("Connecting to {}", output::highlight(name)),
+        "Connected",
+        ssh.connect(),
+    )
+    .await?;
+
+    // Check if DNS provider is already configured
+    let existing_provider = ssh
+        .exec(&format!("cat {} 2>/dev/null || true", DNS_PROVIDER_CONF))
+        .await?
+        .stdout
+        .trim()
+        .to_string();
+
+    if !existing_provider.is_empty() {
+        output::step(&format!(
+            "Current DNS provider: {}",
+            output::highlight(&existing_provider),
+        ));
+
+        let keep = output::confirm("Keep existing DNS provider?", true)?;
+        if keep {
+            output::success("DNS provider configuration unchanged");
+            let _ = ssh.disconnect().await;
+            return Ok(());
+        }
+    }
+
+    // Select DNS provider
+    let provider_options = vec![
+        ("cloudflare".to_string(), "cloudflare"),
+        ("route53 (AWS)".to_string(), "route53"),
+        ("digitalocean".to_string(), "digitalocean"),
+        ("hetzner".to_string(), "hetzner"),
+        ("vultr".to_string(), "vultr"),
+        ("linode".to_string(), "linode"),
+        ("namecheap".to_string(), "namecheap"),
+        ("gcloud (Google Cloud DNS)".to_string(), "gcloud"),
+        ("other (enter manually)".to_string(), "other"),
+    ];
+
+    let provider = output::select(
+        "DNS provider",
+        Some("Choose your DNS provider for Let's Encrypt DNS-01 challenges"),
+        provider_options,
+    )?;
+
+    let provider = if provider == "other" {
+        output::prompt_input("DNS provider name (lego provider code)", false, None)?
+            .trim()
+            .to_string()
+    } else {
+        provider.to_string()
+    };
+
+    // Collect credentials
+    let known_vars = dns_provider_env_vars(&provider);
+    let mut credentials: Vec<(String, String)> = Vec::new();
+
+    if known_vars.is_empty() {
+        output::muted(&format!(
+            "Provider '{}' — enter environment variables required by lego.",
+            provider,
+        ));
+        output::muted("See https://go-acme.github.io/lego/dns/ for provider docs.");
+        output::muted("Enter variables as KEY=VALUE, one per line. Empty line to finish.");
+
+        loop {
+            let line = output::prompt_input("ENV_VAR=value", true, None)?;
+            let line = line.trim().to_string();
+            if line.is_empty() {
+                break;
+            }
+            if let Some((key, value)) = line.split_once('=') {
+                credentials.push((key.trim().to_string(), value.trim().to_string()));
+            } else {
+                output::warning(&format!("Invalid format '{}' — expected KEY=VALUE", line));
+            }
+        }
+    } else {
+        for (var_name, description) in known_vars {
+            let value = output::prompt_input(
+                &format!("{} ({})", var_name, description),
+                false,
+                None,
+            )?;
+            credentials.push((var_name.to_string(), value.trim().to_string()));
+        }
+    }
+
+    if credentials.is_empty() {
+        return Err("No credentials provided. DNS provider setup cancelled.".into());
+    }
+
+    // Detect server architecture for lego download
+    let arch_output = ssh.exec("uname -m").await?;
+    let arch = arch_output.stdout.trim();
+    let arch = match arch {
+        "x86_64" | "amd64" => "x86_64",
+        "aarch64" | "arm64" => "aarch64",
+        other => return Err(format!("Unsupported server architecture: {}", other).into()),
+    };
+
+    // Install lego binary
+    let install_cmd = install_lego_command(arch);
+    let install_cmd = SshClient::run_with_root_or_sudo(&install_cmd);
+    output::with_spinner_async(
+        "Installing lego",
+        "lego installed",
+        ssh.exec_checked(&install_cmd),
+    )
+    .await?;
+
+    // Write credentials env file
+    let mut env_content = String::new();
+    for (key, value) in &credentials {
+        env_content.push_str(&format!("{}={}\n", key, value));
+    }
+
+    // Write via sudo to /opt/tako/dns-credentials.env
+    let escaped_content = env_content.replace('\'', "'\\''");
+    let write_creds_cmd = SshClient::run_with_root_or_sudo(&format!(
+        "printf '%s' '{}' > {} && chmod 0600 {} && chown tako:tako {}",
+        escaped_content, DNS_CREDENTIALS_ENV, DNS_CREDENTIALS_ENV, DNS_CREDENTIALS_ENV,
+    ));
+    output::with_spinner_async(
+        "Writing DNS credentials",
+        "Credentials saved",
+        ssh.exec_checked(&write_creds_cmd),
+    )
+    .await?;
+
+    // Write provider conf
+    let write_provider_cmd = SshClient::run_with_root_or_sudo(&format!(
+        "printf '%s' '{}' > {} && chmod 0644 {} && chown tako:tako {}",
+        provider, DNS_PROVIDER_CONF, DNS_PROVIDER_CONF, DNS_PROVIDER_CONF,
+    ));
+    ssh.exec_checked(&write_provider_cmd).await?;
+
+    // Read existing ExecStart to reconstruct with --dns-provider
+    let existing_exec = ssh
+        .exec("systemctl show tako-server -p ExecStart --value 2>/dev/null | head -1 || true")
+        .await?
+        .stdout
+        .trim()
+        .to_string();
+
+    // Build ExecStart override: strip any old --dns-provider, append new one
+    let base_exec = if existing_exec.contains("--dns-provider") {
+        // Remove old --dns-provider and its argument
+        let re_parts: Vec<&str> = existing_exec.split("--dns-provider").collect();
+        if re_parts.len() >= 2 {
+            let before = re_parts[0].trim_end();
+            // Skip the provider argument after --dns-provider
+            let after = re_parts[1].trim_start();
+            let after = after
+                .split_once(|c: char| c.is_whitespace())
+                .map(|(_, rest)| rest.trim_start())
+                .unwrap_or("");
+            if after.is_empty() {
+                before.to_string()
+            } else {
+                format!("{} {}", before, after)
+            }
+        } else {
+            existing_exec.clone()
+        }
+    } else if !existing_exec.is_empty() {
+        existing_exec.clone()
+    } else {
+        // Fallback: construct default ExecStart
+        "/usr/local/bin/tako-server --socket /var/run/tako/tako.sock --data-dir /opt/tako"
+            .to_string()
+    };
+
+    let exec_start = format!("{} --dns-provider {}", base_exec, provider);
+    let dropin_full = format!(
+        "[Service]\nEnvironmentFile={}\nExecStart=\nExecStart={}\n",
+        DNS_CREDENTIALS_ENV, exec_start,
+    );
+    let escaped_dropin_full = dropin_full.replace('\'', "'\\''");
+
+    let write_dropin_cmd = SshClient::run_with_root_or_sudo(&format!(
+        "mkdir -p /etc/systemd/system/tako-server.service.d && \
+         printf '%s' '{}' > /etc/systemd/system/tako-server.service.d/dns.conf && \
+         systemctl daemon-reload",
+        escaped_dropin_full,
+    ));
+    output::with_spinner_async(
+        "Configuring systemd service",
+        "Service configured",
+        ssh.exec_checked(&write_dropin_cmd),
+    )
+    .await?;
+
+    // Reload service gracefully
+    output::with_spinner_async(
+        "Reloading tako-server",
+        "tako-server reloaded",
+        ssh.tako_reload(),
+    )
+    .await?;
+
+    // Verify the new config took effect
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    match ssh.tako_server_info().await {
+        Ok(info) => {
+            if info.dns_provider.as_deref() == Some(&provider) {
+                output::success(&format!(
+                    "DNS provider '{}' configured on {}",
+                    output::highlight(&provider),
+                    output::highlight(name),
+                ));
+            } else {
+                output::warning(&format!(
+                    "Service reloaded but dns_provider is {:?} (expected '{}').\n\
+                     A full restart may be needed: tako servers restart {}",
+                    info.dns_provider, provider, name,
+                ));
+            }
+        }
+        Err(e) => {
+            output::warning(&format!(
+                "Could not verify server config after reload: {}.\n\
+                 Check: tako servers restart {}",
+                e, name,
+            ));
+        }
+    }
+
+    let _ = ssh.disconnect().await;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -991,5 +1320,36 @@ mod tests {
     fn remote_installer_command_uses_canary_channel_arg_when_requested() {
         let command = remote_installer_command(UpgradeChannel::Canary);
         assert!(command.contains("/usr/local/bin/tako-server-install-refresh canary"));
+    }
+
+    #[test]
+    fn dns_provider_env_vars_returns_cloudflare_vars() {
+        let vars = dns_provider_env_vars("cloudflare");
+        assert_eq!(vars.len(), 1);
+        assert_eq!(vars[0].0, "CF_DNS_API_TOKEN");
+    }
+
+    #[test]
+    fn dns_provider_env_vars_returns_empty_for_unknown() {
+        let vars = dns_provider_env_vars("some-obscure-provider");
+        assert!(vars.is_empty());
+    }
+
+    #[test]
+    fn lego_download_url_uses_correct_arch() {
+        let url = lego_download_url("x86_64");
+        assert!(url.contains("amd64"));
+        assert!(url.contains(LEGO_VERSION));
+
+        let url = lego_download_url("aarch64");
+        assert!(url.contains("arm64"));
+    }
+
+    #[test]
+    fn install_lego_command_checks_existing_version() {
+        let cmd = install_lego_command("x86_64");
+        assert!(cmd.contains("lego --version"));
+        assert!(cmd.contains(LEGO_VERSION));
+        assert!(cmd.contains("/usr/local/bin/lego"));
     }
 }

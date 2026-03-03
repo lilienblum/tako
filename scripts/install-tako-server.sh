@@ -757,23 +757,43 @@ chmod 0770 /var/run/tako-app
 maybe_prompt_ssh_pubkey
 
 # Install authorized_keys for SSH (optional).
-if [ -n "${TAKO_SSH_PUBKEY:-}" ]; then
-  home_dir=""
+tako_home_dir() {
+  _home=""
   if need_cmd getent; then
-    home_dir="$(getent passwd "$TAKO_USER" 2>/dev/null | awk -F: '{print $6}' || true)"
+    _home="$(getent passwd "$TAKO_USER" 2>/dev/null | awk -F: '{print $6}' || true)"
   fi
-  if [ -z "$home_dir" ]; then
-    home_dir="$(awk -F: -v u="$TAKO_USER" '$1==u {print $6}' /etc/passwd 2>/dev/null || true)"
+  if [ -z "$_home" ]; then
+    _home="$(awk -F: -v u="$TAKO_USER" '$1==u {print $6}' /etc/passwd 2>/dev/null || true)"
   fi
-  if [ -z "$home_dir" ]; then
-    home_dir="/home/$TAKO_USER"
+  if [ -z "$_home" ]; then
+    _home="/home/$TAKO_USER"
   fi
+  printf '%s' "$_home"
+}
 
+home_dir="$(tako_home_dir)"
+auth_keys="$home_dir/.ssh/authorized_keys"
+
+if [ -n "${TAKO_SSH_PUBKEY:-}" ]; then
   mkdir -p "$home_dir/.ssh"
   chmod 700 "$home_dir/.ssh"
-  printf '%s\n' "$TAKO_SSH_PUBKEY" > "$home_dir/.ssh/authorized_keys"
-  chmod 600 "$home_dir/.ssh/authorized_keys"
+
+  # Check if key already exists in authorized_keys to avoid duplicates
+  if [ -f "$auth_keys" ] && grep -qF "$TAKO_SSH_PUBKEY" "$auth_keys" 2>/dev/null; then
+    echo "OK SSH key already present in authorized_keys"
+  elif [ -f "$auth_keys" ] && [ -s "$auth_keys" ]; then
+    # File exists and is non-empty — append instead of overwriting
+    printf '%s\n' "$TAKO_SSH_PUBKEY" >> "$auth_keys"
+    echo "OK appended SSH key to existing authorized_keys"
+  else
+    printf '%s\n' "$TAKO_SSH_PUBKEY" > "$auth_keys"
+    echo "OK wrote SSH key to authorized_keys"
+  fi
+
+  chmod 600 "$auth_keys"
   chown -R "$TAKO_USER":"$TAKO_USER" "$home_dir/.ssh" 2>/dev/null || true
+elif [ -f "$auth_keys" ] && [ -s "$auth_keys" ]; then
+  echo "OK existing SSH key retained for '$TAKO_USER'"
 else
   echo "warning: no SSH key installed for '$TAKO_USER'." >&2
   echo "warning: configure ~/.ssh/authorized_keys manually or rerun installer with TAKO_SSH_PUBKEY." >&2
@@ -848,7 +868,14 @@ fi
 if [ "$SERVICE_MANAGER" = "systemd" ]; then
   systemctl daemon-reload
   if is_enabled "$TAKO_RESTART_SERVICE"; then
-    systemctl enable --now tako-server
+    systemctl enable tako-server >/dev/null 2>&1 || true
+    if systemctl is-active --quiet tako-server; then
+      # Service already running — graceful reload (SIGHUP) to pick up new binary
+      systemctl reload tako-server
+      echo "OK tako-server reloaded (SIGHUP)"
+    else
+      systemctl start tako-server
+    fi
     systemctl --no-pager status tako-server || true
     if ! systemctl is-active --quiet tako-server; then
       echo "error: tako-server failed to start. Recent logs:" >&2
@@ -863,7 +890,7 @@ elif [ "$SERVICE_MANAGER" = "openrc" ]; then
   rc-update add tako-server default >/dev/null 2>&1 || true
   if is_enabled "$TAKO_RESTART_SERVICE"; then
     if rc-service tako-server status >/dev/null 2>&1; then
-      rc-service tako-server restart
+      rc-service tako-server reload || rc-service tako-server restart
     else
       rc-service tako-server start
     fi
@@ -879,6 +906,30 @@ else
   # Install-refresh mode can run before init is active (for example in image builds).
   # In this mode we install binaries/users only and skip service definition install.
   echo "OK install refreshed without active service manager (TAKO_RESTART_SERVICE=0); skipped service definition install"
+fi
+
+# Optional DNS provider setup for wildcard certificates
+TAKO_DNS_PROVIDER_CONF="$TAKO_HOME/dns-provider.conf"
+TAKO_DNS_CREDENTIALS_ENV="$TAKO_HOME/dns-credentials.env"
+
+if [ -f "$TAKO_DNS_PROVIDER_CONF" ]; then
+  existing_dns_provider="$(cat "$TAKO_DNS_PROVIDER_CONF" 2>/dev/null || true)"
+  echo "OK DNS provider already configured: $existing_dns_provider"
+  # Ensure systemd drop-in is in place (idempotent)
+  if [ "$SERVICE_MANAGER" = "systemd" ] && [ -n "$existing_dns_provider" ]; then
+    dropin_dir="/etc/systemd/system/tako-server.service.d"
+    if [ ! -f "$dropin_dir/dns.conf" ]; then
+      mkdir -p "$dropin_dir"
+      cat > "$dropin_dir/dns.conf" <<DNSEOF
+[Service]
+EnvironmentFile=$TAKO_DNS_CREDENTIALS_ENV
+ExecStart=
+ExecStart=/usr/local/bin/tako-server --socket $TAKO_SOCKET --data-dir $TAKO_HOME --dns-provider $existing_dns_provider
+DNSEOF
+      systemctl daemon-reload
+      echo "OK restored DNS systemd drop-in for $existing_dns_provider"
+    fi
+  fi
 fi
 
 echo "OK installed tako-server"
