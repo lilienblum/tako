@@ -155,7 +155,7 @@ pub fn highlight(value: &str) -> String {
 // Spinner helpers
 // ---------------------------------------------------------------------------
 
-fn spinner_style() -> ProgressStyle {
+pub fn spinner_style() -> ProgressStyle {
     let teal_spinner = if should_colorize() {
         let (r, g, b) = BRAND_TEAL;
         format!("\x1b[38;2;{r};{g};{b}m{{spinner}}\x1b[39m")
