@@ -205,7 +205,8 @@ async fn run_async(
     let source_root = source_bundle_root(&project_dir);
 
     let validation = output::with_spinner(
-        "Validating configuration...",
+        "Validating configuration",
+        "Validated",
         || -> Result<ValidationResult, String> {
             let tako_config = TakoToml::load_from_dir(&project_dir).map_err(|e| e.to_string())?;
             let servers = ServersToml::load().map_err(|e| e.to_string())?;
@@ -239,7 +240,7 @@ async fn run_async(
                 warnings,
             })
         },
-    )?
+    )
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     let ValidationResult {
@@ -257,9 +258,9 @@ async fn run_async(
             .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     let bun_lockfile_checked = if preflight_runtime_adapter == BuildAdapter::Bun {
-        output::with_spinner("Checking Bun lockfile...", || {
+        output::with_spinner("Checking Bun lockfile", "Bun lockfile valid", || {
             run_bun_lockfile_preflight(&source_root)
-        })?
+        })
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
     } else {
         false
@@ -363,11 +364,11 @@ async fn run_async(
     let runtime_adapter = resolve_effective_build_adapter(&project_dir, &tako_config, &preset_ref)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let (mut build_preset, resolved_preset) = output::with_spinner_async(
-        "Resolving build preset...",
+        "Resolving build preset",
+        "Build preset resolved",
         load_build_preset(&project_dir, &preset_ref),
     )
     .await
-    .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -416,17 +417,18 @@ async fn run_async(
     let app_json_bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
     let app_manifest_archive_path = archive_app_manifest_path(&app_subdir);
-    let source_archive_size = output::with_spinner("Creating source archive...", || {
-        executor.create_source_archive_with_extra_files(
-            &source_root,
-            &source_archive_path,
-            &[(
-                app_manifest_archive_path.as_str(),
-                app_json_bytes.as_slice(),
-            )],
-        )
-    })?
-    .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+    let source_archive_size =
+        output::with_spinner("Creating source archive", "Source archive created", || {
+            executor.create_source_archive_with_extra_files(
+                &source_root,
+                &source_archive_path,
+                &[(
+                    app_manifest_archive_path.as_str(),
+                    app_json_bytes.as_slice(),
+                )],
+            )
+        })
+        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
     output::bullet(&format_source_archive_created_message(
         &format_path_relative_to(&project_dir, &source_archive_path),
@@ -550,9 +552,9 @@ async fn run_async(
     }
 
     let preflight_results = if output::is_interactive() && preflight_handles.len() > 1 {
-        output::with_spinner_async(
-            format!(
-                "Checking remote servers ({} targets)...",
+        output::with_spinner_async_simple(
+            &format!(
+                "Checking remote servers ({} targets)",
                 preflight_handles.len()
             ),
             async {
@@ -563,7 +565,7 @@ async fn run_async(
                 results
             },
         )
-        .await?
+        .await
     } else {
         let mut results = Vec::new();
         for handle in preflight_handles {
@@ -626,14 +628,14 @@ async fn run_async(
 
     let deploy_results =
         if output::is_interactive() && !use_per_server_spinners && handles.len() > 1 {
-            output::with_spinner_async(format_parallel_deploy_step(handles.len()), async {
+            output::with_spinner_async_simple(&format_parallel_deploy_step(handles.len()), async {
                 let mut results = Vec::new();
                 for handle in handles {
                     results.push(handle.await);
                 }
                 results
             })
-            .await?
+            .await
         } else {
             let mut results = Vec::new();
             for handle in handles {
@@ -1051,8 +1053,15 @@ fn format_build_stages_summary(stage_summary: &[String], target_label: Option<&s
 
 fn format_runtime_probe_message(target_label: Option<&str>) -> String {
     match target_label {
-        Some(label) => format!("Resolving runtime version for {}...", label),
-        None => "Resolving runtime version...".to_string(),
+        Some(label) => format!("Resolving runtime version for {}", label),
+        None => "Resolving runtime version".to_string(),
+    }
+}
+
+fn format_runtime_probe_success(target_label: Option<&str>) -> String {
+    match target_label {
+        Some(label) => format!("Runtime version resolved for {}", label),
+        None => "Runtime version resolved".to_string(),
     }
 }
 
@@ -1073,8 +1082,15 @@ fn format_source_archive_created_message(
 
 fn format_build_artifact_message(target_label: Option<&str>) -> String {
     match target_label {
-        Some(label) => format!("Building artifact for {}...", label),
-        None => "Building artifact...".to_string(),
+        Some(label) => format!("Building artifact for {}", label),
+        None => "Building artifact".to_string(),
+    }
+}
+
+fn format_build_artifact_success(target_label: Option<&str>) -> String {
+    match target_label {
+        Some(label) => format!("Artifact built for {}", label),
+        None => "Artifact built".to_string(),
     }
 }
 
@@ -1087,8 +1103,15 @@ fn format_build_completed_message(target_label: Option<&str>) -> String {
 
 fn format_prepare_artifact_message(target_label: Option<&str>) -> String {
     match target_label {
-        Some(label) => format!("Preparing artifact for {}...", label),
-        None => "Preparing artifact...".to_string(),
+        Some(label) => format!("Preparing artifact for {}", label),
+        None => "Preparing artifact".to_string(),
+    }
+}
+
+fn format_prepare_artifact_success(target_label: Option<&str>) -> String {
+    match target_label {
+        Some(label) => format!("Artifact prepared for {}", label),
+        None => "Artifact prepared".to_string(),
     }
 }
 
@@ -2267,8 +2290,9 @@ async fn build_target_artifacts(
         })?;
 
         let runtime_probe_label = format_runtime_probe_message(display_target_label);
+        let runtime_probe_success = format_runtime_probe_success(display_target_label);
         let runtime_version = if use_local_build_spinners {
-            output::with_spinner(runtime_probe_label.as_str(), || {
+            output::with_spinner(&runtime_probe_label, &runtime_probe_success, || {
                 if use_docker_build {
                     resolve_runtime_version_with_docker_probe(
                         &workspace,
@@ -2280,8 +2304,7 @@ async fn build_target_artifacts(
                 } else {
                     resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool)
                 }
-            })
-            .map_err(|e| format!("Failed to render runtime version spinner: {e}"))??
+            })?
         } else {
             if output::is_verbose() {
                 output::muted(&runtime_probe_label);
@@ -2343,8 +2366,9 @@ async fn build_target_artifacts(
 
         let build_result = (|| -> Result<u64, String> {
             let build_label = format_build_artifact_message(display_target_label);
+            let build_success = format_build_artifact_success(display_target_label);
             if use_local_build_spinners {
-                output::with_spinner(build_label.as_str(), || {
+                output::with_spinner(&build_label, &build_success, || {
                     run_target_build(
                         &workspace,
                         app_subdir,
@@ -2354,8 +2378,7 @@ async fn build_target_artifacts(
                         &target_build,
                         custom_stages,
                     )
-                })
-                .map_err(|e| format!("Failed to render artifact build spinner: {e}"))??;
+                })?;
             } else {
                 output::bullet(&build_label);
                 run_target_build(
@@ -2377,8 +2400,9 @@ async fn build_target_artifacts(
             output::bullet(&format_build_completed_message(display_target_label));
 
             let prepare_label = format_prepare_artifact_message(display_target_label);
+            let prepare_success = format_prepare_artifact_success(display_target_label);
             if use_local_build_spinners {
-                output::with_spinner(prepare_label.as_str(), || {
+                output::with_spinner(&prepare_label, &prepare_success, || {
                     package_target_artifact(
                         &workspace,
                         app_subdir,
@@ -2391,7 +2415,6 @@ async fn build_target_artifacts(
                         &build_target_label,
                     )
                 })
-                .map_err(|e| format!("Failed to render artifact preparation spinner: {e}"))?
             } else {
                 output::bullet(&prepare_label);
                 package_target_artifact(
@@ -3189,7 +3212,8 @@ fn should_use_local_build_spinners(interactive: bool) -> bool {
 }
 
 async fn run_deploy_step<T, E, Fut>(
-    label: &'static str,
+    loading: &str,
+    success: &str,
     use_spinner: bool,
     work: Fut,
 ) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
@@ -3199,13 +3223,12 @@ where
     E: Send + Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     if use_spinner {
-        let result = output::with_spinner_async(label, work)
+        output::with_spinner_async(loading, success, work)
             .await
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-        result.map_err(Into::into)
+            .map_err(Into::into)
     } else {
         if output::is_verbose() {
-            output::muted(label);
+            output::muted(loading);
         }
         work.await.map_err(Into::into)
     }
@@ -3272,7 +3295,7 @@ async fn deploy_to_server(
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let ssh_keys_dir = ssh_config.keys_directory();
     let mut ssh = SshClient::new(ssh_config);
-    run_deploy_step("Connecting...", use_spinner, ssh.connect()).await?;
+    run_deploy_step("Connecting", "Connected", use_spinner, ssh.connect()).await?;
     let archive_size_bytes = std::fs::metadata(archive_path)?.len();
 
     // Server-side deploy lock (best-effort). This prevents concurrent deploys of the same app.
@@ -3281,15 +3304,21 @@ async fn deploy_to_server(
         "mkdir -p {} && mkdir {} 2>/dev/null && echo ok || echo locked",
         config.remote_base, lock_dir
     );
-    let lock_check =
-        run_deploy_step("Acquiring deploy lock...", use_spinner, ssh.exec(&lock_cmd)).await?;
+    let lock_check = run_deploy_step(
+        "Acquiring deploy lock",
+        "Deploy lock acquired",
+        use_spinner,
+        ssh.exec(&lock_cmd),
+    )
+    .await?;
     if !lock_check.stdout.trim().contains("ok") {
         let _ = ssh.disconnect().await;
         return Err(format!("deploy lock already held at {}", lock_dir).into());
     }
 
     run_deploy_step(
-        "Checking remote disk space...",
+        "Checking remote disk space",
+        "Disk space OK",
         use_spinner,
         ensure_remote_disk_space(&ssh, archive_size_bytes),
     )
@@ -3302,7 +3331,7 @@ async fn deploy_to_server(
     let result = async {
         // Check if tako-server is installed.
         let installed =
-            run_deploy_step("Checking tako-server...", use_spinner, ssh.is_tako_installed())
+            run_deploy_step("Checking tako-server", "tako-server found", use_spinner, ssh.is_tako_installed())
                 .await?;
         if !installed {
             return Err(
@@ -3313,14 +3342,15 @@ async fn deploy_to_server(
 
         // Ensure the service is running before socket commands.
         run_deploy_step(
-            "Checking tako-server status...",
+            "Checking tako-server status",
+            "tako-server running",
             use_spinner,
             ensure_tako_running(&mut ssh),
         )
         .await?;
 
         // Route conflict validation (best-effort against current tako-server state)
-        let existing = run_deploy_step("Checking route conflicts...", use_spinner, async {
+        let existing = run_deploy_step("Checking route conflicts", "No route conflicts", use_spinner, async {
             parse_existing_routes_response(ssh.tako_routes().await?)
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
         })
@@ -3330,7 +3360,7 @@ async fn deploy_to_server(
             .map_err(|e| format!("Route conflict: {}", e))?;
 
         // Create directories.
-        run_deploy_step("Creating directories...", use_spinner, async {
+        run_deploy_step("Creating directories", "Directories created", use_spinner, async {
             ssh.mkdir(&release_dir).await?;
             ssh.mkdir(&release_app_dir).await?;
             ssh.mkdir(&config.shared_dir()).await?;
@@ -3341,7 +3371,8 @@ async fn deploy_to_server(
         // Upload target-specific archive artifact.
         let remote_archive = remote_release_archive_path(&release_dir);
         run_deploy_step(
-            "Uploading artifact...",
+            "Uploading artifact",
+            "Artifact uploaded",
             use_spinner,
             upload_via_scp(
                 archive_path,
@@ -3356,7 +3387,8 @@ async fn deploy_to_server(
         // Extract archive directly into release root.
         let extract_cmd = build_remote_extract_archive_command(&release_dir, &remote_archive);
         run_deploy_step(
-            "Extracting archive payload...",
+            "Extracting archive payload",
+            "Archive extracted",
             use_spinner,
             ssh.exec_checked(&extract_cmd),
         )
@@ -3370,7 +3402,8 @@ async fn deploy_to_server(
             release_dir
         );
         run_deploy_step(
-            "Linking shared directories...",
+            "Linking shared directories",
+            "Shared directories linked",
             use_spinner,
             ssh.exec_checked(&shared_link_cmd),
         )
@@ -3378,7 +3411,7 @@ async fn deploy_to_server(
 
         // Finalize runtime manifest using the resolved deploy entrypoint.
         let resolved_main = config.main.clone();
-        run_deploy_step("Preparing runtime manifest...", use_spinner, async {
+        run_deploy_step("Preparing runtime manifest", "Runtime manifest ready", use_spinner, async {
             let main = resolved_main.clone();
             let app_json = serde_json::to_vec_pretty(&serde_json::json!({
                 "runtime": config.runtime,
@@ -3417,7 +3450,7 @@ async fn deploy_to_server(
         };
         let json = serde_json::to_string(&cmd)?;
         let response =
-            run_deploy_step("Notifying tako-server...", use_spinner, ssh.tako_command(&json))
+            run_deploy_step("Notifying tako-server", "tako-server notified", use_spinner, ssh.tako_command(&json))
                 .await?;
 
         // Parse response.
@@ -3427,7 +3460,8 @@ async fn deploy_to_server(
 
         // Update current symlink only after tako-server accepted the deploy command.
         run_deploy_step(
-            "Updating current symlink...",
+            "Updating current symlink",
+            "Current symlink updated",
             use_spinner,
             ssh.symlink(&release_dir, &config.current_link()),
         )
@@ -3440,7 +3474,8 @@ async fn deploy_to_server(
             releases_dir
         );
         run_deploy_step(
-            "Cleaning old releases...",
+            "Cleaning old releases",
+            "Old releases cleaned",
             use_spinner,
             ssh.exec(&cleanup_cmd),
         )
@@ -4387,18 +4422,15 @@ name = "test-app"
         );
         assert_eq!(
             format_prepare_artifact_message(Some("linux-aarch64-musl")),
-            "Preparing artifact for linux-aarch64-musl..."
+            "Preparing artifact for linux-aarch64-musl"
         );
     }
 
     #[test]
     fn artifact_progress_helpers_render_shared_messages_without_target_label() {
-        assert_eq!(format_build_artifact_message(None), "Building artifact...");
+        assert_eq!(format_build_artifact_message(None), "Building artifact");
         assert_eq!(format_build_completed_message(None), "Build completed");
-        assert_eq!(
-            format_prepare_artifact_message(None),
-            "Preparing artifact..."
-        );
+        assert_eq!(format_prepare_artifact_message(None), "Preparing artifact");
     }
 
     #[test]

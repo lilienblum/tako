@@ -256,9 +256,9 @@ fn fetch_family_presets_for_adapter(
     let runtime = tokio::runtime::Runtime::new().map_err(|e| {
         std::io::Error::other(format!("Failed to initialize preset fetch runtime: {e}"))
     })?;
-    let fetched = output::with_spinner("Fetching presets...", || {
+    let fetched = output::with_spinner_simple("Fetching presets", || {
         runtime.block_on(load_available_family_preset_definitions(family))
-    })?;
+    });
 
     match fetched {
         Ok(presets) => Ok(normalize_family_preset_definitions(adapter, presets)),

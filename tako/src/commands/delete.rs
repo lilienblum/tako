@@ -143,9 +143,12 @@ async fn run_async(
             let Some(server) = servers.get(server_name) else {
                 return Err(format_server_not_found_error(server_name).into());
             };
-            let label = format!("Deleting from {}...", output::emphasized(server_name));
-            let result =
-                output::with_spinner_async(label, delete_from_server(server, &app_name)).await?;
+            let result = output::with_spinner_async(
+                &format!("Deleting from {}", output::emphasized(server_name)),
+                &format!("Deleted from {}", output::emphasized(server_name)),
+                delete_from_server(server, &app_name),
+            )
+            .await;
             match result {
                 Ok(()) => {
                     output::bullet(&format_server_delete_success_for_output(
@@ -184,8 +187,8 @@ async fn run_async(
         }
 
         let delete_results = if interactive && handles.len() > 1 {
-            output::with_spinner_async(
-                format!("Deleting from {} servers...", handles.len()),
+            output::with_spinner_async_simple(
+                &format!("Deleting from {} servers", handles.len()),
                 async {
                     let mut results = Vec::new();
                     for handle in handles {
@@ -194,7 +197,7 @@ async fn run_async(
                     results
                 },
             )
-            .await?
+            .await
         } else {
             let mut results = Vec::new();
             for handle in handles {
@@ -308,13 +311,14 @@ async fn discover_remote_deployments_with_progress(
     servers: &ServersToml,
 ) -> Result<Vec<RemoteDeployment>, Box<dyn std::error::Error>> {
     if output::is_interactive() {
-        let deployments = output::with_spinner_async("Discovering deployed apps...", async {
-            discover_remote_deployments(servers)
-                .await
-                .map_err(|e| e.to_string())
-        })
-        .await?
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        let deployments =
+            output::with_spinner_async("Discovering deployed apps", "Apps discovered", async {
+                discover_remote_deployments(servers)
+                    .await
+                    .map_err(|e| e.to_string())
+            })
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
         return Ok(deployments);
     }
     discover_remote_deployments(servers).await

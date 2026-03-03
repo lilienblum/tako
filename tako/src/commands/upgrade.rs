@@ -91,32 +91,30 @@ fn run_cli_upgrade_with_installer(
     let downloader = select_downloader(command_exists("curl"), command_exists("wget"))
         .map_err(|e| format!("{e}. Install curl or wget and retry."))?;
 
-    output::with_spinner("Running installer...", || {
+    output::with_spinner("Running installer", "Local CLI upgraded", || {
         run_installer(downloader, &install_url, &env_overrides)
-    })?
+    })
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-
-    output::success("Local CLI upgraded");
     Ok(())
 }
 
 fn run_cli_upgrade_with_homebrew() -> Result<(), Box<dyn std::error::Error>> {
     output::step("Upgrading local tako CLI via Homebrew");
-    output::with_spinner("Running brew upgrade tako...", || {
+    output::with_spinner("Running brew upgrade tako", "Local CLI upgraded", || {
         run_local_upgrade_command("brew", &["upgrade", "tako"])
-    })?
+    })
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::success("Local CLI upgraded");
     Ok(())
 }
 
 fn run_cli_upgrade_with_cargo() -> Result<(), Box<dyn std::error::Error>> {
     output::step("Upgrading local tako CLI via cargo");
-    output::with_spinner("Running cargo install tako --locked...", || {
-        run_local_upgrade_command("cargo", &["install", "tako", "--locked"])
-    })?
+    output::with_spinner(
+        "Running cargo install tako --locked",
+        "Local CLI upgraded",
+        || run_local_upgrade_command("cargo", &["install", "tako", "--locked"]),
+    )
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::success("Local CLI upgraded");
     Ok(())
 }
 

@@ -54,11 +54,16 @@ pub async fn setup_local_ca() -> Result<LocalCA, Box<dyn std::error::Error>> {
     let ca = match plan.source {
         CaSource::Existing => store.load_ca()?,
         CaSource::Generated => {
-            let ca = output::with_spinner("Generating new Tako CA...", LocalCA::generate)?
-                .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
-            output::with_spinner("Saving Tako CA to secure storage...", || store.save_ca(&ca))?
-                .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
-            output::success("Tako CA generated and saved.");
+            let ca = output::with_spinner(
+                "Generating new Tako CA",
+                "Tako CA generated",
+                LocalCA::generate,
+            )
+            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+            output::with_spinner("Saving Tako CA to secure storage", "Tako CA saved", || {
+                store.save_ca(&ca)
+            })
+            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
             ca
         }
     };

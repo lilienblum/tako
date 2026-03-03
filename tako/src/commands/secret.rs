@@ -408,10 +408,11 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
             };
 
             let sync_result = output::with_spinner_async(
-                format!("Syncing to {}", output::emphasized(&server_name)),
+                &format!("Syncing to {}", output::emphasized(&server_name)),
+                &format!("Synced to {}", output::emphasized(&server_name)),
                 sync_to_server(&app_name, server, &env_secrets),
             )
-            .await?;
+            .await;
 
             match sync_result {
                 Ok(()) => {

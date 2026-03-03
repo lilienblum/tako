@@ -148,8 +148,8 @@ async fn list_releases(
 
     let mut merged: BTreeMap<String, ReleaseInfo> = BTreeMap::new();
     let mut any_success = false;
-    let task_results = output::with_spinner_async(
-        format!("Loading releases from {} server(s)...", server_names.len()),
+    let task_results = output::with_spinner_async_simple(
+        &format!("Loading releases from {} server(s)", server_names.len()),
         async {
             let mut results = Vec::new();
             for task in tasks {
@@ -158,7 +158,7 @@ async fn list_releases(
             results
         },
     )
-    .await?;
+    .await;
     for task in task_results {
         let (server_name, result) = task?;
         match result {
@@ -255,8 +255,8 @@ async fn rollback_release(
 
     let mut success_count = 0usize;
     let mut errors = Vec::new();
-    let rollback_results = output::with_spinner_async(
-        format!("Rolling back on {} server(s)...", server_names.len()),
+    let rollback_results = output::with_spinner_async_simple(
+        &format!("Rolling back on {} server(s)", server_names.len()),
         async {
             let mut results = Vec::new();
             for task in tasks {
@@ -265,7 +265,7 @@ async fn rollback_release(
             results
         },
     )
-    .await?;
+    .await;
     for task in rollback_results {
         let (server_name, server, result) = task?;
         match result {
@@ -394,7 +394,7 @@ fn output_release_lines(release: &ReleaseInfo) {
 
     println!(
         "{} {}",
-        output::brand_fg(head).bold(),
+        output::bold(&output::brand_fg(head)),
         output::brand_muted(deployed)
     );
     println!("{}", output::brand_muted(commit));

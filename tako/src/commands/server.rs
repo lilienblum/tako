@@ -389,25 +389,22 @@ pub async fn add_server(
         let ssh_config = SshConfig::from_server(host, port);
         let mut ssh = SshClient::new(ssh_config);
 
-        let connect_result = output::with_spinner_async(
-            format!("Testing SSH connection to tako@{}:{}", host, port),
+        match output::with_spinner_async(
+            &format!("Testing SSH connection to tako@{}:{}", host, port),
+            "SSH connection successful",
             ssh.connect(),
         )
         .await
-        .map_err(|e| format!("SSH connection failed: {}", e))?;
-
-        match connect_result {
+        {
             Ok(()) => {
-                output::success("SSH connection successful");
-                let target_result = output::with_spinner_async(
-                    "Detecting server target...",
+                let target = output::with_spinner_async(
+                    "Detecting server target",
+                    "Target detected",
                     detect_server_target(&ssh),
                 )
                 .await
                 .map_err(|e| format!("Target detection failed: {}", e))?;
-                let target =
-                    target_result.map_err(|e| format!("Target detection failed: {}", e))?;
-                output::success(&format!("Detected target: {}", target.label()));
+                output::muted(&format!("Target: {}", target.label()));
                 detected_target = Some(target);
 
                 // Check if tako-server is installed
@@ -627,11 +624,10 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
 fn print_servers_table(servers: &crate::config::ServersToml) {
     println!(
         "{}",
-        output::brand_muted(format!(
+        output::bold(&output::brand_muted(format!(
             "{:<20} {:<30} {:<6} DESCRIPTION",
             "NAME", "HOST", "PORT"
-        ))
-        .bold()
+        )))
     );
     println!("{}", output::brand_muted("-".repeat(92)));
 
@@ -663,20 +659,21 @@ async fn restart_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
-    let connect_result = output::with_spinner_async(
-        format!("Connecting to {}", output::emphasized(name)),
+    output::with_spinner_async(
+        &format!("Connecting to {}", output::emphasized(name)),
+        "Connected",
         ssh.connect(),
     )
     .await?;
-    connect_result?;
 
-    let restart_result =
-        output::with_spinner_async("Restarting tako-server...", ssh.tako_restart()).await?;
-
-    match restart_result {
+    match output::with_spinner_async(
+        "Restarting tako-server",
+        "tako-server restarted",
+        ssh.tako_restart(),
+    )
+    .await
+    {
         Ok(()) => {
-            output::success("tako-server restarted");
-
             // Wait a moment for it to come back up
             tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
@@ -772,7 +769,7 @@ async fn wait_for_primary_ready(
     while start.elapsed() < timeout {
         ssh.clear_tako_hello_cache();
         match ssh.tako_server_info().await {
-            Ok(info) if info.pid != old_pid => return Ok(info),
+            Ok(info) if info.pid != old_pid || info.pid == 0 => return Ok(info),
             Ok(_) => {
                 // Still the old process — keep polling
                 tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
@@ -832,12 +829,13 @@ pub(crate) async fn upgrade_server(
 
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
-    let connect_result = output::with_spinner_async(
-        format!("Connecting to {}", output::emphasized(name)),
+    output::with_spinner_async(
+        &format!("Connecting to {}", output::emphasized(name)),
+        "Connected",
         ssh.connect(),
     )
-    .await?;
-    connect_result?;
+    .await
+    .map_err(|e| format!("SSH connection failed: {}", e))?;
 
     let owner = build_upgrade_owner(name);
     let mut upgrade_mode_entered = false;
@@ -856,16 +854,15 @@ pub(crate) async fn upgrade_server(
 
         // Install/update binary without restarting the service
         let install_message = if channel == UpgradeChannel::Canary {
-            "Installing updated canary tako-server binary..."
+            "Installing updated canary tako-server binary"
         } else {
-            "Installing updated tako-server binary..."
+            "Installing updated tako-server binary"
         };
-        let install_output = output::with_spinner_async(
+        let install_output = output::with_spinner_async_simple(
             install_message,
             ssh.exec(&remote_installer_command(channel)),
         )
         .await
-        .map_err(|e| format!("Failed to run installer: {}", e))?
         .map_err(|e| format!("Failed to run installer: {}", e))?;
         if !install_output.success() {
             return Err(format_installer_failure(&install_output));
@@ -873,52 +870,55 @@ pub(crate) async fn upgrade_server(
         output::success("Binary updated");
 
         output::with_spinner_async(
-            "Entering upgrading mode...",
+            "Entering upgrading mode",
+            "Upgrading mode enabled",
             ssh.tako_enter_upgrading(&owner),
         )
         .await
-        .map_err(|e| format!("Failed to enter upgrading mode: {}", e))?
         .map_err(|e| format!("Failed to enter upgrading mode: {}", e))?;
         upgrade_mode_entered = true;
-        output::success("Upgrading mode enabled");
 
         // Capture the current (old) PID before reload so we can detect when
         // the new process has taken over the management socket.
-        let old_info =
-            output::with_spinner_async("Reading active runtime config...", ssh.tako_server_info())
-                .await
-                .map_err(|e| format!("Failed to read runtime config: {}", e))?
-                .map_err(|e| format!("Failed to read runtime config: {}", e))?;
+        let old_info = output::with_spinner_async(
+            "Reading active runtime config",
+            "Runtime config loaded",
+            ssh.tako_server_info(),
+        )
+        .await
+        .map_err(|e| format!("Failed to read runtime config: {}", e))?;
         let old_pid = old_info.pid;
 
         // Trigger zero-downtime reload: SIGHUP → new binary spawns → SIGUSR1 → old drains
         output::with_spinner_async(
-            "Reloading tako-server (zero-downtime)...",
+            "Reloading tako-server (zero-downtime)",
+            "Reload triggered",
             ssh.tako_reload(),
         )
         .await
-        .map_err(|e| format!("Reload failed: {}", e))?
         .map_err(|e| format!("Reload failed: {}", e))?;
 
         // Poll until a *new* process (different PID) responds on the socket
         let new_info = output::with_spinner_async(
-            "Waiting for new server to be ready...",
+            "Waiting for new server to be ready",
+            "New server is ready",
             wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid),
         )
         .await
-        .map_err(|e| format!("Readiness check failed: {}", e))?
         .map_err(|e| format!("Readiness check failed: {}", e))?;
-        output::success(&format!(
-            "New server is ready (pid: {} → {}, socket: {})",
+        output::muted(&format!(
+            "pid: {} → {}, socket: {}",
             old_pid, new_info.pid, new_info.socket
         ));
 
-        output::with_spinner_async("Exiting upgrading mode...", ssh.tako_exit_upgrading(&owner))
-            .await
-            .map_err(|e| format!("Failed to exit upgrading mode: {}", e))?
-            .map_err(|e| format!("Failed to exit upgrading mode: {}", e))?;
+        output::with_spinner_async(
+            "Exiting upgrading mode",
+            "Upgrade complete",
+            ssh.tako_exit_upgrading(&owner),
+        )
+        .await
+        .map_err(|e| format!("Failed to exit upgrading mode: {}", e))?;
         upgrade_mode_entered = false;
-        output::success("Upgrade complete");
 
         Ok(())
     }

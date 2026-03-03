@@ -88,6 +88,7 @@ pub enum UpgradeMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServerRuntimeInfo {
+    #[serde(default)]
     pub pid: u32,
     pub mode: UpgradeMode,
     pub socket: String,

@@ -106,11 +106,11 @@ async fn collect_global_status_results(
             continue;
         };
 
-        let status = output::with_spinner_async(
-            format!("Loading {}...", server_name),
+        let status = output::with_spinner_async_simple(
+            &format!("Loading {}", server_name),
             collect_global_status_task(handle),
         )
-        .await?;
+        .await;
         server_results.insert(server_name.clone(), status);
     }
 
@@ -605,7 +605,7 @@ fn output_app_detail_line(detail: &str, is_last: bool) {
     let connector = if is_last { "└" } else { "│" };
     println!(
         "  {} {}",
-        output::brand_accent(connector).bold(),
+        output::bold(&output::brand_accent(connector)),
         output::brand_muted(detail)
     );
 }
@@ -619,8 +619,8 @@ fn output_app_status_heading(heading: &str, state_label: &str, tone: AppStateTon
     };
     println!(
         "  {} {} {}",
-        output::brand_accent("┌").bold(),
-        output::brand_fg(heading).bold(),
+        output::bold(&output::brand_accent("┌")),
+        output::bold(&output::brand_fg(heading)),
         state
     );
 }
