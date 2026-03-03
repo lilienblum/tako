@@ -65,6 +65,7 @@ pub enum ServerCommands {
     },
 
     /// Show global deployment status across configured servers
+    #[command(visible_alias = "info")]
     Status,
 }
 
@@ -769,7 +770,7 @@ async fn wait_for_primary_ready(
     while start.elapsed() < timeout {
         ssh.clear_tako_hello_cache();
         match ssh.tako_server_info().await {
-            Ok(info) if info.pid != old_pid || info.pid == 0 => return Ok(info),
+            Ok(info) if info.pid != old_pid => return Ok(info),
             Ok(_) => {
                 // Still the old process — keep polling
                 tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
