@@ -391,11 +391,7 @@ impl AcmeClient {
             .as_deref()
             .ok_or(AcmeError::NoDnsProvider)?;
 
-        let email = self
-            .config
-            .email
-            .as_deref()
-            .unwrap_or("admin@example.com");
+        let email = self.config.email.as_deref().unwrap_or("admin@example.com");
 
         let lego_dir = self.config.data_dir.join("lego");
         std::fs::create_dir_all(&lego_dir)?;
@@ -436,9 +432,10 @@ impl AcmeClient {
             "Running lego DNS-01 challenge"
         );
 
-        let output = cmd.output().await.map_err(|e| {
-            AcmeError::LegoDns01Failed(format!("Failed to execute lego: {}", e))
-        })?;
+        let output = cmd
+            .output()
+            .await
+            .map_err(|e| AcmeError::LegoDns01Failed(format!("Failed to execute lego: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);

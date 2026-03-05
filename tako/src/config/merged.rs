@@ -70,8 +70,8 @@ impl MergedConfig {
         // Load tako.toml
         let project = TakoToml::load_from_dir(dir)?;
 
-        let app_name =
-            require_app_name_from_config(dir).map_err(|e| ConfigError::Validation(e.to_string()))?;
+        let app_name = require_app_name_from_config(dir)
+            .map_err(|e| ConfigError::Validation(e.to_string()))?;
 
         // Load global servers
         let global_servers = ServersToml::load()?;
@@ -98,8 +98,8 @@ impl MergedConfig {
         // Load tako.toml
         let project = TakoToml::load_from_dir(dir)?;
 
-        let app_name =
-            require_app_name_from_config(dir).map_err(|e| ConfigError::Validation(e.to_string()))?;
+        let app_name = require_app_name_from_config(dir)
+            .map_err(|e| ConfigError::Validation(e.to_string()))?;
 
         // Load global servers
         let global_servers = if let Some(path) = servers_path {

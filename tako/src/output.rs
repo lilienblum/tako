@@ -61,8 +61,6 @@ pub fn brand_dim<D: Display>(value: D) -> String {
     }
 }
 
-
-
 pub fn brand_success<D: Display>(value: D) -> String {
     rgb_fg(value, BRAND_GREEN)
 }
@@ -225,7 +223,11 @@ fn finish_spinner_ok(pb: &ProgressBar, success: &str, elapsed: Duration) {
     if elapsed_str.is_empty() {
         println!("{check} {}", brand_fg(success));
     } else {
-        println!("{check} {} {}", brand_fg(success), brand_muted(&elapsed_str));
+        println!(
+            "{check} {} {}",
+            brand_fg(success),
+            brand_muted(&elapsed_str)
+        );
     }
 }
 
@@ -457,7 +459,10 @@ pub fn confirm_with_description(
     // Raw mode: read single keypress
     terminal::enable_raw_mode()?;
     let result = loop {
-        if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+        if let Event::Key(KeyEvent {
+            code, modifiers, ..
+        }) = event::read()?
+        {
             match code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     terminal::disable_raw_mode()?;
@@ -587,7 +592,11 @@ impl<'a> TextField<'a> {
         }
 
         let display_label = match self.hint {
-            Some(hint) => format!("{} {}", brand_accent(self.label), brand_muted(&format!("({hint})"))),
+            Some(hint) => format!(
+                "{} {}",
+                brand_accent(self.label),
+                brand_muted(&format!("({hint})"))
+            ),
             None => brand_accent(self.label),
         };
 
@@ -616,12 +625,12 @@ fn raw_text_input(
     required: bool,
     trimmed: bool,
 ) -> std::io::Result<String> {
-    use std::io::Write;
     use crossterm::{
         cursor,
         event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
         terminal::{self, Clear, ClearType},
     };
+    use std::io::Write;
 
     let mut out = std::io::stderr();
     let mut buf: Vec<char> = initial.unwrap_or("").chars().collect();
@@ -657,7 +666,12 @@ fn raw_text_input(
         String::new()
     };
 
-    let draw = |buf: &[char], pos: usize, out: &mut std::io::Stderr, password: bool, placeholder: &Option<String>, suffix: &str| {
+    let draw = |buf: &[char],
+                pos: usize,
+                out: &mut std::io::Stderr,
+                password: bool,
+                placeholder: &Option<String>,
+                suffix: &str| {
         let _ = write!(out, "\r");
         let _ = crossterm::execute!(*out, Clear(ClearType::CurrentLine));
         if buf.is_empty() {
@@ -682,7 +696,9 @@ fn raw_text_input(
         // Position cursor: prompt + " › " + chars before cursor
         let prompt_width = console::measure_text_width(prompt);
         let sep_width = 3; // " › "
-        let cursor_offset = if password { pos } else {
+        let cursor_offset = if password {
+            pos
+        } else {
             buf[..pos].iter().collect::<String>().len()
         };
         let col = prompt_width + sep_width + cursor_offset;
@@ -697,7 +713,8 @@ fn raw_text_input(
         }
         let current: String = buf.iter().collect();
         let lower = current.to_lowercase();
-        if let Some(sugg) = suggestions.iter()
+        if let Some(sugg) = suggestions
+            .iter()
             .find(|s| s.to_lowercase().starts_with(&lower) && s.len() > current.len())
         {
             *buf = sugg.chars().collect();
@@ -714,7 +731,10 @@ fn raw_text_input(
     draw(&buf, pos, &mut out, password, &placeholder, &suf);
 
     let result = loop {
-        if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+        if let Event::Key(KeyEvent {
+            code, modifiers, ..
+        }) = event::read()?
+        {
             match code {
                 KeyCode::Enter => {
                     let mut result: String = buf.iter().collect();
@@ -736,10 +756,15 @@ fn raw_text_input(
                     break Err(wizard_back_error());
                 }
                 // Character input
-                KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL)
-                    && !modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Char(c)
+                    if !modifiers.contains(KeyModifiers::CONTROL)
+                        && !modifiers.contains(KeyModifiers::ALT) =>
+                {
                     // Reject leading whitespace when trimmed
-                    if trimmed && c.is_whitespace() && buf[..pos].iter().all(|ch| ch.is_whitespace()) {
+                    if trimmed
+                        && c.is_whitespace()
+                        && buf[..pos].iter().all(|ch| ch.is_whitespace())
+                    {
                         continue;
                     }
                     buf.insert(pos, c);
@@ -747,8 +772,10 @@ fn raw_text_input(
                     suggestion_idx = None;
                 }
                 // Backspace
-                KeyCode::Backspace if modifiers.contains(KeyModifiers::SUPER)
-                    || modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Backspace
+                    if modifiers.contains(KeyModifiers::SUPER)
+                        || modifiers.contains(KeyModifiers::ALT) =>
+                {
                     // Word/line delete backward
                     if pos > 0 {
                         let old_pos = pos;
@@ -775,8 +802,10 @@ fn raw_text_input(
                     }
                 }
                 // Cursor movement
-                KeyCode::Left if modifiers.contains(KeyModifiers::SUPER)
-                    || modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Left
+                    if modifiers.contains(KeyModifiers::SUPER)
+                        || modifiers.contains(KeyModifiers::ALT) =>
+                {
                     while pos > 0 && buf[pos - 1].is_whitespace() {
                         pos -= 1;
                     }
@@ -789,8 +818,10 @@ fn raw_text_input(
                         pos -= 1;
                     }
                 }
-                KeyCode::Right if modifiers.contains(KeyModifiers::SUPER)
-                    || modifiers.contains(KeyModifiers::ALT) => {
+                KeyCode::Right
+                    if modifiers.contains(KeyModifiers::SUPER)
+                        || modifiers.contains(KeyModifiers::ALT) =>
+                {
                     while pos < buf.len() && !buf[pos].is_whitespace() {
                         pos += 1;
                     }
@@ -904,13 +935,19 @@ pub fn select_with_default<T>(
 
 /// Minimal select using crossterm — no cursor, no filter input, just arrow keys.
 /// `hints` provides optional muted text after each label (e.g. "detected").
-fn raw_select(term: &Term, prompt: &str, labels: &[&str], hints: &[&str], default: usize) -> std::io::Result<usize> {
-    use std::io::Write;
+fn raw_select(
+    term: &Term,
+    prompt: &str,
+    labels: &[&str],
+    hints: &[&str],
+    default: usize,
+) -> std::io::Result<usize> {
     use crossterm::{
         cursor,
         event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
         terminal::{self, Clear, ClearType},
     };
+    use std::io::Write;
 
     let mut selected = default;
     let mut out = std::io::stderr();
@@ -945,7 +982,10 @@ fn raw_select(term: &Term, prompt: &str, labels: &[&str], hints: &[&str], defaul
     draw(selected, &mut out);
 
     let result = loop {
-        if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+        if let Event::Key(KeyEvent {
+            code, modifiers, ..
+        }) = event::read()?
+        {
             match code {
                 KeyCode::Up | KeyCode::Char('k') => {
                     if selected > 0 {
@@ -977,10 +1017,7 @@ fn raw_select(term: &Term, prompt: &str, labels: &[&str], hints: &[&str], defaul
             }
             // Move cursor up to first option, clear, and redraw
             if labels.len() > 1 {
-                crossterm::execute!(
-                    out,
-                    cursor::MoveUp((labels.len() - 1) as u16),
-                )?;
+                crossterm::execute!(out, cursor::MoveUp((labels.len() - 1) as u16),)?;
             }
             crossterm::execute!(out, cursor::MoveToColumn(0))?;
             for _ in 0..labels.len() {
@@ -1123,7 +1160,6 @@ impl Wizard {
         });
         self.redraw();
     }
-
 
     pub fn input(
         &mut self,

@@ -57,9 +57,7 @@ pub fn validate_tako_toml(config: &TakoToml) -> ValidationResult {
 
     // Name is required
     if config.name.as_ref().map_or(true, |n| n.trim().is_empty()) {
-        result.error(
-            "tako.toml must have a `name` field. Run `tako init` to set it.".to_string(),
-        );
+        result.error("tako.toml must have a `name` field. Run `tako init` to set it.".to_string());
     }
 
     // Check for environments without routes
