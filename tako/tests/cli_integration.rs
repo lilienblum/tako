@@ -305,8 +305,8 @@ mod init {
         )
         .unwrap();
 
-        // Run tako init (uses --force to skip confirmation)
-        let output = run_tako(&["init", "--force"], &project_dir);
+        // Run tako init (non-interactive: no existing tako.toml, so no confirmation needed)
+        let output = run_tako(&["init"], &project_dir);
 
         assert!(
             output.status.success(),
@@ -352,7 +352,7 @@ mod init {
         .unwrap();
 
         // Invoke from root_dir, but tell tako to operate in project_dir
-        let output = run_tako(&["init", "--force", "my-app"], &root_dir);
+        let output = run_tako(&["init", "my-app"], &root_dir);
 
         assert!(
             output.status.success(),
@@ -371,7 +371,7 @@ mod init {
     }
 
     #[test]
-    fn test_init_with_force_flag() {
+    fn test_init_with_bun_detection() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().to_path_buf();
 
@@ -388,15 +388,18 @@ mod init {
         )
         .unwrap();
 
-        // First init
-        let output = run_tako(&["init", "--force"], &project_dir);
+        let output = run_tako(&["init"], &project_dir);
 
-        // Verify init runs (may require interactive input)
-        let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
-        // Either creates file or shows init output
         assert!(
-            project_dir.join("tako.toml").exists() || !combined.is_empty(),
-            "init should produce output or file"
+            output.status.success(),
+            "tako init failed: {}",
+            stderr_str(&output)
+        );
+        let content = fs::read_to_string(project_dir.join("tako.toml")).unwrap();
+        assert!(
+            content.contains("runtime = \"bun\""),
+            "expected bun runtime in tako.toml: {}",
+            content
         );
     }
 
@@ -650,8 +653,8 @@ mod server_commands {
 
         let out = stdout_str(&ls);
         assert!(
-            out.contains("DESCRIPTION"),
-            "expected description column: {}",
+            out.contains("Description"),
+            "expected description field: {}",
             out
         );
         assert!(
@@ -1048,11 +1051,9 @@ route = "prod.example.com"
         assert!(
             combined.contains("my-test-app")
                 || combined.contains("production")
-                || combined.contains("App:")
-                || combined.contains("No deployed apps found on configured servers.")
-                || combined.contains("No deployed apps.")
+                || combined.contains("Status")
                 || combined.contains("No servers configured.")
-                || combined.contains("tako-server"),
+                || combined.contains("No servers"),
             "Should show app info or status: {}",
             combined
         );

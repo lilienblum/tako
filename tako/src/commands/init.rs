@@ -7,106 +7,390 @@ use crate::build::{
     BuildAdapter, FamilyPresetDefinition, PresetFamily, detect_build_adapter,
     load_available_family_preset_definitions,
 };
+use crate::config::TakoToml;
 use crate::output;
 
-pub fn run(force: bool, runtime_override: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
     let tako_toml_path = project_dir.join("tako.toml");
 
-    // Check if tako.toml already exists
-    if tako_toml_path.exists() && !force {
-        if output::is_interactive()
-            && output::confirm("tako.toml already exists. Overwrite it?", false)?
+    // Load existing config for pre-filling defaults
+    let existing = if tako_toml_path.exists() {
+        TakoToml::load_from_file(&tako_toml_path).ok()
+    } else {
+        None
+    };
+
+    // Check if tako.toml already exists — prompt to overwrite in interactive mode
+    if existing.is_some() {
+        if !output::is_interactive()
+            || !output::confirm(
+                &format!(
+                    "Configuration file {} already exists. Overwrite?",
+                    output::bold("tako.toml")
+                ),
+                false,
+            )?
         {
-            output::warning("Overwriting existing tako.toml");
-        } else {
-            return Err("tako.toml already exists. Use --force to overwrite.".into());
+            return Ok(());
         }
     }
 
     let detected_adapter = detect_build_adapter(&project_dir);
-    let adapter = select_adapter_for_init(detected_adapter, runtime_override)?;
-    let family_presets = fetch_family_presets_for_adapter(adapter)?;
-    let selected_preset = select_preset_for_adapter(adapter, &family_presets)?;
-    let preset_default_main = selected_preset
-        .as_deref()
-        .and_then(|preset| preset_default_main(preset, adapter, &family_presets));
+
+    // Non-interactive: skip wizard, use defaults
+    if !output::is_interactive() {
+        return run_non_interactive(
+            &project_dir,
+            &tako_toml_path,
+            detected_adapter,
+            existing.as_ref(),
+        );
+    }
+
+    // Interactive wizard with state machine for ESC go-back
+    let mut wizard = output::Wizard::new().with_confirmation();
+    let mut step = 0usize;
+    let mut step_history: Vec<(usize, usize)> = Vec::new(); // (step_number, answer_count_before)
+
+    // Cached family presets (keyed by adapter to avoid re-fetching)
+    let mut family_presets_cache: Option<(BuildAdapter, Vec<FamilyPresetDefinition>)> = None;
+
+    // Accumulated values (persisted across restarts for pre-filling)
+    let mut adapter = existing
+        .as_ref()
+        .and_then(|c| c.runtime.as_deref())
+        .and_then(BuildAdapter::from_id)
+        .unwrap_or(detected_adapter);
+    let mut selected_preset: Option<String> = None; // None = custom
+    let mut main_entry: Option<String> = None;
+    let mut assets: Vec<String> = Vec::new();
+    let mut excludes: Vec<String> = Vec::new();
+    let mut app_name = String::new();
+    let mut production_route = String::new();
+
+    // Derived state (recomputed after step 1)
+    let mut is_custom = false;
+
+    loop {
+        match step {
+            // Step 0: App name
+            0 => {
+                let default_app_name = if !app_name.is_empty() {
+                    app_name.clone()
+                } else {
+                    existing
+                        .as_ref()
+                        .and_then(|c| c.name.clone())
+                        .unwrap_or_else(|| {
+                            resolve_app_name(&project_dir).unwrap_or_else(|_| "my-app".to_string())
+                        })
+                };
+                let answers_before = wizard.answer_count();
+                match wizard.input(
+                    "Application name",
+                    Some(&default_app_name),
+                    Some("Name cannot be changed after the first deployment."),
+                ) {
+                    Ok(v) => {
+                        app_name = v;
+                        step_history.push((0, answers_before));
+                        step = 1;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => return Ok(()),
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            // Step 1: Runtime
+            1 => {
+                let adapters = [BuildAdapter::Bun, BuildAdapter::Node, BuildAdapter::Deno];
+                let default_index = adapters.iter().position(|a| *a == adapter).unwrap_or(0);
+                let options: Vec<(String, BuildAdapter)> =
+                    adapters.iter().map(|&a| (a.id().to_string(), a)).collect();
+                let hints: Vec<&str> = adapters
+                    .iter()
+                    .map(|&a| {
+                        if a == detected_adapter && detected_adapter != BuildAdapter::Unknown {
+                            "detected"
+                        } else {
+                            ""
+                        }
+                    })
+                    .collect();
+                let answers_before = wizard.answer_count();
+                match wizard.select(
+                    "Runtime",
+                    "Choose a runtime:",
+                    options,
+                    &hints,
+                    default_index,
+                ) {
+                    Ok(a) => {
+                        adapter = a;
+                        step_history.push((1, answers_before));
+                        step = 2;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => {
+                        if let Some((prev, count)) = step_history.pop() {
+                            wizard.truncate_answers(count);
+                            step = prev;
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            // Step 2: Build preset + compute derived state
+            2 => {
+                let family_presets = match &family_presets_cache {
+                    Some((cached, presets)) if *cached == adapter => presets.clone(),
+                    _ => {
+                        let presets = fetch_family_presets_for_adapter(adapter)?;
+                        family_presets_cache = Some((adapter, presets.clone()));
+                        presets
+                    }
+                };
+                let family_preset_names: Vec<String> =
+                    family_presets.iter().map(|p| p.name.clone()).collect();
+                let existing_preset_ref = existing.as_ref().and_then(|c| c.preset.as_deref());
+                let answers_before = wizard.answer_count();
+
+                if let Some(options) = build_preset_selection_options(adapter, &family_preset_names)
+                {
+                    let default_index = selected_preset
+                        .as_deref()
+                        .and_then(|sp| options.iter().position(|(_, v)| v.as_deref() == Some(sp)))
+                        .or_else(|| {
+                            existing_preset_ref.and_then(|ep| {
+                                options.iter().position(|(_, v)| v.as_deref() == Some(ep))
+                            })
+                        })
+                        .unwrap_or(0);
+                    match wizard.select(
+                        "Build preset",
+                        "Choose a build preset:",
+                        options,
+                        &[],
+                        default_index,
+                    ) {
+                        Ok(sp) => {
+                            selected_preset = sp;
+                        }
+                        Err(e) if output::is_wizard_back(&e) => {
+                            if let Some((prev, count)) = step_history.pop() {
+                                wizard.truncate_answers(count);
+                                step = prev;
+                            } else {
+                                return Ok(());
+                            }
+                            continue;
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
+                } else {
+                    selected_preset = Some(adapter.default_preset().to_string());
+                }
+
+                // Compute derived state
+                is_custom = selected_preset.is_none();
+                let preset_dm = selected_preset
+                    .as_deref()
+                    .and_then(|preset| preset_default_main(preset, adapter, &family_presets));
+                let inferred_main = adapter.infer_main_entrypoint(&project_dir);
+
+                step_history.push((2, answers_before));
+
+                if is_custom {
+                    wizard.begin_subsection();
+                    step = 3; // entrypoint prompt
+                } else if let Some(ref inferred) = inferred_main {
+                    // Auto-compute main (no prompt)
+                    main_entry = if preset_dm.as_deref() == Some(inferred.as_str()) {
+                        None
+                    } else {
+                        Some(inferred.clone())
+                    };
+                    step = 6; // skip to production route
+                } else if preset_dm.is_some() {
+                    main_entry = None;
+                    step = 6;
+                } else {
+                    wizard.begin_subsection();
+                    step = 3; // need entrypoint prompt
+                }
+            }
+            // Step 3: Entrypoint
+            3 => {
+                let default_main = main_entry
+                    .clone()
+                    .or_else(|| existing.as_ref().and_then(|c| c.main.clone()))
+                    .or_else(|| adapter.infer_main_entrypoint(&project_dir))
+                    .unwrap_or_else(|| infer_default_main_entrypoint(&project_dir, adapter));
+                let answers_before = wizard.answer_count();
+                match wizard.input("Entrypoint", Some(&default_main), None) {
+                    Ok(v) => {
+                        main_entry = Some(v);
+                        step_history.push((3, answers_before));
+                        if is_custom {
+                            step = 4;
+                        } else {
+                            wizard.end_subsection();
+                            step = 6;
+                        }
+                    }
+                    Err(e) if output::is_wizard_back(&e) => {
+                        wizard.end_subsection();
+                        if let Some((prev, count)) = step_history.pop() {
+                            wizard.truncate_answers(count);
+                            step = prev;
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            // Step 4: Assets (custom only)
+            4 => {
+                let existing_assets = existing
+                    .as_ref()
+                    .map(|c| c.build.assets.clone())
+                    .unwrap_or_default();
+                let prev_assets = if !assets.is_empty() {
+                    &assets
+                } else {
+                    &existing_assets
+                };
+                let answers_before = wizard.answer_count();
+                match prompt_assets(&mut wizard, prev_assets) {
+                    Ok(collected) => {
+                        if !collected.is_empty() {
+                            wizard.set("Assets", &collected.join(", "));
+                        }
+                        assets = collected;
+                        step_history.push((4, answers_before));
+                        step = 5;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => {
+                        if let Some((prev, count)) = step_history.pop() {
+                            wizard.truncate_answers(count);
+                            step = prev;
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            // Step 5: Excludes (custom only)
+            5 => {
+                let existing_excludes = existing
+                    .as_ref()
+                    .map(|c| c.build.exclude.clone())
+                    .unwrap_or_default();
+                let prev_excludes = if !excludes.is_empty() {
+                    &excludes
+                } else {
+                    &existing_excludes
+                };
+                let answers_before = wizard.answer_count();
+                match prompt_excludes(&mut wizard, prev_excludes) {
+                    Ok(collected) => {
+                        if !collected.is_empty() {
+                            wizard.set("Exclude", &collected.join(", "));
+                        }
+                        excludes = collected;
+                        step_history.push((5, answers_before));
+                        wizard.end_subsection();
+                        step = 6;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => {
+                        if let Some((prev, count)) = step_history.pop() {
+                            wizard.truncate_answers(count);
+                            step = prev;
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            // Step 6: Production route
+            6 => {
+                let default_route = if !production_route.is_empty() {
+                    production_route.clone()
+                } else {
+                    existing
+                        .as_ref()
+                        .and_then(|c| c.envs.get("production").and_then(|e| e.route.clone()))
+                        .unwrap_or_else(|| format!("{}.example.com", app_name.trim()))
+                };
+                let answers_before = wizard.answer_count();
+                match wizard.input("Production route", Some(&default_route), None) {
+                    Ok(v) => {
+                        production_route = v;
+                        step_history.push((6, answers_before));
+                        step = 7;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => {
+                        if let Some((prev, count)) = step_history.pop() {
+                            wizard.truncate_answers(count);
+                            if matches!(prev, 3 | 4 | 5) {
+                                wizard.begin_subsection();
+                            }
+                            step = prev;
+                        } else {
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            // Step 7: Confirm
+            _ => match wizard.finish() {
+                Ok(true) => break,
+                Ok(false) => {
+                    wizard.end_subsection();
+                    step_history.clear();
+                    step = 0;
+                }
+                Err(e) if output::is_wizard_back(&e) => {
+                    if let Some((prev, count)) = step_history.pop() {
+                        wizard.truncate_answers(count);
+                        step = prev;
+                    }
+                }
+                Err(e) => return Err(e.into()),
+            },
+        }
+    }
+
     let selected_preset_for_toml = selected_preset
         .as_deref()
         .filter(|preset| *preset != adapter.default_preset())
         .map(str::to_string);
 
-    // Resolve app name
-    let detected_app_name = resolve_app_name(&project_dir).unwrap_or_else(|_| "my-app".to_string());
-    output::muted(
-        "App name should be unique per server. Renaming later creates a new app; delete the old deployment manually with `tako delete`.",
-    );
-    let app_name = output::prompt_input(
-        "App name (`name` in tako.toml; unique per server)",
-        false,
-        Some(&detected_app_name),
-    )?;
-    let default_production_route = format!("{}.example.com", app_name.trim());
-    let production_route = output::prompt_input(
-        "Production route (`[envs.production].route`)",
-        false,
-        Some(&default_production_route),
-    )?;
-    let inferred_main = adapter.infer_main_entrypoint(&project_dir);
-    let main = if let Some(inferred_main) = inferred_main {
-        if preset_default_main.as_deref() == Some(inferred_main.as_str()) {
-            None
-        } else {
-            Some(inferred_main)
-        }
-    } else if preset_default_main.is_some() {
-        None
-    } else {
-        let default_main = infer_default_main_entrypoint(&project_dir, adapter);
-        Some(output::prompt_input(
-            "Deploy/dev entrypoint (`main` in tako.toml)",
-            false,
-            Some(&default_main),
-        )?)
-    };
-
     // Generate tako.toml
     let template = generate_template(
         app_name.trim(),
-        main.as_deref().map(str::trim),
-        production_route.trim(),
+        main_entry.as_deref().map(str::trim),
+        &sanitize_route(&production_route),
         Some(adapter.id()),
         selected_preset_for_toml.as_deref(),
+        &assets,
+        &excludes,
     );
 
     fs::write(&tako_toml_path, template)?;
 
     output::success("Created tako.toml");
 
-    if should_render_init_detected_section(output::is_verbose()) {
-        output::section("Detected");
-        output::step(&format!("Runtime: {}", output::highlight(adapter.id())));
-        if let Some(preset_ref) = selected_preset_for_toml.as_deref() {
-            output::step(&format!("Preset: {}", output::highlight(preset_ref)));
-        } else if selected_preset.as_deref() == Some(adapter.default_preset()) {
-            output::step("Preset: runtime default (omitted in tako.toml)");
-        } else {
-            output::step("Preset: custom (unset in tako.toml)");
-        }
-        output::step(&format!("App name: {}", output::highlight(app_name.trim())));
-        output::step(&format!(
-            "Production route: {}",
-            output::highlight(production_route.trim())
-        ));
-        if let Some(main) = main.as_deref() {
-            output::step(&format!("Main: {}", output::highlight(main.trim())));
-        } else if let Some(main) = preset_default_main.as_deref() {
-            output::step(&format!("Main: {} (from preset)", output::highlight(main)));
-        }
-    }
-
-    output::section("Next Steps");
-    output::step("1. Edit tako.toml to configure environments and routes");
+    output::heading("Next steps");
+    output::step(&format!(
+        "1. Edit {} to set environment variables and more",
+        output::highlight("tako.toml")
+    ));
     output::step(&format!(
         "2. Run {} to add deployment servers",
         output::highlight("tako servers add")
@@ -123,57 +407,76 @@ pub fn run(force: bool, runtime_override: Option<&str>) -> Result<(), Box<dyn st
     Ok(())
 }
 
-fn should_render_init_detected_section(verbose: bool) -> bool {
-    verbose
+fn resolve_adapter(detected_adapter: BuildAdapter, existing: Option<&TakoToml>) -> BuildAdapter {
+    let preferred = existing
+        .and_then(|c| c.runtime.as_deref())
+        .and_then(BuildAdapter::from_id)
+        .unwrap_or(detected_adapter);
+    match preferred {
+        BuildAdapter::Unknown => BuildAdapter::Bun,
+        other => other,
+    }
 }
 
-fn select_adapter_for_init(
+fn run_non_interactive(
+    project_dir: &Path,
+    tako_toml_path: &Path,
     detected_adapter: BuildAdapter,
-    runtime_override: Option<&str>,
-) -> std::io::Result<BuildAdapter> {
-    if let Some(runtime_override) = runtime_override.map(str::trim).filter(|v| !v.is_empty()) {
-        return BuildAdapter::from_id(runtime_override).ok_or_else(|| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "Invalid runtime '{}'; expected one of: bun, node, deno",
-                    runtime_override
-                ),
-            )
-        });
-    }
+    existing: Option<&TakoToml>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let adapter = resolve_adapter(detected_adapter, existing);
+    let preset = adapter.default_preset().to_string();
+    let preset_dm = preset_default_main(&preset, adapter, &[]);
 
-    if !output::is_interactive() {
-        return Ok(match detected_adapter {
-            BuildAdapter::Unknown => BuildAdapter::Bun,
-            other => other,
-        });
-    }
-
-    let mut adapters = vec![BuildAdapter::Bun, BuildAdapter::Node, BuildAdapter::Deno];
-    if detected_adapter != BuildAdapter::Unknown
-        && let Some(index) = adapters
-            .iter()
-            .position(|adapter| *adapter == detected_adapter)
-    {
-        let detected = adapters.remove(index);
-        adapters.insert(0, detected);
-    }
-    let options = adapters
-        .into_iter()
-        .map(|adapter| (adapter.id().to_string(), adapter))
-        .collect();
-
-    let description = if detected_adapter == BuildAdapter::Unknown {
-        "Choose a runtime for default preset selection and entrypoint inference."
+    let inferred_main = adapter.infer_main_entrypoint(project_dir);
+    let main = if let Some(inferred) = inferred_main {
+        if preset_dm.as_deref() == Some(inferred.as_str()) {
+            None
+        } else {
+            Some(inferred)
+        }
+    } else if preset_dm.is_some() {
+        None
     } else {
-        "Detected runtime is listed first. Choose another to override detection."
+        Some(
+            existing
+                .and_then(|c| c.main.clone())
+                .unwrap_or_else(|| infer_default_main_entrypoint(project_dir, adapter)),
+        )
     };
-    output::select(
-        "Runtime (`runtime` in tako.toml)",
-        Some(description),
-        options,
-    )
+
+    let app_name = existing
+        .and_then(|c| c.name.clone())
+        .unwrap_or_else(|| resolve_app_name(project_dir).unwrap_or_else(|_| "my-app".to_string()));
+
+    let production_route = existing
+        .and_then(|c| c.envs.get("production").and_then(|e| e.route.clone()))
+        .unwrap_or_else(|| format!("{}.example.com", app_name.trim()));
+
+    let template = generate_template(
+        app_name.trim(),
+        main.as_deref().map(str::trim),
+        &sanitize_route(&production_route),
+        Some(adapter.id()),
+        None,
+        &[],
+        &[],
+    );
+
+    fs::write(tako_toml_path, template)?;
+    output::success("Created tako.toml");
+
+    Ok(())
+}
+
+/// Strip http(s):// prefix and trailing slash from a route hostname.
+fn sanitize_route(route: &str) -> String {
+    let s = route.trim();
+    let s = s
+        .strip_prefix("https://")
+        .or_else(|| s.strip_prefix("http://"))
+        .unwrap_or(s);
+    s.trim_end_matches('/').to_string()
 }
 
 fn infer_default_main_entrypoint(project_dir: &Path, adapter: BuildAdapter) -> String {
@@ -219,29 +522,6 @@ fn preset_default_main(
             .find(|preset| preset.name == preset_ref)
             .and_then(|preset| preset.main.clone()),
     }
-}
-
-fn select_preset_for_adapter(
-    adapter: BuildAdapter,
-    family_presets: &[FamilyPresetDefinition],
-) -> std::io::Result<Option<String>> {
-    if !output::is_interactive() {
-        return Ok(Some(adapter.default_preset().to_string()));
-    }
-
-    let family_preset_names: Vec<String> = family_presets
-        .iter()
-        .map(|preset| preset.name.clone())
-        .collect();
-    let Some(options) = build_preset_selection_options(adapter, &family_preset_names) else {
-        return Ok(Some(adapter.default_preset().to_string()));
-    };
-
-    output::select(
-        "Build preset (`preset` in tako.toml)",
-        Some("Choose a built-in preset or leave it unset and add your own later."),
-        options,
-    )
 }
 
 fn fetch_family_presets_for_adapter(
@@ -302,25 +582,117 @@ fn normalize_family_preset_definitions(
 }
 
 fn build_preset_selection_options(
-    adapter: BuildAdapter,
+    _adapter: BuildAdapter,
     family_presets: &[String],
 ) -> Option<Vec<(String, Option<String>)>> {
     if family_presets.is_empty() {
         return None;
     }
 
-    let mut options: Vec<(String, Option<String>)> = Vec::with_capacity(family_presets.len() + 2);
-    let base = adapter.default_preset().to_string();
-    options.push((format!("{} (base preset)", base), Some(base.clone())));
+    let mut options: Vec<(String, Option<String>)> = Vec::with_capacity(family_presets.len() + 1);
     for preset in family_presets {
         options.push((preset.clone(), Some(preset.clone())));
     }
-    options.push((
-        "Custom preset reference (leave unset for now)".to_string(),
-        None,
-    ));
+    options.push(("custom".to_string(), None));
 
     Some(options)
+}
+
+fn prompt_assets(wizard: &mut output::Wizard, existing: &[String]) -> std::io::Result<Vec<String>> {
+    let mut assets = Vec::new();
+    for existing_asset in existing.iter() {
+        match output::TextField::new("Asset directory")
+            .optional()
+            .with_default(existing_asset)
+            .prompt()
+        {
+            Ok(value) => {
+                wizard.track_line();
+                if value.is_empty() {
+                    return Ok(assets);
+                }
+                assets.push(value);
+            }
+            Err(e) if output::is_wizard_back(&e) => {
+                if assets.is_empty() {
+                    return Err(e);
+                }
+                return Ok(assets);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    loop {
+        match output::TextField::new("Asset directory")
+            .optional()
+            .prompt()
+        {
+            Ok(value) => {
+                wizard.track_line();
+                if value.is_empty() {
+                    return Ok(assets);
+                }
+                assets.push(value);
+            }
+            Err(e) if output::is_wizard_back(&e) => {
+                if assets.is_empty() {
+                    return Err(e);
+                }
+                return Ok(assets);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn prompt_excludes(
+    wizard: &mut output::Wizard,
+    existing: &[String],
+) -> std::io::Result<Vec<String>> {
+    let mut excludes = Vec::new();
+    for existing_exclude in existing.iter() {
+        match output::TextField::new("Exclude pattern")
+            .optional()
+            .with_default(existing_exclude)
+            .prompt()
+        {
+            Ok(value) => {
+                wizard.track_line();
+                if value.is_empty() {
+                    return Ok(excludes);
+                }
+                excludes.push(value);
+            }
+            Err(e) if output::is_wizard_back(&e) => {
+                if excludes.is_empty() {
+                    return Err(e);
+                }
+                return Ok(excludes);
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    loop {
+        match output::TextField::new("Exclude pattern")
+            .optional()
+            .prompt()
+        {
+            Ok(value) => {
+                wizard.track_line();
+                if value.is_empty() {
+                    return Ok(excludes);
+                }
+                excludes.push(value);
+            }
+            Err(e) if output::is_wizard_back(&e) => {
+                if excludes.is_empty() {
+                    return Err(e);
+                }
+                return Ok(excludes);
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
 
 fn generate_template(
@@ -329,6 +701,8 @@ fn generate_template(
     production_route: &str,
     runtime: Option<&str>,
     preset_ref: Option<&str>,
+    assets: &[String],
+    excludes: &[String],
 ) -> String {
     let main_line = if let Some(main) = main {
         format!(
@@ -355,6 +729,18 @@ fn generate_template(
     } else {
         format!("# preset = \"{}\"", preset_example)
     };
+    let assets_line = if assets.is_empty() {
+        "# assets = [\"public\", \".output/public\"]".to_string()
+    } else {
+        let items: Vec<String> = assets.iter().map(|a| format!("\"{}\"", a)).collect();
+        format!("assets = [{}]", items.join(", "))
+    };
+    let exclude_line = if excludes.is_empty() {
+        "# exclude = [\"**/*.map\"]".to_string()
+    } else {
+        let items: Vec<String> = excludes.iter().map(|e| format!("\"{}\"", e)).collect();
+        format!("exclude = [{}]", items.join(", "))
+    };
     format!(
         r#"# Tako configuration
 # tako.toml reference: https://tako.sh/docs/tako-toml
@@ -372,8 +758,8 @@ name = "{app_name}"
 # Artifact packaging options.
 [build]
 # include = ["dist/**", ".output/**"]
-# exclude = ["**/*.map"]
-# assets = ["public", ".output/public"]
+{exclude_line}
+{assets_line}
 # [[build.stages]]
 # name = "frontend-assets"
 # working_dir = "frontend"
@@ -442,8 +828,7 @@ route = "{production_route}"
 mod tests {
     use super::{
         build_preset_selection_options, generate_template, infer_default_main_entrypoint,
-        normalize_family_preset_definitions, preset_default_main, select_adapter_for_init,
-        should_render_init_detected_section,
+        normalize_family_preset_definitions, preset_default_main, resolve_adapter,
     };
     use crate::build::{BuildAdapter, FamilyPresetDefinition};
     use tempfile::TempDir;
@@ -456,6 +841,8 @@ mod tests {
             "demo-app.example.com",
             Some("bun"),
             None,
+            &[],
+            &[],
         );
 
         assert!(
@@ -532,6 +919,8 @@ mod tests {
             "demo-app.example.com",
             Some("bun"),
             None,
+            &[],
+            &[],
         );
 
         assert!(
@@ -638,8 +1027,15 @@ mod tests {
 
     #[test]
     fn init_template_can_omit_main_when_preset_provides_default() {
-        let rendered =
-            generate_template("demo-app", None, "demo-app.example.com", Some("bun"), None);
+        let rendered = generate_template(
+            "demo-app",
+            None,
+            "demo-app.example.com",
+            Some("bun"),
+            None,
+            &[],
+            &[],
+        );
         assert!(rendered.contains("# Entrypoint comes from the selected preset default `main`."));
         assert!(!rendered.contains("\nmain = \""));
     }
@@ -652,6 +1048,8 @@ mod tests {
             "api.demo-app.com",
             Some("bun"),
             None,
+            &[],
+            &[],
         );
         assert!(rendered.contains("[envs.production]\nroute = \"api.demo-app.com\""));
         assert!(!rendered.contains("[envs.production]\nroute = \"demo-app.example.com\""));
@@ -659,15 +1057,29 @@ mod tests {
 
     #[test]
     fn init_template_can_leave_preset_unset() {
-        let rendered =
-            generate_template("demo-app", None, "demo-app.example.com", Some("node"), None);
+        let rendered = generate_template(
+            "demo-app",
+            None,
+            "demo-app.example.com",
+            Some("node"),
+            None,
+            &[],
+            &[],
+        );
         assert!(rendered.contains("runtime = \"node\"\n# preset = \"my-node-preset\""));
     }
 
     #[test]
     fn init_template_writes_selected_build_adapter() {
-        let rendered =
-            generate_template("demo-app", None, "demo-app.example.com", Some("bun"), None);
+        let rendered = generate_template(
+            "demo-app",
+            None,
+            "demo-app.example.com",
+            Some("bun"),
+            None,
+            &[],
+            &[],
+        );
         assert!(rendered.contains("runtime = \"bun\""));
     }
 
@@ -679,6 +1091,8 @@ mod tests {
             "demo-app.example.com",
             Some("bun"),
             Some("tanstack-start"),
+            &[],
+            &[],
         );
         assert!(rendered.contains("preset = \"tanstack-start\""));
         assert!(!rendered.contains("preset = \"js/tanstack-start\""));
@@ -753,67 +1167,46 @@ mod tests {
     }
 
     #[test]
-    fn build_preset_selection_options_includes_base_variants_and_custom_mode() {
+    fn build_preset_selection_options_includes_presets_and_custom_mode() {
         let options = build_preset_selection_options(
             BuildAdapter::Node,
             &["tanstack-start".to_string(), "next-start".to_string()],
         )
         .expect("options should be available");
 
-        assert_eq!(options.len(), 4);
+        assert_eq!(options.len(), 3);
         assert_eq!(
             options[0],
-            ("node (base preset)".to_string(), Some("node".to_string()))
-        );
-        assert_eq!(
-            options[1],
             (
                 "tanstack-start".to_string(),
                 Some("tanstack-start".to_string())
             )
         );
         assert_eq!(
-            options[2],
+            options[1],
             ("next-start".to_string(), Some("next-start".to_string()))
         );
-        assert_eq!(
-            options[3],
-            (
-                "Custom preset reference (leave unset for now)".to_string(),
-                None
-            )
-        );
+        assert_eq!(options[2], ("custom".to_string(), None));
     }
 
     #[test]
-    fn select_adapter_for_init_uses_override_when_provided() {
+    fn resolve_adapter_uses_existing_config_runtime() {
+        use crate::config::TakoToml;
+        let existing = TakoToml {
+            runtime: Some("deno".to_string()),
+            ..Default::default()
+        };
         assert_eq!(
-            select_adapter_for_init(BuildAdapter::Node, Some("deno")).unwrap(),
+            resolve_adapter(BuildAdapter::Node, Some(&existing)),
             BuildAdapter::Deno
         );
     }
 
     #[test]
-    fn select_adapter_for_init_rejects_unknown_override() {
-        let err = select_adapter_for_init(BuildAdapter::Node, Some("python")).unwrap_err();
-        assert!(err.to_string().contains("Invalid runtime"));
-    }
-
-    #[test]
-    fn select_adapter_for_init_defaults_unknown_detection_to_bun_non_interactive() {
+    fn resolve_adapter_defaults_unknown_detection_to_bun() {
         assert_eq!(
-            select_adapter_for_init(BuildAdapter::Unknown, None).unwrap(),
+            resolve_adapter(BuildAdapter::Unknown, None),
             BuildAdapter::Bun
         );
-    }
-
-    #[test]
-    fn init_detected_section_is_hidden_in_default_output() {
-        assert!(!should_render_init_detected_section(false));
-    }
-
-    #[test]
-    fn init_detected_section_is_shown_in_verbose_output() {
-        assert!(should_render_init_detected_section(true));
     }
 }
