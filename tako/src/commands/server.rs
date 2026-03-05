@@ -175,6 +175,13 @@ async fn run_add_server_wizard(
     let mut port_suggestions = suggestion_history.server_port_suggestions();
     let mut host_suggestions = host_suggestions;
 
+    // Collect existing hosts/names for filtering placeholders
+    let existing_hosts: Vec<String> = existing_servers
+        .names()
+        .iter()
+        .filter_map(|n| existing_servers.get(n).map(|s| s.host.clone()))
+        .collect();
+
     for server_name in existing_servers.names() {
         if let Some(server) = existing_servers.get(server_name) {
             push_unique_suggestion(&mut host_suggestions, server.host.clone());
@@ -193,109 +200,177 @@ async fn run_add_server_wizard(
         push_unique_suggestion(&mut name_suggestions, initial_name.to_string());
     }
 
-    output::muted("Tip: press Tab for autocomplete suggestions.");
+    // Placeholder: most recent history entry not already in servers
+    let host_placeholder = host_suggestions
+        .iter()
+        .find(|h| !existing_hosts.contains(h))
+        .cloned();
+
+    let mut wizard = output::Wizard::new();
+    let mut step = 0usize;
+    let mut host = String::new();
+    let mut name = String::new();
+    let mut description = String::new();
+    let mut port: u16 = initial_port;
 
     loop {
-        let host = output::prompt_input_with_suggestions(
-            "Server host (IP or hostname)",
-            false,
-            None,
-            &host_suggestions,
-        )?;
-        let host = host.trim().to_string();
-        if host.is_empty() {
-            return Err("Server host cannot be empty".into());
-        }
-
-        let mut name_prompt_suggestions =
-            suggestion_history.server_name_suggestions_for_host(&host);
-        for server_name in existing_servers.names() {
-            if let Some(server) = existing_servers.get(server_name)
-                && server.host == host
-            {
-                push_unique_suggestion(&mut name_prompt_suggestions, server_name.to_string());
+        match step {
+            // Step 0: Server host
+            0 => {
+                let mut builder =
+                    output::TextField::new("Server IP or hostname").suggestions(&host_suggestions);
+                if !host.is_empty() {
+                    builder = builder.with_default(&host);
+                } else if let Some(ref ph) = host_placeholder {
+                    builder = builder.with_placeholder(ph);
+                }
+                match wizard.text_field(builder) {
+                    Ok(v) => {
+                        let v = v.trim().to_string();
+                        if v.is_empty() {
+                            return Err("Server host cannot be empty".into());
+                        }
+                        host = v;
+                        step = 1;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => return Ok(None),
+                    Err(e) => return Err(e.into()),
+                }
             }
-        }
-        append_unique_suggestions(&mut name_prompt_suggestions, &name_suggestions);
-        push_unique_suggestion(&mut name_prompt_suggestions, host.clone());
-        let name = output::prompt_input_with_suggestions(
-            "Server name",
-            false,
-            initial_name,
-            &name_prompt_suggestions,
-        )?;
-        let name = name.trim().to_string();
+            // Step 1: Server name
+            1 => {
+                let mut name_prompt_suggestions =
+                    suggestion_history.server_name_suggestions_for_host(&host);
+                for server_name in existing_servers.names() {
+                    if let Some(server) = existing_servers.get(server_name)
+                        && server.host == host
+                    {
+                        push_unique_suggestion(
+                            &mut name_prompt_suggestions,
+                            server_name.to_string(),
+                        );
+                    }
+                }
+                append_unique_suggestions(&mut name_prompt_suggestions, &name_suggestions);
+                push_unique_suggestion(&mut name_prompt_suggestions, host.clone());
 
-        let description =
-            output::prompt_input("Description (optional)", true, initial_description)?;
-        let description = description.trim().to_string();
-
-        let default_port = initial_port.to_string();
-        let mut port_prompt_suggestions =
-            suggestion_history.server_port_suggestions_for(&host, &name);
-        for server_name in existing_servers.names() {
-            if let Some(server) = existing_servers.get(server_name)
-                && server.host == host
-                && server_name == name
-            {
-                push_unique_suggestion(&mut port_prompt_suggestions, server.port.to_string());
+                let default_name = if !name.is_empty() {
+                    Some(name.as_str())
+                } else if let Some(n) = initial_name {
+                    Some(n)
+                } else if let Some(ref n) = name_prompt_suggestions.first() {
+                    // History/existing server matched this host
+                    Some(n.as_str())
+                } else if !host.chars().next().is_some_and(|c| c.is_ascii_digit())
+                    && !host.contains(':')
+                {
+                    // Hostname (not IP) — suggest as name
+                    Some(host.as_str())
+                } else {
+                    None
+                };
+                match wizard.text_field(
+                    output::TextField::new("Server name")
+                        .default_opt(default_name)
+                        .suggestions(&name_prompt_suggestions),
+                ) {
+                    Ok(v) => {
+                        name = v.trim().to_string();
+                        step = 2;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => step = 0,
+                    Err(e) => return Err(e.into()),
+                }
             }
-        }
-        for server_name in existing_servers.names() {
-            if let Some(server) = existing_servers.get(server_name)
-                && server.host == host
-            {
-                push_unique_suggestion(&mut port_prompt_suggestions, server.port.to_string());
+            // Step 2: Description
+            2 => {
+                let default_desc = if !description.is_empty() {
+                    Some(description.as_str())
+                } else {
+                    initial_description
+                };
+                match wizard.text_field(
+                    output::TextField::new("Description")
+                        .optional()
+                        .default_opt(default_desc),
+                ) {
+                    Ok(v) => {
+                        description = v.trim().to_string();
+                        step = 3;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => step = 1,
+                    Err(e) => return Err(e.into()),
+                }
             }
-        }
-        for server_name in existing_servers.names() {
-            if let Some(server) = existing_servers.get(server_name)
-                && server_name == name
-            {
-                push_unique_suggestion(&mut port_prompt_suggestions, server.port.to_string());
+            // Step 3: SSH port
+            3 => {
+                let port_str = port.to_string();
+                let mut port_prompt_suggestions =
+                    suggestion_history.server_port_suggestions_for(&host, &name);
+                for server_name in existing_servers.names() {
+                    if let Some(server) = existing_servers.get(server_name)
+                        && server.host == host
+                        && server_name == name
+                    {
+                        push_unique_suggestion(
+                            &mut port_prompt_suggestions,
+                            server.port.to_string(),
+                        );
+                    }
+                }
+                for server_name in existing_servers.names() {
+                    if let Some(server) = existing_servers.get(server_name)
+                        && server.host == host
+                    {
+                        push_unique_suggestion(
+                            &mut port_prompt_suggestions,
+                            server.port.to_string(),
+                        );
+                    }
+                }
+                for server_name in existing_servers.names() {
+                    if let Some(server) = existing_servers.get(server_name)
+                        && server_name == name
+                    {
+                        push_unique_suggestion(
+                            &mut port_prompt_suggestions,
+                            server.port.to_string(),
+                        );
+                    }
+                }
+                append_unique_suggestions(&mut port_prompt_suggestions, &port_suggestions);
+                match wizard.text_field(
+                    output::TextField::new("SSH port")
+                        .with_default(&port_str)
+                        .suggestions(&port_prompt_suggestions),
+                ) {
+                    Ok(v) => match v.trim().parse::<u16>() {
+                        Ok(p) => {
+                            port = p;
+                            break;
+                        }
+                        Err(_) => {
+                            output::warning(&format!("Invalid SSH port '{}'", v.trim()));
+                            // Stay on step 3 — undo the answer the wizard just set
+                            wizard.undo_last();
+                        }
+                    },
+                    Err(e) if output::is_wizard_back(&e) => step = 2,
+                    Err(e) => return Err(e.into()),
+                }
             }
+            _ => break,
         }
-        append_unique_suggestions(&mut port_prompt_suggestions, &port_suggestions);
-        let port_raw = output::prompt_input_with_suggestions(
-            "SSH port",
-            false,
-            Some(&default_port),
-            &port_prompt_suggestions,
-        )?;
-        let port: u16 = port_raw
-            .trim()
-            .parse()
-            .map_err(|_| format!("Invalid SSH port '{}'", port_raw.trim()))?;
-
-        output::step(&format!("Host: {}", output::highlight(&host)));
-        output::step(&format!("Server name: {}", output::highlight(&name)));
-        if !description.is_empty() {
-            output::step(&format!("Description: {}", output::highlight(&description)));
-        }
-        output::step(&format!(
-            "SSH port: {}",
-            output::highlight(&port.to_string())
-        ));
-        if default_test_ssh {
-            output::muted("SSH connection test will run before saving.");
-        } else {
-            output::muted("SSH connection test is disabled.");
-        }
-
-        if !output::confirm("Looks good?", true)? {
-            output::warning("Okay, let's try that again.");
-            continue;
-        }
-
-        let name_ref = Some(name.as_str());
-        let description_ref = if description.is_empty() {
-            None
-        } else {
-            Some(description.as_str())
-        };
-
-        return add_server(&host, name_ref, description_ref, port, !default_test_ssh).await;
     }
+
+    let name_ref = Some(name.as_str());
+    let description_ref = if description.is_empty() {
+        None
+    } else {
+        Some(description.as_str())
+    };
+
+    add_server(&host, name_ref, description_ref, port, !default_test_ssh).await
 }
 
 pub async fn add_server(
@@ -393,56 +468,70 @@ pub async fn add_server(
         .into());
     }
 
-    let mut detected_target: Option<ServerTarget> = None;
+    struct ConnectionResult {
+        target: ServerTarget,
+        version: Option<String>,
+        installed: bool,
+    }
 
+    let mut detected_target: Option<ServerTarget> = None;
     // Test SSH connection unless skipped
     if !no_test {
         let ssh_config = SshConfig::from_server(host, port);
         let mut ssh = SshClient::new(ssh_config);
 
-        match output::with_spinner_async(
-            &format!("Testing SSH connection to tako@{}:{}", host, port),
-            "SSH connection successful",
-            ssh.connect(),
-        )
-        .await
-        {
-            Ok(()) => {
-                let target = output::with_spinner_async(
-                    "Detecting server target",
-                    "Target detected",
-                    detect_server_target(&ssh),
-                )
-                .await
-                .map_err(|e| format!("Target detection failed: {}", e))?;
-                output::muted(&format!("Target: {}", target.label()));
-                detected_target = Some(target);
+        let result: Result<ConnectionResult, String> = output::with_spinner_async_err(
+            "Connecting",
+            "Connection successful",
+            "Connection failed",
+            async {
+                ssh.connect().await.map_err(|e| e.to_string())?;
 
-                // Check if tako-server is installed
-                match ssh.is_tako_installed().await {
+                let target = detect_server_target(&ssh)
+                    .await
+                    .map_err(|e| format!("Target detection failed: {e}"))?;
+
+                let (installed, version) = match ssh.is_tako_installed().await {
                     Ok(true) => {
-                        if let Ok(Some(version)) = ssh.tako_version().await {
-                            output::success(&format!(
-                                "tako-server installed ({})",
-                                output::highlight(&version)
-                            ));
-                        } else {
-                            output::success("tako-server installed");
-                        }
+                        let ver = ssh.tako_version().await.ok().flatten();
+                        (true, ver)
                     }
-                    Ok(false) => {
-                        output::warning("tako-server not installed");
-                        output::muted(
-                            "Install it on the server as root (see scripts/install-tako-server.sh), then re-run deploy.",
-                        );
-                    }
-                    Err(e) => output::warning(&format!("Could not check tako-server: {}", e)),
-                }
+                    Ok(false) => (false, None),
+                    Err(_) => (false, None),
+                };
 
-                ssh.disconnect().await?;
+                ssh.disconnect().await.map_err(|e| e.to_string())?;
+
+                Ok(ConnectionResult {
+                    target,
+                    version,
+                    installed,
+                })
+            },
+        )
+        .await;
+
+        match result {
+            Ok(info) => {
+                if output::is_verbose() {
+                    output::muted(&format!("Target: {}", info.target.label()));
+                }
+                if output::is_verbose() {
+                    if let Some(ref ver) = info.version {
+                        let ver = ver.strip_prefix("tako-server ").unwrap_or(ver);
+                        output::muted(&format!("Server version: {ver}"));
+                    }
+                }
+                if !info.installed {
+                    output::warning("tako-server not installed");
+                    output::muted(
+                        "Install it on the server as root (see scripts/install-tako-server.sh), then re-run deploy.",
+                    );
+                }
+                detected_target = Some(info.target);
             }
             Err(e) => {
-                return Err(format!("SSH connection failed: {}", e).into());
+                return Err(e.into());
             }
         }
     } else {
@@ -464,17 +553,7 @@ pub async fn add_server(
     }
     servers.save()?;
 
-    output::success(&format!(
-        "Added server {} (tako@{}:{})",
-        output::highlight(&server_name),
-        host,
-        port
-    ));
-    if let Some(desc) = normalized_description
-        && !desc.trim().is_empty()
-    {
-        output::muted(&format!("Description: {}", desc));
-    }
+    output::success(&format!("Added server {}", output::highlight(&server_name),));
     record_server_history(host, &server_name, port);
 
     Ok(Some(server_name))
@@ -561,59 +640,90 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
         return Err("No servers configured. Run 'tako servers add <host>' first.".into());
     }
 
-    let name = match name {
-        Some(name) => {
-            if !servers.contains(name) {
-                return Err(format!("Server '{}' not found.", name).into());
-            }
-            name.to_string()
+    if let Some(name) = name {
+        if !servers.contains(name) {
+            return Err(format!("Server '{}' not found.", name).into());
         }
-        None => {
-            if !output::is_interactive() {
-                return Err(
-                    "No server name provided and selection requires an interactive terminal. Run 'tako servers rm <name>'."
-                        .into(),
-                );
-            }
 
-            let mut names = servers.names();
-            names.sort_unstable();
-            let options: Vec<(String, String)> = names
-                .into_iter()
-                .filter_map(|server_name| {
-                    servers.get(server_name).map(|entry| {
-                        (
-                            removal_option_label(server_name, entry),
-                            server_name.to_string(),
-                        )
-                    })
-                })
-                .collect();
+        let confirm = output::confirm(
+            &format!("Remove server {}?", output::highlight(name)),
+            false,
+        )?;
 
-            output::select(
-                "Select server to remove",
-                Some("Choose a server and press Enter."),
-                options,
-            )?
+        if !confirm {
+            output::warning("Cancelled");
+            return Ok(());
         }
-    };
 
-    let confirm = output::confirm(
-        &format!("Remove server {}?", output::highlight(&name)),
-        false,
-    )?;
+        servers.remove(name)?;
+        servers.save()?;
 
-    if !confirm {
-        output::warning("Cancelled");
+        output::success(&format!("Removed {}", output::highlight(name)));
         return Ok(());
     }
 
-    servers.remove(&name)?;
-    servers.save()?;
+    if !output::is_interactive() {
+        return Err(
+            "No server name provided and selection requires an interactive terminal. Run 'tako servers rm <name>'."
+                .into(),
+        );
+    }
 
-    output::success(&format!("Removed server {}", output::highlight(&name)));
+    let mut step = 0;
+    let mut selected_name = String::new();
 
-    Ok(())
+    loop {
+        match step {
+            // Step 0: Select server
+            0 => {
+                let mut names = servers.names();
+                names.sort_unstable();
+                let options: Vec<(String, String)> = names
+                    .into_iter()
+                    .filter_map(|server_name| {
+                        servers.get(server_name).map(|entry| {
+                            (
+                                removal_option_label(server_name, entry),
+                                server_name.to_string(),
+                            )
+                        })
+                    })
+                    .collect();
+
+                match output::select("Select server to remove", None, options) {
+                    Ok(name) => {
+                        selected_name = name;
+                        step = 1;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => return Ok(()),
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            // Step 1: Confirm
+            1 => {
+                match output::confirm(
+                    &format!("Remove server {}?", output::highlight(&selected_name)),
+                    false,
+                ) {
+                    Ok(true) => {
+                        servers.remove(&selected_name)?;
+                        servers.save()?;
+                        output::success(&format!("Removed {}", output::highlight(&selected_name)));
+                        return Ok(());
+                    }
+                    Ok(false) => {
+                        output::warning("Cancelled");
+                        return Ok(());
+                    }
+                    Err(e) if output::is_wizard_back(&e) => {
+                        step = 0;
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            _ => unreachable!(),
+        }
+    }
 }
 
 async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
@@ -630,35 +740,41 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    output::section("Servers");
-    print_servers_table(&servers);
-    Ok(())
-}
+    let mut names = servers.names();
+    names.sort_unstable();
 
-fn print_servers_table(servers: &crate::config::ServersToml) {
-    println!(
-        "{}",
-        output::bold(&output::brand_muted(format!(
-            "{:<20} {:<30} {:<6} DESCRIPTION",
-            "NAME", "HOST", "PORT"
-        )))
-    );
-    println!("{}", output::brand_muted("-".repeat(92)));
+    for name in &names {
+        let entry = match servers.get(name) {
+            Some(e) => e,
+            None => continue,
+        };
 
-    for name in servers.names() {
-        if let Some(entry) = servers.get(name) {
+        let header = if entry.port != 22 {
+            format!(
+                "{} ({}:{})",
+                output::highlight(name),
+                entry.host,
+                entry.port
+            )
+        } else {
+            format!("{} ({})", output::highlight(name), entry.host)
+        };
+        println!("{}", header);
+
+        if let Some(desc) = entry
+            .description
+            .as_deref()
+            .filter(|d| !d.trim().is_empty())
+        {
             println!(
-                "{}",
-                output::brand_fg(format!(
-                    "{:<20} {:<30} {:<6} {}",
-                    name,
-                    entry.host,
-                    entry.port,
-                    entry.description.as_deref().unwrap_or("")
-                ))
+                "{} {}  {}",
+                output::brand_muted("└"),
+                output::brand_muted("Description"),
+                desc,
             );
         }
     }
+    Ok(())
 }
 
 async fn restart_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -956,33 +1072,29 @@ const LEGO_VERSION: &str = "4.21.0";
 /// Well-known DNS providers and their required environment variables.
 fn dns_provider_env_vars(provider: &str) -> &'static [(&'static str, &'static str)] {
     match provider {
-        "cloudflare" => &[
-            ("CF_DNS_API_TOKEN", "Cloudflare API token (DNS edit permission)"),
-        ],
+        "cloudflare" => &[(
+            "CF_DNS_API_TOKEN",
+            "Cloudflare API token (DNS edit permission)",
+        )],
         "route53" => &[
             ("AWS_ACCESS_KEY_ID", "AWS access key ID"),
             ("AWS_SECRET_ACCESS_KEY", "AWS secret access key"),
             ("AWS_REGION", "AWS region (e.g. us-east-1)"),
         ],
-        "digitalocean" => &[
-            ("DO_AUTH_TOKEN", "DigitalOcean API token"),
-        ],
-        "hetzner" => &[
-            ("HETZNER_API_KEY", "Hetzner DNS API token"),
-        ],
-        "vultr" => &[
-            ("VULTR_API_KEY", "Vultr API key"),
-        ],
-        "linode" => &[
-            ("LINODE_TOKEN", "Linode API token"),
-        ],
+        "digitalocean" => &[("DO_AUTH_TOKEN", "DigitalOcean API token")],
+        "hetzner" => &[("HETZNER_API_KEY", "Hetzner DNS API token")],
+        "vultr" => &[("VULTR_API_KEY", "Vultr API key")],
+        "linode" => &[("LINODE_TOKEN", "Linode API token")],
         "namecheap" => &[
             ("NAMECHEAP_API_USER", "Namecheap API user"),
             ("NAMECHEAP_API_KEY", "Namecheap API key"),
         ],
         "gcloud" => &[
             ("GCE_PROJECT", "Google Cloud project ID"),
-            ("GCE_SERVICE_ACCOUNT_FILE", "Path to service account JSON key file"),
+            (
+                "GCE_SERVICE_ACCOUNT_FILE",
+                "Path to service account JSON key file",
+            ),
         ],
         _ => &[],
     }
@@ -1085,9 +1197,9 @@ async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let provider = if provider == "other" {
-        output::prompt_input("DNS provider name (lego provider code)", false, None)?
-            .trim()
-            .to_string()
+        output::TextField::new("DNS provider name")
+            .with_hint("lego provider code")
+            .prompt()?
     } else {
         provider.to_string()
     };
@@ -1105,7 +1217,9 @@ async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         output::muted("Enter variables as KEY=VALUE, one per line. Empty line to finish.");
 
         loop {
-            let line = output::prompt_input("ENV_VAR=value", true, None)?;
+            let line = output::TextField::new("ENV_VAR=value")
+                .optional()
+                .prompt()?;
             let line = line.trim().to_string();
             if line.is_empty() {
                 break;
@@ -1118,12 +1232,8 @@ async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         for (var_name, description) in known_vars {
-            let value = output::prompt_input(
-                &format!("{} ({})", var_name, description),
-                false,
-                None,
-            )?;
-            credentials.push((var_name.to_string(), value.trim().to_string()));
+            let value = output::text_field(&format!("{} ({})", var_name, description), None)?;
+            credentials.push((var_name.to_string(), value));
         }
     }
 
