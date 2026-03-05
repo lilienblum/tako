@@ -229,19 +229,68 @@ impl BuildAdapter {
 pub fn detect_build_adapter(project_dir: &Path) -> BuildAdapter {
     if project_dir.join("deno.json").is_file()
         || project_dir.join("deno.jsonc").is_file()
-        || project_dir.join("deno.lock").is_file()
+        || has_ancestor_file(project_dir, "deno.lock")
     {
         return BuildAdapter::Deno;
     }
 
-    if project_dir.join("bun.lockb").is_file() || project_dir.join("bun.lock").is_file() {
+    if has_ancestor_file(project_dir, "bun.lockb") || has_ancestor_file(project_dir, "bun.lock") {
         return BuildAdapter::Bun;
     }
 
     if project_dir.join("package.json").is_file() {
+        // Check if package.json scripts reference bun
+        if let Ok(contents) = std::fs::read_to_string(project_dir.join("package.json")) {
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents) {
+                if let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) {
+                    if scripts
+                        .values()
+                        .any(|v| v.as_str().is_some_and(|s| s.contains("bun ")))
+                    {
+                        return BuildAdapter::Bun;
+                    }
+                }
+            }
+        }
         return BuildAdapter::Node;
     }
     BuildAdapter::Unknown
+}
+
+/// Find the workspace root: the nearest ancestor (or self) containing `.git`.
+/// Falls back to `max_levels` directories up if no `.git` is found.
+fn find_workspace_root(start: &Path) -> &Path {
+    const MAX_LEVELS: usize = 5;
+    let mut current = start;
+    for _ in 0..MAX_LEVELS {
+        if current.join(".git").exists() {
+            return current;
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    current
+}
+
+/// Walk up from `dir` to workspace root looking for `filename`.
+fn has_ancestor_file(dir: &Path, filename: &str) -> bool {
+    let root = find_workspace_root(dir);
+    let mut current = dir;
+    loop {
+        if current.join(filename).is_file() {
+            return true;
+        }
+        if current == root {
+            break;
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => break,
+        }
+    }
+    false
 }
 
 fn infer_javascript_main_entrypoint(project_dir: &Path) -> Option<String> {
@@ -348,6 +397,28 @@ mod tests {
         let temp = TempDir::new().unwrap();
         std::fs::write(temp.path().join("package.json"), r#"{"name":"demo"}"#).unwrap();
         assert_eq!(detect_build_adapter(temp.path()), BuildAdapter::Node);
+    }
+
+    #[test]
+    fn detect_build_adapter_finds_bun_lock_in_ancestor() {
+        let temp = TempDir::new().unwrap();
+        // Simulate monorepo: lockfile at root, package at nested dir
+        std::fs::write(temp.path().join("bun.lock"), "").unwrap();
+        let nested = temp.path().join("packages").join("my-app");
+        std::fs::create_dir_all(&nested).unwrap();
+        std::fs::write(nested.join("package.json"), r#"{"name":"my-app"}"#).unwrap();
+        assert_eq!(detect_build_adapter(&nested), BuildAdapter::Bun);
+    }
+
+    #[test]
+    fn detect_build_adapter_finds_bun_from_package_json_scripts() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"demo","scripts":{"dev":"bun run index.ts"}}"#,
+        )
+        .unwrap();
+        assert_eq!(detect_build_adapter(temp.path()), BuildAdapter::Bun);
     }
 
     #[test]
