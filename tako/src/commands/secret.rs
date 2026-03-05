@@ -68,7 +68,7 @@ fn read_secret_value(prompt: &str) -> Result<String, Box<dyn std::error::Error>>
     use std::io::IsTerminal;
 
     if std::io::stdin().is_terminal() {
-        return Ok(crate::output::prompt_password(prompt, false)?);
+        return Ok(crate::output::password_field(prompt)?);
     }
 
     // Non-interactive fallback for CI/piped input.
@@ -485,8 +485,8 @@ async fn import_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::
 
     let prompt = format!("Enter base64 key for environment '{}'", env);
 
-    let encoded = crate::output::prompt_password(&prompt, false)?;
-    let confirm = crate::output::prompt_password("Confirm key", false)?;
+    let encoded = crate::output::password_field(&prompt)?;
+    let confirm = crate::output::password_field("Confirm key")?;
     if encoded != confirm {
         return Err("Keys do not match".into());
     }

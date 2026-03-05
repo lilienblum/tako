@@ -38,6 +38,12 @@ fn main() {
 
     // Run the command
     if let Err(e) = cli.run() {
+        // Ctrl+C / ESC — exit silently
+        if let Some(io_err) = e.downcast_ref::<std::io::Error>() {
+            if io_err.kind() == std::io::ErrorKind::Interrupted {
+                std::process::exit(130);
+            }
+        }
         crate::output::error_stderr(&e.to_string());
         std::process::exit(1);
     }

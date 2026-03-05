@@ -3250,7 +3250,7 @@ async fn run_deploy_step<T, E, Fut>(
 where
     Fut: Future<Output = Result<T, E>> + Send,
     T: Send,
-    E: Send + Into<Box<dyn std::error::Error + Send + Sync>>,
+    E: Send + std::fmt::Display + Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     if use_spinner {
         output::with_spinner_async(loading, success, work)

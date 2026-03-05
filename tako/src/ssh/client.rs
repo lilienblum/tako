@@ -311,10 +311,13 @@ impl SshClient {
             Err(e) => {
                 let pass = std::env::var("TAKO_SSH_KEY_PASSPHRASE").ok().or_else(|| {
                     if std::io::stdin().is_terminal() {
-                        crate::output::prompt_password(
-                            &format!("SSH key passphrase for {}", key_path.display()),
-                            true,
-                        )
+                        crate::output::TextField::new(&format!(
+                            "SSH key passphrase for {}",
+                            key_path.display()
+                        ))
+                        .password()
+                        .optional()
+                        .prompt()
                         .ok()
                     } else {
                         None
