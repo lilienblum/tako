@@ -123,16 +123,16 @@ pub struct KeyStore {
 }
 
 impl KeyStore {
-    /// Create an environment-scoped key store (~/.tako/keys/{env})
+    /// Create an environment-scoped key store (data_dir/keys/{env})
     pub fn for_env(env: &str) -> Result<Self> {
         validate_key_scope(env)?;
 
-        let home = crate::paths::tako_home_dir().map_err(|e| {
-            ConfigError::Validation(format!("Could not determine tako home directory: {}", e))
+        let data_dir = crate::paths::tako_data_dir().map_err(|e| {
+            ConfigError::Validation(format!("Could not determine tako data directory: {}", e))
         })?;
 
         Ok(Self {
-            key_path: home.join("keys").join(env),
+            key_path: data_dir.join("keys").join(env),
         })
     }
 

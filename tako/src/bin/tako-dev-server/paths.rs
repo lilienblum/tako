@@ -1,32 +1,40 @@
 use std::path::{Path, PathBuf};
 
-/// Get Tako's global home directory.
+/// Get Tako's data directory (XDG-compliant).
 ///
-/// Mirrors `tako/src/paths.rs`:
-/// - In debug builds, prefer `{repo}/local-dev/.tako` when running from a source checkout.
-/// - In release builds, default to `~/.tako`.
-pub fn tako_home_dir() -> Result<PathBuf, std::io::Error> {
+/// - `TAKO_HOME` set → that directory (all-in-one).
+/// - Debug builds from source checkout → `{repo}/local-dev/.tako` (all-in-one).
+/// - Otherwise → `dirs::data_dir()/tako`.
+pub fn tako_data_dir() -> Result<PathBuf, std::io::Error> {
+    if let Some(home) = tako_home_override() {
+        return Ok(home);
+    }
+    let base = dirs::data_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Could not determine data directory",
+        )
+    })?;
+    Ok(base.join("tako"))
+}
+
+/// Returns the override directory when `TAKO_HOME` is set or running from a
+/// debug source checkout. Returns `None` when the XDG split should be used.
+fn tako_home_override() -> Option<PathBuf> {
     if let Ok(v) = std::env::var("TAKO_HOME")
         && !v.trim().is_empty()
     {
-        return Ok(PathBuf::from(v));
+        return Some(PathBuf::from(v));
     }
 
     if cfg!(debug_assertions)
         && let Ok(exe) = std::env::current_exe()
         && let Some(dev_home) = dev_tako_home_from_exe(&exe)
     {
-        return Ok(dev_home);
+        return Some(dev_home);
     }
 
-    let home = dirs::home_dir().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Could not determine home directory",
-        )
-    })?;
-
-    Ok(home.join(".tako"))
+    None
 }
 
 pub fn repo_root_from_exe(exe_path: &Path) -> Option<PathBuf> {
@@ -82,12 +90,12 @@ mod tests {
     }
 
     #[test]
-    fn tako_home_dir_respects_env_override() {
+    fn tako_data_dir_respects_env_override() {
         let temp = TempDir::new().unwrap();
         unsafe {
             std::env::set_var("TAKO_HOME", temp.path());
         }
-        let got = tako_home_dir().unwrap();
+        let got = tako_data_dir().unwrap();
         unsafe {
             std::env::remove_var("TAKO_HOME");
         }

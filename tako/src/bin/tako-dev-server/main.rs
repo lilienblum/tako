@@ -158,7 +158,7 @@ fn advertised_https_port(s: &State) -> u16 {
 }
 
 fn default_socket_path() -> PathBuf {
-    paths::tako_home_dir()
+    paths::tako_data_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("dev-server.sock")
 }
@@ -1026,7 +1026,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args = parse_args();
 
     // Acquire an exclusive PID lock. If another instance is running, SIGTERM it.
-    let pid_path = paths::tako_home_dir()
+    let pid_path = paths::tako_data_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("dev-server.pid");
     if let Some(parent) = pid_path.parent() {
@@ -1128,7 +1128,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Open the SQLite state store and populate routes from persisted apps.
-    let db_path = paths::tako_home_dir()
+    let db_path = paths::tako_data_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("dev-server.db");
     match state::DevStateStore::open(db_path) {

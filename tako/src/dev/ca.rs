@@ -358,17 +358,17 @@ fn system_keychain_output_contains_cert(system_keychain_bundle: &str, cert_pem: 
 impl LocalCAStore {
     /// Create a new CA store with default paths
     pub fn new() -> Result<Self> {
-        let home = crate::paths::tako_home_dir().map_err(|e| {
-            CaError::Validation(format!("Could not determine tako home directory: {}", e))
+        let data_dir = crate::paths::tako_data_dir().map_err(|e| {
+            CaError::Validation(format!("Could not determine tako data directory: {}", e))
         })?;
 
-        let ca_dir = home.join("ca");
+        let ca_dir = data_dir.join("ca");
         let ca_cert_path = ca_dir.join(LOCAL_CA_CERT_FILENAME);
 
         Ok(Self {
             ca_cert_path,
             keychain_service: "tako-local-ca".to_string(),
-            keychain_account: keychain_account_for_home(&home),
+            keychain_account: keychain_account_for_home(&data_dir),
         })
     }
 

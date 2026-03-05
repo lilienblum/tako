@@ -94,12 +94,12 @@ impl Default for ServerEntry {
 }
 
 impl ServersToml {
-    /// Get the default path for global config (~/.tako/config.toml).
+    /// Get the default path for global config.
     pub fn default_path() -> Result<PathBuf> {
-        let home = crate::paths::tako_home_dir().map_err(|e| {
-            ConfigError::Validation(format!("Could not determine tako home directory: {}", e))
+        let config_dir = crate::paths::tako_config_dir().map_err(|e| {
+            ConfigError::Validation(format!("Could not determine tako config directory: {}", e))
         })?;
-        Ok(home.join("config.toml"))
+        Ok(config_dir.join("config.toml"))
     }
 
     fn load_from_paths(config_path: &Path) -> Result<Self> {

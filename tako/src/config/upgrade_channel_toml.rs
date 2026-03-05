@@ -53,10 +53,10 @@ pub fn resolve_upgrade_channel(canary: bool, stable: bool) -> Result<UpgradeChan
 }
 
 fn default_path() -> Result<PathBuf> {
-    let home = crate::paths::tako_home_dir().map_err(|e| {
-        ConfigError::Validation(format!("Could not determine tako home directory: {}", e))
+    let config_dir = crate::paths::tako_config_dir().map_err(|e| {
+        ConfigError::Validation(format!("Could not determine tako config directory: {}", e))
     })?;
-    Ok(home.join("config.toml"))
+    Ok(config_dir.join("config.toml"))
 }
 
 fn load_upgrade_channel_from_file(path: &Path) -> Result<UpgradeChannel> {

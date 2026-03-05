@@ -70,10 +70,10 @@ where
 
 impl CliHistoryToml {
     pub fn default_path() -> Result<PathBuf> {
-        let home = crate::paths::tako_home_dir().map_err(|e| {
-            ConfigError::Validation(format!("Could not determine tako home directory: {}", e))
+        let data_dir = crate::paths::tako_data_dir().map_err(|e| {
+            ConfigError::Validation(format!("Could not determine tako data directory: {}", e))
         })?;
-        Ok(home.join("history.toml"))
+        Ok(data_dir.join("history.toml"))
     }
 
     pub fn load() -> Result<Self> {

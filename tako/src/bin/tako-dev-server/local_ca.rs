@@ -9,7 +9,7 @@ use std::process::Command;
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
 
-use crate::paths::tako_home_dir;
+use crate::paths::tako_data_dir;
 
 /// Root CA certificate validity period (10 years)
 const CA_VALIDITY_DAYS: i64 = 3650;
@@ -177,17 +177,17 @@ pub struct LocalCAStore {
 
 impl LocalCAStore {
     pub fn new() -> Result<Self> {
-        let home = tako_home_dir().map_err(|e| {
-            CaError::Validation(format!("Could not determine tako home directory: {}", e))
+        let data_dir = tako_data_dir().map_err(|e| {
+            CaError::Validation(format!("Could not determine tako data directory: {}", e))
         })?;
 
-        let ca_dir = home.join("ca");
+        let ca_dir = data_dir.join("ca");
         let ca_cert_path = ca_dir.join(LOCAL_CA_CERT_FILENAME);
 
         Ok(Self {
             ca_cert_path,
             keychain_service: "tako-local-ca".to_string(),
-            keychain_account: keychain_account_for_home(&home),
+            keychain_account: keychain_account_for_home(&data_dir),
         })
     }
 

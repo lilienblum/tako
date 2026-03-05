@@ -561,8 +561,8 @@ fn ensure_dev_server_tls_material(
     ca: &LocalCA,
     app_name: &str,
 ) -> Result<bool, Box<dyn std::error::Error>> {
-    let home = crate::paths::tako_home_dir()?;
-    ensure_dev_server_tls_material_for_home(ca, &home, app_name)
+    let data_dir = crate::paths::tako_data_dir()?;
+    ensure_dev_server_tls_material_for_home(ca, &data_dir, app_name)
 }
 
 #[cfg(target_os = "macos")]
@@ -2413,7 +2413,7 @@ pub async fn run(
         }
     }
 
-    let tako_home = crate::paths::tako_home_dir()?;
+    let tako_data = crate::paths::tako_data_dir()?;
 
     // Check daemon for existing registration instead of lock files.
     let canonical_project_dir =
@@ -2428,7 +2428,7 @@ pub async fn run(
             match existing.status.as_str() {
                 "running" => {
                     // Attach to existing running app.
-                    let log_dir = tako_home.join("dev").join("logs");
+                    let log_dir = tako_data.join("dev").join("logs");
                     std::fs::create_dir_all(&log_dir)?;
                     let suffix = dev_client_suffix(&project_dir);
                     let log_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));
@@ -2458,7 +2458,7 @@ pub async fn run(
     }
 
     // Compute log store path (still use lock dir scheme for log files).
-    let log_dir = tako_home.join("dev").join("logs");
+    let log_dir = tako_data.join("dev").join("logs");
     std::fs::create_dir_all(&log_dir)?;
     let suffix = dev_client_suffix(&project_dir);
     let log_store_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));

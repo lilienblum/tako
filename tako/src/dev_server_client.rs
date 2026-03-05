@@ -11,11 +11,11 @@ const DEV_SERVER_STARTUP_WAIT_ATTEMPTS: usize = 300;
 const DEV_SERVER_STARTUP_WAIT_INTERVAL_MS: u64 = 50;
 
 fn socket_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    Ok(crate::paths::tako_home_dir()?.join("dev-server.sock"))
+    Ok(crate::paths::tako_data_dir()?.join("dev-server.sock"))
 }
 
 fn dev_server_log_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
-    Ok(crate::paths::tako_home_dir()?.join("dev-server.log"))
+    Ok(crate::paths::tako_data_dir()?.join("dev-server.log"))
 }
 
 fn open_dev_server_log(log_path: &std::path::Path) -> Result<std::fs::File, std::io::Error> {
