@@ -1,3 +1,4 @@
+name = "tanstack-start-e2e"
 runtime = "bun"
 preset = "tanstack-start"
 

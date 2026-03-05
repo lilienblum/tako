@@ -5,7 +5,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::app::resolve_app_name;
+use crate::app::require_app_name_from_config;
 use crate::build::{
     BuildAdapter, BuildCache, BuildError, BuildExecutor, BuildPreset, BuildStageCommand,
     ResolvedPresetSource, apply_adapter_base_runtime_defaults, compute_file_hash,
@@ -281,9 +281,10 @@ async fn run_async(
         output::warning(&format!("Validation: {}", warning));
     }
 
-    let app_name = resolve_app_name(&project_dir).map_err(|e| -> Box<dyn std::error::Error> {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()).into()
-    })?;
+    let app_name =
+        require_app_name_from_config(&project_dir).map_err(|e| -> Box<dyn std::error::Error> {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()).into()
+        })?;
     let routes = required_env_routes(&tako_config, &env)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let server_names =

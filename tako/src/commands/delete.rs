@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env::current_dir;
 
-use crate::app::resolve_app_name;
+use crate::app::require_app_name_from_config;
 use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::{SshClient, SshConfig};
@@ -36,7 +36,7 @@ async fn run_async(
     let project_tako = load_optional_project_tako_toml(&project_dir)?;
     let project_app =
         if project_tako.is_some() {
-            Some(resolve_app_name(&project_dir).map_err(|e| {
+            Some(require_app_name_from_config(&project_dir).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
             })?)
         } else {

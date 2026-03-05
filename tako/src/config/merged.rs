@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::app::resolve_app_name;
+use crate::app::require_app_name_from_config;
 
 use super::error::{ConfigError, Result};
 use super::secrets::SecretsStore;
@@ -70,7 +70,8 @@ impl MergedConfig {
         // Load tako.toml
         let project = TakoToml::load_from_dir(dir)?;
 
-        let app_name = resolve_app_name(dir).map_err(|e| ConfigError::Validation(e.to_string()))?;
+        let app_name =
+            require_app_name_from_config(dir).map_err(|e| ConfigError::Validation(e.to_string()))?;
 
         // Load global servers
         let global_servers = ServersToml::load()?;
@@ -97,7 +98,8 @@ impl MergedConfig {
         // Load tako.toml
         let project = TakoToml::load_from_dir(dir)?;
 
-        let app_name = resolve_app_name(dir).map_err(|e| ConfigError::Validation(e.to_string()))?;
+        let app_name =
+            require_app_name_from_config(dir).map_err(|e| ConfigError::Validation(e.to_string()))?;
 
         // Load global servers
         let global_servers = if let Some(path) = servers_path {
@@ -544,7 +546,7 @@ host = "5.6.7.8"
     }
 
     #[test]
-    fn test_load_uses_directory_name_when_tako_toml_name_is_missing() {
+    fn test_load_fails_when_tako_toml_name_is_missing() {
         let temp_dir = TempDir::new().unwrap();
         let project_dir = temp_dir.path().join("sample-app");
         std::fs::create_dir_all(&project_dir).unwrap();
@@ -556,8 +558,12 @@ route = "api.example.com"
 "#;
         fs::write(project_dir.join("tako.toml"), tako_toml).unwrap();
 
-        let config = MergedConfig::load_with_paths(&project_dir, None, None).unwrap();
-        assert_eq!(config.app_name, "sample-app");
+        let err = MergedConfig::load_with_paths(&project_dir, None, None).unwrap_err();
+        assert!(
+            err.to_string().contains("name"),
+            "expected error about missing name, got: {}",
+            err
+        );
     }
 
     #[test]

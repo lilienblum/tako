@@ -15,6 +15,21 @@ pub enum AppNameError {
 
 pub type Result<T> = std::result::Result<T, AppNameError>;
 
+/// Require app name from tako.toml `name` field.
+///
+/// Returns an error if tako.toml is missing or has no `name`.
+/// Use this for deploy and other server-facing commands where the name
+/// must be explicitly set in config (not inferred from package.json or directory).
+pub fn require_app_name_from_config<P: AsRef<Path>>(dir: P) -> Result<String> {
+    let dir = dir.as_ref();
+    match get_name_from_tako_toml(dir) {
+        Some(name) => validate_and_sanitize_app_name(&name),
+        None => Err(AppNameError::Resolution(
+            "tako.toml must have a `name` field. Run `tako init` to set it.".to_string(),
+        )),
+    }
+}
+
 /// Resolve app name from a project directory
 ///
 /// Resolution order:

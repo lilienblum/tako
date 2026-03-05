@@ -1,3 +1,4 @@
+name = "bun-e2e"
 runtime = "bun"
 
 [envs.production]

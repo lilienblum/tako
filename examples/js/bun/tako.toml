@@ -1,3 +1,4 @@
+name = "bun-example"
 runtime = "bun"
 
 [vars.development]

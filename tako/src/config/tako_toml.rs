@@ -10,7 +10,7 @@ use super::error::{ConfigError, Result};
 /// Root configuration from tako.toml
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TakoToml {
-    /// Application name (optional; stable identity when set)
+    /// Application name (required; stable identity for deploy paths and hostnames)
     pub name: Option<String>,
 
     /// Build runtime override used for default preset selection when `preset` is omitted.

@@ -6,7 +6,7 @@ use std::sync::OnceLock;
 use clap::Subcommand;
 use time::{OffsetDateTime, UtcOffset};
 
-use crate::app::resolve_app_name;
+use crate::app::require_app_name_from_config;
 use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::{SshClient, SshConfig};
@@ -46,7 +46,7 @@ pub fn run(cmd: ReleaseCommands) -> Result<(), Box<dyn std::error::Error>> {
 
 async fn run_async(cmd: ReleaseCommands) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
-    let app_name = resolve_app_name(&project_dir)
+    let app_name = require_app_name_from_config(&project_dir)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let tako_config = TakoToml::load_from_dir(&project_dir)?;
     let servers = ServersToml::load()?;

@@ -289,7 +289,7 @@ async fn list_secrets() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::app::resolve_app_name;
+    use crate::app::require_app_name_from_config;
     use crate::commands::server;
     use crate::config::{SecretsStore, ServersToml, TakoToml};
     use crate::crypto::decrypt;
@@ -313,8 +313,7 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
         servers = ServersToml::load()?;
     }
 
-    // Resolve app name from config or project directory fallback.
-    let app_name = resolve_app_name(&project_dir)
+    let app_name = require_app_name_from_config(&project_dir)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
 
     // Check for discrepancies first
