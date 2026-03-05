@@ -37,8 +37,8 @@ struct CliUpgradeDetectionContext {
 enum UpdateCheck {
     /// Current version matches latest.
     AlreadyCurrent,
-    /// A newer version is available. Contains the tag name for download.
-    Available { tag: String },
+    /// A newer version is available. Contains the tag name for download and a display version string.
+    Available { tag: String, version: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -48,18 +48,22 @@ enum UpdateCheck {
 pub fn run(canary: bool, stable: bool) -> Result<(), Box<dyn std::error::Error>> {
     let channel = resolve_upgrade_channel(canary, stable)?;
 
-    println!();
-    output::step(&format!(
-        "Current version: {}",
-        output::highlight(&format_current_version())
-    ));
-    println!();
+    if channel == UpgradeChannel::Canary {
+        output::muted(&format!(
+            "You're on {} channel",
+            output::bold_muted("canary")
+        ));
+        output::step(&format!(
+            "Your current version: {}",
+            output::highlight(&current_version())
+        ));
+    }
 
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(run_upgrade(channel))
 }
 
-fn format_current_version() -> String {
+fn current_version() -> String {
     match CANARY_SHA {
         Some(sha) if !sha.trim().is_empty() => {
             let short = &sha.trim()[..sha.trim().len().min(7)];
@@ -95,25 +99,25 @@ async fn run_installer_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn st
     let (os, arch) = detect_platform()?;
     let install_dir = resolve_install_dir();
 
-    // Check for updates (both stable and canary)
     let check = check_for_updates(channel).await;
 
     match check {
         Ok(UpdateCheck::AlreadyCurrent) => {
-            // Spinner already showed "Already on the latest version"
+            match channel {
+                UpgradeChannel::Stable => output::success("Already on the latest version"),
+                UpgradeChannel::Canary => output::success("Already on the latest canary build"),
+            }
             return Ok(());
         }
-        Ok(UpdateCheck::Available { tag }) => {
-            println!();
+        Ok(UpdateCheck::Available { tag, version }) => {
             let url = tarball_url_for_tag(&tag, os, arch);
             download_and_install(&url, &install_dir).await?;
 
-            let new_version = get_installed_version(&install_dir);
-            output::success(&format!("Upgraded to {}", output::highlight(&new_version)));
+            output::success(&format!("Upgraded to {}", output::highlight(&version)));
             return Ok(());
         }
         Err(_) => {
-            // Spinner already showed error; fall through to download anyway
+            output::warning("Could not check for updates");
         }
     }
 
@@ -128,8 +132,7 @@ async fn run_installer_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn st
     let url = tarball_url_for_tag(&tag, os, arch);
     download_and_install(&url, &install_dir).await?;
 
-    let new_version = get_installed_version(&install_dir);
-    output::success(&format!("Upgraded to {}", output::highlight(&new_version)));
+    output::success("Upgraded");
     Ok(())
 }
 
@@ -192,62 +195,9 @@ fn run_local_upgrade_command(binary: &str, args: &[&str]) -> Result<(), String> 
 // Version resolution
 // ---------------------------------------------------------------------------
 
-/// Check for updates with a transforming spinner.
-///
-/// Stable:
-///   - new version:     `✓ Latest version: 0.0.3`
-///   - already current: `✓ Already on the latest version`
-///
-/// Canary:
-///   - new build:       `✓ New canary build available`
-///   - already current: `✓ Already on the latest canary build`
-///
-/// Error: `✗ Could not check for updates`
 async fn check_for_updates(channel: UpgradeChannel) -> Result<UpdateCheck, String> {
-    if !output::is_interactive() {
-        return check_for_updates_inner(channel).await;
-    }
-
-    let start = std::time::Instant::now();
-    let pb = ProgressBar::new_spinner();
-    pb.set_style(output::spinner_style());
-    pb.set_message("Checking for updates...");
-    pb.enable_steady_tick(Duration::from_millis(80));
-
-    let result = check_for_updates_inner(channel).await;
-    let elapsed = output::format_elapsed(start.elapsed());
-
-    match &result {
-        Ok(update) => {
-            let check = output::bold(&output::brand_success("✓"));
-            let msg = match (channel, update) {
-                (UpgradeChannel::Stable, UpdateCheck::AlreadyCurrent) => {
-                    "Already on the latest version".to_string()
-                }
-                (UpgradeChannel::Stable, UpdateCheck::Available { tag }) => {
-                    let version = tag.strip_prefix(TAG_PREFIX).unwrap_or(tag);
-                    format!("Latest version: {}", output::highlight(version))
-                }
-                (UpgradeChannel::Canary, UpdateCheck::AlreadyCurrent) => {
-                    "Already on the latest canary build".to_string()
-                }
-                (UpgradeChannel::Canary, UpdateCheck::Available { .. }) => {
-                    "New canary build available".to_string()
-                }
-            };
-            if elapsed.is_empty() {
-                pb.finish_with_message(format!("{check} {msg}"));
-            } else {
-                pb.finish_with_message(format!("{check} {msg} {}", output::brand_muted(&elapsed)));
-            }
-        }
-        Err(_) => {
-            let x = output::bold(&output::brand_error("✗"));
-            pb.finish_with_message(format!("{x} Could not check for updates"));
-        }
-    }
-
-    result
+    output::with_spinner_async_simple("Checking for updates", check_for_updates_inner(channel))
+        .await
 }
 
 async fn check_for_updates_inner(channel: UpgradeChannel) -> Result<UpdateCheck, String> {
@@ -266,6 +216,7 @@ async fn check_for_updates_inner(channel: UpgradeChannel) -> Result<UpdateCheck,
             } else {
                 Ok(UpdateCheck::Available {
                     tag: tag.name.clone(),
+                    version: version.to_string(),
                 })
             }
         }
@@ -279,8 +230,10 @@ async fn check_for_updates_inner(channel: UpgradeChannel) -> Result<UpdateCheck,
             if !current_sha.is_empty() && sha_prefix_matches(current_sha, &tag.commit_sha) {
                 Ok(UpdateCheck::AlreadyCurrent)
             } else {
+                let short_sha = &tag.commit_sha[..tag.commit_sha.len().min(7)];
                 Ok(UpdateCheck::Available {
                     tag: tag.name.clone(),
+                    version: format!("canary-{short_sha}"),
                 })
             }
         }
@@ -290,28 +243,6 @@ async fn check_for_updates_inner(channel: UpgradeChannel) -> Result<UpdateCheck,
 fn sha_prefix_matches(a: &str, b: &str) -> bool {
     let len = a.len().min(b.len());
     len > 0 && a[..len].eq_ignore_ascii_case(&b[..len])
-}
-
-fn get_installed_version(install_dir: &Path) -> String {
-    let tako_bin = install_dir.join("tako");
-    let result = Command::new(&tako_bin)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output();
-
-    match result {
-        Ok(out) if out.status.success() => {
-            let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if v.is_empty() {
-                "latest".to_string()
-            } else {
-                v
-            }
-        }
-        _ => "latest".to_string(),
-    }
 }
 
 #[derive(Debug)]
@@ -465,13 +396,13 @@ async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn st
 }
 
 fn download_bar_style() -> ProgressStyle {
-    ProgressStyle::with_template("  {msg}\n  {bar:30.cyan} {percent}%")
+    ProgressStyle::with_template("{msg}\n{bar:40.green} {pos}/{len}")
         .unwrap()
-        .progress_chars("━╸─")
+        .progress_chars("██░")
 }
 
 fn download_spinner_style() -> ProgressStyle {
-    ProgressStyle::with_template("  {spinner} {msg}  ({bytes})")
+    ProgressStyle::with_template("{spinner} {msg} ({bytes})")
         .unwrap()
         .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "])
 }
@@ -689,13 +620,6 @@ fn command_exists(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn format_current_version_stable() {
-        // In tests, CANARY_SHA is None (not set at build time)
-        let version = format_current_version();
-        assert_eq!(version, CURRENT_VERSION);
-    }
 
     #[test]
     fn tarball_url_for_tag_constructs_github_url() {
