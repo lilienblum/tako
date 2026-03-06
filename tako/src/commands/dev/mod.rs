@@ -182,9 +182,9 @@ const LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS: u64 = 500;
 const LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS: u64 = 150;
 const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const PF_ANCHOR_NAME: &str = "tako";
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const PF_ANCHOR_FILE: &str = "/etc/pf.anchors/tako";
 #[cfg(target_os = "macos")]
 const PF_CONF_FILE: &str = "/etc/pf.conf";
@@ -193,10 +193,10 @@ const PF_HOOK_BEGIN: &str = "# >>> tako >>>";
 #[cfg(any(target_os = "macos", test))]
 const PF_HOOK_END: &str = "# <<< tako <<<";
 /// Fixed HTTPS port tako-dev-server listens on (matches DEV_PUBLIC_PORT in cli.rs).
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const DEV_HTTPS_LISTEN_PORT: u16 = 47831;
 /// Fixed port for the HTTP→HTTPS redirect server inside tako-dev-server.
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", test))]
 const DEV_HTTP_REDIRECT_PORT: u16 = 47830;
 
 fn dev_initial_instance_count() -> usize {
