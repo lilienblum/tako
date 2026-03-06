@@ -3344,16 +3344,28 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        // Use a runtime config with the socket inside temp dir so that
+        // app_socket_dir resolves to a writable location (not /var/run).
+        let runtime = ServerRuntimeConfig {
+            socket: temp
+                .path()
+                .join("tako")
+                .join("tako.sock")
+                .to_string_lossy()
+                .to_string(),
+            ..ServerRuntimeConfig::for_defaults(temp.path().to_path_buf())
+        };
+        let state =
+            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, runtime)
+                .unwrap();
 
         let fake_bin_dir = temp.path().join("bin");
         std::fs::create_dir_all(&fake_bin_dir).unwrap();
         let fake_bun = fake_bin_dir.join("bun");
+        let fake_server_py = temp.path().join("server.py");
         std::fs::write(
-            &fake_bun,
-            r#"#!/bin/sh
-python3 - <<'PY'
-import os
+            &fake_server_py,
+            r#"import os
 import socketserver
 
 socket_path = (os.environ.get("TAKO_APP_SOCKET") or "").replace("{pid}", str(os.getpid()))
@@ -3375,8 +3387,14 @@ class Handler(socketserver.StreamRequestHandler):
             return
 
 socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
-PY
 "#,
+        )
+        .unwrap();
+        // Use exec so python3 replaces the shell — its PID matches what
+        // the spawner records, so the health-check socket path resolves.
+        std::fs::write(
+            &fake_bun,
+            format!("#!/bin/sh\nexec python3 {}\n", fake_server_py.display()),
         )
         .unwrap();
         #[cfg(unix)]
