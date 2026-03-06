@@ -1858,6 +1858,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::warn!("Failed to initialize certificate manager: {}", e);
     }
 
+    // Bind management socket EARLY — before any potentially slow init (ACME, SQLite).
+    // This ensures the new process takes over the symlink within milliseconds of
+    // starting, so `tako servers upgrade` never times out waiting for the socket.
+    let socket_server = SocketServer::new(&socket);
+    let socket_listener = socket_server
+        .bind()
+        .map_err(|e| format!("Failed to bind management socket: {e}"))?;
+
     // Create ACME client if enabled
     let acme_client = if args.no_acme {
         tracing::info!("ACME disabled, using manual certificate management");
@@ -2034,17 +2042,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rt.spawn(certificate_renewal_task(acme_clone, interval));
     }
 
-    // Start management socket
+    // Start management socket accept loop (listener was bound early, before ACME/SQLite init)
     let socket_state = state.clone();
-    let socket_path = socket.clone();
     rt.spawn(async move {
-        let server = SocketServer::new(&socket_path);
-        if let Err(e) = server
-            .run(move |cmd| {
-                let state = socket_state.clone();
-                async move { state.handle_command(cmd).await }
-            })
-            .await
+        if let Err(e) = SocketServer::serve(socket_listener, move |cmd| {
+            let state = socket_state.clone();
+            async move { state.handle_command(cmd).await }
+        })
+        .await
         {
             tracing::error!("Socket server error: {}", e);
         }
