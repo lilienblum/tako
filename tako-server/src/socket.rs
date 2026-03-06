@@ -58,12 +58,12 @@ impl SocketServer {
         &self.symlink_path
     }
 
-    /// Start listening for commands
-    pub async fn run<F, Fut>(&self, handler: F) -> Result<(), std::io::Error>
-    where
-        F: Fn(Command) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = Response> + Send + 'static,
-    {
+    /// Bind the pid-specific socket and atomically swap the stable symlink.
+    ///
+    /// This is intentionally **synchronous** so it can run before any async
+    /// runtime work (ACME init, state restore, etc.), ensuring the new process
+    /// takes over the management socket within milliseconds of starting.
+    pub fn bind(&self) -> Result<std::os::unix::net::UnixListener, std::io::Error> {
         // Remove stale pid-specific socket file if present
         let _ = std::fs::remove_file(&self.actual_path);
 
@@ -71,7 +71,8 @@ impl SocketServer {
             std::fs::create_dir_all(parent)?;
         }
 
-        let listener = UnixListener::bind(&self.actual_path)?;
+        let std_listener = std::os::unix::net::UnixListener::bind(&self.actual_path)?;
+        std_listener.set_nonblocking(true)?;
 
         // Atomically swap symlink: write to a temp path then rename over the target.
         // rename(2) is atomic so clients see either the old or new target, never nothing.
@@ -89,6 +90,21 @@ impl SocketServer {
             "Management socket listening"
         );
 
+        Ok(std_listener)
+    }
+
+    /// Run the accept loop on a pre-bound std listener, dispatching each
+    /// connection to `handler`. Converts to tokio internally (must be called
+    /// from within a Tokio runtime context).
+    pub async fn serve<F, Fut>(
+        std_listener: std::os::unix::net::UnixListener,
+        handler: F,
+    ) -> Result<(), std::io::Error>
+    where
+        F: Fn(Command) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        let listener = UnixListener::from_std(std_listener)?;
         let handler = std::sync::Arc::new(handler);
 
         loop {
@@ -106,6 +122,16 @@ impl SocketServer {
                 }
             }
         }
+    }
+
+    /// Start listening for commands (convenience wrapper: bind + serve).
+    pub async fn run<F, Fut>(&self, handler: F) -> Result<(), std::io::Error>
+    where
+        F: Fn(Command) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Response> + Send + 'static,
+    {
+        let listener = self.bind()?;
+        Self::serve(listener, handler).await
     }
 }
 

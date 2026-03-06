@@ -583,6 +583,149 @@ Bun.serve({
     }
 }
 
+mod reload {
+    use super::*;
+
+    /// HTTP GET with X-Forwarded-Proto: https to bypass HTTP→HTTPS redirect.
+    fn http_get_as_https(http_port: u16, path: &str, host: &str) -> Result<String, String> {
+        let addr = format!("127.0.0.1:{http_port}");
+        let mut stream =
+            TcpStream::connect(&addr).map_err(|e| format!("Failed to connect: {e}"))?;
+        stream.set_read_timeout(Some(Duration::from_secs(5))).ok();
+        let request = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nX-Forwarded-Proto: https\r\nConnection: close\r\n\r\n"
+        );
+        stream
+            .write_all(request.as_bytes())
+            .map_err(|e| format!("Failed to write: {e}"))?;
+        let mut response = Vec::new();
+        std::io::Read::read_to_end(&mut stream, &mut response)
+            .map_err(|e| format!("Failed to read: {e}"))?;
+        String::from_utf8(response).map_err(|e| format!("Invalid UTF-8: {e}"))
+    }
+
+    #[test]
+    fn test_reload_preserves_deployed_apps() {
+        if !e2e_enabled() {
+            return;
+        }
+
+        let env = E2EEnvironment::new();
+
+        // Deploy an app
+        let app_dir = env.create_test_app(
+            "reload-test",
+            "v1",
+            r#"
+const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
+if (!appSocket) {
+  throw new Error("TAKO_APP_SOCKET is required");
+}
+
+Bun.serve({
+  unix: appSocket,
+  fetch(request) {
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (host === "tako-internal" && path === "/status") {
+      return new Response(JSON.stringify({ status: "ok" }), {
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response("reload-test-v1");
+  },
+});
+"#,
+        );
+
+        let resp = env.send_command(&deploy_command(
+            "reload-test",
+            "v1",
+            &app_dir,
+            &["reload-test.localhost"],
+            1,
+        ));
+        assert_eq!(resp.get("status").and_then(|s| s.as_str()), Some("ok"));
+
+        // Wait for app to be ready
+        thread::sleep(Duration::from_secs(2));
+
+        // Verify app is serving (use X-Forwarded-Proto to bypass HTTP→HTTPS redirect)
+        let body = http_get_as_https(env.http_port, "/", "reload-test.localhost")
+            .expect("app should respond before reload");
+        assert!(
+            body.contains("reload-test-v1"),
+            "expected app response before reload, got: {body}"
+        );
+
+        // Get old PID
+        let info = env.send_command(&serde_json::json!({ "command": "server_info" }));
+        let old_pid = info
+            .get("data")
+            .and_then(|d| d.get("pid"))
+            .and_then(|p| p.as_u64())
+            .expect("server_info should include pid") as u32;
+
+        // Send SIGHUP to trigger reload
+        unsafe {
+            libc::kill(old_pid as i32, libc::SIGHUP);
+        }
+
+        // Wait for new process to take over
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut new_pid = None;
+        while Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(300));
+            let resp = env.send_command(&serde_json::json!({ "command": "server_info" }));
+            if let Some(pid) = resp
+                .get("data")
+                .and_then(|d| d.get("pid"))
+                .and_then(|p| p.as_u64())
+            {
+                if pid as u32 != old_pid {
+                    new_pid = Some(pid as u32);
+                    break;
+                }
+            }
+        }
+        let new_pid = new_pid.expect("new server should take over after SIGHUP");
+
+        // Verify app is still listed
+        let list_resp = env.send_command(&serde_json::json!({ "command": "list" }));
+        assert_eq!(
+            list_resp.get("status").and_then(|s| s.as_str()),
+            Some("ok"),
+            "list should succeed: {list_resp}"
+        );
+        let apps = list_resp
+            .get("data")
+            .and_then(|d| d.get("apps"))
+            .and_then(|a| a.as_array())
+            .expect("list should return data.apps array");
+        let has_app = apps
+            .iter()
+            .any(|a| a.get("name").and_then(|n| n.as_str()) == Some("reload-test"));
+        assert!(has_app, "reload-test app should still be listed: {apps:?}");
+
+        // Wait for app instances to be healthy under new process
+        thread::sleep(Duration::from_secs(2));
+
+        // Verify app still serves traffic
+        let body = http_get_as_https(env.http_port, "/", "reload-test.localhost")
+            .expect("app should respond after reload");
+        assert!(
+            body.contains("reload-test-v1"),
+            "expected app response after reload, got: {body}"
+        );
+
+        // Clean up new process
+        unsafe {
+            libc::kill(new_pid as i32, libc::SIGTERM);
+        }
+    }
+}
+
 mod error_handling {
     use super::*;
 

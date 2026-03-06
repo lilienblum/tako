@@ -896,12 +896,13 @@ async fn wait_for_primary_ready(
 ) -> Result<ServerRuntimeInfo, String> {
     let start = std::time::Instant::now();
     let mut last_err = String::new();
+    let mut last_seen_pid: Option<u32> = None;
     while start.elapsed() < timeout {
         ssh.clear_tako_hello_cache();
         match ssh.tako_server_info().await {
             Ok(info) if info.pid != old_pid => return Ok(info),
-            Ok(_) => {
-                // Still the old process — keep polling
+            Ok(info) => {
+                last_seen_pid = Some(info.pid);
                 tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
             }
             Err(e) => {
@@ -910,8 +911,24 @@ async fn wait_for_primary_ready(
             }
         }
     }
+
+    // Gather diagnostics for a more actionable error message
+    let service_status = match ssh.tako_status().await {
+        Ok(s) => s,
+        Err(_) => "unknown".to_string(),
+    };
+
+    let detail = if !last_err.is_empty() {
+        format!("last socket error: {last_err}")
+    } else if let Some(pid) = last_seen_pid {
+        format!("socket still reports old pid {pid}")
+    } else {
+        "no response received".to_string()
+    };
+
     Err(format!(
-        "timed out waiting for new server process (old pid {old_pid}): {last_err}",
+        "timed out after {:.0}s waiting for new server process (old pid {old_pid}): {detail}; service status: {service_status}",
+        timeout.as_secs_f64(),
     ))
 }
 
