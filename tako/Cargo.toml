@@ -45,8 +45,8 @@ hyper-util = { version = "0.1", features = ["full"] }
 http-body-util = "0.1"
 openssl = "0.10"
 pingora-core = { version = "0.8", default-features = false, features = ["openssl"] }
-pingora-proxy = { version = "0.7", default-features = false, features = ["openssl"] }
-pingora-http = "0.7"
+pingora-proxy = { version = "0.8", default-features = false, features = ["openssl"] }
+pingora-http = "0.8"
 hickory-proto = "0.25"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-pemfile = "2.2"
