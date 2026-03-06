@@ -733,7 +733,7 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
 
     if servers.is_empty() {
         output::warning("No servers configured");
-        output::muted(&format!(
+        output::hint(&format!(
             "Run {} to add a server.",
             output::highlight("tako servers add")
         ));

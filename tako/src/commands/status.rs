@@ -60,7 +60,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 async fn run_global_status(servers: &ServersToml) -> Result<(), Box<dyn std::error::Error>> {
     if servers.is_empty() {
         output::warning("No servers configured.");
-        output::muted(&format!(
+        output::hint(&format!(
             "Run {} to add one.",
             output::highlight("tako servers add")
         ));
@@ -241,33 +241,39 @@ fn render_global_status(
             });
         }
 
-        // 3. Server uptime
+        // 3. Uptime (machine)
         if let Some(ref uptime) = global.server_uptime {
             entries.push(CardEntry::Field {
-                label: "Server uptime".into(),
+                label: "Uptime".into(),
                 value: uptime.clone(),
                 color: None,
             });
         }
 
-        // 4. Process uptime (skip if upgrading)
+        // 4. Server uptime (process, skip if upgrading)
         if global.service_status != "upgrading" {
             if let Some(ref uptime) = global.process_uptime {
                 entries.push(CardEntry::Field {
-                    label: "Server process uptime".into(),
+                    label: "Server uptime".into(),
                     value: uptime.clone(),
                     color: None,
                 });
             }
         }
 
-        // 5. Routes section
+        // 5. Routes section (group by app name, blank repeated names)
         if !global.routes.is_empty() {
-            let children: Vec<(String, String, Option<CardColor>)> = global
-                .routes
-                .iter()
-                .map(|(app, pattern)| (app.clone(), pattern.clone(), None))
-                .collect();
+            let mut children: Vec<(String, String, Option<CardColor>)> = Vec::new();
+            let mut last_app = String::new();
+            for (app, pattern) in &global.routes {
+                let label = if *app == last_app {
+                    String::new()
+                } else {
+                    last_app.clone_from(app);
+                    app.clone()
+                };
+                children.push((label, pattern.clone(), None));
+            }
             entries.push(CardEntry::Section {
                 label: "Routes".into(),
                 children,
@@ -278,14 +284,52 @@ fn render_global_status(
         if !global.apps.is_empty() && !is_offline {
             let mut apps = global.apps;
             sort_global_apps(&mut apps);
-            let children: Vec<(String, String, Option<CardColor>)> = apps
-                .iter()
-                .map(|app| {
-                    let label = format!("{} ({})", app.app_name, app.env_name);
-                    let (state, color) = app_state_summary(Some(&app.status));
-                    (label, state, Some(color))
-                })
-                .collect();
+            let mut children: Vec<(String, String, Option<CardColor>)> = Vec::new();
+            for app in &apps {
+                let (state, color) = app_state_summary(Some(&app.status));
+                children.push((app.app_name.clone(), state, Some(color)));
+
+                // Environment
+                if app.env_name != "unknown" {
+                    children.push(("  Environment".into(), app.env_name.clone(), None));
+                }
+
+                if let Some(ref app_status) = app.status.app_status {
+                    // Instances
+                    let healthy = app_status
+                        .instances
+                        .iter()
+                        .filter(|i| {
+                            i.state == InstanceState::Healthy
+                                || i.state == InstanceState::Ready
+                        })
+                        .count();
+                    let total = app_status.instances.len();
+                    if total > 0 {
+                        children.push((
+                            "  Instances".into(),
+                            format!("{healthy}/{total} healthy"),
+                            None,
+                        ));
+                    }
+
+                    // Release
+                    if !app_status.version.is_empty() {
+                        children.push((
+                            "  Release".into(),
+                            app_status.version.clone(),
+                            None,
+                        ));
+                    }
+                }
+
+                // Deployed At
+                if let Some(unix_secs) = app.status.deployed_at_unix_secs {
+                    if let Some(formatted) = format_deployed_at(unix_secs) {
+                        children.push(("  Deployed at".into(), formatted, None));
+                    }
+                }
+            }
             entries.push(CardEntry::Section {
                 label: "Apps".into(),
                 children,
@@ -313,7 +357,10 @@ fn render_global_status(
             });
         }
 
-        // Compute max label width from this card
+        // Compute max label width from this card.
+        // Fields render as:  "├ {label:<max_label}  {value}"  (prefix = 2 chars)
+        // Children render as: "│   {child:<max_label - 2}  {value}"  (prefix = 4 chars)
+        // So child labels need +2 to share the same value column.
         for e in &entries {
             match e {
                 CardEntry::Field { label, .. } => {
@@ -322,9 +369,7 @@ fn render_global_status(
                 CardEntry::Section { label, children } => {
                     max_label = max_label.max(label.len());
                     for (child_label, _, _) in children {
-                        // Section children are indented by 4 more chars, but they share
-                        // the same global alignment for the value column.
-                        max_label = max_label.max(child_label.len() + 4);
+                        max_label = max_label.max(child_label.len() + 2);
                     }
                 }
             }
@@ -367,16 +412,13 @@ fn render_global_status(
                             output::brand_muted(label),
                         );
                         let cont = if is_last_entry { " " } else { "│" };
-                        for (ci, (child_label, child_value, child_color)) in
-                            children.iter().enumerate()
-                        {
-                            let _ = ci;
+                        for (child_label, child_value, child_color) in children {
                             let colored_value = colorize(child_value, *child_color);
                             println!(
                                 "{}   {:<width$}  {colored_value}",
                                 output::brand_muted(cont),
                                 output::brand_muted(child_label),
-                                width = max_label - 4,
+                                width = max_label - 2,
                             );
                         }
                     }
@@ -662,6 +704,41 @@ fn parse_uptime_since(line: &str) -> Option<OffsetDateTime> {
     let date = time::Date::from_calendar_date(year, month, day).ok()?;
     let time = time::Time::from_hms(hour, minute, second).ok()?;
     Some(OffsetDateTime::new_utc(date, time))
+}
+
+fn format_deployed_at(unix_secs: i64) -> Option<String> {
+    // Try local time first, fall back to UTC.
+    let dt = OffsetDateTime::from_unix_timestamp(unix_secs).ok()?;
+    let local = dt
+        .to_offset(
+            time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC),
+        );
+    let month = local.month();
+    Some(format!(
+        "{} {}, {} {:02}:{:02}",
+        month_abbrev(month),
+        local.day(),
+        local.year(),
+        local.hour(),
+        local.minute(),
+    ))
+}
+
+fn month_abbrev(month: time::Month) -> &'static str {
+    match month {
+        time::Month::January => "Jan",
+        time::Month::February => "Feb",
+        time::Month::March => "Mar",
+        time::Month::April => "Apr",
+        time::Month::May => "May",
+        time::Month::June => "Jun",
+        time::Month::July => "Jul",
+        time::Month::August => "Aug",
+        time::Month::September => "Sep",
+        time::Month::October => "Oct",
+        time::Month::November => "Nov",
+        time::Month::December => "Dec",
+    }
 }
 
 fn format_duration_human(total_secs: u64) -> String {
@@ -1283,5 +1360,13 @@ env = "staging"
 
         let (summary, _) = app_state_summary(Some(&status));
         assert_eq!(summary, "deploying");
+    }
+
+    #[test]
+    fn format_deployed_at_formats_epoch_in_local_time() {
+        // 2026-03-06 12:00:00 UTC
+        let ts = 1772798400;
+        let formatted = format_deployed_at(ts).unwrap();
+        assert!(formatted.starts_with("Mar 6, 2026"));
     }
 }

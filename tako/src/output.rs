@@ -47,7 +47,11 @@ pub fn brand_fg<D: Display>(value: D) -> String {
 
 pub fn brand_muted<D: Display>(value: D) -> String {
     if should_colorize() {
-        format!("\x1b[2m{value}\x1b[22m")
+        // Re-apply dim after any embedded bold-reset (\x1b[22m) so that
+        // highlight()/bold() calls inside a muted() context don't cancel
+        // the dim styling for the surrounding text.
+        let s = value.to_string().replace("\x1b[22m", "\x1b[22m\x1b[2m");
+        format!("\x1b[2m{s}\x1b[22m")
     } else {
         value.to_string()
     }
@@ -166,6 +170,12 @@ pub fn error_stderr(message: &str) {
 
 pub fn muted(message: &str) {
     println!("{}", brand_muted(message));
+}
+
+/// Print a hint line in default text color (not muted).
+/// Use for actionable guidance like "Run X to do Y" where the command is highlight()'d.
+pub fn hint(message: &str) {
+    println!("{}", brand_fg(message));
 }
 
 /// Format a value in bold+accent. Use for dynamic names/values in output lines.

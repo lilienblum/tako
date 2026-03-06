@@ -396,7 +396,7 @@ async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn st
 }
 
 fn download_bar_style() -> ProgressStyle {
-    ProgressStyle::with_template("{msg}\n{bar:40.green} {pos}/{len}")
+    ProgressStyle::with_template("{msg}\n{bar:40} {pos}/{len}")
         .unwrap()
         .progress_chars("██░")
 }
