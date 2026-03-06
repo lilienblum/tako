@@ -646,10 +646,7 @@ mod server_info {
             Some("error"),
             "concurrent enter_upgrading by different owner should fail: {resp}"
         );
-        let msg = resp
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("");
+        let msg = resp.get("message").and_then(|m| m.as_str()).unwrap_or("");
         assert!(
             msg.contains("already upgrading"),
             "error should mention already upgrading: {msg}"
@@ -704,8 +701,7 @@ mod server_info {
             }
         }
 
-        let new_pid =
-            new_pid.expect("new process should take over socket within 5s after SIGHUP");
+        let new_pid = new_pid.expect("new process should take over socket within 5s after SIGHUP");
         assert_ne!(old_pid, new_pid);
 
         unsafe {
@@ -823,10 +819,7 @@ mod server_info {
             }
         }
 
-        assert!(
-            saw_new_pid,
-            "should have seen new pid within 10s"
-        );
+        assert!(saw_new_pid, "should have seen new pid within 10s");
         assert_eq!(
             failures, 0,
             "socket should remain available during reload ({failures}/{total} calls failed)"

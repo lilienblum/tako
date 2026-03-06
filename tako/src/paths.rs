@@ -147,11 +147,7 @@ pub fn migrate_legacy_home() {
             let name = entry.file_name();
             let dest = data_dir.join(&name);
             if let Err(e) = std::fs::rename(entry.path(), &dest) {
-                eprintln!(
-                    "warning: could not move {}: {}",
-                    name.to_string_lossy(),
-                    e
-                );
+                eprintln!("warning: could not move {}: {}", name.to_string_lossy(), e);
             }
         }
     }
