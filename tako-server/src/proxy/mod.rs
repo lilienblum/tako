@@ -1038,6 +1038,15 @@ pub fn build_server_with_acme(
     };
 
     let mut proxy_service = pingora_proxy::http_proxy_service(&server.configuration, proxy);
+
+    // Limit keepalive reuse per connection (matches nginx default of 1000).
+    // Frees per-connection memory allocations periodically.
+    if let Some(app) = proxy_service.app_logic_mut() {
+        let mut opts = pingora_core::apps::HttpServerOptions::default();
+        opts.keepalive_request_limit = Some(1000);
+        app.server_options = Some(opts);
+    }
+
     let listener_options = listener_socket_options();
 
     // Add HTTP listener

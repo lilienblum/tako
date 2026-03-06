@@ -1057,6 +1057,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         server.bootstrap();
         let mut svc = pingora_proxy::http_proxy_service(&server.configuration, proxy);
 
+        if let Some(app) = svc.app_logic_mut() {
+            let mut opts = pingora_core::apps::HttpServerOptions::default();
+            opts.keepalive_request_limit = Some(4096);
+            app.server_options = Some(opts);
+        }
+
         // Dynamic per-SNI cert generation: OpenSSL rejects `*.tako` wildcards
         // (single-label TLD), so we generate a cert per hostname on the fly.
         let ca = load_or_create_ca()?;
