@@ -74,7 +74,7 @@ cargo run -p tako --bin tako -- deploy --help
 - `tako.toml` is required for `dev`, `deploy`, `logs`, and `secrets` workflows.
 - Top-level `name` in `tako.toml` is optional; when omitted, app identity falls back to sanitized project directory name.
 - Setting `name` explicitly is recommended for stable identity and uniqueness per server; renaming identity later creates a new app path and requires manual cleanup of old deployments.
-- Non-development environments must define `route` or `routes`; development defaults to `{app}.tako`.
+- Non-development environments must define `route` or `routes`; development defaults to `{app}.tako.test`.
 
 ## Related Docs
 

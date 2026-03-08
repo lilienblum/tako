@@ -2,7 +2,7 @@ name = "bun-example"
 runtime = "bun"
 
 [vars.development]
-WIDLCARD_SUFFIX = ".bun-example.tako"
+WIDLCARD_SUFFIX = ".bun-example.tako.test"
 
 [vars.production]
 WIDLCARD_SUFFIX = ".bun.tako.sh"
@@ -11,7 +11,7 @@ WIDLCARD_SUFFIX = ".bun.tako.sh"
 WIDLCARD_SUFFIX = ".bun.tako-testbed.orb.local"
 
 [envs.development]
-routes = ["some-app.tako/bun", "*.bun-example.tako"]
+routes = ["some-app.tako.test/bun", "*.bun-example.tako.test"]
 
 [envs.production]
 routes = ["demo.tako.sh/bun", "*.bun.tako.sh"]

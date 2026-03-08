@@ -9,6 +9,17 @@ use console::Term;
 use indicatif::{ProgressBar, ProgressStyle};
 
 static VERBOSE: AtomicBool = AtomicBool::new(false);
+static SUPPRESS: AtomicBool = AtomicBool::new(false);
+
+/// While output is suppressed, most printing functions become no-ops and
+/// inner spinners are skipped (the work still runs).
+pub fn set_suppress(suppress: bool) {
+    SUPPRESS.store(suppress, Ordering::Relaxed);
+}
+
+fn is_suppressed() -> bool {
+    SUPPRESS.load(Ordering::Relaxed)
+}
 
 // Brand palette — RGB values matching dev/output.rs
 const BRAND_TEAL: (u8, u8, u8) = (155, 196, 182); // #9BC4B6 — accent, prompts
@@ -131,16 +142,25 @@ pub fn is_verbose() -> bool {
 }
 
 pub fn section(title: &str) {
+    if is_suppressed() {
+        return;
+    }
     println!();
     println!("{}", bold(&brand_accent(title)));
 }
 
 pub fn heading(title: &str) {
+    if is_suppressed() {
+        return;
+    }
     println!();
     println!("{}", bold(title));
 }
 
 pub fn info(message: &str) {
+    if is_suppressed() {
+        return;
+    }
     println!("{}", brand_fg(message));
 }
 
@@ -149,18 +169,30 @@ pub fn step(message: &str) {
 }
 
 pub fn bullet(message: &str) {
+    if is_suppressed() {
+        return;
+    }
     println!("  {} {}", bold(&brand_secondary("•")), brand_fg(message));
 }
 
 pub fn success(message: &str) {
+    if is_suppressed() {
+        return;
+    }
     println!("{}", brand_fg(message));
 }
 
 pub fn warning(message: &str) {
+    if is_suppressed() {
+        return;
+    }
     println!("{} {}", bold(&brand_warning("!")), brand_fg(message));
 }
 
 pub fn error(message: &str) {
+    if is_suppressed() {
+        return;
+    }
     println!("{} {}", bold(&brand_error("✗")), brand_fg(message));
 }
 
@@ -169,6 +201,9 @@ pub fn error_stderr(message: &str) {
 }
 
 pub fn muted(message: &str) {
+    if is_suppressed() {
+        return;
+    }
     println!("{}", brand_muted(message));
 }
 
@@ -263,7 +298,7 @@ pub fn with_spinner<T, E, F>(loading: &str, success: &str, work: F) -> Result<T,
 where
     F: FnOnce() -> Result<T, E>,
 {
-    if !is_interactive() {
+    if !is_interactive() || is_suppressed() {
         return work();
     }
 
@@ -326,7 +361,7 @@ pub async fn with_spinner_async_err<T, E: Display, Fut>(
 where
     Fut: Future<Output = Result<T, E>>,
 {
-    if !is_interactive() {
+    if !is_interactive() || is_suppressed() {
         return work.await;
     }
 
@@ -364,7 +399,7 @@ pub fn with_spinner_simple<T, F>(message: &str, work: F) -> T
 where
     F: FnOnce() -> T,
 {
-    if !is_interactive() {
+    if !is_interactive() || is_suppressed() {
         return work();
     }
 
@@ -398,7 +433,7 @@ pub async fn with_spinner_async_simple<T, Fut>(message: &str, work: Fut) -> T
 where
     Fut: Future<Output = T>,
 {
-    if !is_interactive() {
+    if !is_interactive() || is_suppressed() {
         return work.await;
     }
 
@@ -420,6 +455,64 @@ where
     pb.finish_and_clear();
     show_cursor();
     result
+}
+
+/// A phase spinner that suppresses all inner output while active.
+/// On drop, restores output and clears the spinner (acts as a safety net
+/// if the phase is exited via `?`).
+pub struct PhaseSpinner {
+    pb: Option<ProgressBar>,
+    start: Instant,
+    finished: bool,
+}
+
+impl PhaseSpinner {
+    pub fn start(message: &str) -> Self {
+        set_suppress(true);
+        let pb = if is_interactive() {
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(spinner_style());
+            pb.set_message(message.to_string());
+            pb.enable_steady_tick(Duration::from_millis(80));
+            hide_cursor();
+            Some(pb)
+        } else {
+            None
+        };
+        Self {
+            pb,
+            start: Instant::now(),
+            finished: false,
+        }
+    }
+
+    pub fn finish(mut self, success: &str) {
+        set_suppress(false);
+        if let Some(ref pb) = self.pb {
+            finish_spinner_ok(pb, success, self.start.elapsed());
+        }
+        self.finished = true;
+    }
+
+    pub fn finish_err(mut self, loading: &str, detail: &str) {
+        set_suppress(false);
+        if let Some(ref pb) = self.pb {
+            finish_spinner_err_with_detail(pb, loading, &detail);
+        }
+        self.finished = true;
+    }
+}
+
+impl Drop for PhaseSpinner {
+    fn drop(&mut self) {
+        set_suppress(false);
+        if !self.finished {
+            if let Some(ref pb) = self.pb {
+                pb.finish_and_clear();
+                show_cursor();
+            }
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -463,7 +556,7 @@ pub fn confirm_with_description(
     // Print prompt with (Y/n) or (y/N) hint
     let separator = brand_muted("›");
     let styled_hint = brand_muted("(y/n)");
-    let styled_prompt = format!("{} {styled_hint} {separator} ", brand_accent(prompt));
+    let styled_prompt = format!("{} {styled_hint} {separator} ", prompt);
     eprint!("{styled_prompt}");
 
     // Raw mode: read single keypress
@@ -1129,8 +1222,8 @@ impl Wizard {
             .unwrap_or(0);
         for (i, answer) in self.answers.iter().enumerate() {
             if answer.subsection {
-                let is_last = !self.answers.get(i + 1).is_some_and(|a| a.subsection);
-                let branch = brand_muted(if is_last { "└" } else { "├" });
+                let is_first = !self.answers[..i].iter().any(|a| a.subsection);
+                let branch = brand_muted(if is_first { "└" } else { " " });
                 let _ = self.term.write_line(&format!(
                     "{branch} {}  {}",
                     brand_muted(&format!("{:<width$}", answer.label, width = max_sub)),

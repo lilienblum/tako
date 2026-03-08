@@ -1,4 +1,5 @@
 use crate::output;
+use crate::ssh::SshClient;
 use clap::Subcommand;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tako_core::ServerRuntimeInfo;
@@ -67,12 +68,6 @@ pub enum ServerCommands {
     /// Show global deployment status across configured servers
     #[command(visible_alias = "info")]
     Status,
-
-    /// Configure DNS provider for wildcard TLS certificates
-    DnsSetup {
-        /// Server name
-        name: String,
-    },
 }
 
 pub fn run(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>> {
@@ -115,7 +110,6 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
             stable,
         } => upgrade_servers(name.as_deref(), canary, stable).await,
         ServerCommands::Status => crate::commands::status::run().await,
-        ServerCommands::DnsSetup { name } => dns_setup(&name).await,
     }
 }
 
@@ -568,17 +562,28 @@ else echo unknown; fi";
 async fn detect_server_target(
     ssh: &crate::ssh::SshClient,
 ) -> Result<crate::config::ServerTarget, String> {
-    let arch_out = ssh
-        .exec("uname -m 2>/dev/null || true")
+    let combined = format!(
+        "echo ARCH:$(uname -m 2>/dev/null || echo unknown); echo LIBC:$({})",
+        DETECT_LIBC_COMMAND
+    );
+    let output = ssh
+        .exec(&combined)
         .await
-        .map_err(|e| format!("Failed to query architecture: {}", e))?;
-    let arch = parse_detected_arch(&arch_out.stdout)?;
+        .map_err(|e| format!("Failed to detect server target: {}", e))?;
 
-    let libc_out = ssh
-        .exec(DETECT_LIBC_COMMAND)
-        .await
-        .map_err(|e| format!("Failed to query libc: {}", e))?;
-    let libc = parse_detected_libc(&libc_out.stdout)?;
+    let mut arch_str = String::new();
+    let mut libc_str = String::new();
+    for line in output.stdout.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("ARCH:") {
+            arch_str = val.trim().to_string();
+        } else if let Some(val) = line.strip_prefix("LIBC:") {
+            libc_str = val.trim().to_string();
+        }
+    }
+
+    let arch = parse_detected_arch(&arch_str)?;
+    let libc = parse_detected_libc(&libc_str)?;
 
     crate::config::ServerTarget::normalized(&arch, &libc)
         .map_err(|e| format!("Unsupported target metadata: {}", e))
@@ -637,7 +642,12 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
     let mut servers = ServersToml::load()?;
 
     if servers.is_empty() {
-        return Err("No servers configured. Run 'tako servers add <host>' first.".into());
+        output::error("No servers configured.");
+        output::hint(&format!(
+            "Run {} to add a server.",
+            output::highlight("tako servers add")
+        ));
+        return Ok(());
     }
 
     if let Some(name) = name {
@@ -766,12 +776,7 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
             .as_deref()
             .filter(|d| !d.trim().is_empty())
         {
-            println!(
-                "{} {}  {}",
-                output::brand_muted("└"),
-                output::brand_muted("Description"),
-                desc,
-            );
+            println!("{}  {}", output::brand_muted("Description"), desc,);
         }
     }
     Ok(())
@@ -939,152 +944,329 @@ async fn upgrade_servers(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::ServersToml;
 
-    let Some(name) = name else {
-        let servers = ServersToml::load()?;
-        if servers.is_empty() {
-            return Err("No servers configured. Run 'tako servers add <host>' first.".into());
-        }
-        let mut names: Vec<String> = servers.names().iter().map(|s| s.to_string()).collect();
-        names.sort_unstable();
-        for server_name in &names {
-            upgrade_server(server_name, canary, stable).await?;
-        }
-        return Ok(());
-    };
-
-    upgrade_server(name, canary, stable).await
-}
-
-pub(crate) async fn upgrade_server(
-    name: &str,
-    canary: bool,
-    stable: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::config::ServersToml;
-    use crate::ssh::{SshClient, SshConfig};
-
     let channel = resolve_upgrade_channel(canary, stable)?;
-    output::step(&format!(
-        "You're on {} channel",
-        output::highlight(channel.as_str())
-    ));
 
     let servers = ServersToml::load()?;
-    let server = servers
-        .get(name)
-        .ok_or_else(|| format!("Server '{}' not found.", name))?;
+    if servers.is_empty() {
+        output::error("No servers configured.");
+        output::hint(&format!(
+            "Run {} to add a server.",
+            output::highlight("tako servers add")
+        ));
+        return Ok(());
+    }
+
+    let names: Vec<String> = if let Some(name) = name {
+        if !servers.contains(name) {
+            return Err(format!("Server '{}' not found.", name).into());
+        }
+        vec![name.to_string()]
+    } else {
+        let mut names: Vec<String> = servers.names().iter().map(|s| s.to_string()).collect();
+        names.sort_unstable();
+        names
+    };
+
+    output::muted(&format!(
+        "You're on {} channel",
+        output::bold_muted(channel.as_str())
+    ));
+
+    // Upgrade all servers in parallel with a single spinner.
+    let total = names.len();
+    let mut join_set = tokio::task::JoinSet::new();
+    let total_start = std::time::Instant::now();
+
+    for server_name in &names {
+        let server = servers
+            .get(server_name)
+            .ok_or_else(|| format!("Server '{}' not found.", server_name))?
+            .clone();
+        let name = server_name.clone();
+        join_set.spawn(async move {
+            let start = std::time::Instant::now();
+            let result = upgrade_server_quiet(&name, &server, channel).await;
+            (name, start.elapsed(), result)
+        });
+    }
+
+    let spinner_msg = if total == 1 {
+        format!("Upgrading {}", output::highlight(&names[0]))
+    } else {
+        format!("Upgrading {} servers", total)
+    };
+    let pb = if output::is_interactive() {
+        let pb = indicatif::ProgressBar::new_spinner();
+        pb.set_style(output::spinner_style());
+        pb.set_message(format!("{}…", spinner_msg));
+        pb.enable_steady_tick(Duration::from_millis(80));
+        Some(pb)
+    } else {
+        None
+    };
+
+    struct UpgradeResult {
+        name: String,
+        elapsed: Duration,
+        version: Option<String>,
+        error: Option<String>,
+    }
+
+    let mut results: Vec<UpgradeResult> = Vec::new();
+    let mut done = 0usize;
+    while let Some(join_result) = join_set.join_next().await {
+        let (name, elapsed, result) =
+            join_result.map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+        done += 1;
+        if let Some(ref pb) = pb {
+            if total > 1 {
+                pb.set_message(format!("Upgrading [{}/{}]…", done, total));
+            }
+        }
+        match result {
+            Ok(version) => results.push(UpgradeResult {
+                name,
+                elapsed,
+                version,
+                error: None,
+            }),
+            Err(e) => results.push(UpgradeResult {
+                name,
+                elapsed,
+                version: None,
+                error: Some(e),
+            }),
+        }
+    }
+
+    let total_elapsed = total_start.elapsed();
+
+    if let Some(ref pb) = pb {
+        pb.finish_and_clear();
+    }
+
+    // Sort results to match input order.
+    results.sort_by(|a, b| {
+        let pos_a = names
+            .iter()
+            .position(|n| n == &a.name)
+            .unwrap_or(usize::MAX);
+        let pos_b = names
+            .iter()
+            .position(|n| n == &b.name)
+            .unwrap_or(usize::MAX);
+        pos_a.cmp(&pos_b)
+    });
+
+    let succeeded = results.iter().filter(|r| r.error.is_none()).count();
+    let failed = results.iter().filter(|r| r.error.is_some()).count();
+    let total_time = output::format_elapsed(total_elapsed);
+
+    // Summary header
+    if total == 1 {
+        let r = &results[0];
+        if r.error.is_some() {
+            output::error(&format!("Upgrade failed {}", total_time));
+        } else {
+            output::success(&format!("Upgrade complete {}", total_time));
+        }
+    } else if failed == 0 {
+        output::success(&format!(
+            "Upgrade complete [{}/{}] {}",
+            succeeded, total, total_time,
+        ));
+    } else {
+        output::error(&format!(
+            "Upgrade finished with errors [{}/{}] {}",
+            succeeded, total, total_time,
+        ));
+    }
+
+    // Per-server results
+    let max_name_len = results.iter().map(|r| r.name.len()).max().unwrap_or(0);
+    for r in &results {
+        let time = output::format_elapsed(r.elapsed);
+        if let Some(ref err) = r.error {
+            output::bullet(&format!(
+                "{} {:<width$}  {}",
+                output::brand_error("✗"),
+                r.name,
+                output::brand_muted(err),
+                width = max_name_len,
+            ));
+        } else {
+            let detail = match r.version.as_deref() {
+                Some(v) if !time.is_empty() => format!("{} {}", v, time),
+                Some(v) => v.to_string(),
+                None if !time.is_empty() => time,
+                None => String::new(),
+            };
+            let detail_str = if detail.is_empty() {
+                String::new()
+            } else {
+                format!("  {}", output::brand_muted(&detail))
+            };
+            output::bullet(&format!(
+                "{} {:<width$}{}",
+                output::brand_success("✓"),
+                r.name,
+                detail_str,
+                width = max_name_len,
+            ));
+        }
+    }
+
+    if failed > 0 {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Run the full upgrade flow for a single server without any output.
+/// Returns the new version string on success.
+async fn upgrade_server_quiet(
+    name: &str,
+    server: &crate::config::ServerEntry,
+    channel: UpgradeChannel,
+) -> Result<Option<String>, String> {
+    use crate::ssh::{SshClient, SshConfig};
 
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
-    output::with_spinner_async(
-        &format!("Connecting to {}", output::highlight(name)),
-        "Connected",
-        ssh.connect(),
-    )
-    .await
-    .map_err(|e| format!("SSH connection failed: {}", e))?;
+    ssh.connect()
+        .await
+        .map_err(|e| format!("SSH connection failed: {e}"))?;
 
     let owner = build_upgrade_owner(name);
     let mut upgrade_mode_entered = false;
 
-    let upgrade_result: Result<(), String> = async {
+    let result: Result<Option<String>, String> = async {
         let status = ssh
             .tako_status()
             .await
-            .map_err(|e| format!("Failed to query tako-server status: {}", e))?;
+            .map_err(|e| format!("Failed to query status: {e}"))?;
         if status != "active" {
-            return Err(format!(
-                "tako-server must be active before upgrade (status: {}).",
-                status
-            ));
+            return Err(format!("tako-server not active (status: {status})"));
         }
 
-        // Install/update binary without restarting the service
-        let install_message = if channel == UpgradeChannel::Canary {
-            "Installing updated canary tako-server binary"
-        } else {
-            "Installing updated tako-server binary"
-        };
-        let install_output = output::with_spinner_async_simple(
-            install_message,
-            ssh.exec(&remote_installer_command(channel)),
-        )
-        .await
-        .map_err(|e| format!("Failed to run installer: {}", e))?;
+        // Install binary
+        let install_output = ssh
+            .exec(&remote_installer_command(channel))
+            .await
+            .map_err(|e| format!("Installer failed: {e}"))?;
         if !install_output.success() {
             return Err(format_installer_failure(&install_output));
         }
-        output::success("Binary updated");
 
-        output::with_spinner_async(
-            "Entering upgrading mode",
-            "Upgrading mode enabled",
-            ssh.tako_enter_upgrading(&owner),
-        )
-        .await
-        .map_err(|e| format!("Failed to enter upgrading mode: {}", e))?;
+        // Enter upgrading mode
+        ssh.tako_enter_upgrading(&owner)
+            .await
+            .map_err(|e| match &e {
+                crate::ssh::SshError::CommandFailed(m) => m.clone(),
+                other => other.to_string(),
+            })?;
         upgrade_mode_entered = true;
 
-        // Capture the current (old) PID before reload so we can detect when
-        // the new process has taken over the management socket.
-        let old_info = output::with_spinner_async(
-            "Reading active runtime config",
-            "Runtime config loaded",
-            ssh.tako_server_info(),
-        )
-        .await
-        .map_err(|e| format!("Failed to read runtime config: {}", e))?;
-        let old_pid = old_info.pid;
+        // Get old PID, reload, wait for new process
+        let old_pid = ssh
+            .tako_server_info()
+            .await
+            .map_err(|e| format!("Failed to read runtime config: {e}"))?
+            .pid;
 
-        // Trigger zero-downtime reload: SIGHUP → new binary spawns → SIGUSR1 → old drains
-        output::with_spinner_async(
-            "Reloading tako-server (zero-downtime)",
-            "Reload triggered",
-            ssh.tako_reload(),
-        )
-        .await
-        .map_err(|e| format!("Reload failed: {}", e))?;
+        ssh.tako_reload()
+            .await
+            .map_err(|e| format!("Reload failed: {e}"))?;
 
-        // Poll until a *new* process (different PID) responds on the socket
-        let new_info = output::with_spinner_async(
-            "Waiting for new server to be ready",
-            "New server is ready",
-            wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid),
-        )
-        .await
-        .map_err(|e| format!("Readiness check failed: {}", e))?;
-        output::muted(&format!(
-            "pid: {} → {}, socket: {}",
-            old_pid, new_info.pid, new_info.socket
-        ));
+        wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid).await?;
 
-        output::with_spinner_async(
-            "Exiting upgrading mode",
-            "Upgrade complete",
-            ssh.tako_exit_upgrading(&owner),
-        )
-        .await
-        .map_err(|e| format!("Failed to exit upgrading mode: {}", e))?;
+        // Exit upgrading mode
+        ssh.tako_exit_upgrading(&owner)
+            .await
+            .map_err(|e| format!("Failed to exit upgrading mode: {e}"))?;
         upgrade_mode_entered = false;
 
-        Ok(())
+        // Get new version
+        let version = ssh.tako_version().await.ok().flatten();
+        Ok(version)
     }
     .await;
 
-    if upgrade_result.is_err() && upgrade_mode_entered {
-        // Best-effort: wait for *any* server to respond, then exit upgrading mode.
-        // Use pid 0 so any responding process satisfies the check.
-        let _ = wait_for_primary_ready(&mut ssh, Duration::from_secs(30), 0).await;
-        let _ = ssh.tako_exit_upgrading(&owner).await;
+    if result.is_err() && upgrade_mode_entered {
+        // Try to release the upgrade lock. Retry a few times in case the
+        // server is still restarting after the SIGHUP reload.
+        for attempt in 0..5 {
+            if attempt > 0 {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            if ssh.tako_exit_upgrading(&owner).await.is_ok() {
+                break;
+            }
+        }
     }
 
     let _ = ssh.disconnect().await;
-    upgrade_result.map_err(|e| e.into())
+    result
 }
 
 const DNS_PROVIDER_CONF: &str = "/opt/tako/dns-provider.conf";
 const DNS_CREDENTIALS_ENV: &str = "/opt/tako/dns-credentials.env";
 const LEGO_VERSION: &str = "4.21.0";
+
+/// Return a shell command to quickly verify credentials for a provider, if
+/// supported. The command should exit 0 on success, non-zero on failure.
+fn credential_verify_command(provider: &str, credentials: &[(String, String)]) -> Option<String> {
+    match provider {
+        "cloudflare" => {
+            let token = credentials.iter().find(|(k, _)| k == "CF_DNS_API_TOKEN")?;
+            let escaped = token.1.replace('\'', "'\\''");
+            Some(format!(
+                "curl -sf -H 'Authorization: Bearer {}' \
+                 https://api.cloudflare.com/client/v4/user/tokens/verify \
+                 | grep -q '\"active\"'",
+                escaped,
+            ))
+        }
+        "digitalocean" => {
+            let token = credentials.iter().find(|(k, _)| k == "DO_AUTH_TOKEN")?;
+            let escaped = token.1.replace('\'', "'\\''");
+            Some(format!(
+                "curl -sf -H 'Authorization: Bearer {}' \
+                 https://api.digitalocean.com/v2/account \
+                 | grep -q '\"account\"'",
+                escaped,
+            ))
+        }
+        "hetzner" => {
+            let token = credentials.iter().find(|(k, _)| k == "HETZNER_API_KEY")?;
+            let escaped = token.1.replace('\'', "'\\''");
+            Some(format!(
+                "curl -sf -H 'Auth-API-Token: {}' \
+                 https://dns.hetzner.com/api/v1/zones >/dev/null",
+                escaped,
+            ))
+        }
+        "vultr" => {
+            let token = credentials.iter().find(|(k, _)| k == "VULTR_API_KEY")?;
+            let escaped = token.1.replace('\'', "'\\''");
+            Some(format!(
+                "curl -sf -H 'Authorization: Bearer {}' \
+                 https://api.vultr.com/v2/account >/dev/null",
+                escaped,
+            ))
+        }
+        "linode" => {
+            let token = credentials.iter().find(|(k, _)| k == "LINODE_TOKEN")?;
+            let escaped = token.1.replace('\'', "'\\''");
+            Some(format!(
+                "curl -sf -H 'Authorization: Bearer {}' \
+                 https://api.linode.com/v4/profile >/dev/null",
+                escaped,
+            ))
+        }
+        _ => None,
+    }
+}
 
 /// Well-known DNS providers and their required environment variables.
 fn dns_provider_env_vars(provider: &str) -> &'static [(&'static str, &'static str)] {
@@ -1149,51 +1331,42 @@ fn install_lego_command(arch: &str) -> String {
     )
 }
 
-async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::config::ServersToml;
-    use crate::ssh::{SshClient, SshConfig};
+/// DNS provider + credentials pair, used to copy config between servers.
+pub struct DnsConfig {
+    pub provider: String,
+    pub credentials_env: String, // KEY=VALUE\n content
+}
 
-    let servers = ServersToml::load()?;
-    let server = servers
-        .get(name)
-        .ok_or_else(|| format!("Server '{}' not found.", name))?;
-
-    output::step(&format!(
-        "Setting up DNS provider for wildcard certificates on {}",
-        output::highlight(name),
-    ));
-
-    let ssh_config = SshConfig::from_server(&server.host, server.port);
-    let mut ssh = SshClient::new(ssh_config);
-    output::with_spinner_async(
-        &format!("Connecting to {}", output::highlight(name)),
-        "Connected",
-        ssh.connect(),
-    )
-    .await?;
-
-    // Check if DNS provider is already configured
-    let existing_provider = ssh
+/// Read DNS provider config and credentials from a server that already has them.
+pub async fn fetch_dns_config(
+    ssh: &SshClient,
+) -> Result<Option<DnsConfig>, Box<dyn std::error::Error>> {
+    let provider = ssh
         .exec(&format!("cat {} 2>/dev/null || true", DNS_PROVIDER_CONF))
         .await?
         .stdout
         .trim()
         .to_string();
-
-    if !existing_provider.is_empty() {
-        output::step(&format!(
-            "Current DNS provider: {}",
-            output::highlight(&existing_provider),
-        ));
-
-        let keep = output::confirm("Keep existing DNS provider?", true)?;
-        if keep {
-            output::success("DNS provider configuration unchanged");
-            let _ = ssh.disconnect().await;
-            return Ok(());
-        }
+    if provider.is_empty() {
+        return Ok(None);
     }
+    let creds_cmd = SshClient::run_with_root_or_sudo(&format!(
+        "cat {} 2>/dev/null || true",
+        DNS_CREDENTIALS_ENV,
+    ));
+    let credentials_env = ssh.exec(&creds_cmd).await?.stdout.trim().to_string();
+    if credentials_env.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(DnsConfig {
+        provider,
+        credentials_env: format!("{}\n", credentials_env),
+    }))
+}
 
+/// Interactively prompt for DNS provider and credentials, verify them, and
+/// return the config. Does not write anything to the server yet.
+pub async fn prompt_dns_setup(ssh: &SshClient) -> Result<DnsConfig, Box<dyn std::error::Error>> {
     // Select DNS provider
     let provider_options = vec![
         ("cloudflare".to_string(), "cloudflare"),
@@ -1208,8 +1381,8 @@ async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     let provider = output::select(
-        "DNS provider",
-        Some("Choose your DNS provider for Let's Encrypt DNS-01 challenges"),
+        "Choose your DNS provider for Let's Encrypt DNS-01 challenges",
+        None,
         provider_options,
     )?;
 
@@ -1249,7 +1422,7 @@ async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         for (var_name, description) in known_vars {
-            let value = output::text_field(&format!("{} ({})", var_name, description), None)?;
+            let value = output::text_field(description, None)?;
             credentials.push((var_name.to_string(), value));
         }
     }
@@ -1257,6 +1430,56 @@ async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     if credentials.is_empty() {
         return Err("No credentials provided. DNS provider setup cancelled.".into());
     }
+
+    // Quick credential validation via provider API before touching the server.
+    if let Some(verify_cmd) = credential_verify_command(&provider, &credentials) {
+        output::with_spinner_async_err(
+            "Verifying credentials",
+            "Credentials valid",
+            "Verifying credentials",
+            ssh.exec_checked(&verify_cmd),
+        )
+        .await
+        .map_err(|_| -> Box<dyn std::error::Error> {
+            "Credentials invalid. Check your API token and try again.".into()
+        })?;
+    }
+
+    let mut env_content = String::new();
+    for (key, value) in &credentials {
+        env_content.push_str(&format!("{}={}\n", key, value));
+    }
+
+    Ok(DnsConfig {
+        provider,
+        credentials_env: env_content,
+    })
+}
+
+/// Apply a DNS config to a server: install lego, write credentials, configure
+/// systemd, and reload tako-server. The server must already be connected.
+/// All intermediate output is suppressed — shows a single spinner line.
+pub async fn apply_dns_config(
+    ssh: &SshClient,
+    name: &str,
+    config: &DnsConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let msg = format!("Configuring DNS on {}", output::highlight(name));
+    output::with_spinner_async_err(
+        &msg,
+        &format!("DNS configured on {}", output::highlight(name)),
+        &msg,
+        apply_dns_config_inner(ssh, name, config),
+    )
+    .await
+}
+
+async fn apply_dns_config_inner(
+    ssh: &SshClient,
+    name: &str,
+    config: &DnsConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let provider = &config.provider;
 
     // Detect server architecture for lego download
     let arch_output = ssh.exec("uname -m").await?;
@@ -1270,38 +1493,23 @@ async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Install lego binary
     let install_cmd = install_lego_command(arch);
     let install_cmd = SshClient::run_with_root_or_sudo(&install_cmd);
-    output::with_spinner_async(
-        "Installing lego",
-        "lego installed",
-        ssh.exec_checked(&install_cmd),
-    )
-    .await?;
+    ssh.exec_checked(&install_cmd).await?;
 
-    // Write credentials env file
-    let mut env_content = String::new();
-    for (key, value) in &credentials {
-        env_content.push_str(&format!("{}={}\n", key, value));
-    }
-
-    // Write via sudo to /opt/tako/dns-credentials.env
-    let escaped_content = env_content.replace('\'', "'\\''");
-    let write_creds_cmd = SshClient::run_with_root_or_sudo(&format!(
-        "printf '%s' '{}' > {} && chmod 0600 {} && chown tako:tako {}",
-        escaped_content, DNS_CREDENTIALS_ENV, DNS_CREDENTIALS_ENV, DNS_CREDENTIALS_ENV,
+    // Write credentials env file and provider conf in a single exec
+    let escaped_content = config.credentials_env.replace('\'', "'\\''");
+    let write_config_cmd = SshClient::run_with_root_or_sudo(&format!(
+        "printf '%s' '{}' > {} && chmod 0600 {} && chown tako:tako {} && \
+         printf '%s' '{}' > {} && chmod 0644 {} && chown tako:tako {}",
+        escaped_content,
+        DNS_CREDENTIALS_ENV,
+        DNS_CREDENTIALS_ENV,
+        DNS_CREDENTIALS_ENV,
+        provider,
+        DNS_PROVIDER_CONF,
+        DNS_PROVIDER_CONF,
+        DNS_PROVIDER_CONF,
     ));
-    output::with_spinner_async(
-        "Writing DNS credentials",
-        "Credentials saved",
-        ssh.exec_checked(&write_creds_cmd),
-    )
-    .await?;
-
-    // Write provider conf
-    let write_provider_cmd = SshClient::run_with_root_or_sudo(&format!(
-        "printf '%s' '{}' > {} && chmod 0644 {} && chown tako:tako {}",
-        provider, DNS_PROVIDER_CONF, DNS_PROVIDER_CONF, DNS_PROVIDER_CONF,
-    ));
-    ssh.exec_checked(&write_provider_cmd).await?;
+    ssh.exec_checked(&write_config_cmd).await?;
 
     // Read existing ExecStart to reconstruct with --dns-provider
     let existing_exec = ssh
@@ -1313,11 +1521,9 @@ async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
 
     // Build ExecStart override: strip any old --dns-provider, append new one
     let base_exec = if existing_exec.contains("--dns-provider") {
-        // Remove old --dns-provider and its argument
         let re_parts: Vec<&str> = existing_exec.split("--dns-provider").collect();
         if re_parts.len() >= 2 {
             let before = re_parts[0].trim_end();
-            // Skip the provider argument after --dns-provider
             let after = re_parts[1].trim_start();
             let after = after
                 .split_once(|c: char| c.is_whitespace())
@@ -1334,7 +1540,6 @@ async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     } else if !existing_exec.is_empty() {
         existing_exec.clone()
     } else {
-        // Fallback: construct default ExecStart
         "/usr/local/bin/tako-server --socket /var/run/tako/tako.sock --data-dir /opt/tako"
             .to_string()
     };
@@ -1346,55 +1551,42 @@ async fn dns_setup(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     );
     let escaped_dropin_full = dropin_full.replace('\'', "'\\''");
 
+    // Write systemd drop-in, reload daemon, and restart service in one exec
     let write_dropin_cmd = SshClient::run_with_root_or_sudo(&format!(
         "mkdir -p /etc/systemd/system/tako-server.service.d && \
          printf '%s' '{}' > /etc/systemd/system/tako-server.service.d/dns.conf && \
-         systemctl daemon-reload",
+         systemctl daemon-reload && \
+         systemctl restart tako-server",
         escaped_dropin_full,
     ));
-    output::with_spinner_async(
-        "Configuring systemd service",
-        "Service configured",
-        ssh.exec_checked(&write_dropin_cmd),
-    )
-    .await?;
+    ssh.exec_checked(&write_dropin_cmd).await?;
 
-    // Reload service gracefully
-    output::with_spinner_async(
-        "Reloading tako-server",
-        "tako-server reloaded",
-        ssh.tako_reload(),
-    )
-    .await?;
-
-    // Verify the new config took effect
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    match ssh.tako_server_info().await {
-        Ok(info) => {
-            if info.dns_provider.as_deref() == Some(&provider) {
-                output::success(&format!(
-                    "DNS provider '{}' configured on {}",
-                    output::highlight(&provider),
-                    output::highlight(name),
-                ));
-            } else {
-                output::warning(&format!(
-                    "Service reloaded but dns_provider is {:?} (expected '{}').\n\
-                     A full restart may be needed: tako servers restart {}",
-                    info.dns_provider, provider, name,
-                ));
+    // Verify the new config took effect (retry up to 5 times)
+    for attempt in 0..5 {
+        tokio::time::sleep(Duration::from_secs(if attempt == 0 { 2 } else { 3 })).await;
+        match ssh.tako_server_info().await {
+            Ok(info) if info.dns_provider.as_deref() == Some(provider.as_str()) => {
+                return Ok(());
+            }
+            Ok(_) if attempt < 4 => continue,
+            Ok(info) => {
+                return Err(format!(
+                    "DNS provider on {} is {:?} after restart (expected '{}').\n\
+                     Try: tako servers restart {}",
+                    name, info.dns_provider, provider, name,
+                )
+                .into());
+            }
+            Err(_) if attempt < 4 => continue,
+            Err(e) => {
+                return Err(format!(
+                    "Could not verify DNS config on {} after restart: {}",
+                    name, e,
+                )
+                .into());
             }
         }
-        Err(e) => {
-            output::warning(&format!(
-                "Could not verify server config after reload: {}.\n\
-                 Check: tako servers restart {}",
-                e, name,
-            ));
-        }
     }
-
-    let _ = ssh.disconnect().await;
     Ok(())
 }
 

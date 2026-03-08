@@ -639,7 +639,7 @@ pub enum Commands {
         args: DevArgs,
     },
 
-    /// Print a diagnostic report about the local dev server (socket, listener, apps)
+    /// Print a local diagnostic report
     Doctor,
 
     /// Server management commands

@@ -1176,7 +1176,7 @@ mod tests {
             "user/myapp",
             "apps/myapp",
             None,
-            &["myapp.tako".to_string()],
+            &["myapp.tako.test".to_string()],
             443,
             None,
             None,
@@ -1196,7 +1196,7 @@ mod tests {
             "user/app",
             "apps/app",
             None,
-            &["app.tako".to_string()],
+            &["app.tako.test".to_string()],
             443,
             None,
             None,
@@ -1204,26 +1204,26 @@ mod tests {
         );
         let plain = strip_ansi(&panel);
         assert!(plain.contains("routes"));
-        assert!(plain.contains("https://app.tako"));
+        assert!(plain.contains("https://app.tako.test"));
     }
 
     #[test]
     fn format_panel_shows_all_urls() {
-        let hosts = vec!["a.tako".to_string(), "b.tako".to_string()];
+        let hosts = vec!["a.tako.test".to_string(), "b.tako.test".to_string()];
         let panel = format_panel(
             "app", "running", "bun", "u/r", "", None, &hosts, 443, None, None, None,
         );
         let plain = strip_ansi(&panel);
-        assert!(plain.contains("https://a.tako"));
-        assert!(plain.contains("https://b.tako"));
+        assert!(plain.contains("https://a.tako.test"));
+        assert!(plain.contains("https://b.tako.test"));
     }
 
     #[test]
     fn format_panel_shows_wildcard_and_path_routes() {
         let hosts = vec![
-            "bun-example.tako".to_string(),
-            "bun-example.tako/bun".to_string(),
-            "*.bun-example.tako".to_string(),
+            "bun-example.tako.test".to_string(),
+            "bun-example.tako.test/bun".to_string(),
+            "*.bun-example.tako.test".to_string(),
         ];
         // Use wide terminal so URLs aren't truncated.
         let panel = format_panel_wide(
@@ -1242,11 +1242,11 @@ mod tests {
         );
         let plain = strip_ansi(&panel);
         assert!(
-            plain.contains("https://bun-example.tako/bun"),
+            plain.contains("https://bun-example.tako.test/bun"),
             "missing /bun route"
         );
         assert!(
-            plain.contains("https://*.bun-example.tako"),
+            plain.contains("https://*.bun-example.tako.test"),
             "missing wildcard route"
         );
         // Verify all 3 routes are present (default host + 2 configured).
@@ -1266,7 +1266,7 @@ mod tests {
             "",
             "",
             None,
-            &["app.tako".to_string()],
+            &["app.tako.test".to_string()],
             443,
             None,
             None,
@@ -1285,7 +1285,7 @@ mod tests {
             "",
             "",
             None,
-            &["app.tako".to_string()],
+            &["app.tako.test".to_string()],
             47831,
             None,
             None,
@@ -1304,7 +1304,7 @@ mod tests {
             "",
             "",
             None,
-            &["app.tako".to_string()],
+            &["app.tako.test".to_string()],
             443,
             Some(50.0),
             Some(100 * 1024 * 1024),
@@ -1325,7 +1325,7 @@ mod tests {
             "",
             "",
             None,
-            &["app.tako".to_string()],
+            &["app.tako.test".to_string()],
             443,
             None,
             None,
@@ -1343,7 +1343,7 @@ mod tests {
             "myorg/myrepo",
             "apps/myapp",
             None,
-            &["app.tako".to_string()],
+            &["app.tako.test".to_string()],
             443,
             None,
             None,
@@ -1365,7 +1365,7 @@ mod tests {
             "user/repo",
             "projects/app",
             None,
-            &["app.tako".to_string()],
+            &["app.tako.test".to_string()],
             443,
             Some(25.0),
             Some(50 * 1024 * 1024),
@@ -1377,7 +1377,7 @@ mod tests {
         assert!(plain.contains('└'));
         assert!(plain.contains("app"));
         assert!(plain.contains("routes"));
-        assert!(plain.contains("https://app.tako"));
+        assert!(plain.contains("https://app.tako.test"));
         assert!(plain.contains("cpu"));
         assert!(plain.contains("ram"));
         assert!(plain.contains("pid"));
@@ -1453,7 +1453,7 @@ mod tests {
             "user/repo",
             "apps/app",
             Some("wt1"),
-            &["app.tako".to_string()],
+            &["app.tako.test".to_string()],
             443,
             None,
             None,
@@ -1472,7 +1472,7 @@ mod tests {
             "user/repo",
             "apps/app",
             None,
-            &["app.tako".to_string()],
+            &["app.tako.test".to_string()],
             443,
             None,
             None,

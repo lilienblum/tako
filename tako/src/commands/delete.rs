@@ -339,7 +339,7 @@ async fn discover_server_deployments(
 
         let mut deployments = Vec::new();
         for app_name in app_names {
-            let env = query_connected_app_env(&mut ssh, &app_name, server_name)
+            let env = query_connected_app_env(&ssh, &app_name, server_name)
                 .await
                 .unwrap_or_else(|| "unknown".to_string());
             deployments.push(RemoteDeployment {
@@ -382,7 +382,7 @@ fn parse_list_apps_response(response: Response) -> Result<Vec<String>, String> {
 }
 
 async fn query_connected_app_env(
-    client: &mut SshClient,
+    client: &SshClient,
     app_name: &str,
     server_name: &str,
 ) -> Option<String> {

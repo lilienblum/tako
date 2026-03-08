@@ -1,8 +1,8 @@
 //! Tako Dev Server
 //!
 //! Local development server with:
-//! - HTTPS via local CA (`{app-name}.tako`)
-//! - Local authoritative DNS for `*.tako`
+//! - HTTPS via local CA (`{app-name}.tako.test`)
+//! - Local authoritative DNS for `*.tako.test`
 //! - `tako.toml` watching for env/route updates
 //! - Streaming logs, status, and resource monitoring
 //! - Idle timeout (stops app process after inactivity)
@@ -169,11 +169,14 @@ const DEV_IDLE_TIMEOUT_SECS: u64 = 30 * 60;
 const DEV_LOG_TAIL_POLL_MS: u64 = 120;
 const DEV_LOG_CLEAR_MARKER_TYPE: &str = "clear_logs";
 const DEV_LOG_APP_EVENT_MARKER_TYPE: &str = "app_event";
-const LOCAL_DNS_PORT: u16 = 53535;
+pub(crate) const LOCAL_DNS_PORT: u16 = 53535;
 #[cfg(any(target_os = "macos", test))]
 const RESOLVER_DIR: &str = "/etc/resolver";
 #[cfg(any(target_os = "macos", test))]
-const TAKO_RESOLVER_FILE: &str = "/etc/resolver/tako";
+pub(crate) const TAKO_RESOLVER_FILE: &str = "/etc/resolver/tako.test";
+/// Old resolver files to clean up during setup.
+#[cfg(any(target_os = "macos", test))]
+const LEGACY_RESOLVER_FILES: &[&str] = &["/etc/resolver/tako", "/etc/resolver/tako.local"];
 const DEV_TLS_CERT_FILENAME: &str = "fullchain.pem";
 const DEV_TLS_KEY_FILENAME: &str = "privkey.pem";
 const DEV_TLS_NAMES_FILENAME: &str = "names.json";
@@ -217,7 +220,7 @@ fn compute_display_routes(cfg: &TakoToml, default_host: &str) -> Vec<String> {
     let mut out = vec![default_host.to_string()];
     if let Some(routes) = cfg.get_routes("development") {
         for route in routes {
-            // Trim trailing slash so "foo.tako/" == "foo.tako".
+            // Trim trailing slash so "foo.tako.test/" == "foo.tako.test".
             if route.trim_end_matches('/') != default_host {
                 out.push(route);
             }
@@ -239,7 +242,7 @@ fn compute_dev_hosts(
         _ => return Ok(vec![default_host.to_string()]),
     };
 
-    // Always include the default host so `{app-name}.tako` works even when
+    // Always include the default host so `{app-name}.tako.test` works even when
     // the user only configures path-specific or wildcard routes.
     let mut out = vec![default_host.to_string()];
     for r in routes {
@@ -256,8 +259,8 @@ fn compute_dev_hosts(
 }
 
 /// Check whether a route pattern's hostname matches an incoming request hostname.
-/// Route pattern may include a path (e.g. "app.tako/api") — the path is ignored.
-/// Wildcard hosts (e.g. "*.app.tako") match any subdomain.
+/// Route pattern may include a path (e.g. "app.tako.test/api") — the path is ignored.
+/// Wildcard hosts (e.g. "*.app.tako.test") match any subdomain.
 fn route_hostname_matches(route_pattern: &str, request_host: &str) -> bool {
     let host = route_pattern.split('/').next().unwrap_or(route_pattern);
     if host == request_host {
@@ -621,7 +624,7 @@ fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::er
     }
 
     crate::output::warning("Sudo password required.");
-    crate::output::muted("One-time sudo required to configure local DNS for *.tako.");
+    crate::output::muted("One-time sudo required to configure local DNS for *.tako.test.");
     crate::output::muted(&format!(
         "This writes {TAKO_RESOLVER_FILE} -> nameserver 127.0.0.1 port {port}."
     ));
@@ -637,7 +640,15 @@ fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::er
         return Err("local DNS resolver setup verification failed".into());
     }
 
-    crate::output::success("Local DNS resolver configured for *.tako.");
+    crate::output::success("Local DNS resolver configured for *.tako.test.");
+
+    // Remove legacy resolver files (.tako, .tako.local) that are no longer used.
+    for legacy in LEGACY_RESOLVER_FILES {
+        if std::path::Path::new(legacy).exists() {
+            let _ = sudo_run_checked(&["rm", "-f", legacy], &format!("removing legacy {legacy}"));
+        }
+    }
+
     Ok(())
 }
 
@@ -684,7 +695,7 @@ fn pf_conf_with_hook(pf_conf: &str) -> String {
 /// Returns true if the pf anchor file and pf.conf hook are in place.
 /// Rules written to /etc/pf.conf persist across reboots (pf loads them at boot).
 #[cfg(target_os = "macos")]
-fn pf_rules_active() -> bool {
+pub(crate) fn pf_rules_active() -> bool {
     let anchor_ok = std::fs::read_to_string(PF_ANCHOR_FILE)
         .map(|a| a == pf_anchor_content())
         .unwrap_or(false);
@@ -743,7 +754,7 @@ fn ensure_pf_forwarding() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn tcp_port_open(ip: &str, port: u16, timeout_ms: u64) -> bool {
+pub(crate) fn tcp_port_open(ip: &str, port: u16, timeout_ms: u64) -> bool {
     use std::net::{Ipv4Addr, SocketAddr};
     let Ok(ipv4) = ip.parse::<Ipv4Addr>() else {
         return false;
@@ -869,7 +880,7 @@ fn restart_required_for_requested_listen(
     }
 }
 
-fn doctor_dev_server_lines(
+pub(crate) fn doctor_dev_server_lines(
     listen: &str,
     port: u64,
     local_443_forwarding: bool,
@@ -895,7 +906,7 @@ fn doctor_dev_server_lines(
 }
 
 #[cfg(any(target_os = "macos", test))]
-fn doctor_local_forwarding_preflight_lines(
+pub(crate) fn doctor_local_forwarding_preflight_lines(
     advertised_ip: &str,
     pf_active: bool,
     https_tcp_ok: bool,
@@ -924,14 +935,7 @@ fn doctor_local_forwarding_preflight_lines(
     ]
 }
 
-fn doctor_dev_server_unavailable_lines() -> Vec<String> {
-    vec![
-        "dev-server:".to_string(),
-        "  status: not running".to_string(),
-    ]
-}
-
-fn is_dev_server_unavailable_error_message(message: &str) -> bool {
+pub(crate) fn is_dev_server_unavailable_error_message(message: &str) -> bool {
     let normalized = message.to_ascii_lowercase();
     normalized.contains("connection refused")
         || normalized.contains("no such file or directory")
@@ -950,7 +954,7 @@ async fn tcp_probe(addr: (&str, u16), timeout_ms: u64) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn system_resolver_ipv4(hostname: &str) -> Option<String> {
+pub(crate) fn system_resolver_ipv4(hostname: &str) -> Option<String> {
     use std::net::ToSocketAddrs;
 
     (hostname, 443)
@@ -963,7 +967,7 @@ fn system_resolver_ipv4(hostname: &str) -> Option<String> {
 }
 
 #[cfg(target_os = "macos")]
-fn local_dns_resolver_values() -> Option<(String, u16)> {
+pub(crate) fn local_dns_resolver_values() -> Option<(String, u16)> {
     let contents = std::fs::read_to_string(TAKO_RESOLVER_FILE).ok()?;
     let (nameserver, port) = parse_local_dns_resolver(&contents);
     Some((nameserver?, port?))
@@ -976,15 +980,15 @@ mod tests {
         child_log_level_and_message, compute_dev_hosts, compute_display_routes, dev_idle_timeout,
         dev_initial_instance_count, dev_server_ready_log, dev_server_starting_log,
         dev_server_tls_names_path_for_home, dev_server_tls_paths_for_home, dev_startup_lines,
-        doctor_dev_server_lines, doctor_dev_server_unavailable_lines,
-        doctor_local_forwarding_preflight_lines, ensure_dev_server_tls_material_for_home,
-        ensure_local_dns_resolver_configured, host_and_port_from_url,
-        is_dev_server_unavailable_error_message, local_dns_resolver_contents,
-        local_https_probe_error, parse_local_dns_resolver, parse_stored_log_line,
-        pf_anchor_content, pf_conf_with_hook, port_from_listen, preferred_public_url,
-        replay_and_follow_logs, resolve_dev_preset_ref, resolve_dev_run_command,
-        resolve_effective_dev_build_adapter, restart_required_for_requested_listen,
-        route_hostname_matches, should_drop_child_log_line, tcp_probe, trim_child_log_message,
+        doctor_dev_server_lines, doctor_local_forwarding_preflight_lines,
+        ensure_dev_server_tls_material_for_home, ensure_local_dns_resolver_configured,
+        host_and_port_from_url, is_dev_server_unavailable_error_message,
+        local_dns_resolver_contents, local_https_probe_error, parse_local_dns_resolver,
+        parse_stored_log_line, pf_anchor_content, pf_conf_with_hook, port_from_listen,
+        preferred_public_url, replay_and_follow_logs, resolve_dev_preset_ref,
+        resolve_dev_run_command, resolve_effective_dev_build_adapter,
+        restart_required_for_requested_listen, route_hostname_matches, should_drop_child_log_line,
+        tcp_probe, trim_child_log_message,
     };
     use crate::build::{BuildAdapter, parse_and_validate_preset};
     use crate::config::TakoToml;
@@ -1104,9 +1108,9 @@ dev = ["bun", "run", "dev"]
             "app",
             "fake",
             Path::new("index.ts"),
-            "https://app.tako:8443/",
+            "https://app.tako.test:8443/",
         );
-        assert_eq!(lines[0], "https://app.tako:8443/");
+        assert_eq!(lines[0], "https://app.tako.test:8443/");
         assert!(lines.iter().all(|l| !l.contains("Tako Dev Server")));
     }
 
@@ -1117,7 +1121,7 @@ dev = ["bun", "run", "dev"]
             "app",
             "fake",
             Path::new("index.ts"),
-            "https://app.tako:8443/",
+            "https://app.tako.test:8443/",
         );
         assert!(lines.iter().any(|l| l == "Tako Dev Server"));
         assert!(lines.iter().any(|l| l.starts_with("URL:")));
@@ -1532,12 +1536,12 @@ dev = ["bun", "run", "dev"]
     #[test]
     fn host_and_port_parser_handles_default_and_explicit_ports() {
         assert_eq!(
-            host_and_port_from_url("https://app.tako/"),
-            Some(("app.tako".to_string(), 443))
+            host_and_port_from_url("https://app.tako.test/"),
+            Some(("app.tako.test".to_string(), 443))
         );
         assert_eq!(
-            host_and_port_from_url("https://app.tako:47831/"),
-            Some(("app.tako".to_string(), 47831))
+            host_and_port_from_url("https://app.tako.test:47831/"),
+            Some(("app.tako.test".to_string(), 47831))
         );
     }
 
@@ -1556,17 +1560,6 @@ dev = ["bun", "run", "dev"]
         assert!(
             lines.iter().any(|line| line == "  port: 47831"),
             "doctor output should keep explicit port when listen does not include one: {lines:?}"
-        );
-    }
-
-    #[test]
-    fn doctor_reports_not_running_when_dev_server_is_unavailable() {
-        assert_eq!(
-            doctor_dev_server_unavailable_lines(),
-            vec![
-                "dev-server:".to_string(),
-                "  status: not running".to_string()
-            ]
         );
     }
 
@@ -1594,13 +1587,13 @@ dev = ["bun", "run", "dev"]
 
     #[test]
     fn local_https_probe_error_mentions_interception_when_server_directly_reachable() {
-        let msg = local_https_probe_error("bun-example.tako", 47831, "timed out", true);
+        let msg = local_https_probe_error("bun-example.tako.test", 47831, "timed out", true);
         assert!(msg.contains("intercepted") || msg.contains("listener"));
     }
 
     #[test]
     fn local_https_probe_error_mentions_pf_when_server_not_directly_reachable() {
-        let msg = local_https_probe_error("bun-example.tako", 47831, "timed out", false);
+        let msg = local_https_probe_error("bun-example.tako.test", 47831, "timed out", false);
         assert!(msg.contains("pf"));
     }
 
@@ -1699,7 +1692,7 @@ dev = ["bun", "run", "dev"]
         let names = std::fs::read_to_string(names_path).unwrap();
         assert!(cert.contains("BEGIN CERTIFICATE"));
         assert!(key.contains("BEGIN PRIVATE KEY"));
-        assert!(names.contains("*.demo.tako"));
+        assert!(names.contains("*.demo.tako.test"));
     }
 
     #[test]
@@ -1713,10 +1706,10 @@ dev = ["bun", "run", "dev"]
         std::fs::write(
             &names_path,
             r#"[
-  "*.tako",
-  "tako",
-  "demo.tako",
-  "*.demo.tako"
+  "*.tako.test",
+  "tako.test",
+  "demo.tako.test",
+  "*.demo.tako.test"
 ]"#,
         )
         .unwrap();
@@ -1749,7 +1742,7 @@ dev = ["bun", "run", "dev"]
             std::fs::read_to_string(dev_server_tls_names_path_for_home(temp.path())).unwrap();
         assert!(cert.contains("BEGIN CERTIFICATE"));
         assert!(key.contains("BEGIN PRIVATE KEY"));
-        assert!(names.contains("*.demo.tako"));
+        assert!(names.contains("*.demo.tako.test"));
     }
 
     #[test]
@@ -1765,8 +1758,8 @@ dev = ["bun", "run", "dev"]
 
         let names =
             std::fs::read_to_string(dev_server_tls_names_path_for_home(temp.path())).unwrap();
-        assert!(names.contains("*.alpha.tako"));
-        assert!(names.contains("*.beta.tako"));
+        assert!(names.contains("*.alpha.tako.test"));
+        assert!(names.contains("*.beta.tako.test"));
     }
 
     #[test]
@@ -1808,273 +1801,136 @@ dev = ["bun", "run", "dev"]
     #[test]
     fn prefers_local_url_when_80_443_forwarding_is_detected() {
         let url = preferred_public_url(
-            "bun-example.tako",
-            "https://bun-example.tako:47831/",
+            "bun-example.tako.test",
+            "https://bun-example.tako.test:47831/",
             47831,
             443,
         );
-        assert_eq!(url, "https://bun-example.tako/");
+        assert_eq!(url, "https://bun-example.tako.test/");
     }
 
     #[test]
     fn prefers_daemon_url_when_display_and_listen_ports_match() {
         let url = preferred_public_url(
-            "bun-example.tako",
-            "https://bun-example.tako:47831/",
+            "bun-example.tako.test",
+            "https://bun-example.tako.test:47831/",
             47831,
             47831,
         );
-        assert_eq!(url, "https://bun-example.tako:47831/");
+        assert_eq!(url, "https://bun-example.tako.test:47831/");
     }
 
     #[test]
     fn display_routes_always_includes_default() {
         let cfg = TakoToml::default();
-        let routes = compute_display_routes(&cfg, "app.tako");
-        assert_eq!(routes, vec!["app.tako"]);
+        let routes = compute_display_routes(&cfg, "app.tako.test");
+        assert_eq!(routes, vec!["app.tako.test"]);
     }
 
     #[test]
     fn display_routes_includes_default_plus_all_configured() {
-        let cfg =
-            TakoToml::parse("[envs.development]\nroutes = [\"app.tako/bun\", \"*.app.tako\"]\n")
-                .unwrap();
-        let routes = compute_display_routes(&cfg, "app.tako");
-        assert_eq!(routes, vec!["app.tako", "app.tako/bun", "*.app.tako"]);
+        let cfg = TakoToml::parse(
+            "[envs.development]\nroutes = [\"app.tako.test/bun\", \"*.app.tako.test\"]\n",
+        )
+        .unwrap();
+        let routes = compute_display_routes(&cfg, "app.tako.test");
+        assert_eq!(
+            routes,
+            vec!["app.tako.test", "app.tako.test/bun", "*.app.tako.test"]
+        );
     }
 
     #[test]
     fn display_routes_deduplicates_default_when_route_matches() {
-        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.tako\"]\n").unwrap();
-        let routes = compute_display_routes(&cfg, "app.tako");
-        assert_eq!(routes, vec!["app.tako"]);
+        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.tako.test\"]\n").unwrap();
+        let routes = compute_display_routes(&cfg, "app.tako.test");
+        assert_eq!(routes, vec!["app.tako.test"]);
     }
 
     #[test]
     fn falls_back_to_default_host_when_development_routes_are_missing() {
         let cfg = TakoToml::default();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
-        assert_eq!(hosts, vec!["app.tako".to_string()]);
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        assert_eq!(hosts, vec!["app.tako.test".to_string()]);
     }
 
     #[test]
     fn falls_back_to_default_host_when_development_routes_are_empty() {
         let cfg = TakoToml::parse("[envs.development]\nroutes = []\n").unwrap();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
-        assert_eq!(hosts, vec!["app.tako".to_string()]);
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        assert_eq!(hosts, vec!["app.tako.test".to_string()]);
     }
 
     #[test]
     fn always_includes_default_host_with_explicit_routes() {
-        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"api.app.tako\"]\n").unwrap();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
-        assert_eq!(hosts, vec!["app.tako", "api.app.tako"]);
+        let cfg =
+            TakoToml::parse("[envs.development]\nroutes = [\"api.app.tako.test\"]\n").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        assert_eq!(hosts, vec!["app.tako.test", "api.app.tako.test"]);
     }
 
     #[test]
     fn always_includes_default_host_with_wildcard_routes() {
-        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"*.app.tako\"]\n").unwrap();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
-        assert_eq!(hosts, vec!["app.tako", "*.app.tako"]);
+        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"*.app.tako.test\"]\n").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        assert_eq!(hosts, vec!["app.tako.test", "*.app.tako.test"]);
     }
 
     #[test]
     fn default_host_deduped_when_already_in_routes() {
-        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.tako\"]\n").unwrap();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
-        assert_eq!(hosts, vec!["app.tako"]);
+        let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.tako.test\"]\n").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        assert_eq!(hosts, vec!["app.tako.test"]);
     }
 
     /// Both routing and display include the full route patterns (host + path).
     #[test]
     fn dev_hosts_now_include_paths_and_wildcards() {
         let cfg = TakoToml::parse(
-            "[envs.development]\nroutes = [\"app.tako\", \"app.tako/api\", \"*.app.tako\"]\n",
+            "[envs.development]\nroutes = [\"app.tako.test\", \"app.tako.test/api\", \"*.app.tako.test\"]\n",
         )
         .unwrap();
-        let display = compute_display_routes(&cfg, "app.tako");
-        let routing = compute_dev_hosts("app", &cfg, "app.tako").unwrap();
+        let display = compute_display_routes(&cfg, "app.tako.test");
+        let routing = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
 
-        assert_eq!(display, vec!["app.tako", "app.tako/api", "*.app.tako"]);
+        assert_eq!(
+            display,
+            vec!["app.tako.test", "app.tako.test/api", "*.app.tako.test"]
+        );
         // Routing now carries full route patterns including paths.
-        assert_eq!(routing, vec!["app.tako", "app.tako/api", "*.app.tako"]);
+        assert_eq!(
+            routing,
+            vec!["app.tako.test", "app.tako.test/api", "*.app.tako.test"]
+        );
     }
 
     #[test]
     fn route_hostname_matches_exact() {
-        assert!(route_hostname_matches("app.tako", "app.tako"));
-        assert!(!route_hostname_matches("app.tako", "other.tako"));
+        assert!(route_hostname_matches("app.tako.test", "app.tako.test"));
+        assert!(!route_hostname_matches("app.tako.test", "other.tako.test"));
     }
 
     #[test]
     fn route_hostname_matches_with_path() {
-        assert!(route_hostname_matches("app.tako/api", "app.tako"));
-        assert!(!route_hostname_matches("app.tako/api", "other.tako"));
+        assert!(route_hostname_matches("app.tako.test/api", "app.tako.test"));
+        assert!(!route_hostname_matches(
+            "app.tako.test/api",
+            "other.tako.test"
+        ));
     }
 
     #[test]
     fn route_hostname_matches_wildcard() {
-        assert!(route_hostname_matches("*.app.tako", "foo.app.tako"));
-        assert!(!route_hostname_matches("*.app.tako", "app.tako"));
-        assert!(!route_hostname_matches("*.app.tako", "other.tako"));
+        assert!(route_hostname_matches(
+            "*.app.tako.test",
+            "foo.app.tako.test"
+        ));
+        assert!(!route_hostname_matches("*.app.tako.test", "app.tako.test"));
+        assert!(!route_hostname_matches(
+            "*.app.tako.test",
+            "other.tako.test"
+        ));
     }
-}
-
-pub async fn doctor(dns: bool) -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(not(target_os = "macos"))]
-    let _ = dns;
-
-    let info = match crate::dev_server_client::info().await {
-        Ok(info) => info,
-        Err(e) => {
-            let message = e.to_string();
-            if is_dev_server_unavailable_error_message(&message) {
-                for line in doctor_dev_server_unavailable_lines() {
-                    println!("{line}");
-                }
-                crate::output::muted(
-                    "Run `tako dev` to start the local dev daemon, then re-run `tako doctor`.",
-                );
-                return Ok(());
-            }
-            return Err(e);
-        }
-    };
-
-    let i = info.get("info").unwrap_or(&serde_json::Value::Null);
-    let listen = i
-        .get("listen")
-        .and_then(|v| v.as_str())
-        .unwrap_or("(unknown)");
-    let port = i.get("port").and_then(|v| v.as_u64()).unwrap_or(0);
-    let local_dns_enabled = i
-        .get("local_dns_enabled")
-        .and_then(|b| b.as_bool())
-        .unwrap_or(false);
-    let local_dns_port = i
-        .get("local_dns_port")
-        .and_then(|v| v.as_u64())
-        .and_then(|v| u16::try_from(v).ok())
-        .unwrap_or(LOCAL_DNS_PORT);
-    let advertised_ip = i
-        .get("advertised_ip")
-        .and_then(|v| v.as_str())
-        .unwrap_or("127.0.0.1");
-    #[cfg(target_os = "macos")]
-    let (pf_active, https_tcp_ok, http_tcp_ok, local_443_forwarding, local_80_forwarding) = {
-        let pf_active = pf_rules_active();
-        let https_tcp_ok = tcp_port_open(advertised_ip, 443, 150);
-        let http_tcp_ok = tcp_port_open(advertised_ip, 80, 150);
-        (
-            pf_active,
-            https_tcp_ok,
-            http_tcp_ok,
-            https_tcp_ok,
-            http_tcp_ok,
-        )
-    };
-    #[cfg(not(target_os = "macos"))]
-    let (local_443_forwarding, local_80_forwarding) = (false, false);
-
-    for line in doctor_dev_server_lines(
-        listen,
-        port,
-        local_443_forwarding,
-        local_80_forwarding,
-        local_dns_enabled,
-        local_dns_port,
-    ) {
-        println!("{line}");
-    }
-
-    #[cfg(target_os = "macos")]
-    {
-        println!();
-        for line in doctor_local_forwarding_preflight_lines(
-            advertised_ip,
-            pf_active,
-            https_tcp_ok,
-            http_tcp_ok,
-        ) {
-            println!("{line}");
-        }
-    }
-
-    let apps = crate::dev_server_client::list_apps()
-        .await
-        .unwrap_or_default();
-    if !apps.is_empty() {
-        println!();
-        println!("apps:");
-        for a in &apps {
-            let hosts = if a.hosts.is_empty() {
-                "(default)".to_string()
-            } else {
-                a.hosts.join(",")
-            };
-            if let Some(pid) = a.pid {
-                println!(
-                    "- {}  hosts={}  port={}  pid={}",
-                    a.app_name, hosts, a.upstream_port, pid
-                );
-            } else {
-                println!(
-                    "- {}  hosts={}  port={}",
-                    a.app_name, hosts, a.upstream_port
-                );
-            }
-        }
-    }
-
-    // Best-effort local DNS checks (macOS only).
-    #[cfg(target_os = "macos")]
-    {
-        if dns {
-            println!();
-            println!("local-dns:");
-
-            match local_dns_resolver_values() {
-                Some((nameserver, port)) if nameserver == "127.0.0.1" && port == local_dns_port => {
-                    println!(
-                        "- resolver {} -> nameserver {} port {} (ok)",
-                        TAKO_RESOLVER_FILE, nameserver, port
-                    );
-                }
-                Some((nameserver, port)) => {
-                    println!(
-                        "- resolver {} -> nameserver {} port {} (conflict; expected 127.0.0.1:{})",
-                        TAKO_RESOLVER_FILE, nameserver, port, local_dns_port
-                    );
-                }
-                None => {
-                    println!("- resolver {} -> (missing)", TAKO_RESOLVER_FILE);
-                }
-            }
-
-            for a in &apps {
-                let hosts = if a.hosts.is_empty() {
-                    vec![crate::dev::get_tako_domain(&a.app_name)]
-                } else {
-                    a.hosts.clone()
-                };
-                for host in hosts.into_iter().filter(|h| h.ends_with(".tako")) {
-                    match system_resolver_ipv4(&host) {
-                        Some(ip) if ip == "127.0.0.1" => {
-                            println!("- {} -> {} (ok)", host, ip);
-                        }
-                        Some(ip) => {
-                            println!("- {} -> {} (conflict; expected 127.0.0.1)", host, ip);
-                        }
-                        None => {
-                            println!("- {} -> (no answer)", host);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(())
 }
 
 /// Run the dev server
@@ -2546,7 +2402,9 @@ pub async fn run(
             .and_then(|b| b.as_bool())
             .unwrap_or(false);
         if !local_dns_enabled {
-            crate::output::warning("Local DNS is unavailable; .tako hostnames may not resolve.");
+            crate::output::warning(
+                "Local DNS is unavailable; .tako.test hostnames may not resolve.",
+            );
             crate::output::muted("Run `tako doctor` for diagnostics.");
         }
     }

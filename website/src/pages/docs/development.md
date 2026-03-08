@@ -7,7 +7,7 @@ current: development
 
 # Development (Local)
 
-This guide covers local development with Tako: trusted HTTPS, `.tako` URLs, and what `tako dev` is doing behind the scenes.
+This guide covers local development with Tako: trusted HTTPS, `.tako.test` URLs, and what `tako dev` is doing behind the scenes.
 
 CLI output follows shared conventions: concise by default, technical detail with `--verbose`, and spinner progress for long interactive steps.
 
@@ -44,9 +44,9 @@ From an app directory:
 tako dev
 ```
 
-`tako dev` resolves app name from top-level `name` when set, otherwise from sanitized project directory name. This name is used for `{app}.tako`.
+`tako dev` resolves app name from top-level `name` when set, otherwise from sanitized project directory name. This name is used for `{app}.tako.test`.
 
-If `[envs.development]` omits routes, `tako dev` defaults to `{app}.tako`.
+If `[envs.development]` omits routes, `tako dev` defaults to `{app}.tako.test`.
 
 Useful commands:
 
@@ -57,15 +57,15 @@ Useful commands:
 
 Default URL:
 
-- macOS (with local forwarding): `https://{app}.tako/`
-- Other platforms: `https://{app}.tako:47831/`
+- macOS (with local forwarding): `https://{app}.tako.test/`
+- Other platforms: `https://{app}.tako.test:47831/`
 
 ## Vite Apps
 
 If your app runs `vite dev` under `tako dev` and uses `tako.sh/vite`:
 
 - configure Vite with `import { tako } from "tako.sh/vite"` and `plugins: [tako()]`
-- the plugin adds `.tako` to Vite `server.allowedHosts` so local Tako hosts are accepted
+- the plugin adds `.tako.test` to Vite `server.allowedHosts` so local Tako hosts are accepted
 - when `PORT` is set by `tako dev`, Vite binds to `127.0.0.1:$PORT` with `strictPort: true`
 
 ## Local Workflow Checklist
@@ -119,10 +119,10 @@ When deploy targets private/local route hostnames (for example `*.local`), `tako
 If no cert matches an SNI hostname yet, `tako-server` serves a fallback self-signed default cert so HTTPS still completes and unmatched hosts/routes return `404`.
 Remote edge proxy response caching stores proxied `GET`/`HEAD` responses only when response `Cache-Control` / `Expires` headers explicitly allow caching.
 
-Name resolution for `.tako` is done via local split DNS:
+Name resolution for `.tako.test` is done via local split DNS:
 
-- `tako dev` installs `/etc/resolver/tako` (one-time sudo) pointing to `127.0.0.1:53535`.
-- `tako-dev-server` answers `*.tako` queries for registered app hosts and maps them to loopback.
+- `tako dev` installs `/etc/resolver/tako.test` (one-time sudo) pointing to `127.0.0.1:53535`.
+- `tako-dev-server` answers `*.tako.test` queries for registered app hosts and maps them to loopback.
 
 ## Environment Variables
 
@@ -145,7 +145,7 @@ These are the environment variables Tako components read and/or set.
 `tako dev` configures this automatically when missing:
 
 ```text
-/etc/resolver/tako
+/etc/resolver/tako.test
   nameserver 127.0.0.1
   port 53535
 ```
@@ -160,6 +160,6 @@ tako doctor
 
 If resolution fails:
 
-- Verify `/etc/resolver/tako` exists and points to `127.0.0.1:53535`.
+- Verify `/etc/resolver/tako.test` exists and points to `127.0.0.1:53535`.
 - Ensure `tako dev` is running and your app is listed in `tako doctor`.
 - Confirm no local process is conflicting on UDP `127.0.0.1:53535`.

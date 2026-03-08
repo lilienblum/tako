@@ -6,10 +6,10 @@
 //! - Optional path suffix allowed: `api.example.com/admin/*`
 //!
 //! Development-Specific Rules (`[envs.development]`):
-//! - Routes are optional in config; if omitted, `tako dev` defaults to `{app-name}.tako`
-//! - Hostname must end with `.tako` (the local dev TLD)
-//! - Examples valid: `"my-app.tako"`, `"*.my-app.tako"`, `"api.my-app.tako"`, `"shared.tako/api"`
-//! - Examples invalid: `"example.com"` (not .tako domain), `"/api/*"` (path-only)
+//! - Routes are optional in config; if omitted, `tako dev` defaults to `{app-name}.tako.test`
+//! - Hostname must end with `.tako.test` (the local dev TLD, RFC 6761)
+//! - Examples valid: `"my-app.tako.test"`, `"*.my-app.tako.test"`, `"api.my-app.tako.test"`, `"shared.tako.test/api"`
+//! - Examples invalid: `"example.com"` (not .tako.test domain), `"/api/*"` (path-only)
 
 use thiserror::Error;
 
@@ -24,7 +24,9 @@ pub enum RouteValidationError {
     #[error("Invalid route pattern: '{0}'. {1}")]
     InvalidPattern(String, String),
 
-    #[error("Development route must use .tako domain: '{0}'. Hostname must end with '.tako'")]
+    #[error(
+        "Development route must use .tako.test domain: '{0}'. Hostname must end with '.tako.test'"
+    )]
     InvalidDevDomain(String, String),
 
     #[error("Empty route is not allowed")]
@@ -65,7 +67,7 @@ pub fn validate_route(route: &str) -> RouteResult<()> {
 /// Validates a route pattern for development environment
 ///
 /// Additional rules for development:
-/// - Hostname must end with `.tako` (the local dev TLD)
+/// - Hostname must end with `.tako.test` (the local dev TLD)
 pub fn validate_dev_route(route: &str, _app_name: &str) -> RouteResult<()> {
     // First, apply general validation
     validate_route(route)?;
@@ -363,17 +365,17 @@ mod tests {
 
     #[test]
     fn test_validate_dev_route_accepts_any_tako_hostname() {
-        // Any .tako hostname is allowed, not just app-name.tako.
-        validate_dev_route("my-app.tako", "my-app").unwrap();
-        validate_dev_route("other.tako", "my-app").unwrap();
-        validate_dev_route("shared.tako/api", "my-app").unwrap();
-        validate_dev_route("*.my-app.tako", "my-app").unwrap();
-        validate_dev_route("api.my-app.tako", "my-app").unwrap();
+        // Any .tako.test hostname is allowed, not just app-name.tako.test.
+        validate_dev_route("my-app.tako.test", "my-app").unwrap();
+        validate_dev_route("other.tako.test", "my-app").unwrap();
+        validate_dev_route("shared.tako.test/api", "my-app").unwrap();
+        validate_dev_route("*.my-app.tako.test", "my-app").unwrap();
+        validate_dev_route("api.my-app.tako.test", "my-app").unwrap();
     }
 
     #[test]
     fn test_default_dev_route_uses_app_name() {
-        assert_eq!(default_dev_route("dashboard"), "dashboard.tako");
+        assert_eq!(default_dev_route("dashboard"), "dashboard.tako.test");
     }
 
     #[test]

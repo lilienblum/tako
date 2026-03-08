@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn register_and_get_app() {
         let (_tmp, store) = temp_store();
-        let hosts = vec!["my-app.tako".to_string()];
+        let hosts = vec!["my-app.tako.test".to_string()];
         let cmd = vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()];
         let env = HashMap::from([("NODE_ENV".to_string(), "development".to_string())]);
 
@@ -359,8 +359,8 @@ mod tests {
     #[test]
     fn register_upserts_on_conflict() {
         let (_tmp, store) = temp_store();
-        let hosts1 = vec!["old.tako".to_string()];
-        let hosts2 = vec!["new.tako".to_string()];
+        let hosts1 = vec!["old.tako.test".to_string()];
+        let hosts2 = vec!["new.tako.test".to_string()];
         let cmd = vec!["bun".to_string()];
         let env = HashMap::new();
 

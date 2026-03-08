@@ -133,7 +133,7 @@ pub struct DevInfo {
     /// Where the daemon proxy is currently listening.
     pub listen: String,
     pub port: u16,
-    /// IP currently advertised for `.tako` hostnames.
+    /// IP currently advertised for `.tako.test` hostnames.
     pub advertised_ip: String,
     #[serde(default)]
     pub local_dns_enabled: bool,
@@ -183,7 +183,7 @@ mod tests {
 
         let resp = Response::Event {
             event: DevEvent::RequestStarted {
-                host: "a.tako".to_string(),
+                host: "a.tako.test".to_string(),
                 path: "/api".to_string(),
             },
         };
@@ -192,7 +192,7 @@ mod tests {
 
         let resp = Response::Event {
             event: DevEvent::RequestFinished {
-                host: "a.tako".to_string(),
+                host: "a.tako.test".to_string(),
                 path: "/api".to_string(),
             },
         };
@@ -225,7 +225,10 @@ mod tests {
         let req = Request::RegisterApp {
             project_dir: "/home/user/proj".to_string(),
             app_name: "my-app".to_string(),
-            hosts: vec!["my-app.tako".to_string(), "my-app.tako/api".to_string()],
+            hosts: vec![
+                "my-app.tako.test".to_string(),
+                "my-app.tako.test/api".to_string(),
+            ],
             upstream_port: 3000,
             command: vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()],
             env: std::collections::HashMap::from([(
@@ -241,7 +244,7 @@ mod tests {
         let resp = Response::AppRegistered {
             app_name: "my-app".to_string(),
             project_dir: "/home/user/proj".to_string(),
-            url: "https://my-app.tako/".to_string(),
+            url: "https://my-app.tako.test/".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
@@ -305,7 +308,7 @@ mod tests {
             apps: vec![RegisteredAppInfo {
                 project_dir: "/proj".to_string(),
                 app_name: "app".to_string(),
-                hosts: vec!["app.tako".to_string()],
+                hosts: vec!["app.tako.test".to_string()],
                 upstream_port: 3000,
                 status: "running".to_string(),
                 pid: Some(111),
@@ -359,13 +362,13 @@ mod tests {
     #[test]
     fn serde_event_defaults_path_to_empty_for_older_payloads() {
         // Old dev-server sends RequestStarted without path field.
-        let json = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.tako"}}"#;
+        let json = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.tako.test"}}"#;
         let resp: Response = serde_json::from_str(json).unwrap();
         match resp {
             Response::Event {
                 event: DevEvent::RequestStarted { host, path },
             } => {
-                assert_eq!(host, "a.tako");
+                assert_eq!(host, "a.tako.test");
                 assert_eq!(path, "");
             }
             other => panic!("unexpected: {other:?}"),
@@ -375,11 +378,11 @@ mod tests {
     #[test]
     fn serde_register_app_ignores_legacy_display_routes_field() {
         // Old clients may still send display_routes; new server ignores it.
-        let json = r#"{"type":"RegisterApp","project_dir":"/p","app_name":"a","hosts":["a.tako"],"display_routes":["a.tako"],"upstream_port":3000,"command":["node"],"env":{},"log_path":"/l"}"#;
+        let json = r#"{"type":"RegisterApp","project_dir":"/p","app_name":"a","hosts":["a.tako.test"],"display_routes":["a.tako.test"],"upstream_port":3000,"command":["node"],"env":{},"log_path":"/l"}"#;
         let req: Request = serde_json::from_str(json).unwrap();
         match req {
             Request::RegisterApp { hosts, .. } => {
-                assert_eq!(hosts, vec!["a.tako"]);
+                assert_eq!(hosts, vec!["a.tako.test"]);
             }
             other => panic!("unexpected: {other:?}"),
         }

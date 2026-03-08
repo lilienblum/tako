@@ -28,25 +28,25 @@ Baseline checks:
 1. `tako doctor`
 2. `tako dev`
 3. Open:
-   - macOS: `https://{app}.tako/`
-   - non-macOS: `https://{app}.tako:47831/`
+   - macOS: `https://{app}.tako.test/`
+   - non-macOS: `https://{app}.tako.test:47831/`
 
 If local URL fails:
 
 - Ensure `tako dev` is currently running.
 - Re-run `tako doctor` and fix preflight issues it reports.
-- On macOS, verify `/etc/resolver/tako` points to `127.0.0.1:53535`.
+- On macOS, verify `/etc/resolver/tako.test` points to `127.0.0.1:53535`.
 
 Important local behavior:
 
 - `tako dev` uses fixed HTTPS port `127.0.0.1:47831`.
-- On macOS, Tako configures local forwarding and split DNS so you can use `https://{app}.tako/` without port suffix.
+- On macOS, Tako configures local forwarding and split DNS so you can use `https://{app}.tako.test/` without port suffix.
 - On first trust/setup flow, elevated access may be required for local CA trust + forwarding setup.
 - If `tako dev` says local forwarding looks inactive, read the diagnostics printed right before sudo: they call out missing pf rules, runtime pf reset (common after reboot), or local listeners on `127.0.0.1:80/443`.
 
 Config-related local failures:
 
-- `[envs.development]` routes must be `{app}.tako` or subdomains.
+- `[envs.development]` routes must be `{app}.tako.test` or subdomains.
 - Dev routing uses exact hostnames; wildcard host entries are ignored.
 - If configured dev routes contain no exact hostnames, `tako dev` fails validation.
 

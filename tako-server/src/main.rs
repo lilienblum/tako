@@ -313,7 +313,15 @@ impl ServerState {
             data_dir.join("runtime-state.sqlite3"),
         ));
         state_store.init()?;
+        // Always start in Normal mode. If the server was previously in
+        // Upgrading mode (e.g. Ctrl+C during upgrade), that upgrade is dead
+        // now — the CLI drives the upgrade over SSH, so a fresh process
+        // means no upgrade is in progress.
         let server_mode = state_store.server_mode()?;
+        if server_mode == UpgradeMode::Upgrading {
+            state_store.set_server_mode(UpgradeMode::Normal)?;
+        }
+        let server_mode = UpgradeMode::Normal;
 
         Ok(Self {
             app_manager,
@@ -2971,7 +2979,7 @@ exit 1
     }
 
     #[tokio::test]
-    async fn server_mode_restores_from_store_on_boot() {
+    async fn server_mode_resets_upgrading_on_boot() {
         let temp = TempDir::new().unwrap();
         let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
             cert_dir: temp.path().join("certs"),
@@ -2986,8 +2994,9 @@ exit 1
             .unwrap();
         drop(state_a);
 
+        // On restart, stale Upgrading mode should be reset to Normal.
         let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
-        assert_eq!(*state_b.server_mode.read().await, UpgradeMode::Upgrading);
+        assert_eq!(*state_b.server_mode.read().await, UpgradeMode::Normal);
     }
 
     #[tokio::test]

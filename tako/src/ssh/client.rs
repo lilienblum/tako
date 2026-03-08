@@ -128,7 +128,7 @@ pub struct SshClient {
     /// SSH session handle (public for SFTP access)
     pub handle: Option<Handle<SshHandler>>,
 
-    tako_hello_checked: bool,
+    tako_hello_checked: std::sync::atomic::AtomicBool,
 }
 
 impl SshClient {
@@ -137,7 +137,7 @@ impl SshClient {
         Self {
             config,
             handle: None,
-            tako_hello_checked: false,
+            tako_hello_checked: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -460,6 +460,19 @@ impl SshClient {
         Ok(output)
     }
 
+    /// Upload file contents to a remote path by piping bytes through `cat`.
+    /// Uses the existing SSH connection (no SFTP subsystem needed).
+    pub async fn upload(&self, local_path: &Path, remote_path: &str) -> SshResult<()> {
+        let content = tokio::fs::read(local_path)
+            .await
+            .map_err(|_| SshError::FileNotFound(local_path.to_path_buf()))?;
+
+        self.exec_checked_with_stdin(&format!("cat > {remote_path}"), &content)
+            .await?;
+
+        Ok(())
+    }
+
     /// Execute a command and stream output to callbacks
     pub async fn exec_streaming<F, G>(
         &self,
@@ -642,7 +655,7 @@ impl SshClient {
     }
 
     /// Send a command to tako-server via unix socket
-    pub async fn tako_command(&mut self, json_command: &str) -> SshResult<String> {
+    pub async fn tako_command(&self, json_command: &str) -> SshResult<String> {
         self.ensure_tako_hello().await?;
         self.tako_command_raw(json_command).await
     }
@@ -680,8 +693,11 @@ impl SshClient {
         Ok(output.stdout)
     }
 
-    async fn ensure_tako_hello(&mut self) -> SshResult<()> {
-        if self.tako_hello_checked {
+    async fn ensure_tako_hello(&self) -> SshResult<()> {
+        if self
+            .tako_hello_checked
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
             return Ok(());
         }
 
@@ -719,7 +735,8 @@ impl SshClient {
             };
 
             Self::interpret_hello_response(&response).map_err(SshError::CommandFailed)?;
-            self.tako_hello_checked = true;
+            self.tako_hello_checked
+                .store(true, std::sync::atomic::Ordering::Relaxed);
             return Ok(());
         }
 
@@ -728,7 +745,7 @@ impl SshClient {
     }
 
     /// Get status of a specific app from tako-server
-    pub async fn tako_app_status(&mut self, app_name: &str) -> SshResult<Response> {
+    pub async fn tako_app_status(&self, app_name: &str) -> SshResult<Response> {
         let cmd = Command::Status {
             app: app_name.to_string(),
         };
@@ -741,7 +758,7 @@ impl SshClient {
     }
 
     /// List all apps from tako-server
-    pub async fn tako_list_apps(&mut self) -> SshResult<Response> {
+    pub async fn tako_list_apps(&self) -> SshResult<Response> {
         let cmd = Command::List;
         let json =
             serde_json::to_string(&cmd).map_err(|e| SshError::CommandFailed(e.to_string()))?;
@@ -752,7 +769,7 @@ impl SshClient {
     }
 
     /// List all configured routes from tako-server
-    pub async fn tako_routes(&mut self) -> SshResult<Response> {
+    pub async fn tako_routes(&self) -> SshResult<Response> {
         let cmd = Command::Routes;
         let json =
             serde_json::to_string(&cmd).map_err(|e| SshError::CommandFailed(e.to_string()))?;
@@ -763,7 +780,7 @@ impl SshClient {
     }
 
     /// Get runtime information from tako-server.
-    pub async fn tako_server_info(&mut self) -> SshResult<ServerRuntimeInfo> {
+    pub async fn tako_server_info(&self) -> SshResult<ServerRuntimeInfo> {
         let cmd = Command::ServerInfo;
         let json =
             serde_json::to_string(&cmd).map_err(|e| SshError::CommandFailed(e.to_string()))?;
@@ -772,7 +789,7 @@ impl SshClient {
     }
 
     /// Enter upgrading mode using a durable owner lock.
-    pub async fn tako_enter_upgrading(&mut self, owner: &str) -> SshResult<()> {
+    pub async fn tako_enter_upgrading(&self, owner: &str) -> SshResult<()> {
         let cmd = Command::EnterUpgrading {
             owner: owner.to_string(),
         };
@@ -783,7 +800,7 @@ impl SshClient {
     }
 
     /// Exit upgrading mode using the lock owner.
-    pub async fn tako_exit_upgrading(&mut self, owner: &str) -> SshResult<()> {
+    pub async fn tako_exit_upgrading(&self, owner: &str) -> SshResult<()> {
         let cmd = Command::ExitUpgrading {
             owner: owner.to_string(),
         };
@@ -825,7 +842,8 @@ impl SshClient {
     }
 
     pub fn clear_tako_hello_cache(&mut self) {
-        self.tako_hello_checked = false;
+        self.tako_hello_checked
+            .store(false, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Disconnect from the server

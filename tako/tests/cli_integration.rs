@@ -192,8 +192,8 @@ impl FakeDevServer {
                         "ListApps" => serde_json::json!({
                             "type": "Apps",
                             "apps": [
-                                { "app_name": "a", "hosts": ["a.tako"], "upstream_port": 1234, "pid": 111 },
-                                { "app_name": "b", "hosts": ["b.tako"], "upstream_port": 2222 }
+                                { "app_name": "a", "hosts": ["a.tako.test"], "upstream_port": 1234, "pid": 111 },
+                                { "app_name": "b", "hosts": ["b.tako.test"], "upstream_port": 2222 }
                             ]
                         }),
                         "Info" => serde_json::json!({
@@ -214,7 +214,7 @@ impl FakeDevServer {
                             "type": "AppRegistered",
                             "app_name": v.get("app_name").and_then(|a| a.as_str()).unwrap_or(""),
                             "project_dir": v.get("project_dir").and_then(|a| a.as_str()).unwrap_or(""),
-                            "url": format!("https://{}.tako/", v.get("app_name").and_then(|a| a.as_str()).unwrap_or("app")),
+                            "url": format!("https://{}.tako.test/", v.get("app_name").and_then(|a| a.as_str()).unwrap_or("app")),
                         }),
                         "SetAppStatus" => serde_json::json!({
                             "type": "AppStatusUpdated",
@@ -1639,13 +1639,10 @@ port = 22223
         // The deploy will fail after validation, but validation messages should still be shown.
         let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
 
-        // Should show validation succeeded before the later deploy failure.
+        // Should show validation warnings even though spinner output is suppressed.
         assert!(
-            combined.contains("Validation complete")
-                || combined.contains("Validate")
-                || combined.contains("Validating")
-                || combined.contains("OK"),
-            "Should show validation in progress: {}",
+            combined.contains("Validation"),
+            "Should show validation warnings: {}",
             combined
         );
     }

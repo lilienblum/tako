@@ -1,10 +1,9 @@
-use std::collections::HashMap;
-
 use crate::commands::server;
 use crate::config::ServersToml;
 use crate::output;
 use crate::ssh::{SshClient, SshConfig};
 use indicatif::ProgressBar;
+use std::collections::HashMap;
 use tako_core::{AppState, AppStatus, InstanceState, Response};
 use time::OffsetDateTime;
 
@@ -19,7 +18,7 @@ struct ServerStatusResult {
 }
 
 /// Global app status discovered on a specific server.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct GlobalAppStatusResult {
     app_name: String,
     env_name: String,
@@ -69,8 +68,9 @@ async fn run_global_status(servers: &ServersToml) -> Result<(), Box<dyn std::err
 
     let server_names = sorted_server_names(servers);
 
-    let mut server_results = collect_global_status_results(servers, &server_names).await?;
-    render_global_status(servers, &server_names, &mut server_results);
+    let mut results = collect_global_status_results(servers, &server_names).await?;
+
+    render_global_status(servers, &server_names, &mut results);
 
     Ok(())
 }
@@ -85,9 +85,7 @@ async fn collect_global_status_results(
     servers: &ServersToml,
     server_names: &[String],
 ) -> Result<HashMap<String, GlobalServerStatusResult>, Box<dyn std::error::Error>> {
-    // Spawn all tasks up-front so they run in parallel.
-    let mut tasks: HashMap<String, tokio::task::JoinHandle<GlobalServerStatusResult>> =
-        HashMap::new();
+    let mut join_set = tokio::task::JoinSet::new();
 
     for server_name in server_names {
         let Some(entry) = servers.get(server_name.as_str()) else {
@@ -97,18 +95,19 @@ async fn collect_global_status_results(
         let name = server_name.clone();
         let host = entry.host.clone();
         let port = entry.port;
-        let handle =
-            tokio::spawn(async move { query_global_server_status(&name, &host, port).await });
-        tasks.insert(server_name.clone(), handle);
+        join_set.spawn(async move {
+            let status = query_global_server_status(&name, &host, port).await;
+            (name, status)
+        });
     }
 
-    let total = tasks.len();
+    let total = join_set.len();
     let mut done = 0usize;
 
     let pb = if output::is_interactive() && total > 0 {
         let pb = ProgressBar::new_spinner();
         pb.set_style(output::spinner_style());
-        pb.set_message(format!("Fetching server status [0/{total}]"));
+        pb.set_message(format!("Retrieving [{done}/{total}]"));
         pb.enable_steady_tick(std::time::Duration::from_millis(80));
         output::hide_cursor();
         Some(pb)
@@ -118,32 +117,25 @@ async fn collect_global_status_results(
 
     let mut server_results: HashMap<String, GlobalServerStatusResult> = HashMap::new();
 
-    // Await in server_names order for consistent progress updates, but all tasks
-    // are running in parallel.
-    for server_name in server_names {
-        let Some(handle) = tasks.remove(server_name.as_str()) else {
-            continue;
-        };
-
-        let status = match handle.await {
-            Ok(status) => status,
-            Err(err) => GlobalServerStatusResult {
-                service_status: "unknown".to_string(),
-                server_version: None,
-                server_uptime: None,
-                process_uptime: None,
-                routes: Vec::new(),
-                apps: Vec::new(),
-                error: Some(format!("Status task failed: {}", err)),
-            },
+    while let Some(join_result) = join_set.join_next().await {
+        let (server_name, status) = match join_result {
+            Ok(pair) => pair,
+            Err(err) => {
+                done += 1;
+                if let Some(ref pb) = pb {
+                    pb.set_message(format!("Retrieving [{done}/{total}]"));
+                }
+                eprintln!("Status task panicked: {err}");
+                continue;
+            }
         };
 
         done += 1;
         if let Some(ref pb) = pb {
-            pb.set_message(format!("Fetching server status [{done}/{total}]"));
+            pb.set_message(format!("Retrieving [{done}/{total}]"));
         }
 
-        server_results.insert(server_name.clone(), status);
+        server_results.insert(server_name, status);
     }
 
     if let Some(pb) = pb {
@@ -208,19 +200,21 @@ fn render_global_status(
             continue;
         };
         let entry = servers.get(server_name.as_str());
-        let host_display = entry
-            .map(|e| {
-                if e.port != 22 {
-                    format!("{}:{}", e.host, e.port)
-                } else {
-                    e.host.clone()
-                }
-            })
-            .unwrap_or_default();
-
-        let header = format!("{} ({})", output::highlight(server_name), host_display);
 
         let mut entries: Vec<CardEntry> = Vec::new();
+
+        let header = output::highlight(server_name).to_string();
+
+        // If retrieval failed, only show the error.
+        if let Some(ref err) = global.error {
+            entries.push(CardEntry::Field {
+                label: "Error".into(),
+                value: err.clone(),
+                color: Some(CardColor::Error),
+            });
+            cards.push(Card { header, entries });
+            continue;
+        }
 
         // 1. Status
         let (status_label, status_color) = service_status_display(&global.service_status);
@@ -282,7 +276,7 @@ fn render_global_status(
 
         // 6. Apps section
         if !global.apps.is_empty() && !is_offline {
-            let mut apps = global.apps;
+            let mut apps = global.apps.clone();
             sort_global_apps(&mut apps);
             let mut children: Vec<(String, String, Option<CardColor>)> = Vec::new();
             for app in &apps {
@@ -300,8 +294,7 @@ fn render_global_status(
                         .instances
                         .iter()
                         .filter(|i| {
-                            i.state == InstanceState::Healthy
-                                || i.state == InstanceState::Ready
+                            i.state == InstanceState::Healthy || i.state == InstanceState::Ready
                         })
                         .count();
                     let total = app_status.instances.len();
@@ -315,11 +308,7 @@ fn render_global_status(
 
                     // Release
                     if !app_status.version.is_empty() {
-                        children.push((
-                            "  Release".into(),
-                            app_status.version.clone(),
-                            None,
-                        ));
+                        children.push(("  Release".into(), app_status.version.clone(), None));
                     }
                 }
 
@@ -348,19 +337,7 @@ fn render_global_status(
             });
         }
 
-        // 8. Error (if any)
-        if let Some(ref err) = global.error {
-            entries.push(CardEntry::Field {
-                label: "Error".into(),
-                value: err.clone(),
-                color: Some(CardColor::Error),
-            });
-        }
-
         // Compute max label width from this card.
-        // Fields render as:  "├ {label:<max_label}  {value}"  (prefix = 2 chars)
-        // Children render as: "│   {child:<max_label - 2}  {value}"  (prefix = 4 chars)
-        // So child labels need +2 to share the same value column.
         for e in &entries {
             match e {
                 CardEntry::Field { label, .. } => {
@@ -369,7 +346,7 @@ fn render_global_status(
                 CardEntry::Section { label, children } => {
                     max_label = max_label.max(label.len());
                     for (child_label, _, _) in children {
-                        max_label = max_label.max(child_label.len() + 2);
+                        max_label = max_label.max(child_label.len());
                     }
                 }
             }
@@ -379,55 +356,58 @@ fn render_global_status(
     }
 
     // Render
-    for (i, card) in cards.iter().enumerate() {
-        if card.entries.is_empty() {
-            println!("{}", card.header);
-        } else {
-            println!("{}", card.header);
-            let entry_count = card.entries.len();
-            let mut entry_idx = 0;
+    for card in &cards {
+        println!("{}", card.header);
+        if !card.entries.is_empty() {
             for entry in &card.entries {
-                entry_idx += 1;
-                let is_last_entry = entry_idx == entry_count;
                 match entry {
                     CardEntry::Field {
                         label,
                         value,
                         color,
                     } => {
-                        let branch = if is_last_entry { "└" } else { "├" };
                         let colored_value = colorize(value, *color);
-                        println!(
-                            "{} {:<width$}  {colored_value}",
-                            output::brand_muted(branch),
-                            output::brand_muted(label),
-                            width = max_label,
-                        );
+                        let padded = format!("{:<width$}", label, width = max_label);
+                        println!("{}  {colored_value}", output::brand_muted(&padded),);
                     }
                     CardEntry::Section { label, children } => {
-                        let branch = if is_last_entry { "└" } else { "├" };
-                        println!(
-                            "{} {}",
-                            output::brand_muted(branch),
-                            output::brand_muted(label),
-                        );
-                        let cont = if is_last_entry { " " } else { "│" };
-                        for (child_label, child_value, child_color) in children {
+                        println!("{}", output::brand_muted(label));
+
+                        for (ci, (child_label, child_value, child_color)) in
+                            children.iter().enumerate()
+                        {
                             let colored_value = colorize(child_value, *child_color);
-                            println!(
-                                "{}   {:<width$}  {colored_value}",
-                                output::brand_muted(cont),
-                                output::brand_muted(child_label),
-                                width = max_label - 2,
-                            );
+                            if child_label.starts_with("  ") {
+                                // Sub-item: first gets └, rest get space
+                                let is_first_sub = ci == 0 || !children[ci - 1].0.starts_with("  ");
+                                let branch = if is_first_sub { "└" } else { " " };
+                                let trimmed = child_label.trim_start();
+                                let padded = format!(
+                                    "{:<width$}",
+                                    trimmed,
+                                    width = max_label.saturating_sub(2)
+                                );
+                                println!(
+                                    "  {} {}  {colored_value}",
+                                    output::brand_muted(branch),
+                                    output::brand_muted(&padded),
+                                );
+                            } else {
+                                // Top-level child: └ prefix, or spaces if label is blank (continuation)
+                                let branch = if child_label.is_empty() { " " } else { "└" };
+                                let padded = format!("{:<width$}", child_label, width = max_label);
+                                println!(
+                                    "{} {}  {colored_value}",
+                                    output::brand_muted(branch),
+                                    output::brand_muted(&padded),
+                                );
+                            }
                         }
                     }
                 }
             }
         }
-        if i < cards.len() - 1 {
-            println!();
-        }
+        println!();
     }
 }
 
@@ -494,20 +474,14 @@ async fn query_global_server_status(
         };
     }
 
-    let server_version = client
-        .tako_version()
-        .await
-        .ok()
-        .flatten()
-        .map(normalize_server_version);
-
+    // Probe service status via socket — this is the fastest check.
     let service_status = match client.tako_status().await {
         Ok(status) => status,
         Err(e) => {
             let _ = client.disconnect().await;
             return GlobalServerStatusResult {
                 service_status: "unknown".to_string(),
-                server_version,
+                server_version: None,
                 server_uptime: None,
                 process_uptime: None,
                 routes: Vec::new(),
@@ -517,14 +491,9 @@ async fn query_global_server_status(
         }
     };
 
-    // Fetch server uptime via `uptime -s`
-    let server_uptime = fetch_server_uptime(&client).await;
-
-    // Fetch process uptime via server info PID
-    let process_uptime = fetch_process_uptime(&mut client).await;
-
-    // Fetch routes
-    let routes = fetch_routes(&mut client).await;
+    // Fetch version/uptime and routes in parallel to reduce SSH round-trips.
+    let ((server_version, server_uptime, process_uptime), routes) =
+        tokio::join!(fetch_version_and_uptimes(&client), fetch_routes(&client),);
 
     let mut effective_service_status = service_status.clone();
     let mut apps = Vec::new();
@@ -540,7 +509,7 @@ async fn query_global_server_status(
 
                     for app_name in app_names {
                         let status = query_connected_app_status(
-                            &mut client,
+                            &client,
                             &effective_service_status,
                             server_version.clone(),
                             &app_name,
@@ -553,22 +522,15 @@ async fn query_global_server_status(
                                 .map(|app| app.version.clone());
 
                             let env_name = if let Some(app_version) = app_version {
-                                build_status.deployed_at_unix_secs =
-                                    query_app_deployed_at_unix_secs(
-                                        &client,
-                                        &app_name,
-                                        &app_version,
-                                    )
-                                    .await;
-
-                                query_remote_app_env_for_server(
+                                let (deployed_at, env) = fetch_app_deploy_info(
                                     &client,
                                     &app_name,
                                     &app_version,
                                     server_name,
                                 )
-                                .await
-                                .unwrap_or_else(|| "unknown".to_string())
+                                .await;
+                                build_status.deployed_at_unix_secs = deployed_at;
+                                env.unwrap_or_else(|| "unknown".to_string())
                             } else {
                                 "unknown".to_string()
                             };
@@ -604,55 +566,79 @@ async fn query_global_server_status(
     }
 }
 
-async fn fetch_server_uptime(client: &SshClient) -> Option<String> {
-    let output = client.exec("uptime -s 2>/dev/null || true").await.ok()?;
-    let line = output.stdout.trim();
-    if line.is_empty() {
-        return None;
+/// Fetch server version, machine uptime, and process uptime in minimal
+/// round-trips.  We get the PID from `tako_server_info` (socket), then run a
+/// single SSH exec that retrieves `tako-server --version`, `uptime -s`, and
+/// the process start time all at once.
+async fn fetch_version_and_uptimes(
+    client: &SshClient,
+) -> (Option<String>, Option<String>, Option<String>) {
+    // Get PID from the socket (already connected).
+    let pid = client.tako_server_info().await.ok().map(|info| info.pid);
+
+    // Build a combined command that outputs three tagged lines.
+    let proc_stat_cmd = if let Some(pid) = pid {
+        format!(
+            "echo PROC:$(stat -c '%Y' /proc/{pid} 2>/dev/null || ps -o lstart= -p {pid} 2>/dev/null || echo -)"
+        )
+    } else {
+        "echo PROC:-".to_string()
+    };
+    let combined = format!(
+        "echo VER:$(tako-server --version 2>/dev/null || echo -); \
+         echo UP:$(uptime -s 2>/dev/null || echo -); \
+         {proc_stat_cmd}"
+    );
+
+    let output = match client.exec(&combined).await {
+        Ok(o) => o,
+        Err(_) => return (None, None, None),
+    };
+
+    let mut version = None;
+    let mut server_uptime = None;
+    let mut process_uptime = None;
+
+    for line in output.stdout.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("VER:") {
+            let val = val.trim();
+            if val != "-" && !val.is_empty() {
+                version = Some(normalize_server_version(val.to_string()));
+            }
+        } else if let Some(val) = line.strip_prefix("UP:") {
+            let val = val.trim();
+            if val != "-" && !val.is_empty() {
+                if let Some(since) = parse_uptime_since(val) {
+                    let elapsed = OffsetDateTime::now_utc() - since;
+                    server_uptime =
+                        Some(format_duration_human(elapsed.whole_seconds().max(0) as u64));
+                }
+            }
+        } else if let Some(val) = line.strip_prefix("PROC:") {
+            let val = val.trim();
+            if val != "-" && !val.is_empty() {
+                process_uptime = parse_process_start(val);
+            }
+        }
     }
-    let since = parse_uptime_since(line)?;
-    let elapsed = OffsetDateTime::now_utc() - since;
-    Some(format_duration_human(elapsed.whole_seconds().max(0) as u64))
+
+    (version, server_uptime, process_uptime)
 }
 
-async fn fetch_process_uptime(client: &mut SshClient) -> Option<String> {
-    let info = client.tako_server_info().await.ok()?;
-    let pid = info.pid;
-    // Try /proc/<pid>/stat mtime first (Linux), fall back to ps
-    let cmd = format!(
-        "stat -c '%Y' /proc/{pid} 2>/dev/null || ps -o lstart= -p {pid} 2>/dev/null || true"
-    );
-    let output = client.exec(&cmd).await.ok()?;
-    let line = output.stdout.trim();
-    if line.is_empty() {
-        return None;
-    }
-
-    // Try parsing as unix timestamp (from stat)
-    if let Ok(epoch) = line.parse::<i64>() {
+/// Parse a process start value — either a unix timestamp (from stat) or a
+/// ps lstart string — into a human-readable duration.
+fn parse_process_start(val: &str) -> Option<String> {
+    // Try unix timestamp first (from stat -c '%Y')
+    if let Ok(epoch) = val.parse::<i64>() {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let secs = (now - epoch).max(0) as u64;
         return Some(format_duration_human(secs));
     }
-
-    // Try parsing ps lstart format (e.g. "Mon Mar  3 12:34:56 2026")
-    // Just use a date command to convert
-    let quoted = shell_single_quote(line);
-    let date_cmd = format!(
-        "date -d {quoted} +%s 2>/dev/null || date -j -f '%a %b %d %T %Y' {quoted} +%s 2>/dev/null || true",
-    );
-    let date_output = client.exec(&date_cmd).await.ok()?;
-    let epoch_str = date_output.stdout.trim();
-    if let Ok(epoch) = epoch_str.parse::<i64>() {
-        let now = OffsetDateTime::now_utc().unix_timestamp();
-        let secs = (now - epoch).max(0) as u64;
-        return Some(format_duration_human(secs));
-    }
-
     None
 }
 
-async fn fetch_routes(client: &mut SshClient) -> Vec<(String, String)> {
+async fn fetch_routes(client: &SshClient) -> Vec<(String, String)> {
     let Ok(response) = client.tako_routes().await else {
         return Vec::new();
     };
@@ -709,10 +695,8 @@ fn parse_uptime_since(line: &str) -> Option<OffsetDateTime> {
 fn format_deployed_at(unix_secs: i64) -> Option<String> {
     // Try local time first, fall back to UTC.
     let dt = OffsetDateTime::from_unix_timestamp(unix_secs).ok()?;
-    let local = dt
-        .to_offset(
-            time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC),
-        );
+    let local =
+        dt.to_offset(time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC));
     let month = local.month();
     Some(format!(
         "{} {}, {} {:02}:{:02}",
@@ -778,21 +762,19 @@ fn sort_global_apps(apps: &mut [GlobalAppStatusResult]) {
 }
 
 async fn query_connected_app_status(
-    client: &mut SshClient,
+    client: &SshClient,
     service_status: &str,
     server_version: Option<String>,
     app_name: &str,
 ) -> ServerStatusResult {
     let mut app_status = None;
-    let mut deployed_at_unix_secs = None;
+    let deployed_at_unix_secs = None;
     let mut error = None;
 
     if service_status == "active" {
         match client.tako_app_status(app_name).await {
             Ok(Response::Ok { data }) => match serde_json::from_value::<AppStatus>(data) {
                 Ok(status) => {
-                    deployed_at_unix_secs =
-                        query_app_deployed_at_unix_secs(client, app_name, &status.version).await;
                     app_status = Some(status);
                 }
                 Err(e) => {
@@ -881,21 +863,54 @@ fn parse_list_apps_response(response: Response) -> Result<Vec<String>, String> {
     }
 }
 
-async fn query_remote_app_env_for_server(
+/// Fetch deployed-at timestamp and environment name for an app version in a
+/// single SSH exec call (combines stat + cat tako.toml).
+async fn fetch_app_deploy_info(
     client: &SshClient,
     app_name: &str,
     version: &str,
     server_name: &str,
-) -> Option<String> {
-    let release_toml = format!("/opt/tako/apps/{}/releases/{}/tako.toml", app_name, version);
-    let quoted = shell_single_quote(&release_toml);
-    let cmd = format!("if [ -f {path} ]; then cat {path}; fi", path = quoted);
-    let output = client.exec(&cmd).await.ok()?;
-    let content = output.stdout;
-    if content.trim().is_empty() {
-        return None;
-    }
-    parse_server_env_from_tako_toml(&content, server_name)
+) -> (Option<i64>, Option<String>) {
+    let release_dir = format!("/opt/tako/apps/{}/releases/{}", app_name, version);
+    let release_toml = format!("{}/tako.toml", release_dir);
+    let dir_q = shell_single_quote(&release_dir);
+    let toml_q = shell_single_quote(&release_toml);
+
+    // Output: first line = deployed-at epoch (or -), rest = tako.toml content
+    let cmd = format!(
+        "if [ -d {dir_q} ]; then \
+           (stat -c '%Y' {dir_q} 2>/dev/null || stat -f '%m' {dir_q} 2>/dev/null || echo -); \
+         else echo -; fi; \
+         echo '---TOML---'; \
+         if [ -f {toml_q} ]; then cat {toml_q}; fi"
+    );
+
+    let output = match client.exec(&cmd).await {
+        Ok(o) => o,
+        Err(_) => return (None, None),
+    };
+
+    let stdout = &output.stdout;
+    let (epoch_part, toml_part) = match stdout.split_once("---TOML---\n") {
+        Some((a, b)) => (a, b),
+        None => match stdout.split_once("---TOML---") {
+            Some((a, b)) => (a, b),
+            None => (stdout.as_str(), ""),
+        },
+    };
+
+    let deployed_at = epoch_part
+        .lines()
+        .next()
+        .and_then(|line| line.trim().parse::<i64>().ok());
+
+    let env_name = if toml_part.trim().is_empty() {
+        None
+    } else {
+        parse_server_env_from_tako_toml(toml_part, server_name)
+    };
+
+    (deployed_at, env_name)
 }
 
 fn parse_server_env_from_tako_toml(content: &str, server_name: &str) -> Option<String> {
@@ -955,29 +970,6 @@ fn format_unix_timestamp_local(unix_secs: i64) -> Option<String> {
 
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-async fn query_app_deployed_at_unix_secs(
-    client: &SshClient,
-    app_name: &str,
-    version: &str,
-) -> Option<i64> {
-    let release_dir = format!("/opt/tako/apps/{}/releases/{}", app_name, version);
-    let quoted = shell_single_quote(&release_dir);
-    let cmd = format!(
-        "if [ -d {path} ]; then (stat -c '%Y' {path} 2>/dev/null || stat -f '%m' {path} 2>/dev/null || echo -); else echo -; fi",
-        path = quoted
-    );
-
-    let Ok(output) = client.exec(&cmd).await else {
-        return None;
-    };
-
-    output
-        .stdout
-        .lines()
-        .next()
-        .and_then(|line| line.trim().parse::<i64>().ok())
 }
 
 #[cfg(test)]

@@ -1,4 +1,4 @@
-//! Local authoritative DNS for `*.tako` development hosts.
+//! Local authoritative DNS for `*.tako.test` development hosts.
 //!
 //! Answers queries directly from the current app host table.
 
@@ -12,7 +12,7 @@ use hickory_proto::{
 use tokio::net::UdpSocket;
 
 const DNS_TTL_SECS: u32 = 30;
-const TAKO_DEV_SUFFIX: &str = ".tako";
+const TAKO_DEV_SUFFIX: &str = ".tako.test";
 
 #[derive(Debug, Clone)]
 struct ParsedDnsQuery {
@@ -40,7 +40,7 @@ impl LocalDns {
 
 fn is_tako_dev_host(host: &str) -> bool {
     let h = host.to_ascii_lowercase();
-    h == "tako" || h.ends_with(TAKO_DEV_SUFFIX)
+    h == "tako.test" || h.ends_with(TAKO_DEV_SUFFIX)
 }
 
 fn parse_dns_query(packet: &[u8]) -> Option<ParsedDnsQuery> {
@@ -189,15 +189,15 @@ mod tests {
 
     #[test]
     fn parses_dns_question_name() {
-        let q = build_query("app.tako", DNS_TYPE_A);
+        let q = build_query("app.tako.test", DNS_TYPE_A);
         let parsed = parse_dns_query(&q).expect("query should parse");
-        assert_eq!(parsed.qname, "app.tako");
+        assert_eq!(parsed.qname, "app.tako.test");
         assert_eq!(parsed.qtype, RecordType::A);
     }
 
     #[test]
     fn returns_a_record_for_known_host() {
-        let q = build_query("app.tako", DNS_TYPE_A);
+        let q = build_query("app.tako.test", DNS_TYPE_A);
         let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
         assert_eq!(rcode(&resp), 0);
         assert_eq!(ancount(&resp), 1);
@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn returns_empty_answer_for_aaaa_known_host() {
-        let q = build_query("app.tako", DNS_TYPE_AAAA);
+        let q = build_query("app.tako.test", DNS_TYPE_AAAA);
         let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
         assert_eq!(rcode(&resp), 0);
         assert_eq!(ancount(&resp), 0);
@@ -214,7 +214,7 @@ mod tests {
 
     #[test]
     fn returns_only_a_record_for_any_query() {
-        let q = build_query("app.tako", 255);
+        let q = build_query("app.tako.test", 255);
         let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
         assert_eq!(rcode(&resp), 0);
         assert_eq!(ancount(&resp), 1);
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn resolves_any_tako_subdomain() {
-        let q = build_query("anything.tako", DNS_TYPE_A);
+        let q = build_query("anything.tako.test", DNS_TYPE_A);
         let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
         assert_eq!(rcode(&resp), 0);
         assert_eq!(ancount(&resp), 1);
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn resolves_bare_tako() {
-        let q = build_query("tako", DNS_TYPE_A);
+        let q = build_query("tako.test", DNS_TYPE_A);
         let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
         assert_eq!(rcode(&resp), 0);
         assert_eq!(ancount(&resp), 1);
@@ -249,7 +249,7 @@ mod tests {
     #[test]
     fn echoes_opcode_in_response_flags() {
         // STATUS opcode with RD bit set.
-        let q = build_query_with_flags("app.tako", DNS_TYPE_A, (2 << 11) | 0x0100);
+        let q = build_query_with_flags("app.tako.test", DNS_TYPE_A, (2 << 11) | 0x0100);
         let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
         assert_eq!(opcode(resp_flags(&resp)), 2);
     }

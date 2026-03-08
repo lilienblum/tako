@@ -15,7 +15,7 @@ use crate::build::{
 use crate::commands::server;
 use crate::config::{BuildStage, SecretsStore, ServerEntry, ServerTarget, ServersToml, TakoToml};
 use crate::output;
-use crate::ssh::{SshClient, SshConfig, SshError, upload_via_scp};
+use crate::ssh::{SshClient, SshConfig, SshError};
 use crate::validation::{
     validate_full_config, validate_no_route_conflicts, validate_secrets_for_deployment,
 };
@@ -204,6 +204,7 @@ async fn run_async(
     let project_dir = current_dir()?;
     let source_root = source_bundle_root(&project_dir);
 
+    output::set_suppress(true);
     let validation = output::with_spinner(
         "Validating configuration",
         "Validated",
@@ -257,7 +258,7 @@ async fn run_async(
         resolve_effective_build_adapter(&project_dir, &tako_config, &preflight_preset_ref)
             .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    let bun_lockfile_checked = if preflight_runtime_adapter == BuildAdapter::Bun {
+    let _bun_lockfile_checked = if preflight_runtime_adapter == BuildAdapter::Bun {
         output::with_spinner("Checking Bun lockfile", "Bun lockfile valid", || {
             run_bun_lockfile_preflight(&source_root)
         })
@@ -266,17 +267,14 @@ async fn run_async(
         false
     };
 
+    output::set_suppress(false);
+
     // Skip confirmation if the user explicitly passed --env production (they
     // already know which environment they're targeting).
     let env_was_explicit = requested_env.is_some();
     confirm_production_deploy(&env, assume_yes || env_was_explicit)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    output::success("Validate");
-    output::bullet("Configuration valid");
-    if bun_lockfile_checked {
-        output::bullet("Bun lockfile valid");
-    }
     for warning in &warnings {
         output::warning(&format!("Validation: {}", warning));
     }
@@ -291,6 +289,211 @@ async fn run_async(
         resolve_deploy_server_names_with_setup(&tako_config, &mut servers, &env, &project_dir)
             .await
             .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    // Preflight: check all servers in parallel — verify they're reachable,
+    // not upgrading, not locked by another deploy, and (if wildcard routes)
+    // have DNS provider configured.
+    {
+        use crate::commands::server::{apply_dns_config, fetch_dns_config, prompt_dns_setup};
+
+        struct ServerCheck {
+            name: String,
+            mode: tako_core::UpgradeMode,
+            dns_provider: Option<String>,
+        }
+
+        let app_name_for_lock = app_name.clone();
+        let mut check_set = tokio::task::JoinSet::new();
+        for server_name in &server_names {
+            let server = servers
+                .get(server_name)
+                .ok_or_else(|| format!("Server '{}' not found in servers.toml", server_name))?;
+            let name = server_name.clone();
+            let app = app_name_for_lock.clone();
+            let ssh_config = SshConfig::from_server(&server.host, server.port);
+            check_set.spawn(async move {
+                let mut ssh = SshClient::new(ssh_config);
+                ssh.connect().await?;
+                let info = ssh.tako_server_info().await?;
+
+                let mut mode = info.mode;
+
+                // If server is stuck in upgrading mode, try to clear it.
+                // This handles Ctrl+C / crash during a previous upgrade.
+                if mode == tako_core::UpgradeMode::Upgrading {
+                    // Reset the state via SQLite directly (the upgrade lock's
+                    // owner may be unknown, and ExitUpgrading requires it).
+                    let reset_cmd = SshClient::run_with_root_or_sudo(
+                        "sqlite3 /opt/tako/runtime-state.sqlite3 \
+                         \"UPDATE server_state SET server_mode = 'normal' WHERE id = 1; \
+                          DELETE FROM upgrade_lock WHERE id = 1;\"",
+                    );
+                    if ssh.exec_checked(&reset_cmd).await.is_ok() {
+                        // Restart to pick up the cleared state
+                        let _ = ssh.tako_restart().await;
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                        // Re-check
+                        if let Ok(new_info) = ssh.tako_server_info().await {
+                            mode = new_info.mode;
+                        }
+                    }
+                }
+
+                // Check for existing deploy lock
+                let lock_dir = format!("/opt/tako/apps/{}/.deploy_lock", app);
+                let lock_check = ssh
+                    .exec(&format!(
+                        "if [ -d '{}' ]; then cat {}/ts 2>/dev/null || echo 0; else echo none; fi",
+                        lock_dir, lock_dir,
+                    ))
+                    .await?;
+                let _ = ssh.disconnect().await;
+
+                let lock_result = lock_check.stdout.trim();
+                if lock_result != "none" {
+                    // Lock exists — check if stale (> 30 min)
+                    if let Ok(ts) = lock_result.parse::<i64>() {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap()
+                            .as_secs() as i64;
+                        if now - ts < 30 * 60 {
+                            return Err(crate::ssh::SshError::CommandFailed(format!(
+                                "{} has an active deploy in progress",
+                                name,
+                            )));
+                        }
+                    }
+                    // Stale lock — will be auto-cleared on deploy
+                }
+
+                Ok::<_, crate::ssh::SshError>(ServerCheck {
+                    name,
+                    mode,
+                    dns_provider: info.dns_provider,
+                })
+            });
+        }
+
+        let total = server_names.len();
+        let spinner_msg = if total == 1 {
+            format!("Checking {}", output::highlight(&server_names[0]))
+        } else {
+            format!("Checking {} servers", total)
+        };
+        let pb = if output::is_interactive() {
+            let pb = indicatif::ProgressBar::new_spinner();
+            pb.set_style(output::spinner_style());
+            pb.set_message(format!("{}…", spinner_msg));
+            pb.enable_steady_tick(std::time::Duration::from_millis(80));
+            Some(pb)
+        } else {
+            None
+        };
+
+        let mut checks: Vec<ServerCheck> = Vec::new();
+        while let Some(result) = check_set.join_next().await {
+            let check = result
+                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?
+                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+
+            // Fail fast: server is upgrading
+            if check.mode == tako_core::UpgradeMode::Upgrading {
+                if let Some(ref pb) = pb {
+                    pb.finish_and_clear();
+                }
+                return Err(format!(
+                    "{} is currently upgrading. Retry after the upgrade completes.",
+                    check.name,
+                )
+                .into());
+            }
+
+            checks.push(check);
+        }
+
+        if let Some(ref pb) = pb {
+            pb.finish_and_clear();
+        }
+
+        // Wildcard DNS check
+        let wildcard_routes: Vec<_> = routes.iter().filter(|r| r.starts_with("*.")).collect();
+        if !wildcard_routes.is_empty() {
+            let has_dns: Option<&str> = checks
+                .iter()
+                .find(|c| c.dns_provider.is_some())
+                .map(|c| c.name.as_str());
+
+            let all_have_dns = checks.iter().all(|c| c.dns_provider.is_some());
+
+            if all_have_dns {
+                output::success("All servers support wildcard domains");
+            } else {
+                // Get DNS config: from a server that has it, or prompt once.
+                let dns_config = if let Some(donor_name) = has_dns {
+                    let donor = servers.get(donor_name).unwrap();
+                    let donor_ssh_config = SshConfig::from_server(&donor.host, donor.port);
+                    let mut donor_ssh = SshClient::new(donor_ssh_config);
+                    donor_ssh
+                        .connect()
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error> {
+                            format!("Failed to connect to {}: {}", donor_name, e).into()
+                        })?;
+                    let config = fetch_dns_config(&donor_ssh)
+                        .await?
+                        .ok_or_else(|| format!("Could not read DNS config from {}", donor_name))?;
+                    let _ = donor_ssh.disconnect().await;
+                    config
+                } else {
+                    let wildcard_list = wildcard_routes
+                        .iter()
+                        .map(|r| format!("`{}`", r))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    output::warning(&format!(
+                        "Wildcard route {} requires DNS challenge support.",
+                        wildcard_list,
+                    ));
+                    let first = &server_names[0];
+                    let first_server = servers.get(first).unwrap();
+                    let first_ssh_config =
+                        SshConfig::from_server(&first_server.host, first_server.port);
+                    let mut first_ssh = SshClient::new(first_ssh_config);
+                    first_ssh
+                        .connect()
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error> {
+                            format!("Failed to connect to {}: {}", first, e).into()
+                        })?;
+                    let config = prompt_dns_setup(&first_ssh).await?;
+                    let _ = first_ssh.disconnect().await;
+                    config
+                };
+
+                // Apply the same config to all servers to ensure consistency.
+                for server_name in &server_names {
+                    let server = servers.get(server_name).unwrap();
+                    let ssh_config = SshConfig::from_server(&server.host, server.port);
+                    let mut ssh = SshClient::new(ssh_config);
+                    ssh.connect()
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error> {
+                            format!("Failed to connect to {}: {}", server_name, e).into()
+                        })?;
+                    apply_dns_config(&ssh, server_name, &dns_config).await?;
+                    let _ = ssh.disconnect().await;
+                }
+            }
+        } else {
+            // No wildcard routes — just report servers are ready.
+            if total == 1 {
+                output::success(&format!("{} ready", output::highlight(&server_names[0]),));
+            } else {
+                output::success(&format!("{} servers ready", total));
+            }
+        }
+    }
+
     let use_per_server_spinners =
         should_use_per_server_spinners(server_names.len(), output::is_interactive());
 
@@ -322,7 +525,7 @@ async fn run_async(
     }
 
     // ===== Build =====
-    output::section("Build");
+    let _phase = output::PhaseSpinner::start("Building…");
 
     let executor = BuildExecutor::new(&project_dir);
     let cache = BuildCache::new(project_dir.join(".tako/artifacts"));
@@ -501,10 +704,10 @@ async fn run_async(
     .await
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    output::success("Build");
+    _phase.finish("Build complete");
 
     // ===== Deploy =====
-    output::section("Deploy");
+    let _phase = output::PhaseSpinner::start("Deploying…");
 
     let deploy_config = Arc::new(DeployConfig {
         app_name: app_name.clone(),
@@ -639,7 +842,6 @@ async fn run_async(
     }
 
     // Collect results
-    let mut success_count = 0;
     let mut errors = Vec::new();
 
     let deploy_results =
@@ -665,7 +867,6 @@ async fn run_async(
             Ok((server_name, server, result)) => match result {
                 Ok(()) => {
                     output::bullet(&format_server_deploy_success(&server_name, &server));
-                    success_count += 1;
                 }
                 Err(e) => {
                     output::error(&format_server_deploy_failure(
@@ -685,8 +886,7 @@ async fn run_async(
 
     // ===== Summary =====
     if errors.is_empty() {
-        output::success("Deploy");
-        output::section("Summary");
+        _phase.finish("Deployed.");
         output::info(&format!("Revision: {}", output::highlight(&version)));
         for (index, route) in routes.iter().enumerate() {
             if index == 0 {
@@ -704,24 +904,11 @@ async fn run_async(
 
         Ok(())
     } else {
-        output::error("Deploy");
-        output::section("Summary");
-        if success_count == 0 {
-            output::error(&format!(
-                "Deployment failed: {}/{} servers succeeded",
-                output::highlight("0"),
-                server_names.len()
-            ));
-        } else {
-            output::warning(&format!(
-                "Deployment partially failed: {}/{} servers succeeded",
-                output::highlight(&success_count.to_string()),
-                server_names.len()
-            ));
-        }
-        for err in &errors {
-            output::error(err);
-        }
+        let first_err = errors
+            .first()
+            .map(|s| s.as_str())
+            .unwrap_or("unknown error");
+        _phase.finish_err("Deploying", first_err);
 
         Err(format_partial_failure_error(errors.len()).into())
     }
@@ -773,7 +960,7 @@ fn format_production_deploy_confirm_prompt() -> String {
 }
 
 fn format_production_deploy_confirm_hint() -> String {
-    "Pass --yes/-y to skip this prompt.".to_string()
+    output::brand_muted("Pass --yes/-y to skip this prompt.")
 }
 
 fn confirm_production_deploy(env: &str, assume_yes: bool) -> Result<(), String> {
@@ -3323,16 +3510,34 @@ async fn deploy_to_server(
     use_spinner: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let ssh_config = SshConfig::from_server(&server.host, server.port);
-    let ssh_keys_dir = ssh_config.keys_directory();
     let mut ssh = SshClient::new(ssh_config);
     run_deploy_step("Connecting", "Connected", use_spinner, ssh.connect()).await?;
     let archive_size_bytes = std::fs::metadata(archive_path)?.len();
 
-    // Server-side deploy lock (best-effort). This prevents concurrent deploys of the same app.
+    // Server-side deploy lock. Prevents concurrent deploys of the same app.
+    // The lock dir contains a timestamp file so stale locks (from dropped
+    // connections / Ctrl+C) can be detected and force-removed.
     let lock_dir = format!("{}/.deploy_lock", config.remote_base);
+    let lock_ts = format!("{}/ts", lock_dir);
+    let stale_seconds = 30 * 60; // 30 minutes
     let lock_cmd = format!(
-        "mkdir -p {} && mkdir {} 2>/dev/null && echo ok || echo locked",
-        config.remote_base, lock_dir
+        "mkdir -p {base} && \
+         if mkdir {lock} 2>/dev/null; then \
+           date +%s > {ts} && echo ok; \
+         else \
+           ts=$(cat {ts} 2>/dev/null || echo 0); \
+           now=$(date +%s); \
+           age=$((now - ts)); \
+           if [ \"$age\" -gt {stale} ]; then \
+             rm -rf {lock} && mkdir {lock} && date +%s > {ts} && echo ok_stale; \
+           else \
+             echo locked; \
+           fi; \
+         fi",
+        base = config.remote_base,
+        lock = lock_dir,
+        ts = lock_ts,
+        stale = stale_seconds,
     );
     let lock_check = run_deploy_step(
         "Acquiring deploy lock",
@@ -3341,9 +3546,15 @@ async fn deploy_to_server(
         ssh.exec(&lock_cmd),
     )
     .await?;
-    if !lock_check.stdout.trim().contains("ok") {
+    let lock_result = lock_check.stdout.trim();
+    if lock_result == "locked" {
         let _ = ssh.disconnect().await;
-        return Err(format!("deploy lock already held at {}", lock_dir).into());
+        return Err(format!(
+            "deploy lock already held at {} (will auto-expire after {} minutes)",
+            lock_dir,
+            stale_seconds / 60,
+        )
+        .into());
     }
 
     run_deploy_step(
@@ -3389,29 +3600,12 @@ async fn deploy_to_server(
         validate_no_route_conflicts(&existing, &config.app_name, &config.routes)
             .map_err(|e| format!("Route conflict: {}", e))?;
 
-        // Wildcard route validation: server must have a DNS provider configured
-        let has_wildcard = config.routes.iter().any(|r| r.starts_with("*."));
-        if has_wildcard {
-            let info = ssh.tako_server_info().await
-                .map_err(|e| format!("Failed to query server info: {}", e))?;
-            if info.dns_provider.is_none() {
-                let wildcard_routes: Vec<_> = config.routes.iter()
-                    .filter(|r| r.starts_with("*."))
-                    .collect();
-                return Err(format!(
-                    "Wildcard route {} requires DNS challenge support.\n\
-                     Run `tako servers dns-setup {}` to configure a DNS provider.",
-                    wildcard_routes.iter().map(|r| format!("`{}`", r)).collect::<Vec<_>>().join(", "),
-                    target_label,
-                ).into());
-            }
-        }
-
         // Create directories.
         run_deploy_step("Creating directories", "Directories created", use_spinner, async {
-            ssh.mkdir(&release_dir).await?;
-            ssh.mkdir(&release_app_dir).await?;
-            ssh.mkdir(&config.shared_dir()).await?;
+            ssh.exec_checked(&format!(
+                "mkdir -p {} {} {}",
+                release_dir, release_app_dir, config.shared_dir()
+            )).await?;
             Ok::<(), SshError>(())
         })
         .await?;
@@ -3422,44 +3616,16 @@ async fn deploy_to_server(
             "Uploading artifact",
             "Artifact uploaded",
             use_spinner,
-            upload_via_scp(
-                archive_path,
-                &server.host,
-                server.port,
-                &remote_archive,
-                &ssh_keys_dir,
-            ),
+            async {
+                ssh.upload(archive_path, &remote_archive).await
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
+            },
         )
         .await?;
 
-        // Extract archive directly into release root.
-        let extract_cmd = build_remote_extract_archive_command(&release_dir, &remote_archive);
-        run_deploy_step(
-            "Extracting archive payload",
-            "Archive extracted",
-            use_spinner,
-            ssh.exec_checked(&extract_cmd),
-        )
-        .await?;
-
-        // Symlink shared directories (logs, etc.).
-        let shared_link_cmd = format!(
-            "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
-            config.shared_dir(),
-            config.shared_dir(),
-            release_dir
-        );
-        run_deploy_step(
-            "Linking shared directories",
-            "Shared directories linked",
-            use_spinner,
-            ssh.exec_checked(&shared_link_cmd),
-        )
-        .await?;
-
-        // Finalize runtime manifest using the resolved deploy entrypoint.
+        // Extract archive, symlink shared dirs, and write runtime manifest in one exec.
         let resolved_main = config.main.clone();
-        run_deploy_step("Preparing runtime manifest", "Runtime manifest ready", use_spinner, async {
+        run_deploy_step("Extracting and configuring release", "Release configured", use_spinner, async {
             let main = resolved_main.clone();
             let app_json = serde_json::to_vec_pretty(&serde_json::json!({
                 "runtime": config.runtime,
@@ -3473,8 +3639,21 @@ async fn deploy_to_server(
             let encoded =
                 base64::Engine::encode(&base64::engine::general_purpose::STANDARD, app_json);
             let app_json_path = config.release_app_manifest_path();
+
+            let extract_cmd = build_remote_extract_archive_command(&release_dir, &remote_archive);
+            let shared_link_cmd = format!(
+                "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
+                config.shared_dir(),
+                config.shared_dir(),
+                release_dir
+            );
             let write_manifest_cmd = build_remote_write_manifest_command(&app_json_path, &encoded);
-            ssh.exec_checked(&write_manifest_cmd).await?;
+
+            let combined_cmd = format!(
+                "{} && {} && {}",
+                extract_cmd, shared_link_cmd, write_manifest_cmd
+            );
+            ssh.exec_checked(&combined_cmd).await?;
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         })
         .await?;
@@ -3546,7 +3725,7 @@ async fn deploy_to_server(
 
     // Always release lock (best-effort).
     let _ = ssh
-        .exec(&format!("rmdir {} 2>/dev/null || true", lock_dir))
+        .exec(&format!("rm -rf {} 2>/dev/null || true", lock_dir))
         .await;
 
     // Always disconnect (best-effort).

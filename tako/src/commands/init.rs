@@ -784,9 +784,9 @@ name = "{app_name}"
 [envs.production]
 route = "{production_route}"
 
-# Development routes are optional; default is `{app_name}.tako`.
+# Development routes are optional; default is `{app_name}.tako.test`.
 # [envs.development]
-# route = "{app_name}.tako"
+# route = "{app_name}.tako.test"
 
 # Optional: use multiple routes instead of `route`.
 # routes = ["{app_name}.example.com", "www.{app_name}.example.com"]

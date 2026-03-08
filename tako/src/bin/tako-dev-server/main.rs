@@ -33,7 +33,7 @@ use protocol::{AppInfo, Request, Response};
 use tracing_subscriber::EnvFilter;
 
 const IDLE_EXIT_DELAY: Duration = Duration::from_secs(2);
-const TAKO_DEV_DOMAIN: &str = "tako";
+const TAKO_DEV_DOMAIN: &str = "tako.test";
 const LOCAL_DNS_LISTEN_ADDR: &str = "127.0.0.1:53535";
 const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
 const HTTP_REDIRECT_LISTEN_ADDR: &str = "127.0.0.1:47830";
@@ -252,7 +252,7 @@ impl TlsAccept for DevCertResolver {
     }
 }
 
-/// Split a route pattern like "app.tako/api" into ("app.tako", Some("/api")).
+/// Split a route pattern like "app.tako.test/api" into ("app.tako.test", Some("/api")).
 fn split_route_pattern(route: &str) -> (&str, Option<&str>) {
     match route.find('/') {
         Some(idx) => (&route[..idx], Some(&route[idx..])),
@@ -1257,7 +1257,7 @@ mod tests {
             "type": "RegisterApp",
             "project_dir": "/tmp/test-proj",
             "app_name": "my-app",
-            "hosts": ["my-app.tako"],
+            "hosts": ["my-app.tako.test"],
             "upstream_port": 1234,
             "command": ["node", "index.js"],
             "env": {},
@@ -1276,7 +1276,7 @@ mod tests {
             } => {
                 assert_eq!(app_name, "my-app");
                 assert_eq!(project_dir, "/tmp/test-proj");
-                assert!(url.contains("my-app.tako"));
+                assert!(url.contains("my-app.tako.test"));
             }
             other => panic!("unexpected: {other:?}"),
         }
@@ -1363,7 +1363,7 @@ mod tests {
                 db.register_app(
                     "/proj",
                     "my-app",
-                    &["my-app.tako".to_string()],
+                    &["my-app.tako.test".to_string()],
                     3000,
                     &state::AppStatus::Running,
                     &["bun".to_string()],
@@ -1375,7 +1375,7 @@ mod tests {
             }
             s.routes.set_routes(
                 "reg:/proj".to_string(),
-                vec!["my-app.tako".to_string()],
+                vec!["my-app.tako.test".to_string()],
                 3000,
                 true,
             );
@@ -1444,7 +1444,7 @@ mod tests {
                 db.register_app(
                     "/proj",
                     "my-app",
-                    &["my-app.tako".to_string()],
+                    &["my-app.tako.test".to_string()],
                     3000,
                     &state::AppStatus::Running,
                     &["bun".to_string()],
@@ -1517,7 +1517,7 @@ mod tests {
                 db.register_app(
                     "/proj",
                     "my-app",
-                    &["my-app.tako".to_string()],
+                    &["my-app.tako.test".to_string()],
                     3000,
                     &state::AppStatus::Running,
                     &["bun".to_string()],
@@ -1582,14 +1582,14 @@ mod tests {
 
     #[test]
     fn redirect_location_strips_default_http_port() {
-        let location = redirect_location("bun-example.tako:80", "/hello");
-        assert_eq!(location, "https://bun-example.tako/hello");
+        let location = redirect_location("bun-example.tako.test:80", "/hello");
+        assert_eq!(location, "https://bun-example.tako.test/hello");
     }
 
     #[test]
     fn redirect_location_keeps_non_default_port() {
-        let location = redirect_location("bun-example.tako:8080", "/");
-        assert_eq!(location, "https://bun-example.tako:8080/");
+        let location = redirect_location("bun-example.tako.test:8080", "/");
+        assert_eq!(location, "https://bun-example.tako.test:8080/");
     }
 
     #[test]
@@ -1625,7 +1625,7 @@ mod tests {
                 db.register_app(
                     "/proj",
                     "my-app",
-                    &["my-app.tako".to_string()],
+                    &["my-app.tako.test".to_string()],
                     3000,
                     &state::AppStatus::Running,
                     &["bun".to_string()],
@@ -1637,7 +1637,7 @@ mod tests {
             }
             s.routes.set_routes(
                 "reg:/proj".to_string(),
-                vec!["my-app.tako".to_string()],
+                vec!["my-app.tako.test".to_string()],
                 3000,
                 true,
             );
@@ -1739,7 +1739,7 @@ mod tests {
         let resolver = DevCertResolver::new(ca);
 
         let (x509, _pkey) = resolver
-            .get_or_create_cert("foo.tako")
+            .get_or_create_cert("foo.tako.test")
             .expect("should generate cert");
 
         // Verify the SAN contains the exact hostname.
@@ -1768,8 +1768,8 @@ mod tests {
             .collect();
 
         assert!(
-            dns_names.contains(&"foo.tako"),
-            "cert must contain foo.tako SAN, got: {:?}",
+            dns_names.contains(&"foo.tako.test"),
+            "cert must contain foo.tako.test SAN, got: {:?}",
             dns_names
         );
     }
@@ -1784,7 +1784,7 @@ mod tests {
         let resolver = DevCertResolver::new(ca);
 
         let (leaf_x509, _) = resolver
-            .get_or_create_cert("foo.tako")
+            .get_or_create_cert("foo.tako.test")
             .expect("should generate cert");
 
         // Verify the leaf cert is signed by the CA's public key.
@@ -1800,8 +1800,8 @@ mod tests {
         let ca = local_ca::LocalCA::generate().unwrap();
         let resolver = DevCertResolver::new(ca);
 
-        let (first, _) = resolver.get_or_create_cert("bar.tako").unwrap();
-        let (second, _) = resolver.get_or_create_cert("bar.tako").unwrap();
+        let (first, _) = resolver.get_or_create_cert("bar.tako.test").unwrap();
+        let (second, _) = resolver.get_or_create_cert("bar.tako.test").unwrap();
 
         // Same DER bytes → same cert object was returned from cache.
         assert_eq!(first.to_der().unwrap(), second.to_der().unwrap());

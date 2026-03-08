@@ -28,12 +28,12 @@ This runs the example through `tako dev` (HTTPS local ingress + routing).
 - The app starts Bun on `0.0.0.0:$PORT` (default `3000`) and serves HTTP directly.
 - Internal health checks use `Host: tako-internal` with path `/status` via the Tako SDK wrapper.
 - Development routes in `tako.toml` are:
-  - `bun.tako/bun`
-  - `foo.bun.tako`
-  - `*.bun.tako`
+  - `bun.tako.test/bun`
+  - `foo.bun.tako.test`
+  - `*.bun.tako.test`
 - Current `tako dev` routing is exact-host only, so use:
-  - `https://bun.tako/bun`
-  - `https://foo.bun.tako/`
+  - `https://bun.tako.test/bun`
+  - `https://foo.bun.tako.test/`
 - Staging routes:
   - `https://tako-testbed.orb.local/bun`
   - `https://<tenant>.bun.tako-testbed.orb.local/`

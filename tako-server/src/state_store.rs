@@ -216,26 +216,46 @@ impl SqliteStateStore {
         }
     }
 
+    /// Stale lock threshold: locks older than this are force-acquired.
+    const UPGRADE_LOCK_STALE_SECS: i64 = 600; // 10 minutes
+
     pub fn try_acquire_upgrade_lock(&self, owner: &str) -> Result<bool, StateStoreError> {
         let conn = self.open_connection()?;
         let tx = conn
             .unchecked_transaction()
             .map_err(StateStoreError::from)?;
 
-        let existing: Option<String> = tx
-            .query_row("SELECT owner FROM upgrade_lock WHERE id = 1;", [], |row| {
-                row.get(0)
-            })
+        let existing: Option<(String, i64)> = tx
+            .query_row(
+                "SELECT owner, acquired_at_unix_secs FROM upgrade_lock WHERE id = 1;",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
             .optional()
             .map_err(StateStoreError::from)?;
 
+        let now: i64 = tx
+            .query_row("SELECT CAST(strftime('%s','now') AS INTEGER);", [], |row| {
+                row.get(0)
+            })
+            .map_err(StateStoreError::from)?;
+
         let acquired = match existing {
-            Some(existing) if existing == owner => true,
+            Some((ref existing_owner, _)) if existing_owner == owner => true,
+            Some((_, acquired_at)) if now - acquired_at > Self::UPGRADE_LOCK_STALE_SECS => {
+                // Stale lock — force-acquire by replacing it.
+                tx.execute(
+                    "UPDATE upgrade_lock SET owner = ?1, acquired_at_unix_secs = ?2 WHERE id = 1;",
+                    rusqlite::params![owner, now],
+                )
+                .map_err(StateStoreError::from)?;
+                true
+            }
             Some(_) => false,
             None => {
                 tx.execute(
                     "INSERT INTO upgrade_lock (id, owner, acquired_at_unix_secs)
-                     VALUES (1, ?1, strftime('%s','now'));",
+                     VALUES (1, ?1, CAST(strftime('%s','now') AS INTEGER));",
                     rusqlite::params![owner],
                 )
                 .map_err(StateStoreError::from)?;
@@ -599,6 +619,34 @@ mod tests {
         assert!(!store.release_upgrade_lock("controller-b").unwrap());
         assert!(store.release_upgrade_lock("controller-a").unwrap());
         assert!(store.try_acquire_upgrade_lock("controller-b").unwrap());
+    }
+
+    #[test]
+    fn upgrade_lock_force_acquires_stale_lock() {
+        let (_temp, store) = temp_store();
+        store.init().unwrap();
+        assert!(store.try_acquire_upgrade_lock("controller-a").unwrap());
+
+        // Backdate the lock to make it stale.
+        let conn = store.open_connection().unwrap();
+        let stale_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            - SqliteStateStore::UPGRADE_LOCK_STALE_SECS
+            - 1;
+        conn.execute(
+            "UPDATE upgrade_lock SET acquired_at_unix_secs = ?1 WHERE id = 1;",
+            rusqlite::params![stale_time],
+        )
+        .unwrap();
+
+        // A different owner can now force-acquire the stale lock.
+        assert!(store.try_acquire_upgrade_lock("controller-b").unwrap());
+        assert_eq!(
+            store.upgrade_lock_owner().unwrap().as_deref(),
+            Some("controller-b")
+        );
     }
 
     #[test]

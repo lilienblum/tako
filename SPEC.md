@@ -32,7 +32,7 @@ App names must be URL-friendly (DNS hostname compatible):
 - **Must start with:** lowercase letter
 - **Examples:** `my-app`, `api-server`, `web-frontend`
 
-This ensures names work in DNS (`{app-name}.tako` by default), URLs, and environment variables.
+This ensures names work in DNS (`{app-name}.tako.test` by default), URLs, and environment variables.
 `name` is optional in `tako.toml`. If omitted, Tako resolves app name from the project directory name.
 Using top-level `name` is recommended for stability: it must be unique per server. Renaming it later creates a new app identity/path; delete the old deployment manually.
 
@@ -390,7 +390,7 @@ Start (or attach to) a local development session for the current app, backed by 
   - When a new owning session starts, Tako truncates that shared stream before writing fresh logs for the new session.
   - Attached clients replay the existing file contents, then follow new lines from the same stream.
   - App lifecycle state (`starting`, `running`, `stopped`, app PID, and startup errors) is persisted to the same shared stream, so attached sessions reconstruct the same status/CPU/RAM view as the owning session.
-- The daemon supports **multiple concurrent apps** and maintains hostname-based routing for `*.tako`.
+- The daemon supports **multiple concurrent apps** and maintains hostname-based routing for `*.tako.test`.
 - Utility flags:
   - `tako doctor`: print a diagnostic report and exit.
     - Reports dev daemon listen info, local 80/443 forwarding status, and local DNS status.
@@ -420,21 +420,21 @@ Start (or attach to) a local development session for the current app, backed by 
 - `tako dev` ensures daemon TLS files exist at `{TAKO_HOME}/certs/fullchain.pem` and `{TAKO_HOME}/certs/privkey.pem` before spawning the daemon.
   - The daemon reuses existing TLS files when present.
 - `tako dev` listens on `127.0.0.1:47831` in HTTPS mode.
-- By default, Tako registers `https://{app}.tako:47831/` on non-macOS and `https://{app}.tako/` on macOS.
-  - On macOS, Tako configures split DNS for `tako` by writing `/etc/resolver/tako` (one-time sudo), pointing to a local DNS listener on `127.0.0.1:53535`.
-  - The dev daemon answers `A` queries for active `*.tako` hosts.
+- By default, Tako registers `https://{app}.tako.test:47831/` on non-macOS and `https://{app}.tako.test/` on macOS.
+  - On macOS, Tako configures split DNS for `tako.test` by writing `/etc/resolver/tako.test` (one-time sudo), pointing to a local DNS listener on `127.0.0.1:53535`.
+  - The dev daemon answers `A` queries for active `*.tako.test` hosts.
     - On macOS, it maps to a dedicated loopback address (`127.77.0.1`) used by pf forwarding.
     - On non-macOS, it maps to `127.0.0.1`.
   - On macOS, `tako dev` automatically tries to enable scoped local forwarding when missing (one-time sudo prompt):
     - `127.77.0.1:443 -> 127.0.0.1:47831`
     - `127.77.0.1:80 -> 127.0.0.1:47830` (HTTP redirect to HTTPS)
   - If forwarding later appears inactive, `tako dev` explains why it is re-requesting sudo before repair (missing pf rules, runtime forwarding reset after reboot/pf reset, or conflicting local listeners on `127.0.0.1:80/443`).
-  - On macOS, Tako always requires this forwarding and always advertises `https://{app}.tako/` (no explicit port).
+  - On macOS, Tako always requires this forwarding and always advertises `https://{app}.tako.test/` (no explicit port).
   - After applying or repairing local forwarding, Tako retries loopback 80/443 reachability and fails startup if those endpoints remain unreachable.
   - On macOS, Tako probes HTTPS for the app host via loopback and fails startup if that probe does not succeed.
-  - If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.tako/` still fails, Tako reports a targeted hint that local `:443` traffic is being intercepted/bypassed before reaching Tako.
-  - `tako dev` uses routes from `[envs.development]` when configured; otherwise it defaults to `{app}.tako`.
-    - Dev routes must be `{app}.tako` or a subdomain of it.
+  - If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.tako.test/` still fails, Tako reports a targeted hint that local `:443` traffic is being intercepted/bypassed before reaching Tako.
+  - `tako dev` uses routes from `[envs.development]` when configured; otherwise it defaults to `{app}.tako.test`.
+    - Dev routes must be `{app}.tako.test` or a subdomain of it.
     - Dev routing matches exact hostnames only; wildcard host entries are ignored.
     - If configured dev routes contain no exact hostnames, `tako dev` fails with an invalid route error.
   - The HTTPS daemon listen port for `tako dev` is fixed at `47831`.
@@ -879,7 +879,7 @@ Apps specify routes at environment level (not per-server). Routes support:
 - `[envs.{env}]` accepts only route keys (`route`/`routes`); env vars belong in `[vars]` / `[vars.{env}]`
 - Each non-development environment must define `route` or `routes`
 - Empty route lists are invalid for non-development environments
-- Development routes must be `{app-name}.tako` or a subdomain of it
+- Development routes must be `{app-name}.tako.test` or a subdomain of it
 
 ### Multi-App Scenarios
 
@@ -1263,7 +1263,7 @@ import { tako } from "tako.sh/vite";
 
 - `tako.sh/vite` provides a plugin that prepares a deploy entry wrapper in Vite output.
 - It emits `<outDir>/tako-entry.mjs`, which normalizes the compiled server module to a default-exported fetch handler.
-- During `vite dev`, it adds `.tako` to `server.allowedHosts`.
+- During `vite dev`, it adds `.tako.test` to `server.allowedHosts`.
 - During `vite dev`, when `PORT` is set, it binds Vite to `127.0.0.1:$PORT` with `strictPort: true`.
 - Deploy does not read Vite metadata files.
 - To use the generated wrapper as deploy entry, set `main` in `tako.toml` to the generated file (for example `dist/server/tako-entry.mjs`) or define preset top-level `main`.
