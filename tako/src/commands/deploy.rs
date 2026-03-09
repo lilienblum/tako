@@ -356,10 +356,13 @@ async fn run_async(
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap()
                             .as_secs() as i64;
-                        if now - ts < 30 * 60 {
+                        let elapsed = now - ts;
+                        if elapsed < 30 * 60 {
+                            let remaining_secs = 30 * 60 - elapsed;
+                            let remaining_min = (remaining_secs + 59) / 60;
                             return Err(crate::ssh::SshError::CommandFailed(format!(
-                                "{} has an active deploy in progress",
-                                name,
+                                "{} not ready: active deploy in progress (try again in ~{}m)",
+                                name, remaining_min,
                             )));
                         }
                     }
@@ -487,7 +490,7 @@ async fn run_async(
         } else {
             // No wildcard routes — just report servers are ready.
             if total == 1 {
-                output::success(&format!("{} ready", output::highlight(&server_names[0]),));
+                output::success(&format!("{} is ready", output::highlight(&server_names[0]),));
             } else {
                 output::success(&format!("{} servers ready", total));
             }
@@ -512,12 +515,7 @@ async fn run_async(
         ) {
             output::info(&line);
         }
-    } else if server_names.len() == 1 {
-        output::info(&format!(
-            "Deploying to {}",
-            output::highlight(&server_names[0])
-        ));
-    } else {
+    } else if server_names.len() > 1 {
         output::info(&format!(
             "Deploying to {} servers",
             output::highlight(&server_names.len().to_string())

@@ -187,7 +187,7 @@ pub fn success(message: &str) {
     if is_suppressed() {
         return;
     }
-    println!("{}", brand_fg(message));
+    println!("{} {}", bold(&brand_secondary("✔")), brand_fg(message));
 }
 
 pub fn warning(message: &str) {

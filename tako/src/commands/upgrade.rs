@@ -134,14 +134,28 @@ async fn run_installer_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn st
     Ok(())
 }
 
-/// Canary upgrade: always download, compare binary hashes to detect "already current",
-/// then run the new binary to get the actual version for display.
+/// Canary upgrade: fetch the remote tarball checksum first to skip download
+/// when already current, otherwise download, verify, and install.
 async fn run_canary_upgrade(
     os: &str,
     arch: &str,
     install_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let url = tarball_url_for_tag("canary-latest", os, arch);
+    let sha_url = format!("{url}.sha256");
+
+    // Quick check: compare remote tarball hash with locally saved hash from last upgrade
+    let saved_hash_path = canary_hash_path();
+    if let Ok(remote_hash) = fetch_sha256(&sha_url).await {
+        if let Some(ref path) = saved_hash_path {
+            if let Ok(saved_hash) = std::fs::read_to_string(path) {
+                if saved_hash.trim() == remote_hash {
+                    output::success("Already on the latest canary build");
+                    return Ok(());
+                }
+            }
+        }
+    }
 
     // Download and extract to temp dir
     let tmp_base = std::env::temp_dir();
@@ -152,7 +166,7 @@ async fn run_canary_upgrade(
         let archive_path = tmp_dir.join("tako.tar.gz");
         download_with_progress(&url, &archive_path).await?;
 
-        // Verify SHA256 if available
+        // Verify SHA256 if available and save for future quick checks
         let sha_url = format!("{url}.sha256");
         if let Ok(expected) = fetch_sha256(&sha_url).await {
             verify_sha256(&archive_path, &expected)?;
@@ -171,6 +185,8 @@ async fn run_canary_upgrade(
             let current_hash = hash_file(&current_exe)?;
             let new_hash = hash_file(&new_tako)?;
             if current_hash == new_hash {
+                // Save tarball hash so next time we can skip the download
+                save_canary_hash(saved_hash_path.as_deref(), &archive_path);
                 output::success("Already on the latest canary build");
                 return Ok(());
             }
@@ -186,6 +202,9 @@ async fn run_canary_upgrade(
         install_binary(&new_tako, install_dir, "tako")?;
         install_binary(&new_dev_server, install_dir, "tako-dev-server")?;
 
+        // Save tarball hash so next time we can skip the download
+        save_canary_hash(saved_hash_path.as_deref(), &archive_path);
+
         output::success(&format!("Upgraded to {}", output::highlight(&version)));
         Ok(())
     }
@@ -193,6 +212,22 @@ async fn run_canary_upgrade(
 
     let _ = std::fs::remove_dir_all(&tmp_dir);
     result
+}
+
+fn canary_hash_path() -> Option<PathBuf> {
+    crate::paths::tako_data_dir()
+        .ok()
+        .map(|d| d.join("canary-tarball-sha256"))
+}
+
+fn save_canary_hash(path: Option<&Path>, archive: &Path) {
+    let Some(path) = path else { return };
+    if let Ok(hash) = hash_file(archive) {
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, hash);
+    }
 }
 
 fn tarball_url_for_tag(tag: &str, os: &str, arch: &str) -> String {

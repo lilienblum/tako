@@ -18,7 +18,7 @@ pub enum SshError {
     #[error("Failed to load SSH key {path}: {reason}")]
     KeyLoad { path: PathBuf, reason: String },
 
-    #[error("Command execution failed: {0}")]
+    #[error("{0}")]
     CommandFailed(String),
 
     #[error("Command returned non-zero exit code: {code}")]
