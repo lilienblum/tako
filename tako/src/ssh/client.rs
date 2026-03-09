@@ -1066,11 +1066,40 @@ l4QMs5cmnWfrM0GQ==\n\
     }
 
     #[test]
-    fn tako_reload_command_uses_service_helper_with_root_or_sudo() {
+    fn tako_reload_command_uses_direct_sudo() {
         let command = SshClient::tako_reload_command();
         assert!(command.contains("if [ \"$(id -u)\" -eq 0 ]"));
         assert!(command.contains("command -v sudo"));
         assert!(command.contains("/usr/local/bin/tako-server-service reload"));
+        // run_as_root uses direct sudo, not sh -c wrapping
+        assert!(
+            !command.contains("sudo sh -c"),
+            "reload should use direct sudo for restricted sudoers compatibility"
+        );
+        assert!(command.contains("then sudo /usr/local/bin/tako-server-service reload"));
+    }
+
+    #[test]
+    fn run_as_root_uses_direct_sudo() {
+        let cmd = SshClient::run_as_root("systemctl restart foo");
+        // Direct sudo: `sudo systemctl restart foo`
+        assert!(cmd.contains("sudo systemctl restart foo"));
+        // No sh -c wrapping
+        assert!(!cmd.contains("sudo sh -c"));
+    }
+
+    #[test]
+    fn run_with_root_or_sudo_uses_sh_c() {
+        let cmd = SshClient::run_with_root_or_sudo("cat /etc/foo && echo ok");
+        // sh -c wrapping for complex shell constructs
+        assert!(cmd.contains("sudo sh -c 'cat /etc/foo && echo ok'"));
+    }
+
+    #[test]
+    fn run_as_root_when_already_root() {
+        let cmd = SshClient::run_as_root("systemctl restart foo");
+        // When running as root (id -u == 0), execute directly without sudo
+        assert!(cmd.contains("then systemctl restart foo"));
     }
 
     #[test]

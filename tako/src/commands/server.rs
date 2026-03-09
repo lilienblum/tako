@@ -896,20 +896,45 @@ async fn wait_for_primary_ready(
     ssh: &mut crate::ssh::SshClient,
     timeout: Duration,
     old_pid: u32,
+    server_name: &str,
 ) -> Result<ServerRuntimeInfo, String> {
     let start = std::time::Instant::now();
     let mut last_err = String::new();
     let mut last_seen_pid: Option<u32> = None;
+    let mut poll_count = 0u32;
     while start.elapsed() < timeout {
         ssh.clear_tako_hello_cache();
+        poll_count += 1;
         match ssh.tako_server_info().await {
-            Ok(info) if info.pid != old_pid => return Ok(info),
+            Ok(info) if info.pid != old_pid => {
+                tracing::debug!(
+                    server = server_name,
+                    new_pid = info.pid,
+                    old_pid,
+                    polls = poll_count,
+                    elapsed_ms = start.elapsed().as_millis() as u64,
+                    "new server process detected"
+                );
+                return Ok(info);
+            }
             Ok(info) => {
                 last_seen_pid = Some(info.pid);
+                tracing::debug!(
+                    server = server_name,
+                    pid = info.pid,
+                    polls = poll_count,
+                    "still seeing old PID, waiting"
+                );
                 tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
             }
             Err(e) => {
                 last_err = e.to_string();
+                tracing::debug!(
+                    server = server_name,
+                    error = %e,
+                    polls = poll_count,
+                    "socket probe failed, waiting"
+                );
                 tokio::time::sleep(UPGRADE_POLL_INTERVAL).await;
             }
         }
@@ -1221,24 +1246,40 @@ async fn upgrade_server_quiet(
     let mut upgrade_mode_entered = false;
 
     let result: Result<Option<String>, String> = async {
+        tracing::debug!(server = name, "checking server status");
         let status = ssh
             .tako_status()
             .await
             .map_err(|e| format!("Failed to query status: {e}"))?;
+        tracing::debug!(server = name, status = %status, "server status");
         if status != "active" {
             return Err(format!("tako-server not active (status: {status})"));
         }
 
         // Install binary
+        tracing::debug!(server = name, channel = ?channel, "running installer");
+        let install_start = std::time::Instant::now();
         let install_output = ssh
             .exec(&remote_installer_command(channel))
             .await
             .map_err(|e| format!("Installer failed: {e}"))?;
+        tracing::debug!(
+            server = name,
+            exit_code = install_output.exit_code,
+            elapsed_ms = install_start.elapsed().as_millis() as u64,
+            "installer finished"
+        );
         if !install_output.success() {
+            tracing::debug!(
+                server = name,
+                stderr = %install_output.stderr.trim(),
+                "installer failed"
+            );
             return Err(format_installer_failure(&install_output));
         }
 
         // Enter upgrading mode
+        tracing::debug!(server = name, owner = %owner, "entering upgrading mode");
         ssh.tako_enter_upgrading(&owner)
             .await
             .map_err(|e| match &e {
@@ -1254,17 +1295,19 @@ async fn upgrade_server_quiet(
             .map_err(|e| format!("Failed to read runtime config: {e}"))?
             .pid;
 
-        tracing::debug!(old_pid, "captured current server PID before reload");
+        tracing::debug!(server = name, old_pid, "captured current server PID before reload");
 
         ssh.tako_reload()
             .await
             .map_err(|e| format!("Reload failed: {e}"))?;
 
-        tracing::debug!(old_pid, "reload sent, waiting for new server process");
+        tracing::debug!(server = name, old_pid, "reload sent, waiting for new server process");
 
-        wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid).await?;
+        let info = wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?;
+        tracing::debug!(server = name, new_pid = info.pid, "new server process ready");
 
         // Exit upgrading mode
+        tracing::debug!(server = name, owner = %owner, "exiting upgrading mode");
         ssh.tako_exit_upgrading(&owner)
             .await
             .map_err(|e| format!("Failed to exit upgrading mode: {e}"))?;
@@ -1272,19 +1315,27 @@ async fn upgrade_server_quiet(
 
         // Get new version
         let version = ssh.tako_version().await.ok().flatten();
+        tracing::debug!(server = name, version = ?version, "upgrade complete");
         Ok(version)
     }
     .await;
 
     if result.is_err() && upgrade_mode_entered {
+        tracing::debug!(server = name, owner = %owner, "upgrade failed, attempting to release upgrade lock");
         // Try to release the upgrade lock. Retry a few times in case the
         // server is still restarting after the SIGHUP reload.
         for attempt in 0..5 {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
-            if ssh.tako_exit_upgrading(&owner).await.is_ok() {
-                break;
+            match ssh.tako_exit_upgrading(&owner).await {
+                Ok(()) => {
+                    tracing::debug!(server = name, attempt, "upgrade lock released");
+                    break;
+                }
+                Err(e) => {
+                    tracing::debug!(server = name, attempt, error = %e, "failed to release upgrade lock, retrying");
+                }
             }
         }
     }
@@ -1754,5 +1805,91 @@ mod tests {
         assert!(cmd.contains("lego --version"));
         assert!(cmd.contains(LEGO_VERSION));
         assert!(cmd.contains("/usr/local/bin/lego"));
+    }
+
+    #[test]
+    fn remote_installer_command_uses_direct_sudo_not_sh_c() {
+        // run_as_root uses `sudo <cmd>` directly, not `sudo sh -c '<cmd>'`.
+        // This is critical for restricted sudoers that only allow specific binaries.
+        let cmd = remote_installer_command(UpgradeChannel::Stable);
+        // Should contain direct sudo invocation
+        assert!(
+            cmd.contains("then sudo /usr/local/bin/tako-server-install-refresh"),
+            "should use direct sudo, got: {cmd}"
+        );
+        // Should NOT use sh -c wrapping
+        assert!(
+            !cmd.contains("sudo sh -c"),
+            "should not use sudo sh -c, got: {cmd}"
+        );
+    }
+
+    #[test]
+    fn remote_installer_command_canary_uses_direct_sudo() {
+        let cmd = remote_installer_command(UpgradeChannel::Canary);
+        assert!(cmd.contains("then sudo /usr/local/bin/tako-server-install-refresh canary"));
+        assert!(!cmd.contains("sudo sh -c"));
+    }
+
+    #[test]
+    fn format_installer_failure_missing_helper() {
+        let output = crate::ssh::CommandOutput {
+            exit_code: 127,
+            stdout: String::new(),
+            stderr: "bash: /usr/local/bin/tako-server-install-refresh: not found\n".to_string(),
+        };
+        let msg = format_installer_failure(&output);
+        assert!(msg.contains("missing the tako-server upgrade helper"));
+    }
+
+    #[test]
+    fn format_installer_failure_sudo_denied() {
+        let output = crate::ssh::CommandOutput {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: "sudo: a password is required\n".to_string(),
+        };
+        let msg = format_installer_failure(&output);
+        assert!(msg.contains("root privileges"));
+    }
+
+    #[test]
+    fn format_installer_failure_generic_error() {
+        let output = crate::ssh::CommandOutput {
+            exit_code: 2,
+            stdout: String::new(),
+            stderr: "some unexpected error\n".to_string(),
+        };
+        let msg = format_installer_failure(&output);
+        assert!(msg.contains("exit code 2"));
+        assert!(msg.contains("some unexpected error"));
+    }
+
+    #[test]
+    fn format_installer_failure_requires_root_message() {
+        let output = crate::ssh::CommandOutput {
+            exit_code: 1,
+            stdout: String::new(),
+            stderr: "error: this operation requires root privileges (run as root or install/configure sudo)\n".to_string(),
+        };
+        let msg = format_installer_failure(&output);
+        assert!(msg.contains("root privileges"));
+    }
+
+    #[test]
+    fn build_upgrade_owner_differs_by_server_name() {
+        let a = build_upgrade_owner("prod-1");
+        let b = build_upgrade_owner("prod-2");
+        assert_ne!(a, b, "different servers should produce different owner IDs");
+        assert!(a.contains("prod-1"));
+        assert!(b.contains("prod-2"));
+    }
+
+    #[test]
+    fn first_non_empty_line_skips_blanks() {
+        assert_eq!(first_non_empty_line("\n\n  hello\nworld"), Some("hello"));
+        assert_eq!(first_non_empty_line(""), None);
+        assert_eq!(first_non_empty_line("\n\n"), None);
+        assert_eq!(first_non_empty_line("first"), Some("first"));
     }
 }
