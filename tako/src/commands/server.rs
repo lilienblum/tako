@@ -1306,11 +1306,24 @@ async fn upgrade_server_quiet(
         let info = wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?;
         tracing::debug!(server = name, new_pid = info.pid, "new server process ready");
 
-        // Exit upgrading mode
+        // Exit upgrading mode. After a SIGHUP reload the new server process
+        // starts fresh in Normal mode and clears the orphaned upgrade lock, so
+        // "owner does not hold the upgrade lock" is expected and harmless.
         tracing::debug!(server = name, owner = %owner, "exiting upgrading mode");
-        ssh.tako_exit_upgrading(&owner)
-            .await
-            .map_err(|e| format!("Failed to exit upgrading mode: {e}"))?;
+        match ssh.tako_exit_upgrading(&owner).await {
+            Ok(()) => {}
+            Err(e) => {
+                let msg = e.to_string();
+                if msg.contains("does not hold the upgrade lock") {
+                    tracing::debug!(
+                        server = name,
+                        "upgrade lock already cleared by new server process"
+                    );
+                } else {
+                    return Err(format!("Failed to exit upgrading mode: {e}"));
+                }
+            }
+        }
         upgrade_mode_entered = false;
 
         // Get new version
