@@ -51,14 +51,9 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
-      # zigbuild needed for musl targets (vendored OpenSSL handles glibc without system deps)
-      - name: Install zigbuild
+      - name: Install musl toolchain
         if: matrix.libc == 'musl'
-        uses: goto-bus-stop/setup-zig@v2
-
-      - name: Install cargo-zigbuild
-        if: matrix.libc == 'musl'
-        run: cargo install cargo-zigbuild --locked
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
 
       - name: Build artifacts
         env:
@@ -68,7 +63,7 @@ jobs:
           mkdir -p dist
 
           if [ "${{ matrix.libc }}" = "musl" ]; then
-            cargo zigbuild -p tako-server --release --target ${{ matrix.target }}
+            cargo build -p tako-server --release --target ${{ matrix.target }}
           else
             cargo build -p tako --bin tako --bin tako-dev-server --release
             cargo build -p tako-server --release
