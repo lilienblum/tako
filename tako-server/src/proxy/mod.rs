@@ -313,8 +313,6 @@ pub struct RequestCtx {
     backend: Option<Backend>,
     is_https: bool,
     matched_route_path: Option<String>,
-    /// Set if this is an ACME challenge response
-    acme_response: Option<String>,
 }
 
 enum BackendResolution {
@@ -383,7 +381,6 @@ impl ProxyHttp for TakoProxy {
             backend: None,
             is_https: false,
             matched_route_path: None,
-            acme_response: None,
         }
     }
 
@@ -403,8 +400,15 @@ impl ProxyHttp for TakoProxy {
         {
             if let Some(response) = handler.handle_challenge(&path) {
                 tracing::info!(path = %path, "Serving ACME challenge response");
-                ctx.acme_response = Some(response);
-                return Ok(true); // Skip upstream, we'll handle in response
+                let mut header = ResponseHeader::build(200, None)?;
+                insert_body_headers(&mut header, "text/plain", &response)?;
+                session
+                    .write_response_header(Box::new(header), false)
+                    .await?;
+                session
+                    .write_response_body(Some(response.into()), true)
+                    .await?;
+                return Ok(true);
             } else {
                 tracing::warn!(path = %path, "ACME challenge token not found");
                 // Return 404 for unknown challenge tokens
@@ -615,12 +619,6 @@ impl ProxyHttp for TakoProxy {
         session: &mut Session,
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        // If we have an ACME response, we need to handle it specially
-        // This shouldn't be called if request_filter returned true
-        if ctx.acme_response.is_some() {
-            return Err(Error::new(ErrorType::InternalError));
-        }
-
         // Check if this is an HTTPS connection
         let transport_https = session
             .digest()
@@ -670,26 +668,6 @@ impl ProxyHttp for TakoProxy {
             )
         })?;
         Ok(Box::new(peer))
-    }
-
-    async fn response_filter(
-        &self,
-        session: &mut Session,
-        _upstream_response: &mut ResponseHeader,
-        ctx: &mut Self::CTX,
-    ) -> Result<()> {
-        // Handle ACME response if we have one
-        if let Some(ref response) = ctx.acme_response {
-            let mut header = ResponseHeader::build(200, None)?;
-            insert_body_headers(&mut header, "text/plain", response)?;
-            session
-                .write_response_header(Box::new(header), false)
-                .await?;
-            session
-                .write_response_body(Some(response.clone().into()), true)
-                .await?;
-        }
-        Ok(())
     }
 
     async fn upstream_request_filter(
@@ -1288,7 +1266,6 @@ mod tests {
         assert!(ctx.backend.is_none());
         assert!(!ctx.is_https);
         assert!(ctx.matched_route_path.is_none());
-        assert!(ctx.acme_response.is_none());
     }
 
     #[test]

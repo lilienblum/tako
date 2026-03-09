@@ -28,15 +28,12 @@ tako-linux: _require-zigbuild
 # arch: x86_64 | aarch64
 # libc: musl | glibc
 tako-server arch libc: _require-zigbuild
-    mkdir -p {{ ARTIFACTS_DIR }}
     #!/usr/bin/env sh
     set -eu
+    mkdir -p {{ ARTIFACTS_DIR }}
     case "{{ arch }}" in x86_64|aarch64) ;; *) echo "Invalid arch '{{ arch }}' (expected: x86_64 or aarch64)" >&2; exit 1 ;; esac
     case "{{ libc }}" in musl|glibc) ;; *) echo "Invalid libc '{{ libc }}' (expected: musl or glibc)" >&2; exit 1 ;; esac
-    case "{{ libc }}" in
-        musl)  target="{{ arch }}-unknown-linux-musl" ;;
-        glibc) target="{{ arch }}-unknown-linux-gnu" ;;
-    esac
+    if [ "{{ libc }}" = "musl" ]; then target="{{ arch }}-unknown-linux-musl"; else target="{{ arch }}-unknown-linux-gnu"; fi
     rustup target add "$target" 2>/dev/null || true
     cargo zigbuild -p tako-server --release --target "$target"
     cp "target/$target/release/tako-server" "{{ ARTIFACTS_DIR }}/tako-server-linux-{{ arch }}-{{ libc }}"
