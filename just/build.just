@@ -5,48 +5,47 @@ ARTIFACTS_DIR := "dist"
 tako:
     cargo build -p tako --bin tako --release
 
-tako-linux:
+_require-zigbuild:
+    @if ! command -v cargo-zigbuild >/dev/null 2>&1; then \
+        echo "error: cargo-zigbuild is required (install: cargo install cargo-zigbuild)" >&2; \
+        echo "       also install zig: brew install zig (macOS) or pip3 install ziglang" >&2; \
+        exit 1; \
+    fi
+
+tako-linux: _require-zigbuild
     mkdir -p {{ ARTIFACTS_DIR }}
-    for arch in amd64 arm64; do \
-        docker buildx build -f docker/build.Dockerfile \
-            --platform linux/$arch \
-            --target tako-artifact-glibc \
-            --output type=local,dest={{ ARTIFACTS_DIR }}/linux-$arch-glibc \
-            . || exit 1; \
-        if [ "$arch" = "amd64" ]; then outarch="x86_64"; else outarch="aarch64"; fi; \
-        cp {{ ARTIFACTS_DIR }}/linux-$arch-glibc/tako {{ ARTIFACTS_DIR }}/tako-linux-$outarch || exit 1; \
-        cp {{ ARTIFACTS_DIR }}/linux-$arch-glibc/tako.sha256 {{ ARTIFACTS_DIR }}/tako-linux-$outarch.sha256 || exit 1; \
-        cp {{ ARTIFACTS_DIR }}/linux-$arch-glibc/tako-dev-server {{ ARTIFACTS_DIR }}/tako-dev-server-linux-$outarch || exit 1; \
-        cp {{ ARTIFACTS_DIR }}/linux-$arch-glibc/tako-dev-server.sha256 {{ ARTIFACTS_DIR }}/tako-dev-server-linux-$outarch.sha256 || exit 1; \
-        rm -rf {{ ARTIFACTS_DIR }}/linux-$arch-glibc; \
-    done
-    echo "Built binaries:"
+    rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu 2>/dev/null || true
+    cargo zigbuild -p tako --bin tako --bin tako-dev-server --release --target x86_64-unknown-linux-gnu
+    cargo zigbuild -p tako --bin tako --bin tako-dev-server --release --target aarch64-unknown-linux-gnu
+    cp target/x86_64-unknown-linux-gnu/release/tako {{ ARTIFACTS_DIR }}/tako-linux-x86_64
+    cp target/x86_64-unknown-linux-gnu/release/tako-dev-server {{ ARTIFACTS_DIR }}/tako-dev-server-linux-x86_64
+    cp target/aarch64-unknown-linux-gnu/release/tako {{ ARTIFACTS_DIR }}/tako-linux-aarch64
+    cp target/aarch64-unknown-linux-gnu/release/tako-dev-server {{ ARTIFACTS_DIR }}/tako-dev-server-linux-aarch64
+    @echo "Built binaries:"
     ls -la {{ ARTIFACTS_DIR }}/tako-linux-* {{ ARTIFACTS_DIR }}/tako-dev-server-linux-*
 
 # Build a single tako-server artifact.
-# arch: amd64 | arm64
+# arch: x86_64 | aarch64
 # libc: musl | glibc
-# For the default `testbed.Dockerfile` container from `just testbed::create`
-# (`DOCKER_PLATFORM=linux/arm64` on Alpine), use: `just build::tako-server arm64 musl`.
-tako-server arch libc:
+tako-server arch libc: _require-zigbuild
     mkdir -p {{ ARTIFACTS_DIR }}
-    case "{{ arch }}" in amd64|arm64) ;; *) echo "Invalid arch '{{ arch }}' (expected: amd64 or arm64)" >&2; exit 1 ;; esac
+    #!/usr/bin/env sh
+    set -eu
+    case "{{ arch }}" in x86_64|aarch64) ;; *) echo "Invalid arch '{{ arch }}' (expected: x86_64 or aarch64)" >&2; exit 1 ;; esac
     case "{{ libc }}" in musl|glibc) ;; *) echo "Invalid libc '{{ libc }}' (expected: musl or glibc)" >&2; exit 1 ;; esac
-    docker buildx build -f docker/build.Dockerfile \
-        --platform linux/{{ arch }} \
-        --target tako-server-artifact-{{ libc }} \
-        --output type=local,dest={{ ARTIFACTS_DIR }}/linux-{{ arch }}-{{ libc }} \
-        .
-    if [ "{{ arch }}" = "amd64" ]; then outarch="x86_64"; else outarch="aarch64"; fi; \
-        cp {{ ARTIFACTS_DIR }}/linux-{{ arch }}-{{ libc }}/tako-server {{ ARTIFACTS_DIR }}/tako-server-linux-$outarch-{{ libc }}; \
-        cp {{ ARTIFACTS_DIR }}/linux-{{ arch }}-{{ libc }}/tako-server.sha256 {{ ARTIFACTS_DIR }}/tako-server-linux-$outarch-{{ libc }}.sha256; \
-        rm -rf {{ ARTIFACTS_DIR }}/linux-{{ arch }}-{{ libc }}; \
-        echo "Built binaries:"; \
-        ls -la {{ ARTIFACTS_DIR }}/tako-server-linux-$outarch-{{ libc }} {{ ARTIFACTS_DIR }}/tako-server-linux-$outarch-{{ libc }}.sha256
+    case "{{ libc }}" in
+        musl)  target="{{ arch }}-unknown-linux-musl" ;;
+        glibc) target="{{ arch }}-unknown-linux-gnu" ;;
+    esac
+    rustup target add "$target" 2>/dev/null || true
+    cargo zigbuild -p tako-server --release --target "$target"
+    cp "target/$target/release/tako-server" "{{ ARTIFACTS_DIR }}/tako-server-linux-{{ arch }}-{{ libc }}"
+    echo "Built binaries:"
+    ls -la "{{ ARTIFACTS_DIR }}/tako-server-linux-{{ arch }}-{{ libc }}"
 
-tako-server-all:
+tako-server-all: _require-zigbuild
     for libc in musl glibc; do \
-        for arch in amd64 arm64; do \
+        for arch in x86_64 aarch64; do \
             just build::tako-server "$arch" "$libc" || exit 1; \
         done; \
     done

@@ -27,7 +27,7 @@ pingora-core = { version = "0.8", default-features = false, features = ["openssl
 pingora-proxy = { version = "0.8", default-features = false, features = ["openssl"] }
 pingora-http = "0.8"
 pingora-cache = "0.8"
-openssl = "0.10"
+openssl.workspace = true
 rusqlite = { version = "0.32", features = ["bundled"] }
 thiserror = "2.0"
 dashmap = "6.1"

@@ -23,17 +23,19 @@ jobs:
       matrix:
         include:
           - outarch: x86_64
+            target: x86_64-unknown-linux-gnu
             libc: glibc
             runs_on: ubuntu-latest
           - outarch: aarch64
+            target: aarch64-unknown-linux-gnu
             libc: glibc
             runs_on: ubuntu-24.04-arm
-          - arch: amd64
-            outarch: x86_64
+          - outarch: x86_64
+            target: x86_64-unknown-linux-musl
             libc: musl
             runs_on: ubuntu-latest
-          - arch: arm64
-            outarch: aarch64
+          - outarch: aarch64
+            target: aarch64-unknown-linux-musl
             libc: musl
             runs_on: ubuntu-24.04-arm
 
@@ -41,71 +43,62 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # --- glibc: native cargo build ---
       - name: Setup Rust
-        if: matrix.libc == 'glibc'
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
 
       - name: Cache Rust artifacts
-        if: matrix.libc == 'glibc'
         uses: Swatinem/rust-cache@v2
 
-      - name: Install glibc build dependencies
-        if: matrix.libc == 'glibc'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libsqlite3-dev
+      # zigbuild needed for musl targets (vendored OpenSSL handles glibc without system deps)
+      - name: Install zigbuild
+        if: matrix.libc == 'musl'
+        uses: goto-bus-stop/setup-zig@v2
 
-      - name: Build and package glibc artifacts
-        if: matrix.libc == 'glibc'
+      - name: Install cargo-zigbuild
+        if: matrix.libc == 'musl'
+        run: cargo install cargo-zigbuild --locked
+
+      - name: Build artifacts
         env:
           TAKO_CANARY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           mkdir -p dist
 
-          cargo build -p tako --bin tako --bin tako-dev-server --release
-          cargo build -p tako-server --release
+          if [ "${{ matrix.libc }}" = "musl" ]; then
+            cargo zigbuild -p tako-server --release --target ${{ matrix.target }}
+          else
+            cargo build -p tako --bin tako --bin tako-dev-server --release
+            cargo build -p tako-server --release
+          fi
 
+      - name: Package server artifact
+        run: |
+          set -euo pipefail
+          if [ "${{ matrix.libc }}" = "musl" ]; then
+            server_bin="target/${{ matrix.target }}/release/tako-server"
+          else
+            server_bin="target/release/tako-server"
+          fi
+
+          tmpdir="$(mktemp -d)"
+          cp "$server_bin" "$tmpdir/tako-server"
+          tar -czf "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz" -C "$tmpdir" tako-server
+          sha256sum "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz" > "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz.sha256"
+          rm -rf "$tmpdir"
+
+      - name: Package CLI artifact
+        if: matrix.libc == 'glibc'
+        run: |
+          set -euo pipefail
           tmpdir="$(mktemp -d)"
           cp target/release/tako "$tmpdir/tako"
           cp target/release/tako-dev-server "$tmpdir/tako-dev-server"
           tar -czf "dist/tako-linux-${{ matrix.outarch }}.tar.gz" -C "$tmpdir" tako tako-dev-server
           sha256sum "dist/tako-linux-${{ matrix.outarch }}.tar.gz" > "dist/tako-linux-${{ matrix.outarch }}.tar.gz.sha256"
           rm -rf "$tmpdir"
-
-          tmpdir="$(mktemp -d)"
-          cp target/release/tako-server "$tmpdir/tako-server"
-          tar -czf "dist/tako-server-linux-${{ matrix.outarch }}-glibc.tar.gz" -C "$tmpdir" tako-server
-          sha256sum "dist/tako-server-linux-${{ matrix.outarch }}-glibc.tar.gz" > "dist/tako-server-linux-${{ matrix.outarch }}-glibc.tar.gz.sha256"
-          rm -rf "$tmpdir"
-
-      # --- musl: Docker build on native runner (no QEMU) ---
-      - name: Setup Docker Buildx
-        if: matrix.libc == 'musl'
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build and package musl artifacts
-        if: matrix.libc == 'musl'
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-
-          docker buildx build -f docker/build.Dockerfile \
-            --target "tako-server-artifact-musl" \
-            --build-arg TAKO_CANARY_SHA="$GITHUB_SHA" \
-            --build-arg BUILD_TAKO=0 \
-            --build-arg BUILD_TAKO_SERVER=1 \
-            --cache-from "type=gha,scope=canary-linux-${{ matrix.arch }}-musl" \
-            --cache-to "type=gha,scope=canary-linux-${{ matrix.arch }}-musl,mode=max" \
-            --output "type=local,dest=dist/tako-server-build" \
-            .
-
-          tmpdir="$(mktemp -d)"
-          cp "dist/tako-server-build/tako-server" "$tmpdir/tako-server"
-          tar -czf "dist/tako-server-linux-${{ matrix.outarch }}-musl.tar.gz" -C "$tmpdir" tako-server
-          sha256sum "dist/tako-server-linux-${{ matrix.outarch }}-musl.tar.gz" > "dist/tako-server-linux-${{ matrix.outarch }}-musl.tar.gz.sha256"
-          rm -rf "$tmpdir" "dist/tako-server-build"
 
       - name: Upload Linux server artifact
         uses: actions/upload-artifact@v4
