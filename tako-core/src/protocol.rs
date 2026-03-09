@@ -70,6 +70,12 @@ pub enum Command {
 
     /// Exit upgrading mode for the lock owner.
     ExitUpgrading { owner: String },
+
+    /// Inject an ACME challenge token (for testing HTTP-01 challenge serving).
+    InjectChallengeToken {
+        token: String,
+        key_authorization: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

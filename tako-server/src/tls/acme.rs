@@ -128,10 +128,21 @@ pub struct AcmeClient {
 
 impl AcmeClient {
     pub fn new(config: AcmeConfig, cert_manager: Arc<CertManager>) -> Self {
+        Self::with_tokens(config, cert_manager, Arc::new(RwLock::new(HashMap::new())))
+    }
+
+    /// Create with externally-owned challenge tokens map.
+    /// This allows the proxy and server state to share the same tokens
+    /// even when the ACME client fails to initialize.
+    pub fn with_tokens(
+        config: AcmeConfig,
+        cert_manager: Arc<CertManager>,
+        challenge_tokens: ChallengeTokens,
+    ) -> Self {
         Self {
             config,
             cert_manager,
-            challenge_tokens: Arc::new(RwLock::new(HashMap::new())),
+            challenge_tokens,
             account: RwLock::new(None),
         }
     }

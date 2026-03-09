@@ -760,4 +760,82 @@ mod error_handling {
             Some("error")
         );
     }
+
+}
+
+mod acme_challenge {
+    use super::*;
+
+    /// Verify that injected ACME challenge tokens are served via HTTP.
+    /// This test catches the bug where challenge responses were stored in ctx
+    /// but never written to the HTTP connection (fixed in ceabba1).
+    #[test]
+    fn test_acme_challenge_token_served_via_http() {
+        if !can_bind_localhost() {
+            return;
+        }
+
+        let env = E2EEnvironment::new();
+
+        // Inject a challenge token via socket
+        let response = env.send_command(&serde_json::json!({
+            "command": "inject_challenge_token",
+            "token": "test-token-abc123",
+            "key_authorization": "test-token-abc123.thumbprint-xyz"
+        }));
+        assert_eq!(
+            response.get("status").and_then(|s| s.as_str()),
+            Some("ok"),
+            "inject_challenge_token should succeed: {:?}",
+            response
+        );
+
+        // Make HTTP request to the challenge path
+        let http_response = env
+            .http_get_with_host(
+                "/.well-known/acme-challenge/test-token-abc123",
+                "any-domain.example.com",
+            )
+            .expect("HTTP request should succeed");
+
+        // Verify 200 response with correct key authorization
+        assert!(
+            http_response.contains("200"),
+            "Expected HTTP 200, got: {}",
+            http_response.lines().next().unwrap_or("")
+        );
+        assert!(
+            http_response.contains("test-token-abc123.thumbprint-xyz"),
+            "Response body should contain key authorization, got: {}",
+            http_response
+        );
+    }
+
+    /// Verify that unknown challenge tokens return 404.
+    #[test]
+    fn test_acme_challenge_unknown_token_returns_404() {
+        if !can_bind_localhost() {
+            return;
+        }
+
+        let env = E2EEnvironment::new();
+
+        let http_response = env
+            .http_get_with_host(
+                "/.well-known/acme-challenge/nonexistent-token",
+                "any-domain.example.com",
+            )
+            .expect("HTTP request should succeed");
+
+        assert!(
+            http_response.contains("404"),
+            "Expected HTTP 404 for unknown token, got: {}",
+            http_response.lines().next().unwrap_or("")
+        );
+        assert!(
+            http_response.contains("Token not found"),
+            "Response should say 'Token not found', got: {}",
+            http_response
+        );
+    }
 }

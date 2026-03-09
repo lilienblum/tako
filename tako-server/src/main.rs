@@ -31,7 +31,7 @@ use crate::socket::{
     SocketServer,
 };
 use crate::state_store::{SqliteStateStore, StateStoreError};
-use crate::tls::{AcmeClient, AcmeConfig, CertInfo, CertManager, CertManagerConfig};
+use crate::tls::{AcmeClient, AcmeConfig, CertInfo, CertManager, CertManagerConfig, ChallengeTokens};
 use clap::Parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -272,6 +272,8 @@ pub struct ServerState {
     cert_manager: Arc<CertManager>,
     /// ACME client (optional)
     acme_client: Option<Arc<AcmeClient>>,
+    /// HTTP-01 challenge tokens (always present for testing/proxy use)
+    challenge_tokens: ChallengeTokens,
     /// Route table (app_name -> route patterns)
     routes: Arc<RwLock<RouteTable>>,
 
@@ -296,15 +298,17 @@ impl ServerState {
         data_dir: PathBuf,
         cert_manager: Arc<CertManager>,
         acme_client: Option<Arc<AcmeClient>>,
+        challenge_tokens: ChallengeTokens,
     ) -> Result<Self, StateStoreError> {
         let runtime = ServerRuntimeConfig::for_defaults(data_dir.clone());
-        Self::new_with_runtime(data_dir, cert_manager, acme_client, runtime)
+        Self::new_with_runtime(data_dir, cert_manager, acme_client, challenge_tokens, runtime)
     }
 
     pub fn new_with_runtime(
         data_dir: PathBuf,
         cert_manager: Arc<CertManager>,
         acme_client: Option<Arc<AcmeClient>>,
+        challenge_tokens: ChallengeTokens,
         runtime: ServerRuntimeConfig,
     ) -> Result<Self, StateStoreError> {
         let app_manager = Arc::new(AppManager::new());
@@ -333,6 +337,7 @@ impl ServerState {
             load_balancer,
             cert_manager,
             acme_client,
+            challenge_tokens,
             routes: Arc::new(RwLock::new(RouteTable::default())),
             deploy_locks: RwLock::new(HashMap::new()),
             cold_start: Arc::new(ColdStartManager::new(ColdStartConfig::default())),
@@ -616,6 +621,17 @@ impl ServerState {
                 ),
                 Err(e) => Response::error(format!("Failed to exit upgrading mode: {}", e)),
             },
+            Command::InjectChallengeToken {
+                token,
+                key_authorization,
+            } => {
+                let mut tokens = self.challenge_tokens.write();
+                tokens.insert(token.clone(), key_authorization);
+                Response::ok(serde_json::json!({
+                    "status": "injected",
+                    "token": token
+                }))
+            }
         }
     }
 
@@ -1879,6 +1895,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .bind()
         .map_err(|e| format!("Failed to bind management socket: {e}"))?;
 
+    // Shared challenge tokens for HTTP-01 validation.
+    // Always created so the proxy can serve challenge responses and tests can inject tokens.
+    let challenge_tokens: ChallengeTokens = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+
     // Create ACME client if enabled
     let acme_client = if args.no_acme {
         tracing::info!("ACME disabled, using manual certificate management");
@@ -1893,7 +1913,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ..Default::default()
         };
 
-        let client = Arc::new(AcmeClient::new(acme_config, cert_manager.clone()));
+        let client = Arc::new(AcmeClient::with_tokens(
+            acme_config,
+            cert_manager.clone(),
+            challenge_tokens.clone(),
+        ));
 
         // Initialize ACME account
         if let Err(e) = rt.block_on(client.init()) {
@@ -1912,8 +1936,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    // Get ACME challenge tokens for proxy
-    let acme_tokens = acme_client.as_ref().map(|c| c.challenge_tokens());
+    // Always pass challenge tokens to proxy so HTTP-01 challenges are served
+    let acme_tokens = Some(challenge_tokens.clone());
 
     // Create server state
     let runtime = ServerRuntimeConfig {
@@ -1933,6 +1957,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         data_dir.clone(),
         cert_manager.clone(),
         acme_client.clone(),
+        challenge_tokens,
         runtime,
     )?);
 
@@ -2406,6 +2431,10 @@ mod tests {
     use tako_core::UpgradeMode;
     use tempfile::TempDir;
 
+    fn empty_challenge_tokens() -> super::ChallengeTokens {
+        Arc::new(parking_lot::RwLock::new(HashMap::new()))
+    }
+
     #[test]
     fn default_server_log_filter_is_warn() {
         assert_eq!(super::DEFAULT_SERVER_LOG_FILTER, "warn");
@@ -2549,7 +2578,7 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         let response = state
             .handle_command(Command::Deploy {
@@ -2576,7 +2605,7 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         let outside_release = temp.path().join("outside-release");
         std::fs::create_dir_all(&outside_release).unwrap();
@@ -2609,7 +2638,7 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         let release_dir = temp
             .path()
@@ -2855,7 +2884,7 @@ exit 1
         }));
         cert_manager.init().unwrap();
         let state =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
 
         let cert = state
             .ensure_route_certificate("my-app", "tako-bun-server.orb.local")
@@ -2877,7 +2906,7 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         let release_dir = temp
             .path()
@@ -2928,7 +2957,7 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         let response = state
             .handle_command(Command::Delete {
@@ -2946,7 +2975,7 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         let response = state
             .handle_command(Command::Delete {
@@ -2967,7 +2996,7 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
         state.set_server_mode(UpgradeMode::Upgrading).await.unwrap();
 
         let response = state
@@ -2992,7 +3021,7 @@ exit 1
         }));
 
         let state_a =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
         state_a
             .set_server_mode(UpgradeMode::Upgrading)
             .await
@@ -3003,7 +3032,7 @@ exit 1
 
         // On restart, stale Upgrading mode AND orphaned lock should be cleared.
         let state_b =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
         assert_eq!(*state_b.server_mode.read().await, UpgradeMode::Normal);
         // A new owner should be able to acquire immediately (no 10-min stale wait).
         assert!(state_b.try_enter_upgrading("new-cli").await.unwrap());
@@ -3017,8 +3046,8 @@ exit 1
             ..Default::default()
         }));
         let state_a =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
-        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
+        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         assert!(state_a.try_enter_upgrading("controller-a").await.unwrap());
         assert!(!state_b.try_enter_upgrading("controller-b").await.unwrap());
@@ -3047,7 +3076,7 @@ exit 1
             dns_provider: None,
         };
         let state =
-            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, runtime)
+            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens(), runtime)
                 .unwrap();
         state
             .set_server_mode(UpgradeMode::Upgrading)
@@ -3083,7 +3112,7 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         let enter = state
             .handle_command(Command::EnterUpgrading {
@@ -3127,7 +3156,7 @@ exit 1
         }));
 
         let state_a =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
         let release_dir = temp
             .path()
             .join("apps")
@@ -3172,7 +3201,7 @@ exit 1
         state_a.persist_app_state("my-app").await;
         drop(state_a);
 
-        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
         state_b.restore_from_state_store().await.unwrap();
 
         let restored = state_b.app_manager.get_app("my-app").expect("app restored");
@@ -3201,7 +3230,7 @@ exit 1
             ..Default::default()
         }));
         let state_a =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
         let release_dir = temp
             .path()
             .join("apps")
@@ -3247,7 +3276,7 @@ exit 1
             dns_provider: None,
         };
         let state_b =
-            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, runtime)
+            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens(), runtime)
                 .unwrap();
         state_b.restore_from_state_store().await.unwrap();
         let restored = state_b.app_manager.get_app("my-app").expect("app restored");
@@ -3262,7 +3291,7 @@ exit 1
             ..Default::default()
         }));
         let state_a =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
 
         let release_dir = temp
             .path()
@@ -3298,7 +3327,7 @@ exit 1
             .await;
         assert!(matches!(response, Response::Ok { .. }));
 
-        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
         state_b.restore_from_state_store().await.unwrap();
         assert!(state_b.app_manager.get_app("my-app").is_none());
     }
@@ -3310,7 +3339,7 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         let release_dir = temp
             .path()
@@ -3375,7 +3404,7 @@ exit 1
             ..ServerRuntimeConfig::for_defaults(temp.path().to_path_buf())
         };
         let state =
-            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, runtime)
+            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens(), runtime)
                 .unwrap();
 
         let fake_bin_dir = temp.path().join("bin");
@@ -3513,7 +3542,7 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         let app = state.app_manager.register_app(AppConfig {
             name: "idle-app".to_string(),
@@ -3553,7 +3582,7 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
 
         let app = state.app_manager.register_app(AppConfig {
             name: "my-app".to_string(),
