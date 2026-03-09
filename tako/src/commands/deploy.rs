@@ -52,6 +52,7 @@ struct ServerDeployTarget {
     server: ServerEntry,
     target_label: String,
     archive_path: PathBuf,
+    artifact_sha256: String,
     instances: u8,
     idle_timeout: u32,
 }
@@ -741,11 +742,13 @@ async fn run_async(
                 target_label, server_name
             )
         })?;
+        let artifact_sha256 = read_artifact_sha256(archive_path)?;
         targets.push(ServerDeployTarget {
             name: server_name.clone(),
             server,
             target_label,
             archive_path: archive_path.clone(),
+            artifact_sha256,
             instances: tako_config.get_effective_instances(server_name),
             idle_timeout: tako_config.get_effective_idle_timeout(server_name),
         });
@@ -819,6 +822,7 @@ async fn run_async(
         let server_name = target.name.clone();
         let target_label = target.target_label.clone();
         let archive_path = target.archive_path.clone();
+        let artifact_sha256 = target.artifact_sha256.clone();
         let deploy_config = deploy_config.clone();
         let instances = target.instances;
         let idle_timeout = target.idle_timeout;
@@ -828,6 +832,7 @@ async fn run_async(
                 &deploy_config,
                 &server,
                 &archive_path,
+                &artifact_sha256,
                 &target_label,
                 instances,
                 idle_timeout,
@@ -2268,6 +2273,24 @@ fn artifact_cache_metadata_path_for_archive(archive_path: &Path) -> Option<PathB
     Some(archive_path.with_file_name(format!("{stem}.json")))
 }
 
+fn read_artifact_sha256(archive_path: &Path) -> Result<String, String> {
+    let metadata_path = artifact_cache_metadata_path_for_archive(archive_path)
+        .ok_or_else(|| format!("Cannot derive metadata path from {}", archive_path.display()))?;
+    let bytes = std::fs::read(&metadata_path).map_err(|e| {
+        format!(
+            "Failed to read artifact metadata {}: {e}",
+            metadata_path.display()
+        )
+    })?;
+    let metadata: ArtifactCacheMetadata = serde_json::from_slice(&bytes).map_err(|e| {
+        format!(
+            "Failed to parse artifact metadata {}: {e}",
+            metadata_path.display()
+        )
+    })?;
+    Ok(metadata.artifact_sha256)
+}
+
 fn artifact_cache_archive_path_for_metadata(metadata_path: &Path) -> Option<PathBuf> {
     let file_name = metadata_path.file_name()?.to_str()?;
     let stem = file_name.strip_suffix(".json")?;
@@ -3502,6 +3525,7 @@ async fn deploy_to_server(
     config: &DeployConfig,
     server: &ServerEntry,
     archive_path: &Path,
+    artifact_sha256: &str,
     target_label: &str,
     instances: u8,
     idle_timeout: u32,
@@ -3608,18 +3632,54 @@ async fn deploy_to_server(
         })
         .await?;
 
-        // Upload target-specific archive artifact.
+        // Upload target-specific archive artifact (skip if server already has it).
         let remote_archive = remote_release_archive_path(&release_dir);
-        run_deploy_step(
-            "Uploading artifact",
-            "Artifact uploaded",
-            use_spinner,
-            async {
-                ssh.upload(archive_path, &remote_archive).await
-                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
-            },
-        )
-        .await?;
+        let artifact_cache_dir = "/opt/tako/artifact-cache";
+        let cached_artifact_path = format!("{}/{}.tar.zst", artifact_cache_dir, artifact_sha256);
+        let has_cached = ssh
+            .exec(&format!(
+                "test -f {} && echo hit || echo miss",
+                cached_artifact_path
+            ))
+            .await
+            .map(|r| r.stdout.trim() == "hit")
+            .unwrap_or(false);
+
+        if has_cached {
+            run_deploy_step(
+                "Linking cached artifact",
+                "Artifact cached (skip upload)",
+                use_spinner,
+                async {
+                    ssh.exec_checked(&format!(
+                        "cp {} {}",
+                        cached_artifact_path, remote_archive
+                    ))
+                    .await?;
+                    Ok::<(), SshError>(())
+                },
+            )
+            .await?;
+        } else {
+            run_deploy_step(
+                "Uploading artifact",
+                "Artifact uploaded",
+                use_spinner,
+                async {
+                    ssh.upload(archive_path, &remote_archive)
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
+                },
+            )
+            .await?;
+            // Cache the artifact for future deploys (best-effort).
+            let _ = ssh
+                .exec(&format!(
+                    "mkdir -p {} && cp {} {}",
+                    artifact_cache_dir, remote_archive, cached_artifact_path
+                ))
+                .await;
+        }
 
         // Extract archive, symlink shared dirs, and write runtime manifest in one exec.
         let resolved_main = config.main.clone();
