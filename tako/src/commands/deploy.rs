@@ -291,8 +291,7 @@ async fn run_async(
             .await
             .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     // Preflight: check all servers in parallel — verify they're reachable,
-    // not upgrading, not locked by another deploy, and (if wildcard routes)
-    // have DNS provider configured.
+    // not upgrading, and (if wildcard routes) have DNS provider configured.
     {
         use crate::commands::server::{apply_dns_config, fetch_dns_config, prompt_dns_setup};
 
@@ -302,14 +301,12 @@ async fn run_async(
             dns_provider: Option<String>,
         }
 
-        let app_name_for_lock = app_name.clone();
         let mut check_set = tokio::task::JoinSet::new();
         for server_name in &server_names {
             let server = servers
                 .get(server_name)
                 .ok_or_else(|| format!("Server '{}' not found in servers.toml", server_name))?;
             let name = server_name.clone();
-            let app = app_name_for_lock.clone();
             let ssh_config = SshConfig::from_server(&server.host, server.port);
             check_set.spawn(async move {
                 let mut ssh = SshClient::new(ssh_config);
@@ -339,36 +336,7 @@ async fn run_async(
                     }
                 }
 
-                // Check for existing deploy lock
-                let lock_dir = format!("/opt/tako/apps/{}/.deploy_lock", app);
-                let lock_check = ssh
-                    .exec(&format!(
-                        "if [ -d '{}' ]; then cat {}/ts 2>/dev/null || echo 0; else echo none; fi",
-                        lock_dir, lock_dir,
-                    ))
-                    .await?;
                 let _ = ssh.disconnect().await;
-
-                let lock_result = lock_check.stdout.trim();
-                if lock_result != "none" {
-                    // Lock exists — check if stale (> 30 min)
-                    if let Ok(ts) = lock_result.parse::<i64>() {
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap()
-                            .as_secs() as i64;
-                        let elapsed = now - ts;
-                        if elapsed < 30 * 60 {
-                            let remaining_secs = 30 * 60 - elapsed;
-                            let remaining_min = (remaining_secs + 59) / 60;
-                            return Err(crate::ssh::SshError::CommandFailed(format!(
-                                "{} not ready: active deploy in progress (try again in ~{}m)",
-                                name, remaining_min,
-                            )));
-                        }
-                    }
-                    // Stale lock — will be auto-cleared on deploy
-                }
 
                 Ok::<_, crate::ssh::SshError>(ServerCheck {
                     name,
@@ -3536,49 +3504,6 @@ async fn deploy_to_server(
     run_deploy_step("Connecting", "Connected", use_spinner, ssh.connect()).await?;
     let archive_size_bytes = std::fs::metadata(archive_path)?.len();
 
-    // Server-side deploy lock. Prevents concurrent deploys of the same app.
-    // The lock dir contains a timestamp file so stale locks (from dropped
-    // connections / Ctrl+C) can be detected and force-removed.
-    let lock_dir = format!("{}/.deploy_lock", config.remote_base);
-    let lock_ts = format!("{}/ts", lock_dir);
-    let stale_seconds = 30 * 60; // 30 minutes
-    let lock_cmd = format!(
-        "mkdir -p {base} && \
-         if mkdir {lock} 2>/dev/null; then \
-           date +%s > {ts} && echo ok; \
-         else \
-           ts=$(cat {ts} 2>/dev/null || echo 0); \
-           now=$(date +%s); \
-           age=$((now - ts)); \
-           if [ \"$age\" -gt {stale} ]; then \
-             rm -rf {lock} && mkdir {lock} && date +%s > {ts} && echo ok_stale; \
-           else \
-             echo locked; \
-           fi; \
-         fi",
-        base = config.remote_base,
-        lock = lock_dir,
-        ts = lock_ts,
-        stale = stale_seconds,
-    );
-    let lock_check = run_deploy_step(
-        "Acquiring deploy lock",
-        "Deploy lock acquired",
-        use_spinner,
-        ssh.exec(&lock_cmd),
-    )
-    .await?;
-    let lock_result = lock_check.stdout.trim();
-    if lock_result == "locked" {
-        let _ = ssh.disconnect().await;
-        return Err(format!(
-            "deploy lock already held at {} (will auto-expire after {} minutes)",
-            lock_dir,
-            stale_seconds / 60,
-        )
-        .into());
-    }
-
     run_deploy_step(
         "Checking remote disk space",
         "Disk space OK",
@@ -3780,11 +3705,6 @@ async fn deploy_to_server(
             "Failed to cleanup partial release directory"
         );
     }
-
-    // Always release lock (best-effort).
-    let _ = ssh
-        .exec(&format!("rm -rf {} 2>/dev/null || true", lock_dir))
-        .await;
 
     // Always disconnect (best-effort).
     let _ = ssh.disconnect().await;
