@@ -863,8 +863,36 @@ EOF
   chmod 0755 /etc/init.d/tako-server
 }
 
+install_systemd_worker_unit() {
+  cat > /etc/systemd/system/tako-server-worker.service <<EOF
+[Unit]
+Description=Tako Server Worker
+After=network.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+User=$TAKO_USER
+Group=$TAKO_USER
+NoNewPrivileges=true
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ExecStart=/usr/local/bin/tako-server --worker --socket $TAKO_SOCKET --data-dir $TAKO_HOME --instance-port-offset 1000
+Restart=always
+RestartSec=1
+KillMode=mixed
+TimeoutStopSec=30min
+RuntimeDirectory=tako
+RuntimeDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
 if [ "$SERVICE_MANAGER" = "systemd" ]; then
   install_systemd_service_unit
+  install_systemd_worker_unit
 elif [ "$SERVICE_MANAGER" = "openrc" ]; then
   install_openrc_service_script
 fi

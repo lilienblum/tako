@@ -107,6 +107,8 @@ pub struct ServerRuntimeInfo {
     pub instance_port_offset: u16,
     #[serde(default)]
     pub dns_provider: Option<String>,
+    #[serde(default)]
+    pub worker: bool,
 }
 
 /// Response from the server

@@ -31,7 +31,9 @@ use crate::socket::{
     SocketServer,
 };
 use crate::state_store::{SqliteStateStore, StateStoreError};
-use crate::tls::{AcmeClient, AcmeConfig, CertInfo, CertManager, CertManagerConfig, ChallengeTokens};
+use crate::tls::{
+    AcmeClient, AcmeConfig, CertInfo, CertManager, CertManagerConfig, ChallengeTokens,
+};
 use clap::Parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -96,6 +98,13 @@ pub struct Args {
     #[arg(long)]
     pub dns_provider: Option<String>,
 
+    /// Run as a worker: serve traffic with minimal scaling (max 1 instance
+    /// per app), skip management socket and ACME. Monitors the primary
+    /// server's socket — promotes to full mode if primary is unavailable,
+    /// shuts down gracefully when primary comes back.
+    #[arg(long)]
+    pub worker: bool,
+
     /// Extract a `.tar.zst` archive into a destination directory and exit.
     #[arg(long, hide = true)]
     pub extract_zstd_archive: Option<String>,
@@ -118,6 +127,7 @@ pub struct ServerRuntimeConfig {
     renewal_interval_hours: u64,
     instance_port_offset: u16,
     dns_provider: Option<String>,
+    worker: bool,
 }
 
 impl ServerRuntimeConfig {
@@ -134,6 +144,7 @@ impl ServerRuntimeConfig {
             renewal_interval_hours: 12,
             instance_port_offset: 0,
             dns_provider: None,
+            worker: false,
         }
     }
 
@@ -151,6 +162,7 @@ impl ServerRuntimeConfig {
             renewal_interval_hours: self.renewal_interval_hours,
             instance_port_offset: self.instance_port_offset,
             dns_provider: self.dns_provider.clone(),
+            worker: self.worker,
         }
     }
 
@@ -270,8 +282,8 @@ pub struct ServerState {
     load_balancer: Arc<LoadBalancer>,
     /// Certificate manager
     cert_manager: Arc<CertManager>,
-    /// ACME client (optional)
-    acme_client: Option<Arc<AcmeClient>>,
+    /// ACME client (optional, behind RwLock for runtime → full promotion)
+    acme_client: RwLock<Option<Arc<AcmeClient>>>,
     /// HTTP-01 challenge tokens (always present for testing/proxy use)
     challenge_tokens: ChallengeTokens,
     /// Route table (app_name -> route patterns)
@@ -301,7 +313,13 @@ impl ServerState {
         challenge_tokens: ChallengeTokens,
     ) -> Result<Self, StateStoreError> {
         let runtime = ServerRuntimeConfig::for_defaults(data_dir.clone());
-        Self::new_with_runtime(data_dir, cert_manager, acme_client, challenge_tokens, runtime)
+        Self::new_with_runtime(
+            data_dir,
+            cert_manager,
+            acme_client,
+            challenge_tokens,
+            runtime,
+        )
     }
 
     pub fn new_with_runtime(
@@ -336,7 +354,7 @@ impl ServerState {
             app_manager,
             load_balancer,
             cert_manager,
-            acme_client,
+            acme_client: RwLock::new(acme_client),
             challenge_tokens,
             routes: Arc::new(RwLock::new(RouteTable::default())),
             deploy_locks: RwLock::new(HashMap::new()),
@@ -349,6 +367,11 @@ impl ServerState {
 
     pub fn cold_start(&self) -> Arc<ColdStartManager> {
         self.cold_start.clone()
+    }
+
+    /// Set the ACME client (used during runtime → full promotion)
+    pub async fn set_acme_client(&self, client: Arc<AcmeClient>) {
+        *self.acme_client.write().await = Some(client);
     }
 
     /// Get or create a deploy lock for an app
@@ -420,6 +443,13 @@ impl ServerState {
             let mut config = persisted.config.clone();
             let app_name = config.name.clone();
             let routes = persisted.routes.clone();
+
+            // In worker mode, cap scaling to 1 instance to minimize resources.
+            if self.runtime.worker && config.min_instances > 1 {
+                config.min_instances = 1;
+                config.max_instances = config.max_instances.max(1);
+            }
+
             let should_start = config.min_instances > 0;
             config.base_port =
                 self.select_runtime_base_port(config.base_port, config.max_instances);
@@ -1164,7 +1194,8 @@ impl ServerState {
 
     /// Request a certificate for a domain via ACME
     pub async fn request_certificate(&self, domain: &str) -> Response {
-        let acme = match &self.acme_client {
+        let acme_guard = self.acme_client.read().await;
+        let acme = match acme_guard.as_ref() {
             Some(acme) => acme,
             None => return Response::error("ACME is disabled".to_string()),
         };
@@ -1267,7 +1298,8 @@ impl ServerState {
             }
         }
 
-        let Some(acme) = &self.acme_client else {
+        let acme_guard = self.acme_client.read().await;
+        let Some(acme) = acme_guard.as_ref() else {
             return None;
         };
 
@@ -1849,7 +1881,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "/var/lib/tako".to_string()
     });
 
+    let worker = args.worker;
+
     tracing::info!("Tako Server v{}", env!("CARGO_PKG_VERSION"));
+    if worker {
+        tracing::info!("Mode: worker");
+    }
     tracing::info!("Socket: {}", socket);
     tracing::info!("HTTP port: {}", args.port);
     tracing::info!("HTTPS port: {}", args.tls_port);
@@ -1890,18 +1927,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Bind management socket EARLY — before any potentially slow init (ACME, SQLite).
     // This ensures the new process takes over the symlink within milliseconds of
     // starting, so `tako servers upgrade` never times out waiting for the socket.
-    let socket_server = SocketServer::new(&socket);
-    let socket_listener = socket_server
-        .bind()
-        .map_err(|e| format!("Failed to bind management socket: {e}"))?;
+    // In worker mode, skip binding — let the primary own the socket.
+    let (_socket_server, socket_listener) = if worker {
+        (None, None)
+    } else {
+        let server = SocketServer::new(&socket);
+        let listener = server
+            .bind()
+            .map_err(|e| format!("Failed to bind management socket: {e}"))?;
+        (Some(server), Some(listener))
+    };
 
     // Shared challenge tokens for HTTP-01 validation.
     // Always created so the proxy can serve challenge responses and tests can inject tokens.
     let challenge_tokens: ChallengeTokens = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
-    // Create ACME client if enabled
-    let acme_client = if args.no_acme {
-        tracing::info!("ACME disabled, using manual certificate management");
+    // Create ACME client if enabled (skip in worker mode)
+    let acme_client = if args.no_acme || worker {
+        if worker {
+            tracing::info!("ACME disabled (worker mode)");
+        } else {
+            tracing::info!("ACME disabled, using manual certificate management");
+        }
         None
     } else {
         let acme_config = AcmeConfig {
@@ -1952,7 +1999,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         renewal_interval_hours: args.renewal_interval_hours,
         instance_port_offset: args.instance_port_offset,
         dns_provider: args.dns_provider.clone(),
+        worker,
     };
+    // Clone challenge_tokens before moving into ServerState (needed for runtime promotion)
+    let challenge_tokens_for_promote = challenge_tokens.clone();
     let state = Arc::new(ServerState::new_with_runtime(
         data_dir.clone(),
         cert_manager.clone(),
@@ -2080,18 +2130,151 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rt.spawn(certificate_renewal_task(acme_clone, interval));
     }
 
-    // Start management socket accept loop (listener was bound early, before ACME/SQLite init)
-    let socket_state = state.clone();
-    rt.spawn(async move {
-        if let Err(e) = SocketServer::serve(socket_listener, move |cmd| {
-            let state = socket_state.clone();
-            async move { state.handle_command(cmd).await }
-        })
-        .await
-        {
-            tracing::error!("Socket server error: {}", e);
-        }
-    });
+    // Start management socket accept loop (listener was bound early, before ACME/SQLite init).
+    // In worker mode, no socket is bound — the primary owns it.
+    if let Some(socket_listener) = socket_listener {
+        let socket_state = state.clone();
+        rt.spawn(async move {
+            if let Err(e) = SocketServer::serve(socket_listener, move |cmd| {
+                let state = socket_state.clone();
+                async move { state.handle_command(cmd).await }
+            })
+            .await
+            {
+                tracing::error!("Socket server error: {}", e);
+            }
+        });
+    }
+
+    // In worker mode, monitor the primary's management socket.
+    // - If primary goes down: promote to full mode (bind socket, init ACME).
+    // - If primary comes back (after we promoted): gracefully shut down.
+    if worker {
+        let socket_path = socket.clone();
+        let promote_state = state.clone();
+        let promote_cert_manager = cert_manager.clone();
+        let promote_args_acme_staging = args.acme_staging;
+        let promote_args_acme_email = args.acme_email.clone();
+        let promote_args_dns_provider = args.dns_provider.clone();
+        let promote_args_no_acme = args.no_acme;
+        let promote_renewal_hours = args.renewal_interval_hours;
+        let promote_data_dir = data_dir.clone();
+        let promote_challenge_tokens = challenge_tokens_for_promote;
+        let our_pid = std::process::id();
+        rt.spawn(async move {
+            const PROBE_INTERVAL: Duration = Duration::from_secs(5);
+            const FAILURE_THRESHOLD: u32 = 3;
+            let mut consecutive_failures: u32 = 0;
+            let mut promoted = false;
+
+            loop {
+                tokio::time::sleep(PROBE_INTERVAL).await;
+
+                let probe_result = probe_primary_socket(&socket_path, our_pid).await;
+
+                match probe_result {
+                    PrimaryStatus::Alive => {
+                        if promoted {
+                            // Primary came back — we should shut down gracefully.
+                            tracing::info!("Primary server is back — worker shutting down");
+                            #[cfg(unix)]
+                            unsafe {
+                                libc::kill(libc::getpid(), libc::SIGTERM);
+                            }
+                            break;
+                        }
+                        if consecutive_failures > 0 {
+                            tracing::debug!("Primary socket is alive again");
+                        }
+                        consecutive_failures = 0;
+                    }
+                    PrimaryStatus::IsUs => {
+                        // Socket points to us (we promoted) — keep running.
+                        consecutive_failures = 0;
+                    }
+                    PrimaryStatus::Down => {
+                        consecutive_failures += 1;
+                        tracing::warn!(
+                            failures = consecutive_failures,
+                            "Primary management socket not responding"
+                        );
+
+                        if consecutive_failures >= FAILURE_THRESHOLD && !promoted {
+                            tracing::info!("Promoting worker to full mode");
+
+                            let server = SocketServer::new(&socket_path);
+                            match server.bind() {
+                                Ok(listener) => {
+                                    let socket_state = promote_state.clone();
+                                    tokio::spawn(async move {
+                                        if let Err(e) = SocketServer::serve(listener, move |cmd| {
+                                            let state = socket_state.clone();
+                                            async move { state.handle_command(cmd).await }
+                                        })
+                                        .await
+                                        {
+                                            tracing::error!(
+                                                "Socket server error after promotion: {e}"
+                                            );
+                                        }
+                                    });
+                                    // Prevent Drop from removing socket file
+                                    std::mem::forget(server);
+                                    tracing::info!("Management socket bound after promotion");
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "Failed to bind management socket on promotion: {e}"
+                                    );
+                                    consecutive_failures = 0;
+                                    continue;
+                                }
+                            }
+
+                            // Initialize ACME if enabled
+                            if !promote_args_no_acme {
+                                let acme_dir = promote_data_dir.join("acme");
+                                let acme_config = AcmeConfig {
+                                    staging: promote_args_acme_staging,
+                                    email: promote_args_acme_email.clone(),
+                                    account_dir: acme_dir,
+                                    dns_provider: promote_args_dns_provider.clone(),
+                                    data_dir: promote_data_dir.clone(),
+                                    ..Default::default()
+                                };
+                                let client = Arc::new(AcmeClient::with_tokens(
+                                    acme_config,
+                                    promote_cert_manager.clone(),
+                                    promote_challenge_tokens.clone(),
+                                ));
+                                match client.init().await {
+                                    Ok(()) => {
+                                        tracing::info!("ACME initialized after promotion");
+                                        let interval =
+                                            Duration::from_secs(promote_renewal_hours * 3600);
+                                        tokio::spawn(certificate_renewal_task(
+                                            client.clone(),
+                                            interval,
+                                        ));
+                                        promote_state.set_acme_client(client).await;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to init ACME after promotion: {e}");
+                                    }
+                                }
+                            }
+
+                            promoted = true;
+                            consecutive_failures = 0;
+                            tracing::info!(
+                                "Promotion complete — worker now running as full server"
+                            );
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     // Best-effort cleanup for stale app unix socket files.
     // This matters if an app crashes and leaves behind a stale socket path.
@@ -2409,6 +2592,56 @@ async fn replace_instance_if_needed(
     }
 }
 
+/// Result of probing the primary management socket.
+enum PrimaryStatus {
+    /// Primary is alive and it's a different process.
+    Alive,
+    /// Socket connects but points to our own PID (we promoted earlier).
+    IsUs,
+    /// Socket is unreachable or not responding.
+    Down,
+}
+
+/// Probe the primary management socket. Sends a `server_info` command and
+/// checks the PID in the response to distinguish "primary" from "us".
+async fn probe_primary_socket(socket_path: &str, our_pid: u32) -> PrimaryStatus {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut stream = match tokio::net::UnixStream::connect(socket_path).await {
+        Ok(s) => s,
+        Err(_) => return PrimaryStatus::Down,
+    };
+
+    let cmd = "{\"command\":\"server_info\"}\n";
+    if stream.write_all(cmd.as_bytes()).await.is_err() {
+        return PrimaryStatus::Down;
+    }
+    let _ = stream.shutdown().await;
+
+    let mut buf = Vec::new();
+    let _ = stream.read_to_end(&mut buf).await;
+    let response = String::from_utf8_lossy(&buf);
+
+    if !response.contains("\"status\":\"ok\"") {
+        return PrimaryStatus::Down;
+    }
+
+    // Parse PID from response to distinguish primary from ourselves
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
+        if let Some(pid) = parsed
+            .get("data")
+            .and_then(|d| d.get("pid"))
+            .and_then(|p| p.as_u64())
+        {
+            if pid as u32 == our_pid {
+                return PrimaryStatus::IsUs;
+            }
+        }
+    }
+
+    PrimaryStatus::Alive
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -2578,7 +2811,13 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let response = state
             .handle_command(Command::Deploy {
@@ -2605,7 +2844,13 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let outside_release = temp.path().join("outside-release");
         std::fs::create_dir_all(&outside_release).unwrap();
@@ -2638,7 +2883,13 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let release_dir = temp
             .path()
@@ -2883,8 +3134,13 @@ exit 1
             ..Default::default()
         }));
         cert_manager.init().unwrap();
-        let state =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager.clone(),
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let cert = state
             .ensure_route_certificate("my-app", "tako-bun-server.orb.local")
@@ -2906,7 +3162,13 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let release_dir = temp
             .path()
@@ -2957,7 +3219,13 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let response = state
             .handle_command(Command::Delete {
@@ -2975,7 +3243,13 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let response = state
             .handle_command(Command::Delete {
@@ -2996,7 +3270,13 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
         state.set_server_mode(UpgradeMode::Upgrading).await.unwrap();
 
         let response = state
@@ -3020,8 +3300,13 @@ exit 1
             ..Default::default()
         }));
 
-        let state_a =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
+        let state_a = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager.clone(),
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
         state_a
             .set_server_mode(UpgradeMode::Upgrading)
             .await
@@ -3031,8 +3316,13 @@ exit 1
         drop(state_a);
 
         // On restart, stale Upgrading mode AND orphaned lock should be cleared.
-        let state_b =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
+        let state_b = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager.clone(),
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
         assert_eq!(*state_b.server_mode.read().await, UpgradeMode::Normal);
         // A new owner should be able to acquire immediately (no 10-min stale wait).
         assert!(state_b.try_enter_upgrading("new-cli").await.unwrap());
@@ -3045,9 +3335,20 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state_a =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
-        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state_a = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager.clone(),
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
+        let state_b = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         assert!(state_a.try_enter_upgrading("controller-a").await.unwrap());
         assert!(!state_b.try_enter_upgrading("controller-b").await.unwrap());
@@ -3074,10 +3375,16 @@ exit 1
             renewal_interval_hours: 24,
             instance_port_offset: 10000,
             dns_provider: None,
+            worker: false,
         };
-        let state =
-            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens(), runtime)
-                .unwrap();
+        let state = ServerState::new_with_runtime(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+            runtime,
+        )
+        .unwrap();
         state
             .set_server_mode(UpgradeMode::Upgrading)
             .await
@@ -3112,7 +3419,13 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let enter = state
             .handle_command(Command::EnterUpgrading {
@@ -3155,8 +3468,13 @@ exit 1
             ..Default::default()
         }));
 
-        let state_a =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
+        let state_a = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager.clone(),
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
         let release_dir = temp
             .path()
             .join("apps")
@@ -3201,7 +3519,13 @@ exit 1
         state_a.persist_app_state("my-app").await;
         drop(state_a);
 
-        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state_b = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
         state_b.restore_from_state_store().await.unwrap();
 
         let restored = state_b.app_manager.get_app("my-app").expect("app restored");
@@ -3229,8 +3553,13 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state_a =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
+        let state_a = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager.clone(),
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
         let release_dir = temp
             .path()
             .join("apps")
@@ -3274,10 +3603,16 @@ exit 1
             renewal_interval_hours: 12,
             instance_port_offset: 10_000,
             dns_provider: None,
+            worker: false,
         };
-        let state_b =
-            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens(), runtime)
-                .unwrap();
+        let state_b = ServerState::new_with_runtime(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+            runtime,
+        )
+        .unwrap();
         state_b.restore_from_state_store().await.unwrap();
         let restored = state_b.app_manager.get_app("my-app").expect("app restored");
         assert_ne!(restored.config.read().base_port, 65_000);
@@ -3290,8 +3625,13 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state_a =
-            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None, empty_challenge_tokens()).unwrap();
+        let state_a = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager.clone(),
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let release_dir = temp
             .path()
@@ -3327,7 +3667,13 @@ exit 1
             .await;
         assert!(matches!(response, Response::Ok { .. }));
 
-        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state_b = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
         state_b.restore_from_state_store().await.unwrap();
         assert!(state_b.app_manager.get_app("my-app").is_none());
     }
@@ -3339,7 +3685,13 @@ exit 1
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let release_dir = temp
             .path()
@@ -3403,9 +3755,14 @@ exit 1
                 .to_string(),
             ..ServerRuntimeConfig::for_defaults(temp.path().to_path_buf())
         };
-        let state =
-            ServerState::new_with_runtime(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens(), runtime)
-                .unwrap();
+        let state = ServerState::new_with_runtime(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+            runtime,
+        )
+        .unwrap();
 
         let fake_bin_dir = temp.path().join("bin");
         std::fs::create_dir_all(&fake_bin_dir).unwrap();
@@ -3542,7 +3899,13 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let app = state.app_manager.register_app(AppConfig {
             name: "idle-app".to_string(),
@@ -3582,7 +3945,13 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        let state = ServerState::new(temp.path().to_path_buf(), cert_manager, None, empty_challenge_tokens()).unwrap();
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
 
         let app = state.app_manager.register_app(AppConfig {
             name: "my-app".to_string(),
