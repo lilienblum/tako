@@ -650,6 +650,31 @@ mod tests {
     }
 
     #[test]
+    fn upgrade_lock_owner_cleared_allows_new_owner() {
+        let (_temp, store) = temp_store();
+        store.init().unwrap();
+
+        // Simulate: owner-a acquires lock then crashes (no release).
+        assert!(store.try_acquire_upgrade_lock("owner-a").unwrap());
+        assert_eq!(
+            store.upgrade_lock_owner().unwrap().as_deref(),
+            Some("owner-a")
+        );
+
+        // Manual cleanup (as server startup would do): read owner, release.
+        if let Some(owner) = store.upgrade_lock_owner().unwrap() {
+            assert!(store.release_upgrade_lock(&owner).unwrap());
+        }
+
+        // New owner can acquire immediately without waiting for stale timeout.
+        assert!(store.try_acquire_upgrade_lock("owner-b").unwrap());
+        assert_eq!(
+            store.upgrade_lock_owner().unwrap().as_deref(),
+            Some("owner-b")
+        );
+    }
+
+    #[test]
     fn init_rejects_v1_schema() {
         let (_temp, store) = temp_store();
         // Bootstrap a v1 schema with env_json column

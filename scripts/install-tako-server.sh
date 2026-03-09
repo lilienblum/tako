@@ -10,7 +10,7 @@ set -eu
 # - downloads and installs `tako-server`
 # - creates OS user `tako`
 # - configures a service manager (systemd or OpenRC) for `tako-server`
-# - installs scoped maintenance helpers/sudoers for non-interactive upgrade/reload
+# - installs maintenance helpers and sudoers for the tako service user
 #
 # Optional env vars:
 #   TAKO_USER               default: tako
@@ -233,7 +233,11 @@ EOF
 
   cat > /etc/sudoers.d/tako <<EOF
 # Managed by Tako install-server.
-$TAKO_USER ALL=(root) NOPASSWD: $TAKO_SERVER_INSTALL_REFRESH_HELPER, $TAKO_SERVER_INSTALL_REFRESH_HELPER *, $TAKO_SERVER_SERVICE_HELPER, $TAKO_SERVER_SERVICE_HELPER *
+# The tako user is a no-login service account (only accessible via SSH key).
+# It needs root for upgrades (binary install + service reload) and server
+# administration tasks (DNS setup, systemd drop-ins). Commands are invoked
+# via sudo sh -c '...' so the rule must not be restricted to specific binaries.
+$TAKO_USER ALL=(root) NOPASSWD: ALL
 EOF
   chmod 0440 /etc/sudoers.d/tako
 
@@ -361,7 +365,7 @@ maybe_prompt_ssh_pubkey() {
       fi
       echo "warning: invalid SSH public key format. Paste the full key line (for example: ssh-ed25519 AAAA...)." >&2
     done
-  elif [ -r /dev/tty ] && [ -w /dev/tty ]; then
+  elif [ -r /dev/tty ] && [ -w /dev/tty ] && (printf '' > /dev/tty) 2>/dev/null; then
     # Support common piped installs (curl ... | sudo sh) by prompting on the controlling tty.
     while :; do
       printf "Public key for '$TAKO_USER': " > /dev/tty

@@ -5324,6 +5324,50 @@ name = "test-app"
     }
 
     #[test]
+    fn artifact_cache_lock_drop_releases_lock() {
+        let temp = TempDir::new().unwrap();
+        let lock_path = temp.path().join("artifact.lock");
+        {
+            let _guard = acquire_artifact_cache_lock_with_options(
+                &lock_path,
+                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs(60),
+            )
+            .unwrap();
+            // Lock dir should exist while held.
+            assert!(lock_path.exists());
+        }
+        // After drop, lock dir should be removed.
+        assert!(!lock_path.exists());
+        // Re-acquire should succeed immediately.
+        let _guard2 = acquire_artifact_cache_lock_with_options(
+            &lock_path,
+            std::time::Duration::from_millis(10),
+            std::time::Duration::from_secs(60),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn artifact_cache_lock_stale_lock_auto_clears() {
+        let temp = TempDir::new().unwrap();
+        let lock_path = temp.path().join("artifact.lock");
+        // Simulate a crashed process that left a lock dir behind.
+        std::fs::create_dir_all(&lock_path).unwrap();
+        // Sleep briefly so the lock dir has nonzero age.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        // Use a tiny stale_after so the existing lock is treated as stale.
+        let guard = acquire_artifact_cache_lock_with_options(
+            &lock_path,
+            std::time::Duration::from_millis(200),
+            std::time::Duration::from_millis(1),
+        )
+        .unwrap();
+        assert!(lock_path.exists());
+        drop(guard);
+    }
+
+    #[test]
     fn cleanup_local_artifact_cache_prunes_old_source_and_target_archives() {
         let temp = TempDir::new().unwrap();
         let cache_dir = temp.path().join("artifacts");

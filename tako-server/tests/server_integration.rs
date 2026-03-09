@@ -660,6 +660,93 @@ mod server_info {
         assert_eq!(resp.get("status").and_then(|s| s.as_str()), Some("ok"));
     }
 
+    /// Verify that a stuck upgrade lock is cleared after a process restart
+    /// (SIGHUP reload). Simulates Ctrl+C during upgrade: the old process dies
+    /// with upgrading mode + lock held, the new process should start clean.
+    #[test]
+    fn test_upgrade_lock_clears_after_reload() {
+        if !require_localhost_bind() {
+            return;
+        }
+
+        let server = TestServer::start();
+
+        // Enter upgrading mode (sets mode + acquires lock).
+        let resp = server.send_command(&serde_json::json!({
+            "command": "enter_upgrading",
+            "owner": "crashed-cli"
+        }));
+        assert_eq!(resp.get("status").and_then(|s| s.as_str()), Some("ok"));
+
+        // Verify we're in upgrading mode.
+        let info = server.send_command(&serde_json::json!({ "command": "server_info" }));
+        let mode = info
+            .get("data")
+            .and_then(|d| d.get("mode"))
+            .and_then(|m| m.as_str())
+            .unwrap();
+        assert_eq!(mode, "upgrading");
+
+        // SIGHUP to simulate process restart (as would happen after crash + systemd restart).
+        let old_pid = server.child.as_ref().unwrap().id();
+        unsafe {
+            libc::kill(old_pid as i32, libc::SIGHUP);
+        }
+
+        // Wait for new process to take over.
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let mut new_pid = None;
+        while std::time::Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(500));
+            let resp = server.send_command(&serde_json::json!({ "command": "server_info" }));
+            if let Some(pid) = resp
+                .get("data")
+                .and_then(|d| d.get("pid"))
+                .and_then(|p| p.as_u64())
+            {
+                if pid as u32 != old_pid {
+                    new_pid = Some(pid as u32);
+                    break;
+                }
+            }
+        }
+        let new_pid =
+            new_pid.expect("new server process should have a different PID after SIGHUP");
+
+        // New process should be in normal mode (not stuck upgrading).
+        let info = server.send_command(&serde_json::json!({ "command": "server_info" }));
+        let mode = info
+            .get("data")
+            .and_then(|d| d.get("mode"))
+            .and_then(|m| m.as_str())
+            .unwrap();
+        assert_eq!(
+            mode, "normal",
+            "server should reset to normal mode after restart"
+        );
+
+        // A new owner should be able to enter upgrading immediately
+        // (no 10-minute stale wait).
+        let resp = server.send_command(&serde_json::json!({
+            "command": "enter_upgrading",
+            "owner": "new-cli"
+        }));
+        assert_eq!(
+            resp.get("status").and_then(|s| s.as_str()),
+            Some("ok"),
+            "new owner should acquire upgrade lock immediately after restart: {resp}"
+        );
+
+        // Clean up: exit upgrading and kill new process.
+        let _ = server.send_command(&serde_json::json!({
+            "command": "exit_upgrading",
+            "owner": "new-cli"
+        }));
+        unsafe {
+            libc::kill(new_pid as i32, libc::SIGTERM);
+        }
+    }
+
     /// Tighter deadline than test_sighup_reload_replaces_process (5s vs 30s)
     /// to catch regressions from the early-bind fix.
     #[test]

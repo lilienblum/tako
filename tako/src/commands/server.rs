@@ -200,7 +200,12 @@ async fn run_add_server_wizard(
         .find(|h| !existing_hosts.contains(h))
         .cloned();
 
-    let mut wizard = output::Wizard::new();
+    let mut wizard = output::Wizard::new().with_fields(&[
+        ("Server IP or hostname", false),
+        ("Server name", false),
+        ("Description", false),
+        ("SSH port", false),
+    ]);
     let mut step = 0usize;
     let mut host = String::new();
     let mut name = String::new();
@@ -853,13 +858,6 @@ fn first_non_empty_line(value: &str) -> Option<&str> {
     value.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
-fn run_with_root_or_sudo(shell_script: &str) -> String {
-    format!(
-        "if [ \"$(id -u)\" -eq 0 ]; then sh -c '{0}'; elif command -v sudo >/dev/null 2>&1; then sudo sh -c '{0}'; else echo \"error: this operation requires root privileges (run as root or install/configure sudo)\" >&2; exit 1; fi",
-        shell_script
-    )
-}
-
 fn remote_installer_command(channel: UpgradeChannel) -> String {
     let channel_arg = if channel == UpgradeChannel::Canary {
         "canary"
@@ -867,7 +865,7 @@ fn remote_installer_command(channel: UpgradeChannel) -> String {
         "stable"
     };
 
-    run_with_root_or_sudo(&format!(
+    SshClient::run_as_root(&format!(
         "{} {}",
         SERVER_INSTALL_REFRESH_HELPER, channel_arg
     ))
@@ -990,20 +988,57 @@ async fn upgrade_servers(
         });
     }
 
-    let spinner_msg = if total == 1 {
-        format!("Upgrading {}", output::highlight(&names[0]))
+    let interactive = output::is_interactive();
+
+    // Multi-progress: main header spinner + per-server spinners
+    let mp = if interactive {
+        Some(indicatif::MultiProgress::new())
     } else {
-        format!("Upgrading {} servers", total)
+        None
     };
-    let pb = if output::is_interactive() {
-        let pb = indicatif::ProgressBar::new_spinner();
-        pb.set_style(output::spinner_style());
-        pb.set_message(format!("{}…", spinner_msg));
+
+    // Spinner style with muted elapsed time
+    let spinner_with_elapsed = {
+        let (r, g, b) = (155u8, 196u8, 182u8); // BRAND_TEAL
+        indicatif::ProgressStyle::with_template(&format!(
+            "\x1b[38;2;{r};{g};{b}m{{spinner}}\x1b[39m {{msg}} \x1b[2m({{elapsed}})\x1b[22m"
+        ))
+        .unwrap()
+        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "])
+    };
+
+    let main_pb = if let Some(ref mp) = mp {
+        let pb = mp.add(indicatif::ProgressBar::new_spinner());
+        pb.set_style(spinner_with_elapsed.clone());
+        if total == 1 {
+            pb.set_message(format!("Upgrading {}…", output::highlight(&names[0])));
+        } else {
+            pb.set_message(format!("Upgrading servers… [0/{}]", total));
+        }
         pb.enable_steady_tick(Duration::from_millis(80));
         Some(pb)
     } else {
         None
     };
+
+    // Per-server spinner bars (inserted after the main bar)
+    let mut server_pbs: std::collections::HashMap<String, indicatif::ProgressBar> =
+        std::collections::HashMap::new();
+    let mut spacer_pb: Option<indicatif::ProgressBar> = None;
+    if let Some(ref mp) = mp {
+        // Empty line separator between header and per-server lines
+        let spacer = mp.add(indicatif::ProgressBar::new(0));
+        spacer.set_style(indicatif::ProgressStyle::with_template(" ").unwrap());
+        spacer.finish();
+        spacer_pb = Some(spacer);
+        for name in &names {
+            let pb = mp.add(indicatif::ProgressBar::new_spinner());
+            pb.set_style(spinner_with_elapsed.clone());
+            pb.set_message(format!("{}…", name));
+            pb.enable_steady_tick(Duration::from_millis(80));
+            server_pbs.insert(name.clone(), pb);
+        }
+    }
 
     struct UpgradeResult {
         name: String,
@@ -1018,11 +1053,53 @@ async fn upgrade_servers(
         let (name, elapsed, result) =
             join_result.map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
         done += 1;
-        if let Some(ref pb) = pb {
-            if total > 1 {
-                pb.set_message(format!("Upgrading [{}/{}]…", done, total));
+        let time = {
+            let t = output::format_elapsed(elapsed);
+            if t.is_empty() { "(0s)".to_string() } else { t }
+        };
+
+        // Finish the per-server spinner with result
+        if let Some(spb) = server_pbs.get(&name) {
+            // Switch to a no-prefix style so the finished line has no spinner padding
+            spb.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
+            match &result {
+                Ok(version) => {
+                    let detail = match version.as_deref() {
+                        Some(v) => format!(" {} {}", v, time),
+                        None => format!(" {}", time),
+                    };
+                    spb.finish_with_message(format!(
+                        "{} {}{}",
+                        output::brand_success("✓"),
+                        name,
+                        output::brand_muted(&detail),
+                    ));
+                }
+                Err(e) => {
+                    // Strip verbose details like "(owner: ...)" from error messages
+                    let clean_err = if let Some(pos) = e.find(" (owner:") {
+                        &e[..pos]
+                    } else {
+                        e.as_str()
+                    };
+                    spb.finish_with_message(format!(
+                        "{} {} {} {}",
+                        output::brand_error("✗"),
+                        name,
+                        output::brand_muted(&time),
+                        output::brand_error(clean_err),
+                    ));
+                }
             }
         }
+
+        // Update main progress
+        if let Some(ref pb) = main_pb {
+            if total > 1 {
+                pb.set_message(format!("Upgrading servers… [{}/{}]", done, total));
+            }
+        }
+
         match result {
             Ok(version) => results.push(UpgradeResult {
                 name,
@@ -1041,78 +1118,81 @@ async fn upgrade_servers(
 
     let total_elapsed = total_start.elapsed();
 
-    if let Some(ref pb) = pb {
+    // Clear all spinners and print final output cleanly
+    if let Some(ref pb) = main_pb {
         pb.finish_and_clear();
     }
-
-    // Sort results to match input order.
-    results.sort_by(|a, b| {
-        let pos_a = names
-            .iter()
-            .position(|n| n == &a.name)
-            .unwrap_or(usize::MAX);
-        let pos_b = names
-            .iter()
-            .position(|n| n == &b.name)
-            .unwrap_or(usize::MAX);
-        pos_a.cmp(&pos_b)
-    });
+    if let Some(ref sp) = spacer_pb {
+        sp.finish_and_clear();
+    }
+    for spb in server_pbs.values() {
+        spb.finish_and_clear();
+    }
 
     let succeeded = results.iter().filter(|r| r.error.is_none()).count();
     let failed = results.iter().filter(|r| r.error.is_some()).count();
     let total_time = output::format_elapsed(total_elapsed);
 
     // Summary header
+    let muted_time = output::brand_muted(&total_time);
     if total == 1 {
         let r = &results[0];
         if r.error.is_some() {
-            output::error(&format!("Upgrade failed {}", total_time));
+            output::error(&format!("Upgrade failed {}", muted_time));
         } else {
-            output::success(&format!("Upgrade complete {}", total_time));
+            output::success(&format!("Upgrade complete {}", muted_time));
         }
     } else if failed == 0 {
         output::success(&format!(
             "Upgrade complete [{}/{}] {}",
-            succeeded, total, total_time,
+            succeeded, total, muted_time,
         ));
     } else {
         output::error(&format!(
             "Upgrade finished with errors [{}/{}] {}",
-            succeeded, total, total_time,
+            succeeded, total, muted_time,
         ));
     }
 
     // Per-server results
-    let max_name_len = results.iter().map(|r| r.name.len()).max().unwrap_or(0);
+    if total > 1 {
+        println!();
+    }
+    // Sort results to match input order.
+    results.sort_by(|a, b| {
+        let pos_a = names.iter().position(|n| n == &a.name).unwrap_or(usize::MAX);
+        let pos_b = names.iter().position(|n| n == &b.name).unwrap_or(usize::MAX);
+        pos_a.cmp(&pos_b)
+    });
     for r in &results {
-        let time = output::format_elapsed(r.elapsed);
+        let time = {
+            let t = output::format_elapsed(r.elapsed);
+            if t.is_empty() { "(0s)".to_string() } else { t }
+        };
         if let Some(ref err) = r.error {
-            output::bullet(&format!(
-                "{} {:<width$}  {}",
+            let clean_err = if let Some(pos) = err.find(" (owner:") {
+                &err[..pos]
+            } else {
+                err
+            };
+            println!(
+                "{} {} {} {}",
                 output::brand_error("✗"),
                 r.name,
-                output::brand_muted(err),
-                width = max_name_len,
-            ));
+                output::brand_muted(&time),
+                output::brand_error(clean_err),
+            );
         } else {
             let detail = match r.version.as_deref() {
-                Some(v) if !time.is_empty() => format!("{} {}", v, time),
-                Some(v) => v.to_string(),
-                None if !time.is_empty() => time,
-                None => String::new(),
+                Some(v) => format!("{} {}", v, time),
+                None => time,
             };
-            let detail_str = if detail.is_empty() {
-                String::new()
-            } else {
-                format!("  {}", output::brand_muted(&detail))
-            };
-            output::bullet(&format!(
-                "{} {:<width$}{}",
+            println!(
+                "{} {} {}",
                 output::brand_success("✓"),
                 r.name,
-                detail_str,
-                width = max_name_len,
-            ));
+                output::brand_muted(&detail),
+            );
         }
     }
 
@@ -1174,9 +1254,13 @@ async fn upgrade_server_quiet(
             .map_err(|e| format!("Failed to read runtime config: {e}"))?
             .pid;
 
+        tracing::debug!(old_pid, "captured current server PID before reload");
+
         ssh.tako_reload()
             .await
             .map_err(|e| format!("Reload failed: {e}"))?;
+
+        tracing::debug!(old_pid, "reload sent, waiting for new server process");
 
         wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid).await?;
 

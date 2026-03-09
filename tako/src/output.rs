@@ -98,6 +98,14 @@ pub fn bold(value: &str) -> String {
 
 /// Bold text for embedding inside a `muted()` string.
 /// Re-applies dim after the bold-reset so surrounding muted style is preserved.
+pub fn underline<D: Display>(value: D) -> String {
+    if should_colorize() {
+        format!("\x1b[4m{value}\x1b[24m")
+    } else {
+        value.to_string()
+    }
+}
+
 pub fn bold_muted(value: &str) -> String {
     if should_colorize() {
         format!("\x1b[1m{value}\x1b[22m\x1b[2m")
@@ -556,7 +564,7 @@ pub fn confirm_with_description(
     // Print prompt with (Y/n) or (y/N) hint
     let separator = brand_muted("›");
     let styled_hint = brand_muted("(y/n)");
-    let styled_prompt = format!("{} {styled_hint} {separator} ", prompt);
+    let styled_prompt = format!("{} {styled_hint} {separator} ", brand_accent(prompt));
     eprint!("{styled_prompt}");
 
     // Raw mode: read single keypress
@@ -830,6 +838,12 @@ fn raw_text_input(
 
     // Draw initial state
     terminal::enable_raw_mode()?;
+
+    // Set cursor color to brand teal
+    let (cr, cg, cb) = BRAND_TEAL;
+    let _ = write!(out, "\x1b]12;rgb:{cr:02x}/{cg:02x}/{cb:02x}\x1b\\");
+    let _ = out.flush();
+
     let suf = inline_suffix(&buf);
     draw(&buf, pos, &mut out, password, &placeholder, &suf);
 
@@ -989,6 +1003,9 @@ fn raw_text_input(
 
     terminal::disable_raw_mode()?;
 
+    // Restore default cursor color
+    let _ = write!(out, "\x1b]112\x1b\\");
+
     // Move to next line
     let _ = write!(out, "\r\n");
     let _ = out.flush();
@@ -1056,13 +1073,13 @@ fn raw_select(
     let mut out = std::io::stderr();
 
     // Print prompt (before raw mode)
-    let _ = term.write_line(prompt);
+    let _ = term.write_line(&brand_accent(prompt));
 
     let draw = |sel: usize, out: &mut std::io::Stderr| {
         for (i, label) in labels.iter().enumerate() {
             let hint = hints.get(i).filter(|h| !h.is_empty());
             if i == sel {
-                let _ = write!(out, "{} {}", brand_accent("❯"), brand_accent(label));
+                let _ = write!(out, "{} {}", brand_accent("❯"), underline(label));
                 if let Some(h) = hint {
                     let _ = write!(out, " {}", brand_muted(&format!("({h})")));
                 }
@@ -1154,32 +1171,46 @@ fn raw_select(
 }
 
 // ---------------------------------------------------------------------------
-// Wizard — multi-step prompt with accumulated answers
+// Wizard — declarative multi-step prompt with pre-defined field layout
 // ---------------------------------------------------------------------------
 
-struct WizardAnswer {
+struct WizardField {
     label: String,
-    value: String,
+    value: Option<String>,
     subsection: bool,
+    visible: bool,
 }
 
 pub struct Wizard {
-    answers: Vec<WizardAnswer>,
+    fields: Vec<WizardField>,
     term: Term,
     lines_on_screen: usize,
     confirmation: bool,
-    in_subsection: bool,
 }
 
 impl Wizard {
     pub fn new() -> Self {
         Self {
-            answers: Vec::new(),
+            fields: Vec::new(),
             term: Term::stderr(),
             lines_on_screen: 0,
             confirmation: false,
-            in_subsection: false,
         }
+    }
+
+    /// Define all fields upfront with their order and subsection grouping.
+    /// Each entry is `(label, subsection)`.
+    pub fn with_fields(mut self, fields: &[(&str, bool)]) -> Self {
+        self.fields = fields
+            .iter()
+            .map(|(label, subsection)| WizardField {
+                label: label.to_string(),
+                value: None,
+                subsection: *subsection,
+                visible: !subsection, // root fields visible by default
+            })
+            .collect();
+        self
     }
 
     /// Enable a "Looks good?" confirmation prompt at the end of the wizard.
@@ -1188,17 +1219,47 @@ impl Wizard {
         self
     }
 
-    pub fn begin_subsection(&mut self) {
-        self.in_subsection = true;
+    /// Set a field's value.
+    pub fn set(&mut self, label: &str, value: &str) {
+        if let Some(field) = self.fields.iter_mut().find(|f| f.label == label) {
+            field.value = if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            };
+        }
+        self.redraw();
     }
 
-    pub fn end_subsection(&mut self) {
-        self.in_subsection = false;
+    /// Clear a field's value back to pending.
+    #[allow(dead_code)]
+    pub fn clear_value(&mut self, label: &str) {
+        if let Some(field) = self.fields.iter_mut().find(|f| f.label == label) {
+            field.value = None;
+        }
     }
 
-    /// Remove the last answer and redraw (for correcting invalid input).
+    /// Set visibility for a field.
+    pub fn set_visible(&mut self, label: &str, visible: bool) {
+        if let Some(field) = self.fields.iter_mut().find(|f| f.label == label) {
+            field.visible = visible;
+            if !visible {
+                field.value = None;
+            }
+        }
+    }
+
+    /// Remove the last visible answered field's value and redraw
+    /// (for correcting invalid input like bad port numbers).
     pub fn undo_last(&mut self) {
-        self.answers.pop();
+        if let Some(field) = self
+            .fields
+            .iter_mut()
+            .rev()
+            .find(|f| f.visible && f.value.is_some())
+        {
+            field.value = None;
+        }
         self.redraw();
     }
 
@@ -1206,62 +1267,43 @@ impl Wizard {
         if self.lines_on_screen > 0 {
             let _ = self.term.clear_last_lines(self.lines_on_screen);
         }
-        let max_root = self
-            .answers
-            .iter()
-            .filter(|a| !a.subsection)
-            .map(|a| a.label.len())
-            .max()
-            .unwrap_or(0);
-        let max_sub = self
-            .answers
-            .iter()
-            .filter(|a| a.subsection)
-            .map(|a| a.label.len())
-            .max()
-            .unwrap_or(0);
-        for (i, answer) in self.answers.iter().enumerate() {
-            if answer.subsection {
-                let is_first = !self.answers[..i].iter().any(|a| a.subsection);
-                let branch = brand_muted(if is_first { "└" } else { " " });
-                let _ = self.term.write_line(&format!(
-                    "{branch} {}  {}",
-                    brand_muted(&format!("{:<width$}", answer.label, width = max_sub)),
-                    answer.value,
-                ));
+
+        let visible: Vec<&WizardField> = self.fields.iter().filter(|f| f.visible).collect();
+
+        let max_label = visible.iter().map(|f| f.label.len()).max().unwrap_or(0);
+
+        let mut first_sub = true;
+        for field in &visible {
+            let label = brand_muted(&format!("{:<width$}", field.label, width = max_label));
+            if field.subsection {
+                let branch = brand_muted(if first_sub { "└" } else { " " });
+                first_sub = false;
+                match &field.value {
+                    Some(value) => {
+                        let _ = self.term.write_line(&format!("{branch} {label}  {value}"));
+                    }
+                    None => {
+                        let _ = self.term.write_line(&format!("{branch} {label}"));
+                    }
+                }
             } else {
-                let _ = self.term.write_line(&format!(
-                    "{}  {}",
-                    brand_muted(&format!("{:<width$}", answer.label, width = max_root)),
-                    answer.value,
-                ));
+                first_sub = true; // reset for next subsection group
+                match &field.value {
+                    Some(value) => {
+                        let _ = self.term.write_line(&format!("{label}  {value}"));
+                    }
+                    None => {
+                        let _ = self.term.write_line(&label.to_string());
+                    }
+                }
             }
         }
-        self.lines_on_screen = self.answers.len();
-        if !self.answers.is_empty() {
+
+        self.lines_on_screen = visible.len();
+        if !visible.is_empty() {
             let _ = self.term.write_line("");
             self.lines_on_screen += 1;
         }
-    }
-
-    /// Pop the previous answer and redraw, returning a wizard_back error.
-    fn go_back(&mut self) -> std::io::Error {
-        self.answers.pop();
-        self.redraw();
-        wizard_back_error()
-    }
-
-    pub fn set(&mut self, label: &str, value: &str) {
-        if value.is_empty() {
-            self.redraw();
-            return;
-        }
-        self.answers.push(WizardAnswer {
-            label: label.to_string(),
-            value: value.to_string(),
-            subsection: self.in_subsection,
-        });
-        self.redraw();
     }
 
     pub fn input(
@@ -1287,7 +1329,7 @@ impl Wizard {
             }
             Err(e) if is_wizard_back(&e) => {
                 self.lines_on_screen += 1; // prompt line
-                Err(self.go_back())
+                Err(wizard_back_error())
             }
             Err(e) => Err(e),
         }
@@ -1319,7 +1361,7 @@ impl Wizard {
             }
             Err(e) if is_wizard_back(&e) => {
                 // raw_select already cleaned up its own display
-                Err(self.go_back())
+                Err(wizard_back_error())
             }
             Err(e) => Err(e),
         }
@@ -1337,7 +1379,7 @@ impl Wizard {
             }
             Err(e) if is_wizard_back(&e) => {
                 self.lines_on_screen += 1; // prompt line
-                Err(self.go_back())
+                Err(wizard_back_error())
             }
             Err(e) => Err(e),
         }
@@ -1354,27 +1396,21 @@ impl Wizard {
     ) -> std::io::Result<bool> {
         self.redraw();
         match confirm_with_description(prompt, description, true) {
-            Err(e) if is_wizard_back(&e) => {
-                // confirm_with_description already cleaned up its own display
-                Err(self.go_back())
-            }
+            Err(e) if is_wizard_back(&e) => Err(wizard_back_error()),
             result => result,
         }
     }
 
     /// Finalize the wizard. If confirmation is enabled, shows a "Looks good?" prompt.
-    /// Returns `Ok(true)` to proceed, `Ok(false)` to restart from the beginning.
-    /// ESC on the confirmation propagates as `wizard_back`.
+    /// Returns `Ok(true)` to proceed, `Ok(false)` to restart from step 0.
+    /// ESC goes back one step via `wizard_back`.
     pub fn finish(&mut self) -> std::io::Result<bool> {
         if !self.confirmation {
             return Ok(true);
         }
         match self.confirm("Looks good?") {
             Ok(true) => Ok(true),
-            Ok(false) => {
-                self.clear();
-                Ok(false)
-            }
+            Ok(false) => Ok(false),
             Err(e) => Err(e),
         }
     }
@@ -1382,27 +1418,6 @@ impl Wizard {
     /// Track a line drawn by an external prompt (for proper clear on next redraw).
     pub fn track_line(&mut self) {
         self.lines_on_screen += 1;
-    }
-
-    /// Number of accumulated answers.
-    pub fn answer_count(&self) -> usize {
-        self.answers.len()
-    }
-
-    /// Truncate answers to `n` entries (for state-machine go-back).
-    pub fn truncate_answers(&mut self, n: usize) {
-        if self.answers.len() > n {
-            self.answers.truncate(n);
-        }
-    }
-
-    /// Clear the wizard display and reset state for a fresh run.
-    pub fn clear(&mut self) {
-        if self.lines_on_screen > 0 {
-            let _ = self.term.clear_last_lines(self.lines_on_screen);
-            self.lines_on_screen = 0;
-        }
-        self.answers.clear();
     }
 }
 

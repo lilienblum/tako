@@ -316,10 +316,15 @@ impl ServerState {
         // Always start in Normal mode. If the server was previously in
         // Upgrading mode (e.g. Ctrl+C during upgrade), that upgrade is dead
         // now — the CLI drives the upgrade over SSH, so a fresh process
-        // means no upgrade is in progress.
+        // means no upgrade is in progress. Clear both the mode and the
+        // upgrade lock so the next upgrade attempt isn't blocked.
         let server_mode = state_store.server_mode()?;
         if server_mode == UpgradeMode::Upgrading {
             state_store.set_server_mode(UpgradeMode::Normal)?;
+            // Clear the orphaned upgrade lock so a new owner can acquire immediately.
+            if let Some(owner) = state_store.upgrade_lock_owner()? {
+                let _ = state_store.release_upgrade_lock(&owner);
+            }
         }
         let server_mode = UpgradeMode::Normal;
 
@@ -2992,11 +2997,16 @@ exit 1
             .set_server_mode(UpgradeMode::Upgrading)
             .await
             .unwrap();
+        // Simulate an upgrade lock left behind by a crashed CLI.
+        assert!(state_a.try_enter_upgrading("crashed-cli").await.unwrap());
         drop(state_a);
 
-        // On restart, stale Upgrading mode should be reset to Normal.
-        let state_b = ServerState::new(temp.path().to_path_buf(), cert_manager, None).unwrap();
+        // On restart, stale Upgrading mode AND orphaned lock should be cleared.
+        let state_b =
+            ServerState::new(temp.path().to_path_buf(), cert_manager.clone(), None).unwrap();
         assert_eq!(*state_b.server_mode.read().await, UpgradeMode::Normal);
+        // A new owner should be able to acquire immediately (no 10-min stale wait).
+        assert!(state_b.try_enter_upgrading("new-cli").await.unwrap());
     }
 
     #[tokio::test]

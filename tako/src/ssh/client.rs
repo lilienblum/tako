@@ -402,6 +402,7 @@ impl SshClient {
         let mut stdout = Vec::new();
         let mut stderr = Vec::new();
         let mut exit_code = 0u32;
+        let mut got_exit_status = false;
 
         loop {
             match channel.wait().await {
@@ -416,11 +417,16 @@ impl SshClient {
                 }
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
                     exit_code = exit_status;
+                    got_exit_status = true;
                 }
-                Some(ChannelMsg::Eof) | None => break,
+                // Eof signals end of data but ExitStatus may follow.
+                // Continue reading until the channel closes (None).
+                Some(ChannelMsg::Eof) => {}
+                None => break,
                 _ => {}
             }
         }
+        let _ = got_exit_status;
 
         let output = CommandOutput {
             exit_code,
@@ -605,6 +611,9 @@ impl SshClient {
         Ok(())
     }
 
+    /// Run a shell script as root via `sudo sh -c`. Handles shell constructs
+    /// (pipes, redirects, `&&` chains) correctly — the entire script runs as
+    /// root. Requires that the sudoers policy allows running `sh`.
     pub fn run_with_root_or_sudo(shell_script: &str) -> String {
         format!(
             "if [ \"$(id -u)\" -eq 0 ]; then sh -c '{0}'; elif command -v sudo >/dev/null 2>&1; then sudo sh -c '{0}'; else echo \"error: this operation requires root privileges (run as root or install/configure sudo)\" >&2; exit 1; fi",
@@ -612,12 +621,23 @@ impl SshClient {
         )
     }
 
+    /// Run a simple command as root via direct `sudo` (no `sh -c` wrapping).
+    /// Works with restricted sudoers that only allow specific binaries.
+    /// The command must be a simple binary + args — shell constructs like
+    /// pipes or redirects will NOT run as root.
+    pub fn run_as_root(command: &str) -> String {
+        format!(
+            "if [ \"$(id -u)\" -eq 0 ]; then {0}; elif command -v sudo >/dev/null 2>&1; then sudo {0}; else echo \"error: this operation requires root privileges (run as root or install/configure sudo)\" >&2; exit 1; fi",
+            command
+        )
+    }
+
     fn tako_restart_command() -> String {
-        Self::run_with_root_or_sudo(&format!("{TAKO_SERVER_SERVICE_HELPER} restart"))
+        Self::run_as_root(&format!("{TAKO_SERVER_SERVICE_HELPER} restart"))
     }
 
     fn tako_reload_command() -> String {
-        Self::run_with_root_or_sudo(&format!("{TAKO_SERVER_SERVICE_HELPER} reload"))
+        Self::run_as_root(&format!("{TAKO_SERVER_SERVICE_HELPER} reload"))
     }
 
     fn tako_service_status_command() -> &'static str {

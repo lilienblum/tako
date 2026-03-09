@@ -49,28 +49,84 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Interactive wizard with state machine for ESC go-back
-    let mut wizard = output::Wizard::new().with_confirmation();
+    let mut wizard = output::Wizard::new()
+        .with_fields(&[
+            ("Application name", false),
+            ("Runtime", false),
+            ("Build preset", false),
+            ("Entrypoint", true),  // subsection — hidden until custom preset
+            ("Assets", true),      // subsection
+            ("Exclude", true),     // subsection
+            ("Production route", false),
+        ])
+        .with_confirmation();
     let mut step = 0usize;
-    let mut step_history: Vec<(usize, usize)> = Vec::new(); // (step_number, answer_count_before)
+    let mut step_history: Vec<usize> = Vec::new();
 
     // Cached family presets (keyed by adapter to avoid re-fetching)
     let mut family_presets_cache: Option<(BuildAdapter, Vec<FamilyPresetDefinition>)> = None;
 
-    // Accumulated values (persisted across restarts for pre-filling)
+    // Accumulated values — pre-filled from existing config when overwriting
     let mut adapter = existing
         .as_ref()
         .and_then(|c| c.runtime.as_deref())
         .and_then(BuildAdapter::from_id)
         .unwrap_or(detected_adapter);
-    let mut selected_preset: Option<String> = None; // None = custom
-    let mut main_entry: Option<String> = None;
-    let mut assets: Vec<String> = Vec::new();
-    let mut excludes: Vec<String> = Vec::new();
-    let mut app_name = String::new();
-    let mut production_route = String::new();
+    let mut selected_preset: Option<String> = existing
+        .as_ref()
+        .and_then(|c| c.preset.clone());
+    let mut main_entry: Option<String> = existing
+        .as_ref()
+        .and_then(|c| c.main.clone());
+    let mut assets: Vec<String> = existing
+        .as_ref()
+        .map(|c| c.build.assets.clone())
+        .unwrap_or_default();
+    let mut excludes: Vec<String> = existing
+        .as_ref()
+        .map(|c| c.build.exclude.clone())
+        .unwrap_or_default();
+    let mut app_name = existing
+        .as_ref()
+        .and_then(|c| c.name.clone())
+        .unwrap_or_default();
+    let mut production_route = existing
+        .as_ref()
+        .and_then(|c| c.envs.get("production").and_then(|e| e.route.clone()))
+        .unwrap_or_default();
 
-    // Derived state (recomputed after step 1)
-    let mut is_custom = false;
+    // Derived state
+    let mut is_custom = selected_preset.is_none();
+
+    // Pre-populate wizard from existing config
+    if existing.is_some() {
+        if !app_name.is_empty() {
+            wizard.set("Application name", &app_name);
+        }
+        wizard.set("Runtime", adapter.id());
+        if let Some(ref preset) = selected_preset {
+            wizard.set("Build preset", preset);
+        } else {
+            wizard.set("Build preset", "custom");
+        }
+        if is_custom {
+            wizard.set_visible("Entrypoint", true);
+            wizard.set_visible("Assets", true);
+            wizard.set_visible("Exclude", true);
+            if let Some(ref main) = main_entry {
+                wizard.set("Entrypoint", main);
+            }
+            if !assets.is_empty() {
+                wizard.set("Assets", &assets.join(", "));
+            }
+            if !excludes.is_empty() {
+                wizard.set("Exclude", &excludes.join(", "));
+            }
+        }
+        if !production_route.is_empty() {
+            wizard.set("Production route", &production_route);
+        }
+    }
 
     loop {
         match step {
@@ -86,7 +142,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             resolve_app_name(&project_dir).unwrap_or_else(|_| "my-app".to_string())
                         })
                 };
-                let answers_before = wizard.answer_count();
                 match wizard.input(
                     "Application name",
                     Some(&default_app_name),
@@ -94,14 +149,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ) {
                     Ok(v) => {
                         app_name = v;
-                        step_history.push((0, answers_before));
+                        step_history.push(0);
                         step = 1;
                     }
                     Err(e) if output::is_wizard_back(&e) => return Ok(()),
                     Err(e) => return Err(e.into()),
                 }
             }
-            // Step 1: Runtime
+            // Step 1: Runtime (pre-filled with detected value)
             1 => {
                 let adapters = [BuildAdapter::Bun, BuildAdapter::Node, BuildAdapter::Deno];
                 let default_index = adapters.iter().position(|a| *a == adapter).unwrap_or(0);
@@ -117,7 +172,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         }
                     })
                     .collect();
-                let answers_before = wizard.answer_count();
                 match wizard.select(
                     "Runtime",
                     "Choose a runtime:",
@@ -127,12 +181,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 ) {
                     Ok(a) => {
                         adapter = a;
-                        step_history.push((1, answers_before));
+                        step_history.push(1);
                         step = 2;
                     }
                     Err(e) if output::is_wizard_back(&e) => {
-                        if let Some((prev, count)) = step_history.pop() {
-                            wizard.truncate_answers(count);
+                        if let Some(prev) = step_history.pop() {
                             step = prev;
                         } else {
                             return Ok(());
@@ -154,7 +207,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 let family_preset_names: Vec<String> =
                     family_presets.iter().map(|p| p.name.clone()).collect();
                 let existing_preset_ref = existing.as_ref().and_then(|c| c.preset.as_deref());
-                let answers_before = wizard.answer_count();
 
                 if let Some(options) = build_preset_selection_options(adapter, &family_preset_names)
                 {
@@ -178,8 +230,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                             selected_preset = sp;
                         }
                         Err(e) if output::is_wizard_back(&e) => {
-                            if let Some((prev, count)) = step_history.pop() {
-                                wizard.truncate_answers(count);
+                            if let Some(prev) = step_history.pop() {
                                 step = prev;
                             } else {
                                 return Ok(());
@@ -199,24 +250,33 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .and_then(|preset| preset_default_main(preset, adapter, &family_presets));
                 let inferred_main = adapter.infer_main_entrypoint(&project_dir);
 
-                step_history.push((2, answers_before));
+                step_history.push(2);
 
                 if is_custom {
-                    wizard.begin_subsection();
+                    wizard.set_visible("Entrypoint", true);
+                    wizard.set_visible("Assets", true);
+                    wizard.set_visible("Exclude", true);
                     step = 3; // entrypoint prompt
                 } else if let Some(ref inferred) = inferred_main {
-                    // Auto-compute main (no prompt)
                     main_entry = if preset_dm.as_deref() == Some(inferred.as_str()) {
                         None
                     } else {
                         Some(inferred.clone())
                     };
+                    wizard.set_visible("Entrypoint", false);
+                    wizard.set_visible("Assets", false);
+                    wizard.set_visible("Exclude", false);
                     step = 6; // skip to production route
                 } else if preset_dm.is_some() {
                     main_entry = None;
+                    wizard.set_visible("Entrypoint", false);
+                    wizard.set_visible("Assets", false);
+                    wizard.set_visible("Exclude", false);
                     step = 6;
                 } else {
-                    wizard.begin_subsection();
+                    wizard.set_visible("Entrypoint", true);
+                    wizard.set_visible("Assets", false);
+                    wizard.set_visible("Exclude", false);
                     step = 3; // need entrypoint prompt
                 }
             }
@@ -227,22 +287,18 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                     .or_else(|| existing.as_ref().and_then(|c| c.main.clone()))
                     .or_else(|| adapter.infer_main_entrypoint(&project_dir))
                     .unwrap_or_else(|| infer_default_main_entrypoint(&project_dir, adapter));
-                let answers_before = wizard.answer_count();
                 match wizard.input("Entrypoint", Some(&default_main), None) {
                     Ok(v) => {
                         main_entry = Some(v);
-                        step_history.push((3, answers_before));
+                        step_history.push(3);
                         if is_custom {
                             step = 4;
                         } else {
-                            wizard.end_subsection();
                             step = 6;
                         }
                     }
                     Err(e) if output::is_wizard_back(&e) => {
-                        wizard.end_subsection();
-                        if let Some((prev, count)) = step_history.pop() {
-                            wizard.truncate_answers(count);
+                        if let Some(prev) = step_history.pop() {
                             step = prev;
                         } else {
                             return Ok(());
@@ -262,19 +318,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     &existing_assets
                 };
-                let answers_before = wizard.answer_count();
                 match prompt_assets(&mut wizard, prev_assets) {
                     Ok(collected) => {
                         if !collected.is_empty() {
                             wizard.set("Assets", &collected.join(", "));
                         }
                         assets = collected;
-                        step_history.push((4, answers_before));
+                        step_history.push(4);
                         step = 5;
                     }
                     Err(e) if output::is_wizard_back(&e) => {
-                        if let Some((prev, count)) = step_history.pop() {
-                            wizard.truncate_answers(count);
+                        if let Some(prev) = step_history.pop() {
                             step = prev;
                         } else {
                             return Ok(());
@@ -294,20 +348,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 } else {
                     &existing_excludes
                 };
-                let answers_before = wizard.answer_count();
                 match prompt_excludes(&mut wizard, prev_excludes) {
                     Ok(collected) => {
                         if !collected.is_empty() {
                             wizard.set("Exclude", &collected.join(", "));
                         }
                         excludes = collected;
-                        step_history.push((5, answers_before));
-                        wizard.end_subsection();
+                        step_history.push(5);
                         step = 6;
                     }
                     Err(e) if output::is_wizard_back(&e) => {
-                        if let Some((prev, count)) = step_history.pop() {
-                            wizard.truncate_answers(count);
+                        if let Some(prev) = step_history.pop() {
                             step = prev;
                         } else {
                             return Ok(());
@@ -326,19 +377,14 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                         .and_then(|c| c.envs.get("production").and_then(|e| e.route.clone()))
                         .unwrap_or_else(|| format!("{}.example.com", app_name.trim()))
                 };
-                let answers_before = wizard.answer_count();
                 match wizard.input("Production route", Some(&default_route), None) {
                     Ok(v) => {
                         production_route = v;
-                        step_history.push((6, answers_before));
+                        step_history.push(6);
                         step = 7;
                     }
                     Err(e) if output::is_wizard_back(&e) => {
-                        if let Some((prev, count)) = step_history.pop() {
-                            wizard.truncate_answers(count);
-                            if matches!(prev, 3 | 4 | 5) {
-                                wizard.begin_subsection();
-                            }
+                        if let Some(prev) = step_history.pop() {
                             step = prev;
                         } else {
                             return Ok(());
@@ -351,13 +397,11 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             _ => match wizard.finish() {
                 Ok(true) => break,
                 Ok(false) => {
-                    wizard.end_subsection();
                     step_history.clear();
                     step = 0;
                 }
                 Err(e) if output::is_wizard_back(&e) => {
-                    if let Some((prev, count)) = step_history.pop() {
-                        wizard.truncate_answers(count);
+                    if let Some(prev) = step_history.pop() {
                         step = prev;
                     }
                 }
