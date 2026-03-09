@@ -99,14 +99,15 @@ async fn run_installer_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn st
     let (os, arch) = detect_platform()?;
     let install_dir = resolve_install_dir();
 
+    if channel == UpgradeChannel::Canary {
+        return run_canary_upgrade(os, arch, &install_dir).await;
+    }
+
     let check = check_for_updates(channel).await;
 
     match check {
         Ok(UpdateCheck::AlreadyCurrent) => {
-            match channel {
-                UpgradeChannel::Stable => output::success("Already on the latest version"),
-                UpgradeChannel::Canary => output::success("Already on the latest canary build"),
-            }
+            output::success("Already on the latest version");
             return Ok(());
         }
         Ok(UpdateCheck::Available { tag, version }) => {
@@ -122,18 +123,76 @@ async fn run_installer_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn st
     }
 
     // Version check failed: download latest anyway
-    let tag = match channel {
-        UpgradeChannel::Canary => "canary-latest".to_string(),
-        UpgradeChannel::Stable => fetch_latest_stable_tag()
-            .await
-            .map_err(|e| format!("Failed to resolve latest release: {e}"))?,
-    };
+    let tag = fetch_latest_stable_tag()
+        .await
+        .map_err(|e| format!("Failed to resolve latest release: {e}"))?;
 
     let url = tarball_url_for_tag(&tag, os, arch);
     download_and_install(&url, &install_dir).await?;
 
     output::success("Upgraded");
     Ok(())
+}
+
+/// Canary upgrade: always download, compare binary hashes to detect "already current",
+/// then run the new binary to get the actual version for display.
+async fn run_canary_upgrade(
+    os: &str,
+    arch: &str,
+    install_dir: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let url = tarball_url_for_tag("canary-latest", os, arch);
+
+    // Download and extract to temp dir
+    let tmp_base = std::env::temp_dir();
+    let tmp_dir = tmp_base.join(format!("tako-upgrade-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir)?;
+
+    let result = async {
+        let archive_path = tmp_dir.join("tako.tar.gz");
+        download_with_progress(&url, &archive_path).await?;
+
+        // Verify SHA256 if available
+        let sha_url = format!("{url}.sha256");
+        if let Ok(expected) = fetch_sha256(&sha_url).await {
+            verify_sha256(&archive_path, &expected)?;
+        }
+
+        let extract_dir = tmp_dir.join("extract");
+        std::fs::create_dir_all(&extract_dir)?;
+        extract_tarball(&archive_path, &extract_dir)?;
+
+        let new_tako = find_binary(&extract_dir, "tako")
+            .ok_or("archive did not contain a tako binary")?;
+
+        // Compare hashes of current and downloaded binary
+        let current_exe = install_dir.join("tako");
+        if current_exe.exists() {
+            let current_hash = hash_file(&current_exe)?;
+            let new_hash = hash_file(&new_tako)?;
+            if current_hash == new_hash {
+                output::success("Already on the latest canary build");
+                return Ok(());
+            }
+        }
+
+        // Get version from the new binary before installing
+        let version = get_binary_version(&new_tako).unwrap_or_else(|| "canary".to_string());
+
+        // Install
+        let new_dev_server = find_binary(&extract_dir, "tako-dev-server")
+            .ok_or("archive did not contain a tako-dev-server binary")?;
+        std::fs::create_dir_all(install_dir)?;
+        install_binary(&new_tako, install_dir, "tako")?;
+        install_binary(&new_dev_server, install_dir, "tako-dev-server")?;
+
+        output::success(&format!("Upgraded to {}", output::highlight(&version)));
+        Ok(())
+    }
+    .await;
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    result
 }
 
 fn tarball_url_for_tag(tag: &str, os: &str, arch: &str) -> String {
@@ -203,52 +262,28 @@ async fn check_for_updates(channel: UpgradeChannel) -> Result<UpdateCheck, Strin
 async fn check_for_updates_inner(channel: UpgradeChannel) -> Result<UpdateCheck, String> {
     let tags = fetch_tags().await?;
 
-    match channel {
-        UpgradeChannel::Stable => {
-            let tag = tags
-                .iter()
-                .find(|t| t.name.starts_with(TAG_PREFIX))
-                .ok_or_else(|| format!("no release found with prefix '{TAG_PREFIX}'"))?;
+    // Canary upgrades are handled by run_canary_upgrade (hash-based comparison)
+    assert!(channel == UpgradeChannel::Stable);
 
-            let version = tag.name.strip_prefix(TAG_PREFIX).unwrap_or(&tag.name);
-            if version == CURRENT_VERSION {
-                Ok(UpdateCheck::AlreadyCurrent)
-            } else {
-                Ok(UpdateCheck::Available {
-                    tag: tag.name.clone(),
-                    version: version.to_string(),
-                })
-            }
-        }
-        UpgradeChannel::Canary => {
-            let tag = tags
-                .iter()
-                .find(|t| t.name == "canary-latest")
-                .ok_or("no canary release found")?;
+    let tag = tags
+        .iter()
+        .find(|t| t.name.starts_with(TAG_PREFIX))
+        .ok_or_else(|| format!("no release found with prefix '{TAG_PREFIX}'"))?;
 
-            let current_sha = CANARY_SHA.map(|s| s.trim()).unwrap_or("");
-            if !current_sha.is_empty() && sha_prefix_matches(current_sha, &tag.commit_sha) {
-                Ok(UpdateCheck::AlreadyCurrent)
-            } else {
-                let short_sha = &tag.commit_sha[..tag.commit_sha.len().min(7)];
-                Ok(UpdateCheck::Available {
-                    tag: tag.name.clone(),
-                    version: format!("canary-{short_sha}"),
-                })
-            }
-        }
+    let version = tag.name.strip_prefix(TAG_PREFIX).unwrap_or(&tag.name);
+    if version == CURRENT_VERSION {
+        Ok(UpdateCheck::AlreadyCurrent)
+    } else {
+        Ok(UpdateCheck::Available {
+            tag: tag.name.clone(),
+            version: version.to_string(),
+        })
     }
-}
-
-fn sha_prefix_matches(a: &str, b: &str) -> bool {
-    let len = a.len().min(b.len());
-    len > 0 && a[..len].eq_ignore_ascii_case(&b[..len])
 }
 
 #[derive(Debug)]
 struct TagInfo {
     name: String,
-    commit_sha: String,
 }
 
 async fn fetch_tags() -> Result<Vec<TagInfo>, String> {
@@ -274,10 +309,9 @@ async fn fetch_tags() -> Result<Vec<TagInfo>, String> {
 
     let mut tags = Vec::new();
     for entry in &raw {
-        if let (Some(name), Some(sha)) = (entry["name"].as_str(), entry["commit"]["sha"].as_str()) {
+        if let Some(name) = entry["name"].as_str() {
             tags.push(TagInfo {
                 name: name.to_string(),
-                commit_sha: sha.to_string(),
             });
         }
     }
@@ -424,6 +458,25 @@ async fn fetch_sha256(url: &str) -> Result<String, String> {
     let text = resp.text().await.map_err(|e| format!("{e}"))?;
     // SHA file format: "hash  filename" or just "hash"
     Ok(text.split_whitespace().next().unwrap_or("").to_string())
+}
+
+fn hash_file(path: &Path) -> Result<String, String> {
+    let data = std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    Ok(hex::encode(Sha256::digest(&data)))
+}
+
+fn get_binary_version(path: &Path) -> Option<String> {
+    let output = Command::new(path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
@@ -644,33 +697,6 @@ mod tests {
         let (os, arch) = detect_platform().unwrap();
         assert!(os == "darwin" || os == "linux");
         assert!(arch == "x86_64" || arch == "aarch64");
-    }
-
-    #[test]
-    fn sha_prefix_matches_full_match() {
-        assert!(sha_prefix_matches("abc1234", "abc1234"));
-    }
-
-    #[test]
-    fn sha_prefix_matches_short_vs_long() {
-        assert!(sha_prefix_matches("abc1234", "abc1234567890abcdef"));
-        assert!(sha_prefix_matches("abc1234567890abcdef", "abc1234"));
-    }
-
-    #[test]
-    fn sha_prefix_matches_rejects_mismatch() {
-        assert!(!sha_prefix_matches("abc1234", "def5678"));
-    }
-
-    #[test]
-    fn sha_prefix_matches_rejects_empty() {
-        assert!(!sha_prefix_matches("", "abc1234"));
-        assert!(!sha_prefix_matches("abc1234", ""));
-    }
-
-    #[test]
-    fn sha_prefix_matches_case_insensitive() {
-        assert!(sha_prefix_matches("ABC1234", "abc1234"));
     }
 
     #[test]

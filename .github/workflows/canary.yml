@@ -172,9 +172,16 @@ jobs:
     needs:
       - build-linux-target
       - build-darwin-cli
+    environment: release-canary
     permissions:
       contents: write
     steps:
+      - name: Checkout (for tag update)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          token: ${{ secrets.GH_PAT }}
+
       - name: Download Linux artifacts
         uses: actions/download-artifact@v4
         with:
@@ -187,6 +194,11 @@ jobs:
         with:
           name: canary-darwin
           path: dist
+
+      - name: Move canary-latest tag to current commit
+        run: |
+          git tag -f canary-latest "$GITHUB_SHA"
+          git push -f origin canary-latest
 
       - name: Publish canary prerelease
         env:
