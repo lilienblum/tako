@@ -318,9 +318,32 @@ impl AcmeClient {
             }
             OrderStatus::Invalid => {
                 self.clear_domain_tokens(domain);
-                return Err(AcmeError::ChallengeFailed(
-                    "Order became invalid".to_string(),
-                ));
+
+                // Re-fetch authorizations to capture the challenge error detail
+                // from Let's Encrypt (e.g. DNS resolution failures, wrong content).
+                let mut detail = String::from("Order became invalid");
+                let mut auths = order.authorizations();
+                while let Some(Ok(auth)) = auths.next().await {
+                    for challenge in &auth.challenges {
+                        if let Some(ref err) = challenge.error {
+                            let err_type = err.r#type.as_deref().unwrap_or("unknown");
+                            let err_detail = err.detail.as_deref().unwrap_or("unknown");
+                            detail = format!(
+                                "Order became invalid: {err_detail} (type: {err_type}, status: {:?})",
+                                challenge.status,
+                            );
+                            tracing::warn!(
+                                domain = domain,
+                                error_type = err_type,
+                                error_detail = err_detail,
+                                challenge_status = ?challenge.status,
+                                "ACME challenge validation failed"
+                            );
+                        }
+                    }
+                }
+
+                return Err(AcmeError::ChallengeFailed(detail));
             }
             status => {
                 self.clear_domain_tokens(domain);
