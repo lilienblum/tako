@@ -453,6 +453,7 @@ mod tests {
             renewal_interval_hours: 12,
             instance_port_offset: 0,
             dns_provider: None,
+            worker: false,
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: ServerRuntimeInfo = serde_json::from_str(&json).unwrap();

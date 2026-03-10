@@ -3,12 +3,12 @@ use std::env::current_dir;
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::app::require_app_name_from_config;
 use crate::build::{
     BuildAdapter, BuildCache, BuildError, BuildExecutor, BuildPreset, BuildStageCommand,
-    ResolvedPresetSource, apply_adapter_base_runtime_defaults, compute_file_hash,
+    apply_adapter_base_runtime_defaults, compute_file_hash,
     create_filtered_archive_with_prefix, infer_adapter_from_preset_reference, load_build_preset,
     qualify_runtime_local_preset_ref, run_container_build,
 };
@@ -76,43 +76,16 @@ struct ValidationResult {
     warnings: Vec<String>,
 }
 
-const ARTIFACT_CACHE_SCHEMA_VERSION: u32 = 3;
-const ARTIFACT_CACHE_LOCK_TIMEOUT_SECS: u64 = 10 * 60;
-const ARTIFACT_CACHE_STALE_LOCK_SECS: u64 = 30 * 60;
-const LOCAL_ARTIFACT_CACHE_KEEP_SOURCE_ARCHIVES: usize = 30;
+const ARTIFACT_CACHE_SCHEMA_VERSION: u32 = 4;
 const LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS: usize = 90;
 const LOCAL_BUILD_WORKSPACE_RELATIVE_DIR: &str = ".tako/tmp/workspaces";
 const RUNTIME_VERSION_OUTPUT_FILE: &str = ".tako-runtime-version";
 const MISE_TOML_FILE: &str = "mise.toml";
 const UNIFIED_JS_CACHE_TARGET_LABEL: &str = "shared-local-js";
 
-#[derive(serde::Serialize)]
-struct ArtifactCacheKeyInput<'a> {
-    schema_version: u32,
-    source_hash: &'a str,
-    runtime: &'a str,
-    runtime_tool: &'a str,
-    runtime_version: &'a str,
-    target_label: &'a str,
-    preset_ref: &'a str,
-    preset_repo: &'a str,
-    preset_path: &'a str,
-    preset_commit: &'a str,
-    app_subdir: &'a str,
-    builder_image: Option<&'a str>,
-    use_docker: bool,
-    install: Option<&'a str>,
-    build: Option<&'a str>,
-    custom_stages: &'a [BuildStage],
-    include_patterns: &'a [String],
-    exclude_patterns: &'a [String],
-    asset_roots: &'a [String],
-}
-
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 struct ArtifactCacheMetadata {
     schema_version: u32,
-    cache_key: String,
     artifact_sha256: String,
     artifact_size: u64,
 }
@@ -121,7 +94,6 @@ struct ArtifactCacheMetadata {
 struct ArtifactCachePaths {
     artifact_path: PathBuf,
     metadata_path: PathBuf,
-    lock_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -140,27 +112,16 @@ struct ArtifactBuildGroup {
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct LocalArtifactCacheCleanupSummary {
-    removed_source_archives: usize,
     removed_target_artifacts: usize,
     removed_target_metadata: usize,
 }
 
 impl LocalArtifactCacheCleanupSummary {
     fn total_removed(self) -> usize {
-        self.removed_source_archives + self.removed_target_artifacts + self.removed_target_metadata
+        self.removed_target_artifacts + self.removed_target_metadata
     }
 }
 
-#[derive(Debug)]
-struct ArtifactCacheLockGuard {
-    lock_path: PathBuf,
-}
-
-impl Drop for ArtifactCacheLockGuard {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.lock_path);
-    }
-}
 
 impl DeployConfig {
     fn release_dir(&self) -> String {
@@ -501,13 +462,11 @@ async fn run_async(
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
     match cleanup_local_artifact_cache(
         cache.cache_dir(),
-        LOCAL_ARTIFACT_CACHE_KEEP_SOURCE_ARCHIVES,
         LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS,
     ) {
         Ok(summary) if summary.total_removed() > 0 && output::is_verbose() => {
             output::muted(&format!(
-                "Local artifact cache cleanup: removed {} old source archive(s), {} old artifact(s), {} stale metadata file(s)",
-                summary.removed_source_archives,
+                "Local artifact cache cleanup: removed {} old artifact(s), {} stale metadata file(s)",
                 summary.removed_target_artifacts,
                 summary.removed_target_metadata
             ))
@@ -535,7 +494,7 @@ async fn run_async(
     }
 
     // Generate version string
-    let (version, source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)?;
+    let (version, _source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)?;
     let git_commit_message = resolve_git_commit_message(&source_root);
     let git_dirty = executor.is_git_dirty().ok();
     if output::is_verbose() {
@@ -597,9 +556,12 @@ async fn run_async(
     let deploy_secrets = build_deploy_secrets(secrets.get_env(&env));
 
     // Create source archive used as input for target-specific builds.
-    let source_archive_path = cache
-        .cache_dir()
-        .join(format!("{}-source.tar.zst", version));
+    // The source archive is ephemeral (placed in .tako/tmp/) and also
+    // serves as a build lock — its existence means a build is in progress.
+    let source_archive_dir = project_dir.join(".tako/tmp");
+    std::fs::create_dir_all(&source_archive_dir)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+    let source_archive_path = source_archive_dir.join("source.tar.zst");
     let app_json_bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
     let app_manifest_archive_path = archive_app_manifest_path(&app_subdir);
@@ -653,16 +615,13 @@ async fn run_async(
         cache.cache_dir(),
         &build_workspace_root,
         &source_archive_path,
-        &source_hash,
         &version,
         &app_subdir,
-        &build_preset.name,
         &runtime_tool,
         use_unified_js_target_process,
         &manifest_main,
         &server_targets,
         &build_preset,
-        &resolved_preset,
         &tako_config.build.stages,
         &include_patterns,
         &exclude_patterns,
@@ -2048,63 +2007,17 @@ fn sanitize_cache_label(label: &str) -> String {
 
 fn artifact_cache_paths(
     cache_dir: &Path,
-    target_label: &str,
-    cache_key: &str,
+    version: &str,
+    target_label: Option<&str>,
 ) -> ArtifactCachePaths {
-    let label = sanitize_cache_label(target_label);
-    let stem = format!("artifact-cache-{}-{}", label, cache_key);
-    ArtifactCachePaths {
-        artifact_path: cache_dir.join(format!("{}.tar.zst", stem)),
-        metadata_path: cache_dir.join(format!("{}.json", stem)),
-        lock_path: cache_dir.join(format!("{}.lock", stem)),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn build_artifact_cache_key(
-    source_hash: &str,
-    runtime_name: &str,
-    runtime_tool: &str,
-    runtime_version: &str,
-    use_docker: bool,
-    target_label: &str,
-    preset_source: &ResolvedPresetSource,
-    target_build: &crate::build::BuildPresetTarget,
-    custom_stages: &[BuildStage],
-    include_patterns: &[String],
-    exclude_patterns: &[String],
-    asset_roots: &[String],
-    app_subdir: &str,
-) -> Result<String, String> {
-    use sha2::{Digest, Sha256};
-
-    let payload = ArtifactCacheKeyInput {
-        schema_version: ARTIFACT_CACHE_SCHEMA_VERSION,
-        source_hash,
-        runtime: runtime_name,
-        runtime_tool,
-        runtime_version,
-        target_label,
-        preset_ref: &preset_source.preset_ref,
-        preset_repo: &preset_source.repo,
-        preset_path: &preset_source.path,
-        preset_commit: &preset_source.commit,
-        app_subdir,
-        builder_image: target_build.builder_image.as_deref(),
-        use_docker,
-        install: target_build.install.as_deref(),
-        build: target_build.build.as_deref(),
-        custom_stages,
-        include_patterns,
-        exclude_patterns,
-        asset_roots,
+    let base = match target_label {
+        Some(label) => cache_dir.join(sanitize_cache_label(label)),
+        None => cache_dir.to_path_buf(),
     };
-    let bytes = serde_json::to_vec(&payload)
-        .map_err(|e| format!("Failed to serialize build artifact cache key input: {e}"))?;
-
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    Ok(hex::encode(hasher.finalize()))
+    ArtifactCachePaths {
+        artifact_path: base.join(format!("{}.tar.zst", version)),
+        metadata_path: base.join(format!("{}.json", version)),
+    }
 }
 
 fn artifact_cache_temp_path(final_path: &Path) -> Result<PathBuf, String> {
@@ -2122,58 +2035,68 @@ fn artifact_cache_temp_path(final_path: &Path) -> Result<PathBuf, String> {
 
 fn cleanup_local_artifact_cache(
     cache_dir: &Path,
-    keep_source_archives: usize,
     keep_target_artifacts: usize,
 ) -> Result<LocalArtifactCacheCleanupSummary, String> {
     if !cache_dir.exists() {
         return Ok(LocalArtifactCacheCleanupSummary::default());
     }
-    let mut source_archives = Vec::new();
-    let mut target_archives = Vec::new();
-    let mut target_metadata = Vec::new();
-
-    for entry in std::fs::read_dir(cache_dir)
-        .map_err(|e| format!("Failed to read {}: {e}", cache_dir.display()))?
-    {
-        let entry = entry
-            .map_err(|e| format!("Failed to read dir entry in {}: {e}", cache_dir.display()))?;
-        let path = entry.path();
-        let file_name = match path.file_name().and_then(|name| name.to_str()) {
-            Some(name) => name,
-            None => continue,
-        };
-        let metadata = entry
-            .metadata()
-            .map_err(|e| format!("Failed to read metadata for {}: {e}", path.display()))?;
-        if !metadata.is_file() {
-            continue;
-        }
-
-        if file_name.ends_with("-source.tar.zst") {
-            source_archives.push((path, metadata.modified().unwrap_or(UNIX_EPOCH)));
-            continue;
-        }
-        if file_name.starts_with("artifact-cache-") && file_name.ends_with(".tar.zst") {
-            target_archives.push((path, metadata.modified().unwrap_or(UNIX_EPOCH)));
-            continue;
-        }
-        if file_name.starts_with("artifact-cache-") && file_name.ends_with(".json") {
-            target_metadata.push(path);
-        }
-    }
-
-    source_archives.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| right.0.cmp(&left.0)));
-    target_archives.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| right.0.cmp(&left.0)));
 
     let mut summary = LocalArtifactCacheCleanupSummary::default();
 
-    for (path, _) in source_archives.into_iter().skip(keep_source_archives) {
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("Failed to remove source archive {}: {e}", path.display()))?;
-        summary.removed_source_archives += 1;
+    // Collect artifacts from cache_dir itself and from target subdirectories.
+    let mut all_artifacts: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
+    let mut all_metadata: Vec<PathBuf> = Vec::new();
+    let mut subdirs: Vec<PathBuf> = Vec::new();
+
+    // Scan a single directory, collecting artifacts/metadata and subdirs.
+    fn scan_artifact_dir(
+        dir: &Path,
+        artifacts: &mut Vec<(PathBuf, std::time::SystemTime)>,
+        metadata: &mut Vec<PathBuf>,
+        mut subdirs: Option<&mut Vec<PathBuf>>,
+    ) -> Result<(), String> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(()),
+        };
+        for entry in entries {
+            let entry = entry
+                .map_err(|e| format!("Failed to read dir entry in {}: {e}", dir.display()))?;
+            let path = entry.path();
+            let file_name = match path.file_name().and_then(|name| name.to_str()) {
+                Some(name) => name,
+                None => continue,
+            };
+            let meta = entry
+                .metadata()
+                .map_err(|e| format!("Failed to read metadata for {}: {e}", path.display()))?;
+            if meta.is_dir() {
+                if let Some(ref mut subs) = subdirs {
+                    subs.push(path);
+                }
+                continue;
+            }
+            if !meta.is_file() {
+                continue;
+            }
+            if file_name.ends_with(".tar.zst") {
+                artifacts.push((path, meta.modified().unwrap_or(UNIX_EPOCH)));
+            } else if file_name.ends_with(".json") {
+                metadata.push(path);
+            }
+        }
+        Ok(())
     }
 
-    for (path, _) in target_archives.into_iter().skip(keep_target_artifacts) {
+    scan_artifact_dir(cache_dir, &mut all_artifacts, &mut all_metadata, Some(&mut subdirs))?;
+    for subdir in subdirs {
+        scan_artifact_dir(&subdir, &mut all_artifacts, &mut all_metadata, None)?;
+    }
+
+    all_artifacts
+        .sort_by(|left, right| right.1.cmp(&left.1).then_with(|| right.0.cmp(&left.0)));
+
+    for (path, _) in all_artifacts.into_iter().skip(keep_target_artifacts) {
         std::fs::remove_file(&path)
             .map_err(|e| format!("Failed to remove artifact cache {}: {e}", path.display()))?;
         summary.removed_target_artifacts += 1;
@@ -2191,7 +2114,7 @@ fn cleanup_local_artifact_cache(
         }
     }
 
-    for metadata_path in target_metadata {
+    for metadata_path in all_metadata {
         let Some(archive_path) = artifact_cache_archive_path_for_metadata(&metadata_path) else {
             continue;
         };
@@ -2277,7 +2200,6 @@ fn remove_cached_artifact_files(paths: &ArtifactCachePaths) {
 
 fn load_valid_cached_artifact(
     paths: &ArtifactCachePaths,
-    expected_key: &str,
 ) -> Result<Option<CachedArtifact>, String> {
     if !paths.artifact_path.exists() || !paths.metadata_path.exists() {
         return Ok(None);
@@ -2301,9 +2223,6 @@ fn load_valid_cached_artifact(
             "cache schema mismatch (found {}, expected {})",
             metadata.schema_version, ARTIFACT_CACHE_SCHEMA_VERSION
         ));
-    }
-    if metadata.cache_key != expected_key {
-        return Err("cache metadata key mismatch".to_string());
     }
 
     let artifact_size = std::fs::metadata(&paths.artifact_path)
@@ -2340,7 +2259,6 @@ fn load_valid_cached_artifact(
 fn persist_cached_artifact(
     artifact_temp_path: &Path,
     paths: &ArtifactCachePaths,
-    cache_key: &str,
     artifact_size: u64,
 ) -> Result<(), String> {
     if let Some(parent) = paths.artifact_path.parent() {
@@ -2356,7 +2274,6 @@ fn persist_cached_artifact(
     })?;
     let metadata = ArtifactCacheMetadata {
         schema_version: ARTIFACT_CACHE_SCHEMA_VERSION,
-        cache_key: cache_key.to_string(),
         artifact_sha256: artifact_sha,
         artifact_size,
     };
@@ -2389,83 +2306,26 @@ fn persist_cached_artifact(
     Ok(())
 }
 
-fn acquire_artifact_cache_lock(lock_path: &Path) -> Result<ArtifactCacheLockGuard, String> {
-    acquire_artifact_cache_lock_with_options(
-        lock_path,
-        Duration::from_secs(ARTIFACT_CACHE_LOCK_TIMEOUT_SECS),
-        Duration::from_secs(ARTIFACT_CACHE_STALE_LOCK_SECS),
-    )
-}
-
-fn acquire_artifact_cache_lock_with_options(
-    lock_path: &Path,
-    timeout: Duration,
-    stale_after: Duration,
-) -> Result<ArtifactCacheLockGuard, String> {
-    if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
-    }
-
-    let start = Instant::now();
-    loop {
-        match std::fs::create_dir(lock_path) {
-            Ok(()) => {
-                return Ok(ArtifactCacheLockGuard {
-                    lock_path: lock_path.to_path_buf(),
-                });
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
-                if stale_after > Duration::from_secs(0)
-                    && let Ok(metadata) = std::fs::metadata(lock_path)
-                    && let Ok(modified_at) = metadata.modified()
-                    && let Ok(age) = modified_at.elapsed()
-                    && age > stale_after
-                {
-                    let _ = std::fs::remove_dir_all(lock_path);
-                    continue;
-                }
-
-                if start.elapsed() >= timeout {
-                    return Err(format!(
-                        "Timed out waiting for artifact cache lock {}",
-                        lock_path.display()
-                    ));
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-            Err(error) => {
-                return Err(format!(
-                    "Failed to acquire artifact cache lock {}: {error}",
-                    lock_path.display()
-                ));
-            }
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn build_target_artifacts(
     project_dir: &Path,
     cache_dir: &Path,
     build_workspace_root: &Path,
     source_archive_path: &Path,
-    source_hash: &str,
     version: &str,
     app_subdir: &str,
-    runtime_name: &str,
     runtime_tool: &str,
     use_unified_target_process: bool,
     main: &str,
     server_targets: &[(String, ServerTarget)],
     preset: &BuildPreset,
-    preset_source: &ResolvedPresetSource,
     custom_stages: &[BuildStage],
     include_patterns: &[String],
     exclude_patterns: &[String],
     asset_roots: &[String],
 ) -> Result<HashMap<String, PathBuf>, String> {
     let target_groups = build_artifact_target_groups(server_targets, use_unified_target_process);
+    let has_multiple_targets = target_groups.len() > 1;
     let use_docker_build = should_use_docker_build(preset);
     let mut artifacts = HashMap::new();
 
@@ -2533,25 +2393,14 @@ async fn build_target_artifacts(
             }
         };
 
-        let cache_key = build_artifact_cache_key(
-            source_hash,
-            runtime_name,
-            runtime_tool,
-            &runtime_version,
-            use_docker_build,
-            &cache_target_label,
-            preset_source,
-            &target_build,
-            custom_stages,
-            include_patterns,
-            exclude_patterns,
-            asset_roots,
-            app_subdir,
-        )?;
-        let cache_paths = artifact_cache_paths(cache_dir, &cache_target_label, &cache_key);
-        let _cache_lock = acquire_artifact_cache_lock(&cache_paths.lock_path)?;
+        let target_label_for_path = if has_multiple_targets {
+            Some(cache_target_label.as_str())
+        } else {
+            None
+        };
+        let cache_paths = artifact_cache_paths(cache_dir, version, target_label_for_path);
 
-        match load_valid_cached_artifact(&cache_paths, &cache_key) {
+        match load_valid_cached_artifact(&cache_paths) {
             Ok(Some(cached)) => {
                 output::bullet(&format_artifact_cache_hit_message_for_output(
                     display_target_label,
@@ -2621,7 +2470,6 @@ async fn build_target_artifacts(
                         include_patterns,
                         exclude_patterns,
                         &cache_paths,
-                        &cache_key,
                         main,
                         &build_target_label,
                     )
@@ -2635,7 +2483,6 @@ async fn build_target_artifacts(
                     include_patterns,
                     exclude_patterns,
                     &cache_paths,
-                    &cache_key,
                     main,
                     &build_target_label,
                 )
@@ -3203,7 +3050,6 @@ fn package_target_artifact(
     include_patterns: &[String],
     exclude_patterns: &[String],
     cache_paths: &ArtifactCachePaths,
-    cache_key: &str,
     main: &str,
     target_label: &str,
 ) -> Result<u64, String> {
@@ -3228,7 +3074,7 @@ fn package_target_artifact(
     .map_err(|e| format!("Failed to create artifact for {}: {}", target_label, e))?;
 
     if let Err(error) =
-        persist_cached_artifact(&artifact_temp_path, cache_paths, cache_key, artifact_size)
+        persist_cached_artifact(&artifact_temp_path, cache_paths, artifact_size)
     {
         let _ = std::fs::remove_file(&artifact_temp_path);
         let _ = std::fs::remove_file(&cache_paths.metadata_path);
@@ -5055,208 +4901,18 @@ name = "test-app"
     }
 
     #[test]
-    fn artifact_cache_key_changes_when_build_inputs_change() {
-        let resolved = crate::build::ResolvedPresetSource {
-            preset_ref: "bun".to_string(),
-            repo: "tako-sh/presets".to_string(),
-            path: "presets/js.toml".to_string(),
-            commit: "abc123def456".to_string(),
-        };
-        let target = crate::build::BuildPresetTarget {
-            builder_image: Some("oven/bun:1.2".to_string()),
-            install: Some("bun install".to_string()),
-            build: Some("bun run build".to_string()),
-        };
-        let include_patterns = vec!["**/*".to_string()];
-        let exclude_patterns: Vec<String> = vec![];
-        let asset_roots = vec!["public".to_string()];
-        let custom_stages: Vec<crate::config::BuildStage> = vec![];
-
-        let baseline = build_artifact_cache_key(
-            "source-hash-a",
-            "bun",
-            "bun",
-            "1.3.9",
-            true,
-            "linux-x86_64-glibc",
-            &resolved,
-            &target,
-            &custom_stages,
-            &include_patterns,
-            &exclude_patterns,
-            &asset_roots,
-            "apps/web",
-        )
-        .unwrap();
-
-        let changed_source = build_artifact_cache_key(
-            "source-hash-b",
-            "bun",
-            "bun",
-            "1.3.9",
-            true,
-            "linux-x86_64-glibc",
-            &resolved,
-            &target,
-            &custom_stages,
-            &include_patterns,
-            &exclude_patterns,
-            &asset_roots,
-            "apps/web",
-        )
-        .unwrap();
-        assert_ne!(baseline, changed_source);
-
-        let changed_runtime = build_artifact_cache_key(
-            "source-hash-a",
-            "node",
-            "bun",
-            "1.3.9",
-            true,
-            "linux-x86_64-glibc",
-            &resolved,
-            &target,
-            &custom_stages,
-            &include_patterns,
-            &exclude_patterns,
-            &asset_roots,
-            "apps/web",
-        )
-        .unwrap();
-        assert_ne!(baseline, changed_runtime);
-
-        let changed_target = build_artifact_cache_key(
-            "source-hash-a",
-            "bun",
-            "bun",
-            "1.3.9",
-            true,
-            "linux-aarch64-glibc",
-            &resolved,
-            &target,
-            &custom_stages,
-            &include_patterns,
-            &exclude_patterns,
-            &asset_roots,
-            "apps/web",
-        )
-        .unwrap();
-        assert_ne!(baseline, changed_target);
-
-        let changed_runtime_version = build_artifact_cache_key(
-            "source-hash-a",
-            "bun",
-            "bun",
-            "1.3.10",
-            true,
-            "linux-x86_64-glibc",
-            &resolved,
-            &target,
-            &custom_stages,
-            &include_patterns,
-            &exclude_patterns,
-            &asset_roots,
-            "apps/web",
-        )
-        .unwrap();
-        assert_ne!(baseline, changed_runtime_version);
-
-        let mut changed_preset = resolved.clone();
-        changed_preset.commit = "fff111aaa222".to_string();
-        let changed_preset_commit = build_artifact_cache_key(
-            "source-hash-a",
-            "bun",
-            "bun",
-            "1.3.9",
-            true,
-            "linux-x86_64-glibc",
-            &changed_preset,
-            &target,
-            &custom_stages,
-            &include_patterns,
-            &exclude_patterns,
-            &asset_roots,
-            "apps/web",
-        )
-        .unwrap();
-        assert_ne!(baseline, changed_preset_commit);
-
-        let mut changed_build_target = target.clone();
-        changed_build_target.build = Some("bun run custom-build".to_string());
-        let changed_script = build_artifact_cache_key(
-            "source-hash-a",
-            "bun",
-            "bun",
-            "1.3.9",
-            true,
-            "linux-x86_64-glibc",
-            &resolved,
-            &changed_build_target,
-            &custom_stages,
-            &include_patterns,
-            &exclude_patterns,
-            &asset_roots,
-            "apps/web",
-        )
-        .unwrap();
-        assert_ne!(baseline, changed_script);
-
-        let changed_include = build_artifact_cache_key(
-            "source-hash-a",
-            "bun",
-            "bun",
-            "1.3.9",
-            true,
-            "linux-x86_64-glibc",
-            &resolved,
-            &target,
-            &custom_stages,
-            &["dist/**".to_string()],
-            &exclude_patterns,
-            &asset_roots,
-            "apps/web",
-        )
-        .unwrap();
-        assert_ne!(baseline, changed_include);
-
-        let changed_stages = build_artifact_cache_key(
-            "source-hash-a",
-            "bun",
-            "bun",
-            "1.3.9",
-            true,
-            "linux-x86_64-glibc",
-            &resolved,
-            &target,
-            &[crate::config::BuildStage {
-                name: None,
-                working_dir: None,
-                install: None,
-                run: "bun run build".to_string(),
-            }],
-            &include_patterns,
-            &exclude_patterns,
-            &asset_roots,
-            "apps/web",
-        )
-        .unwrap();
-        assert_ne!(baseline, changed_stages);
-    }
-
-    #[test]
     fn cached_artifact_round_trip_verifies_checksum_and_size() {
         let temp = TempDir::new().unwrap();
         let cache_dir = temp.path().join("artifacts");
         std::fs::create_dir_all(&cache_dir).unwrap();
-        let key = "abc123".to_string();
-        let paths = artifact_cache_paths(&cache_dir, "linux-x86_64-glibc", &key);
+        let paths = artifact_cache_paths(&cache_dir, "abc123", None);
 
         let artifact_tmp = cache_dir.join("artifact.tmp");
         std::fs::write(&artifact_tmp, b"hello artifact").unwrap();
         let size = std::fs::metadata(&artifact_tmp).unwrap().len();
-        persist_cached_artifact(&artifact_tmp, &paths, &key, size).unwrap();
+        persist_cached_artifact(&artifact_tmp, &paths, size).unwrap();
 
-        let verified = load_valid_cached_artifact(&paths, &key).unwrap().unwrap();
+        let verified = load_valid_cached_artifact(&paths).unwrap().unwrap();
         assert_eq!(verified.path, paths.artifact_path);
         assert_eq!(verified.size_bytes, size);
     }
@@ -5266,13 +4922,11 @@ name = "test-app"
         let temp = TempDir::new().unwrap();
         let cache_dir = temp.path().join("artifacts");
         std::fs::create_dir_all(&cache_dir).unwrap();
-        let key = "abc123".to_string();
-        let paths = artifact_cache_paths(&cache_dir, "linux-x86_64-glibc", &key);
+        let paths = artifact_cache_paths(&cache_dir, "abc123", None);
 
         std::fs::write(&paths.artifact_path, b"hello artifact").unwrap();
         let bad_metadata = ArtifactCacheMetadata {
             schema_version: ARTIFACT_CACHE_SCHEMA_VERSION,
-            cache_key: key.clone(),
             artifact_sha256: "deadbeef".to_string(),
             artifact_size: 14,
         };
@@ -5282,112 +4936,60 @@ name = "test-app"
         )
         .unwrap();
 
-        let err = load_valid_cached_artifact(&paths, &key).unwrap_err();
+        let err = load_valid_cached_artifact(&paths).unwrap_err();
         assert!(err.contains("checksum mismatch"));
     }
 
     #[test]
-    fn artifact_cache_lock_times_out_if_already_held() {
-        let temp = TempDir::new().unwrap();
-        let lock_path = temp.path().join("artifact.lock");
-        let _held = acquire_artifact_cache_lock_with_options(
-            &lock_path,
-            std::time::Duration::from_secs(1),
-            std::time::Duration::from_secs(60),
-        )
-        .unwrap();
-
-        let err = acquire_artifact_cache_lock_with_options(
-            &lock_path,
-            std::time::Duration::from_millis(30),
-            std::time::Duration::from_secs(60),
-        )
-        .unwrap_err();
-        assert!(err.contains("Timed out waiting"));
-    }
-
-    #[test]
-    fn artifact_cache_lock_drop_releases_lock() {
-        let temp = TempDir::new().unwrap();
-        let lock_path = temp.path().join("artifact.lock");
-        {
-            let _guard = acquire_artifact_cache_lock_with_options(
-                &lock_path,
-                std::time::Duration::from_secs(1),
-                std::time::Duration::from_secs(60),
-            )
-            .unwrap();
-            // Lock dir should exist while held.
-            assert!(lock_path.exists());
-        }
-        // After drop, lock dir should be removed.
-        assert!(!lock_path.exists());
-        // Re-acquire should succeed immediately.
-        let _guard2 = acquire_artifact_cache_lock_with_options(
-            &lock_path,
-            std::time::Duration::from_millis(10),
-            std::time::Duration::from_secs(60),
-        )
-        .unwrap();
-    }
-
-    #[test]
-    fn artifact_cache_lock_stale_lock_auto_clears() {
-        let temp = TempDir::new().unwrap();
-        let lock_path = temp.path().join("artifact.lock");
-        // Simulate a crashed process that left a lock dir behind.
-        std::fs::create_dir_all(&lock_path).unwrap();
-        // Sleep briefly so the lock dir has nonzero age.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        // Use a tiny stale_after so the existing lock is treated as stale.
-        let guard = acquire_artifact_cache_lock_with_options(
-            &lock_path,
-            std::time::Duration::from_millis(200),
-            std::time::Duration::from_millis(1),
-        )
-        .unwrap();
-        assert!(lock_path.exists());
-        drop(guard);
-    }
-
-    #[test]
-    fn cleanup_local_artifact_cache_prunes_old_source_and_target_archives() {
+    fn cleanup_local_artifact_cache_prunes_old_artifacts() {
         let temp = TempDir::new().unwrap();
         let cache_dir = temp.path().join("artifacts");
         std::fs::create_dir_all(&cache_dir).unwrap();
 
-        let old_source = cache_dir.join("v1-source.tar.zst");
-        let new_source = cache_dir.join("v2-source.tar.zst");
-        std::fs::write(&old_source, b"old source").unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        std::fs::write(&new_source, b"new source").unwrap();
-
-        let old_artifact = cache_dir.join("artifact-cache-linux-aarch64-glibc-old.tar.zst");
-        let old_metadata = cache_dir.join("artifact-cache-linux-aarch64-glibc-old.json");
-        let new_artifact = cache_dir.join("artifact-cache-linux-aarch64-glibc-new.tar.zst");
-        let new_metadata = cache_dir.join("artifact-cache-linux-aarch64-glibc-new.json");
+        let old_artifact = cache_dir.join("old-version.tar.zst");
+        let old_metadata = cache_dir.join("old-version.json");
+        let new_artifact = cache_dir.join("new-version.tar.zst");
+        let new_metadata = cache_dir.join("new-version.json");
         std::fs::write(&old_artifact, b"old artifact").unwrap();
-        std::fs::write(&old_metadata, b"{\"cache_key\":\"old\"}").unwrap();
+        std::fs::write(&old_metadata, b"{}").unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         std::fs::write(&new_artifact, b"new artifact").unwrap();
-        std::fs::write(&new_metadata, b"{\"cache_key\":\"new\"}").unwrap();
+        std::fs::write(&new_metadata, b"{}").unwrap();
 
-        let summary = cleanup_local_artifact_cache(&cache_dir, 1, 1).unwrap();
+        let summary = cleanup_local_artifact_cache(&cache_dir, 1).unwrap();
         assert_eq!(
             summary,
             LocalArtifactCacheCleanupSummary {
-                removed_source_archives: 1,
                 removed_target_artifacts: 1,
                 removed_target_metadata: 1,
             }
         );
 
-        assert!(!old_source.exists());
-        assert!(new_source.exists());
         assert!(!old_artifact.exists());
         assert!(!old_metadata.exists());
         assert!(new_artifact.exists());
         assert!(new_metadata.exists());
+    }
+
+    #[test]
+    fn cleanup_local_artifact_cache_prunes_target_subdirectories() {
+        let temp = TempDir::new().unwrap();
+        let cache_dir = temp.path().join("artifacts");
+        let target_dir = cache_dir.join("linux-x86_64-glibc");
+        std::fs::create_dir_all(&target_dir).unwrap();
+
+        let old_artifact = target_dir.join("old-version.tar.zst");
+        let old_metadata = target_dir.join("old-version.json");
+        let new_artifact = target_dir.join("new-version.tar.zst");
+        std::fs::write(&old_artifact, b"old").unwrap();
+        std::fs::write(&old_metadata, b"{}").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        std::fs::write(&new_artifact, b"new").unwrap();
+
+        let summary = cleanup_local_artifact_cache(&cache_dir, 1).unwrap();
+        assert_eq!(summary.removed_target_artifacts, 1);
+        assert!(!old_artifact.exists());
+        assert!(new_artifact.exists());
     }
 
     #[test]
@@ -5396,18 +4998,17 @@ name = "test-app"
         let cache_dir = temp.path().join("artifacts");
         std::fs::create_dir_all(&cache_dir).unwrap();
 
-        let artifact = cache_dir.join("artifact-cache-linux-aarch64-glibc-live.tar.zst");
-        let live_metadata = cache_dir.join("artifact-cache-linux-aarch64-glibc-live.json");
-        let orphan_metadata = cache_dir.join("artifact-cache-linux-aarch64-glibc-orphan.json");
+        let artifact = cache_dir.join("live-version.tar.zst");
+        let live_metadata = cache_dir.join("live-version.json");
+        let orphan_metadata = cache_dir.join("orphan-version.json");
         std::fs::write(&artifact, b"live artifact").unwrap();
-        std::fs::write(&live_metadata, b"{\"cache_key\":\"live\"}").unwrap();
-        std::fs::write(&orphan_metadata, b"{\"cache_key\":\"orphan\"}").unwrap();
+        std::fs::write(&live_metadata, b"{}").unwrap();
+        std::fs::write(&orphan_metadata, b"{}").unwrap();
 
-        let summary = cleanup_local_artifact_cache(&cache_dir, 10, 10).unwrap();
+        let summary = cleanup_local_artifact_cache(&cache_dir, 10).unwrap();
         assert_eq!(
             summary,
             LocalArtifactCacheCleanupSummary {
-                removed_source_archives: 0,
                 removed_target_artifacts: 0,
                 removed_target_metadata: 1,
             }
@@ -5812,7 +5413,7 @@ name = "test-app"
 
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
-        let cache_paths = artifact_cache_paths(&cache_dir, "linux-aarch64-musl", "cache-key");
+        let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
             &workspace,
             "apps/web",
@@ -5820,7 +5421,6 @@ name = "test-app"
             &["**/*".to_string()],
             &[],
             &cache_paths,
-            "cache-key",
             "index.ts",
             "linux-aarch64-musl",
         )
@@ -5847,7 +5447,7 @@ name = "test-app"
 
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
-        let cache_paths = artifact_cache_paths(&cache_dir, "linux-aarch64-musl", "cache-key");
+        let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
             &workspace,
             "apps/web",
@@ -5855,7 +5455,6 @@ name = "test-app"
             &["**/*".to_string()],
             &[],
             &cache_paths,
-            "cache-key",
             "index.ts",
             "linux-aarch64-musl",
         )
@@ -5879,7 +5478,7 @@ name = "test-app"
 
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
-        let cache_paths = artifact_cache_paths(&cache_dir, "linux-aarch64-musl", "cache-key");
+        let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
             &workspace,
             "apps/web",
@@ -5887,7 +5486,6 @@ name = "test-app"
             &["**/*".to_string()],
             &["**/node_modules/**".to_string()],
             &cache_paths,
-            "cache-key",
             "src/app.ts",
             "linux-aarch64-musl",
         )
@@ -5923,7 +5521,7 @@ name = "test-app"
 
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
-        let cache_paths = artifact_cache_paths(&cache_dir, "linux-aarch64-musl", "cache-key");
+        let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
             &workspace,
             "apps/web",
@@ -5931,7 +5529,6 @@ name = "test-app"
             &["**/*".to_string()],
             &[],
             &cache_paths,
-            "cache-key",
             "src.ts",
             "linux-aarch64-musl",
         )
@@ -5949,7 +5546,7 @@ name = "test-app"
 
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
-        let cache_paths = artifact_cache_paths(&cache_dir, "linux-aarch64-musl", "cache-key");
+        let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let err = package_target_artifact(
             &workspace,
             "apps/web",
@@ -5957,7 +5554,6 @@ name = "test-app"
             &["**/*".to_string()],
             &[],
             &cache_paths,
-            "cache-key",
             "dist/server/tako-entry.mjs",
             "linux-aarch64-musl",
         )
