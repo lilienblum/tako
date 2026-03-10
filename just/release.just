@@ -28,7 +28,7 @@ _guard:
         echo "error: working tree is not clean; commit or stash changes before releasing" >&2; \
         exit 1; \
     fi; \
-    if ! git fetch --quiet --tags origin master; then \
+    if ! git fetch --quiet --tags --force origin master; then \
         echo "error: failed to fetch origin/master; cannot verify branch freshness" >&2; \
         exit 1; \
     fi; \
