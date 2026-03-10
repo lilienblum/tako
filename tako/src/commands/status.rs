@@ -2,7 +2,6 @@ use crate::commands::server;
 use crate::config::ServersToml;
 use crate::output;
 use crate::ssh::{SshClient, SshConfig};
-use indicatif::ProgressBar;
 use std::collections::HashMap;
 use tako_core::{AppState, AppStatus, InstanceState, Response};
 use time::OffsetDateTime;
@@ -104,16 +103,7 @@ async fn collect_global_status_results(
     let total = join_set.len();
     let mut done = 0usize;
 
-    let pb = if output::is_interactive() && total > 0 {
-        let pb = ProgressBar::new_spinner();
-        pb.set_style(output::spinner_style());
-        pb.set_message(format!("Retrieving [{done}/{total}]"));
-        pb.enable_steady_tick(std::time::Duration::from_millis(80));
-        output::hide_cursor();
-        Some(pb)
-    } else {
-        None
-    };
+    let spinner = output::TrackedSpinner::start(&format!("Retrieving [{done}/{total}]"));
 
     let mut server_results: HashMap<String, GlobalServerStatusResult> = HashMap::new();
 
@@ -122,26 +112,19 @@ async fn collect_global_status_results(
             Ok(pair) => pair,
             Err(err) => {
                 done += 1;
-                if let Some(ref pb) = pb {
-                    pb.set_message(format!("Retrieving [{done}/{total}]"));
-                }
+                spinner.set_message(&format!("Retrieving [{done}/{total}]"));
                 eprintln!("Status task panicked: {err}");
                 continue;
             }
         };
 
         done += 1;
-        if let Some(ref pb) = pb {
-            pb.set_message(format!("Retrieving [{done}/{total}]"));
-        }
+        spinner.set_message(&format!("Retrieving [{done}/{total}]"));
 
         server_results.insert(server_name, status);
     }
 
-    if let Some(pb) = pb {
-        pb.finish_and_clear();
-        output::show_cursor();
-    }
+    spinner.finish();
 
     Ok(server_results)
 }

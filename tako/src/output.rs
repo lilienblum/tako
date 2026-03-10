@@ -541,6 +541,50 @@ impl Drop for PhaseSpinner {
     }
 }
 
+/// A spinner whose message can be updated while running.
+/// Does NOT suppress other output (unlike PhaseSpinner).
+pub struct TrackedSpinner {
+    pb: Option<ProgressBar>,
+}
+
+impl TrackedSpinner {
+    pub fn start(message: &str) -> Self {
+        let pb = if is_interactive() {
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(spinner_style());
+            pb.set_message(message.to_string());
+            pb.enable_steady_tick(Duration::from_millis(80));
+            hide_cursor();
+            Some(pb)
+        } else {
+            None
+        };
+        Self { pb }
+    }
+
+    pub fn set_message(&self, message: &str) {
+        if let Some(ref pb) = self.pb {
+            pb.set_message(message.to_string());
+        }
+    }
+
+    pub fn finish(&self) {
+        if let Some(ref pb) = self.pb {
+            pb.finish_and_clear();
+            show_cursor();
+        }
+    }
+}
+
+impl Drop for TrackedSpinner {
+    fn drop(&mut self) {
+        if let Some(ref pb) = self.pb {
+            pb.finish_and_clear();
+            show_cursor();
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Prompts — wizards vanish after the user answers
 // ---------------------------------------------------------------------------

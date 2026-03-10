@@ -313,15 +313,7 @@ async fn run_async(
         } else {
             format!("Checking {} servers", total)
         };
-        let pb = if output::is_interactive() {
-            let pb = indicatif::ProgressBar::new_spinner();
-            pb.set_style(output::spinner_style());
-            pb.set_message(format!("{}…", spinner_msg));
-            pb.enable_steady_tick(std::time::Duration::from_millis(80));
-            Some(pb)
-        } else {
-            None
-        };
+        let spinner = output::TrackedSpinner::start(&format!("{spinner_msg}…"));
 
         let mut checks: Vec<ServerCheck> = Vec::new();
         while let Some(result) = check_set.join_next().await {
@@ -331,9 +323,7 @@ async fn run_async(
 
             // Fail fast: server is upgrading
             if check.mode == tako_core::UpgradeMode::Upgrading {
-                if let Some(ref pb) = pb {
-                    pb.finish_and_clear();
-                }
+                spinner.finish();
                 return Err(format!(
                     "{} is currently upgrading. Retry after the upgrade completes.",
                     check.name,
@@ -344,9 +334,7 @@ async fn run_async(
             checks.push(check);
         }
 
-        if let Some(ref pb) = pb {
-            pb.finish_and_clear();
-        }
+        spinner.finish();
 
         // Wildcard DNS check
         let wildcard_routes: Vec<_> = routes.iter().filter(|r| r.starts_with("*.")).collect();
