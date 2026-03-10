@@ -56,6 +56,17 @@ use tracing_subscriber::EnvFilter;
 const DEFAULT_SERVER_LOG_FILTER: &str = "warn";
 const SIGNAL_PARENT_ON_READY_ENV: &str = "TAKO_SIGNAL_PARENT_ON_READY";
 
+fn server_version() -> String {
+    let base = env!("CARGO_PKG_VERSION");
+    match option_env!("TAKO_CANARY_SHA") {
+        Some(sha) if !sha.trim().is_empty() => {
+            let short = &sha.trim()[..sha.trim().len().min(7)];
+            format!("{base}-canary-{short}")
+        }
+        _ => base.to_string(),
+    }
+}
+
 /// Tako Server - Application runtime and proxy
 #[derive(Parser)]
 #[command(name = "tako-server")]
@@ -481,6 +492,11 @@ impl ServerState {
                         HashMap::new()
                     });
 
+            // Pre-install mise-managed tools so cold starts don't stall on download.
+            if let Err(e) = ensure_mise_tools_installed(&config.cwd).await {
+                tracing::warn!(app = %app_name, "Failed to pre-install mise tools: {}", e);
+            }
+
             let app = self.app_manager.register_app(config.clone());
             self.load_balancer.register_app(app.clone());
 
@@ -531,7 +547,7 @@ impl ServerState {
             Command::Hello { protocol_version } => {
                 let data = HelloResponse {
                     protocol_version: PROTOCOL_VERSION,
-                    server_version: env!("CARGO_PKG_VERSION").to_string(),
+                    server_version: server_version(),
                     capabilities: vec![
                         "deploy_instances_idle_timeout".to_string(),
                         "on_demand_cold_start".to_string(),
@@ -1543,6 +1559,52 @@ fn bun_install_args_for_release(release_dir: &Path) -> Vec<String> {
     args
 }
 
+/// Pre-install mise-managed tools if a `mise.toml` exists in the release dir.
+///
+/// Without this, the first `mise exec -- <tool>` invocation would download the
+/// tool on-demand, which can take 30+ seconds and cause cold-start timeouts.
+async fn ensure_mise_tools_installed(release_dir: &Path) -> Result<(), String> {
+    let mise_toml = release_dir.join("mise.toml");
+    if !mise_toml.exists() {
+        return Ok(());
+    }
+
+    // Check mise is available
+    if TokioCommand::new("mise")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await
+        .map(|s| !s.success())
+        .unwrap_or(true)
+    {
+        tracing::debug!(dir = %release_dir.display(), "mise not available, skipping tool install");
+        return Ok(());
+    }
+
+    tracing::info!(dir = %release_dir.display(), "Pre-installing mise tools");
+    let output = TokioCommand::new("mise")
+        .args(["install"])
+        .current_dir(release_dir)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str())
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run 'mise install' in {}: {}", release_dir.display(), e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        tracing::warn!(
+            dir = %release_dir.display(),
+            stderr = %stderr,
+            "mise install failed (non-fatal)"
+        );
+    }
+    Ok(())
+}
+
 async fn prepare_release_runtime(
     release_dir: &Path,
     env: &HashMap<String, String>,
@@ -1556,6 +1618,9 @@ async fn prepare_release_runtime(
             release_dir.join("app.json").display()
         ));
     }
+
+    // Pre-install mise-managed tools before dependency install or app start.
+    ensure_mise_tools_installed(release_dir).await?;
 
     if let Some(install_cmd) = manifest
         .install
@@ -1871,8 +1936,9 @@ fn sd_notify_ready() {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     install_rustls_crypto_provider();
 
-    // Initialize tracing
+    // Initialize tracing with JSON output for structured log consumption.
     tracing_subscriber::fmt()
+        .json()
         .with_env_filter(
             EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| EnvFilter::new(DEFAULT_SERVER_LOG_FILTER)),
@@ -2713,10 +2779,11 @@ async fn probe_primary_socket(socket_path: &str, our_pid: u32) -> PrimaryStatus 
 mod tests {
     use super::{
         SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, bun_install_args_for_release,
-        extract_zstd_archive, handle_idle_event, install_rustls_crypto_provider,
-        prepare_release_runtime, read_secrets_file, resolve_release_runtime,
-        run_extract_archive_mode, secrets_file_path, should_signal_parent_on_ready,
-        should_use_self_signed_route_cert, validate_deploy_routes, write_secrets_file,
+        ensure_mise_tools_installed, extract_zstd_archive, handle_idle_event,
+        install_rustls_crypto_provider, prepare_release_runtime, read_secrets_file,
+        resolve_release_runtime, run_extract_archive_mode, secrets_file_path,
+        should_signal_parent_on_ready, should_use_self_signed_route_cert, validate_deploy_routes,
+        write_secrets_file,
     };
     use crate::instances::AppConfig;
     use crate::socket::{AppState, Command, InstanceState, Response};
@@ -4063,5 +4130,22 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
             versions.contains(&"v1") && versions.contains(&"v2"),
             "expected status to include both running builds: {data}"
         );
+    }
+
+    #[tokio::test]
+    async fn ensure_mise_tools_installed_skips_when_no_mise_toml() {
+        let dir = TempDir::new().unwrap();
+        // No mise.toml present — should be a no-op.
+        ensure_mise_tools_installed(dir.path()).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_mise_tools_installed_skips_when_mise_not_available() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("mise.toml"), "[tools]\n").unwrap();
+        // Even if mise.toml exists, if mise is not installed this should not error.
+        // This test passes in any environment because ensure_mise_tools_installed
+        // gracefully handles a missing mise binary.
+        ensure_mise_tools_installed(dir.path()).await.unwrap();
     }
 }
