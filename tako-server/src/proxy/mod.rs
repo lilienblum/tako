@@ -386,12 +386,7 @@ impl ProxyHttp for TakoProxy {
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
         let path = session.req_header().uri.path().to_string();
-        let host = session
-            .req_header()
-            .headers
-            .get("host")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("");
+        let host = request_host(session.req_header());
         let hostname = host.split(':').next().unwrap_or(host);
 
         // Handle ACME HTTP-01 challenges
@@ -586,12 +581,7 @@ impl ProxyHttp for TakoProxy {
     }
 
     fn cache_key_callback(&self, session: &Session, _ctx: &mut Self::CTX) -> Result<CacheKey> {
-        let host = session
-            .req_header()
-            .headers
-            .get("host")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("");
+        let host = request_host(session.req_header());
         Ok(build_proxy_cache_key(
             host,
             &session.req_header().uri.to_string(),
@@ -712,12 +702,8 @@ impl ProxyHttp for TakoProxy {
             .map(|r| r.status.as_u16())
             .unwrap_or(0);
 
-        let host = session
-            .req_header()
-            .headers
-            .get("host")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("-");
+        let host = request_host(session.req_header());
+        let host = if host.is_empty() { "-" } else { host };
 
         let path = session.req_header().uri.path();
         let method = session.req_header().method.as_str();
@@ -874,6 +860,19 @@ async fn stream_static_file(
     }
 
     Ok(())
+}
+
+/// Extract the host/authority from a request.
+///
+/// For HTTP/2, the hostname lives in the `:authority` pseudo-header which
+/// Pingora exposes via `uri.authority()`.  For HTTP/1.1, it lives in the
+/// `Host` header.  We try both so routing works regardless of protocol.
+fn request_host<'a>(req: &'a pingora_http::RequestHeader) -> &'a str {
+    req.uri
+        .authority()
+        .map(|a| a.as_str())
+        .or_else(|| req.headers.get("host").and_then(|h| h.to_str().ok()))
+        .unwrap_or("")
 }
 
 fn path_looks_like_static_asset(path: &str) -> bool {
