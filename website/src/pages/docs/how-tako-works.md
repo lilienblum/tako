@@ -102,7 +102,7 @@ Important deployment behavior:
 - Preset runtime fields use top-level `main`/`install`/`start` keys.
 - Top-level `preset` in `tako.toml` must be runtime-local (for example `tanstack-start` with `runtime = "bun"`); namespaced aliases like `js/tanstack-start` are rejected and `github:` refs are not supported.
 - Runtime base presets provide defaults for `install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`; explicit top-level `preset` also uses preset top-level `dev`.
-- For `tako dev`, when top-level `preset` is omitted, Tako ignores preset top-level `dev` and runs runtime-default command with resolved `main` (`bun run node_modules/tako.sh/src/wrapper.ts {main}`, `node {main}`, or `deno run --allow-net --allow-env --allow-read {main}`).
+- For `tako dev`, when top-level `preset` is omitted, Tako ignores preset top-level `dev` and runs runtime-default command with resolved `main` (`bun run node_modules/tako.sh/src/entrypoints/bun.ts {main}`, `node --experimental-strip-types node_modules/tako.sh/src/entrypoints/node.ts {main}`, or `deno run --allow-net --allow-env --allow-read node_modules/tako.sh/src/entrypoints/deno.ts {main}`).
 - JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set.
 - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.
 - Preset `[[build.stages]]` is not supported; app-level custom stages are configured in `tako.toml` under `[[build.stages]]`.
@@ -149,7 +149,7 @@ Exact path routes normalize trailing slash, so `example.com/api` and `example.co
 Tako uses active HTTP probing as the source of truth for instance health.
 
 - Probe interval: 1s (default)
-- Probe target: `GET /status` with `Host: tako-internal`
+- Probe target: `GET /status` with `Host: tako`
 - Probe transport: Unix deploys probe via per-instance `TAKO_APP_SOCKET` path (no TCP fallback)
 - Failure handling:
   - consecutive failures mark instances unhealthy and remove them from balancing

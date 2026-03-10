@@ -9,7 +9,7 @@ Rust crate for the remote Tako runtime and proxy.
 - Terminate HTTP/HTTPS traffic and proxy upstream.
 - Redirect HTTP traffic to HTTPS (except ACME challenge checks).
 - Cache proxied `GET`/`HEAD` upstream responses in-memory when response cache directives explicitly allow caching.
-- Perform health probing using `Host: tako-internal` + `/status` against each app instance.
+- Perform health probing using `Host: tako` + `/status` against each app instance.
 - Perform active health probing.
 - Serve management commands over Unix socket.
 - Report per-build runtime status (multiple concurrently running builds during rollout).

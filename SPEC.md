@@ -110,9 +110,9 @@ env = "production"
 - Top-level `runtime` is optional; when set to `bun`, `node`, or `deno`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
 - Top-level `preset` is optional; when omitted, `tako deploy`/`tako dev` use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`).
   - For `tako dev`, when top-level `preset` is omitted, Tako ignores preset top-level `dev` and runs a runtime-default command using resolved `main`:
-    - Bun: `bun run node_modules/tako.sh/src/wrapper.ts {main}`
-    - Node: `node {main}`
-    - Deno: `deno run --allow-net --allow-env --allow-read {main}`
+    - Bun: `bun run node_modules/tako.sh/src/entrypoints/bun.ts {main}`
+    - Node: `node --experimental-strip-types node_modules/tako.sh/src/entrypoints/node.ts {main}`
+    - Deno: `deno run --allow-net --allow-env --allow-read node_modules/tako.sh/src/entrypoints/deno.ts {main}`
   - For `tako dev`, when top-level `preset` is explicitly set, Tako uses preset top-level `dev`.
 - `preset` supports:
   - runtime-local aliases: `tanstack-start` (resolved under selected runtime, e.g. `runtime = "bun"`)
@@ -762,11 +762,11 @@ When deploying with `instances = 0`, rolling deploy starts one warm instance for
 
 - Release `app.json` is required for app startup.
 - If release `app.json` includes non-empty `start`, tako-server uses that command (expanding `{main}` placeholders).
-- If `start` is missing/empty, tako-server falls back by runtime:
-  - `bun`: resolve `node_modules/tako.sh/src/wrapper.ts` from app dir or parent dirs, then run `bun run <resolved-wrapper-path> <app.json.main>`
-    - if wrapper is missing, warm-instance startup fails with an explicit missing-wrapper error
-  - `node`: run `node <app.json.main>`
-  - `deno`: run `deno run --allow-net --allow-env --allow-read <app.json.main>`
+- If `start` is missing/empty, tako-server falls back by runtime, resolving the SDK entrypoint (`node_modules/tako.sh/src/entrypoints/{runtime}.ts`) from app dir or parent dirs:
+  - `bun`: `bun run <resolved-entrypoint> <app.json.main>`
+  - `node`: `node --experimental-strip-types <resolved-entrypoint> <app.json.main>`
+  - `deno`: `deno run --allow-net --allow-env --allow-read <resolved-entrypoint> <app.json.main>`
+  - if the entrypoint is missing, warm-instance startup fails with an explicit error
 - Unknown runtime values in `app.json` are rejected with an explicit unsupported-runtime error.
 
 **Partial failure:** If some servers fail while others succeed, deployment continues. Failures are reported at the end.
@@ -1149,7 +1149,7 @@ Server-side validation on `deploy` and app-scoped commands:
 Active HTTP probing is the source of truth for instance health:
 
 - **Probe interval**: 1 second by default (configurable)
-- **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako-internal`
+- **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako`
 - **Transport**: On Unix deploys, probes use the instance Unix socket path from `TAKO_APP_SOCKET` (no TCP fallback).
 - **Unhealthy threshold**: 2 consecutive failures → mark unhealthy, remove from load balancer
 - **Dead threshold**: 5 consecutive failures → mark stopped, kill process
@@ -1161,7 +1161,7 @@ Tako-server performs health checks against the deployed app process:
 
 ```
 GET /status
-Host: tako-internal
+Host: tako
 ```
 
 Expected response:
@@ -1177,7 +1177,7 @@ Expected response:
 }
 ```
 
-The SDK wrappers implement this endpoint automatically. The edge proxy does not reserve or bypass `Host: tako-internal` routes.
+The SDK wrappers implement this endpoint automatically. The edge proxy does not reserve or bypass `Host: tako` routes.
 
 ## TLS/SSL Certificates
 
@@ -1272,12 +1272,12 @@ import { tako } from "tako.sh/vite";
 
 - Fetch handler adapters for Bun/Node/Deno runtimes
 - Unix socket serving for deployed Unix apps via `TAKO_APP_SOCKET`; `tako dev` remains TCP (`PORT`)
-- Internal status endpoint (`Host: tako-internal` + `/status`)
+- Internal status endpoint (`Host: tako` + `/status`)
 - Graceful shutdown handling
 
 ### Built-in Endpoints
 
-**`GET /status` with `Host: tako-internal`**
+**`GET /status` with `Host: tako`**
 
 ```json
 {

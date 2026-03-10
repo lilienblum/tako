@@ -100,7 +100,7 @@ Install/refresh server runtime commands:
 - Build preset resolves from official alias; unpinned aliases fetch from `master` (fetch failures fail resolution; runtime base aliases fall back to embedded defaults when missing from fetched family manifests) and resolved source metadata is written to `.tako/build.lock.json`.
 - Preset runtime fields are top-level `main`/`install`/`start`.
 - Runtime base presets provide defaults for `install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`; explicit top-level `preset` also uses preset top-level `dev` in `tako dev`.
-- In `tako dev`, omitted top-level `preset` ignores preset top-level `dev` and runs runtime-default command with resolved `main` (`bun run node_modules/tako.sh/src/wrapper.ts {main}`, `node {main}`, or `deno run --allow-net --allow-env --allow-read {main}`).
+- In `tako dev`, omitted top-level `preset` ignores preset top-level `dev` and runs runtime-default command with resolved `main` (`bun run node_modules/tako.sh/src/entrypoints/bun.ts {main}`, `node --experimental-strip-types node_modules/tako.sh/src/entrypoints/node.ts {main}`, or `deno run --allow-net --allow-env --allow-read node_modules/tako.sh/src/entrypoints/deno.ts {main}`).
 - JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set.
 - Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.
 - Preset `[[build.stages]]` is not supported; app-level custom stages are configured in `tako.toml` under `[[build.stages]]`.
@@ -116,7 +116,7 @@ Install/refresh server runtime commands:
 - Final `app.json` also carries optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
 - Runtime startup on `tako-server` uses release `app.json`:
   - if `start` is present, that command is used (`{main}` placeholders are expanded)
-  - if `start` is missing, runtime fallback is used (`bun` wrapper, `node <main>`, or `deno run --allow-net --allow-env --allow-read <main>`)
+  - if `start` is missing, runtime fallback is used (`bun` entrypoint, `node` entrypoint, or `deno` entrypoint — each goes through the per-runtime SDK entrypoint with `<main>`)
 - Runtime `main` resolution order:
   1. `main` from `tako.toml`
   2. for JS runtimes (`bun`, `node`, `deno`) when preset `main` is `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`): existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`
