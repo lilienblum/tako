@@ -54,11 +54,11 @@ impl Spawner {
     pub async fn spawn(&self, app: &App, instance: Arc<Instance>) -> Result<(), InstanceError> {
         let config = app.config.read().clone();
         let app_name = config.name.clone();
-        let instance_id = instance.id;
+        let instance_id = instance.id.clone();
 
         tracing::info!(
             app = %app_name,
-            instance = instance_id,
+            instance = %instance_id,
             port = instance.port,
             "Spawning instance"
         );
@@ -77,7 +77,7 @@ impl Spawner {
             .instance_tx
             .send(InstanceEvent::Started {
                 app: app_name.clone(),
-                instance_id,
+                instance_id: instance_id.clone(),
             })
             .await;
 
@@ -100,7 +100,7 @@ impl Spawner {
                 instance.set_state(InstanceState::Healthy);
                 tracing::info!(
                     app = %app_name,
-                    instance = instance_id,
+                    instance = %instance_id,
                     "Instance is healthy"
                 );
 
@@ -214,7 +214,7 @@ fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String
     let mut env = config.env_vars.clone();
     env.extend(config.secrets.iter().map(|(k, v)| (k.clone(), v.clone())));
 
-    env.insert("TAKO_INSTANCE".to_string(), instance.id.to_string());
+    env.insert("TAKO_INSTANCE".to_string(), instance.id.clone());
 
     #[cfg(unix)]
     {
@@ -469,10 +469,9 @@ mod tests {
         let instance = app.allocate_instance();
 
         let env = build_instance_env(&app.config.read().clone(), &instance);
-        let expected_instance = instance.id.to_string();
         assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
         assert_eq!(env.get("SECRET").map(String::as_str), Some("shh"));
-        assert_eq!(env.get("TAKO_INSTANCE"), Some(&expected_instance));
+        assert_eq!(env.get("TAKO_INSTANCE").map(String::as_str), Some(instance.id.as_str()));
         assert!(env.contains_key("TAKO_APP_SOCKET"));
         assert!(!env.contains_key("PORT"));
     }
@@ -502,7 +501,7 @@ mod tests {
             let is_internal_status = request.starts_with("GET /status ")
                 && request
                     .lines()
-                    .any(|line| line.eq_ignore_ascii_case("host: tako-internal"));
+                    .any(|line| line.eq_ignore_ascii_case("host: tako"));
 
             let response = if is_internal_status {
                 b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
@@ -519,7 +518,7 @@ mod tests {
             base_port: 31_000,
             app_socket_dir: temp.path().to_path_buf(),
             health_check_path: "/status".to_string(),
-            health_check_host: "tako-internal".to_string(),
+            health_check_host: "tako".to_string(),
             ..Default::default()
         };
         let app = App::new(config, instance_tx);
@@ -555,7 +554,7 @@ mod tests {
             base_port: port,
             app_socket_dir: temp.path().to_path_buf(),
             health_check_path: "/status".to_string(),
-            health_check_host: "tako-internal".to_string(),
+            health_check_host: "tako".to_string(),
             ..Default::default()
         };
         let app = App::new(config, instance_tx);
@@ -580,7 +579,7 @@ mod tests {
                 .probe_health(
                     &instance,
                     "/status",
-                    "tako-internal",
+                    "tako",
                     Duration::from_millis(200),
                 )
                 .await

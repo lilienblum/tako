@@ -5437,7 +5437,7 @@ name = "test-app"
     }
 
     #[test]
-    fn package_target_artifact_for_bun_does_not_require_wrapper_sources() {
+    fn package_target_artifact_for_bun_does_not_require_entrypoint_sources() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
         let app_dir = workspace.join("apps/web");

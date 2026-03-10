@@ -106,7 +106,7 @@ impl RollingUpdater {
                     Ok(()) => {
                         tracing::info!(
                             app = %app.name(),
-                            instance = instance.id,
+                            instance = %instance.id,
                             "New instance is healthy"
                         );
                         new_instances.push(instance);
@@ -114,7 +114,7 @@ impl RollingUpdater {
                     Err(e) => {
                         tracing::error!(
                             app = %app.name(),
-                            instance = instance.id,
+                            instance = %instance.id,
                             error = %e,
                             "New instance failed health check, rolling back"
                         );
@@ -122,11 +122,11 @@ impl RollingUpdater {
                         // Rollback: kill all new instances
                         for new_instance in &new_instances {
                             let _ = new_instance.kill().await;
-                            app.remove_instance(new_instance.id);
+                            app.remove_instance(&new_instance.id);
                         }
                         // Also kill the failed instance
                         let _ = instance.kill().await;
-                        app.remove_instance(instance.id);
+                        app.remove_instance(&instance.id);
 
                         return Ok(RollingUpdateResult {
                             success: false,
@@ -216,7 +216,7 @@ impl RollingUpdater {
     async fn drain_and_stop(&self, app: &App, instance: &Instance) -> Result<(), InstanceError> {
         tracing::debug!(
             app = %app.name(),
-            instance = instance.id,
+            instance = %instance.id,
             "Draining instance"
         );
 
@@ -229,7 +229,7 @@ impl RollingUpdater {
             if tokio::time::Instant::now() >= deadline {
                 tracing::warn!(
                     app = %app.name(),
-                    instance = instance.id,
+                    instance = %instance.id,
                     in_flight = instance.in_flight(),
                     "Drain timeout exceeded, forcing stop"
                 );
@@ -240,11 +240,11 @@ impl RollingUpdater {
 
         // Kill the instance
         instance.kill().await?;
-        app.remove_instance(instance.id);
+        app.remove_instance(&instance.id);
 
         tracing::debug!(
             app = %app.name(),
-            instance = instance.id,
+            instance = %instance.id,
             "Instance stopped"
         );
 
@@ -393,7 +393,7 @@ mod tests {
         assert!(result.is_ok());
 
         // Instance should be removed from app
-        assert!(app.get_instance(instance.id).is_none());
+        assert!(app.get_instance(&instance.id).is_none());
     }
 
     #[test]

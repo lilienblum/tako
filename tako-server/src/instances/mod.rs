@@ -16,7 +16,7 @@ use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU16, AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::process::Child;
 use tokio::sync::mpsc;
@@ -28,8 +28,13 @@ fn now_unix_millis() -> u64 {
         .as_millis() as u64
 }
 
-pub const INTERNAL_STATUS_HOST: &str = "tako-internal";
+pub const INTERNAL_STATUS_HOST: &str = "tako";
 const APP_SOCKET_PID_TOKEN: &str = "{pid}";
+
+/// Generate a short random instance ID
+fn generate_instance_id() -> String {
+    nanoid::nanoid!(8)
+}
 
 /// Configuration for an app
 #[derive(Debug, Clone)]
@@ -94,7 +99,7 @@ impl Default for AppConfig {
 /// A running instance of an app
 pub struct Instance {
     /// Unique instance ID
-    pub id: u32,
+    pub id: String,
     /// Port the instance is listening on
     pub port: u16,
     /// Build version this instance was launched from
@@ -121,7 +126,12 @@ pub struct Instance {
 }
 
 impl Instance {
-    pub fn new(id: u32, port: u16, build_version: String, socket_template: Option<String>) -> Self {
+    pub fn new(
+        id: String,
+        port: u16,
+        build_version: String,
+        socket_template: Option<String>,
+    ) -> Self {
         Self {
             id,
             port,
@@ -225,7 +235,7 @@ impl Instance {
 
     pub fn status(&self) -> InstanceStatus {
         InstanceStatus {
-            id: self.id,
+            id: self.id.clone(),
             state: self.state(),
             port: self.port,
             pid: self.pid(),
@@ -263,14 +273,14 @@ pub struct App {
     /// App configuration
     pub config: RwLock<AppConfig>,
     /// Running instances
-    instances: DashMap<u32, Arc<Instance>>,
+    instances: DashMap<String, Arc<Instance>>,
     /// Current app state
     state: RwLock<AppState>,
 
     /// Most recent error message (if any)
     last_error: RwLock<Option<String>>,
-    /// Next instance ID
-    next_instance_id: AtomicU32,
+    /// Next port offset (for sequential port allocation)
+    next_port_offset: AtomicU16,
     /// Channel to notify about instance changes
     instance_tx: mpsc::Sender<InstanceEvent>,
 }
@@ -278,10 +288,10 @@ pub struct App {
 /// Events for instance lifecycle
 #[derive(Debug)]
 pub enum InstanceEvent {
-    Started { app: String, instance_id: u32 },
-    Ready { app: String, instance_id: u32 },
-    Unhealthy { app: String, instance_id: u32 },
-    Stopped { app: String, instance_id: u32 },
+    Started { app: String, instance_id: String },
+    Ready { app: String, instance_id: String },
+    Unhealthy { app: String, instance_id: String },
+    Stopped { app: String, instance_id: String },
 }
 
 impl App {
@@ -291,7 +301,7 @@ impl App {
             instances: DashMap::new(),
             state: RwLock::new(AppState::Stopped),
             last_error: RwLock::new(None),
-            next_instance_id: AtomicU32::new(1),
+            next_port_offset: AtomicU16::new(0),
             instance_tx,
         }
     }
@@ -344,18 +354,18 @@ impl App {
     /// Pick the healthy instance with the lowest externally provided load value.
     pub fn get_least_loaded_healthy_instance<F>(&self, mut load_for: F) -> Option<Arc<Instance>>
     where
-        F: FnMut(u32) -> u64,
+        F: FnMut(&str) -> u64,
     {
         self.instances
             .iter()
             .filter(|entry| entry.value().state() == InstanceState::Healthy)
-            .min_by_key(|entry| load_for(entry.value().id))
+            .min_by_key(|entry| load_for(&entry.value().id))
             .map(|entry| entry.value().clone())
     }
 
     /// Get instance by ID
-    pub fn get_instance(&self, id: u32) -> Option<Arc<Instance>> {
-        self.instances.get(&id).map(|entry| entry.value().clone())
+    pub fn get_instance(&self, id: &str) -> Option<Arc<Instance>> {
+        self.instances.get(id).map(|entry| entry.value().clone())
     }
 
     /// Get all instances
@@ -376,9 +386,10 @@ impl App {
 
     /// Allocate a new instance (doesn't start it yet)
     pub fn allocate_instance(&self) -> Arc<Instance> {
-        let id = self.next_instance_id.fetch_add(1, Ordering::Relaxed);
+        let id = generate_instance_id();
         let config = self.config.read();
-        let port = config.base_port + (id - 1) as u16;
+        let port_offset = self.next_port_offset.fetch_add(1, Ordering::Relaxed);
+        let port = config.base_port + port_offset;
         let socket_template = if cfg!(unix) {
             Some(
                 config
@@ -394,7 +405,7 @@ impl App {
             None
         };
         let instance = Arc::new(Instance::new(
-            id,
+            id.clone(),
             port,
             config.version.clone(),
             socket_template,
@@ -404,8 +415,8 @@ impl App {
     }
 
     /// Remove an instance
-    pub fn remove_instance(&self, id: u32) -> Option<Arc<Instance>> {
-        self.instances.remove(&id).map(|(_, v)| v)
+    pub fn remove_instance(&self, id: &str) -> Option<Arc<Instance>> {
+        self.instances.remove(id).map(|(_, v)| v)
     }
 
     /// Update configuration (for reloads/deploys)
@@ -494,7 +505,7 @@ impl AppManager {
         let instances = app.get_instances();
         for instance in instances {
             instance.kill().await?;
-            app.remove_instance(instance.id);
+            app.remove_instance(&instance.id);
         }
 
         Ok(())
@@ -534,7 +545,7 @@ mod tests {
 
     #[test]
     fn test_instance_state_transitions() {
-        let instance = Instance::new(1, 3000, "v1".to_string(), None);
+        let instance = Instance::new("test-1".to_string(), 3000, "v1".to_string(), None);
         assert_eq!(instance.state(), InstanceState::Starting);
 
         instance.set_state(InstanceState::Ready);
@@ -546,7 +557,7 @@ mod tests {
 
     #[test]
     fn test_instance_request_tracking() {
-        let instance = Instance::new(1, 3000, "v1".to_string(), None);
+        let instance = Instance::new("test-1".to_string(), 3000, "v1".to_string(), None);
         assert_eq!(instance.requests_total(), 0);
 
         instance.request_started();
@@ -572,15 +583,15 @@ mod tests {
         let app = App::new(config, tx);
 
         let i1 = app.allocate_instance();
-        assert_eq!(i1.id, 1);
+        assert!(!i1.id.is_empty());
         assert_eq!(i1.port, 3000);
 
         let i2 = app.allocate_instance();
-        assert_eq!(i2.id, 2);
+        assert_ne!(i1.id, i2.id);
         assert_eq!(i2.port, 3001);
 
         let i3 = app.allocate_instance();
-        assert_eq!(i3.id, 3);
+        assert_ne!(i2.id, i3.id);
         assert_eq!(i3.port, 3002);
         assert_eq!(
             i3.socket_template(),
@@ -614,7 +625,7 @@ mod tests {
     #[test]
     fn test_instance_socket_path_resolves_pid_placeholder() {
         let instance = Instance::new(
-            1,
+            "test-1".to_string(),
             3000,
             "v1".to_string(),
             Some("/tmp/tako-app-test-app-{pid}.sock".to_string()),

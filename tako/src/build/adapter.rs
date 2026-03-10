@@ -34,7 +34,7 @@ else
   fi
 fi
 '''
-start = ["mise", "exec", "--", "bun", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
+start = ["mise", "exec", "--", "bun", "run", "node_modules/tako.sh/src/entrypoints/bun.ts", "{main}"]
 
 [build]
 exclude = ["node_modules/"]
@@ -85,7 +85,7 @@ else
   fi
 fi
 '''
-start = ["mise", "exec", "--", "node", "{main}"]
+start = ["mise", "exec", "--", "node", "--experimental-strip-types", "node_modules/tako.sh/src/entrypoints/node.ts", "{main}"]
 
 [build]
 exclude = ["node_modules/"]
@@ -142,6 +142,7 @@ start = [
   "--allow-net",
   "--allow-env",
   "--allow-read",
+  "node_modules/tako.sh/src/entrypoints/deno.ts",
   "{main}",
 ]
 

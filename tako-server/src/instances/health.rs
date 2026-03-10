@@ -1,6 +1,6 @@
 //! Health checker - monitors instance health via HTTP probing
 //!
-//! Performs active HTTP health checks to internal host `tako-internal` at `/status` on each
+//! Performs active HTTP health checks to internal host `tako` at `/status` on each
 //! instance.
 //! This replaces passive heartbeat-only detection with active probing.
 
@@ -41,13 +41,13 @@ impl Default for HealthConfig {
 #[derive(Debug, Clone)]
 pub enum HealthEvent {
     /// Instance became healthy
-    Healthy { app: String, instance_id: u32 },
+    Healthy { app: String, instance_id: String },
     /// Instance became unhealthy
-    Unhealthy { app: String, instance_id: u32 },
+    Unhealthy { app: String, instance_id: String },
     /// Instance is dead (no heartbeat for too long)
-    Dead { app: String, instance_id: u32 },
+    Dead { app: String, instance_id: String },
     /// Instance recovered from unhealthy
-    Recovered { app: String, instance_id: u32 },
+    Recovered { app: String, instance_id: String },
 }
 
 /// Tracks consecutive health check failures per instance
@@ -148,12 +148,12 @@ impl HealthChecker {
                 let event = if current_state == InstanceState::Unhealthy {
                     HealthEvent::Recovered {
                         app: app.name(),
-                        instance_id: instance.id,
+                        instance_id: instance.id.clone(),
                     }
                 } else {
                     HealthEvent::Healthy {
                         app: app.name(),
-                        instance_id: instance.id,
+                        instance_id: instance.id.clone(),
                     }
                 };
                 let _ = self.event_tx.send(event).await;
@@ -166,7 +166,7 @@ impl HealthChecker {
 
             tracing::debug!(
                 app = %app.name(),
-                instance = instance.id,
+                instance = %instance.id,
                 failures = failure_count,
                 "Health check failed"
             );
@@ -187,26 +187,26 @@ impl HealthChecker {
                     InstanceState::Unhealthy => {
                         tracing::warn!(
                             app = %app.name(),
-                            instance = instance.id,
+                            instance = %instance.id,
                             failures = failure_count,
                             "Instance marked unhealthy"
                         );
                         Some(HealthEvent::Unhealthy {
                             app: app.name(),
-                            instance_id: instance.id,
+                            instance_id: instance.id.clone(),
                         })
                     }
                     InstanceState::Stopped => {
                         tracing::error!(
                             app = %app.name(),
-                            instance = instance.id,
+                            instance = %instance.id,
                             failures = failure_count,
                             "Instance marked dead after {} consecutive failures",
                             failure_count
                         );
                         Some(HealthEvent::Dead {
                             app: app.name(),
-                            instance_id: instance.id,
+                            instance_id: instance.id.clone(),
                         })
                     }
                     _ => None,
@@ -220,13 +220,13 @@ impl HealthChecker {
     }
 
     /// Get current failure count for an instance
-    pub fn get_failure_count(&self, app_name: &str, instance_id: u32) -> u32 {
+    pub fn get_failure_count(&self, app_name: &str, instance_id: &str) -> u32 {
         let key = format!("{}:{}", app_name, instance_id);
         self.failure_counts.get(&key).map(|v| *v).unwrap_or(0)
     }
 
     /// Clear failure count for an instance (e.g., after restart)
-    pub fn clear_failure_count(&self, app_name: &str, instance_id: u32) {
+    pub fn clear_failure_count(&self, app_name: &str, instance_id: &str) {
         let key = format!("{}:{}", app_name, instance_id);
         self.failure_counts.remove(&key);
     }
@@ -341,7 +341,7 @@ mod tests {
         let checker = HealthChecker::new(config, tx);
 
         // Verify failure counts start empty
-        assert_eq!(checker.get_failure_count("test-app", 1), 0);
+        assert_eq!(checker.get_failure_count("test-app", "1"), 0);
     }
 
     #[tokio::test]
@@ -354,11 +354,11 @@ mod tests {
         let key = "test-app:1".to_string();
         checker.failure_counts.insert(key.clone(), 3);
 
-        assert_eq!(checker.get_failure_count("test-app", 1), 3);
+        assert_eq!(checker.get_failure_count("test-app", "1"), 3);
 
         // Clear and verify
-        checker.clear_failure_count("test-app", 1);
-        assert_eq!(checker.get_failure_count("test-app", 1), 0);
+        checker.clear_failure_count("test-app", "1");
+        assert_eq!(checker.get_failure_count("test-app", "1"), 0);
     }
 
     #[tokio::test]
@@ -387,19 +387,19 @@ mod tests {
     fn test_health_event_types() {
         let healthy = HealthEvent::Healthy {
             app: "test".to_string(),
-            instance_id: 1,
+            instance_id: "abc123".to_string(),
         };
         let unhealthy = HealthEvent::Unhealthy {
             app: "test".to_string(),
-            instance_id: 1,
+            instance_id: "abc123".to_string(),
         };
         let dead = HealthEvent::Dead {
             app: "test".to_string(),
-            instance_id: 1,
+            instance_id: "abc123".to_string(),
         };
         let recovered = HealthEvent::Recovered {
             app: "test".to_string(),
-            instance_id: 1,
+            instance_id: "abc123".to_string(),
         };
 
         // Just verify they can be created and formatted
@@ -439,7 +439,7 @@ mod tests {
                 let is_internal_status = request.starts_with("GET /status ")
                     && request
                         .lines()
-                        .any(|line| line.eq_ignore_ascii_case("host: tako-internal"));
+                        .any(|line| line.eq_ignore_ascii_case("host: tako"));
 
                 let response = if is_internal_status {
                     b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
@@ -451,15 +451,13 @@ mod tests {
         });
 
         let (tx, _rx) = mpsc::channel(16);
-        let mut config = AppConfig {
+        let config = AppConfig {
             name: "test-app".to_string(),
             base_port: 31_001,
             app_socket_dir: temp.path().to_path_buf(),
             min_instances: 1,
             ..Default::default()
         };
-        config.health_check_path = "/status".to_string();
-        config.health_check_host = "tako-internal".to_string();
 
         let app = Arc::new(App::new(config, tx));
         let instance = app.allocate_instance();
@@ -541,7 +539,7 @@ mod tests {
 
         let healthy = probe_instance_health(
             &instance,
-            "tako-internal",
+            "tako",
             "/status",
             Duration::from_millis(200),
         )

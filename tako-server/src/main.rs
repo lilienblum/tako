@@ -1263,7 +1263,7 @@ impl ServerState {
         match spawner.spawn(app, instance.clone()).await {
             Ok(()) => Ok(()),
             Err(e) => {
-                app.remove_instance(instance.id);
+                app.remove_instance(&instance.id);
                 Err(format!("Warm instance startup failed: {}", e))
             }
         }
@@ -1554,12 +1554,12 @@ async fn prepare_release_runtime(
         install_bun_dependencies_for_release(release_dir, env).await?;
     }
 
-    if manifest.runtime == "bun" {
-        let wrapper_path = release_dir.join("node_modules/tako.sh/src/wrapper.ts");
-        if !wrapper_path.is_file() {
+    if let Some(rel_path) = crate::app_command::entrypoint_relative_path(&manifest.runtime) {
+        let entrypoint_path = release_dir.join(rel_path);
+        if !entrypoint_path.is_file() {
             return Err(format!(
-                "Bun dependency install completed but '{}' is missing. Ensure package 'tako.sh' is installed.",
-                wrapper_path.display()
+                "Dependency install completed but '{}' is missing. Ensure package 'tako.sh' is installed.",
+                entrypoint_path.display()
             ));
         }
     }
@@ -2398,10 +2398,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn handle_instance_event(state: &ServerState, event: InstanceEvent) {
     match event {
         InstanceEvent::Started { app, instance_id } => {
-            tracing::debug!(app = %app, instance = instance_id, "Instance started");
+            tracing::debug!(app = %app, instance = %instance_id, "Instance started");
         }
         InstanceEvent::Ready { app, instance_id } => {
-            tracing::info!(app = %app, instance = instance_id, "Instance ready");
+            tracing::info!(app = %app, instance = %instance_id, "Instance ready");
             state.cold_start.mark_ready(&app);
 
             if let Some(app_ref) = state.app_manager.get_app(&app) {
@@ -2409,12 +2409,12 @@ async fn handle_instance_event(state: &ServerState, event: InstanceEvent) {
             }
         }
         InstanceEvent::Unhealthy { app, instance_id } => {
-            tracing::warn!(app = %app, instance = instance_id, "Instance unhealthy");
+            tracing::warn!(app = %app, instance = %instance_id, "Instance unhealthy");
             // Replace unhealthy instance after a grace period
-            replace_instance_if_needed(state, &app, instance_id, "unhealthy").await;
+            replace_instance_if_needed(state, &app, &instance_id, "unhealthy").await;
         }
         InstanceEvent::Stopped { app, instance_id } => {
-            tracing::info!(app = %app, instance = instance_id, "Instance stopped");
+            tracing::info!(app = %app, instance = %instance_id, "Instance stopped");
         }
     }
 }
@@ -2424,7 +2424,7 @@ async fn handle_health_event(state: &ServerState, event: crate::instances::Healt
 
     match event {
         HealthEvent::Healthy { app, instance_id } => {
-            tracing::info!(app = %app, instance = instance_id, "Instance is healthy");
+            tracing::info!(app = %app, instance = %instance_id, "Instance is healthy");
             state.cold_start.mark_ready(&app);
 
             if let Some(app_ref) = state.app_manager.get_app(&app) {
@@ -2432,20 +2432,20 @@ async fn handle_health_event(state: &ServerState, event: crate::instances::Healt
             }
         }
         HealthEvent::Unhealthy { app, instance_id } => {
-            tracing::warn!(app = %app, instance = instance_id, "Instance became unhealthy");
+            tracing::warn!(app = %app, instance = %instance_id, "Instance became unhealthy");
             // Don't immediately replace - wait for Dead event or recovery
         }
         HealthEvent::Dead { app, instance_id } => {
-            tracing::error!(app = %app, instance = instance_id, "Instance is dead (no heartbeat)");
+            tracing::error!(app = %app, instance = %instance_id, "Instance is dead (no heartbeat)");
             state.cold_start.mark_failed(&app);
             if let Some(app_ref) = state.app_manager.get_app(&app) {
                 app_ref.set_last_error("Instance marked dead");
             }
             // Replace dead instance immediately
-            replace_instance_if_needed(state, &app, instance_id, "dead").await;
+            replace_instance_if_needed(state, &app, &instance_id, "dead").await;
         }
         HealthEvent::Recovered { app, instance_id } => {
-            tracing::info!(app = %app, instance = instance_id, "Instance recovered from unhealthy");
+            tracing::info!(app = %app, instance = %instance_id, "Instance recovered from unhealthy");
         }
     }
 }
@@ -2454,12 +2454,12 @@ async fn handle_idle_event(state: &ServerState, event: IdleEvent) {
     match event {
         IdleEvent::InstanceIdle { app, instance_id } => {
             if let Some(app_ref) = state.app_manager.get_app(&app)
-                && let Some(instance) = app_ref.get_instance(instance_id)
+                && let Some(instance) = app_ref.get_instance(&instance_id)
             {
                 if let Err(e) = instance.kill().await {
-                    tracing::warn!(app = %app, instance = instance_id, "Failed to kill idle instance: {}", e);
+                    tracing::warn!(app = %app, instance = %instance_id, "Failed to kill idle instance: {}", e);
                 }
-                app_ref.remove_instance(instance_id);
+                app_ref.remove_instance(&instance_id);
 
                 let running_count = app_ref
                     .get_instances()
@@ -2495,7 +2495,7 @@ async fn handle_idle_event(state: &ServerState, event: IdleEvent) {
 async fn replace_instance_if_needed(
     state: &ServerState,
     app_name: &str,
-    instance_id: u32,
+    instance_id: &str,
     reason: &str,
 ) {
     let app = match state.app_manager.get_app(app_name) {
@@ -2510,7 +2510,7 @@ async fn replace_instance_if_needed(
     let instance = match app.get_instance(instance_id) {
         Some(inst) => inst,
         None => {
-            tracing::debug!(app = %app_name, instance = instance_id, "Instance already removed");
+            tracing::debug!(app = %app_name, instance = %instance_id, "Instance already removed");
             return;
         }
     };
@@ -2536,7 +2536,7 @@ async fn replace_instance_if_needed(
     if current_count > min_for_build {
         tracing::info!(
             app = %app_name,
-            instance = instance_id,
+            instance = %instance_id,
             reason = reason,
             build = %failed_build,
             current = current_count,
@@ -2546,7 +2546,7 @@ async fn replace_instance_if_needed(
         );
         // Just remove the bad instance
         if let Err(e) = instance.kill().await {
-            tracing::error!(app = %app_name, instance = instance_id, "Failed to kill instance: {}", e);
+            tracing::error!(app = %app_name, instance = %instance_id, "Failed to kill instance: {}", e);
         }
         app.remove_instance(instance_id);
         return;
@@ -2554,7 +2554,7 @@ async fn replace_instance_if_needed(
 
     tracing::info!(
         app = %app_name,
-        instance = instance_id,
+        instance = %instance_id,
         reason = reason,
         "Replacing {} instance with a new one",
         reason
@@ -2562,7 +2562,7 @@ async fn replace_instance_if_needed(
 
     // Kill the old instance
     if let Err(e) = instance.kill().await {
-        tracing::error!(app = %app_name, instance = instance_id, "Failed to kill old instance: {}", e);
+        tracing::error!(app = %app_name, instance = %instance_id, "Failed to kill old instance: {}", e);
     }
     app.remove_instance(instance_id);
 
@@ -2574,20 +2574,20 @@ async fn replace_instance_if_needed(
         Ok(()) => {
             tracing::info!(
                 app = %app_name,
-                old_instance = instance_id,
-                new_instance = new_instance.id,
+                old_instance = %instance_id,
+                new_instance = %new_instance.id,
                 "Successfully spawned replacement instance"
             );
         }
         Err(e) => {
             tracing::error!(
                 app = %app_name,
-                instance = new_instance.id,
+                instance = %new_instance.id,
                 "Failed to spawn replacement instance: {}",
                 e
             );
             // Clean up the failed instance
-            app.remove_instance(new_instance.id);
+            app.remove_instance(&new_instance.id);
         }
     }
 }
@@ -3002,8 +3002,8 @@ mod tests {
             &fake_bun,
             r#"#!/bin/sh
 if [ "$1" = "install" ]; then
-  mkdir -p node_modules/tako.sh/src
-  printf "export {};\n" > node_modules/tako.sh/src/wrapper.ts
+  mkdir -p node_modules/tako.sh/src/entrypoints
+  printf "export {};\n" > node_modules/tako.sh/src/entrypoints/bun.ts
   exit 0
 fi
 echo "unexpected bun args: $*" >&2
@@ -3029,7 +3029,7 @@ exit 1
         prepare_release_runtime(&release_dir, &env).await.unwrap();
         assert!(
             release_dir
-                .join("node_modules/tako.sh/src/wrapper.ts")
+                .join("node_modules/tako.sh/src/entrypoints/bun.ts")
                 .is_file()
         );
     }
@@ -3052,8 +3052,8 @@ exit 1
             &fake_bun,
             r#"#!/bin/sh
 if [ "$1" = "install" ]; then
-  mkdir -p node_modules/tako.sh/src
-  printf "export {};\n" > node_modules/tako.sh/src/wrapper.ts
+  mkdir -p node_modules/tako.sh/src/entrypoints
+  printf "export {};\n" > node_modules/tako.sh/src/entrypoints/bun.ts
   exit 0
 fi
 echo "unexpected bun args: $*" >&2
@@ -3079,7 +3079,7 @@ exit 1
         prepare_release_runtime(&release_dir, &env).await.unwrap();
         assert!(
             release_dir
-                .join("node_modules/tako.sh/src/wrapper.ts")
+                .join("node_modules/tako.sh/src/entrypoints/bun.ts")
                 .is_file()
         );
     }
@@ -3091,7 +3091,7 @@ exit 1
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
             release_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","install":"mkdir -p node_modules/tako.sh/src && printf 'export {};\n' > node_modules/tako.sh/src/wrapper.ts"}"#,
+            r#"{"runtime":"bun","main":"index.ts","install":"mkdir -p node_modules/tako.sh/src && printf 'export {};\n' > node_modules/tako.sh/src/entrypoints/bun.ts"}"#,
         )
         .unwrap();
         std::fs::write(
@@ -3105,7 +3105,7 @@ exit 1
             .unwrap();
         assert!(
             release_dir
-                .join("node_modules/tako.sh/src/wrapper.ts")
+                .join("node_modules/tako.sh/src/entrypoints/bun.ts")
                 .is_file()
         );
     }
@@ -3823,9 +3823,9 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
         )
         .unwrap();
         std::fs::write(release_dir.join("index.ts"), "export default {};\n").unwrap();
-        std::fs::create_dir_all(release_dir.join("node_modules/tako.sh/src")).unwrap();
+        std::fs::create_dir_all(release_dir.join("node_modules/tako.sh/src/entrypoints")).unwrap();
         std::fs::write(
-            release_dir.join("node_modules/tako.sh/src/wrapper.ts"),
+            release_dir.join("node_modules/tako.sh/src/entrypoints/bun.ts"),
             "export default {};",
         )
         .unwrap();
@@ -3928,7 +3928,7 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
             &state,
             crate::scaling::IdleEvent::InstanceIdle {
                 app: "idle-app".to_string(),
-                instance_id: instance.id,
+                instance_id: instance.id.clone(),
             },
         )
         .await;

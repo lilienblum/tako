@@ -360,16 +360,22 @@ fn resolve_runtime_default_dev_command(
         BuildAdapter::Bun => vec![
             "bun".to_string(),
             "run".to_string(),
-            "node_modules/tako.sh/src/wrapper.ts".to_string(),
+            "node_modules/tako.sh/src/entrypoints/bun.ts".to_string(),
             main.to_string(),
         ],
-        BuildAdapter::Node => vec!["node".to_string(), main.to_string()],
+        BuildAdapter::Node => vec![
+            "node".to_string(),
+            "--experimental-strip-types".to_string(),
+            "node_modules/tako.sh/src/entrypoints/node.ts".to_string(),
+            main.to_string(),
+        ],
         BuildAdapter::Deno => vec![
             "deno".to_string(),
             "run".to_string(),
             "--allow-net".to_string(),
             "--allow-env".to_string(),
             "--allow-read".to_string(),
+            "node_modules/tako.sh/src/entrypoints/deno.ts".to_string(),
             main.to_string(),
         ],
         BuildAdapter::Unknown => {
@@ -1076,7 +1082,7 @@ dev = ["bun", "run", "dev"]
             vec![
                 "bun".to_string(),
                 "run".to_string(),
-                "node_modules/tako.sh/src/wrapper.ts".to_string(),
+                "node_modules/tako.sh/src/entrypoints/bun.ts".to_string(),
                 "src/index.ts".to_string(),
             ]
         );

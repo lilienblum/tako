@@ -181,7 +181,7 @@ pub struct BuildStatus {
 /// Instance status information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstanceStatus {
-    pub id: u32,
+    pub id: String,
     pub state: InstanceState,
     pub port: u16,
     pub pid: Option<u32>,

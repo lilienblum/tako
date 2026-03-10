@@ -1,7 +1,14 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-const BUN_WRAPPER_RELATIVE_PATH: &str = "node_modules/tako.sh/src/wrapper.ts";
+pub(crate) fn entrypoint_relative_path(runtime: &str) -> Option<&'static str> {
+    match runtime {
+        "bun" => Some("node_modules/tako.sh/src/entrypoints/bun.ts"),
+        "node" => Some("node_modules/tako.sh/src/entrypoints/node.ts"),
+        "deno" => Some("node_modules/tako.sh/src/entrypoints/deno.ts"),
+        _ => None,
+    }
+}
 
 #[derive(Debug, serde::Deserialize)]
 struct DeployArchiveManifest {
@@ -89,44 +96,52 @@ fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String
         ));
     }
 
+    let rel_path = entrypoint_relative_path(&manifest.runtime).ok_or_else(|| {
+        format!(
+            "unsupported runtime '{}' in deploy manifest {}",
+            manifest.runtime,
+            manifest_path.display()
+        )
+    })?;
+    let entrypoint = resolve_entrypoint_path(release_dir, rel_path);
+
     match manifest.runtime.as_str() {
-        "bun" => {
-            let wrapper = resolve_bun_wrapper_path(release_dir);
-            Ok(Some(vec![
-                "bun".to_string(),
-                "run".to_string(),
-                wrapper,
-                manifest.main,
-            ]))
-        }
-        "node" => Ok(Some(vec!["node".to_string(), manifest.main])),
+        "bun" => Ok(Some(vec![
+            "bun".to_string(),
+            "run".to_string(),
+            entrypoint,
+            manifest.main,
+        ])),
+        "node" => Ok(Some(vec![
+            "node".to_string(),
+            "--experimental-strip-types".to_string(),
+            entrypoint,
+            manifest.main,
+        ])),
         "deno" => Ok(Some(vec![
             "deno".to_string(),
             "run".to_string(),
             "--allow-net".to_string(),
             "--allow-env".to_string(),
             "--allow-read".to_string(),
+            entrypoint,
             manifest.main,
         ])),
-        other => Err(format!(
-            "unsupported runtime '{}' in deploy manifest {}",
-            other,
-            manifest_path.display()
-        )),
+        _ => unreachable!(),
     }
 }
 
-fn resolve_bun_wrapper_path(release_dir: &Path) -> String {
+fn resolve_entrypoint_path(release_dir: &Path, relative_path: &str) -> String {
     let mut current = Some(release_dir);
     while let Some(dir) = current {
-        let candidate = dir.join(BUN_WRAPPER_RELATIVE_PATH);
+        let candidate = dir.join(relative_path);
         if candidate.is_file() {
             return candidate.to_string_lossy().to_string();
         }
         current = dir.parent();
     }
     release_dir
-        .join(BUN_WRAPPER_RELATIVE_PATH)
+        .join(relative_path)
         .to_string_lossy()
         .to_string()
 }
@@ -179,9 +194,9 @@ mod tests {
     #[test]
     fn uses_manifest_main_when_present() {
         let dir = TempDir::new().unwrap();
-        std::fs::create_dir_all(dir.path().join("node_modules/tako.sh/src")).unwrap();
+        std::fs::create_dir_all(dir.path().join("node_modules/tako.sh/src/entrypoints")).unwrap();
         std::fs::write(
-            dir.path().join("node_modules/tako.sh/src/wrapper.ts"),
+            dir.path().join("node_modules/tako.sh/src/entrypoints/bun.ts"),
             "export {};",
         )
         .unwrap();
@@ -200,7 +215,7 @@ mod tests {
                 "bun",
                 "run",
                 &dir.path()
-                    .join("node_modules/tako.sh/src/wrapper.ts")
+                    .join("node_modules/tako.sh/src/entrypoints/bun.ts")
                     .to_string_lossy(),
                 "server/entry.js"
             ]
@@ -212,7 +227,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"server/entry.js","start":["bun","run","node_modules/tako.sh/src/wrapper.ts","{main}"]}"#,
+            r#"{"runtime":"bun","main":"server/entry.js","start":["bun","run","node_modules/tako.sh/src/entrypoints/bun.ts","{main}"]}"#,
         )
         .unwrap();
 
@@ -222,7 +237,7 @@ mod tests {
             vec![
                 "bun",
                 "run",
-                "node_modules/tako.sh/src/wrapper.ts",
+                "node_modules/tako.sh/src/entrypoints/bun.ts",
                 "server/entry.js"
             ]
         );
@@ -257,7 +272,17 @@ mod tests {
         .unwrap();
 
         let cmd = command_for_release_dir(dir.path()).unwrap();
-        assert_eq!(cmd, vec!["node", "server/index.mjs"]);
+        assert_eq!(
+            cmd,
+            vec![
+                "node",
+                "--experimental-strip-types",
+                &dir.path()
+                    .join("node_modules/tako.sh/src/entrypoints/node.ts")
+                    .to_string_lossy(),
+                "server/index.mjs",
+            ]
+        );
     }
 
     #[test]
@@ -278,6 +303,9 @@ mod tests {
                 "--allow-net",
                 "--allow-env",
                 "--allow-read",
+                &dir.path()
+                    .join("node_modules/tako.sh/src/entrypoints/deno.ts")
+                    .to_string_lossy(),
                 "server/main.ts",
             ]
         );
@@ -297,14 +325,14 @@ mod tests {
     }
 
     #[test]
-    fn resolves_bun_wrapper_from_parent_node_modules() {
+    fn resolves_bun_entrypoint_from_parent_node_modules() {
         let dir = TempDir::new().unwrap();
         let release_root = dir.path().join("releases/v1");
         let app_dir = release_root.join("apps/web");
         std::fs::create_dir_all(app_dir.join("src")).unwrap();
-        std::fs::create_dir_all(release_root.join("node_modules/tako.sh/src")).unwrap();
+        std::fs::create_dir_all(release_root.join("node_modules/tako.sh/src/entrypoints")).unwrap();
         std::fs::write(
-            release_root.join("node_modules/tako.sh/src/wrapper.ts"),
+            release_root.join("node_modules/tako.sh/src/entrypoints/bun.ts"),
             "export {};",
         )
         .unwrap();
@@ -321,14 +349,14 @@ mod tests {
         assert_eq!(
             cmd[2],
             release_root
-                .join("node_modules/tako.sh/src/wrapper.ts")
+                .join("node_modules/tako.sh/src/entrypoints/bun.ts")
                 .to_string_lossy()
         );
         assert_eq!(cmd[3], "src/app.ts");
     }
 
     #[test]
-    fn uses_default_wrapper_path_when_manifest_wrapper_is_missing() {
+    fn uses_default_entrypoint_path_when_entrypoint_is_missing() {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
@@ -344,7 +372,7 @@ mod tests {
         assert_eq!(
             cmd[2],
             dir.path()
-                .join("node_modules/tako.sh/src/wrapper.ts")
+                .join("node_modules/tako.sh/src/entrypoints/bun.ts")
                 .to_string_lossy()
         );
         assert_eq!(cmd[3], "src/app.ts");

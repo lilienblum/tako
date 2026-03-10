@@ -353,7 +353,7 @@ impl TakoProxy {
                     tracing::error!(app = %app_name, "cold start spawn failed: {}", e);
                     app.set_state(crate::socket::AppState::Error);
                     app.set_last_error(format!("Cold start failed: {}", e));
-                    app.remove_instance(instance.id);
+                    app.remove_instance(&instance.id);
                     cold_start.mark_failed(&app_name);
                 }
             });
@@ -675,7 +675,7 @@ impl ProxyHttp for TakoProxy {
         // Track the request on the instance
         if let Some(ref backend) = ctx.backend
             && let Some(app) = self.lb.app_manager().get_app(&backend.app_name)
-            && let Some(instance) = app.get_instance(backend.instance_id)
+            && let Some(instance) = app.get_instance(&backend.instance_id)
         {
             instance.request_started();
         }
@@ -687,10 +687,10 @@ impl ProxyHttp for TakoProxy {
         // Mark connection completed in load balancer
         if let Some(ref backend) = ctx.backend {
             self.lb
-                .request_completed(&backend.app_name, backend.instance_id);
+                .request_completed(&backend.app_name, &backend.instance_id);
 
             if let Some(app) = self.lb.app_manager().get_app(&backend.app_name)
-                && let Some(instance) = app.get_instance(backend.instance_id)
+                && let Some(instance) = app.get_instance(&backend.instance_id)
             {
                 instance.request_finished();
             }

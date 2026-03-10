@@ -230,7 +230,7 @@ impl E2EEnvironment {
             .join("releases")
             .join(version);
         fs::create_dir_all(&app_dir).unwrap();
-        fs::create_dir_all(app_dir.join("node_modules/tako.sh/src")).unwrap();
+        fs::create_dir_all(app_dir.join("node_modules/tako.sh/src/entrypoints")).unwrap();
 
         fs::write(
             app_dir.join("package.json"),
@@ -241,7 +241,7 @@ impl E2EEnvironment {
         )
         .unwrap();
         fs::write(
-            app_dir.join("node_modules/tako.sh/src/wrapper.ts"),
+            app_dir.join("node_modules/tako.sh/src/entrypoints/bun.ts"),
             "export default {};",
         )
         .unwrap();
@@ -348,7 +348,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako-internal" && path === "/status") {
+    if (host === "tako" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -408,7 +408,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako-internal" && path === "/status") {
+    if (host === "tako" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -433,7 +433,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako-internal" && path === "/status") {
+    if (host === "tako" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -510,7 +510,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako-internal" && path === "/status") {
+    if (host === "tako" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -555,7 +555,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako-internal" && path === "/status") {
+    if (host === "tako" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -628,7 +628,7 @@ Bun.serve({
     const url = new URL(request.url);
     const path = url.pathname;
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako-internal" && path === "/status") {
+    if (host === "tako" && path === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });

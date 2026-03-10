@@ -37,7 +37,7 @@ pub struct AppLoadBalancer {
     /// Round-robin counter
     rr_counter: AtomicUsize,
     /// Active connections per instance
-    connections: DashMap<u32, AtomicU64>,
+    connections: DashMap<String, AtomicU64>,
 }
 
 impl AppLoadBalancer {
@@ -78,7 +78,7 @@ impl AppLoadBalancer {
     fn least_connections(&self) -> Option<Arc<Instance>> {
         self.app.get_least_loaded_healthy_instance(|instance_id| {
             self.connections
-                .get(&instance_id)
+                .get(instance_id)
                 .map(|c| c.load(Ordering::Relaxed))
                 .unwrap_or(0)
         })
@@ -112,24 +112,24 @@ impl AppLoadBalancer {
     }
 
     /// Mark connection started
-    pub fn connection_started(&self, instance_id: u32) {
+    pub fn connection_started(&self, instance_id: &str) {
         self.connections
-            .entry(instance_id)
+            .entry(instance_id.to_string())
             .or_insert_with(|| AtomicU64::new(0))
             .fetch_add(1, Ordering::Relaxed);
     }
 
     /// Mark connection ended
-    pub fn connection_ended(&self, instance_id: u32) {
-        if let Some(count) = self.connections.get(&instance_id) {
+    pub fn connection_ended(&self, instance_id: &str) {
+        if let Some(count) = self.connections.get(instance_id) {
             count.fetch_sub(1, Ordering::Relaxed);
         }
     }
 
     /// Get active connection count for an instance
-    pub fn active_connections(&self, instance_id: u32) -> u64 {
+    pub fn active_connections(&self, instance_id: &str) -> u64 {
         self.connections
-            .get(&instance_id)
+            .get(instance_id)
             .map(|c| c.load(Ordering::Relaxed))
             .unwrap_or(0)
     }
@@ -176,17 +176,17 @@ impl LoadBalancer {
         let lb = self.app_lbs.get(app_name)?;
         let instance = lb.get_instance_for_ip(client_ip)?;
 
-        lb.connection_started(instance.id);
+        lb.connection_started(&instance.id);
 
         Some(Backend {
             app_name: app_name.to_string(),
-            instance_id: instance.id,
+            instance_id: instance.id.clone(),
             socket_path: instance.socket_path(),
         })
     }
 
     /// Mark request completed
-    pub fn request_completed(&self, app_name: &str, instance_id: u32) {
+    pub fn request_completed(&self, app_name: &str, instance_id: &str) {
         if let Some(lb) = self.app_lbs.get(app_name) {
             lb.connection_ended(instance_id);
         }
@@ -212,7 +212,7 @@ pub struct Backend {
     /// App name
     pub app_name: String,
     /// Instance ID
-    pub instance_id: u32,
+    pub instance_id: String,
     /// Optional Unix socket path for upstream proxying
     pub socket_path: Option<String>,
 }
@@ -279,7 +279,7 @@ mod tests {
 
         // Both have 0 connections, should get first one
         let instance = lb.get_instance().unwrap();
-        lb.connection_started(instance.id);
+        lb.connection_started(&instance.id);
 
         // Now first has 1 connection, should get second
         let instance2 = lb.get_instance().unwrap();
@@ -294,14 +294,14 @@ mod tests {
 
         let lb = AppLoadBalancer::new(app, Strategy::RoundRobin);
 
-        assert_eq!(lb.active_connections(1), 0);
+        assert_eq!(lb.active_connections(&i1.id), 0);
 
-        lb.connection_started(1);
-        lb.connection_started(1);
-        assert_eq!(lb.active_connections(1), 2);
+        lb.connection_started(&i1.id);
+        lb.connection_started(&i1.id);
+        assert_eq!(lb.active_connections(&i1.id), 2);
 
-        lb.connection_ended(1);
-        assert_eq!(lb.active_connections(1), 1);
+        lb.connection_ended(&i1.id);
+        assert_eq!(lb.active_connections(&i1.id), 1);
     }
 
     #[test]
@@ -426,7 +426,7 @@ mod tests {
         let start = Instant::now();
         for _ in 0..50_000 {
             let backend = lb.get_backend("test-app").expect("backend should exist");
-            lb.request_completed("test-app", backend.instance_id);
+            lb.request_completed("test-app", &backend.instance_id);
         }
         assert!(
             start.elapsed() < Duration::from_secs(20),
@@ -487,7 +487,7 @@ mod tests {
         for i in 0..100 {
             let ip: IpAddr = format!("10.0.0.{}", i).parse().unwrap();
             let instance = lb.get_instance_for_ip(Some(ip)).unwrap();
-            *instance_counts.entry(instance.id).or_insert(0) += 1;
+            *instance_counts.entry(instance.id.clone()).or_insert(0) += 1;
         }
 
         // Should have distributed across all 3 instances

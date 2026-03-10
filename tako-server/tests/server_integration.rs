@@ -327,14 +327,14 @@ mod instance_management {
             .join("releases")
             .join("v1");
         fs::create_dir_all(&app_dir).unwrap();
-        fs::create_dir_all(app_dir.join("node_modules/tako.sh/src")).unwrap();
+        fs::create_dir_all(app_dir.join("node_modules/tako.sh/src/entrypoints")).unwrap();
         fs::write(
             app_dir.join("package.json"),
             r#"{"name":"test-app","scripts":{"dev":"bun run index.ts"}}"#,
         )
         .unwrap();
         fs::write(
-            app_dir.join("node_modules/tako.sh/src/wrapper.ts"),
+            app_dir.join("node_modules/tako.sh/src/entrypoints/bun.ts"),
             "export default {};",
         )
         .unwrap();
@@ -356,7 +356,7 @@ Bun.serve({
   fetch(request) {
     const url = new URL(request.url);
     const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako-internal" && url.pathname === "/status") {
+    if (host === "tako" && url.pathname === "/status") {
       return new Response(JSON.stringify({ status: "ok" }), {
         headers: { "Content-Type": "application/json" },
       });
@@ -438,7 +438,7 @@ mod health_check {
 
         let response = server
             .http_get_with_host_and_headers(
-                "tako-internal",
+                "tako",
                 "/status",
                 &[("X-Forwarded-Proto", "https")],
             )

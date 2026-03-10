@@ -34,7 +34,7 @@ impl Default for IdleConfig {
 #[derive(Debug, Clone)]
 pub enum IdleEvent {
     /// Instance became idle and should be stopped
-    InstanceIdle { app: String, instance_id: u32 },
+    InstanceIdle { app: String, instance_id: String },
     /// App became fully idle (all instances stopped)
     AppIdle { app: String },
 }
@@ -85,7 +85,7 @@ impl IdleMonitor {
             for instance in idle_instances.into_iter().take(can_stop) {
                 tracing::info!(
                     app = %app.name(),
-                    instance = instance.id,
+                    instance = %instance.id,
                     idle_time = ?instance.idle_time(),
                     "Stopping idle instance"
                 );
@@ -94,7 +94,7 @@ impl IdleMonitor {
                     .event_tx
                     .send(IdleEvent::InstanceIdle {
                         app: app.name(),
-                        instance_id: instance.id,
+                        instance_id: instance.id.clone(),
                     })
                     .await;
             }
@@ -256,7 +256,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let monitor = IdleMonitor::new(IdleConfig::default(), tx);
 
-        let instance = Instance::new(1, 3000, "v1".to_string(), None);
+        let instance = Instance::new("test-1".to_string(), 3000, "v1".to_string(), None);
         instance.set_state(InstanceState::Healthy);
 
         // Can't stop if at min_instances

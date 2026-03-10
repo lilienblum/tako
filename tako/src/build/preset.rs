@@ -1235,7 +1235,7 @@ main = "index.ts"
 
 dev = ["bun", "--hot", "{main}"]
 install = "bun install --production --frozen-lockfile"
-start = ["bun", "run", "node_modules/tako.sh/src/wrapper.ts", "{main}"]
+start = ["bun", "run", "node_modules/tako.sh/src/entrypoints/bun.ts", "{main}"]
 
 [build]
 exclude = ["**/*.map"]
@@ -1261,7 +1261,7 @@ targets = ["linux-x86_64-glibc", "linux-aarch64-musl"]
             vec![
                 "bun",
                 "run",
-                "node_modules/tako.sh/src/wrapper.ts",
+                "node_modules/tako.sh/src/entrypoints/bun.ts",
                 "{main}"
             ]
         );

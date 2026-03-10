@@ -1085,7 +1085,7 @@ mod tests {
                         version: "v1".to_string(),
                         state: AppState::Running,
                         instances: vec![InstanceStatus {
-                            id: 1,
+                            id: "abc1".to_string(),
                             state: InstanceState::Healthy,
                             port: 3001,
                             pid: Some(111),
@@ -1097,7 +1097,7 @@ mod tests {
                         version: "v2".to_string(),
                         state: AppState::Running,
                         instances: vec![InstanceStatus {
-                            id: 2,
+                            id: "abc2".to_string(),
                             state: InstanceState::Healthy,
                             port: 3002,
                             pid: Some(222),
@@ -1297,7 +1297,7 @@ env = "staging"
                 version: "v123".to_string(),
                 instances: vec![
                     InstanceStatus {
-                        id: 1,
+                        id: "abc1".to_string(),
                         state: InstanceState::Healthy,
                         port: 3001,
                         pid: Some(111),
@@ -1305,7 +1305,7 @@ env = "staging"
                         requests_total: 0,
                     },
                     InstanceStatus {
-                        id: 2,
+                        id: "abc2".to_string(),
                         state: InstanceState::Healthy,
                         port: 3002,
                         pid: Some(112),
@@ -1313,7 +1313,7 @@ env = "staging"
                         requests_total: 0,
                     },
                     InstanceStatus {
-                        id: 3,
+                        id: "abc3".to_string(),
                         state: InstanceState::Starting,
                         port: 3003,
                         pid: Some(113),
