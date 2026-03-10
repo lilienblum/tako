@@ -34,6 +34,9 @@ jobs:
           node-version: 22
           registry-url: https://registry.npmjs.org
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
       - name: Determine version and tag
         id: version
         run: |
@@ -53,6 +56,6 @@ jobs:
 
           cd sdk/js
           npm pkg set version="${{ steps.version.outputs.version }}"
-          npm install --ignore-scripts
-          npm run build
+          bun install
+          bun run build
           npm publish --tag "${{ steps.version.outputs.tag }}" --provenance
