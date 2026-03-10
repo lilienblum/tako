@@ -1,0 +1,58 @@
+name: Publish SDK to npm
+
+on:
+  push:
+    branches:
+      - master
+    paths:
+      - sdk/js/**
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "npm dist-tag (e.g. canary, latest)"
+        required: true
+        default: canary
+      version:
+        description: "Version to publish (leave empty for canary auto-version)"
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish SDK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+
+      - name: Determine version and tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            echo "version=${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            short_sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
+            echo "version=0.0.0-canary.${short_sha}" >> "$GITHUB_OUTPUT"
+            echo "tag=canary" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        run: |
+          set -euo pipefail
+          echo "Publishing sdk: ${{ steps.version.outputs.version }} (tag: ${{ steps.version.outputs.tag }})"
+
+          cd sdk/js
+          npm pkg set version="${{ steps.version.outputs.version }}"
+          npm install --ignore-scripts
+          npm run build
+          npm publish --tag "${{ steps.version.outputs.tag }}" --provenance

@@ -550,6 +550,20 @@ npm: _guard
     @just --justfile just/release.just _guard
     cd sdk/js && npm publish
 
+# Publish canary npm SDK (`tako.sh`):
+# - sets version to 0.0.0-canary.{short_sha}
+# - builds and publishes with --tag canary
+# - restores original version in package.json (no commit)
+npm-canary:
+    short_sha="$(git rev-parse --short=7 HEAD)"; \
+    original="$(cd sdk/js && npm pkg get version --json | tr -d '"')"; \
+    canary_version="0.0.0-canary.${short_sha}"; \
+    echo "Publishing sdk canary: $canary_version"; \
+    (cd sdk/js && npm pkg set version="$canary_version"); \
+    cleanup() { (cd sdk/js && npm pkg set version="$original"); }; \
+    trap cleanup EXIT; \
+    (cd sdk/js && bun install && bun run build && npm publish --tag canary)
+
 # Publish multi-arch builder images to container registry.
 # Usage: just release builder-images <version> [registry]
 builder-images version registry=BUILDER_IMAGE_REGISTRY:
