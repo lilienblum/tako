@@ -81,7 +81,7 @@ const ARTIFACT_CACHE_LOCK_TIMEOUT_SECS: u64 = 10 * 60;
 const ARTIFACT_CACHE_STALE_LOCK_SECS: u64 = 30 * 60;
 const LOCAL_ARTIFACT_CACHE_KEEP_SOURCE_ARCHIVES: usize = 30;
 const LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS: usize = 90;
-const LOCAL_BUILD_WORKSPACE_RELATIVE_DIR: &str = ".tako/build-workspaces";
+const LOCAL_BUILD_WORKSPACE_RELATIVE_DIR: &str = ".tako/tmp/workspaces";
 const RUNTIME_VERSION_OUTPUT_FILE: &str = ".tako-runtime-version";
 const MISE_TOML_FILE: &str = "mise.toml";
 const UNIFIED_JS_CACHE_TARGET_LABEL: &str = "shared-local-js";
@@ -2242,8 +2242,13 @@ fn artifact_cache_metadata_path_for_archive(archive_path: &Path) -> Option<PathB
 }
 
 fn read_artifact_sha256(archive_path: &Path) -> Result<String, String> {
-    let metadata_path = artifact_cache_metadata_path_for_archive(archive_path)
-        .ok_or_else(|| format!("Cannot derive metadata path from {}", archive_path.display()))?;
+    let metadata_path =
+        artifact_cache_metadata_path_for_archive(archive_path).ok_or_else(|| {
+            format!(
+                "Cannot derive metadata path from {}",
+                archive_path.display()
+            )
+        })?;
     let bytes = std::fs::read(&metadata_path).map_err(|e| {
         format!(
             "Failed to read artifact metadata {}: {e}",

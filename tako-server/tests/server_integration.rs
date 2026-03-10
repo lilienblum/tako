@@ -710,8 +710,7 @@ mod server_info {
                 }
             }
         }
-        let new_pid =
-            new_pid.expect("new server process should have a different PID after SIGHUP");
+        let new_pid = new_pid.expect("new server process should have a different PID after SIGHUP");
 
         // New process should be in normal mode (not stuck upgrading).
         let info = server.send_command(&serde_json::json!({ "command": "server_info" }));

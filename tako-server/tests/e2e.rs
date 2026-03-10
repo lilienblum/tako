@@ -760,7 +760,6 @@ mod error_handling {
             Some("error")
         );
     }
-
 }
 
 mod acme_challenge {

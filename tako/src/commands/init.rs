@@ -54,9 +54,9 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             ("Application name", false),
             ("Runtime", false),
             ("Build preset", false),
-            ("Entrypoint", true),  // subsection — hidden until custom preset
-            ("Assets", true),      // subsection
-            ("Exclude", true),     // subsection
+            ("Entrypoint", true), // subsection — hidden until custom preset
+            ("Assets", true),     // subsection
+            ("Exclude", true),    // subsection
             ("Production route", false),
         ])
         .with_confirmation();
@@ -72,12 +72,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|c| c.runtime.as_deref())
         .and_then(BuildAdapter::from_id)
         .unwrap_or(detected_adapter);
-    let mut selected_preset: Option<String> = existing
-        .as_ref()
-        .and_then(|c| c.preset.clone());
-    let mut main_entry: Option<String> = existing
-        .as_ref()
-        .and_then(|c| c.main.clone());
+    let mut selected_preset: Option<String> = existing.as_ref().and_then(|c| c.preset.clone());
+    let mut main_entry: Option<String> = existing.as_ref().and_then(|c| c.main.clone());
     let mut assets: Vec<String> = existing
         .as_ref()
         .map(|c| c.build.assets.clone())

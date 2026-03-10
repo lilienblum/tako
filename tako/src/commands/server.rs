@@ -1185,8 +1185,14 @@ async fn upgrade_servers(
     }
     // Sort results to match input order.
     results.sort_by(|a, b| {
-        let pos_a = names.iter().position(|n| n == &a.name).unwrap_or(usize::MAX);
-        let pos_b = names.iter().position(|n| n == &b.name).unwrap_or(usize::MAX);
+        let pos_a = names
+            .iter()
+            .position(|n| n == &a.name)
+            .unwrap_or(usize::MAX);
+        let pos_b = names
+            .iter()
+            .position(|n| n == &b.name)
+            .unwrap_or(usize::MAX);
         pos_a.cmp(&pos_b)
     });
     for r in &results {
@@ -1295,16 +1301,29 @@ async fn upgrade_server_quiet(
             .map_err(|e| format!("Failed to read runtime config: {e}"))?
             .pid;
 
-        tracing::debug!(server = name, old_pid, "captured current server PID before reload");
+        tracing::debug!(
+            server = name,
+            old_pid,
+            "captured current server PID before reload"
+        );
 
         ssh.tako_reload()
             .await
             .map_err(|e| format!("Reload failed: {e}"))?;
 
-        tracing::debug!(server = name, old_pid, "reload sent, waiting for new server process");
+        tracing::debug!(
+            server = name,
+            old_pid,
+            "reload sent, waiting for new server process"
+        );
 
-        let info = wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?;
-        tracing::debug!(server = name, new_pid = info.pid, "new server process ready");
+        let info =
+            wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?;
+        tracing::debug!(
+            server = name,
+            new_pid = info.pid,
+            "new server process ready"
+        );
 
         // Exit upgrading mode. After a SIGHUP reload the new server process
         // starts fresh in Normal mode and clears the orphaned upgrade lock, so

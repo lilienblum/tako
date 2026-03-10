@@ -176,8 +176,8 @@ async fn run_canary_upgrade(
         std::fs::create_dir_all(&extract_dir)?;
         extract_tarball(&archive_path, &extract_dir)?;
 
-        let new_tako = find_binary(&extract_dir, "tako")
-            .ok_or("archive did not contain a tako binary")?;
+        let new_tako =
+            find_binary(&extract_dir, "tako").ok_or("archive did not contain a tako binary")?;
 
         // Compare hashes of current and downloaded binary
         let current_exe = install_dir.join("tako");
@@ -496,7 +496,8 @@ async fn fetch_sha256(url: &str) -> Result<String, String> {
 }
 
 fn hash_file(path: &Path) -> Result<String, String> {
-    let data = std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
+    let data =
+        std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
     Ok(hex::encode(Sha256::digest(&data)))
 }
 
