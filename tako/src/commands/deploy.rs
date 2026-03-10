@@ -816,19 +816,25 @@ async fn run_async(
 
     // ===== Summary =====
     if errors.is_empty() {
-        _phase.finish("Deployed.");
-        output::info(&format!("Revision: {}", output::highlight(&version)));
+        _phase.finish("Deploy complete");
+        println!();
+        println!(
+            "  {}  {}",
+            output::brand_muted("Revision"),
+            version
+        );
         for (index, route) in routes.iter().enumerate() {
             if index == 0 {
-                output::info(&format!(
-                    "URL     : {}",
-                    output::highlight(&format!("https://{}", route))
-                ));
+                println!(
+                    "  {}       {}",
+                    output::brand_muted("URL"),
+                    format!("https://{}", route)
+                );
             } else {
-                output::info(&format!(
-                    "          {}",
-                    output::highlight(&format!("https://{}", route))
-                ));
+                println!(
+                    "            {}",
+                    format!("https://{}", route)
+                );
             }
         }
 

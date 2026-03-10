@@ -473,7 +473,7 @@ fn download_bar_style() -> ProgressStyle {
 fn download_spinner_style() -> ProgressStyle {
     ProgressStyle::with_template("{spinner} {msg} ({bytes})")
         .unwrap()
-        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "])
+        .tick_strings(crate::output::SPINNER_TICKS)
 }
 
 // ---------------------------------------------------------------------------

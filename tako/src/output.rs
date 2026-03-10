@@ -231,16 +231,34 @@ pub fn highlight(value: &str) -> String {
 // Spinner helpers
 // ---------------------------------------------------------------------------
 
-pub fn spinner_style() -> ProgressStyle {
-    let teal_spinner = if should_colorize() {
+pub const SPINNER_TICKS: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "];
+
+fn teal_spinner_token() -> String {
+    if should_colorize() {
         let (r, g, b) = BRAND_TEAL;
         format!("\x1b[38;2;{r};{g};{b}m{{spinner}}\x1b[39m")
     } else {
         "{spinner}".to_string()
-    };
-    ProgressStyle::with_template(&format!("{teal_spinner} {{msg}}"))
+    }
+}
+
+pub fn spinner_style() -> ProgressStyle {
+    let s = teal_spinner_token();
+    ProgressStyle::with_template(&format!("{s} {{msg}}"))
         .unwrap()
-        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "])
+        .tick_strings(SPINNER_TICKS)
+}
+
+pub fn phase_spinner_style() -> ProgressStyle {
+    let s = teal_spinner_token();
+    let elapsed = if should_colorize() {
+        "\x1b[2m({elapsed})\x1b[22m"
+    } else {
+        "({elapsed})"
+    };
+    ProgressStyle::with_template(&format!("{s} {{msg}} {elapsed}"))
+        .unwrap()
+        .tick_strings(SPINNER_TICKS)
 }
 
 /// Print a spinner result without elapsed (fast path — spinner was never shown).
@@ -479,7 +497,7 @@ impl PhaseSpinner {
         set_suppress(true);
         let pb = if is_interactive() {
             let pb = ProgressBar::new_spinner();
-            pb.set_style(spinner_style());
+            pb.set_style(phase_spinner_style());
             pb.set_message(message.to_string());
             pb.enable_steady_tick(Duration::from_millis(80));
             hide_cursor();
