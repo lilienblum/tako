@@ -7,7 +7,7 @@ use crate::app::require_app_name_from_config;
 use crate::commands::server;
 use crate::config::{ServersToml, TakoToml};
 use crate::output;
-use crate::ssh::{SshClient, SshConfig};
+use crate::ssh::SshClient;
 
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
@@ -101,9 +101,7 @@ async fn stream_logs(
         let prefix = format_prefix(server_name, show_prefix, colorize);
 
         tasks.push(tokio::spawn(async move {
-            let ssh_config = SshConfig::from_server(&host, port);
-            let mut ssh = SshClient::new(ssh_config);
-            ssh.connect().await?;
+            let mut ssh = SshClient::connect_to(&host, port).await?;
 
             let log_cmd = format!(
                 "sudo journalctl -u tako-server -f --no-pager -o cat 2>/dev/null \
@@ -176,9 +174,7 @@ async fn fetch_logs(
         let collected = collected.clone();
 
         tasks.push(tokio::spawn(async move {
-            let ssh_config = SshConfig::from_server(&host, port);
-            let mut ssh = SshClient::new(ssh_config);
-            ssh.connect().await?;
+            let mut ssh = SshClient::connect_to(&host, port).await?;
 
             let log_cmd = format!(
                 "sudo journalctl -u tako-server --since '{days} days ago' --no-pager -o cat 2>/dev/null \

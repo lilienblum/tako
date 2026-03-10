@@ -608,12 +608,9 @@ async fn sync_to_server(
     server: &crate::config::ServerEntry,
     secrets: &std::collections::HashMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    use crate::ssh::{SshClient, SshConfig};
+    use crate::ssh::SshClient;
 
-    // Connect
-    let ssh_config = SshConfig::from_server(&server.host, server.port);
-    let mut ssh = SshClient::new(ssh_config);
-    ssh.connect().await?;
+    let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
 
     // Push secrets through the management protocol; no remote .env file writes.
     let update_cmd = build_update_secrets_command(app_name, secrets)?;

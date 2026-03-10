@@ -1313,11 +1313,9 @@ async fn upgrade_server_quiet(
     server: &crate::config::ServerEntry,
     channel: UpgradeChannel,
 ) -> Result<Option<String>, String> {
-    use crate::ssh::{SshClient, SshConfig};
+    use crate::ssh::SshClient;
 
-    let ssh_config = SshConfig::from_server(&server.host, server.port);
-    let mut ssh = SshClient::new(ssh_config);
-    ssh.connect()
+    let mut ssh = SshClient::connect_to(&server.host, server.port)
         .await
         .map_err(|e| format!("SSH connection failed: {e}"))?;
 

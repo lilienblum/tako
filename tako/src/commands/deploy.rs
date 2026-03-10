@@ -3545,9 +3545,7 @@ async fn deploy_to_server(
 async fn check_tako_server(
     server: &ServerEntry,
 ) -> Result<TakoServerStatus, Box<dyn std::error::Error + Send + Sync>> {
-    let ssh_config = SshConfig::from_server(&server.host, server.port);
-    let mut ssh = SshClient::new(ssh_config);
-    ssh.connect().await?;
+    let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
 
     let installed = ssh.is_tako_installed().await?;
     if !installed {

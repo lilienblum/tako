@@ -141,6 +141,13 @@ impl SshClient {
         }
     }
 
+    /// Create and connect to a server in one step.
+    pub async fn connect_to(host: &str, port: u16) -> SshResult<Self> {
+        let mut client = Self::new(SshConfig::from_server(host, port));
+        client.connect().await?;
+        Ok(client)
+    }
+
     fn interpret_hello_response(resp: &Response) -> Result<(), String> {
         match resp {
             Response::Ok { .. } => Ok(()),

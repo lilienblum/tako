@@ -9,7 +9,7 @@ use time::{OffsetDateTime, UtcOffset};
 use crate::app::require_app_name_from_config;
 use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
-use crate::ssh::{SshClient, SshConfig};
+use crate::ssh::SshClient;
 use tako_core::{Command, ListReleasesResponse, ReleaseInfo, Response};
 
 static LOCAL_OFFSET: OnceLock<UtcOffset> = OnceLock::new();
@@ -294,8 +294,9 @@ async fn fetch_releases_for_server(
     server: &ServerEntry,
     app_name: &str,
 ) -> Result<Vec<ReleaseInfo>, String> {
-    let mut ssh = SshClient::new(SshConfig::from_server(&server.host, server.port));
-    ssh.connect().await.map_err(|e| e.to_string())?;
+    let mut ssh = SshClient::connect_to(&server.host, server.port)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let cmd = serde_json::to_string(&Command::ListReleases {
         app: app_name.to_string(),
@@ -311,8 +312,9 @@ async fn rollback_server_release(
     app_name: &str,
     release: &str,
 ) -> Result<(), String> {
-    let mut ssh = SshClient::new(SshConfig::from_server(&server.host, server.port));
-    ssh.connect().await.map_err(|e| e.to_string())?;
+    let mut ssh = SshClient::connect_to(&server.host, server.port)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let cmd = serde_json::to_string(&Command::Rollback {
         app: app_name.to_string(),

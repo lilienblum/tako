@@ -4,7 +4,7 @@ use std::env::current_dir;
 use crate::app::require_app_name_from_config;
 use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
-use crate::ssh::{SshClient, SshConfig};
+use crate::ssh::SshClient;
 use tako_core::{AppStatus, Command, Response};
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -328,9 +328,7 @@ async fn discover_server_deployments(
     server_name: &str,
     server: &ServerEntry,
 ) -> Result<Vec<RemoteDeployment>, Box<dyn std::error::Error + Send + Sync>> {
-    let ssh_config = SshConfig::from_server(&server.host, server.port);
-    let mut ssh = SshClient::new(ssh_config);
-    ssh.connect().await?;
+    let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
 
     let result = async {
         let list = ssh.tako_list_apps().await?;
@@ -656,9 +654,7 @@ async fn delete_from_server(
     server: &ServerEntry,
     app_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let ssh_config = SshConfig::from_server(&server.host, server.port);
-    let mut ssh = SshClient::new(ssh_config);
-    ssh.connect().await?;
+    let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
 
     let result = async {
         let cmd = Command::Delete {
