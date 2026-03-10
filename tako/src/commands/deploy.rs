@@ -928,38 +928,23 @@ fn resolve_deploy_server_names(
     env: &str,
     confirmation: Option<bool>,
 ) -> Result<Vec<String>, String> {
-    let server_names: Vec<String> = tako_config
-        .get_servers_for_env(env)
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
-    if !server_names.is_empty() {
-        return Ok(server_names);
-    }
+    let resolved = super::helpers::resolve_servers_for_env(tako_config, servers, env)?;
 
-    if env == "production" && servers.len() == 1 {
-        let server_name = servers.names().into_iter().next().unwrap_or("<server>");
-
+    if resolved.used_fallback {
+        let server_name = &resolved.names[0];
         let confirmed = match confirmation {
             Some(value) => value,
             None => confirm_single_server_production_fallback(server_name)?,
         };
-
-        if confirmed {
-            return Ok(vec![server_name.to_string()]);
+        if !confirmed {
+            return Err(
+                "Deployment cancelled. Add [servers.<name>] with env = \"production\" to tako.toml, or rerun with --env <name>."
+                    .to_string(),
+            );
         }
-
-        return Err(
-            "Deployment cancelled. Add [servers.<name>] with env = \"production\" to tako.toml, or rerun with --env <name>."
-                .to_string(),
-        );
     }
 
-    if servers.is_empty() {
-        return Err(format_no_global_servers_error());
-    }
-
-    Err(format_no_servers_for_env_error(env))
+    Ok(resolved.names)
 }
 
 fn confirm_single_server_production_fallback(server_name: &str) -> Result<bool, String> {

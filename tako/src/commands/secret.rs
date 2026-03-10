@@ -452,29 +452,25 @@ fn resolve_secret_sync_server_names(
     tako_config: &crate::config::TakoToml,
     servers: &crate::config::ServersToml,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let mapped: Vec<String> = tako_config
-        .get_servers_for_env(env_name)
-        .into_iter()
-        .map(|name| name.to_string())
-        .collect();
-    if !mapped.is_empty() {
-        return Ok(mapped);
-    }
+    let resolved = match super::helpers::resolve_servers_for_env(tako_config, servers, env_name) {
+        Ok(r) => r,
+        Err(_) => return Ok(Vec::new()),
+    };
 
-    if env_name == "production" && servers.len() == 1 {
-        let only = servers.names().into_iter().next().unwrap_or("<server>");
-        if output::confirm(
+    if resolved.used_fallback {
+        let only = &resolved.names[0];
+        if !output::confirm(
             &format!(
                 "No [servers.*] mapping for 'production'. Sync secrets to the only configured server ('{}')?",
                 only
             ),
             true,
         )? {
-            return Ok(vec![only.to_string()]);
+            return Ok(Vec::new());
         }
     }
 
-    Ok(Vec::new())
+    Ok(resolved.names)
 }
 
 async fn import_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {

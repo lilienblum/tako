@@ -2,6 +2,7 @@ pub mod delete;
 pub mod deploy;
 pub mod dev;
 pub mod doctor;
+pub mod helpers;
 pub mod init;
 pub mod logs;
 pub mod releases;

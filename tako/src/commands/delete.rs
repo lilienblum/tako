@@ -607,31 +607,8 @@ fn resolve_delete_server_names(
     servers: &ServersToml,
     env: &str,
 ) -> Result<Vec<String>, String> {
-    let mapped: Vec<String> = tako_config
-        .get_servers_for_env(env)
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
-    if !mapped.is_empty() {
-        return Ok(mapped);
-    }
-
-    if env == "production" && servers.len() == 1 {
-        let server_name = servers.names().into_iter().next().unwrap_or("<server>");
-        return Ok(vec![server_name.to_string()]);
-    }
-
-    if servers.is_empty() {
-        return Err(format!(
-            "No servers have been added. Run 'tako servers add <host>' first, then map it in tako.toml with [servers.<name>] env = \"{}\".",
-            env
-        ));
-    }
-
-    Err(format!(
-        "No servers configured for environment '{}'. Add [servers.<name>] with env = \"{}\" to tako.toml.",
-        env, env
-    ))
+    // Silent fallback — no confirmation needed for delete (user already confirmed the delete itself).
+    Ok(super::helpers::resolve_servers_for_env(tako_config, servers, env)?.names)
 }
 
 fn resolve_delete_server_names_from_deployments(

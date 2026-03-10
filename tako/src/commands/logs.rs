@@ -540,56 +540,41 @@ async fn resolve_log_server_names(
     servers: &mut ServersToml,
     env: &str,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let mapped: Vec<String> = tako_config
-        .get_servers_for_env(env)
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
-    if !mapped.is_empty() {
-        return Ok(mapped);
-    }
-
-    if env == "production" && servers.len() == 1 {
-        let only = servers.names().into_iter().next().unwrap_or("<server>");
-        let confirmed = output::confirm(
-            &format!(
-                "No [servers.*] mapping for 'production'. Stream logs from the only configured server ('{}')?",
-                only
-            ),
-            true,
-        )?;
-        if confirmed {
-            return Ok(vec![only.to_string()]);
-        }
-        return Err(
-            "Logs cancelled. Add [servers.<name>] with env = \"production\" to tako.toml.".into(),
-        );
-    }
-
-    if env == "production" && servers.is_empty() {
-        if server::prompt_to_add_server(
-            "No servers have been added. Logs need at least one server.",
-        )
-        .await?
-        .is_some()
-        {
-            *servers = ServersToml::load()?;
-            if servers.len() == 1 {
-                let only = servers.names().into_iter().next().unwrap_or("<server>");
-                return Ok(vec![only.to_string()]);
+    match super::helpers::resolve_servers_for_env(tako_config, servers, env) {
+        Ok(resolved) => {
+            if resolved.used_fallback {
+                let only = &resolved.names[0];
+                if !output::confirm(
+                    &format!(
+                        "No [servers.*] mapping for 'production'. Stream logs from the only configured server ('{}')?",
+                        only
+                    ),
+                    true,
+                )? {
+                    return Err("Logs cancelled. Add [servers.<name>] with env = \"production\" to tako.toml.".into());
+                }
             }
+            Ok(resolved.names)
         }
-        return Err(
-            "No servers have been added. Run 'tako servers add <host>' first, then map it in tako.toml with [servers.<name>] env = \"production\"."
-                .into(),
-        );
+        Err(_) if env == "production" && servers.is_empty() => {
+            if server::prompt_to_add_server(
+                "No servers have been added. Logs need at least one server.",
+            )
+            .await?
+            .is_some()
+            {
+                *servers = ServersToml::load()?;
+                if servers.len() == 1 {
+                    let only = servers.names().into_iter().next().unwrap_or("<server>");
+                    return Ok(vec![only.to_string()]);
+                }
+            }
+            Err("No servers have been added. Run 'tako servers add <host>' first, \
+                 then map it in tako.toml with [servers.<name>] env = \"production\"."
+                .into())
+        }
+        Err(e) => Err(e.into()),
     }
-
-    Err(format!(
-        "No servers configured for environment '{}'. Add [servers.<name>] with env = \"{}\" to tako.toml.",
-        env, env
-    )
-    .into())
 }
 
 #[cfg(test)]

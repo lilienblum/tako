@@ -88,35 +88,11 @@ fn resolve_server_names_for_env(
     servers: &ServersToml,
     env: &str,
 ) -> Result<Vec<String>, String> {
-    let mut names: Vec<String> = tako_config
-        .get_servers_for_env(env)
-        .into_iter()
-        .map(|name| name.to_string())
-        .collect();
-    if names.is_empty()
-        && env == "production"
-        && servers.len() == 1
-        && let Some(name) = servers.names().into_iter().next()
-    {
-        names.push(name.to_string());
-    }
-    if names.is_empty() {
-        return Err(format!(
-            "No servers configured for environment '{}'. Add [servers.<name>] env = \"{}\" in tako.toml.",
-            env, env
-        ));
-    }
-    names.sort();
-    names.dedup();
-    for name in &names {
-        if !servers.contains(name) {
-            return Err(format!(
-                "Server '{}' not found in ~/.tako/config.toml",
-                name
-            ));
-        }
-    }
-    Ok(names)
+    let mut resolved = super::helpers::resolve_servers_for_env(tako_config, servers, env)?;
+    resolved.names.sort();
+    resolved.names.dedup();
+    super::helpers::validate_server_names(&resolved.names, servers)?;
+    Ok(resolved.names)
 }
 
 async fn list_releases(
