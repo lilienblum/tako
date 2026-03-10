@@ -26,7 +26,7 @@ export type { TakoOptions, TakoStatus, FetchHandler } from "../types";
  * Create a Tako-wrapped Bun server
  *
  * This wraps Bun.serve() with Tako functionality including:
- * - Internal status endpoint on Host `tako-internal` + `/status`
+ * - Internal status endpoint on Host `tako` + `/status`
  * - Graceful shutdown handling
  */
 export function serve(
@@ -41,7 +41,7 @@ export function serve(
 
   // Environment variables set by tako
   const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";
-  const TAKO_INSTANCE = parseInt(process.env.TAKO_INSTANCE || "1", 10);
+  const TAKO_INSTANCE = process.env.TAKO_INSTANCE || "unknown";
   const TAKO_APP_SOCKET = process.env.TAKO_APP_SOCKET;
   const appSocketPath = resolveAppSocketPath(TAKO_APP_SOCKET);
 

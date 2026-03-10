@@ -32,7 +32,7 @@ describe("handleTakoEndpoint", () => {
 
   describe("internal host /status", () => {
     test("returns status JSON", async () => {
-      const request = new Request("http://tako-internal/status");
+      const request = new Request("http://tako/status");
       const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();
@@ -48,14 +48,14 @@ describe("handleTakoEndpoint", () => {
         ...mockStatus,
         status: "draining",
       };
-      const request = new Request("http://tako-internal/status");
+      const request = new Request("http://tako/status");
       const response = handleTakoEndpoint(request, unhealthyStatus);
 
       const body = await response!.json();
       expect(body.status).toBe("draining");
     });
     test("returns status for internal host with explicit port", async () => {
-      const request = new Request("http://tako-internal:3000/status");
+      const request = new Request("http://tako:3000/status");
       const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();
@@ -65,7 +65,7 @@ describe("handleTakoEndpoint", () => {
 
   describe("internal host unknown paths", () => {
     test("returns 404 for unknown paths on internal host", async () => {
-      const request = new Request("http://tako-internal/unknown");
+      const request = new Request("http://tako/unknown");
       const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();

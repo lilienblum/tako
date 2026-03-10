@@ -26,7 +26,7 @@ export type { TakoOptions, TakoStatus } from "../types";
 
 // Environment variables set by tako
 const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";
-const TAKO_INSTANCE = parseInt(process.env.TAKO_INSTANCE || "1", 10);
+const TAKO_INSTANCE = process.env.TAKO_INSTANCE || "unknown";
 
 const startedAt = Date.now();
 let status: TakoStatus["status"] = "starting";
@@ -56,7 +56,7 @@ export function setStatus(newStatus: TakoStatus["status"]): void {
  * Express/Connect-style middleware for Tako internal endpoints
  *
  * Handles:
- * - GET /status on Host `tako-internal` - Returns app status
+ * - GET /status on Host `tako` - Returns app status
  */
 export function createMiddleware(): (
   req: {

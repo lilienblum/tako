@@ -6,7 +6,7 @@
 
 import type { TakoStatus } from "./types";
 
-export const TAKO_INTERNAL_HOST = "tako-internal";
+export const TAKO_INTERNAL_HOST = "tako";
 export const TAKO_INTERNAL_STATUS_PATH = "/status";
 
 function normalizeHost(value: string | null): string | null {
@@ -53,7 +53,7 @@ export function handleTakoEndpoint(request: Request, status: TakoStatus): Respon
 }
 
 /**
- * GET /status on tako-internal - Full status information
+ * GET /status on Host: tako - Full status information
  */
 function handleStatus(status: TakoStatus): Response {
   return new Response(JSON.stringify(status), {

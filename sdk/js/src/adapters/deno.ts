@@ -32,7 +32,7 @@ const getEnv = (key: string, defaultValue: string = ""): string => {
 };
 
 const TAKO_VERSION = getEnv("TAKO_VERSION", "unknown");
-const TAKO_INSTANCE = parseInt(getEnv("TAKO_INSTANCE", "1"), 10);
+const TAKO_INSTANCE = getEnv("TAKO_INSTANCE", "unknown");
 
 const startedAt = Date.now();
 let status: TakoStatus["status"] = "starting";
@@ -58,7 +58,7 @@ export function getStatus(): TakoStatus {
  * Create a Tako-wrapped Deno server
  *
  * This wraps Deno.serve() with Tako functionality including:
- * - Internal status endpoint on Host `tako-internal` + `/status`
+ * - Internal status endpoint on Host `tako` + `/status`
  * - Graceful shutdown handling
  */
 export function serve(

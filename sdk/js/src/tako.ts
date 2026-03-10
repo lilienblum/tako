@@ -25,7 +25,7 @@ export class Tako {
   constructor(options: TakoOptions = {}) {
     this.options = options;
 
-    // Store as singleton for the wrapper to access
+    // Store as singleton for the entrypoint to access
     Tako.instance = this;
   }
 
@@ -48,11 +48,11 @@ export class Tako {
    */
   static getEnv(): {
     version: string;
-    instanceId: number;
+    instanceId: string;
   } {
     return {
       version: process.env.TAKO_VERSION || "unknown",
-      instanceId: parseInt(process.env.TAKO_INSTANCE || "0", 10),
+      instanceId: process.env.TAKO_INSTANCE || "unknown",
     };
   }
 

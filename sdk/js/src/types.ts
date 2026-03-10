@@ -25,7 +25,7 @@ export interface TakoStatus {
   status: "healthy" | "starting" | "draining" | "unhealthy";
   app: string;
   version: string;
-  instance_id: number;
+  instance_id: string;
   pid: number;
   uptime_seconds: number;
 }

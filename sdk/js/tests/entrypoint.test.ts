@@ -1,4 +1,4 @@
-import { resolveUserAppImportUrl } from "../src/wrapper";
+import { resolveUserAppImportUrl } from "../src/create-entrypoint";
 
 test("resolveUserAppImportUrl resolves relative paths against cwd", () => {
   const cwd = process.cwd();

@@ -8,7 +8,7 @@ Package name: `tako.sh`
 
 - Runtime adapters for Bun, Node.js, and Deno.
 - Built-in internal status endpoint:
-  - `GET /status` when `Host: tako-internal`
+  - `GET /status` when `Host: tako`
 - Optional lifecycle integration hooks (for example config reload handling).
 
 ## Install

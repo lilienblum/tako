@@ -37,7 +37,7 @@ describe("Tako", () => {
     test("returns default values when env not set", () => {
       const env = Tako.getEnv();
       expect(env.version).toBe("unknown");
-      expect(env.instanceId).toBe(0);
+      expect(env.instanceId).toBe("unknown");
     });
 
     test("returns values from environment", () => {
@@ -46,7 +46,7 @@ describe("Tako", () => {
 
       const env = Tako.getEnv();
       expect(env.version).toBe("abc123");
-      expect(env.instanceId).toBe(2);
+      expect(env.instanceId).toBe("2");
     });
   });
 
