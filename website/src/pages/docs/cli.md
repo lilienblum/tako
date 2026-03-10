@@ -148,6 +148,7 @@ Notes:
 - without channel flags, server upgrade uses persisted global `upgrade_channel` (default: `stable`).
 - installer-managed hosts configure scoped passwordless sudo for `tako` user maintenance helpers, so `tako servers upgrade`/`restart` run non-interactively by default.
 - `tako servers status` prints a single global deployment/runtime snapshot across configured servers.
+- `tako-server` accepts `--metrics-port <port>` to control the Prometheus metrics endpoint (default: 9898, set to 0 to disable). Metrics are served on localhost only.
 
 Deploy note:
 

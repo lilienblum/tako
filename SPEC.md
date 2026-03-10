@@ -1179,6 +1179,38 @@ Expected response:
 
 The SDK wrappers implement this endpoint automatically. The edge proxy does not reserve or bypass `Host: tako` routes.
 
+### Prometheus Metrics
+
+Tako-server exposes a Prometheus-compatible metrics endpoint for observability.
+
+**Endpoint:** `http://127.0.0.1:9898/` (localhost only, not publicly accessible)
+
+**CLI flag:** `--metrics-port <port>` (default: 9898, set to 0 to disable)
+
+**Exposed metrics:**
+
+| Metric | Type | Labels | Description |
+|---|---|---|---|
+| `tako_http_requests_total` | Counter | `server`, `app`, `status` | Total proxied requests, grouped by status class (2xx/3xx/4xx/5xx) |
+| `tako_http_request_duration_seconds` | Histogram | `server`, `app` | Request latency distribution |
+| `tako_http_active_connections` | Gauge | `server`, `app` | Currently active connections |
+| `tako_cold_starts_total` | Counter | `server`, `app` | Total cold starts triggered (scale-to-zero apps) |
+| `tako_cold_start_duration_seconds` | Histogram | `server`, `app` | Cold start duration distribution |
+| `tako_instance_health` | Gauge | `server`, `app`, `instance` | Instance health status (1=healthy, 0=unhealthy) |
+| `tako_instances_running` | Gauge | `server`, `app` | Number of running instances |
+
+All metrics carry a `server` label (machine hostname) so multi-server deployments are distinguishable without scraper-side relabeling. A single scrape returns data for all deployed apps on that server.
+
+Only proxied requests (routed to a backend) are measured. ACME challenges, direct static asset responses, and unmatched-host 404s are excluded.
+
+**Usage with monitoring platforms:**
+
+- **Self-hosted Prometheus/Grafana**: Add `127.0.0.1:9898` as a scrape target.
+- **Hosted platforms (Grafana Cloud, Datadog, etc.)**: Install the platform's agent on the server, configure it to scrape `http://127.0.0.1:9898/metrics`.
+- **Tailscale/WireGuard**: Expose port 9898 on the private network interface for remote scraping.
+
+The endpoint uses Pingora's built-in Prometheus server with gzip compression.
+
 ## TLS/SSL Certificates
 
 ### SNI-Based Certificate Selection

@@ -109,6 +109,10 @@ pub struct ServerRuntimeInfo {
     pub dns_provider: Option<String>,
     #[serde(default)]
     pub worker: bool,
+    #[serde(default)]
+    pub metrics_port: Option<u16>,
+    #[serde(default)]
+    pub server_name: Option<String>,
 }
 
 /// Response from the server
@@ -454,10 +458,13 @@ mod tests {
             instance_port_offset: 0,
             dns_provider: None,
             worker: false,
+            metrics_port: Some(9898),
+            server_name: Some("la".to_string()),
         };
         let json = serde_json::to_string(&info).unwrap();
         let parsed: ServerRuntimeInfo = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.pid, 42);
         assert!(parsed.dns_provider.is_none());
+        assert_eq!(parsed.server_name.as_deref(), Some("la"));
     }
 }

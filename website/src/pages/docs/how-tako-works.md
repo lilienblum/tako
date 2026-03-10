@@ -26,7 +26,7 @@ CLI output conventions across commands:
 | ------------------ | --------------- | -------------------------------------------------------------------------------- |
 | `tako` CLI         | Your machine    | Project setup, dev client, build/deploy orchestration, server/secrets management |
 | `tako-dev-server`  | Your machine    | Local HTTPS ingress for `*.tako`, local app lifecycle                            |
-| `tako-server`      | Deployment host | Remote app lifecycle, routing, health checks, load balancing, TLS                |
+| `tako-server`      | Deployment host | Remote app lifecycle, routing, health checks, load balancing, TLS, metrics       |
 | Your app instances | Local or remote | Serve your app logic                                                             |
 
 ## Configuration Sources
@@ -162,6 +162,22 @@ Instance mode by `instances`:
 - `instances > 0`: always-on baseline, with health-based rotation during deploy
 
 For on-demand deploys (`instances = 0`), deploy starts one warm instance; if warm startup fails, deploy fails.
+
+## Prometheus Metrics
+
+Tako-server exposes a Prometheus-compatible metrics endpoint on `http://127.0.0.1:9898/` (localhost only, not publicly accessible). The `--metrics-port` flag controls the port (default: 9898, set to 0 to disable).
+
+All metrics carry `server` (machine hostname) and `app` labels, so multi-server deployments are distinguishable without scraper-side relabeling:
+
+- Request count, grouped by status class (2xx/3xx/4xx/5xx)
+- Request latency distribution
+- Active connections
+- Cold starts triggered and cold start duration (scale-to-zero apps)
+- Instance health status and running instance count
+
+Only proxied requests are measured. ACME challenges, static asset responses, and unmatched-host 404s are excluded.
+
+Scrape with self-hosted Prometheus, a hosted monitoring agent (Grafana Cloud, Datadog), or expose the port over Tailscale/WireGuard for remote collection.
 
 ## TLS and Certificates
 

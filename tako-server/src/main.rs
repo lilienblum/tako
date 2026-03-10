@@ -4,11 +4,15 @@
 #[cfg(not(unix))]
 compile_error!("tako-server requires Unix (management and app routing use Unix sockets).");
 
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod app_command;
 mod app_socket_cleanup;
 mod defaults;
 mod instances;
 mod lb;
+mod metrics;
 mod paths;
 mod protocol;
 mod proxy;
@@ -105,6 +109,10 @@ pub struct Args {
     #[arg(long)]
     pub worker: bool,
 
+    /// Prometheus metrics port (default: 9898, set to 0 to disable)
+    #[arg(long, default_value_t = 9898)]
+    pub metrics_port: u16,
+
     /// Extract a `.tar.zst` archive into a destination directory and exit.
     #[arg(long, hide = true)]
     pub extract_zstd_archive: Option<String>,
@@ -128,6 +136,8 @@ pub struct ServerRuntimeConfig {
     instance_port_offset: u16,
     dns_provider: Option<String>,
     worker: bool,
+    metrics_port: Option<u16>,
+    server_name: Option<String>,
 }
 
 impl ServerRuntimeConfig {
@@ -145,6 +155,8 @@ impl ServerRuntimeConfig {
             instance_port_offset: 0,
             dns_provider: None,
             worker: false,
+            metrics_port: Some(9898),
+            server_name: None,
         }
     }
 
@@ -163,6 +175,8 @@ impl ServerRuntimeConfig {
             instance_port_offset: self.instance_port_offset,
             dns_provider: self.dns_provider.clone(),
             worker: self.worker,
+            metrics_port: self.metrics_port,
+            server_name: self.server_name.clone(),
         }
     }
 
@@ -1804,6 +1818,23 @@ fn should_signal_parent_on_ready() -> bool {
     )
 }
 
+/// Read the server name from `{data_dir}/server-name` (written by the installer).
+/// Falls back to the machine hostname.
+fn read_server_name_file(data_dir: &Path) -> Option<String> {
+    let path = data_dir.join("server-name");
+    if let Ok(contents) = std::fs::read_to_string(&path) {
+        let name = contents.trim().to_string();
+        if !name.is_empty() {
+            return Some(name);
+        }
+    }
+    // Fallback to hostname
+    hostname::get()
+        .ok()
+        .and_then(|h| h.into_string().ok())
+        .filter(|h| !h.is_empty())
+}
+
 /// Notify systemd that the server is ready (READY=1) and claim the main PID.
 /// During a zero-downtime reload handoff, optionally sends SIGUSR1 to the parent process so the
 /// old server starts draining.
@@ -2000,6 +2031,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         instance_port_offset: args.instance_port_offset,
         dns_provider: args.dns_provider.clone(),
         worker,
+        metrics_port: if args.metrics_port == 0 {
+            None
+        } else {
+            Some(args.metrics_port)
+        },
+        server_name: read_server_name_file(&data_dir),
     };
     // Clone challenge_tokens before moving into ServerState (needed for runtime promotion)
     let challenge_tokens_for_promote = challenge_tokens.clone();
@@ -2307,6 +2344,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         cert_dir,
         redirect_http_to_https: true,
         response_cache: Some(proxy::ResponseCacheConfig::default()),
+        metrics_port: if args.metrics_port == 0 {
+            None
+        } else {
+            Some(args.metrics_port)
+        },
     };
 
     // Start Pingora proxy
@@ -2375,6 +2417,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    metrics::init(state.runtime.server_name.as_deref());
+
     let server = proxy::build_server_with_acme(
         state.load_balancer.clone(),
         state.routes(),
@@ -2425,29 +2469,50 @@ async fn handle_health_event(state: &ServerState, event: crate::instances::Healt
     match event {
         HealthEvent::Healthy { app, instance_id } => {
             tracing::info!(app = %app, instance = %instance_id, "Instance is healthy");
+            metrics::set_instance_health(&app, &instance_id, true);
             state.cold_start.mark_ready(&app);
 
             if let Some(app_ref) = state.app_manager.get_app(&app) {
                 app_ref.clear_last_error();
+                update_instance_count_metric(&app, &app_ref);
             }
         }
         HealthEvent::Unhealthy { app, instance_id } => {
             tracing::warn!(app = %app, instance = %instance_id, "Instance became unhealthy");
+            metrics::set_instance_health(&app, &instance_id, false);
             // Don't immediately replace - wait for Dead event or recovery
         }
         HealthEvent::Dead { app, instance_id } => {
             tracing::error!(app = %app, instance = %instance_id, "Instance is dead (no heartbeat)");
+            metrics::set_instance_health(&app, &instance_id, false);
+            metrics::remove_instance_metrics(&app, &instance_id);
             state.cold_start.mark_failed(&app);
             if let Some(app_ref) = state.app_manager.get_app(&app) {
                 app_ref.set_last_error("Instance marked dead");
+                update_instance_count_metric(&app, &app_ref);
             }
             // Replace dead instance immediately
             replace_instance_if_needed(state, &app, &instance_id, "dead").await;
         }
         HealthEvent::Recovered { app, instance_id } => {
             tracing::info!(app = %app, instance = %instance_id, "Instance recovered from unhealthy");
+            metrics::set_instance_health(&app, &instance_id, true);
         }
     }
+}
+
+fn update_instance_count_metric(app_name: &str, app: &App) {
+    let count = app
+        .get_instances()
+        .iter()
+        .filter(|i| {
+            matches!(
+                i.state(),
+                InstanceState::Starting | InstanceState::Ready | InstanceState::Healthy
+            )
+        })
+        .count();
+    metrics::set_instances_running(app_name, count as i64);
 }
 
 async fn handle_idle_event(state: &ServerState, event: IdleEvent) {
@@ -2460,6 +2525,7 @@ async fn handle_idle_event(state: &ServerState, event: IdleEvent) {
                     tracing::warn!(app = %app, instance = %instance_id, "Failed to kill idle instance: {}", e);
                 }
                 app_ref.remove_instance(&instance_id);
+                metrics::remove_instance_metrics(&app, &instance_id);
 
                 let running_count = app_ref
                     .get_instances()
@@ -2471,6 +2537,7 @@ async fn handle_idle_event(state: &ServerState, event: IdleEvent) {
                         )
                     })
                     .count();
+                metrics::set_instances_running(&app, running_count as i64);
                 let min_instances = app_ref.config.read().min_instances;
 
                 // When the final running instance is stopped, transition immediately so the
@@ -3376,6 +3443,8 @@ exit 1
             instance_port_offset: 10000,
             dns_provider: None,
             worker: false,
+            metrics_port: Some(9898),
+            server_name: Some("test-server".to_string()),
         };
         let state = ServerState::new_with_runtime(
             temp.path().to_path_buf(),
@@ -3604,6 +3673,8 @@ exit 1
             instance_port_offset: 10_000,
             dns_provider: None,
             worker: false,
+            metrics_port: Some(9898),
+            server_name: None,
         };
         let state_b = ServerState::new_with_runtime(
             temp.path().to_path_buf(),

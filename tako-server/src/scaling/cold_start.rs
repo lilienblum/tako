@@ -164,6 +164,12 @@ impl ColdStartManager {
     pub fn mark_ready(&self, app_name: &str) {
         let mut apps = self.apps.lock();
         if let Some(cold_start) = apps.get_mut(app_name) {
+            if let Some(started_at) = cold_start.started_at {
+                crate::metrics::record_cold_start(
+                    app_name,
+                    started_at.elapsed().as_secs_f64(),
+                );
+            }
             cold_start.state = ColdStartState::Ready;
             if let Some(tx) = cold_start.ready_tx.take() {
                 let _ = tx.send(true);
@@ -175,6 +181,12 @@ impl ColdStartManager {
     pub fn mark_failed(&self, app_name: &str) {
         let mut apps = self.apps.lock();
         if let Some(cold_start) = apps.get_mut(app_name) {
+            if let Some(started_at) = cold_start.started_at {
+                crate::metrics::record_cold_start(
+                    app_name,
+                    started_at.elapsed().as_secs_f64(),
+                );
+            }
             cold_start.state = ColdStartState::Failed;
             if let Some(tx) = cold_start.ready_tx.take() {
                 let _ = tx.send(false);

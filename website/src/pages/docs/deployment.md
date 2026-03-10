@@ -181,6 +181,7 @@ Install/refresh server runtime commands:
 - Use `tako releases ls --env <environment>` to inspect release/build history before deciding on rollback.
 - Use `tako releases rollback <release-id> --env <environment>` to roll back to a previous release id using normal rolling-update behavior.
 - `tako servers upgrade <name> [--canary|--stable]` installs the updated server binary then performs an in-place reload via host service manager (`systemctl reload tako-server` on systemd or `rc-service tako-server reload` on OpenRC) using root privileges (root login or sudo-capable user). A supported service manager is required. `--canary` installs server artifacts from the moving canary prerelease; without flags it uses persisted global `upgrade_channel` (default: `stable`).
+- `tako-server` exposes Prometheus metrics on `http://127.0.0.1:9898/` by default (localhost only). Configure with `--metrics-port` (set to 0 to disable). Scrape with self-hosted Prometheus, a hosted monitoring agent (Grafana Cloud, Datadog), or expose the port over Tailscale/WireGuard.
 - HTTP requests are redirected to HTTPS by default (307 with `Cache-Control: no-store`).
 - Exception on HTTP: `/.well-known/acme-challenge/*`.
 - Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.

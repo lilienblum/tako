@@ -10,6 +10,7 @@ mod static_files;
 pub use static_files::*;
 
 use crate::lb::{Backend, LoadBalancer};
+use crate::metrics::RequestTimer;
 use crate::routing::RouteTable;
 use crate::scaling::{ColdStartManager, WaitForReadyOutcome};
 use crate::tls::{
@@ -26,6 +27,7 @@ use pingora_cache::{CacheKey, CacheMetaDefaults, MemCache, RespCacheable};
 use pingora_core::listeners::TcpSocketOptions;
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::prelude::*;
+use pingora_core::services::listening::Service as ListeningService;
 use pingora_core::upstreams::peer::HttpPeer;
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::{ProxyHttp, Session};
@@ -53,6 +55,8 @@ pub struct ProxyConfig {
     pub redirect_http_to_https: bool,
     /// Optional upstream response cache configuration
     pub response_cache: Option<ResponseCacheConfig>,
+    /// Optional Prometheus metrics port (localhost-only listener)
+    pub metrics_port: Option<u16>,
 }
 
 /// Upstream response cache configuration
@@ -109,6 +113,7 @@ impl Default for ProxyConfig {
             cert_dir: PathBuf::from("/opt/tako/certs"),
             redirect_http_to_https: true,
             response_cache: Some(ResponseCacheConfig::default()),
+            metrics_port: Some(9898),
         }
     }
 }
@@ -124,6 +129,7 @@ impl ProxyConfig {
             cert_dir: PathBuf::from("./data/certs"),
             redirect_http_to_https: true,
             response_cache: Some(ResponseCacheConfig::default()),
+            metrics_port: Some(9898),
         }
     }
 }
@@ -313,6 +319,7 @@ pub struct RequestCtx {
     backend: Option<Backend>,
     is_https: bool,
     matched_route_path: Option<String>,
+    request_timer: Option<RequestTimer>,
 }
 
 enum BackendResolution {
@@ -381,6 +388,7 @@ impl ProxyHttp for TakoProxy {
             backend: None,
             is_https: false,
             matched_route_path: None,
+            request_timer: None,
         }
     }
 
@@ -552,6 +560,7 @@ impl ProxyHttp for TakoProxy {
             }
         };
 
+        ctx.request_timer = Some(RequestTimer::start(&app_name));
         ctx.backend = Some(backend);
 
         Ok(false)
@@ -701,6 +710,11 @@ impl ProxyHttp for TakoProxy {
             .response_written()
             .map(|r| r.status.as_u16())
             .unwrap_or(0);
+
+        // Record Prometheus metrics
+        if let Some(timer) = ctx.request_timer.take() {
+            timer.finish(status);
+        }
 
         let host = request_host(session.req_header());
         let host = if host.is_empty() { "-" } else { host };
@@ -1047,6 +1061,15 @@ pub fn build_server_with_acme(
     }
 
     server.add_service(proxy_service);
+
+    // Add Prometheus metrics listener (localhost only)
+    if let Some(metrics_port) = config.metrics_port {
+        let mut metrics_service = ListeningService::prometheus_http_service();
+        metrics_service.add_tcp(&format!("127.0.0.1:{}", metrics_port));
+        server.add_service(metrics_service);
+        tracing::info!(port = metrics_port, "Prometheus metrics listener enabled");
+    }
+
     Ok(server)
 }
 

@@ -25,6 +25,9 @@ set -eu
 #   TAKO_REPO_NAME          default: tako
 #   TAKO_TAG_PREFIX         default: tako-server-v
 #   TAKO_TAGS_API           override tags API URL (optional)
+#   TAKO_SERVER_NAME        server identity for metrics labels (optional)
+#                           if unset, installer prompts in interactive terminals
+#                           defaults to machine hostname if non-interactive
 #   TAKO_INSTALL_MISE       default: 1 (set 0/false to skip mise install)
 #   TAKO_MISE_VERSION       optional mise version for installer (default: latest)
 #   TAKO_MISE_BIN           default: /usr/local/bin/mise
@@ -802,6 +805,55 @@ else
   echo "warning: no SSH key installed for '$TAKO_USER'." >&2
   echo "warning: configure ~/.ssh/authorized_keys manually or rerun installer with TAKO_SSH_PUBKEY." >&2
 fi
+
+# ── Server name ──────────────────────────────────────────────────────
+# Used as the `server` label in Prometheus metrics so multi-server
+# deployments are distinguishable in monitoring dashboards.
+
+TAKO_SERVER_NAME_FILE="$TAKO_HOME/server-name"
+
+maybe_prompt_server_name() {
+  default_name="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")"
+
+  # Env var takes precedence
+  if [ -n "${TAKO_SERVER_NAME:-}" ]; then
+    printf '%s\n' "$TAKO_SERVER_NAME" > "$TAKO_SERVER_NAME_FILE"
+    echo "OK server name set to '$TAKO_SERVER_NAME'"
+    return
+  fi
+
+  # Preserve existing name on re-installs
+  if [ -f "$TAKO_SERVER_NAME_FILE" ] && [ -s "$TAKO_SERVER_NAME_FILE" ]; then
+    existing="$(cat "$TAKO_SERVER_NAME_FILE")"
+    echo "OK server name already configured: $existing"
+    return
+  fi
+
+  # Interactive prompt
+  if [ -t 0 ] 2>/dev/null; then
+    printf 'Server name (used in metrics) [%s]: ' "$default_name"
+    IFS= read -r TAKO_SERVER_NAME
+    if [ -z "$TAKO_SERVER_NAME" ]; then
+      TAKO_SERVER_NAME="$default_name"
+    fi
+  elif [ -e /dev/tty ]; then
+    printf 'Server name (used in metrics) [%s]: ' "$default_name" > /dev/tty
+    IFS= read -r TAKO_SERVER_NAME < /dev/tty
+    if [ -z "$TAKO_SERVER_NAME" ]; then
+      TAKO_SERVER_NAME="$default_name"
+    fi
+  else
+    TAKO_SERVER_NAME="$default_name"
+  fi
+
+  if [ -n "$TAKO_SERVER_NAME" ]; then
+    printf '%s\n' "$TAKO_SERVER_NAME" > "$TAKO_SERVER_NAME_FILE"
+    chown "$TAKO_USER":"$TAKO_USER" "$TAKO_SERVER_NAME_FILE"
+    echo "OK server name set to '$TAKO_SERVER_NAME'"
+  fi
+}
+
+maybe_prompt_server_name
 
 install_systemd_service_unit() {
   mkdir -p /etc/systemd/system

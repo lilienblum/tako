@@ -245,6 +245,8 @@ fn spawn_test_server(
         .arg("--tls-port")
         .arg(tls_port.to_string())
         .arg("--no-acme")
+        .arg("--metrics-port")
+        .arg("0")
         .env("RUST_LOG", "warn")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
