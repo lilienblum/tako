@@ -1103,15 +1103,7 @@ async fn upgrade_servers(
         None
     };
 
-    // Spinner style with muted elapsed time
-    let spinner_with_elapsed = {
-        let (r, g, b) = (155u8, 196u8, 182u8); // BRAND_TEAL
-        indicatif::ProgressStyle::with_template(&format!(
-            "\x1b[38;2;{r};{g};{b}m{{spinner}}\x1b[39m {{msg}} \x1b[2m({{elapsed}})\x1b[22m"
-        ))
-        .unwrap()
-        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "])
-    };
+    let spinner_with_elapsed = output::phase_spinner_style();
 
     let main_pb = if let Some(ref mp) = mp {
         let pb = mp.add(indicatif::ProgressBar::new_spinner());
@@ -1343,6 +1335,10 @@ async fn upgrade_server_quiet(
             return Err(format!("tako-server not active (status: {status})"));
         }
 
+        // Get current binary version before installing
+        let version_before = ssh.tako_version().await.ok().flatten();
+        tracing::debug!(server = name, version = ?version_before, "version before install");
+
         // Install binary
         tracing::debug!(server = name, channel = ?channel, "running installer");
         let install_start = std::time::Instant::now();
@@ -1363,6 +1359,14 @@ async fn upgrade_server_quiet(
                 "installer failed"
             );
             return Err(format_installer_failure(&install_output));
+        }
+
+        // Check if the binary actually changed
+        let version_after = ssh.tako_version().await.ok().flatten();
+        tracing::debug!(server = name, version = ?version_after, "version after install");
+        if version_before.is_some() && version_before == version_after {
+            tracing::debug!(server = name, "binary unchanged, skipping reload");
+            return Ok(version_after);
         }
 
         // Enter upgrading mode
