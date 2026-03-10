@@ -627,6 +627,18 @@ pub enum Commands {
         /// Environment to view logs from
         #[arg(long, default_value = "production")]
         env: String,
+
+        /// Stream logs continuously
+        #[arg(long, conflicts_with = "days")]
+        tail: bool,
+
+        /// Number of days of history to show (default: 3)
+        #[arg(long, default_value = "3")]
+        days: u32,
+
+        /// Run in this directory (defaults to current directory)
+        #[arg(value_name = "DIR")]
+        dir: Option<std::path::PathBuf>,
     },
 
     /// Start development server with hot reloading
@@ -717,7 +729,17 @@ impl Cli {
                 }
                 commands::init::run()
             }
-            Commands::Logs { env } => commands::logs::run(&env),
+            Commands::Logs {
+                env,
+                tail,
+                days,
+                dir,
+            } => {
+                if let Some(dir) = dir {
+                    std::env::set_current_dir(dir)?;
+                }
+                commands::logs::run(&env, tail, days)
+            }
             Commands::Dev { command, args } => {
                 let rt = tokio::runtime::Runtime::new()?;
 
