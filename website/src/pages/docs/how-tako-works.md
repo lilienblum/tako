@@ -86,7 +86,7 @@ High-level deploy flow:
 4. Resolve build preset (top-level runtime-local `preset` override or adapter base default from top-level `runtime`/detection), fetching unpinned official aliases from `master` (fetch failures fail resolution; runtime base aliases fall back to embedded defaults when missing from fetched family manifests), then write resolved metadata to `.tako/build.lock.json`.
 5. Build target-specific artifacts locally (Docker or local host based on preset `[build].container`, with defaults derived from `[build].targets`), running preset stage first then app `[[build.stages]]`, with deterministic local artifact cache reuse when inputs are unchanged.
 6. Deploy to target servers in parallel over SSH.
-7. On each server: lock, upload/extract target artifact, finalize `app.json`, send deploy command with secrets payload (env vars come from `app.json`), run runtime prep (Bun dependency install), rolling update, unlock.
+7. On each server: lock, upload/extract target artifact, finalize `app.json`, compare secrets hash with server (only send secrets if changed), send deploy command (env vars come from `app.json`), run runtime prep (Bun dependency install), rolling update, unlock.
 
 Important deployment behavior:
 

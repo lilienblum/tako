@@ -646,6 +646,15 @@ impl ServerState {
                 }
                 self.update_secrets(&app, secrets).await
             }
+            Command::GetSecretsHash { app } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
+                let path = secrets_file_path(&self.runtime.data_dir, &app);
+                let secrets = read_secrets_file(&path).unwrap_or_default();
+                let hash = tako_core::compute_secrets_hash(&secrets);
+                Response::ok(serde_json::json!({ "hash": hash }))
+            }
             Command::ServerInfo => Response::ok(self.runtime_info().await),
             Command::EnterUpgrading { owner } => match self.try_enter_upgrading(&owner).await {
                 Ok(true) => Response::ok(serde_json::json!({
@@ -698,7 +707,7 @@ impl ServerState {
         version: &str,
         path: &str,
         routes: Vec<String>,
-        secrets: HashMap<String, String>,
+        secrets: Option<HashMap<String, String>>,
         instances: u8,
         idle_timeout: u32,
     ) -> Response {
@@ -765,11 +774,16 @@ impl ServerState {
             );
         }
 
-        // Write secrets to per-app file (0600 permissions)
+        // Resolve secrets: if provided, write to disk; otherwise keep existing.
         let secrets_path = secrets_file_path(&self.runtime.data_dir, app_name);
-        if let Err(e) = write_secrets_file(&secrets_path, &secrets) {
-            return Response::error(format!("Failed to write secrets: {}", e));
-        }
+        let secrets = if let Some(new_secrets) = secrets {
+            if let Err(e) = write_secrets_file(&secrets_path, &new_secrets) {
+                return Response::error(format!("Failed to write secrets: {}", e));
+            }
+            new_secrets
+        } else {
+            read_secrets_file(&secrets_path).unwrap_or_default()
+        };
 
         // Get or create app
         let (app, deploy_config, is_new_app) =
@@ -1152,7 +1166,7 @@ impl ServerState {
             version,
             &target_path.to_string_lossy(),
             routes,
-            config.secrets.clone(),
+            None, // keep existing secrets on rollback
             config.min_instances as u8,
             idle_timeout,
         )
@@ -2990,7 +3004,7 @@ mod tests {
                 version: "v1".to_string(),
                 path: temp.path().to_string_lossy().to_string(),
                 routes: vec!["api.example.com".to_string()],
-                secrets: HashMap::new(),
+                secrets: Some(HashMap::new()),
                 instances: 1,
                 idle_timeout: 300,
             })
@@ -3026,7 +3040,7 @@ mod tests {
                 version: "v1".to_string(),
                 path: outside_release.to_string_lossy().to_string(),
                 routes: vec!["api.example.com".to_string()],
-                secrets: HashMap::new(),
+                secrets: Some(HashMap::new()),
                 instances: 1,
                 idle_timeout: 300,
             })
@@ -3070,7 +3084,7 @@ mod tests {
                 version: "../v1".to_string(),
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["api.example.com".to_string()],
-                secrets: HashMap::new(),
+                secrets: Some(HashMap::new()),
                 instances: 1,
                 idle_timeout: 300,
             })
@@ -3628,6 +3642,105 @@ exit 1
     }
 
     #[tokio::test]
+    async fn get_secrets_hash_returns_hash_of_app_secrets() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
+
+        // No secrets file → hash of empty map
+        let response = state
+            .handle_command(Command::GetSecretsHash {
+                app: "my-app".to_string(),
+            })
+            .await;
+        let Response::Ok { data } = &response else {
+            panic!("expected ok response: {response:?}");
+        };
+        let empty_hash = data.get("hash").and_then(Value::as_str).unwrap();
+        assert_eq!(
+            empty_hash,
+            tako_core::compute_secrets_hash(&HashMap::new())
+        );
+
+        // Write secrets and check hash changes
+        let secrets: HashMap<String, String> = [("KEY".to_string(), "val".to_string())]
+            .into_iter()
+            .collect();
+        write_secrets_file(&secrets_file_path(temp.path(), "my-app"), &secrets).unwrap();
+
+        let response = state
+            .handle_command(Command::GetSecretsHash {
+                app: "my-app".to_string(),
+            })
+            .await;
+        let Response::Ok { data } = &response else {
+            panic!("expected ok response");
+        };
+        let with_secrets_hash = data.get("hash").and_then(Value::as_str).unwrap();
+        assert_ne!(with_secrets_hash, empty_hash);
+        assert_eq!(
+            with_secrets_hash,
+            tako_core::compute_secrets_hash(&secrets)
+        );
+    }
+
+    #[tokio::test]
+    async fn deploy_without_secrets_keeps_existing() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
+
+        // Pre-write secrets for the app
+        let secrets: HashMap<String, String> =
+            [("API_KEY".to_string(), "original".to_string())]
+                .into_iter()
+                .collect();
+        let release_dir = temp
+            .path()
+            .join("apps")
+            .join("keep-app")
+            .join("releases")
+            .join("v1");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        write_secrets_file(&secrets_file_path(temp.path(), "keep-app"), &secrets).unwrap();
+
+        // Deploy with secrets: None — should keep existing
+        let _response = state
+            .handle_command(Command::Deploy {
+                app: "keep-app".to_string(),
+                version: "v1".to_string(),
+                path: release_dir.to_string_lossy().to_string(),
+                routes: vec!["keep.localhost".to_string()],
+                secrets: None,
+                instances: 0,
+                idle_timeout: 300,
+            })
+            .await;
+
+        // Verify secrets file still has original value
+        let loaded = read_secrets_file(&secrets_file_path(temp.path(), "keep-app")).unwrap();
+        assert_eq!(loaded.get("API_KEY"), Some(&"original".to_string()));
+    }
+
+    #[tokio::test]
     async fn restore_from_state_store_rehydrates_apps_routes_and_secrets() {
         let temp = TempDir::new().unwrap();
         let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
@@ -3887,7 +4000,7 @@ exit 1
                 version: "v1".to_string(),
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["broken.localhost".to_string()],
-                secrets: HashMap::new(),
+                secrets: Some(HashMap::new()),
                 instances: 0,
                 idle_timeout: 300,
             })
@@ -4034,7 +4147,7 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
                 version: "v1".to_string(),
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["warm.localhost".to_string()],
-                secrets: env,
+                secrets: Some(env),
                 instances: 0,
                 idle_timeout: 300,
             })

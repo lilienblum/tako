@@ -590,7 +590,7 @@ Failure behavior:
 - If failure happens before the reload signal, CLI performs best-effort cleanup (exits upgrade mode).
 - If the reload was sent but the socket did not become ready within the timeout, CLI warns that upgrade mode may remain enabled until the primary recovers.
 
-### tako secrets set [--env {environment}] {name}
+### tako secrets set [--env {environment}] [--sync] {name}
 
 Set/update secret for environment (defaults to production).
 
@@ -598,11 +598,15 @@ When running in an interactive terminal, prompts for value with masked input. In
 
 Uses the environment key at `~/.tako/keys/{env}` (creates it if missing).
 
-### tako secrets rm [--env {environment}] {name}
+When `--sync` is provided, immediately syncs secrets to all servers in the target environment after the local change, triggering a rolling restart of running instances.
+
+### tako secrets rm [--env {environment}] [--sync] {name}
 
 Remove secret from environment.
 
 Removes from local `.tako/secrets`. Omitting `--env` removes the secret from all environments.
+
+When `--sync` is provided, immediately syncs secrets to servers after the local change. If `--env` is specified, syncs to that environment; otherwise syncs to all environments.
 
 Aliases: `tako secrets remove ...`, `tako secrets delete ...`.
 
@@ -624,6 +628,8 @@ By default, sync processes all environments declared in `tako.toml`.
 When `--env` is provided, sync processes only that environment.
 
 For each target environment, sync decrypts with `~/.tako/keys/{env}`.
+
+Shows a spinner with the total number of target servers while syncing, and reports the elapsed time on completion.
 
 Sync flow helpers:
 
@@ -698,7 +704,8 @@ Deploy flow helpers:
    - Acquire deploy lock (prevents concurrent deploys)
    - Upload and extract target-specific artifact
    - Write final `app.json` in app directory using resolved runtime `main`
-   - Send deploy command with merged environment payload (`TAKO_BUILD`, `TAKO_ENV`, runtime vars, user vars, decrypted secrets)
+   - Query server for the app's current secrets hash; if it matches the local secrets hash, skip sending secrets (server keeps existing). If hashes differ (or app is new), include decrypted secrets in the deploy command.
+   - Send deploy command with merged environment payload (`TAKO_BUILD`, `TAKO_ENV`, runtime vars, user vars, and conditionally decrypted secrets)
    - Runtime prep runs on server before rolling update (Bun: dependency install in release directory)
    - Perform rolling update
    - Release lock and clean up old releases (>30 days)
@@ -732,6 +739,7 @@ Deploy flow helpers:
 - Final `app.json` is written in the deployed app directory and contains runtime `main` used by `tako-server`.
 - Final `app.json` also includes optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
 - Deploy does not write a release `.env` file; runtime environment is provided through the `deploy` command payload and applied by `tako-server` when spawning instances.
+- Deploy queries each server's secrets hash before sending the deploy command. If the hash matches the local secrets, secrets are omitted from the payload and the server keeps its existing secrets. This avoids unnecessary secret transmission and ensures new servers or servers with stale secrets are automatically provisioned.
 - Deploy requires valid `arch` and `libc` metadata in each selected `[[servers]]` entry.
 - Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
 - Deploy pre-validation still fails when target environment is missing secret keys used by other environments.
@@ -1092,7 +1100,7 @@ Response:
 { "command": "exit_upgrading", "owner": "upgrade-prod-..." }
 ```
 
-- `deploy` (includes route patterns and secrets payload; env vars are read from `app.json` in the release dir):
+- `deploy` (includes route patterns and optional secrets payload; env vars are read from `app.json` in the release dir). When `secrets` is omitted or `null`, the server keeps existing secrets for the app:
 
 ```json
 {
@@ -1108,6 +1116,12 @@ Response:
   "instances": 0,
   "idle_timeout": 300
 }
+```
+
+- `get_secrets_hash` (returns the SHA-256 hash of an app's current secrets; used by deploy to skip sending secrets when unchanged):
+
+```json
+{ "command": "get_secrets_hash", "app": "my-app" }
 ```
 
 Server-side validation on `deploy` and app-scoped commands:

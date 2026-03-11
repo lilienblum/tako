@@ -172,13 +172,13 @@ Deploy note:
 `tako secrets set`:
 
 ```bash
-tako secrets set <NAME> [--env <ENV>]
+tako secrets set <NAME> [--env <ENV>] [--sync]
 ```
 
 `tako secrets rm`:
 
 ```bash
-tako secrets rm <NAME> [--env <ENV>]
+tako secrets rm <NAME> [--env <ENV>] [--sync]
 ```
 
 `tako secrets ls`:
@@ -207,16 +207,18 @@ tako secrets key export [--env <ENV>]
 
 Notes:
 
-- `tako secrets set` defaults to `--env production` if omitted.
+- `tako secrets set` defaults to `--env production` if omitted. With `--sync`, immediately syncs to servers after setting.
 - `tako secrets rm`:
   - with `--env`: removes from one environment.
   - without `--env`: removes from all environments.
+  - with `--sync`: syncs to servers after removing (to the specified env, or all envs if `--env` is omitted).
 - `tako secrets ls` alias: `list`.
 - `tako secrets rm` aliases: `remove`, `delete`.
 - `tako secrets sync`:
   - with `--env`: syncs only that environment.
   - without `--env`: syncs all environments declared in `tako.toml`.
   - syncs via `tako-server` management command `update_secrets`; app instances restart automatically when secrets change. Does not write remote `.env` files.
+  - shows a spinner with server count and elapsed time.
 - `tako secrets key import/export` default to `production` when `--env` is omitted.
 
 ## Common Examples

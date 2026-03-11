@@ -1013,7 +1013,7 @@ port = 1
             combined
         );
         assert!(
-            combined.contains("Synced to 0 server(s), 1 failed."),
+            combined.contains("Synced to 0 server(s), 1 failed"),
             "expected failure summary: {}",
             combined
         );

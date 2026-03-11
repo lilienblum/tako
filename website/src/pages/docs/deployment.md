@@ -36,7 +36,7 @@ What happens during deploy:
 - On cache hit, deploy reuses the verified artifact; on cache mismatch/corruption, deploy rebuilds that target artifact automatically.
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives (`*-source.tar.zst`), keeps 90 newest target artifacts (`artifact-cache-*.tar.zst`), and removes orphan target metadata files.
 - Deploys run to all target servers in parallel.
-- On each server, Tako writes final `app.json` (with env vars) and per-app `secrets.json` (with secrets, 0600 permissions), sends the secrets payload in the deploy command, performs runtime prep (Bun dependency install), and performs rolling update from the uploaded target artifact.
+- On each server, Tako writes final `app.json` (with env vars), queries the server's current secrets hash, and only sends secrets when they differ from the local copy (new servers or changed secrets are automatically provisioned). Secrets are stored in per-app `secrets.json` (0600 permissions). Then performs runtime prep (Bun dependency install) and rolling update from the uploaded target artifact.
 - Each server is handled independently, so partial success is possible.
 
 ## Pre-Deploy Checklist
@@ -142,7 +142,7 @@ Install/refresh server runtime commands:
 7. Upload and extract archive into `/opt/tako/apps/<app>/releases/<version>/`.
 8. Link shared directories (for example `logs`).
 9. Resolve runtime `main`, write final app `app.json` (including optional commit metadata).
-10. Send deploy command to `tako-server` including the decrypted secrets payload; env vars are written to `app.json` in the release directory and secrets to a per-app `secrets.json` (0600); `tako-server` runs runtime prep (Bun dependency install) before rolling update.
+10. Query server for current secrets hash; if it matches the local secrets, skip sending secrets (server keeps existing). Otherwise include decrypted secrets in the deploy command. Env vars are written to `app.json` in the release directory and secrets to a per-app `secrets.json` (0600); `tako-server` runs runtime prep (Bun dependency install) before rolling update.
 11. Update `current` symlink after server accepts deploy.
 12. Clean old release directories.
 
@@ -165,13 +165,13 @@ Install/refresh server runtime commands:
 ## Environment and Secrets
 
 - Deploy sends `TAKO_BUILD="<version>"` in the deploy command payload and `tako-server` injects it into app process environment.
-- Local encrypted secrets are decrypted during deploy and sent in the deploy command payload for the target environment.
+- During deploy, the CLI compares the local secrets hash against the server's current secrets hash. Secrets are only sent when they differ (or when the app is new). This avoids unnecessary transmission and ensures convergence.
 - Bun runtime dependency install runs on server from the uploaded release (`bun install --production`, and `--frozen-lockfile` when lockfile exists).
 - Deploy pre-validation fails when target environment is missing secret keys used by other environments.
 - Deploy pre-validation warns (does not fail) when target environment has extra secret keys not present in other secret environments.
 - Manage secrets with:
-  - `tako secrets set`
-  - `tako secrets rm`
+  - `tako secrets set [--sync]`
+  - `tako secrets rm [--sync]`
   - `tako secrets sync`
 
 ## Operational Notes

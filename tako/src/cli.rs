@@ -289,14 +289,14 @@ mod tests {
     #[test]
     fn secrets_remove_aliases_parse() {
         let cli = Cli::try_parse_from(["tako", "secrets", "remove", "API_KEY"]).unwrap();
-        let Some(Commands::Secrets(secret::SecretCommands::Rm { name, env })) = cli.command else {
+        let Some(Commands::Secrets(secret::SecretCommands::Rm { name, env, .. })) = cli.command else {
             panic!("expected Secrets::Rm");
         };
         assert_eq!(name, "API_KEY");
         assert!(env.is_none());
 
         let cli = Cli::try_parse_from(["tako", "secrets", "delete", "API_KEY"]).unwrap();
-        let Some(Commands::Secrets(secret::SecretCommands::Rm { name, env })) = cli.command else {
+        let Some(Commands::Secrets(secret::SecretCommands::Rm { name, env, .. })) = cli.command else {
             panic!("expected Secrets::Rm");
         };
         assert_eq!(name, "API_KEY");

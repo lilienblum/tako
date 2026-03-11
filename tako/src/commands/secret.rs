@@ -13,6 +13,10 @@ pub enum SecretCommands {
         /// Environment to set the secret for
         #[arg(long, default_value = "production")]
         env: String,
+
+        /// Sync secrets to servers after setting
+        #[arg(long)]
+        sync: bool,
     },
 
     /// Remove a secret
@@ -24,6 +28,10 @@ pub enum SecretCommands {
         /// Environment to remove from (or all if not specified)
         #[arg(long)]
         env: Option<String>,
+
+        /// Sync secrets to servers after removing
+        #[arg(long)]
+        sync: bool,
     },
 
     /// List all secrets
@@ -87,8 +95,8 @@ fn read_secret_value(prompt: &str) -> Result<String, Box<dyn std::error::Error>>
 
 async fn run_async(cmd: SecretCommands) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
-        SecretCommands::Set { name, env } => set_secret(&name, &env).await,
-        SecretCommands::Rm { name, env } => remove_secret(&name, env.as_deref()).await,
+        SecretCommands::Set { name, env, sync } => set_secret(&name, &env, sync).await,
+        SecretCommands::Rm { name, env, sync } => remove_secret(&name, env.as_deref(), sync).await,
         SecretCommands::Ls => list_secrets().await,
         SecretCommands::Sync { env } => sync_secrets(env.as_deref()).await,
         SecretCommands::Key(SecretKeyCommands::Import { env }) => import_key(env.as_deref()).await,
@@ -96,7 +104,11 @@ async fn run_async(cmd: SecretCommands) -> Result<(), Box<dyn std::error::Error>
     }
 }
 
-async fn set_secret(name: &str, env: &str) -> Result<(), Box<dyn std::error::Error>> {
+async fn set_secret(
+    name: &str,
+    env: &str,
+    do_sync: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::SecretsStore;
     use crate::crypto::encrypt;
     use std::env::current_dir;
@@ -139,17 +151,18 @@ async fn set_secret(name: &str, env: &str) -> Result<(), Box<dyn std::error::Err
         ));
     }
 
-    if output::is_verbose() {
-        output::muted(&format!(
-            "Note: Run {} to push secrets to servers.",
-            output::highlight("tako secrets sync")
-        ));
+    if do_sync {
+        sync_secrets(Some(env)).await?;
     }
 
     Ok(())
 }
 
-async fn remove_secret(name: &str, env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+async fn remove_secret(
+    name: &str,
+    env: Option<&str>,
+    do_sync: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::SecretsStore;
     use std::env::current_dir;
 
@@ -207,11 +220,9 @@ async fn remove_secret(name: &str, env: Option<&str>) -> Result<(), Box<dyn std:
 
     secrets.save_to_dir(&project_dir)?;
 
-    if output::is_verbose() {
-        output::muted(&format!(
-            "Note: Run {} to update servers.",
-            output::highlight("tako secrets sync")
-        ));
+    if do_sync {
+        // Sync to the specific env if provided, otherwise all environments
+        sync_secrets(env).await?;
     }
 
     Ok(())
@@ -339,10 +350,8 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
         tako_config.get_environment_names()
     };
 
-    let mut success_count = 0;
-    let mut error_count = 0;
-
-    // Sync to each environment
+    // Collect all (env, server_name, server_entry) targets first
+    let mut sync_targets: Vec<(String, String, crate::config::ServerEntry)> = Vec::new();
     for env_name in &envs_to_sync {
         let server_names = resolve_secret_sync_server_names(env_name, &tako_config, &servers)
             .map_err(|e| {
@@ -354,14 +363,44 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
 
         if server_names.is_empty() {
             output::warning(&format!(
-                "Skipping {} - no servers configured",
+                "Skipping {} — no servers configured",
                 output::highlight(env_name)
             ));
             continue;
         }
 
-        output::section(&format!("Sync {}", output::highlight(env_name)));
+        for server_name in server_names {
+            let server = match servers.get(server_name.as_str()) {
+                Some(s) => s.clone(),
+                None => {
+                    output::error(&format!(
+                        "{} — server not found",
+                        output::highlight(&server_name)
+                    ));
+                    continue;
+                }
+            };
+            sync_targets.push((env_name.clone(), server_name, server));
+        }
+    }
 
+    if sync_targets.is_empty() {
+        output::warning("No servers to sync to.");
+        return Ok(());
+    }
+
+    let total_servers = sync_targets.len();
+    let spinner_msg = format!(
+        "Syncing secrets to {} server(s)",
+        output::highlight(&total_servers.to_string())
+    );
+    let spinner = output::TrackedSpinner::start(&format!("{spinner_msg}…"));
+    let sync_start = std::time::Instant::now();
+
+    let mut success_count = 0;
+    let mut error_count = 0;
+
+    for (env_name, server_name, server) in &sync_targets {
         // Get decrypted secrets for this environment
         let env_secrets = match secrets.get_env(env_name) {
             Some(encrypted_secrets) => {
@@ -384,63 +423,44 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
                 decrypted
             }
             None => {
-                output::warning("No secrets for this environment");
+                output::warning(&format!(
+                    "No secrets for environment {}",
+                    output::highlight(env_name)
+                ));
                 continue;
             }
         };
 
         if env_secrets.is_empty() {
-            output::warning("No secrets to sync.");
             continue;
         }
 
-        for server_name in server_names {
-            let server = match servers.get(server_name.as_str()) {
-                Some(s) => s,
-                None => {
-                    output::error(&format!(
-                        "{} - server not found in ~/.tako/config.toml [[servers]]",
-                        output::highlight(&server_name)
-                    ));
-                    error_count += 1;
-                    continue;
-                }
-            };
-
-            let sync_result = output::with_spinner_async(
-                &format!("Syncing to {}", output::highlight(&server_name)),
-                &format!("Synced to {}", output::highlight(&server_name)),
-                sync_to_server(&app_name, server, &env_secrets),
-            )
-            .await;
-
-            match sync_result {
-                Ok(()) => {
-                    output::bullet(&format!("Synced {}", output::highlight(&server_name)));
-                    success_count += 1;
-                }
-                Err(e) => {
-                    output::error(&format!("{} ({})", e, output::highlight(&server_name)));
-                    error_count += 1;
-                }
+        match sync_to_server(&app_name, server, &env_secrets).await {
+            Ok(()) => {
+                success_count += 1;
+            }
+            Err(e) => {
+                output::error(&format!("{} ({})", e, output::highlight(server_name)));
+                error_count += 1;
             }
         }
     }
 
+    let elapsed = sync_start.elapsed();
+    spinner.finish();
+
     if error_count == 0 {
-        output::success("Sync");
-        output::section("Summary");
-        output::info(&format!(
-            "Synced secrets to {} server(s) successfully.",
-            output::highlight(&success_count.to_string())
+        output::success(&format!(
+            "Synced secrets to {} server(s) ({:.1}s)",
+            output::highlight(&success_count.to_string()),
+            elapsed.as_secs_f64()
         ));
     } else {
-        output::error("Sync");
-        output::section("Summary");
         output::warning(&format!(
-            "Synced to {} server(s), {} failed.",
+            "Synced to {} server(s), {} failed ({:.1}s)",
             output::highlight(&success_count.to_string()),
-            output::highlight(&error_count.to_string())
+            output::highlight(&error_count.to_string()),
+            elapsed.as_secs_f64()
         ));
     }
 

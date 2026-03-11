@@ -36,6 +36,8 @@ struct DeployConfig {
     remote_base: String,
     routes: Vec<String>,
     env_vars: HashMap<String, String>,
+    /// SHA-256 hash of the decrypted secrets for this deploy.
+    secrets_hash: String,
     app_subdir: String,
     runtime: String,
     main: String,
@@ -627,12 +629,14 @@ async fn run_async(
     // ===== Deploy =====
     let _phase = output::PhaseSpinner::start("Deploying…");
 
+    let secrets_hash = tako_core::compute_secrets_hash(&deploy_secrets);
     let deploy_config = Arc::new(DeployConfig {
         app_name: app_name.clone(),
         version: version.clone(),
         remote_base: format!("/opt/tako/apps/{}", app_name),
         routes: routes.clone(),
         env_vars: deploy_secrets,
+        secrets_hash,
         app_subdir,
         runtime: runtime_adapter.id().to_string(),
         main: manifest_main,
@@ -3482,13 +3486,20 @@ async fn deploy_to_server(
             ));
         }
 
+        // Check if server already has up-to-date secrets by comparing hashes.
+        // If hashes match, skip sending secrets (server keeps existing ones).
+        let deploy_secrets = match query_remote_secrets_hash(&ssh, &config.app_name).await {
+            Some(remote_hash) if remote_hash == config.secrets_hash => None,
+            _ => Some(config.env_vars.clone()),
+        };
+
         // Send deploy command to tako-server.
         let cmd = Command::Deploy {
             app: config.app_name.clone(),
             version: config.version.clone(),
             path: release_app_dir.clone(),
             routes: config.routes.clone(),
-            secrets: config.env_vars.clone(),
+            secrets: deploy_secrets,
             instances,
             idle_timeout,
         };
@@ -3544,6 +3555,25 @@ async fn deploy_to_server(
     let _ = ssh.disconnect().await;
 
     result
+}
+
+/// Query the remote server for the SHA-256 hash of an app's current secrets.
+/// Returns `None` if the query fails (e.g. old server version, app not found).
+async fn query_remote_secrets_hash(ssh: &SshClient, app_name: &str) -> Option<String> {
+    let cmd = Command::GetSecretsHash {
+        app: app_name.to_string(),
+    };
+    let json = serde_json::to_string(&cmd).ok()?;
+    let response_str = ssh.tako_command(&json).await.ok()?;
+    let value: serde_json::Value = serde_json::from_str(&response_str).ok()?;
+    if value.get("status").and_then(|s| s.as_str()) != Some("ok") {
+        return None;
+    }
+    value
+        .get("data")
+        .and_then(|d| d.get("hash"))
+        .and_then(|h| h.as_str())
+        .map(|s| s.to_string())
 }
 
 async fn check_tako_server(
@@ -4146,6 +4176,7 @@ name = "test-app"
             remote_base: "/opt/tako/apps/my-app".to_string(),
             routes: vec![],
             env_vars: HashMap::new(),
+            secrets_hash: String::new(),
             app_subdir: "examples/bun".to_string(),
             runtime: "bun".to_string(),
             main: "index.ts".to_string(),

@@ -186,7 +186,7 @@ mod tests {
                 assert_eq!(version, "1.0.0");
                 assert!(path.contains("releases"));
                 assert_eq!(routes.len(), 2);
-                assert!(secrets.is_empty());
+                assert!(secrets.is_none());
                 assert_eq!(instances, 0);
                 assert_eq!(idle_timeout, 300);
             }

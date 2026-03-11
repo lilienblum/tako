@@ -4,7 +4,8 @@
 //! communication via the Unix management socket.
 
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap};
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
@@ -25,8 +26,9 @@ pub enum Command {
 
         /// Secret environment variables injected into app processes at spawn time.
         /// Non-secret env vars are read by the server from app.json in the release dir.
+        /// When `None`, the server keeps existing secrets for this app.
         #[serde(default)]
-        secrets: HashMap<String, String>,
+        secrets: Option<HashMap<String, String>>,
 
         /// Minimum number of instances to keep running (0 = on-demand).
         instances: u8,
@@ -61,6 +63,9 @@ pub enum Command {
         app: String,
         secrets: HashMap<String, String>,
     },
+
+    /// Get the SHA-256 hash of an app's current secrets
+    GetSecretsHash { app: String },
 
     /// Get server runtime information (ports, data dir, upgrade mode).
     ServerInfo,
@@ -266,6 +271,23 @@ pub struct ListReleasesResponse {
     pub releases: Vec<ReleaseInfo>,
 }
 
+/// Compute a stable SHA-256 hash of a secrets map.
+///
+/// The hash is computed over sorted key-value pairs to ensure deterministic
+/// output regardless of HashMap iteration order. Returns a hex-encoded digest.
+/// An empty map produces a distinct hash (the SHA-256 of an empty input).
+pub fn compute_secrets_hash(secrets: &HashMap<String, String>) -> String {
+    let sorted: BTreeMap<&String, &String> = secrets.iter().collect();
+    let mut hasher = Sha256::new();
+    for (key, value) in &sorted {
+        hasher.update(key.as_bytes());
+        hasher.update(b"=");
+        hasher.update(value.as_bytes());
+        hasher.update(b"\n");
+    }
+    format!("{:x}", hasher.finalize())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,7 +309,7 @@ mod tests {
             version: "v1".to_string(),
             path: "/opt/tako/apps/my-app/releases/v1".to_string(),
             routes: vec!["example.com".to_string()],
-            secrets: HashMap::from([("API_KEY".to_string(), "secret123".to_string())]),
+            secrets: Some(HashMap::from([("API_KEY".to_string(), "secret123".to_string())])),
             instances: 0,
             idle_timeout: 300,
         };
@@ -311,7 +333,7 @@ mod tests {
         }"#;
         let cmd: Command = serde_json::from_str(json).unwrap();
         match cmd {
-            Command::Deploy { secrets, .. } => assert!(secrets.is_empty()),
+            Command::Deploy { secrets, .. } => assert!(secrets.is_none()),
             _ => panic!("Expected deploy command"),
         }
     }
@@ -440,6 +462,73 @@ mod tests {
         let mode = UpgradeMode::Upgrading;
         let json = serde_json::to_string(&mode).unwrap();
         assert_eq!(json, r#""upgrading""#);
+    }
+
+    #[test]
+    fn test_get_secrets_hash_command_serialization() {
+        let cmd = Command::GetSecretsHash {
+            app: "my-app".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""command":"get_secrets_hash""#));
+        assert!(json.contains(r#""app":"my-app""#));
+    }
+
+    #[test]
+    fn test_compute_secrets_hash_deterministic() {
+        let secrets =
+            HashMap::from([("B".to_string(), "2".to_string()), ("A".to_string(), "1".to_string())]);
+        let hash1 = compute_secrets_hash(&secrets);
+        let hash2 = compute_secrets_hash(&secrets);
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_compute_secrets_hash_order_independent() {
+        let mut a = HashMap::new();
+        a.insert("X".to_string(), "1".to_string());
+        a.insert("Y".to_string(), "2".to_string());
+
+        let mut b = HashMap::new();
+        b.insert("Y".to_string(), "2".to_string());
+        b.insert("X".to_string(), "1".to_string());
+
+        assert_eq!(compute_secrets_hash(&a), compute_secrets_hash(&b));
+    }
+
+    #[test]
+    fn test_compute_secrets_hash_differs_for_different_values() {
+        let a = HashMap::from([("KEY".to_string(), "value1".to_string())]);
+        let b = HashMap::from([("KEY".to_string(), "value2".to_string())]);
+        assert_ne!(compute_secrets_hash(&a), compute_secrets_hash(&b));
+    }
+
+    #[test]
+    fn test_compute_secrets_hash_empty_map() {
+        let empty = HashMap::new();
+        let hash = compute_secrets_hash(&empty);
+        assert!(!hash.is_empty());
+        // Empty map should produce a consistent hash
+        assert_eq!(hash, compute_secrets_hash(&HashMap::new()));
+    }
+
+    #[test]
+    fn test_deploy_with_none_secrets_keeps_existing() {
+        let cmd = Command::Deploy {
+            app: "my-app".to_string(),
+            version: "v1".to_string(),
+            path: "/opt/tako/apps/my-app/releases/v1".to_string(),
+            routes: vec!["example.com".to_string()],
+            secrets: None,
+            instances: 1,
+            idle_timeout: 300,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Command::Deploy { secrets, .. } => assert!(secrets.is_none()),
+            _ => panic!("Expected deploy command"),
+        }
     }
 
     #[test]
