@@ -58,7 +58,7 @@ pub enum AcmeError {
     #[error("HTTP-01 challenge not available")]
     NoHttp01Challenge,
 
-    #[error("Wildcard certificate requires a DNS provider (--dns-provider not configured)")]
+    #[error("Wildcard certificate requires a DNS provider (dns.provider not set in config.json)")]
     NoDnsProvider,
 
     #[error("lego DNS-01 challenge failed: {0}")]

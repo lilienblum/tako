@@ -806,26 +806,92 @@ else
   echo "warning: configure ~/.ssh/authorized_keys manually or rerun installer with TAKO_SSH_PUBKEY." >&2
 fi
 
-# ── Server name ──────────────────────────────────────────────────────
-# Used as the `server` label in Prometheus metrics so multi-server
-# deployments are distinguishable in monitoring dashboards.
+# ── Server config (config.json) ──────────────────────────────────────
+# Stores server_name (metrics label) and dns.provider in a single file.
 
-TAKO_SERVER_NAME_FILE="$TAKO_HOME/server-name"
+TAKO_CONFIG="$TAKO_HOME/config.json"
+
+# Read a field from config.json. Uses jq > python3 > sed fallback.
+config_get() {
+  local key="$1"
+  if [ ! -f "$TAKO_CONFIG" ]; then return; fi
+  if command -v jq >/dev/null 2>&1; then
+    jq -r ".$key // empty" "$TAKO_CONFIG" 2>/dev/null
+  elif command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import json, sys, functools, operator
+d = json.load(open(sys.argv[1]))
+keys = sys.argv[2].split('.')
+try: v = functools.reduce(operator.getitem, keys, d)
+except (KeyError, TypeError): v = ''
+print(v if isinstance(v, str) and v else '')
+" "$TAKO_CONFIG" "$key" 2>/dev/null
+  else
+    # Flat keys only (e.g. server_name), not nested
+    sed -n 's/.*"'"$key"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TAKO_CONFIG" 2>/dev/null | head -1
+  fi
+}
+
+# Write config.json from CONFIG_SERVER_NAME and CONFIG_DNS_PROVIDER variables.
+write_config() {
+  local json="{"
+  local need_comma=false
+  if [ -n "$CONFIG_SERVER_NAME" ]; then
+    json="${json}\"server_name\":\"$CONFIG_SERVER_NAME\""
+    need_comma=true
+  fi
+  if [ -n "$CONFIG_DNS_PROVIDER" ]; then
+    $need_comma && json="${json},"
+    json="${json}\"dns\":{\"provider\":\"$CONFIG_DNS_PROVIDER\"}"
+  fi
+  json="${json}}"
+  printf '%s\n' "$json" > "$TAKO_CONFIG"
+  chown "$TAKO_USER":"$TAKO_USER" "$TAKO_CONFIG" 2>/dev/null || true
+  chmod 0644 "$TAKO_CONFIG"
+}
+
+# Migrate legacy single-value files into config.json
+migrate_legacy_config() {
+  CONFIG_SERVER_NAME=""
+  CONFIG_DNS_PROVIDER=""
+
+  if [ -f "$TAKO_CONFIG" ]; then
+    CONFIG_SERVER_NAME="$(config_get server_name)"
+    CONFIG_DNS_PROVIDER="$(config_get dns.provider)"
+    return
+  fi
+
+  # Read legacy files
+  if [ -f "$TAKO_HOME/server-name" ] && [ -s "$TAKO_HOME/server-name" ]; then
+    CONFIG_SERVER_NAME="$(cat "$TAKO_HOME/server-name")"
+  fi
+  if [ -f "$TAKO_HOME/dns-provider.conf" ] && [ -s "$TAKO_HOME/dns-provider.conf" ]; then
+    CONFIG_DNS_PROVIDER="$(cat "$TAKO_HOME/dns-provider.conf")"
+  fi
+
+  # Write merged config.json if we found anything to migrate
+  if [ -n "$CONFIG_SERVER_NAME" ] || [ -n "$CONFIG_DNS_PROVIDER" ]; then
+    write_config
+    echo "OK migrated legacy config to config.json"
+  fi
+}
+
+migrate_legacy_config
 
 maybe_prompt_server_name() {
   default_name="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")"
 
   # Env var takes precedence
   if [ -n "${TAKO_SERVER_NAME:-}" ]; then
-    printf '%s\n' "$TAKO_SERVER_NAME" > "$TAKO_SERVER_NAME_FILE"
-    echo "OK server name set to '$TAKO_SERVER_NAME'"
+    CONFIG_SERVER_NAME="$TAKO_SERVER_NAME"
+    write_config
+    echo "OK server name set to '$CONFIG_SERVER_NAME'"
     return
   fi
 
   # Preserve existing name on re-installs
-  if [ -f "$TAKO_SERVER_NAME_FILE" ] && [ -s "$TAKO_SERVER_NAME_FILE" ]; then
-    existing="$(cat "$TAKO_SERVER_NAME_FILE")"
-    echo "OK server name already configured: $existing"
+  if [ -n "$CONFIG_SERVER_NAME" ]; then
+    echo "OK server name already configured: $CONFIG_SERVER_NAME"
     return
   fi
 
@@ -847,9 +913,9 @@ maybe_prompt_server_name() {
   fi
 
   if [ -n "$TAKO_SERVER_NAME" ]; then
-    printf '%s\n' "$TAKO_SERVER_NAME" > "$TAKO_SERVER_NAME_FILE"
-    chown "$TAKO_USER":"$TAKO_USER" "$TAKO_SERVER_NAME_FILE"
-    echo "OK server name set to '$TAKO_SERVER_NAME'"
+    CONFIG_SERVER_NAME="$TAKO_SERVER_NAME"
+    write_config
+    echo "OK server name set to '$CONFIG_SERVER_NAME'"
   fi
 }
 
@@ -992,26 +1058,21 @@ else
   echo "OK install refreshed without active service manager (TAKO_RESTART_SERVICE=0); skipped service definition install"
 fi
 
-# Optional DNS provider setup for wildcard certificates
-TAKO_DNS_PROVIDER_CONF="$TAKO_HOME/dns-provider.conf"
+# Ensure DNS credentials systemd drop-in is in place (idempotent)
 TAKO_DNS_CREDENTIALS_ENV="$TAKO_HOME/dns-credentials.env"
 
-if [ -f "$TAKO_DNS_PROVIDER_CONF" ]; then
-  existing_dns_provider="$(cat "$TAKO_DNS_PROVIDER_CONF" 2>/dev/null || true)"
-  echo "OK DNS provider already configured: $existing_dns_provider"
-  # Ensure systemd drop-in is in place (idempotent)
-  if [ "$SERVICE_MANAGER" = "systemd" ] && [ -n "$existing_dns_provider" ]; then
+if [ -n "$CONFIG_DNS_PROVIDER" ]; then
+  echo "OK DNS provider already configured: $CONFIG_DNS_PROVIDER"
+  if [ "$SERVICE_MANAGER" = "systemd" ] && [ -f "$TAKO_DNS_CREDENTIALS_ENV" ]; then
     dropin_dir="/etc/systemd/system/tako-server.service.d"
     if [ ! -f "$dropin_dir/dns.conf" ]; then
       mkdir -p "$dropin_dir"
       cat > "$dropin_dir/dns.conf" <<DNSEOF
 [Service]
 EnvironmentFile=$TAKO_DNS_CREDENTIALS_ENV
-ExecStart=
-ExecStart=/usr/local/bin/tako-server --socket $TAKO_SOCKET --data-dir $TAKO_HOME --dns-provider $existing_dns_provider
 DNSEOF
       systemctl daemon-reload
-      echo "OK restored DNS systemd drop-in for $existing_dns_provider"
+      echo "OK restored DNS systemd drop-in"
     fi
   fi
 fi

@@ -970,17 +970,20 @@ Reference scripts in this repo:
 - Proxy cache storage is in-memory with bounded LRU eviction (256 MiB total, 8 MiB per cached response body).
 - No application path namespace is reserved at the edge proxy. Requests are routed strictly by configured routes.
 
-**Optional `/opt/tako/server-config.toml`:**
+**`/opt/tako/config.json`** — server-level configuration:
 
-```toml
-[server]
-http_port = 80
-https_port = 443
-
-[acme]
-staging = false         # true for development/testing
-email = "admin@example.com"
+```json
+{
+  "server_name": "prod",
+  "dns": {
+    "provider": "cloudflare"
+  }
+}
 ```
+
+- `server_name` — identity label for Prometheus metrics (defaults to hostname if absent).
+- `dns.provider` — DNS provider for Let's Encrypt DNS-01 wildcard challenges (set via `tako servers dns`).
+- Written by the installer (server name) and CLI (DNS config). Read by `tako-server` at startup.
 
 ### Zero-Downtime Operation
 
@@ -992,7 +995,7 @@ email = "admin@example.com"
 
 ```
 /opt/tako/
-├── server-config.toml
+├── config.json
 ├── runtime-state.sqlite3
 ├── acme/
 │   └── credentials.json
@@ -1253,7 +1256,7 @@ Routing supports wildcard hosts (e.g. `*.example.com`). For TLS:
 
 ### Development
 
-Set `staging = true` in `/opt/tako/server-config.toml` to use Let's Encrypt staging:
+Pass `--acme-staging` to `tako-server` to use Let's Encrypt staging:
 
 - No rate limits
 - Unlimited certificate issuance

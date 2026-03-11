@@ -109,10 +109,6 @@ pub struct Args {
     #[arg(long, default_value_t = 0)]
     pub instance_port_offset: u16,
 
-    /// DNS provider for lego DNS-01 wildcard certificate challenges (e.g. cloudflare, route53)
-    #[arg(long)]
-    pub dns_provider: Option<String>,
-
     /// Run as a worker: serve traffic with minimal scaling (max 1 instance
     /// per app), skip management socket and ACME. Monitors the primary
     /// server's socket — promotes to full mode if primary is unavailable,
@@ -1883,21 +1879,47 @@ fn should_signal_parent_on_ready() -> bool {
     )
 }
 
-/// Read the server name from `{data_dir}/server-name` (written by the installer).
-/// Falls back to the machine hostname.
-fn read_server_name_file(data_dir: &Path) -> Option<String> {
-    let path = data_dir.join("server-name");
-    if let Ok(contents) = std::fs::read_to_string(&path) {
-        let name = contents.trim().to_string();
-        if !name.is_empty() {
-            return Some(name);
+/// Server-level configuration stored in `{data_dir}/config.json`.
+#[derive(Debug, Default, serde::Deserialize, serde::Serialize)]
+struct ServerConfigFile {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    server_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    dns: Option<ServerConfigDns>,
+}
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct ServerConfigDns {
+    provider: String,
+}
+
+/// Read server configuration from `{data_dir}/config.json`.
+/// Falls back to legacy `server-name` / `dns-provider.conf` files for migration.
+fn read_server_config(data_dir: &Path) -> ServerConfigFile {
+    let config_path = data_dir.join("config.json");
+    if let Ok(contents) = std::fs::read_to_string(&config_path) {
+        if let Ok(config) = serde_json::from_str::<ServerConfigFile>(&contents) {
+            return config;
         }
     }
-    // Fallback to hostname
-    hostname::get()
-        .ok()
-        .and_then(|h| h.into_string().ok())
-        .filter(|h| !h.is_empty())
+
+    // Legacy migration: read old single-value files
+    let mut config = ServerConfigFile::default();
+    let server_name_path = data_dir.join("server-name");
+    if let Ok(contents) = std::fs::read_to_string(&server_name_path) {
+        let name = contents.trim().to_string();
+        if !name.is_empty() {
+            config.server_name = Some(name);
+        }
+    }
+    let dns_provider_path = data_dir.join("dns-provider.conf");
+    if let Ok(contents) = std::fs::read_to_string(&dns_provider_path) {
+        let provider = contents.trim().to_string();
+        if !provider.is_empty() {
+            config.dns = Some(ServerConfigDns { provider });
+        }
+    }
+    config
 }
 
 /// Notify systemd that the server is ready (READY=1) and claim the main PID.
@@ -2035,6 +2057,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         (Some(server), Some(listener))
     };
 
+    // Read server-level config (server name, DNS provider)
+    let server_config = read_server_config(&data_dir);
+    let config_dns_provider = server_config.dns.map(|d| d.provider);
+
     // Shared challenge tokens for HTTP-01 validation.
     // Always created so the proxy can serve challenge responses and tests can inject tokens.
     let challenge_tokens: ChallengeTokens = Arc::new(parking_lot::RwLock::new(HashMap::new()));
@@ -2052,7 +2078,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             staging: args.acme_staging,
             email: args.acme_email.clone(),
             account_dir: acme_dir,
-            dns_provider: args.dns_provider.clone(),
+            dns_provider: config_dns_provider.clone(),
             data_dir: data_dir.clone(),
             ..Default::default()
         };
@@ -2095,14 +2121,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         acme_email: args.acme_email.clone(),
         renewal_interval_hours: args.renewal_interval_hours,
         instance_port_offset: args.instance_port_offset,
-        dns_provider: args.dns_provider.clone(),
+        dns_provider: config_dns_provider.clone(),
         worker,
         metrics_port: if args.metrics_port == 0 {
             None
         } else {
             Some(args.metrics_port)
         },
-        server_name: read_server_name_file(&data_dir),
+        server_name: server_config.server_name.or_else(|| {
+            hostname::get()
+                .ok()
+                .and_then(|h| h.into_string().ok())
+                .filter(|h| !h.is_empty())
+        }),
     };
     // Clone challenge_tokens before moving into ServerState (needed for runtime promotion)
     let challenge_tokens_for_promote = challenge_tokens.clone();
@@ -2258,7 +2289,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let promote_cert_manager = cert_manager.clone();
         let promote_args_acme_staging = args.acme_staging;
         let promote_args_acme_email = args.acme_email.clone();
-        let promote_args_dns_provider = args.dns_provider.clone();
+        let promote_dns_provider = config_dns_provider;
         let promote_args_no_acme = args.no_acme;
         let promote_renewal_hours = args.renewal_interval_hours;
         let promote_data_dir = data_dir.clone();
@@ -2341,7 +2372,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     staging: promote_args_acme_staging,
                                     email: promote_args_acme_email.clone(),
                                     account_dir: acme_dir,
-                                    dns_provider: promote_args_dns_provider.clone(),
+                                    dns_provider: promote_dns_provider.clone(),
                                     data_dir: promote_data_dir.clone(),
                                     ..Default::default()
                                 };
@@ -2781,7 +2812,7 @@ mod tests {
         SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, bun_install_args_for_release,
         ensure_mise_tools_installed, extract_zstd_archive, handle_idle_event,
         install_rustls_crypto_provider, prepare_release_runtime, read_secrets_file,
-        resolve_release_runtime, run_extract_archive_mode, secrets_file_path,
+        read_server_config, resolve_release_runtime, run_extract_archive_mode, secrets_file_path,
         should_signal_parent_on_ready, should_use_self_signed_route_cert, validate_deploy_routes,
         write_secrets_file,
     };
@@ -4147,5 +4178,50 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
         // This test passes in any environment because ensure_mise_tools_installed
         // gracefully handles a missing mise binary.
         ensure_mise_tools_installed(dir.path()).await.unwrap();
+    }
+
+    #[test]
+    fn read_server_config_from_json() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"server_name":"prod","dns":{"provider":"cloudflare"}}"#,
+        )
+        .unwrap();
+        let config = read_server_config(dir.path());
+        assert_eq!(config.server_name.as_deref(), Some("prod"));
+        assert_eq!(config.dns.as_ref().unwrap().provider, "cloudflare");
+    }
+
+    #[test]
+    fn read_server_config_falls_back_to_legacy_files() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(dir.path().join("server-name"), "legacy-host\n").unwrap();
+        std::fs::write(dir.path().join("dns-provider.conf"), "route53\n").unwrap();
+        let config = read_server_config(dir.path());
+        assert_eq!(config.server_name.as_deref(), Some("legacy-host"));
+        assert_eq!(config.dns.as_ref().unwrap().provider, "route53");
+    }
+
+    #[test]
+    fn read_server_config_returns_defaults_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let config = read_server_config(dir.path());
+        assert!(config.server_name.is_none());
+        assert!(config.dns.is_none());
+    }
+
+    #[test]
+    fn read_server_config_json_takes_precedence_over_legacy() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("config.json"),
+            r#"{"server_name":"from-json"}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("server-name"), "from-legacy\n").unwrap();
+        let config = read_server_config(dir.path());
+        assert_eq!(config.server_name.as_deref(), Some("from-json"));
+        assert!(config.dns.is_none());
     }
 }

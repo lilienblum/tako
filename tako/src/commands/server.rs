@@ -1459,7 +1459,7 @@ async fn upgrade_server_quiet(
     result
 }
 
-const DNS_PROVIDER_CONF: &str = "/opt/tako/dns-provider.conf";
+const SERVER_CONFIG_JSON: &str = "/opt/tako/config.json";
 const DNS_CREDENTIALS_ENV: &str = "/opt/tako/dns-credentials.env";
 const LEGO_VERSION: &str = "4.21.0";
 
@@ -1591,12 +1591,20 @@ pub struct DnsConfig {
 pub async fn fetch_dns_config(
     ssh: &SshClient,
 ) -> Result<Option<DnsConfig>, Box<dyn std::error::Error>> {
-    let provider = ssh
-        .exec(&format!("cat {} 2>/dev/null || true", DNS_PROVIDER_CONF))
+    let config_json = ssh
+        .exec(&format!("cat {} 2>/dev/null || true", SERVER_CONFIG_JSON))
         .await?
         .stdout
         .trim()
         .to_string();
+    let provider = if !config_json.is_empty() {
+        serde_json::from_str::<serde_json::Value>(&config_json)
+            .ok()
+            .and_then(|v| v.get("dns")?.get("provider")?.as_str().map(String::from))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     if provider.is_empty() {
         return Ok(None);
     }
@@ -1745,69 +1753,47 @@ async fn apply_dns_config_inner(
     let install_cmd = SshClient::run_with_root_or_sudo(&install_cmd);
     ssh.exec_checked(&install_cmd).await?;
 
-    // Write credentials env file and provider conf in a single exec
+    // Write credentials env file
     let escaped_content = config.credentials_env.replace('\'', "'\\''");
-    let write_config_cmd = SshClient::run_with_root_or_sudo(&format!(
-        "printf '%s' '{}' > {} && chmod 0600 {} && chown tako:tako {} && \
-         printf '%s' '{}' > {} && chmod 0644 {} && chown tako:tako {}",
+    let write_creds_cmd = SshClient::run_with_root_or_sudo(&format!(
+        "printf '%s' '{}' > {} && chmod 0600 {} && chown tako:tako {}",
         escaped_content,
         DNS_CREDENTIALS_ENV,
         DNS_CREDENTIALS_ENV,
         DNS_CREDENTIALS_ENV,
-        provider,
-        DNS_PROVIDER_CONF,
-        DNS_PROVIDER_CONF,
-        DNS_PROVIDER_CONF,
     ));
-    ssh.exec_checked(&write_config_cmd).await?;
+    ssh.exec_checked(&write_creds_cmd).await?;
 
-    // Read existing ExecStart to reconstruct with --dns-provider
-    let existing_exec = ssh
-        .exec("systemctl show tako-server -p ExecStart --value 2>/dev/null | head -1 || true")
-        .await?
-        .stdout
-        .trim()
-        .to_string();
+    // Merge dns.provider into config.json
+    let escaped_provider = provider.replace('\\', "\\\\").replace('"', "\\\"");
+    let merge_config_cmd = SshClient::run_with_root_or_sudo(&format!(
+        r#"CONFIG="{path}"; \
+         EXISTING="$(cat "$CONFIG" 2>/dev/null || echo '{{}}')"; \
+         if command -v jq >/dev/null 2>&1; then \
+           echo "$EXISTING" | jq --arg p '{provider}' '.dns.provider = $p' > "$CONFIG.tmp"; \
+         elif command -v python3 >/dev/null 2>&1; then \
+           python3 -c "import json,sys; d=json.loads(sys.argv[1]); d.setdefault('dns',{{}}); d['dns']['provider']=sys.argv[2]; json.dump(d,open(sys.argv[3],'w'))" "$EXISTING" '{provider}' "$CONFIG.tmp"; \
+         else \
+           echo "error: jq or python3 required" >&2 && exit 1; \
+         fi && \
+         mv "$CONFIG.tmp" "$CONFIG" && chmod 0644 "$CONFIG" && chown tako:tako "$CONFIG""#,
+        path = SERVER_CONFIG_JSON,
+        provider = escaped_provider,
+    ));
+    ssh.exec_checked(&merge_config_cmd).await?;
 
-    // Build ExecStart override: strip any old --dns-provider, append new one
-    let base_exec = if existing_exec.contains("--dns-provider") {
-        let re_parts: Vec<&str> = existing_exec.split("--dns-provider").collect();
-        if re_parts.len() >= 2 {
-            let before = re_parts[0].trim_end();
-            let after = re_parts[1].trim_start();
-            let after = after
-                .split_once(|c: char| c.is_whitespace())
-                .map(|(_, rest)| rest.trim_start())
-                .unwrap_or("");
-            if after.is_empty() {
-                before.to_string()
-            } else {
-                format!("{} {}", before, after)
-            }
-        } else {
-            existing_exec.clone()
-        }
-    } else if !existing_exec.is_empty() {
-        existing_exec.clone()
-    } else {
-        "/usr/local/bin/tako-server --socket /var/run/tako/tako.sock --data-dir /opt/tako"
-            .to_string()
-    };
-
-    let exec_start = format!("{} --dns-provider {}", base_exec, provider);
-    let dropin_full = format!(
-        "[Service]\nEnvironmentFile={}\nExecStart=\nExecStart={}\n",
-        DNS_CREDENTIALS_ENV, exec_start,
+    // Write systemd drop-in for EnvironmentFile (credentials only), reload, and restart
+    let dropin = format!(
+        "[Service]\nEnvironmentFile={}\n",
+        DNS_CREDENTIALS_ENV,
     );
-    let escaped_dropin_full = dropin_full.replace('\'', "'\\''");
-
-    // Write systemd drop-in, reload daemon, and restart service in one exec
+    let escaped_dropin = dropin.replace('\'', "'\\''");
     let write_dropin_cmd = SshClient::run_with_root_or_sudo(&format!(
         "mkdir -p /etc/systemd/system/tako-server.service.d && \
          printf '%s' '{}' > /etc/systemd/system/tako-server.service.d/dns.conf && \
          systemctl daemon-reload && \
          systemctl restart tako-server",
-        escaped_dropin_full,
+        escaped_dropin,
     ));
     ssh.exec_checked(&write_dropin_cmd).await?;
 
