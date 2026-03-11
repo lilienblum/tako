@@ -32,9 +32,9 @@ use tokio::time::timeout;
 
 use crate::app::resolve_app_name;
 use crate::build::{
-    BuildAdapter, BuildPreset, PresetReference, apply_adapter_base_runtime_defaults,
-    infer_adapter_from_preset_reference, load_build_preset, parse_preset_reference,
-    qualify_runtime_local_preset_ref,
+    BuildAdapter, BuildPreset, PresetFamily, PresetReference,
+    apply_adapter_base_runtime_defaults, infer_adapter_from_preset_reference, js,
+    load_build_preset, parse_preset_reference, qualify_runtime_local_preset_ref,
 };
 use crate::config::TakoToml;
 use crate::dev::LocalCA;
@@ -2047,6 +2047,10 @@ pub async fn run(
         build_preset.main.as_deref(),
     )
     .map_err(|e| format!("Failed to resolve deploy entrypoint: {}", e))?;
+
+    if runtime_adapter.preset_family() == PresetFamily::Js {
+        let _ = js::write_types(&project_dir);
+    }
 
     let runtime_name = build_preset.name.clone();
 

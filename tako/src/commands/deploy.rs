@@ -8,9 +8,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::app::require_app_name_from_config;
 use crate::build::{
     BuildAdapter, BuildCache, BuildError, BuildExecutor, BuildPreset, BuildStageCommand,
-    apply_adapter_base_runtime_defaults, compute_file_hash,
-    create_filtered_archive_with_prefix, infer_adapter_from_preset_reference, load_build_preset,
-    qualify_runtime_local_preset_ref, run_container_build,
+    PresetFamily, apply_adapter_base_runtime_defaults, compute_file_hash,
+    create_filtered_archive_with_prefix, infer_adapter_from_preset_reference, js,
+    load_build_preset, qualify_runtime_local_preset_ref, run_container_build,
 };
 use crate::commands::server;
 use crate::config::{BuildStage, SecretsStore, ServerEntry, ServerTarget, ServersToml, TakoToml};
@@ -219,6 +219,10 @@ async fn run_async(
     let preflight_runtime_adapter =
         resolve_effective_build_adapter(&project_dir, &tako_config, &preflight_preset_ref)
             .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+    if preflight_runtime_adapter.preset_family() == PresetFamily::Js {
+        let _ = js::write_types(&project_dir);
+    }
 
     let _bun_lockfile_checked = if preflight_runtime_adapter == BuildAdapter::Bun {
         output::with_spinner("Checking Bun lockfile", "Bun lockfile valid", || {

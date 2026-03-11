@@ -3,6 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::app::resolve_app_name;
+use crate::build::js;
 use crate::build::{
     BuildAdapter, FamilyPresetDefinition, PresetFamily, detect_build_adapter,
     load_available_family_preset_definitions,
@@ -426,6 +427,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     output::success("Created tako.toml");
 
+    if js::write_types(&project_dir)? {
+        output::success("Created tako.d.ts");
+    }
+
     output::heading("Next steps");
     output::step(&format!(
         "1. Edit {} to set environment variables and more",
@@ -505,6 +510,10 @@ fn run_non_interactive(
 
     fs::write(tako_toml_path, template)?;
     output::success("Created tako.toml");
+
+    if js::write_types(project_dir)? {
+        output::success("Created tako.d.ts");
+    }
 
     Ok(())
 }
