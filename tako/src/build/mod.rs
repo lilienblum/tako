@@ -10,6 +10,7 @@ mod artifact;
 mod cache;
 mod container;
 mod executor;
+pub mod js;
 mod preset;
 
 pub use adapter::*;
