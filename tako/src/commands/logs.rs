@@ -441,9 +441,9 @@ fn format_log_entry(line: &str, colorize: bool) -> (String, String) {
         let key = format!("{level} {message}");
         let formatted = if colorize {
             let color = level_color(&level);
-            format!("{DIM}{hms}{RESET} {color}{level:<5}{RESET} {message}")
+            format!("{DIM}{hms}{RESET} {color}{level:>5}{RESET} {message}")
         } else {
-            format!("{hms} {level:<5} {message}")
+            format!("{hms} {level:>5} {message}")
         };
         (key, formatted)
     } else {

@@ -605,7 +605,7 @@ pub fn format_log(log: &ScopedLog) -> String {
     }
     let color = level_color(&log.level);
     format!(
-        "{DIM}{}{RESET} {color}{:<5}{RESET} {DIM}{}{RESET} {}",
+        "{DIM}{}{RESET} {color}{:>5}{RESET} {DIM}{}{RESET} {}",
         log.timestamp, log.level, log.scope, log.message
     )
 }

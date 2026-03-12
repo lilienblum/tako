@@ -153,7 +153,7 @@ impl TakoToml {
         let path = dir.as_ref().join("tako.toml");
         if !path.exists() {
             return Err(ConfigError::Validation(format!(
-                "Missing tako.toml at {}. Run 'tako init' first.",
+                "tako.toml not found at {}",
                 path.display()
             )));
         }

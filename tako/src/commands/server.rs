@@ -1098,6 +1098,7 @@ async fn upgrade_servers(
 
     // Multi-progress: main header spinner + per-server spinners
     let mp = if interactive {
+        output::hide_cursor();
         Some(indicatif::MultiProgress::new())
     } else {
         None
@@ -1148,8 +1149,15 @@ async fn upgrade_servers(
     let mut results: Vec<UpgradeResult> = Vec::new();
     let mut done = 0usize;
     while let Some(join_result) = join_set.join_next().await {
-        let (name, elapsed, result) =
-            join_result.map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+        let (name, elapsed, result) = match join_result {
+            Ok(v) => v,
+            Err(e) => {
+                if interactive {
+                    output::show_cursor();
+                }
+                return Err(e.to_string().into());
+            }
+        };
         done += 1;
         let time = {
             let t = output::format_elapsed(elapsed);
@@ -1162,15 +1170,16 @@ async fn upgrade_servers(
             spb.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
             match &result {
                 Ok(version) => {
-                    let detail = match version.as_deref() {
-                        Some(v) => format!(" {} {}", v, time),
-                        None => format!(" {}", time),
+                    let version_part = match version.as_deref() {
+                        Some(v) => format!(" {}", output::highlight(v)),
+                        None => String::new(),
                     };
                     spb.finish_with_message(format!(
-                        "{} {}{}",
+                        "{} {}{} {}",
                         output::brand_success("✓"),
                         name,
-                        output::brand_muted(&detail),
+                        version_part,
+                        output::brand_muted(&time),
                     ));
                 }
                 Err(e) => {
@@ -1225,6 +1234,9 @@ async fn upgrade_servers(
     }
     for spb in server_pbs.values() {
         spb.finish_and_clear();
+    }
+    if interactive {
+        output::show_cursor();
     }
 
     let succeeded = results.iter().filter(|r| r.error.is_none()).count();
@@ -1287,15 +1299,16 @@ async fn upgrade_servers(
                 output::brand_error(clean_err),
             );
         } else {
-            let detail = match r.version.as_deref() {
-                Some(v) => format!("{} {}", v, time),
-                None => time,
+            let version_part = match r.version.as_deref() {
+                Some(v) => format!(" {}", output::highlight(v)),
+                None => String::new(),
             };
             println!(
-                "{} {} {}",
+                "{} {}{} {}",
                 output::brand_success("✓"),
                 r.name,
-                output::brand_muted(&detail),
+                version_part,
+                output::brand_muted(&time),
             );
         }
     }
