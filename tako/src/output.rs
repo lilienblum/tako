@@ -9,6 +9,7 @@ use console::Term;
 use indicatif::{ProgressBar, ProgressStyle};
 
 static VERBOSE: AtomicBool = AtomicBool::new(false);
+static CI: AtomicBool = AtomicBool::new(false);
 static SUPPRESS: AtomicBool = AtomicBool::new(false);
 
 /// While output is suppressed, most printing functions become no-ops and
@@ -38,7 +39,7 @@ fn should_colorize() -> bool {
     if cfg!(test) {
         return false;
     }
-    std::io::stdout().is_terminal()
+    !is_ci() && std::io::stderr().is_terminal()
 }
 
 fn rgb_fg<D: Display>(value: D, (r, g, b): (u8, u8, u8)) -> String {
@@ -152,6 +153,10 @@ pub fn set_verbose(verbose: bool) {
     VERBOSE.store(verbose, Ordering::Relaxed);
 }
 
+pub fn set_ci(ci: bool) {
+    CI.store(ci, Ordering::Relaxed);
+}
+
 pub fn is_interactive() -> bool {
     #[cfg(test)]
     {
@@ -160,7 +165,7 @@ pub fn is_interactive() -> bool {
 
     #[cfg(not(test))]
     {
-        std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
+        !is_ci() && std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
     }
 }
 
@@ -168,27 +173,140 @@ pub fn is_verbose() -> bool {
     VERBOSE.load(Ordering::Relaxed)
 }
 
+pub fn is_ci() -> bool {
+    CI.load(Ordering::Relaxed)
+}
+
+// ---------------------------------------------------------------------------
+// Structured log output (verbose / CI mode)
+// ---------------------------------------------------------------------------
+
+/// Log level for structured verbose output.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum LogLevel {
+    Debug,
+    Info,
+    Warn,
+    Error,
+}
+
+impl LogLevel {
+    /// Right-aligned 5-char uppercase label.
+    fn label(self) -> &'static str {
+        match self {
+            LogLevel::Debug => "DEBUG",
+            LogLevel::Info => " INFO",
+            LogLevel::Warn => " WARN",
+            LogLevel::Error => "ERROR",
+        }
+    }
+
+    fn color(self) -> (u8, u8, u8) {
+        match self {
+            LogLevel::Debug => (128, 128, 128),
+            LogLevel::Info => ACCENT,
+            LogLevel::Warn => BRAND_AMBER,
+            LogLevel::Error => BRAND_RED,
+        }
+    }
+}
+
+fn format_timestamp() -> String {
+    #[cfg(unix)]
+    {
+        let epoch = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as libc::time_t;
+        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+        unsafe { libc::localtime_r(&epoch, &mut tm) };
+        format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
+    }
+    #[cfg(not(unix))]
+    {
+        let total_secs = std::time::SystemTime::now()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let hours = (total_secs % 86400) / 3600;
+        let minutes = (total_secs % 3600) / 60;
+        let seconds = total_secs % 60;
+        format!("{:02}:{:02}:{:02}", hours, minutes, seconds)
+    }
+}
+
+/// Print a structured log line to stderr: `<time> <LEVEL> <message>`
+pub fn log(level: LogLevel, message: &str) {
+    let time = format_timestamp();
+    let time_display = if should_colorize() {
+        brand_dim(&time)
+    } else {
+        time
+    };
+    let label = level.label();
+    let level_display = if should_colorize() {
+        rgb_fg(label, level.color())
+    } else {
+        label.to_string()
+    };
+    eprintln!("{time_display} {level_display} {message}");
+}
+
+/// Print a DEBUG log line (only shown in verbose mode).
+pub fn log_debug(message: &str) {
+    if is_verbose() {
+        log(LogLevel::Debug, message);
+    }
+}
+
+/// Print an INFO log line (always shown in verbose mode, no-op in normal mode).
+pub fn log_info(message: &str) {
+    log(LogLevel::Info, message);
+}
+
+/// Print a WARN log line.
+pub fn log_warn(message: &str) {
+    log(LogLevel::Warn, message);
+}
+
+/// Print an ERROR log line.
+pub fn log_error(message: &str) {
+    log(LogLevel::Error, message);
+}
+
 pub fn section(title: &str) {
     if is_suppressed() {
         return;
     }
-    println!();
-    println!("{}", bold(&brand_accent(title)));
+    if is_verbose() {
+        log(LogLevel::Info, title);
+    } else {
+        eprintln!();
+        eprintln!("{}", bold(&brand_accent(title)));
+    }
 }
 
 pub fn heading(title: &str) {
     if is_suppressed() {
         return;
     }
-    println!();
-    println!("{}", bold(title));
+    if is_verbose() {
+        log(LogLevel::Info, title);
+    } else {
+        eprintln!();
+        eprintln!("{}", bold(title));
+    }
 }
 
 pub fn info(message: &str) {
     if is_suppressed() {
         return;
     }
-    println!("{}", brand_fg(message));
+    if is_verbose() {
+        log(LogLevel::Info, message);
+    } else {
+        eprintln!("{}", brand_fg(message));
+    }
 }
 
 pub fn step(message: &str) {
@@ -199,50 +317,82 @@ pub fn bullet(message: &str) {
     if is_suppressed() {
         return;
     }
-    println!("  {} {}", bold(&brand_secondary("•")), brand_fg(message));
+    if is_verbose() {
+        log(LogLevel::Info, &format!("  {message}"));
+    } else {
+        eprintln!("  {} {}", bold(&brand_secondary("•")), brand_fg(message));
+    }
 }
 
 pub fn success(message: &str) {
     if is_suppressed() {
         return;
     }
-    println!("{} {}", brand_success("✓"), brand_fg(message));
+    if is_verbose() {
+        log(LogLevel::Info, message);
+    } else {
+        eprintln!("{} {}", brand_success("✓"), brand_fg(message));
+    }
 }
 
 pub fn warning(message: &str) {
     if is_suppressed() {
         return;
     }
-    println!("{} {}", bold(&brand_warning("!")), brand_fg(message));
+    if is_verbose() {
+        log(LogLevel::Warn, message);
+    } else {
+        eprintln!("{} {}", bold(&brand_warning("!")), brand_fg(message));
+    }
 }
 
 pub fn error(message: &str) {
     if is_suppressed() {
         return;
     }
-    println!("{} {}", bold(&brand_error("✗")), brand_fg(message));
+    if is_verbose() {
+        log(LogLevel::Error, message);
+    } else {
+        eprintln!("{} {}", bold(&brand_error("✗")), brand_fg(message));
+    }
 }
 
 pub fn error_stderr(message: &str) {
-    eprintln!("{} {}", bold(&brand_error("✗")), brand_fg(message));
+    if is_verbose() {
+        log(LogLevel::Error, message);
+    } else {
+        eprintln!("{} {}", bold(&brand_error("✗")), brand_fg(message));
+    }
 }
 
 pub fn muted(message: &str) {
     if is_suppressed() {
         return;
     }
-    println!("{}", brand_muted(message));
+    if is_verbose() {
+        log(LogLevel::Debug, message);
+    } else {
+        eprintln!("{}", brand_muted(message));
+    }
 }
 
 /// Print a hint line in default text color (not muted).
 /// Use for actionable guidance like "Run X to do Y" where the command is strong()'d.
 pub fn hint(message: &str) {
-    println!("{}", brand_fg(message));
+    if is_verbose() {
+        log(LogLevel::Info, message);
+    } else {
+        eprintln!("{}", brand_fg(message));
+    }
 }
 
 /// Print a server heading: `Server {name}` with the name in strong (bold).
 pub fn server_heading(name: &str) {
-    println!("Server {}", strong(name));
+    if is_verbose() {
+        log(LogLevel::Info, &format!("Server {name}"));
+    } else {
+        eprintln!("Server {}", strong(name));
+    }
 }
 
 /// Indentation prefix for lines under a heading (2 spaces).
@@ -294,11 +444,17 @@ impl ContextBlock {
         if self.lines.is_empty() || is_suppressed() {
             return;
         }
-        let border = rgb_fg("┃", ACCENT_DIM);
-        for line in &self.lines {
-            println!("{border} {line}");
+        if is_verbose() {
+            for line in &self.lines {
+                log(LogLevel::Info, line);
+            }
+        } else {
+            let border = rgb_fg("┃", ACCENT_DIM);
+            for line in &self.lines {
+                eprintln!("{border} {line}");
+            }
+            eprintln!();
         }
-        println!();
     }
 }
 
@@ -339,19 +495,31 @@ fn phase_spinner_style_indented() -> ProgressStyle {
 }
 
 /// Print a spinner result without elapsed (fast path — spinner was never shown).
-fn print_ok(success: &str) {
-    let check = brand_success("✓");
-    println!("{check} {}", brand_fg(success));
+fn print_ok(success_msg: &str) {
+    if is_verbose() {
+        log(LogLevel::Info, success_msg);
+    } else {
+        let check = brand_success("✓");
+        eprintln!("{check} {}", brand_fg(success_msg));
+    }
 }
 
 fn print_err(loading: &str) {
-    let x = bold(&brand_error("✗"));
-    println!("{x} {loading}");
+    if is_verbose() {
+        log(LogLevel::Error, loading);
+    } else {
+        let x = bold(&brand_error("✗"));
+        eprintln!("{x} {loading}");
+    }
 }
 
 fn print_err_with_detail(loading: &str, detail: &dyn Display) {
-    let x = bold(&brand_error("✗"));
-    println!("{x} {loading}: {detail}");
+    if is_verbose() {
+        log(LogLevel::Error, &format!("{loading}: {detail}"));
+    } else {
+        let x = bold(&brand_error("✗"));
+        eprintln!("{x} {loading}: {detail}");
+    }
 }
 
 /// Hide cursor and suppress keyboard echo while keeping signal handling
@@ -389,40 +557,79 @@ fn suppress_echo(suppress: bool) {
     }
 }
 
-fn finish_spinner_ok(pb: &ProgressBar, success: &str, elapsed: Duration) {
+fn finish_spinner_ok(pb: &ProgressBar, success_msg: &str, elapsed: Duration) {
     pb.finish_and_clear();
     show_cursor();
-    let check = brand_success("✓");
-    let time = muted_elapsed(elapsed);
-    if time.is_empty() {
-        println!("{check} {}", brand_fg(success));
+    if is_verbose() {
+        let time = format_elapsed(elapsed);
+        if time.is_empty() {
+            log(LogLevel::Info, success_msg);
+        } else {
+            log(LogLevel::Info, &format!("{success_msg} {time}"));
+        }
     } else {
-        println!("{check} {} {time}", brand_fg(success));
+        let check = brand_success("✓");
+        let time = muted_elapsed(elapsed);
+        if time.is_empty() {
+            eprintln!("{check} {}", brand_fg(success_msg));
+        } else {
+            eprintln!("{check} {} {time}", brand_fg(success_msg));
+        }
     }
 }
 
 fn finish_spinner_err(pb: &ProgressBar, loading: &str) {
     pb.finish_and_clear();
     show_cursor();
-    let x = bold(&brand_error("✗"));
-    println!("{x} {loading}");
+    if is_verbose() {
+        log(LogLevel::Error, loading);
+    } else {
+        let x = bold(&brand_error("✗"));
+        eprintln!("{x} {loading}");
+    }
 }
 
 fn finish_spinner_err_with_detail(pb: &ProgressBar, loading: &str, detail: &dyn Display) {
     pb.finish_and_clear();
     show_cursor();
-    let x = bold(&brand_error("✗"));
-    println!("{x} {loading}: {detail}");
+    if is_verbose() {
+        log(LogLevel::Error, &format!("{loading}: {detail}"));
+    } else {
+        let x = bold(&brand_error("✗"));
+        eprintln!("{x} {loading}: {detail}");
+    }
 }
 
 /// Spinner that shows only if work takes >= 1s, then clears on completion.
 ///
 /// - Fast (<1s):  prints result directly, no spinner, no elapsed
 /// - Slow (≥1s):  `⠋ {loading}...` → `{success} (elapsed)` or `✗ {loading} failed`
+///
+/// In verbose mode: prints start/end log lines instead of spinner.
 pub fn with_spinner<T, E, F>(loading: &str, success: &str, work: F) -> Result<T, E>
 where
     F: FnOnce() -> Result<T, E>,
 {
+    // Verbose mode: log start, run work, log result.
+    if is_verbose() {
+        log(LogLevel::Info, loading);
+        let start = Instant::now();
+        let result = work();
+        let elapsed = start.elapsed();
+        match &result {
+            Ok(_) => {
+                let time = format_elapsed(elapsed);
+                if time.is_empty() {
+                    log(LogLevel::Info, success);
+                } else {
+                    log(LogLevel::Info, &format!("{success} {time}"));
+                }
+            }
+            Err(_) => log(LogLevel::Error, loading),
+        }
+        return result;
+    }
+
     if !is_interactive() || is_suppressed() {
         return work();
     }
@@ -480,12 +687,32 @@ where
 pub async fn with_spinner_async_err<T, E: Display, Fut>(
     loading: &str,
     success: &str,
-    error: &str,
+    error_label: &str,
     work: Fut,
 ) -> Result<T, E>
 where
     Fut: Future<Output = Result<T, E>>,
 {
+    // Verbose mode: log start, run work, log result.
+    if is_verbose() {
+        log(LogLevel::Info, loading);
+        let start = Instant::now();
+        let result = work.await;
+        let elapsed = start.elapsed();
+        match &result {
+            Ok(_) => {
+                let time = format_elapsed(elapsed);
+                if time.is_empty() {
+                    log(LogLevel::Info, success);
+                } else {
+                    log(LogLevel::Info, &format!("{success} {time}"));
+                }
+            }
+            Err(e) => log(LogLevel::Error, &format!("{error_label}: {e}")),
+        }
+        return result;
+    }
+
     if !is_interactive() || is_suppressed() {
         return work.await;
     }
@@ -497,7 +724,7 @@ where
     if let Ok(result) = tokio::time::timeout(Duration::from_secs(1), work.as_mut()).await {
         match &result {
             Ok(_) => print_ok(success),
-            Err(e) => print_err_with_detail(error, e),
+            Err(e) => print_err_with_detail(error_label, e),
         }
         return result;
     }
@@ -513,17 +740,23 @@ where
 
     match &result {
         Ok(_) => finish_spinner_ok(&pb, success, start.elapsed()),
-        Err(e) => finish_spinner_err_with_detail(&pb, error, e),
+        Err(e) => finish_spinner_err_with_detail(&pb, error_label, e),
     }
 
     result
 }
 
 /// Simple spinner — shows only if work takes >= 1s, then clears. No result line.
+/// In verbose mode: prints a log line for the action.
 pub fn with_spinner_simple<T, F>(message: &str, work: F) -> T
 where
     F: FnOnce() -> T,
 {
+    if is_verbose() {
+        log(LogLevel::Info, message);
+        return work();
+    }
+
     if !is_interactive() || is_suppressed() {
         return work();
     }
@@ -554,10 +787,16 @@ where
 }
 
 /// Async simple spinner — shows only if work takes >= 1s, then clears. No result line.
+/// In verbose mode: prints a log line for the action.
 pub async fn with_spinner_async_simple<T, Fut>(message: &str, work: Fut) -> T
 where
     Fut: Future<Output = T>,
 {
+    if is_verbose() {
+        log(LogLevel::Info, message);
+        return work.await;
+    }
+
     if !is_interactive() || is_suppressed() {
         return work.await;
     }
@@ -585,10 +824,13 @@ where
 /// A phase spinner that suppresses all inner output while active.
 /// On drop, restores output and clears the spinner (acts as a safety net
 /// if the phase is exited via `?`).
+///
+/// In verbose mode: no spinner animation, no output suppression, just log lines.
 pub struct PhaseSpinner {
     pb: Option<ProgressBar>,
     start: Instant,
     finished: bool,
+    verbose: bool,
     _elapsed_task: Option<tokio::task::JoinHandle<()>>,
 }
 
@@ -603,6 +845,20 @@ impl PhaseSpinner {
     }
 
     fn new(message: &str, indented: bool) -> Self {
+        let verbose = is_verbose();
+
+        if verbose {
+            // Verbose mode: just log the start, no suppression.
+            log(LogLevel::Info, message);
+            return Self {
+                pb: None,
+                start: Instant::now(),
+                finished: false,
+                verbose: true,
+                _elapsed_task: None,
+            };
+        }
+
         set_suppress(true);
         let style = if indented {
             phase_spinner_style_indented()
@@ -641,6 +897,7 @@ impl PhaseSpinner {
             pb,
             start: Instant::now(),
             finished: false,
+            verbose: false,
             _elapsed_task: elapsed_task,
         }
     }
@@ -649,37 +906,59 @@ impl PhaseSpinner {
         self.pb.as_ref()
     }
 
-    pub fn finish(mut self, success: &str) {
+    pub fn finish(mut self, success_msg: &str) {
         self.abort_elapsed_task();
-        set_suppress(false);
-        if let Some(ref pb) = self.pb {
-            finish_spinner_ok(pb, success, self.start.elapsed());
+        if self.verbose {
+            let time = format_elapsed(self.start.elapsed());
+            if time.is_empty() {
+                log(LogLevel::Info, success_msg);
+            } else {
+                log(LogLevel::Info, &format!("{success_msg} {time}"));
+            }
+        } else {
+            set_suppress(false);
+            if let Some(ref pb) = self.pb {
+                finish_spinner_ok(pb, success_msg, self.start.elapsed());
+            }
         }
         self.finished = true;
     }
 
     pub fn finish_err(mut self, loading: &str, detail: &str) {
         self.abort_elapsed_task();
-        set_suppress(false);
-        if let Some(ref pb) = self.pb {
-            finish_spinner_err_with_detail(pb, loading, &detail);
+        if self.verbose {
+            log(LogLevel::Error, &format!("{loading}: {detail}"));
+        } else {
+            set_suppress(false);
+            if let Some(ref pb) = self.pb {
+                finish_spinner_err_with_detail(pb, loading, &detail);
+            }
         }
         self.finished = true;
     }
 
     /// Finish indented spinner with success: `  ✓ message (elapsed)`
-    pub fn finish_ok_indented(mut self, success: &str) {
+    pub fn finish_ok_indented(mut self, success_msg: &str) {
         self.abort_elapsed_task();
-        set_suppress(false);
-        if let Some(ref pb) = self.pb {
-            pb.finish_and_clear();
-            show_cursor();
-            let check = brand_success("✓");
-            let time = muted_elapsed(self.start.elapsed());
+        if self.verbose {
+            let time = format_elapsed(self.start.elapsed());
             if time.is_empty() {
-                println!("{INDENT}{check} {}", brand_fg(success));
+                log(LogLevel::Info, &format!("  {success_msg}"));
             } else {
-                println!("{INDENT}{check} {} {time}", brand_fg(success));
+                log(LogLevel::Info, &format!("  {success_msg} {time}"));
+            }
+        } else {
+            set_suppress(false);
+            if let Some(ref pb) = self.pb {
+                pb.finish_and_clear();
+                show_cursor();
+                let check = brand_success("✓");
+                let time = muted_elapsed(self.start.elapsed());
+                if time.is_empty() {
+                    eprintln!("{INDENT}{check} {}", brand_fg(success_msg));
+                } else {
+                    eprintln!("{INDENT}{check} {} {time}", brand_fg(success_msg));
+                }
             }
         }
         self.finished = true;
@@ -688,12 +967,16 @@ impl PhaseSpinner {
     /// Finish indented spinner with error: `  ✗ message`
     pub fn finish_err_indented(mut self, detail: &str) {
         self.abort_elapsed_task();
-        set_suppress(false);
-        if let Some(ref pb) = self.pb {
-            pb.finish_and_clear();
-            show_cursor();
-            let x = bold(&brand_error("✗"));
-            println!("{INDENT}{x} {}", brand_error(detail));
+        if self.verbose {
+            log(LogLevel::Error, &format!("  {detail}"));
+        } else {
+            set_suppress(false);
+            if let Some(ref pb) = self.pb {
+                pb.finish_and_clear();
+                show_cursor();
+                let x = bold(&brand_error("✗"));
+                eprintln!("{INDENT}{x} {}", brand_error(detail));
+            }
         }
         self.finished = true;
     }
@@ -708,7 +991,9 @@ impl PhaseSpinner {
 impl Drop for PhaseSpinner {
     fn drop(&mut self) {
         self.abort_elapsed_task();
-        set_suppress(false);
+        if !self.verbose {
+            set_suppress(false);
+        }
         if !self.finished {
             if let Some(ref pb) = self.pb {
                 pb.finish_and_clear();
@@ -720,12 +1005,22 @@ impl Drop for PhaseSpinner {
 
 /// A spinner whose message can be updated while running.
 /// Does NOT suppress other output (unlike PhaseSpinner).
+///
+/// In verbose mode: logs messages as they are set.
 pub struct TrackedSpinner {
     pb: Option<ProgressBar>,
+    verbose: bool,
 }
 
 impl TrackedSpinner {
     pub fn start(message: &str) -> Self {
+        if is_verbose() {
+            log(LogLevel::Info, message);
+            return Self {
+                pb: None,
+                verbose: true,
+            };
+        }
         let pb = if is_interactive() {
             let pb = ProgressBar::new_spinner();
             pb.set_style(spinner_style());
@@ -736,11 +1031,13 @@ impl TrackedSpinner {
         } else {
             None
         };
-        Self { pb }
+        Self { pb, verbose: false }
     }
 
     pub fn set_message(&self, message: &str) {
-        if let Some(ref pb) = self.pb {
+        if self.verbose {
+            log(LogLevel::Info, message);
+        } else if let Some(ref pb) = self.pb {
             pb.set_message(message.to_string());
         }
     }
@@ -786,6 +1083,55 @@ pub fn confirm_with_description(
 ) -> std::io::Result<bool> {
     if !is_interactive() {
         return Ok(default);
+    }
+
+    // Verbose mode: transcript-style confirm (still interactive).
+    if is_verbose() {
+        use crossterm::{
+            event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+            terminal,
+        };
+        let hint = if default { "Y/n" } else { "y/N" };
+        log(LogLevel::Info, &format!("{prompt} [{hint}]"));
+        terminal::enable_raw_mode()?;
+        let result = loop {
+            if let Event::Key(KeyEvent {
+                code, modifiers, ..
+            }) = event::read()?
+            {
+                match code {
+                    KeyCode::Char('y') | KeyCode::Char('Y') => {
+                        terminal::disable_raw_mode()?;
+                        log(LogLevel::Info, &format!("{prompt}: yes"));
+                        break Ok(true);
+                    }
+                    KeyCode::Char('n') | KeyCode::Char('N') => {
+                        terminal::disable_raw_mode()?;
+                        log(LogLevel::Info, &format!("{prompt}: no"));
+                        break Ok(false);
+                    }
+                    KeyCode::Enter => {
+                        terminal::disable_raw_mode()?;
+                        let answer = if default { "yes" } else { "no" };
+                        log(LogLevel::Info, &format!("{prompt}: {answer}"));
+                        break Ok(default);
+                    }
+                    KeyCode::Esc => {
+                        terminal::disable_raw_mode()?;
+                        break Err(wizard_back_error());
+                    }
+                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        terminal::disable_raw_mode()?;
+                        break Err(std::io::Error::new(
+                            std::io::ErrorKind::Interrupted,
+                            "Operation interrupted",
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+        };
+        return result;
     }
 
     use crossterm::{
@@ -936,9 +1282,49 @@ impl<'a> TextField<'a> {
                 Some(value) => Ok(value.to_string()),
                 None => Err(std::io::Error::new(
                     std::io::ErrorKind::Unsupported,
-                    "Input prompt requires an interactive terminal",
+                    format!(
+                        "Missing required value: {}. In --ci mode, pass the value via a CLI flag or config.",
+                        self.label
+                    ),
                 )),
             };
+        }
+
+        // Verbose mode: transcript-style text input (still interactive).
+        if is_verbose() {
+            let default_hint = match self.default {
+                Some(d) => format!(" [default: {d}]"),
+                None => String::new(),
+            };
+            if self.password {
+                log(LogLevel::Info, &format!("{}?", self.label));
+            } else {
+                log(LogLevel::Info, &format!("{}?{default_hint}", self.label));
+            }
+            // Use simple line-based input for verbose mode
+            let display_label = match self.hint {
+                Some(hint) => format!(
+                    "{} {}",
+                    brand_accent(self.label),
+                    brand_muted(&format!("({hint})"))
+                ),
+                None => brand_accent(self.label),
+            };
+            let value = raw_text_input(
+                &display_label,
+                self.default,
+                self.suggestions,
+                self.password,
+                self.placeholder,
+                self.required,
+                self.trimmed,
+            )?;
+            if self.password {
+                log(LogLevel::Info, &format!("{} received", self.label));
+            } else {
+                log(LogLevel::Debug, &format!("Resolved {}: {value}", self.label));
+            }
+            return Ok(value);
         }
 
         let display_label = match self.hint {
@@ -1269,7 +1655,9 @@ pub fn select_with_default<T>(
     if !is_interactive() {
         return Err(std::io::Error::new(
             std::io::ErrorKind::Unsupported,
-            "Selection prompt requires an interactive terminal",
+            format!(
+                "Missing required selection: {title}. In --ci mode, pass the value via a CLI flag or config."
+            ),
         ));
     }
 
@@ -1278,6 +1666,26 @@ pub fn select_with_default<T>(
             std::io::ErrorKind::InvalidInput,
             "No options available for selection",
         ));
+    }
+
+    // Verbose mode: numbered list with simple input.
+    if is_verbose() {
+        log(LogLevel::Info, &format!("{title}:"));
+        for (i, (label, _)) in options.iter().enumerate() {
+            let marker = if i == default { " (default)" } else { "" };
+            log(LogLevel::Info, &format!("  {}) {label}{marker}", i + 1));
+        }
+        // Use raw_select under the hood (still interactive, just logged)
+        let labels: Vec<&str> = options.iter().map(|(label, _)| label.as_str()).collect();
+        let term = Term::stderr();
+        let full_prompt = match description {
+            Some(desc) => format!("{title}\n{desc}"),
+            None => title.to_string(),
+        };
+        let index = raw_select(&term, &full_prompt, &labels, &[], default)?;
+        let selected_label = &options[index].0;
+        log(LogLevel::Info, &format!("Selected: {selected_label}"));
+        return Ok(options.into_iter().nth(index).unwrap().1);
     }
 
     let labels: Vec<&str> = options.iter().map(|(label, _)| label.as_str()).collect();
@@ -1826,5 +2234,41 @@ mod tests {
         assert_eq!(brand_accent("hello"), "hello");
         assert_eq!(brand_success("ok"), "ok");
         assert_eq!(brand_error("fail"), "fail");
+    }
+
+    #[test]
+    fn ci_round_trip() {
+        set_ci(false);
+        assert!(!is_ci());
+        set_ci(true);
+        assert!(is_ci());
+        set_ci(false);
+    }
+
+    #[test]
+    fn log_level_label_right_aligned_5_chars() {
+        assert_eq!(LogLevel::Debug.label(), "DEBUG");
+        assert_eq!(LogLevel::Info.label(), " INFO");
+        assert_eq!(LogLevel::Warn.label(), " WARN");
+        assert_eq!(LogLevel::Error.label(), "ERROR");
+        // All labels are 5 characters wide for alignment
+        for level in [LogLevel::Debug, LogLevel::Info, LogLevel::Warn, LogLevel::Error] {
+            assert_eq!(level.label().len(), 5);
+        }
+    }
+
+    #[test]
+    fn format_timestamp_is_valid_hh_mm_ss() {
+        let ts = format_timestamp();
+        assert_eq!(ts.len(), 8, "Timestamp should be HH:MM:SS format: {ts}");
+        assert_eq!(&ts[2..3], ":", "Expected colon at position 2: {ts}");
+        assert_eq!(&ts[5..6], ":", "Expected colon at position 5: {ts}");
+    }
+
+    #[test]
+    fn with_spinner_runs_work_in_non_tty() {
+        // Non-interactive: work runs directly, result returned
+        let result: Result<usize, String> = with_spinner("Loading", "Done", || Ok(42));
+        assert_eq!(result.unwrap(), 42);
     }
 }

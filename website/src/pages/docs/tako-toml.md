@@ -107,7 +107,7 @@ Global environment variables applied to every environment.
 
 ```toml
 [vars]
-LOG_LEVEL = "info"
+TAKO_APP_LOG_LEVEL = "info"
 API_BASE_URL = "https://api.example.com"
 ```
 
@@ -117,16 +117,16 @@ Per-environment overrides merged on top of `[vars]`.
 
 ```toml
 [vars.production]
-LOG_LEVEL = "warn"
+TAKO_APP_LOG_LEVEL = "warn"
 
 [vars.staging]
-LOG_LEVEL = "debug"
+TAKO_APP_LOG_LEVEL = "debug"
 API_BASE_URL = "https://staging-api.example.com"
 ```
 
 ## `[envs.<environment>]`
 
-Environment route declarations.
+Environment route declarations and runtime settings.
 
 ```toml
 [envs.production]
@@ -134,12 +134,14 @@ route = "api.example.com"
 # routes = ["api.example.com", "www.api.example.com"]
 # route = "example.com/api/*"
 # routes = ["example.com/api/*", "example.com/admin/*"]
+log_level = "info"
 ```
 
 - `route`: single hostname/path pattern.
 - `routes`: multiple route patterns (use this instead of `route` when you have more than one).
 - Each environment can set `route` or `routes`, but not both.
-- Environment sections accept only `route`/`routes`. Put env vars in `[vars]` / `[vars.<environment>]`.
+- `log_level`: app log verbosity for this environment. Accepts `debug`, `info`, `warn`, `error`. Default: `debug` for `development`, `info` for all other environments.
+- Environment sections accept `route`/`routes` and `log_level`. Put env vars in `[vars]` / `[vars.<environment>]`.
 - Every non-development environment must define `route` or `routes`.
 - `[envs.development]` may omit routes and defaults to `{app}.tako` for `tako dev`.
 - Development routes must be `{app}.tako` or a subdomain of it.
@@ -164,6 +166,7 @@ Server membership is declared directly inside each environment.
 route = "api.example.com"
 servers = ["la", "nyc"]
 idle_timeout = 300
+log_level = "info"
 ```
 
 - `servers` is a list of server names previously added with `tako servers add`.
@@ -195,22 +198,24 @@ runtime = "bun"
 assets = ["assets/shared"]
 
 [vars]
-LOG_LEVEL = "info"
+TAKO_APP_LOG_LEVEL = "info"
 
 [vars.production]
-LOG_LEVEL = "warn"
+TAKO_APP_LOG_LEVEL = "warn"
 LOG_FORMAT = "json"
 
 [vars.staging]
-LOG_LEVEL = "debug"
+TAKO_APP_LOG_LEVEL = "debug"
 
 [envs.production]
 routes = ["api.example.com", "www.api.example.com"]
 servers = ["primary", "secondary"]
 idle_timeout = 300
+log_level = "info"
 
 [envs.staging]
 route = "staging.example.com"
 servers = ["staging"]
 idle_timeout = 120
+log_level = "debug"
 ```

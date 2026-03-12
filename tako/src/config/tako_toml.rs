@@ -95,10 +95,35 @@ pub struct EnvConfig {
     /// Idle timeout in seconds (300 = 5 minutes).
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout: u32,
+
+    /// Application log level for this environment.
+    /// Allowed values: "debug", "info", "warn", "error".
+    /// Default: "debug" for development, "info" for all others.
+    pub log_level: Option<String>,
 }
 
 fn default_idle_timeout() -> u32 {
     300
+}
+
+/// Allowed values for the `log_level` config field.
+const ALLOWED_LOG_LEVELS: &[&str] = &["debug", "info", "warn", "error"];
+
+/// Resolve the effective app log level for an environment.
+/// Explicit `log_level` in config takes precedence; otherwise:
+/// - "development" => "debug"
+/// - everything else => "info"
+pub fn resolve_app_log_level<'a>(env_config: Option<&'a EnvConfig>, env_name: &'a str) -> &'a str {
+    if let Some(config) = env_config {
+        if let Some(ref level) = config.log_level {
+            return level;
+        }
+    }
+    if env_name == "development" {
+        "debug"
+    } else {
+        "info"
+    }
 }
 
 impl TakoToml {
@@ -296,6 +321,16 @@ impl TakoToml {
             }
             for server_name in &env_config.servers {
                 validate_server_name(server_name)?;
+            }
+            if let Some(ref log_level) = env_config.log_level {
+                if !ALLOWED_LOG_LEVELS.contains(&log_level.as_str()) {
+                    return Err(ConfigError::Validation(format!(
+                        "Invalid log_level \"{}\" in [envs.{}]. Allowed values: {}",
+                        log_level,
+                        env_name,
+                        ALLOWED_LOG_LEVELS.join(", ")
+                    )));
+                }
             }
         }
 
@@ -1066,11 +1101,11 @@ preset = "bun/tanstack-start"
     fn test_parse_global_vars() {
         let toml = r#"
 [vars]
-LOG_LEVEL = "info"
+TAKO_APP_LOG_LEVEL = "info"
 API_URL = "https://api.example.com"
 "#;
         let config = TakoToml::parse(toml).unwrap();
-        assert_eq!(config.vars.get("LOG_LEVEL"), Some(&"info".to_string()));
+        assert_eq!(config.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
         assert_eq!(
             config.vars.get("API_URL"),
             Some(&"https://api.example.com".to_string())
@@ -1158,7 +1193,7 @@ routes = ["api.example.com", "*.api.example.com", "example.com/api/*"]
         let toml = r#"
 [envs.production]
 route = "api.example.com"
-log_level = "info"
+replicas = 3
 "#;
         let err = TakoToml::parse(toml).unwrap_err();
         assert!(err.to_string().contains("unknown field"));
@@ -1204,7 +1239,7 @@ working_dir = "frontend"
 run = "bun run build"
 
 [vars]
-LOG_LEVEL = "info"
+TAKO_APP_LOG_LEVEL = "info"
 
 [envs.production]
 route = "api.example.com"
@@ -1234,7 +1269,7 @@ routes = ["staging.example.com", "*.staging.example.com"]
                 run: "bun run build".to_string(),
             }
         );
-        assert_eq!(config.vars.get("LOG_LEVEL"), Some(&"info".to_string()));
+        assert_eq!(config.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
 
         let prod = config.envs.get("production").unwrap();
         assert_eq!(prod.route, Some("api.example.com".to_string()));
@@ -1575,10 +1610,10 @@ name = 123
     fn test_parse_per_env_vars() {
         let toml = r#"
 [vars]
-LOG_LEVEL = "info"
+TAKO_APP_LOG_LEVEL = "info"
 
 [vars.production]
-LOG_LEVEL = "warn"
+TAKO_APP_LOG_LEVEL = "warn"
 DATABASE_URL = "postgres://prod"
 
 [vars.staging]
@@ -1587,11 +1622,11 @@ DATABASE_URL = "postgres://staging"
         let config = TakoToml::parse(toml).unwrap();
 
         // Global var
-        assert_eq!(config.vars.get("LOG_LEVEL"), Some(&"info".to_string()));
+        assert_eq!(config.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
 
         // Per-env vars
         let prod_vars = config.vars_per_env.get("production").unwrap();
-        assert_eq!(prod_vars.get("LOG_LEVEL"), Some(&"warn".to_string()));
+        assert_eq!(prod_vars.get("TAKO_APP_LOG_LEVEL"), Some(&"warn".to_string()));
         assert_eq!(
             prod_vars.get("DATABASE_URL"),
             Some(&"postgres://prod".to_string())
@@ -1608,17 +1643,17 @@ DATABASE_URL = "postgres://staging"
     fn test_get_merged_vars() {
         let toml = r#"
 [vars]
-LOG_LEVEL = "info"
+TAKO_APP_LOG_LEVEL = "info"
 API_URL = "https://api.example.com"
 
 [vars.production]
-LOG_LEVEL = "warn"
+TAKO_APP_LOG_LEVEL = "warn"
 DATABASE_URL = "postgres://prod"
 "#;
         let config = TakoToml::parse(toml).unwrap();
 
         let merged = config.get_merged_vars("production");
-        assert_eq!(merged.get("LOG_LEVEL"), Some(&"warn".to_string())); // overridden
+        assert_eq!(merged.get("TAKO_APP_LOG_LEVEL"), Some(&"warn".to_string())); // overridden
         assert_eq!(
             merged.get("API_URL"),
             Some(&"https://api.example.com".to_string())
@@ -1633,12 +1668,12 @@ DATABASE_URL = "postgres://prod"
     fn test_get_merged_vars_nonexistent_env() {
         let toml = r#"
 [vars]
-LOG_LEVEL = "info"
+TAKO_APP_LOG_LEVEL = "info"
 "#;
         let config = TakoToml::parse(toml).unwrap();
 
         let merged = config.get_merged_vars("nonexistent");
-        assert_eq!(merged.get("LOG_LEVEL"), Some(&"info".to_string()));
+        assert_eq!(merged.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
         assert_eq!(merged.len(), 1);
     }
 
@@ -1759,5 +1794,73 @@ servers = ["INVALID_NAME"]
         assert!(validate_server_name("my_server").is_err());
         assert!(validate_server_name("my.server").is_err());
         assert!(validate_server_name("MY-SERVER").is_err());
+    }
+
+    #[test]
+    fn test_log_level_parses_valid_values() {
+        for level in ["debug", "info", "warn", "error"] {
+            let toml = format!(
+                r#"
+[envs.production]
+route = "example.com"
+log_level = "{level}"
+"#
+            );
+            let config = TakoToml::parse(&toml).unwrap();
+            assert_eq!(
+                config.envs["production"].log_level.as_deref(),
+                Some(level)
+            );
+        }
+    }
+
+    #[test]
+    fn test_log_level_rejects_invalid_value() {
+        let toml = r#"
+[envs.production]
+route = "example.com"
+log_level = "verbose"
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("Invalid log_level"));
+        assert!(err.to_string().contains("verbose"));
+    }
+
+    #[test]
+    fn test_log_level_defaults_omitted() {
+        let toml = r#"
+[envs.production]
+route = "example.com"
+"#;
+        let config = TakoToml::parse(toml).unwrap();
+        assert_eq!(config.envs["production"].log_level, None);
+    }
+
+    #[test]
+    fn test_resolve_app_log_level_explicit() {
+        let config = EnvConfig {
+            log_level: Some("warn".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(resolve_app_log_level(Some(&config), "production"), "warn");
+        assert_eq!(resolve_app_log_level(Some(&config), "development"), "warn");
+    }
+
+    #[test]
+    fn test_resolve_app_log_level_default_for_development() {
+        assert_eq!(resolve_app_log_level(None, "development"), "debug");
+        let config = EnvConfig::default();
+        assert_eq!(
+            resolve_app_log_level(Some(&config), "development"),
+            "debug"
+        );
+    }
+
+    #[test]
+    fn test_resolve_app_log_level_default_for_other_envs() {
+        assert_eq!(resolve_app_log_level(None, "production"), "info");
+        assert_eq!(resolve_app_log_level(None, "staging"), "info");
+        let config = EnvConfig::default();
+        assert_eq!(resolve_app_log_level(Some(&config), "production"), "info");
     }
 }

@@ -19,8 +19,9 @@ tako deploy [--env <environment>]
 
 What happens during deploy:
 
-- CLI output is concise by default; use `--verbose` for detailed technical progress.
+- CLI output is concise by default; use `--verbose` for an append-only execution transcript with timestamps and log levels.
 - In interactive terminals, long-running deploy steps use spinner progress indicators.
+- For CI/CD pipelines, use `--ci` for deterministic plain-text output (no colors, no spinners, no prompts). Combine with `--verbose` for full transcript output in build logs.
 - Deploy packages source files into a versioned source archive, then builds target-specific artifacts locally.
 - Source bundle root is resolved in this order: git root, current app directory.
 - Source filtering uses `.gitignore`.

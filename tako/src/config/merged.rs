@@ -296,10 +296,10 @@ mod tests {
 name = "test-app"
 
 [vars]
-LOG_LEVEL = "info"
+TAKO_APP_LOG_LEVEL = "info"
 
 [vars.production]
-LOG_LEVEL = "warn"
+TAKO_APP_LOG_LEVEL = "warn"
 
 [envs.production]
 route = "api.example.com"
@@ -378,7 +378,7 @@ host = "5.6.7.8"
         let prod = config.resolve_env("production").unwrap();
         assert_eq!(prod.name, "production");
         assert_eq!(prod.routes, vec!["api.example.com"]);
-        assert_eq!(prod.vars.get("LOG_LEVEL"), Some(&"warn".to_string())); // overridden
+        assert_eq!(prod.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"warn".to_string())); // overridden
         assert_eq!(prod.servers.len(), 1);
         assert_eq!(prod.servers[0].name, "prod-1");
     }
@@ -561,11 +561,11 @@ route = "api.example.com"
         .unwrap();
 
         let prod = config.resolve_env("production").unwrap();
-        // LOG_LEVEL should be overridden to "warn" in production
-        assert_eq!(prod.vars.get("LOG_LEVEL"), Some(&"warn".to_string()));
+        // TAKO_APP_LOG_LEVEL should be overridden to "warn" in production
+        assert_eq!(prod.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"warn".to_string()));
 
         let staging = config.resolve_env("staging").unwrap();
-        // LOG_LEVEL should be "info" in staging (no override)
-        assert_eq!(staging.vars.get("LOG_LEVEL"), Some(&"info".to_string()));
+        // TAKO_APP_LOG_LEVEL should be "info" in staging (no override)
+        assert_eq!(staging.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
     }
 }

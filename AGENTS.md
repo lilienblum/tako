@@ -1,6 +1,4 @@
-# AGENTS.md
-
-Instructions for AI agents working on the Tako codebase.
+# Instructions for AI agents working on the Tako codebase
 
 Tako is under active development: prefer breaking changes and remove outdated code paths rather than preserving backward compatibility.
 
@@ -27,9 +25,9 @@ Tako is under active development: prefer breaking changes and remove outdated co
    - `website/src/pages/docs/deployment.md`
    - `website/src/pages/docs/development.md`
 
-8. **Keep preset family files canonical** - Define family presets in `presets/<family>.toml` (for example `presets/js.toml`). Do not add old per-preset files under `presets/<family>/<name>.toml`.
+8. **Keep preset family files canonical** - Define family presets in `presets/<family>.toml` (for example `presets/js.toml`).
 
-9. **Keep non-TUI CLI output simple and consistent** - For `tako` CLI output outside the TUI only (this does **not** apply to `tako-server`, which should remain basic/plain for server-side usage):
+9. **Keep CLI output simple and consistent** - For `tako` CLI output (this does **not** apply to `tako-server`, which should remain basic/plain for server-side usage):
    - Keep output basic and easy to scan
    - Use spinners for actions expected to take longer than ~500ms (approximate; no measurement needed)
    - Use a single line state transition per action (pending text → final result text), with no intermediate line rewrites/results

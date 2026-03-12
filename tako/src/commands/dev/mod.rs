@@ -859,7 +859,7 @@ fn local_https_probe_error(
     }
 }
 
-fn port_from_listen(listen: &str) -> Option<u16> {
+pub(crate) fn port_from_listen(listen: &str) -> Option<u16> {
     listen
         .rsplit(':')
         .next()
@@ -876,6 +876,7 @@ fn restart_required_for_requested_listen(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn doctor_dev_server_lines(
     listen: &str,
     port: u64,
@@ -901,7 +902,7 @@ pub(crate) fn doctor_dev_server_lines(
     lines
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(test)]
 pub(crate) fn doctor_local_forwarding_preflight_lines(
     advertised_ip: &str,
     pf_active: bool,

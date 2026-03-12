@@ -37,6 +37,10 @@ pub struct Cli {
     #[arg(short = 'v', long, global = true)]
     pub verbose: bool,
 
+    /// Deterministic non-interactive output (no colors, no spinners, no prompts)
+    #[arg(long, global = true)]
+    pub ci: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -631,6 +635,25 @@ mod tests {
     fn display_version_with_blank_canary_sha_uses_base_version() {
         let version = format_display_version("1.2.3", Some("   "));
         assert_eq!(version, "1.2.3");
+    }
+
+    #[test]
+    fn ci_flag_parses_globally() {
+        let cli = Cli::try_parse_from(["tako", "--ci", "deploy"]).unwrap();
+        assert!(cli.ci);
+    }
+
+    #[test]
+    fn ci_and_verbose_flags_combine() {
+        let cli = Cli::try_parse_from(["tako", "--ci", "-v", "deploy"]).unwrap();
+        assert!(cli.ci);
+        assert!(cli.verbose);
+    }
+
+    #[test]
+    fn ci_flag_after_subcommand_parses() {
+        let cli = Cli::try_parse_from(["tako", "deploy", "--ci"]).unwrap();
+        assert!(cli.ci);
     }
 }
 

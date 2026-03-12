@@ -23,6 +23,7 @@ fn main() {
     let cli = Cli::parse();
 
     crate::output::set_verbose(cli.verbose);
+    crate::output::set_ci(cli.ci);
 
     // Initialize tracing
     tracing_subscriber::fmt()

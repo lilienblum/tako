@@ -9,7 +9,7 @@ current: development
 
 This guide covers local development with Tako: trusted HTTPS, `.tako.test` URLs, and what `tako dev` is doing behind the scenes.
 
-CLI output follows shared conventions: concise by default, technical detail with `--verbose`, and spinner progress for long interactive steps.
+CLI output follows shared conventions: concise by default, append-only execution transcript with `--verbose`, and spinner progress for long interactive steps. Note: `--verbose` controls Tako CLI and dev-server verbosity; the app's own log level is controlled separately by `log_level` in `[envs.development]` (defaults to `debug`).
 
 ## Overview
 

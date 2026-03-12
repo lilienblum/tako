@@ -12,19 +12,22 @@ Your quick map of `tako` commands, flags, and common patterns.
 ## Global Usage
 
 ```bash
-tako [--version] [-v|--verbose] <command> [args]
+tako [--version] [-v|--verbose] [--ci] <command> [args]
 ```
 
 Global flags:
 
 - `--version`: print version and exit (`<semver>` on stable builds, `<semver>-canary-<sha7>` on canary builds).
-- `-v`, `--verbose`: enable verbose output.
+- `-v`, `--verbose`: show verbose output as an append-only execution transcript with timestamps and log levels.
+- `--ci`: deterministic non-interactive output (no colors, no spinners, no prompts). Can be combined with `--verbose`.
 
-CLI output conventions:
+### Output Modes
 
-- default output is concise and user-focused
-- `--verbose` adds technical detail (paths, target metadata, per-host transport context)
-- in interactive terminals, long-running steps show spinner progress
+Tako has three output modes:
+
+- **Normal** (default): concise, user-focused output with spinners for long-running steps in interactive terminals.
+- **Verbose** (`-v`/`--verbose`): append-only execution transcript with timestamps and log levels. Shows technical detail (paths, target metadata, per-host transport context).
+- **CI** (`--ci`): deterministic plain-text output suitable for CI/CD pipelines and log aggregation. Disables colors, spinners, and interactive prompts. Combine with `--verbose` for full transcript output without formatting.
 
 Directory selection is command-scoped:
 
@@ -262,6 +265,12 @@ Deploy staging and skip confirmation:
 
 ```bash
 tako deploy --env staging --yes
+```
+
+Deploy in a CI/CD pipeline with full transcript:
+
+```bash
+tako deploy --env production --yes --ci --verbose
 ```
 
 Keep two warm instances on every production server:

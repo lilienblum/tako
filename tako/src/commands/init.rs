@@ -817,16 +817,16 @@ name = "{app_name}"
 
 # Global environment variables applied to every environment.
 # [vars]
-# LOG_LEVEL = "info"
+# TAKO_APP_LOG_LEVEL = "info"
 # API_BASE_URL = "https://api.example.com"
 
 # Environment-specific variable overrides merged on top of [vars].
 # [vars.production]
-# LOG_LEVEL = "warn"
+# TAKO_APP_LOG_LEVEL = "warn"
 # API_BASE_URL = "https://api.example.com"
 
 # [vars.staging]
-# LOG_LEVEL = "debug"
+# TAKO_APP_LOG_LEVEL = "debug"
 # API_BASE_URL = "https://staging-api.example.com"
 
 # Environment declarations. Deploy environments must define `route` or `routes`.

@@ -57,7 +57,7 @@ runtime = "bun"           # Optional override; defaults to detected adapter
 # run = "bun run build"
 
 [vars]
-LOG_LEVEL = "info"        # Base variables (all environments)
+TAKO_APP_LOG_LEVEL = "info"        # Base variables (all environments)
 
 [vars.production]
 API_URL = "https://api.example.com"
@@ -78,7 +78,14 @@ routes = [
 ]
 servers = ["staging"]
 idle_timeout = 120
+
+[envs.development]
+log_level = "debug"        # App log level (default: "debug" for development, "info" for others)
 ```
+
+**Environment `log_level`:**
+
+Each `[envs.*]` block can set `log_level` to control the application's log verbosity: `debug`, `info`, `warn`, or `error`. Defaults: `debug` for `development`, `info` for all other environments. This is independent of `--verbose`, which controls only Tako CLI and dev-server logs. The resolved level is passed to the app as the `TAKO_APP_LOG_LEVEL` environment variable.
 
 **Variable merging order (later overrides earlier):**
 
@@ -287,13 +294,17 @@ Upgrade channel state:
 ### Global options
 
 - `--version`: Print version and exit (`<semver>` on stable builds, `<semver>-canary-<sha7>` on canary builds).
-- `-v, --verbose`: Show verbose output (enables detailed command output and info logs).
+- `-v, --verbose`: Show verbose output as an append-only execution transcript with timestamps and log levels.
+- `--ci`: Deterministic non-interactive output (no colors, no spinners, no prompts). Can be combined with `--verbose`.
 
-CLI output conventions:
+CLI output modes:
 
-- Default output is concise and user-focused.
-- `--verbose` enables detailed technical progress (for example resolved paths, target metadata, and per-host transport details).
-- In interactive terminals, long-running command steps show spinner progress indicators; parallel multi-server operations may use line-based status output to avoid overlapping spinners.
+- **Normal mode** (default): Concise interactive UX with spinners, line replacement, and rich prompts.
+- **Verbose mode** (`--verbose`): Append-only execution transcript. Each line: `HH:MM:SS LEVEL message`. Spinners degrade to log lines. Prompts render as transcript-style (still interactive). DEBUG-level messages are shown.
+- **CI mode** (`--ci`): No ANSI colors, no spinners, no interactive prompts. If a required prompt value is missing, fails with an actionable error message suggesting CLI flags or config.
+- **CI + Verbose** (`--ci --verbose`): Detailed append-only transcript with no colors.
+
+All status/progress/log output goes to stderr. Only actual command results (URLs, machine-readable data) go to stdout.
 
 Directory selection is command-scoped:
 
