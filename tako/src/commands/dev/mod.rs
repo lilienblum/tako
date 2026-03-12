@@ -174,9 +174,6 @@ pub(crate) const LOCAL_DNS_PORT: u16 = 53535;
 const RESOLVER_DIR: &str = "/etc/resolver";
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const TAKO_RESOLVER_FILE: &str = "/etc/resolver/tako.test";
-/// Old resolver files to clean up during setup.
-#[cfg(any(target_os = "macos", test))]
-const LEGACY_RESOLVER_FILES: &[&str] = &["/etc/resolver/tako", "/etc/resolver/tako.local"];
 const DEV_TLS_CERT_FILENAME: &str = "fullchain.pem";
 const DEV_TLS_KEY_FILENAME: &str = "privkey.pem";
 const DEV_TLS_NAMES_FILENAME: &str = "names.json";
@@ -647,13 +644,6 @@ fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::er
     }
 
     crate::output::success("Local DNS resolver configured for *.tako.test.");
-
-    // Remove legacy resolver files (.tako, .tako.local) that are no longer used.
-    for legacy in LEGACY_RESOLVER_FILES {
-        if std::path::Path::new(legacy).exists() {
-            let _ = sudo_run_checked(&["rm", "-f", legacy], &format!("removing legacy {legacy}"));
-        }
-    }
 
     Ok(())
 }

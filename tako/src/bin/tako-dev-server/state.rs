@@ -96,9 +96,6 @@ impl DevStateStore {
         )
         .map_err(|e| format!("migrate: {e}"))?;
 
-        // Add column for databases that predate client_pid tracking.
-        let _ = conn.execute_batch("ALTER TABLE apps ADD COLUMN client_pid INTEGER;");
-
         Ok(Self {
             db_path: path,
             conn,

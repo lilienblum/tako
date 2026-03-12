@@ -750,8 +750,6 @@ if ! id -u "tako-app" >/dev/null 2>&1; then
   fi
 fi
 
-# Remove deprecated helper path if present.
-rm -f /usr/local/bin/tako-server-upgrade
 install_upgrade_helpers
 
 mkdir -p "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")"
@@ -853,33 +851,12 @@ write_config() {
   chmod 0644 "$TAKO_CONFIG"
 }
 
-# Migrate legacy single-value files into config.json
-migrate_legacy_config() {
-  CONFIG_SERVER_NAME=""
-  CONFIG_DNS_PROVIDER=""
-
-  if [ -f "$TAKO_CONFIG" ]; then
-    CONFIG_SERVER_NAME="$(config_get server_name)"
-    CONFIG_DNS_PROVIDER="$(config_get dns.provider)"
-    return
-  fi
-
-  # Read legacy files
-  if [ -f "$TAKO_HOME/server-name" ] && [ -s "$TAKO_HOME/server-name" ]; then
-    CONFIG_SERVER_NAME="$(cat "$TAKO_HOME/server-name")"
-  fi
-  if [ -f "$TAKO_HOME/dns-provider.conf" ] && [ -s "$TAKO_HOME/dns-provider.conf" ]; then
-    CONFIG_DNS_PROVIDER="$(cat "$TAKO_HOME/dns-provider.conf")"
-  fi
-
-  # Write merged config.json if we found anything to migrate
-  if [ -n "$CONFIG_SERVER_NAME" ] || [ -n "$CONFIG_DNS_PROVIDER" ]; then
-    write_config
-    echo "OK migrated legacy config to config.json"
-  fi
-}
-
-migrate_legacy_config
+CONFIG_SERVER_NAME=""
+CONFIG_DNS_PROVIDER=""
+if [ -f "$TAKO_CONFIG" ]; then
+  CONFIG_SERVER_NAME="$(config_get server_name)"
+  CONFIG_DNS_PROVIDER="$(config_get dns.provider)"
+fi
 
 maybe_prompt_server_name() {
   default_name="$(hostname -s 2>/dev/null || hostname 2>/dev/null || echo "")"

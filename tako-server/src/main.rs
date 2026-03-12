@@ -1908,7 +1908,6 @@ struct ServerConfigDns {
 }
 
 /// Read server configuration from `{data_dir}/config.json`.
-/// Falls back to legacy `server-name` / `dns-provider.conf` files for migration.
 fn read_server_config(data_dir: &Path) -> ServerConfigFile {
     let config_path = data_dir.join("config.json");
     if let Ok(contents) = std::fs::read_to_string(&config_path) {
@@ -1916,24 +1915,7 @@ fn read_server_config(data_dir: &Path) -> ServerConfigFile {
             return config;
         }
     }
-
-    // Legacy migration: read old single-value files
-    let mut config = ServerConfigFile::default();
-    let server_name_path = data_dir.join("server-name");
-    if let Ok(contents) = std::fs::read_to_string(&server_name_path) {
-        let name = contents.trim().to_string();
-        if !name.is_empty() {
-            config.server_name = Some(name);
-        }
-    }
-    let dns_provider_path = data_dir.join("dns-provider.conf");
-    if let Ok(contents) = std::fs::read_to_string(&dns_provider_path) {
-        let provider = contents.trim().to_string();
-        if !provider.is_empty() {
-            config.dns = Some(ServerConfigDns { provider });
-        }
-    }
-    config
+    ServerConfigFile::default()
 }
 
 /// Notify systemd that the server is ready (READY=1) and claim the main PID.
@@ -4307,16 +4289,6 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
     }
 
     #[test]
-    fn read_server_config_falls_back_to_legacy_files() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("server-name"), "legacy-host\n").unwrap();
-        std::fs::write(dir.path().join("dns-provider.conf"), "route53\n").unwrap();
-        let config = read_server_config(dir.path());
-        assert_eq!(config.server_name.as_deref(), Some("legacy-host"));
-        assert_eq!(config.dns.as_ref().unwrap().provider, "route53");
-    }
-
-    #[test]
     fn read_server_config_returns_defaults_when_missing() {
         let dir = TempDir::new().unwrap();
         let config = read_server_config(dir.path());
@@ -4324,17 +4296,4 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
         assert!(config.dns.is_none());
     }
 
-    #[test]
-    fn read_server_config_json_takes_precedence_over_legacy() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("config.json"),
-            r#"{"server_name":"from-json"}"#,
-        )
-        .unwrap();
-        std::fs::write(dir.path().join("server-name"), "from-legacy\n").unwrap();
-        let config = read_server_config(dir.path());
-        assert_eq!(config.server_name.as_deref(), Some("from-json"));
-        assert!(config.dns.is_none());
-    }
 }

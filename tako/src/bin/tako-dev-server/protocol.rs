@@ -375,26 +375,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn serde_register_app_ignores_legacy_display_routes_field() {
-        // Old clients may still send display_routes; new server ignores it.
-        let json = r#"{"type":"RegisterApp","project_dir":"/p","app_name":"a","hosts":["a.tako.test"],"display_routes":["a.tako.test"],"upstream_port":3000,"command":["node"],"env":{},"log_path":"/l"}"#;
-        let req: Request = serde_json::from_str(json).unwrap();
-        match req {
-            Request::RegisterApp { hosts, .. } => {
-                assert_eq!(hosts, vec!["a.tako.test"]);
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn serde_info_defaults_control_clients_to_zero_for_older_payloads() {
-        let json = r#"{"type":"Info","info":{"listen":"127.0.0.1:8443","port":8443,"advertised_ip":"127.0.0.1","local_dns_enabled":true,"local_dns_port":53535}}"#;
-        let resp: Response = serde_json::from_str(json).unwrap();
-        match resp {
-            Response::Info { info } => assert_eq!(info.control_clients, 0),
-            other => panic!("unexpected: {other:?}"),
-        }
-    }
 }

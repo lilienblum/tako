@@ -19,9 +19,6 @@ use tracing_subscriber::EnvFilter;
 use cli::Cli;
 
 fn main() {
-    // Migrate legacy ~/.tako/ to XDG directories if needed.
-    crate::paths::migrate_legacy_home();
-
     // Parse CLI arguments early so we can configure logging/output.
     let cli = Cli::parse();
 
