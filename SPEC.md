@@ -1077,7 +1077,7 @@ Reference scripts in this repo:
 - `hello` (capabilities / protocol negotiation; CLI sends this before other commands):
 
 ```json
-{ "command": "hello", "protocol_version": 3 }
+{ "command": "hello", "protocol_version": 0 }
 ```
 
 Response:
@@ -1086,7 +1086,7 @@ Response:
 {
   "status": "ok",
   "data": {
-    "protocol_version": 3,
+    "protocol_version": 0,
     "server_version": "0.1.0",
     "capabilities": [
       "deploy_instances_idle_timeout",
