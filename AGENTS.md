@@ -1,6 +1,6 @@
 # Instructions for AI agents working on the Tako codebase
 
-Tako is under active development: prefer breaking changes and remove outdated code paths rather than preserving backward compatibility.
+Tako's protocol is v0: do not keep any legacy code, backward compatibility shims, or deprecated paths — break things freely until protocol v1.
 
 ## Key Principles
 
