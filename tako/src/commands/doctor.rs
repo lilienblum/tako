@@ -1,5 +1,8 @@
 use crate::output;
 
+/// Label width for consistent column alignment across all sections.
+const LABEL_WIDTH: usize = 14;
+
 pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     print_paths();
     print_certificate();
@@ -8,12 +11,23 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Print a right-padded muted label + value row.
+fn row(label: &str, value: &str, width: usize) {
+    let padding = width.saturating_sub(label.len());
+    eprintln!(
+        "  {}{}  {}",
+        output::brand_muted(label),
+        " ".repeat(padding),
+        value,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Paths
 // ---------------------------------------------------------------------------
 
 fn print_paths() {
-    println!("{}", output::strong("Paths"));
+    eprintln!("{}", output::strong("Paths"));
 
     let config_dir = crate::paths::tako_config_dir()
         .map(|p| p.display().to_string())
@@ -22,17 +36,8 @@ fn print_paths() {
         .map(|p| p.display().to_string())
         .unwrap_or_else(|_| "(error)".into());
 
-    let labels = [("Config", &config_dir), ("Data", &data_dir)];
-    let max_label = labels.iter().map(|(l, _)| l.len()).max().unwrap_or(0);
-
-    for (label, value) in &labels {
-        println!(
-            "{:<width$}  {}",
-            output::brand_muted(label),
-            value,
-            width = max_label,
-        );
-    }
+    row("Config", &config_dir, LABEL_WIDTH);
+    row("Data", &data_dir, LABEL_WIDTH);
 }
 
 // ---------------------------------------------------------------------------
@@ -40,18 +45,13 @@ fn print_paths() {
 // ---------------------------------------------------------------------------
 
 fn print_certificate() {
-    println!();
-    println!("{}", output::strong("Local CA"));
+    eprintln!();
+    eprintln!("{}", output::strong("Local CA"));
 
     let store = match crate::dev::LocalCAStore::new() {
         Ok(s) => s,
         Err(e) => {
-            println!(
-                "{:<width$}  {}",
-                output::brand_muted("Status"),
-                output::brand_error(format!("error: {e}")),
-                width = 6,
-            );
+            row("Status", &output::brand_error(format!("error: {e}")), LABEL_WIDTH);
             return;
         }
     };
@@ -59,52 +59,34 @@ fn print_certificate() {
     let exists = store.ca_exists();
     let trusted = if exists { store.is_ca_trusted() } else { false };
 
-    let (status_text, status_color) = if !exists {
-        ("not created", output::brand_warning("not created"))
+    let status_color = if !exists {
+        output::brand_warning("not created")
     } else if trusted {
-        ("trusted", output::brand_success("trusted"))
+        output::brand_success("trusted")
     } else {
-        ("untrusted", output::brand_warning("untrusted"))
+        output::brand_warning("untrusted")
     };
-    let _ = status_text;
 
-    println!(
-        "{:<width$}  {}",
-        output::brand_muted("Status"),
-        status_color,
-        width = 6,
-    );
+    row("Status", &status_color, LABEL_WIDTH);
 }
 
-// ---------------------------------------------------------------------------
-// Dev server (adapted from commands::dev::doctor)
-// ---------------------------------------------------------------------------
-
 async fn print_dev_server() {
-    use super::dev::{
-        LOCAL_DNS_PORT, doctor_dev_server_lines, is_dev_server_unavailable_error_message,
-    };
+    use super::dev::{LOCAL_DNS_PORT, is_dev_server_unavailable_error_message};
 
-    println!();
-    println!("{}", output::strong("Development server"));
+    eprintln!();
+    eprintln!("{}", output::strong("Development server"));
 
     let info = match crate::dev_server_client::info().await {
         Ok(info) => info,
         Err(e) => {
             let message = e.to_string();
             if is_dev_server_unavailable_error_message(&message) {
-                println!(
-                    "{:<width$}  {}",
-                    output::brand_muted("Status"),
-                    output::brand_warning("not running"),
-                    width = 6,
-                );
+                row("Status", &output::brand_warning("not running"), LABEL_WIDTH);
             } else {
-                println!(
-                    "{:<width$}  {}",
-                    output::brand_muted("Status"),
-                    output::brand_error(format!("error: {e}")),
-                    width = 6,
+                row(
+                    "Status",
+                    &output::brand_error(format!("error: {e}")),
+                    LABEL_WIDTH,
                 );
             }
             return;
@@ -132,96 +114,130 @@ async fn print_dev_server() {
         .unwrap_or("127.0.0.1");
 
     #[cfg(target_os = "macos")]
-    let (pf_active, https_tcp_ok, http_tcp_ok, local_443_forwarding, local_80_forwarding) = {
+    let (pf_active, https_tcp_ok, http_tcp_ok) = {
         use super::dev::{pf_rules_active, tcp_port_open};
         let pf_active = pf_rules_active();
         let https_tcp_ok = tcp_port_open(advertised_ip, 443, 150);
         let http_tcp_ok = tcp_port_open(advertised_ip, 80, 150);
-        (
-            pf_active,
-            https_tcp_ok,
-            http_tcp_ok,
-            https_tcp_ok,
-            http_tcp_ok,
-        )
+        (pf_active, https_tcp_ok, http_tcp_ok)
     };
-    #[cfg(not(target_os = "macos"))]
-    let (local_443_forwarding, local_80_forwarding) = (false, false);
 
-    for line in doctor_dev_server_lines(
-        listen,
-        port,
-        local_443_forwarding,
-        local_80_forwarding,
-        local_dns_enabled,
-        local_dns_port,
-    ) {
-        println!("  {line}");
+    // Dev-server info rows
+    row("Listen", listen, LABEL_WIDTH);
+
+    let port_is_duplicate = u16::try_from(port)
+        .ok()
+        .zip(super::dev::port_from_listen(listen))
+        .is_some_and(|(reported, from_listen)| reported == from_listen);
+    if port > 0 && !port_is_duplicate {
+        row("Port", &port.to_string(), LABEL_WIDTH);
     }
 
+    row("Local DNS", &format_bool_status(local_dns_enabled), LABEL_WIDTH);
+    row("Local DNS port", &local_dns_port.to_string(), LABEL_WIDTH);
+
+    // pf forwarding (macOS only)
     #[cfg(target_os = "macos")]
     {
-        use super::dev::doctor_local_forwarding_preflight_lines;
-        println!();
-        for line in doctor_local_forwarding_preflight_lines(
-            advertised_ip,
-            pf_active,
-            https_tcp_ok,
-            http_tcp_ok,
-        ) {
-            println!("  {line}");
-        }
+        let tcp_443 = format!("tcp {advertised_ip}:443");
+        let tcp_80 = format!("tcp {advertised_ip}:80");
+        let fwd_width = ["pf rules", &tcp_443, &tcp_80]
+            .iter()
+            .map(|s| s.len())
+            .max()
+            .unwrap_or(0);
+
+        eprintln!();
+        eprintln!("{}", output::strong("Forwarding"));
+        row(
+            "pf rules",
+            &format_active_status(pf_active, "active", "not configured"),
+            fwd_width,
+        );
+        row(
+            &tcp_443,
+            &format_active_status(https_tcp_ok, "ok", "unreachable"),
+            fwd_width,
+        );
+        row(
+            &tcp_80,
+            &format_active_status(http_tcp_ok, "ok", "unreachable"),
+            fwd_width,
+        );
     }
 
+    // Running apps
     let apps = crate::dev_server_client::list_apps()
         .await
         .unwrap_or_default();
     if !apps.is_empty() {
-        println!();
-        println!("  apps:");
+        eprintln!();
+        eprintln!("{}", output::strong("Apps"));
         for a in &apps {
             let hosts = if a.hosts.is_empty() {
                 "(default)".to_string()
             } else {
-                a.hosts.join(",")
+                a.hosts.join(", ")
             };
-            if let Some(pid) = a.pid {
-                println!(
-                    "  - {}  hosts={}  port={}  pid={}",
-                    a.app_name, hosts, a.upstream_port, pid
-                );
-            } else {
-                println!(
-                    "  - {}  hosts={}  port={}",
-                    a.app_name, hosts, a.upstream_port
-                );
-            }
+            let pid_str = a
+                .pid
+                .map(|p| format!("  {}", output::brand_muted(&format!("pid {p}"))))
+                .unwrap_or_default();
+            eprintln!(
+                "  {}  {}  port {}{}",
+                output::strong(&a.app_name),
+                output::brand_muted(&hosts),
+                a.upstream_port,
+                pid_str,
+            );
         }
     }
 
-    // Best-effort local DNS checks (macOS only).
+    // Local DNS checks (macOS only)
     #[cfg(target_os = "macos")]
     {
         use super::dev::{TAKO_RESOLVER_FILE, local_dns_resolver_values, system_resolver_ipv4};
 
-        println!();
-        println!("  local-dns:");
+        eprintln!();
+        eprintln!("{}", output::strong("Local DNS"));
 
         match local_dns_resolver_values() {
             Some((nameserver, port)) if nameserver == "127.0.0.1" && port == local_dns_port => {
-                println!(
-                    "  - resolver {} -> nameserver {} port {} (ok)",
-                    TAKO_RESOLVER_FILE, nameserver, port
+                row(
+                    "Resolver",
+                    &format!(
+                        "{} {} {}",
+                        TAKO_RESOLVER_FILE,
+                        output::brand_muted("→"),
+                        format!("{nameserver}:{port}")
+                    ),
+                    LABEL_WIDTH,
                 );
             }
             Some((nameserver, port)) => {
-                println!(
-                    "  - resolver {} -> nameserver {} port {} (conflict; expected 127.0.0.1:{})",
-                    TAKO_RESOLVER_FILE, nameserver, port, local_dns_port
+                row(
+                    "Resolver",
+                    &format!(
+                        "{} {} {} {}",
+                        TAKO_RESOLVER_FILE,
+                        output::brand_muted("→"),
+                        format!("{nameserver}:{port}"),
+                        output::brand_warning(&format!("(expected 127.0.0.1:{local_dns_port})"))
+                    ),
+                    LABEL_WIDTH,
                 );
             }
             None => {
-                println!("  - resolver {} -> (missing)", TAKO_RESOLVER_FILE);
+                row(
+                    "Resolver",
+                    &format!(
+                        "{} {} {}",
+                        TAKO_RESOLVER_FILE,
+                        output::brand_muted("→"),
+                        output::brand_warning("missing")
+                    ),
+                    LABEL_WIDTH,
+                );
             }
         }
 
@@ -234,16 +250,49 @@ async fn print_dev_server() {
             for host in hosts.into_iter().filter(|h| h.ends_with(".tako.test")) {
                 match system_resolver_ipv4(&host) {
                     Some(ip) if ip == "127.0.0.1" => {
-                        println!("  - {} -> {} (ok)", host, ip);
+                        row(
+                            &host,
+                            &format!("{} {}", output::brand_muted("→"), ip),
+                            LABEL_WIDTH,
+                        );
                     }
                     Some(ip) => {
-                        println!("  - {} -> {} (conflict; expected 127.0.0.1)", host, ip);
+                        row(
+                            &host,
+                            &format!(
+                                "{} {} {}",
+                                output::brand_muted("→"),
+                                ip,
+                                output::brand_warning("(expected 127.0.0.1)")
+                            ),
+                            LABEL_WIDTH,
+                        );
                     }
                     None => {
-                        println!("  - {} -> (no answer)", host);
+                        row(
+                            &host,
+                            &format!("{} {}", output::brand_muted("→"), output::brand_warning("no answer")),
+                            LABEL_WIDTH,
+                        );
                     }
                 }
             }
         }
+    }
+}
+
+fn format_bool_status(enabled: bool) -> String {
+    if enabled {
+        output::brand_success("enabled")
+    } else {
+        output::brand_warning("disabled")
+    }
+}
+
+fn format_active_status(ok: bool, ok_label: &str, fail_label: &str) -> String {
+    if ok {
+        output::brand_success(ok_label)
+    } else {
+        output::brand_error(fail_label)
     }
 }
