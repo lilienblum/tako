@@ -284,24 +284,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_rejects_old_servers_entries_array_header() {
+    fn parse_rejects_invalid_server_entries_shape() {
         let parsed = CliHistoryToml::parse(
             r#"[servers]
-hosts = ["203.0.113.10"]
-names = ["prod"]
-ports = ["2222"]
-
-[[servers.entries]]
-host = "203.0.113.10"
-name = "prod"
-port = "2222"
+entries = [{ host = "203.0.113.10", name = "prod", port = "2222" }]
 "#,
         );
 
-        assert!(
-            parsed.is_err(),
-            "old [[servers.entries]] format should not be accepted"
-        );
+        assert!(parsed.is_err());
     }
 
     #[test]

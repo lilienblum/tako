@@ -416,28 +416,32 @@ async fn query_remote_app_env_for_server(
 }
 
 fn parse_server_env_from_tako_toml(content: &str, server_name: &str) -> Option<String> {
-    let value: toml::Value = toml::from_str(content).ok()?;
-    let servers = value.get("servers")?.as_table()?;
+    let config = TakoToml::parse(content).ok()?;
 
-    if let Some(entry) = servers.get(server_name)
-        && let Some(table) = entry.as_table()
-        && let Some(env) = table.get("env").and_then(|v| v.as_str())
-    {
-        return Some(env.to_string());
+    let mut matching_envs = config
+        .envs
+        .iter()
+        .filter(|(env_name, _)| env_name.as_str() != "development")
+        .filter(|(_, env_config)| env_config.servers.iter().any(|name| name == server_name))
+        .map(|(env_name, _)| env_name.clone())
+        .collect::<Vec<_>>();
+    matching_envs.sort();
+    matching_envs.dedup();
+    if matching_envs.len() == 1 {
+        return matching_envs.into_iter().next();
     }
 
-    let mut envs = Vec::new();
-    for value in servers.values() {
-        if let Some(table) = value.as_table()
-            && let Some(env) = table.get("env").and_then(|v| v.as_str())
-        {
-            envs.push(env.to_string());
-        }
-    }
-    envs.sort();
-    envs.dedup();
-    if envs.len() == 1 {
-        envs.into_iter().next()
+    let mut configured_envs = config
+        .envs
+        .iter()
+        .filter(|(env_name, _)| env_name.as_str() != "development")
+        .filter(|(_, env_config)| !env_config.servers.is_empty())
+        .map(|(env_name, _)| env_name.clone())
+        .collect::<Vec<_>>();
+    configured_envs.sort();
+    configured_envs.dedup();
+    if configured_envs.len() == 1 {
+        configured_envs.into_iter().next()
     } else {
         None
     }
@@ -610,8 +614,10 @@ fn resolve_delete_server_names(
     servers: &ServersToml,
     env: &str,
 ) -> Result<Vec<String>, String> {
-    // Silent fallback — no confirmation needed for delete (user already confirmed the delete itself).
-    Ok(super::helpers::resolve_servers_for_env(tako_config, servers, env)?.names)
+    let mut names = super::helpers::resolve_servers_for_env(tako_config, servers, env)?;
+    names.sort();
+    names.dedup();
+    Ok(names)
 }
 
 fn resolve_delete_server_names_from_deployments(
@@ -787,7 +793,7 @@ fn format_server_not_found_error(server_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::ServerConfig;
+    use crate::config::EnvConfig;
 
     fn server_entry(host: &str) -> ServerEntry {
         ServerEntry {
@@ -920,13 +926,10 @@ mod tests {
     #[test]
     fn resolve_delete_server_names_prefers_env_mapping() {
         let mut config = TakoToml::default();
-        config
-            .envs
-            .insert("production".to_string(), Default::default());
-        config.servers.insert(
-            "prod-a".to_string(),
-            ServerConfig {
-                env: "production".to_string(),
+        config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                servers: vec!["prod-a".to_string()],
                 ..Default::default()
             },
         );
@@ -944,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_delete_server_names_uses_single_production_fallback() {
+    fn resolve_delete_server_names_requires_explicit_mapping() {
         let mut config = TakoToml::default();
         config
             .envs
@@ -955,8 +958,8 @@ mod tests {
             .servers
             .insert("solo".to_string(), server_entry("127.0.0.1"));
 
-        let names = resolve_delete_server_names(&config, &servers, "production").unwrap();
-        assert_eq!(names, vec!["solo".to_string()]);
+        let err = resolve_delete_server_names(&config, &servers, "production").unwrap_err();
+        assert!(err.contains("No servers configured for environment 'production'"));
     }
 
     #[test]
@@ -985,7 +988,7 @@ mod tests {
         let servers = ServersToml::default();
         let err = resolve_delete_server_names(&config, &servers, "staging").unwrap_err();
         assert!(err.contains("No servers have been added"));
-        assert!(err.contains("env = \"staging\""));
+        assert!(err.contains("[envs.staging].servers"));
     }
 
     #[test]
@@ -1042,11 +1045,13 @@ mod tests {
     #[test]
     fn parse_server_env_from_tako_toml_matches_named_server() {
         let content = r#"
-[servers.prod]
-env = "production"
+[envs.production]
+route = "app.example.com"
+servers = ["prod"]
 
-[servers.staging]
-env = "staging"
+[envs.staging]
+route = "staging.example.com"
+servers = ["staging"]
 "#;
 
         let env = parse_server_env_from_tako_toml(content, "prod");
@@ -1056,11 +1061,9 @@ env = "staging"
     #[test]
     fn parse_server_env_from_tako_toml_falls_back_to_single_env() {
         let content = r#"
-[servers.a]
-env = "production"
-
-[servers.b]
-env = "production"
+[envs.production]
+route = "app.example.com"
+servers = ["a", "b"]
 "#;
 
         let env = parse_server_env_from_tako_toml(content, "missing");

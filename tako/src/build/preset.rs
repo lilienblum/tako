@@ -88,6 +88,7 @@ pub struct BuildPresetTargetDefaults {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BuildPresetRaw {
     #[serde(default)]
     name: Option<String>,
@@ -104,6 +105,7 @@ struct BuildPresetRaw {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BuildPresetRawBuild {
     #[serde(default)]
     exclude: Vec<String>,
@@ -504,97 +506,6 @@ pub fn parse_and_validate_preset(
 ) -> Result<BuildPreset, String> {
     let value: toml::Value =
         toml::from_str(content).map_err(|e| format!("Failed to parse build preset TOML: {e}"))?;
-    if value.get("artifact").is_some() {
-        return Err(
-            "Build preset no longer supports [artifact]. Move exclude to [build].exclude and remove include."
-                .to_string(),
-        );
-    }
-    if value.get("include").is_some() {
-        return Err(
-            "Build preset no longer supports top-level include. Use app [build].include when needed."
-                .to_string(),
-        );
-    }
-    if value.get("targets").is_some() {
-        return Err(
-            "Build preset no longer supports top-level [targets]. Use [build].targets = [\"linux-x86_64-glibc\", ...].".to_string(),
-        );
-    }
-    if value.get("exclude").is_some() {
-        return Err(
-            "Build preset no longer supports top-level exclude. Use [build].exclude.".to_string(),
-        );
-    }
-    if value.get("assets").is_some() {
-        return Err(
-            "Build preset no longer supports top-level assets. Use [build].assets.".to_string(),
-        );
-    }
-    if value.get("builder_image").is_some() {
-        return Err(
-            "Build preset no longer supports top-level `builder_image`. Builder image overrides are no longer supported."
-                .to_string(),
-        );
-    }
-    if value.get("runtime").is_some() {
-        return Err(
-            "Build preset no longer supports top-level `runtime`. Use top-level `name` (or omit it to use the preset file name)."
-                .to_string(),
-        );
-    }
-    if value.get("id").is_some() {
-        return Err(
-            "Build preset no longer supports top-level `id`. Use top-level `name`.".to_string(),
-        );
-    }
-    if value.get("dev").and_then(toml::Value::as_table).is_some() {
-        return Err("Build preset no longer supports [dev]. Use top-level `dev`.".to_string());
-    }
-    if value.get("development").is_some() {
-        return Err(
-            "Build preset no longer supports [development]. Use top-level `dev`.".to_string(),
-        );
-    }
-    if value.get("deploy").is_some() {
-        return Err(
-            "Build preset no longer supports [deploy]. Use top-level `install` and `start`."
-                .to_string(),
-        );
-    }
-    if value.get("dev_cmd").is_some() {
-        return Err(
-            "Build preset no longer supports top-level `dev_cmd`. Use top-level `dev`.".to_string(),
-        );
-    }
-    if value
-        .get("build")
-        .and_then(|build| build.get("builder_image"))
-        .is_some()
-    {
-        return Err(
-            "Build preset no longer supports [build].builder_image. Builder image overrides are no longer supported."
-                .to_string(),
-        );
-    }
-    if value
-        .get("build")
-        .and_then(|build| build.get("stages"))
-        .is_some()
-    {
-        return Err(
-            "Build preset does not support [build].stages. Define custom stages in app tako.toml under [[build.stages]].".to_string(),
-        );
-    }
-    if value
-        .get("build")
-        .and_then(|build| build.get("docker"))
-        .is_some()
-    {
-        return Err(
-            "Build preset no longer supports [build].docker. Use [build].container.".to_string(),
-        );
-    }
 
     let build_table = value.get("build").and_then(toml::Value::as_table);
     let targets_explicit = build_table.and_then(|table| table.get("targets")).is_some();
@@ -1287,7 +1198,8 @@ name = "bun"
         builder_image = "oven/bun:1.2"
         "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("Use [build].targets"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("targets"));
     }
 
     #[test]
@@ -1300,7 +1212,8 @@ exclude = ["**/*.map"]
 install = "bun install"
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("top-level exclude"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("exclude"));
     }
 
     #[test]
@@ -1313,7 +1226,8 @@ assets = ["dist/client"]
 install = "bun install"
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("top-level assets"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("assets"));
     }
 
     #[test]
@@ -1326,7 +1240,8 @@ builder_image = "oven/bun:1.2"
 install = "bun install"
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("top-level `builder_image`"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("builder_image"));
     }
 
     #[test]
@@ -1338,7 +1253,8 @@ runtime = "bun"
 install = "bun install"
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("top-level `runtime`"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("runtime"));
     }
 
     #[test]
@@ -1350,11 +1266,12 @@ id = "bun"
 install = "bun install"
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("top-level `id`"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("id"));
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_old_dev_cmd() {
+    fn parse_and_validate_preset_rejects_unknown_dev_cmd_key() {
         let raw = r#"
 name = "bun"
 
@@ -1364,11 +1281,12 @@ dev_cmd = ["bun", "run", "dev"]
 install = "bun install"
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("top-level `dev_cmd`"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("dev_cmd"));
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_old_dev_table() {
+    fn parse_and_validate_preset_rejects_non_array_dev_value() {
         let raw = r#"
 name = "bun"
 
@@ -1379,11 +1297,11 @@ install = "bun install"
 start = ["bun", "run", "dev"]
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("no longer supports [dev]"));
+        assert!(err.contains("expected a sequence"));
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_old_deploy_table() {
+    fn parse_and_validate_preset_rejects_unknown_deploy_key() {
         let raw = r#"
 name = "bun"
 
@@ -1395,7 +1313,8 @@ install = "bun install --production --frozen-lockfile"
 start = ["bun", "run", "index.ts"]
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("no longer supports [deploy]"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("deploy"));
     }
 
     #[test]
@@ -1446,7 +1365,7 @@ targets = ["linux-x86_64-glibc"]
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_old_build_docker_toggle() {
+    fn parse_and_validate_preset_rejects_unknown_build_docker_key() {
         let raw = r#"
 name = "bun"
 
@@ -1457,7 +1376,8 @@ build = "bun run --if-present build"
 targets = ["linux-x86_64-glibc"]
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("[build].docker"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("docker"));
     }
 
     #[test]
@@ -1489,7 +1409,8 @@ build = "bun run build"
 run = "bun run build"
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("does not support [build].stages"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("stages"));
     }
 
     #[test]
@@ -1514,13 +1435,14 @@ build = "bun run --if-present build"
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_old_artifact_table() {
+    fn parse_and_validate_preset_rejects_unknown_artifact_key() {
         let raw = r#"
 [artifact]
 include = ["**/*"]
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("no longer supports [artifact]"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("artifact"));
     }
 
     #[test]
@@ -1548,7 +1470,8 @@ include = ["dist/**"]
 install = "bun install"
 "#;
         let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("top-level include"));
+        assert!(err.contains("unknown field"));
+        assert!(err.contains("include"));
     }
 
     #[test]

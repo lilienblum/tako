@@ -4,6 +4,4 @@ preset = "tanstack-start"
 
 [envs.production]
 route = "tako-testbed.orb.local/tanstack-start/*"
-
-[servers.testbed]
-env = "production"
+servers = ["testbed"]

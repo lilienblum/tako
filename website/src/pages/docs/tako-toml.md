@@ -155,35 +155,23 @@ route = "api.example.com"
   - `example.com/api/*` matches `/api`, `/api/`, and `/api/...`
   - `example.com/admin/*` matches `/admin`, `/admin/`, and `/admin/...`
 
-## `[servers]`
+## `[envs.<name>].servers`
 
-Default runtime settings applied to every mapped server unless overridden.
+Server membership is declared directly inside each environment.
 
 ```toml
-[servers]
-instances = 0
-port = 80
+[envs.production]
+route = "api.example.com"
+servers = ["la", "nyc"]
 idle_timeout = 300
 ```
 
-- `instances = 0` means on-demand instances. Deploy keeps one warm instance running; idle timeout can scale it to zero. Once at zero, first request waits for cold start readiness up to startup timeout (30s default), then returns `504 App startup timed out` if still not ready. If startup fails before readiness, it returns `502 App failed to start`. While startup is already in progress, requests queue up to 100 waiters per app by default; overflow returns `503 App startup queue is full` with `Retry-After: 1`.
-- `port` is the app upstream port.
-- `idle_timeout` is in seconds.
-
-## `[servers.<name>]`
-
-Per-server overrides. The section name must match a server added with `tako servers add`.
-
-```toml
-[servers.production]
-env = "production"
-instances = 2
-port = 8080
-idle_timeout = 300
-```
-
-- `env` is required.
-- `instances`, `port`, and `idle_timeout` are optional overrides.
+- `servers` is a list of server names previously added with `tako servers add`.
+- `idle_timeout` is optional and defaults to `300` seconds.
+- New deploys start with desired instances `0` on each server. Change that runtime value with `tako scale`.
+- Desired instances are stored on the server, so they survive deploys, rollbacks, and restarts.
+- Non-development environments may not share the same server name.
+- `servers` under `development` are ignored by deploy validation.
 - `arch`/`libc` are not configured in `tako.toml`; Tako detects and stores them in each matching `[[servers]]` entry in global server config (`~/.tako/config.toml`) when adding servers.
 
 ## Variable Merge Order
@@ -218,16 +206,11 @@ LOG_LEVEL = "debug"
 
 [envs.production]
 routes = ["api.example.com", "www.api.example.com"]
+servers = ["primary", "secondary"]
+idle_timeout = 300
 
 [envs.staging]
 route = "staging.example.com"
-
-[servers]
-instances = 0
-port = 80
-idle_timeout = 300
-
-[servers.primary]
-env = "production"
-instances = 2
+servers = ["staging"]
+idle_timeout = 120
 ```

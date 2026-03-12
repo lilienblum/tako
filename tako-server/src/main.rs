@@ -476,7 +476,7 @@ impl ServerState {
                 self.select_runtime_base_port(config.base_port, config.max_instances);
             config.app_socket_dir = self.runtime.app_socket_dir();
 
-            // Populate env from files (SQLite no longer stores env)
+            // Populate env vars from the release manifest and secrets file.
             config.env_vars = env_vars_from_release_dir(&config.path).unwrap_or_else(|e| {
                 tracing::warn!(app = %app_name, "Failed to read env vars from app.json: {}", e);
                 HashMap::new()
@@ -548,6 +548,7 @@ impl ServerState {
                         "deploy_instances_idle_timeout".to_string(),
                         "on_demand_cold_start".to_string(),
                         "idle_scale_to_zero".to_string(),
+                        "scale".to_string(),
                         "upgrade_mode_control".to_string(),
                         "server_runtime_info".to_string(),
                         "release_history".to_string(),
@@ -570,7 +571,6 @@ impl ServerState {
                 path,
                 routes,
                 secrets,
-                instances,
                 idle_timeout,
             } => {
                 if let Err(msg) = validate_app_name(&app) {
@@ -588,10 +588,18 @@ impl ServerState {
                     &path,
                     routes,
                     secrets,
-                    instances,
                     idle_timeout,
                 )
                 .await
+            }
+            Command::Scale { app, instances } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
+                if let Some(resp) = self.reject_mutating_when_upgrading("scale").await {
+                    return resp;
+                }
+                self.scale_app(&app, instances).await
             }
             Command::Stop { app } => {
                 if let Err(msg) = validate_app_name(&app) {
@@ -708,7 +716,6 @@ impl ServerState {
         path: &str,
         routes: Vec<String>,
         secrets: Option<HashMap<String, String>>,
-        instances: u8,
         idle_timeout: u32,
     ) -> Response {
         tracing::info!(app = app_name, version = version, "Deploying app");
@@ -795,7 +802,6 @@ impl ServerState {
                 config.cwd = release_path.clone();
                 config.env_vars = env_vars;
                 config.secrets = secrets;
-                config.min_instances = instances as u32;
                 config.idle_timeout = Duration::from_secs(idle_timeout as u64);
                 config.app_socket_dir = self.runtime.app_socket_dir();
                 config.command = match command_for_release_dir(&config.cwd) {
@@ -821,7 +827,7 @@ impl ServerState {
                     },
                     env_vars,
                     secrets,
-                    min_instances: instances as u32,
+                    min_instances: 0,
                     max_instances: 4,
                     base_port: self.allocate_port_range(),
                     app_socket_dir: self.runtime.app_socket_dir(),
@@ -970,6 +976,128 @@ impl ServerState {
             })),
             Err(e) => Response::error(format!("Stop failed: {}", e)),
         }
+    }
+
+    async fn scale_app(&self, app_name: &str, requested_instances: u8) -> Response {
+        tracing::info!(app = app_name, requested_instances, "Scaling app");
+
+        let app = match self.app_manager.get_app(app_name) {
+            Some(app) => app,
+            None => return Response::error(format!("App not found: {}", app_name)),
+        };
+
+        let previous_config = app.config.read().clone();
+        let effective_instances = if self.runtime.worker {
+            requested_instances.min(1)
+        } else {
+            requested_instances
+        };
+
+        let mut next_config = previous_config.clone();
+        next_config.min_instances = effective_instances as u32;
+        if next_config.max_instances < next_config.min_instances {
+            next_config.max_instances = next_config.min_instances.max(4);
+            next_config.base_port =
+                self.select_runtime_base_port(next_config.base_port, next_config.max_instances);
+        }
+        app.update_config(next_config.clone());
+
+        let running_before = app
+            .get_instances()
+            .into_iter()
+            .filter(|instance| {
+                matches!(
+                    instance.state(),
+                    InstanceState::Starting | InstanceState::Ready | InstanceState::Healthy
+                )
+            })
+            .count();
+
+        if effective_instances as usize > running_before {
+            let to_add = effective_instances as usize - running_before;
+            let mut started_instances = Vec::with_capacity(to_add);
+
+            for _ in 0..to_add {
+                let instance = app.allocate_instance();
+                match self.app_manager.spawner().spawn(&app, instance.clone()).await {
+                    Ok(()) => started_instances.push(instance),
+                    Err(error) => {
+                        for started in started_instances {
+                            let _ = started.kill().await;
+                            app.remove_instance(&started.id);
+                        }
+                        app.update_config(previous_config);
+                        return Response::error(format!("Scale failed: {}", error));
+                    }
+                }
+            }
+        } else if (effective_instances as usize) < running_before {
+            let mut candidates: Vec<_> = app
+                .get_instances()
+                .into_iter()
+                .filter(|instance| {
+                    matches!(
+                        instance.state(),
+                        InstanceState::Starting | InstanceState::Ready | InstanceState::Healthy
+                    )
+                })
+                .collect();
+            candidates.sort_by_key(|instance| std::cmp::Reverse(instance.idle_time()));
+
+            let to_remove = running_before - effective_instances as usize;
+            for instance in candidates.into_iter().take(to_remove) {
+                if let Err(error) = self.drain_and_stop_instance(&app, &instance).await {
+                    return Response::error(format!("Scale failed: {}", error));
+                }
+            }
+        }
+
+        update_instance_count_metric(app_name, &app);
+        if app.get_instances().is_empty() && effective_instances == 0 {
+            app.set_state(AppState::Idle);
+            self.cold_start.reset(app_name);
+        } else {
+            app.set_state(AppState::Running);
+        }
+
+        self.persist_app_state(app_name).await;
+
+        Response::ok(serde_json::json!({
+            "status": "scaled",
+            "app": app_name,
+            "instances": effective_instances,
+            "requested_instances": requested_instances,
+            "worker_limited": self.runtime.worker && effective_instances != requested_instances
+        }))
+    }
+
+    async fn drain_and_stop_instance(
+        &self,
+        app: &Arc<App>,
+        instance: &Arc<crate::instances::Instance>,
+    ) -> Result<(), String> {
+        instance.set_state(InstanceState::Draining);
+        let deadline = tokio::time::Instant::now() + RollingUpdateConfig::default().drain_timeout;
+        while instance.in_flight() > 0 {
+            if tokio::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    app = %app.name(),
+                    instance = %instance.id,
+                    in_flight = instance.in_flight(),
+                    "Scale drain timeout exceeded, forcing stop"
+                );
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        instance
+            .kill()
+            .await
+            .map_err(|error| format!("failed to stop instance '{}': {}", instance.id, error))?;
+        app.remove_instance(&instance.id);
+        metrics::remove_instance_metrics(&app.name(), &instance.id);
+        Ok(())
     }
 
     async fn delete_app(&self, app_name: &str) -> Response {
@@ -1167,7 +1295,6 @@ impl ServerState {
             &target_path.to_string_lossy(),
             routes,
             None, // keep existing secrets on rollback
-            config.min_instances as u8,
             idle_timeout,
         )
         .await
@@ -1920,7 +2047,7 @@ fn read_server_config(data_dir: &Path) -> ServerConfigFile {
 
 /// Notify systemd that the server is ready (READY=1) and claim the main PID.
 /// During a zero-downtime reload handoff, optionally sends SIGUSR1 to the parent process so the
-/// old server starts draining.
+/// previous server process starts draining.
 fn sd_notify_ready() {
     #[cfg(unix)]
     {
@@ -2522,7 +2649,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     // Notify systemd that the server is ready and claim the main PID.
-    // This also signals the parent process (old server during reload) to start draining.
+    // This also signals the parent process from the prior reload generation to start draining.
     sd_notify_ready();
 
     // Run the server (this blocks until SIGTERM triggers graceful shutdown)
@@ -2987,7 +3114,6 @@ mod tests {
                 path: temp.path().to_string_lossy().to_string(),
                 routes: vec!["api.example.com".to_string()],
                 secrets: Some(HashMap::new()),
-                instances: 1,
                 idle_timeout: 300,
             })
             .await;
@@ -3023,7 +3149,6 @@ mod tests {
                 path: outside_release.to_string_lossy().to_string(),
                 routes: vec!["api.example.com".to_string()],
                 secrets: Some(HashMap::new()),
-                instances: 1,
                 idle_timeout: 300,
             })
             .await;
@@ -3067,7 +3192,6 @@ mod tests {
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["api.example.com".to_string()],
                 secrets: Some(HashMap::new()),
-                instances: 1,
                 idle_timeout: 300,
             })
             .await;
@@ -3252,7 +3376,7 @@ exit 1
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
             release_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","install":"mkdir -p node_modules/tako.sh/src && printf 'export {};\n' > node_modules/tako.sh/src/entrypoints/bun.ts"}"#,
+            r#"{"runtime":"bun","main":"index.ts","install":"mkdir -p node_modules/tako.sh/src/entrypoints && printf 'export {};\n' > node_modules/tako.sh/src/entrypoints/bun.ts"}"#,
         )
         .unwrap();
         std::fs::write(
@@ -3712,7 +3836,6 @@ exit 1
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["keep.localhost".to_string()],
                 secrets: None,
-                instances: 0,
                 idle_timeout: 300,
             })
             .await;
@@ -3806,6 +3929,168 @@ exit 1
             restored_secrets.get("DATABASE_URL"),
             Some(&"postgres://db".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn scale_command_persists_zero_instances_across_restore() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+
+        let state_a = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager.clone(),
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
+        let release_dir = temp
+            .path()
+            .join("apps")
+            .join("my-app")
+            .join("releases")
+            .join("v1");
+        std::fs::create_dir_all(&release_dir).unwrap();
+        std::fs::write(
+            release_dir.join("app.json"),
+            r#"{"runtime":"node","main":"index.js","start":["/bin/sh","-lc","sleep 600"]}"#,
+        )
+        .unwrap();
+
+        let app = state_a.app_manager.register_app(AppConfig {
+            name: "my-app".to_string(),
+            version: "v1".to_string(),
+            path: release_dir.clone(),
+            cwd: release_dir,
+            command: vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "sleep 600".to_string(),
+            ],
+            min_instances: 2,
+            max_instances: 4,
+            base_port: 4200,
+            idle_timeout: Duration::from_secs(300),
+            ..Default::default()
+        });
+        state_a.load_balancer.register_app(app.clone());
+        {
+            let mut route_table = state_a.routes.write().await;
+            route_table.set_app_routes("my-app".to_string(), vec!["api.example.com".to_string()]);
+        }
+
+        let first = app.allocate_instance();
+        first.set_state(InstanceState::Healthy);
+        let second = app.allocate_instance();
+        second.set_state(InstanceState::Healthy);
+
+        let response = state_a
+            .handle_command(Command::Scale {
+                app: "my-app".to_string(),
+                instances: 0,
+            })
+            .await;
+        assert!(matches!(response, Response::Ok { .. }));
+        assert_eq!(app.config.read().min_instances, 0);
+        assert!(app.get_instances().is_empty());
+
+        drop(state_a);
+
+        let state_b = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
+        state_b.restore_from_state_store().await.unwrap();
+
+        let restored = state_b.app_manager.get_app("my-app").expect("app restored");
+        assert_eq!(restored.config.read().min_instances, 0);
+        assert_eq!(restored.state(), AppState::Idle);
+    }
+
+    #[tokio::test]
+    async fn deploy_preserves_scaled_instance_count() {
+        let temp = TempDir::new().unwrap();
+        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        }));
+        let state = ServerState::new(
+            temp.path().to_path_buf(),
+            cert_manager,
+            None,
+            empty_challenge_tokens(),
+        )
+        .unwrap();
+
+        let current_release = temp
+            .path()
+            .join("apps")
+            .join("my-app")
+            .join("releases")
+            .join("v1");
+        std::fs::create_dir_all(&current_release).unwrap();
+        std::fs::write(
+            current_release.join("app.json"),
+            r#"{"runtime":"node","main":"index.js","start":["/bin/sh","-lc","sleep 600"]}"#,
+        )
+        .unwrap();
+
+        let app = state.app_manager.register_app(AppConfig {
+            name: "my-app".to_string(),
+            version: "v1".to_string(),
+            path: current_release.clone(),
+            cwd: current_release,
+            command: vec![
+                "/bin/sh".to_string(),
+                "-lc".to_string(),
+                "sleep 600".to_string(),
+            ],
+            min_instances: 2,
+            max_instances: 4,
+            base_port: 4300,
+            idle_timeout: Duration::from_secs(300),
+            ..Default::default()
+        });
+        state.load_balancer.register_app(app.clone());
+        {
+            let mut route_table = state.routes.write().await;
+            route_table.set_app_routes("my-app".to_string(), vec!["api.example.com".to_string()]);
+        }
+
+        let old_instance = app.allocate_instance();
+        old_instance.set_state(InstanceState::Healthy);
+
+        let broken_release = temp
+            .path()
+            .join("apps")
+            .join("my-app")
+            .join("releases")
+            .join("v2");
+        std::fs::create_dir_all(&broken_release).unwrap();
+        std::fs::write(
+            broken_release.join("app.json"),
+            r#"{"runtime":"node","main":"index.js","start":["/bin/sh","-lc","exit 1"]}"#,
+        )
+        .unwrap();
+
+        let response = state
+            .handle_command(Command::Deploy {
+                app: "my-app".to_string(),
+                version: "v2".to_string(),
+                path: broken_release.to_string_lossy().to_string(),
+                routes: vec!["api.example.com".to_string()],
+                secrets: Some(HashMap::new()),
+                idle_timeout: 300,
+            })
+            .await;
+
+        assert!(matches!(response, Response::Error { .. }));
+        assert_eq!(app.config.read().min_instances, 2);
     }
 
     #[tokio::test]
@@ -3983,7 +4268,6 @@ exit 1
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["broken.localhost".to_string()],
                 secrets: Some(HashMap::new()),
-                instances: 0,
                 idle_timeout: 300,
             })
             .await;
@@ -4130,7 +4414,6 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["warm.localhost".to_string()],
                 secrets: Some(env),
-                instances: 0,
                 idle_timeout: 300,
             })
             .await;

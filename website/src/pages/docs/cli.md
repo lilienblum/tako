@@ -44,6 +44,7 @@ Directory selection is command-scoped:
 - `tako dev ls`: list all registered dev apps with status.
 - `tako doctor`: print local dev diagnostics (DNS, socket, listener, apps, and local forwarding preflight checks).
 - `tako deploy [--env <ENV>] [-y|--yes] [DIR]`: build and deploy app.
+- `tako scale <N> [--env <ENV>] [--server <SERVER>] [--app <APP>]`: change the desired instance count for a deployed app.
 - `tako releases <subcommand>`: list release history and roll back to a previous release.
 - `tako delete [--env <ENV>] [-y|--yes] [DIR]`: delete deployed app (single-server interactive deletes show spinner progress; multi-server deletes use line-based status).
 - `tako servers <subcommand>`: manage server inventory and server runtime actions.
@@ -91,6 +92,26 @@ Notes:
   - line 2: commit message + cleanliness marker (`[clean]`, `[dirty]`, `[unknown]`)
 - `tako releases rollback` reuses current routes/env/secrets/scaling config and rolls app runtime back to the target release id using normal rolling-update behavior.
 - In interactive terminals, rollback to `production` prompts for confirmation unless `--yes` is provided.
+
+## `scale`
+
+```bash
+tako scale <N> --env <ENV>
+tako scale <N> --server <SERVER>
+tako scale <N> --server <SERVER> --env <ENV>
+tako scale <N> --server <SERVER> --app <APP>
+```
+
+Notes:
+
+- `N` is the desired instance count per targeted server.
+- New apps start at desired instance count `0`.
+- In a project directory, Tako resolves the app name from `tako.toml` (or directory fallback when top-level `name` is unset).
+- Outside a project directory, `--app` is required.
+- With `--env`, Tako scales every server listed in `[envs.<ENV>].servers`.
+- With `--server`, Tako scales only that server.
+- If both `--server` and `--env` are provided, the server must belong to that environment.
+- The desired instance count is stored on the server, so it survives deploys, rollbacks, and restarts.
 
 ## `servers` Subcommands
 
@@ -241,6 +262,12 @@ Deploy staging and skip confirmation:
 
 ```bash
 tako deploy --env staging --yes
+```
+
+Keep two warm instances on every production server:
+
+```bash
+tako scale 2 --env production
 ```
 
 Remove production app:

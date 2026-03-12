@@ -840,29 +840,18 @@ route = "{production_route}"
 # Optional: use multiple routes instead of `route`.
 # routes = ["{app_name}.example.com", "www.{app_name}.example.com"]
 
-# Environment sections only define routes.
+# Environment sections define routes, server membership, and idle scale-down.
 # Set environment variables in [vars] and [vars.<environment>].
 
 # [envs.staging]
 # route = "staging.{app_name}.example.com"
 # routes = ["staging.{app_name}.example.com", "www.staging.{app_name}.example.com"]
-
-# Default runtime settings for every mapped server.
-# [servers]
-# instances = 0
-# port = 80
+# servers = ["production"]
 # idle_timeout = 300
 
-# Per-server overrides. Section name must match `tako servers ls`.
-# [servers.production]
-# env = "production"
-# instances = 2
-# port = 8080
-# idle_timeout = 300
-
-# [servers.staging]
-# env = "staging"
-# instances = 1
+# [envs.staging]
+# route = "staging.{app_name}.example.com"
+# servers = ["staging"]
 # idle_timeout = 120
 "#,
         app_name = app_name,
@@ -951,12 +940,12 @@ mod tests {
             "expected vars section to be commented"
         );
         assert!(
-            rendered.contains("# [servers]"),
-            "expected server defaults section to be commented"
+            rendered.contains("# servers = [\"production\"]"),
+            "expected env-local server list example to be commented"
         );
         assert!(
-            rendered.contains("# [servers.production]"),
-            "expected per-server section to be commented"
+            rendered.contains("# idle_timeout = 300"),
+            "expected env-local idle timeout example to be commented"
         );
     }
 

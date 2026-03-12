@@ -324,8 +324,6 @@ cat > "$TAKO_HOME/config.toml" <<CFG
 name = "ssh"
 host = "server-ubuntu"
 port = 22
-
-[server_targets.ssh]
 arch = "$TARGET_ARCH"
 libc = "gnu"
 CFG

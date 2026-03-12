@@ -134,12 +134,6 @@ impl ServersToml {
 
         let mut config = ServersToml::default();
 
-        if raw.get("server_targets").is_some() {
-            return Err(ConfigError::Validation(
-                "Global server config no longer supports [server_targets.<name>]. Set `arch` and `libc` directly inside each [[servers]] entry.".to_string(),
-            ));
-        }
-
         if let Some(servers_array) = raw.get("servers")
             && let Some(array) = servers_array.as_array()
         {
@@ -620,24 +614,14 @@ arch = "x86_64"
     }
 
     #[test]
-    fn test_parse_rejects_old_server_targets_table() {
-        let toml = r#"
-[server_targets.ghost]
-arch = "x86_64"
-libc = "glibc"
-"#;
-        let err = ServersToml::parse(toml).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("no longer supports [server_targets")
-        );
-    }
-
-    #[test]
-    fn test_parse_from_config_toml_with_dev_section() {
+    fn test_parse_ignores_unrelated_top_level_tables() {
         let toml = r#"
 [dev]
 port = 55555
+
+[server_targets.ghost]
+arch = "x86_64"
+libc = "glibc"
 
 [[servers]]
 name = "la"
@@ -646,6 +630,7 @@ host = "1.2.3.4"
         let config = ServersToml::parse(toml).unwrap();
         assert_eq!(config.len(), 1);
         assert!(config.contains("la"));
+        assert!(config.get_target("ghost").is_none());
     }
 
     #[test]
@@ -1070,10 +1055,10 @@ port = 61234
     }
 
     #[test]
-    fn test_load_prefers_config_over_old_servers_path_when_present() {
+    fn test_load_prefers_config_when_adjacent_servers_file_exists() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        let old_servers_path = temp_dir.path().join("servers.toml");
+        let adjacent_servers_path = temp_dir.path().join("servers.toml");
 
         fs::write(
             &config_path,
@@ -1085,7 +1070,7 @@ host = "1.1.1.1"
         )
         .unwrap();
         fs::write(
-            &old_servers_path,
+            &adjacent_servers_path,
             r#"
 [[servers]]
 name = "from-old-path"
@@ -1100,10 +1085,10 @@ host = "2.2.2.2"
     }
 
     #[test]
-    fn test_load_does_not_fallback_to_old_servers_path_when_config_has_no_servers() {
+    fn test_load_does_not_read_adjacent_servers_file_when_config_has_no_servers() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        let old_servers_path = temp_dir.path().join("servers.toml");
+        let adjacent_servers_path = temp_dir.path().join("servers.toml");
 
         fs::write(
             &config_path,
@@ -1114,7 +1099,7 @@ port = 55555
         )
         .unwrap();
         fs::write(
-            &old_servers_path,
+            &adjacent_servers_path,
             r#"
 [[servers]]
 name = "from-old-path"
@@ -1128,13 +1113,13 @@ host = "2.2.2.2"
     }
 
     #[test]
-    fn test_load_does_not_fallback_to_old_servers_path_when_config_missing() {
+    fn test_load_returns_empty_when_config_missing_even_if_adjacent_servers_file_exists() {
         let temp_dir = TempDir::new().unwrap();
         let config_path = temp_dir.path().join("config.toml");
-        let old_servers_path = temp_dir.path().join("servers.toml");
+        let adjacent_servers_path = temp_dir.path().join("servers.toml");
 
         fs::write(
-            &old_servers_path,
+            &adjacent_servers_path,
             r#"
 [[servers]]
 name = "from-old-path"

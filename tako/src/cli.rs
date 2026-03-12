@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::commands::{self, delete, releases, secret, server, upgrade};
+use crate::commands::{self, delete, releases, scale, secret, server, upgrade};
 use clap::CommandFactory;
 
 const DEV_PUBLIC_PORT: u16 = 47831;
@@ -328,6 +328,53 @@ mod tests {
             panic!("expected Deploy");
         };
         assert_eq!(env.as_deref(), Some("staging"));
+    }
+
+    #[test]
+    fn scale_parses_instances_and_env() {
+        let cli = Cli::try_parse_from(["tako", "scale", "3", "--env", "staging"]).unwrap();
+        let Some(Commands::Scale {
+            instances,
+            env,
+            server,
+            app,
+        }) = cli.command
+        else {
+            panic!("expected Scale");
+        };
+        assert_eq!(instances, 3);
+        assert_eq!(env.as_deref(), Some("staging"));
+        assert!(server.is_none());
+        assert!(app.is_none());
+    }
+
+    #[test]
+    fn scale_parses_server_env_and_app() {
+        let cli = Cli::try_parse_from([
+            "tako",
+            "scale",
+            "2",
+            "--server",
+            "la-1",
+            "--env",
+            "production",
+            "--app",
+            "my-app",
+        ])
+        .unwrap();
+        let Some(Commands::Scale {
+            instances,
+            env,
+            server,
+            app,
+        }) = cli.command
+        else {
+            panic!("expected Scale");
+        };
+        assert_eq!(instances, 2);
+        assert_eq!(env.as_deref(), Some("production"));
+        assert_eq!(server.as_deref(), Some("la-1"));
+        assert_eq!(app.as_deref(), Some("my-app"));
     }
 
     #[test]
@@ -707,6 +754,24 @@ pub enum Commands {
         #[arg(value_name = "DIR")]
         dir: Option<std::path::PathBuf>,
     },
+
+    /// Change the desired instance count for a deployed app
+    Scale {
+        /// Desired instance count per targeted server
+        instances: u8,
+
+        /// Environment to scale
+        #[arg(long)]
+        env: Option<String>,
+
+        /// Specific server to scale
+        #[arg(long)]
+        server: Option<String>,
+
+        /// App name (required outside a project directory)
+        #[arg(long)]
+        app: Option<String>,
+    },
 }
 
 impl Cli {
@@ -775,6 +840,12 @@ impl Cli {
                 }
                 delete::run(env.as_deref(), yes)
             }
+            Commands::Scale {
+                instances,
+                env,
+                server,
+                app,
+            } => scale::run(instances, env.as_deref(), server.as_deref(), app.as_deref()),
         }
     }
 }

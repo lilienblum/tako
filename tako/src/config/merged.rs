@@ -46,20 +46,11 @@ pub struct ResolvedEnv {
 /// Resolved server configuration with defaults applied
 #[derive(Debug, Clone)]
 pub struct ResolvedServer {
-    /// Server name (from [servers.*] in tako.toml)
+    /// Server name referenced from `[envs.<name>].servers`.
     pub name: String,
 
     /// SSH connection details from global config
     pub connection: ServerEntry,
-
-    /// Number of instances (from server config or defaults)
-    pub instances: u8,
-
-    /// Port to use (from server config or defaults)
-    pub port: u16,
-
-    /// Idle timeout in seconds (from server config or defaults)
-    pub idle_timeout: u32,
 }
 
 impl MergedConfig {
@@ -176,8 +167,12 @@ impl MergedConfig {
 
     /// Resolve a specific server with defaults applied
     pub fn resolve_server(&self, server_name: &str) -> Result<ResolvedServer> {
-        // Verify server config exists in tako.toml
-        if !self.project.servers.contains_key(server_name) {
+        if !self
+            .project
+            .envs
+            .values()
+            .any(|env| env.servers.iter().any(|name| name == server_name))
+        {
             return Err(ConfigError::ServerNotFound(server_name.to_string()));
         }
 
@@ -194,17 +189,9 @@ impl MergedConfig {
             })?
             .clone();
 
-        // Apply defaults
-        let instances = self.project.get_effective_instances(server_name);
-        let port = self.project.get_effective_port(server_name);
-        let idle_timeout = self.project.get_effective_idle_timeout(server_name);
-
         Ok(ResolvedServer {
             name: server_name.to_string(),
             connection,
-            instances,
-            port,
-            idle_timeout,
         })
     }
 
@@ -228,7 +215,12 @@ impl MergedConfig {
     pub fn validate_servers(&self) -> Result<()> {
         let mut missing = Vec::new();
 
-        for server_name in self.project.servers.keys() {
+        for server_name in self
+            .project
+            .envs
+            .values()
+            .flat_map(|env| env.servers.iter())
+        {
             if !self.global_servers.contains(server_name) {
                 missing.push(server_name.clone());
             }
@@ -281,7 +273,7 @@ impl MergedConfig {
         if servers.is_empty() {
             return Err(ConfigError::Validation(format!(
                 "No servers configured for environment '{}'. \
-                 Add a [servers.<name>] section with env = \"{}\" in tako.toml.",
+                 Add `servers = [\"<name>\"]` under [envs.{}] in tako.toml.",
                 env_name, env_name
             )));
         }
@@ -311,20 +303,11 @@ LOG_LEVEL = "warn"
 
 [envs.production]
 route = "api.example.com"
+servers = ["prod-1"]
 
 [envs.staging]
 route = "staging.example.com"
-
-[servers]
-instances = 2
-port = 80
-
-[servers.prod-1]
-env = "production"
-instances = 4
-
-[servers.staging-1]
-env = "staging"
+servers = ["staging-1"]
 "#;
         fs::write(temp_dir.path().join("tako.toml"), tako_toml).unwrap();
 
@@ -416,8 +399,7 @@ host = "5.6.7.8"
         let server = config.resolve_server("prod-1").unwrap();
         assert_eq!(server.name, "prod-1");
         assert_eq!(server.connection.host, "1.2.3.4");
-        assert_eq!(server.instances, 4); // overridden
-        assert_eq!(server.port, 80); // default
+        assert_eq!(server.connection.port, 22);
     }
 
     #[test]
@@ -434,9 +416,8 @@ host = "5.6.7.8"
         .unwrap();
 
         let server = config.resolve_server("staging-1").unwrap();
-        assert_eq!(server.instances, 2); // default
-        assert_eq!(server.port, 80); // default
-        assert_eq!(server.idle_timeout, 300); // default
+        assert_eq!(server.connection.host, "5.6.7.8");
+        assert_eq!(server.connection.port, 22);
     }
 
     #[test]

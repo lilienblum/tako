@@ -112,14 +112,14 @@ Expected deploy behavior:
   - Expected: edge proxy caches only when response `Cache-Control` / `Expires` headers explicitly allow it.
   - Fix: for dynamic/user-specific responses, send `Cache-Control: no-store` (or stricter private/no-cache directives) from the app.
 - `504 App startup timed out`:
-  - Symptom: on-demand app (`instances = 0`) was scaled to zero and did not become healthy within startup timeout (30s default).
+  - Symptom: the app's desired instance count is `0`, it scaled to zero, and cold start did not become healthy within startup timeout (30s default).
   - Fix: check startup logs and health probe readiness.
 - `502 App failed to start`:
   - Symptom: cold start failed before the app reached ready/healthy state.
   - Fix: check runtime command, startup errors, and app dependencies.
 - `503 App startup queue is full`:
-  - Symptom: on-demand app (`instances = 0`) is currently cold-starting and concurrent startup waiters exceeded the queue limit (100 per app by default).
-  - Fix: retry shortly (proxy sends `Retry-After: 1`), or keep at least one warm instance (`instances > 0`) for bursty traffic.
+  - Symptom: an app with desired instance count `0` is currently cold-starting and concurrent startup waiters exceeded the queue limit (100 per app by default).
+  - Fix: retry shortly (proxy sends `Retry-After: 1`), or keep at least one warm instance with `tako scale 1` for bursty traffic.
 - `Prometheus metrics endpoint not responding`:
   - Symptom: scraping `http://127.0.0.1:9898/` returns connection refused or no data.
   - Fix: confirm `tako-server` is running. Check if `--metrics-port 0` was set (disables metrics). Verify you are scraping from localhost (the endpoint is not publicly accessible). Default port is 9898.

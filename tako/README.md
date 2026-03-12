@@ -51,7 +51,7 @@ Operational behavior highlights:
 - `tako releases rollback <release-id>` rolls target servers back to a previous release id using the normal rolling-update path.
 - `tako servers add` captures per-server target metadata (`arch`, `libc`) during SSH checks and stores it directly in each `[[servers]]` entry in `~/.tako/config.toml`.
 - `tako deploy` requires valid target metadata for each selected server and does not probe targets during deploy.
-- `tako deploy` validates startup even for `instances = 0` (on-demand) by briefly starting one instance; deploy fails if startup health checks fail.
+- New apps start with desired instance count `0`, and `tako deploy` still validates startup by briefly starting one warm instance; deploy fails if startup health checks fail.
 
 ## Run and Test
 

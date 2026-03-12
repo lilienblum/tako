@@ -55,7 +55,6 @@ struct ServerDeployTarget {
     target_label: String,
     archive_path: PathBuf,
     artifact_sha256: String,
-    instances: u8,
     idle_timeout: u32,
 }
 
@@ -679,8 +678,7 @@ async fn run_async(
             target_label,
             archive_path: archive_path.clone(),
             artifact_sha256,
-            instances: tako_config.get_effective_instances(server_name),
-            idle_timeout: tako_config.get_effective_idle_timeout(server_name),
+            idle_timeout: tako_config.get_idle_timeout(&env),
         });
     }
     if targets.len() > 1 {
@@ -754,7 +752,6 @@ async fn run_async(
         let archive_path = target.archive_path.clone();
         let artifact_sha256 = target.artifact_sha256.clone();
         let deploy_config = deploy_config.clone();
-        let instances = target.instances;
         let idle_timeout = target.idle_timeout;
         let use_spinner = use_per_server_spinners;
         let handle = tokio::spawn(async move {
@@ -764,7 +761,6 @@ async fn run_async(
                 &archive_path,
                 &artifact_sha256,
                 &target_label,
-                instances,
                 idle_timeout,
                 use_spinner,
             )
@@ -929,58 +925,12 @@ fn resolve_deploy_server_names(
     tako_config: &TakoToml,
     servers: &ServersToml,
     env: &str,
-    confirmation: Option<bool>,
 ) -> Result<Vec<String>, String> {
-    let resolved = super::helpers::resolve_servers_for_env(tako_config, servers, env)?;
-
-    if resolved.used_fallback {
-        let server_name = &resolved.names[0];
-        let confirmed = match confirmation {
-            Some(value) => value,
-            None => confirm_single_server_production_fallback(server_name)?,
-        };
-        if !confirmed {
-            return Err(
-                "Deployment cancelled. Add [servers.<name>] with env = \"production\" to tako.toml, or rerun with --env <name>."
-                    .to_string(),
-            );
-        }
-    }
-
-    Ok(resolved.names)
-}
-
-fn confirm_single_server_production_fallback(server_name: &str) -> Result<bool, String> {
-    if !output::is_interactive() {
-        return Ok(true);
-    }
-
-    output::warning(&format!(
-        "No server is mapped for {} in tako.toml.",
-        output::highlight("production")
-    ));
-    output::muted("Add this mapping manually:");
-    for line in format_production_mapping_example(server_name).lines() {
-        output::muted(&format!("  {}", line));
-    }
-    output::muted("If you choose 'Yes', tako will add this mapping to tako.toml for you.");
-
-    output::confirm(
-        &format_single_server_production_confirm_prompt(server_name),
-        true,
-    )
-    .map_err(|e| format!("Failed to read confirmation: {}", e))
-}
-
-fn format_production_mapping_example(server_name: &str) -> String {
-    format!("[servers.{server_name}]\nenv = \"production\"")
-}
-
-fn format_single_server_production_confirm_prompt(server_name: &str) -> String {
-    format!(
-        "Deploy to the only configured server ({}) and save this mapping to tako.toml?",
-        output::highlight(server_name)
-    )
+    let mut names = super::helpers::resolve_servers_for_env(tako_config, servers, env)?;
+    names.sort();
+    names.dedup();
+    super::helpers::validate_server_names(&names, servers)?;
+    Ok(names)
 }
 
 async fn resolve_deploy_server_names_with_setup(
@@ -989,18 +939,8 @@ async fn resolve_deploy_server_names_with_setup(
     env: &str,
     project_dir: &Path,
 ) -> Result<Vec<String>, String> {
-    let has_explicit_env_mapping = !tako_config.get_servers_for_env(env).is_empty();
-
-    match resolve_deploy_server_names(tako_config, servers, env, None) {
+    match resolve_deploy_server_names(tako_config, servers, env) {
         Ok(names) => {
-            if env == "production" && !has_explicit_env_mapping && names.len() == 1 {
-                persist_server_env_mapping(project_dir, &names[0], env)?;
-                output::info(&format!(
-                    "Mapped server {} to {} in tako.toml",
-                    output::highlight(&names[0]),
-                    output::highlight(env)
-                ));
-            }
             Ok(names)
         }
         Err(original_error) => {
@@ -1027,14 +967,12 @@ async fn resolve_deploy_server_names_with_setup(
             }
 
             let selected_server = if servers.len() == 1 {
-                let server_name = servers
+                servers
                     .names()
                     .into_iter()
                     .next()
                     .unwrap_or("<server>")
-                    .to_string();
-                choose_or_add_production_server_after_single_fallback(servers, &server_name, None)
-                    .await?
+                    .to_string()
             } else {
                 select_production_server_for_mapping(servers)?
             };
@@ -1048,46 +986,6 @@ async fn resolve_deploy_server_names_with_setup(
             Ok(vec![selected_server])
         }
     }
-}
-
-async fn choose_or_add_production_server_after_single_fallback(
-    servers: &mut ServersToml,
-    server_name: &str,
-    confirmation: Option<bool>,
-) -> Result<String, String> {
-    let confirmed = match confirmation {
-        Some(value) => value,
-        None => confirm_single_server_production_fallback(server_name)?,
-    };
-    if confirmed {
-        return Ok(server_name.to_string());
-    }
-
-    let added = server::prompt_to_add_server(&format_declined_single_server_reason(server_name))
-        .await
-        .map_err(|e| format!("Failed to run server setup: {}", e))?;
-
-    let Some(added_server_name) = added else {
-        return Err(
-            "Deployment cancelled. Add [servers.<name>] with env = \"production\" to tako.toml, or rerun with --env <name>."
-                .to_string(),
-        );
-    };
-
-    *servers = ServersToml::load().map_err(|e| e.to_string())?;
-    if !servers.contains(&added_server_name) {
-        return Err(format_server_not_found_error(&added_server_name));
-    }
-
-    Ok(added_server_name)
-}
-
-fn format_declined_single_server_reason(server_name: &str) -> String {
-    format!(
-        "Skipped using {} for {}. Add a different server now and use it for production deploy.",
-        output::highlight(server_name),
-        output::highlight("production")
-    )
 }
 
 fn select_production_server_for_mapping(servers: &ServersToml) -> Result<String, String> {
@@ -1109,7 +1007,7 @@ fn select_production_server_for_mapping(servers: &ServersToml) -> Result<String,
 
     output::select(
         "Select server for production deploy",
-        Some("No [servers.*] mapping was found. We will save your selection to tako.toml."),
+        Some("No servers are configured for production. We will save your selection to tako.toml."),
         options,
     )
     .map_err(|e| format!("Failed to read selection: {}", e))
@@ -1368,7 +1266,10 @@ fn persist_server_env_mapping(
     env: &str,
 ) -> Result<(), String> {
     TakoToml::upsert_server_env_in_dir(project_dir, server_name, env).map_err(|e| {
-        format!("Failed to update tako.toml with [servers.{server_name}] env = \"{env}\": {e}")
+        format!(
+            "Failed to update tako.toml with [envs.{env}].servers including '{}': {}",
+            server_name, e
+        )
     })
 }
 
@@ -1386,13 +1287,13 @@ fn format_environment_not_found_error(env: &str, available: &[String]) -> String
 
 fn format_no_servers_for_env_error(env: &str) -> String {
     format!(
-        "No servers configured for environment '{}'. Add [servers.<name>] with env = \"{}\" to tako.toml.",
+        "No servers configured for environment '{}'. Add `servers = [\"<name>\"]` under [envs.{}] in tako.toml.",
         env, env
     )
 }
 
 fn format_no_global_servers_error() -> String {
-    "No servers have been added. Run 'tako servers add <host>' first, then map it in tako.toml with [servers.<name>] env = \"production\".".to_string()
+    "No servers have been added. Run 'tako servers add <host>' first, then add the server under [envs.production].servers in tako.toml.".to_string()
 }
 
 fn format_server_not_found_error(server_name: &str) -> String {
@@ -3340,7 +3241,6 @@ async fn deploy_to_server(
     archive_path: &Path,
     artifact_sha256: &str,
     target_label: &str,
-    instances: u8,
     idle_timeout: u32,
     use_spinner: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -3507,7 +3407,6 @@ async fn deploy_to_server(
             path: release_app_dir.clone(),
             routes: config.routes.clone(),
             secrets: deploy_secrets,
-            instances,
             idle_timeout,
         };
         let json = serde_json::to_string(&cmd)?;
@@ -3565,7 +3464,7 @@ async fn deploy_to_server(
 }
 
 /// Query the remote server for the SHA-256 hash of an app's current secrets.
-/// Returns `None` if the query fails (e.g. old server version, app not found).
+/// Returns `None` if the query fails.
 async fn query_remote_secrets_hash(ssh: &SshClient, app_name: &str) -> Option<String> {
     let cmd = Command::GetSecretsHash {
         app: app_name.to_string(),
@@ -3679,7 +3578,7 @@ fn format_path_relative_to(project_dir: &Path, path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EnvConfig, ServerConfig, ServerEntry, ServersToml, TakoToml};
+    use crate::config::{EnvConfig, ServerEntry, ServersToml, TakoToml};
     use std::collections::HashMap;
     use tempfile::TempDir;
 
@@ -3946,13 +3845,11 @@ mod tests {
     #[test]
     fn resolve_deploy_servers_prefers_explicit_mapping() {
         let mut config = TakoToml::default();
-        config.servers.insert(
-            "prod-1".to_string(),
-            ServerConfig {
-                env: "production".to_string(),
-                instances: None,
-                port: None,
-                idle_timeout: None,
+        config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                servers: vec!["prod-1".to_string()],
+                ..Default::default()
             },
         );
 
@@ -3966,14 +3863,16 @@ mod tests {
             },
         );
 
-        let resolved =
-            resolve_deploy_server_names(&config, &servers, "production", Some(false)).unwrap();
+        let resolved = resolve_deploy_server_names(&config, &servers, "production").unwrap();
         assert_eq!(resolved, vec!["prod-1".to_string()]);
     }
 
     #[test]
-    fn resolve_deploy_servers_can_fallback_to_single_global_production_server() {
-        let config = TakoToml::default();
+    fn resolve_deploy_servers_require_explicit_mapping() {
+        let mut config = TakoToml::default();
+        config
+            .envs
+            .insert("production".to_string(), Default::default());
 
         let mut servers = ServersToml::default();
         servers.servers.insert(
@@ -3985,44 +3884,29 @@ mod tests {
             },
         );
 
-        let resolved =
-            resolve_deploy_server_names(&config, &servers, "production", Some(true)).unwrap();
-        assert_eq!(resolved, vec!["solo".to_string()]);
-    }
-
-    #[test]
-    fn resolve_deploy_servers_can_cancel_single_global_production_fallback() {
-        let config = TakoToml::default();
-
-        let mut servers = ServersToml::default();
-        servers.servers.insert(
-            "solo".to_string(),
-            ServerEntry {
-                host: "127.0.0.1".to_string(),
-                port: 22,
-                description: None,
-            },
-        );
-
-        let err =
-            resolve_deploy_server_names(&config, &servers, "production", Some(false)).unwrap_err();
-        assert!(err.contains("cancelled"));
+        let err = resolve_deploy_server_names(&config, &servers, "production").unwrap_err();
+        assert!(err.contains("No servers configured for environment 'production'"));
     }
 
     #[test]
     fn resolve_deploy_servers_errors_with_hint_when_no_global_servers_exist() {
-        let config = TakoToml::default();
+        let mut config = TakoToml::default();
+        config
+            .envs
+            .insert("production".to_string(), Default::default());
         let servers = ServersToml::default();
 
-        let err =
-            resolve_deploy_server_names(&config, &servers, "production", Some(true)).unwrap_err();
+        let err = resolve_deploy_server_names(&config, &servers, "production").unwrap_err();
         assert!(err.contains("No servers have been added"));
         assert!(err.contains("tako servers add <host>"));
     }
 
     #[test]
     fn resolve_deploy_servers_errors_for_non_production_without_mapping() {
-        let config = TakoToml::default();
+        let mut config = TakoToml::default();
+        config
+            .envs
+            .insert("staging".to_string(), Default::default());
         let mut servers = ServersToml::default();
         servers.servers.insert(
             "solo".to_string(),
@@ -4033,79 +3917,43 @@ mod tests {
             },
         );
 
-        let err =
-            resolve_deploy_server_names(&config, &servers, "staging", Some(true)).unwrap_err();
+        let err = resolve_deploy_server_names(&config, &servers, "staging").unwrap_err();
         assert!(err.contains("No servers configured for environment 'staging'"));
     }
 
     #[test]
-    fn format_production_mapping_example_uses_tako_toml_server_section() {
-        let example = format_production_mapping_example("tako-server");
-        assert!(example.contains("[servers.tako-server]"));
-        assert!(example.contains("env = \"production\""));
-    }
+    fn persist_server_env_mapping_updates_env_server_list() {
+        let temp_dir = TempDir::new().unwrap();
+        std::fs::write(
+            temp_dir.path().join("tako.toml"),
+            r#"
+name = "test-app"
 
-    #[test]
-    fn format_single_server_production_confirm_prompt_mentions_persisting_mapping() {
-        let prompt = format_single_server_production_confirm_prompt("tako-server");
-        assert!(prompt.contains("tako-server"));
-        assert!(prompt.contains("save this mapping"));
-        assert!(prompt.contains("tako.toml"));
-    }
-
-    #[test]
-    fn format_declined_single_server_reason_mentions_next_step() {
-        let reason = format_declined_single_server_reason("solo");
-        assert!(reason.contains("solo"));
-        assert!(reason.contains("Add a different server now"));
-        assert!(reason.contains("production"));
-    }
-
-    #[tokio::test]
-    async fn choose_or_add_production_server_after_single_fallback_keeps_existing_when_confirmed() {
-        let mut servers = ServersToml::default();
-        servers.servers.insert(
-            "solo".to_string(),
-            ServerEntry {
-                host: "127.0.0.1".to_string(),
-                port: 22,
-                description: None,
-            },
-        );
-
-        let selected =
-            choose_or_add_production_server_after_single_fallback(&mut servers, "solo", Some(true))
-                .await
-                .unwrap();
-        assert_eq!(selected, "solo");
-    }
-
-    #[tokio::test]
-    async fn choose_or_add_production_server_after_single_fallback_can_cancel_when_declined() {
-        let mut servers = ServersToml::default();
-        servers.servers.insert(
-            "solo".to_string(),
-            ServerEntry {
-                host: "127.0.0.1".to_string(),
-                port: 22,
-                description: None,
-            },
-        );
-
-        let err = choose_or_add_production_server_after_single_fallback(
-            &mut servers,
-            "solo",
-            Some(false),
+[envs.production]
+route = "app.example.com"
+"#,
         )
-        .await
-        .unwrap_err();
-        assert!(err.contains("Deployment cancelled"));
+        .unwrap();
+
+        persist_server_env_mapping(temp_dir.path(), "tako-server", "production").unwrap();
+
+        let saved = TakoToml::load_from_dir(temp_dir.path()).unwrap();
+        assert_eq!(saved.get_servers_for_env("production"), vec!["tako-server"]);
     }
 
     #[tokio::test]
     async fn resolve_deploy_servers_with_setup_persists_single_server_mapping() {
         let config = TakoToml {
             name: Some("test-app".to_string()),
+            envs: [(
+                "production".to_string(),
+                EnvConfig {
+                    route: Some("app.example.com".to_string()),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
             ..Default::default()
         };
         let mut servers = ServersToml::default();
@@ -4123,6 +3971,9 @@ mod tests {
             temp_dir.path().join("tako.toml"),
             r#"
 name = "test-app"
+
+[envs.production]
+route = "app.example.com"
 "#,
         )
         .unwrap();

@@ -1317,19 +1317,18 @@ dev = ["bun", "run", "dev"]
     }
 
     #[test]
-    fn stored_log_line_rejects_old_hms_json_shape() {
-        let old_line = r#"{"h":12,"m":3,"s":7,"level":"Info","scope":"app","message":"hello"}"#;
-        let decoded = parse_stored_log_line(old_line).unwrap();
+    fn stored_log_line_preserves_unrecognized_json_log_shape_as_message() {
+        let raw_line = r#"{"h":12,"m":3,"s":7,"level":"Info","scope":"app","message":"hello"}"#;
+        let decoded = parse_stored_log_line(raw_line).unwrap();
 
         let StoredLogEvent::Log(decoded) = decoded else {
             panic!("expected log event");
         };
 
-        // Old h/m/s payloads are no longer parsed as structured log records.
         assert_ne!(decoded.timestamp, "12:03:07");
         assert!(matches!(decoded.level, LogLevel::Info));
         assert_eq!(decoded.scope, "app");
-        assert_eq!(decoded.message, old_line);
+        assert_eq!(decoded.message, raw_line);
     }
 
     #[test]

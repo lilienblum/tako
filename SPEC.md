@@ -65,13 +65,10 @@ API_URL = "https://api.example.com"
 [vars.staging]
 API_URL = "https://staging-api.example.com"
 
-[servers]
-instances = 0             # Default: on-demand/serverless
-port = 80                 # Default: 80
-idle_timeout = 300        # Default: 5 minutes
-
 [envs.production]
 route = "api.example.com"  # Single route, or use 'routes' for multiple
+servers = ["la", "nyc"]
+idle_timeout = 300         # Optional, default: 5 minutes
 
 [envs.staging]
 routes = [
@@ -79,13 +76,8 @@ routes = [
   "www.staging.example.com",
   "example.com/api/*"
 ]
-
-[servers.la]
-env = "production"
-instances = 3             # Override default
-
-[servers.nyc]
-env = "production"
+servers = ["staging"]
+idle_timeout = 120
 ```
 
 **Variable merging order (later overrides earlier):**
@@ -108,6 +100,9 @@ env = "production"
 - If neither `tako.toml main` nor preset `main` is set, deploy/dev fail with guidance.
 - Top-level deploy/build keys in `tako.toml` are `main`, `runtime`, `preset`, and `[build]`; standalone top-level `dist` and `assets` keys are rejected.
 - Top-level `runtime` is optional; when set to `bun`, `node`, or `deno`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
+- Server membership is declared per environment with `[envs.<name>].servers`.
+- The same server name cannot be assigned to multiple non-development environments in one project.
+- `development` is for `tako dev`; `servers` declared there are ignored by deploy validation.
 - Top-level `preset` is optional; when omitted, `tako deploy`/`tako dev` use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`).
   - For `tako dev`, when top-level `preset` is omitted, Tako ignores preset top-level `dev` and runs a runtime-default command using resolved `main`:
     - Bun: `bun run node_modules/tako.sh/src/entrypoints/bun.ts {main}`
@@ -171,14 +166,18 @@ env = "production"
 
 **Instance behavior:**
 
-- `instances = 0`: On-demand with scale-to-zero. Deploy keeps one warm instance running so the app is immediately reachable after deploy. Instances are stopped after idle timeout.
+- Desired instances are runtime app state stored on each server, not `tako.toml` config.
+- New app deploys start with desired instances `0` on each server.
+- `tako scale` changes the desired instance count per targeted server, and that value persists across server restarts, deploys, and rollbacks.
+- Desired instances `0`: On-demand with scale-to-zero. Deploy keeps one warm instance running so the app is immediately reachable after deploy. Instances are stopped after idle timeout.
   - Once scaled to zero, the next request triggers a cold start and waits for readiness up to startup timeout (default 30 seconds). If no healthy instance is ready before timeout, proxy returns `504 App startup timed out`.
   - If cold start setup fails before readiness, proxy returns `502 App failed to start`.
   - While a cold start is already in progress, requests are queued up to 100 waiters per app (default). If the queue is full, proxy returns `503 App startup queue is full` with `Retry-After: 1`.
   - If warm-instance startup fails during deploy, deploy fails.
-- `instances = N` (N > 0): Always-on. Minimum N instances maintained, scales up on load, scales down after idle timeout.
+- Desired instances `N` (`N > 0`): keep at least `N` instances running on that server.
 - `idle_timeout`: Applies per-instance (default 300s / 5 minutes)
 - Instances are not stopped while serving in-flight requests.
+- Explicit scale-down drains in-flight requests first, then stops excess instances.
 
 ### ~/.tako/config.toml (Global User Config)
 
@@ -322,9 +321,7 @@ Template behavior:
   - `name`, `main`, top-level `runtime`/`preset`, and `[build]` (`include`, `exclude`, `assets`, `[[build.stages]]`)
   - `[vars]`
   - `[vars.<env>]`
-  - `[envs.<env>]` route declarations (`route`/`routes`)
-  - `[servers]`
-  - `[servers.<name>]` overrides
+  - `[envs.<env>]` route declarations (`route`/`routes`), server membership (`servers`), and idle scaling policy (`idle_timeout`)
 - Includes a docs link to `https://tako.sh/docs/tako-toml`.
 - Prompts for required app `name` (default from directory-derived app name).
 - Prompts for required production route (`[envs.production].route`) with default `{name}.example.com`.
@@ -501,7 +498,6 @@ Stream logs from all servers in an environment.
 
 Logs flow helpers:
 
-- For `production`, if no `[servers.*]` env mapping exists but exactly one global server exists, logs offers to use that server.
 - For `production`, if no servers are configured and the terminal is interactive, logs offers to run the add-server wizard.
 
 ### tako servers add [host] [--name {name}] [--description {text}] [--port {port}]
@@ -633,8 +629,8 @@ Shows a spinner with the total number of target servers while syncing, and repor
 
 Sync flow helpers:
 
-- For `production`, if no `[servers.*]` env mapping exists but exactly one global server exists, sync offers to target that server.
 - If no servers are configured and the terminal is interactive, sync offers to run the add-server wizard.
+- Environments with no mapped servers are skipped with a warning.
 - Sync sends `update_secrets` to `tako-server`; it does not write remote `.env` files. App instances restart automatically when secrets are updated via `UpdateSecrets`.
 
 ### tako secrets key import [--env {environment}]
@@ -668,9 +664,9 @@ In interactive terminals, deploying to `production` requires an explicit confirm
 Deploy flow helpers:
 
 - If no servers are configured and the terminal is interactive, deploy offers to run the add-server wizard before continuing.
-- For `production`, if no `[servers.*]` env mapping exists:
-  - with one global server: deploy shows a `tako.toml` mapping example, explains that selecting "Yes" will write it, and if declined offers the normal add-server wizard to add a different production server
-  - with multiple global servers (interactive terminal): deploy asks you to pick one, then writes `[servers.<name>] env = "production"` to `tako.toml`
+- For `production`, if `[envs.production].servers` is empty:
+  - with one global server: deploy selects it and writes it to `[envs.production].servers` in `tako.toml`
+  - with multiple global servers (interactive terminal): deploy asks you to pick one, then writes it to `[envs.production].servers`
 - Interactive deploy progress:
   - single-server deploys show spinner loaders for long per-server steps (connect, lock, upload, extract, etc.) while pending
   - multi-server deploys keep line-based progress output to avoid overlapping spinners
@@ -761,8 +757,8 @@ Deploy flow helpers:
 6. Update `current` symlink to the new release directory
 7. Clean up releases older than 30 days
 
-Rolling update target counts use the configured `instances` value for the incoming build itself (not old+new combined counts).
-When deploying with `instances = 0`, rolling deploy starts one warm instance for the new build so traffic is immediately served after deploy.
+Rolling update target counts use the app's current desired instance count stored on that server (not old+new combined counts).
+When the stored desired instance count is `0`, rolling deploy still starts one warm instance for the new build so traffic is immediately served after deploy.
 
 **On failure:** Automatic rollback - kill new instances, keep old ones running, return error to CLI.
 
@@ -788,13 +784,12 @@ When deploying with `instances = 0`, rolling deploy starts one warm instance for
 
 **Deployment target:**
 
-- If `[servers.*]` sections in tako.toml → deploy to environment's servers
-- If deploying to `production` with no `[servers.*]` mapping:
-  - exactly one server in `~/.tako/config.toml` `[[servers]]` → prompt to use it, show a mapping example, and persist `[servers.<name>] env = "production"` in `tako.toml` on confirmation
-    - if declined, offer the add-server wizard to create/select a different server for production, then persist that mapping
-  - multiple servers in `~/.tako/config.toml` `[[servers]]` (interactive terminal) → prompt to select one and persist `[servers.<name>] env = "production"` in `tako.toml`
+- If `[envs.<env>].servers` exists in `tako.toml` → deploy to those servers
+- If deploying to `production` with no `[envs.production].servers` mapping:
+  - exactly one server in `~/.tako/config.toml` `[[servers]]` → use it and persist it into `[envs.production].servers`
+  - multiple servers in `~/.tako/config.toml` `[[servers]]` (interactive terminal) → prompt to select one and persist it into `[envs.production].servers`
 - If no servers exist in `~/.tako/config.toml` `[[servers]]` → fail with hint to run `tako servers add <host>`
-- Otherwise, require explicit `[servers.*]` mapping in tako.toml
+- Otherwise, require explicit `[envs.<env>].servers` mapping in tako.toml
 
 ### tako releases ls [--env {environment}]
 
@@ -802,7 +797,7 @@ List release/build history for the current app across mapped environment servers
 
 - Environment defaults to `production`.
 - Environment must exist in `tako.toml` (`[envs.<name>]`).
-- Server targeting follows `[servers.*]` mappings for the selected environment (with the same single-server production fallback as deploy when exactly one global server exists).
+- Server targeting follows `[envs.<name>].servers` for the selected environment.
 - Output is release-centric and sorted newest-first:
   - line 1: release/build id + deployed timestamp
     - when deployed within 24 hours, append a muted relative hint in braces (for example `{3h ago}`)
@@ -819,6 +814,19 @@ Roll back the current app/environment to a previously deployed release/build id.
 - Rollback is executed per mapped server in parallel.
 - tako-server performs rollback by reusing current app routes/env/secrets/scaling config and switching runtime path/version to the target release, then running the standard rolling-update flow.
 - Partial failures are reported per server; successful servers remain rolled back.
+
+### tako scale {instances} [--env {environment}] [--server {server}] [--app {app}]
+
+Change the desired instance count for a deployed app.
+
+- `instances` is the desired instance count per targeted server.
+- In a project directory, Tako resolves the app name from `tako.toml` (or directory fallback when top-level `name` is unset).
+- Outside a project directory, `--app` is required.
+- When `--server` is omitted, `--env` is required and Tako scales every server listed in `[envs.<env>].servers`.
+- When `--server` is provided, Tako scales only that server.
+- When both `--env` and `--server` are provided, the server must belong to that environment.
+- Scale uses persisted runtime app state on the server, so the desired instance count survives deploys, rollbacks, and server restarts.
+- Scaling to `0` drains and stops excess instances after in-flight requests finish (or drain timeout).
 
 ### tako delete [--env {environment}] [--yes|-y] [DIR]
 
@@ -860,11 +868,9 @@ Delete is idempotent for absent app runtime state (safe to re-run for cleanup).
 **Delete target:**
 
 - Project mode:
-  - If `[servers.*]` sections in tako.toml map the target env → delete on those servers.
-  - If deleting from `production` with no `[servers.*]` mapping:
-    - exactly one server in `~/.tako/config.toml` `[[servers]]` → delete on that server.
+  - If `[envs.<env>].servers` maps the target env → delete on those servers.
   - If no servers exist in `~/.tako/config.toml` `[[servers]]` → fail with hint to run `tako servers add <host>`
-  - Otherwise, require explicit `[servers.*]` mapping in tako.toml.
+  - Otherwise, require explicit `[envs.<env>].servers` mapping in tako.toml.
 - Outside project mode:
   - Tako targets the subset of configured servers where the selected app/environment is currently deployed.
 
@@ -1075,6 +1081,7 @@ Response:
       "deploy_instances_idle_timeout",
       "on_demand_cold_start",
       "idle_scale_to_zero",
+      "scale",
       "upgrade_mode_control",
       "server_runtime_info",
       "release_history",
@@ -1113,9 +1120,14 @@ Response:
     "DATABASE_URL": "...",
     "API_KEY": "..."
   },
-  "instances": 0,
   "idle_timeout": 300
 }
+```
+
+- `scale` (updates the desired instance count for an app on one server):
+
+```json
+{ "command": "scale", "app": "my-app", "instances": 3 }
 ```
 
 - `get_secrets_hash` (returns the SHA-256 hash of an app's current secrets; used by deploy to skip sending secrets when unchanged):

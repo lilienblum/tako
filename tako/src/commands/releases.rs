@@ -89,10 +89,10 @@ fn resolve_server_names_for_env(
     env: &str,
 ) -> Result<Vec<String>, String> {
     let mut resolved = super::helpers::resolve_servers_for_env(tako_config, servers, env)?;
-    resolved.names.sort();
-    resolved.names.dedup();
-    super::helpers::validate_server_names(&resolved.names, servers)?;
-    Ok(resolved.names)
+    resolved.sort();
+    resolved.dedup();
+    super::helpers::validate_server_names(&resolved, servers)?;
+    Ok(resolved)
 }
 
 async fn list_releases(

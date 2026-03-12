@@ -14,14 +14,10 @@ WIDLCARD_SUFFIX = ".bun.tako-testbed.orb.local"
 routes = ["some-app.tako.test/bun", "*.bun-example.tako.test"]
 
 [envs.production]
-routes = ["demo.tako.sh/bun"] #, "*.bun.tako.sh"]
+routes = ["demo.tako.sh/bun", "*.bun.tako.sh"]
+servers = ["tako-demo"]
 
 [envs.staging]
 routes = ["tako-testbed.orb.local/bun", "*.bun.tako-testbed.orb.local"]
-
-[servers.tako-demo]
-env = "production"
-
-[servers.testbed]
-env = "staging"
-instances = 2
+servers = ["testbed"]
+idle_timeout = 300

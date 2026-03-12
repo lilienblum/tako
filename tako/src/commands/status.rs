@@ -1,5 +1,5 @@
 use crate::commands::server;
-use crate::config::ServersToml;
+use crate::config::{ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::{SshClient, SshConfig};
 use std::collections::HashMap;
@@ -897,28 +897,32 @@ async fn fetch_app_deploy_info(
 }
 
 fn parse_server_env_from_tako_toml(content: &str, server_name: &str) -> Option<String> {
-    let value: toml::Value = toml::from_str(content).ok()?;
-    let servers = value.get("servers")?.as_table()?;
+    let config = TakoToml::parse(content).ok()?;
 
-    if let Some(entry) = servers.get(server_name)
-        && let Some(table) = entry.as_table()
-        && let Some(env) = table.get("env").and_then(|v| v.as_str())
-    {
-        return Some(env.to_string());
-    }
+    let mut matching_envs = Vec::new();
+    let mut configured_envs = Vec::new();
+    for (env_name, env_config) in &config.envs {
+        if env_name == "development" {
+            continue;
+        }
 
-    let mut envs = Vec::new();
-    for value in servers.values() {
-        if let Some(table) = value.as_table()
-            && let Some(env) = table.get("env").and_then(|v| v.as_str())
-        {
-            envs.push(env.to_string());
+        if env_config.servers.iter().any(|name| name == server_name) {
+            matching_envs.push(env_name.clone());
+        }
+        if !env_config.servers.is_empty() {
+            configured_envs.push(env_name.clone());
         }
     }
-    envs.sort();
-    envs.dedup();
-    if envs.len() == 1 {
-        envs.into_iter().next()
+    matching_envs.sort();
+    matching_envs.dedup();
+    if matching_envs.len() == 1 {
+        return matching_envs.into_iter().next();
+    }
+
+    configured_envs.sort();
+    configured_envs.dedup();
+    if configured_envs.len() == 1 {
+        configured_envs.into_iter().next()
     } else {
         None
     }
@@ -1161,14 +1165,13 @@ mod tests {
     #[test]
     fn parse_server_env_from_tako_toml_prefers_matching_server_name() {
         let content = r#"
-[servers]
-instances = 0
+[envs.production]
+route = "app.example.com"
+servers = ["eu"]
 
-[servers.eu]
-env = "production"
-
-[servers.us]
-env = "staging"
+[envs.staging]
+route = "staging.example.com"
+servers = ["us"]
 "#;
         let env = parse_server_env_from_tako_toml(content, "us");
         assert_eq!(env.as_deref(), Some("staging"));
@@ -1177,8 +1180,9 @@ env = "staging"
     #[test]
     fn parse_server_env_from_tako_toml_falls_back_to_single_mapping() {
         let content = r#"
-[servers.only]
-env = "production"
+[envs.production]
+route = "app.example.com"
+servers = ["only"]
 "#;
         let env = parse_server_env_from_tako_toml(content, "missing");
         assert_eq!(env.as_deref(), Some("production"));
@@ -1187,11 +1191,13 @@ env = "production"
     #[test]
     fn parse_server_env_from_tako_toml_returns_none_for_ambiguous_mappings() {
         let content = r#"
-[servers.first]
-env = "production"
+[envs.production]
+route = "app.example.com"
+servers = ["first"]
 
-[servers.second]
-env = "staging"
+[envs.staging]
+route = "staging.example.com"
+servers = ["second"]
 "#;
         assert!(parse_server_env_from_tako_toml(content, "missing").is_none());
     }

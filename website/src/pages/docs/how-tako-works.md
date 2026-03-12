@@ -156,12 +156,12 @@ Tako uses active HTTP probing as the source of truth for instance health.
   - deeper failure threshold marks instances stopped/killed
 - Recovery: successful probe restores healthy status
 
-Instance mode by `instances`:
+Desired instances are runtime app state per server, changed with `tako scale` and preserved across deploys and restarts:
 
-- `instances = 0`: on-demand mode (scale-to-zero when idle). Deploy keeps one warm instance running, then idle timeout can scale it to zero. Once at zero, the next request waits for cold start readiness up to startup timeout (30s default); if still not ready, it returns `504 App startup timed out`. If startup fails early, it returns `502 App failed to start`. While startup is already in progress, requests queue up to 100 waiters per app by default; overflow returns `503 App startup queue is full` with `Retry-After: 1`.
-- `instances > 0`: always-on baseline, with health-based rotation during deploy
+- `0`: on-demand mode (scale-to-zero when idle). Deploy keeps one warm instance running, then idle timeout can scale it to zero. Once at zero, the next request waits for cold start readiness up to startup timeout (30s default); if still not ready, it returns `504 App startup timed out`. If startup fails early, it returns `502 App failed to start`. While startup is already in progress, requests queue up to 100 waiters per app by default; overflow returns `503 App startup queue is full` with `Retry-After: 1`.
+- `> 0`: keep at least that many instances running on the server.
 
-For on-demand deploys (`instances = 0`), deploy starts one warm instance; if warm startup fails, deploy fails.
+For on-demand deploys (desired instances `0`), deploy starts one warm instance; if warm startup fails, deploy fails.
 
 ## Prometheus Metrics
 

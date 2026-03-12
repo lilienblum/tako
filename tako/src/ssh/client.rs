@@ -152,20 +152,7 @@ impl SshClient {
         match resp {
             Response::Ok { .. } => Ok(()),
             Response::Error { message } => {
-                // Old servers will fail to deserialize `hello` and respond with "Invalid command".
-                // Also catch serde's unknown-variant wording.
-                let m = message.to_lowercase();
-                if m.contains("invalid command") && m.contains("hello") {
-                    return Err(
-                        "Remote tako-server is too old (no protocol handshake support). Upgrade tako-server.".to_string(),
-                    );
-                }
-                if m.contains("unknown variant") && m.contains("hello") {
-                    return Err(
-                        "Remote tako-server is too old (no protocol handshake support). Upgrade tako-server.".to_string(),
-                    );
-                }
-                if m.contains("protocol version mismatch") {
+                if message.to_lowercase().contains("protocol version mismatch") {
                     return Err(format!("Remote tako-server protocol mismatch: {message}"));
                 }
                 Err(format!("tako-server handshake failed: {message}"))
@@ -1000,12 +987,13 @@ l4QMs5cmnWfrM0GQ==\n\
     }
 
     #[test]
-    fn hello_response_interpretation_rejects_old_server() {
+    fn hello_response_interpretation_surfaces_invalid_command_message() {
         let resp = Response::Error {
             message: "Invalid command: unknown variant `hello`, expected one of ...".to_string(),
         };
         let err = SshClient::interpret_hello_response(&resp).unwrap_err();
-        assert!(err.to_lowercase().contains("too old"));
+        assert!(err.contains("tako-server handshake failed"));
+        assert!(err.contains("Invalid command"));
     }
 
     #[test]

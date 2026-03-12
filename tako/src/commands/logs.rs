@@ -562,20 +562,12 @@ async fn resolve_log_server_names(
     env: &str,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     match super::helpers::resolve_servers_for_env(tako_config, servers, env) {
-        Ok(resolved) => {
-            if resolved.used_fallback {
-                let only = &resolved.names[0];
-                if !output::confirm(
-                    &format!(
-                        "No [servers.*] mapping for 'production'. Stream logs from the only configured server ('{}')?",
-                        only
-                    ),
-                    true,
-                )? {
-                    return Err("Logs cancelled. Add [servers.<name>] with env = \"production\" to tako.toml.".into());
-                }
-            }
-            Ok(resolved.names)
+        Ok(mut resolved) => {
+            resolved.sort();
+            resolved.dedup();
+            super::helpers::validate_server_names(&resolved, servers)
+                .map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+            Ok(resolved)
         }
         Err(_) if env == "production" && servers.is_empty() => {
             if server::prompt_to_add_server(
@@ -591,7 +583,7 @@ async fn resolve_log_server_names(
                 }
             }
             Err("No servers have been added. Run 'tako servers add <host>' first, \
-                 then map it in tako.toml with [servers.<name>] env = \"production\"."
+                 then add it under [envs.production].servers in tako.toml."
                 .into())
         }
         Err(e) => Err(e.into()),
@@ -680,8 +672,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_log_server_names_uses_single_production_server_fallback() {
-        let tako_config = TakoToml::default();
+    async fn resolve_log_server_names_uses_explicit_env_mapping() {
+        let tako_config = TakoToml::parse(
+            r#"
+[envs.production]
+route = "app.example.com"
+servers = ["solo"]
+"#,
+        )
+        .unwrap();
         let mut servers = ServersToml::default();
         servers.servers.insert(
             "solo".to_string(),
@@ -694,7 +693,7 @@ mod tests {
 
         let names = resolve_log_server_names(&tako_config, &mut servers, "production")
             .await
-            .expect("should resolve with fallback");
+            .expect("should resolve explicit mapping");
         assert_eq!(names, vec!["solo".to_string()]);
     }
 

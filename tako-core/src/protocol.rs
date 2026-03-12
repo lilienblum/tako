@@ -30,12 +30,12 @@ pub enum Command {
         #[serde(default)]
         secrets: Option<HashMap<String, String>>,
 
-        /// Minimum number of instances to keep running (0 = on-demand).
-        instances: u8,
-
         /// Idle timeout in seconds (instances are stopped after this long with no requests).
         idle_timeout: u32,
     },
+
+    /// Update the desired minimum number of instances for an app.
+    Scale { app: String, instances: u8 },
 
     /// Stop an app
     Stop { app: String },
@@ -310,13 +310,11 @@ mod tests {
             path: "/opt/tako/apps/my-app/releases/v1".to_string(),
             routes: vec!["example.com".to_string()],
             secrets: Some(HashMap::from([("API_KEY".to_string(), "secret123".to_string())])),
-            instances: 0,
             idle_timeout: 300,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains(r#""command":"deploy""#));
         assert!(json.contains(r#""secrets":{"API_KEY":"secret123"}"#));
-        assert!(json.contains(r#""instances":0"#));
         assert!(json.contains(r#""idle_timeout":300"#));
     }
 
@@ -328,13 +326,37 @@ mod tests {
             "version":"v1",
             "path":"/opt/tako/apps/my-app/releases/v1",
             "routes":["example.com"],
-            "instances":1,
             "idle_timeout":300
         }"#;
         let cmd: Command = serde_json::from_str(json).unwrap();
         match cmd {
             Command::Deploy { secrets, .. } => assert!(secrets.is_none()),
             _ => panic!("Expected deploy command"),
+        }
+    }
+
+    #[test]
+    fn test_scale_command_serialization() {
+        let cmd = Command::Scale {
+            app: "my-app".to_string(),
+            instances: 3,
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""command":"scale""#));
+        assert!(json.contains(r#""app":"my-app""#));
+        assert!(json.contains(r#""instances":3"#));
+    }
+
+    #[test]
+    fn test_scale_command_deserialization() {
+        let json = r#"{"command":"scale","app":"my-app","instances":2}"#;
+        let cmd: Command = serde_json::from_str(json).unwrap();
+        match cmd {
+            Command::Scale { app, instances } => {
+                assert_eq!(app, "my-app");
+                assert_eq!(instances, 2);
+            }
+            _ => panic!("Expected scale command"),
         }
     }
 
@@ -520,7 +542,6 @@ mod tests {
             path: "/opt/tako/apps/my-app/releases/v1".to_string(),
             routes: vec!["example.com".to_string()],
             secrets: None,
-            instances: 1,
             idle_timeout: 300,
         };
         let json = serde_json::to_string(&cmd).unwrap();

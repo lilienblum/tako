@@ -37,14 +37,6 @@ pub struct TakoToml {
     /// [envs.*] sections - environment configurations
     #[serde(default)]
     pub envs: HashMap<String, EnvConfig>,
-
-    /// [servers] section - default server settings
-    #[serde(default)]
-    pub server_defaults: ServerDefaults,
-
-    /// [servers.*] sections - per-server configurations
-    #[serde(default)]
-    pub servers: HashMap<String, ServerConfig>,
 }
 
 /// Build configuration from [build].
@@ -95,56 +87,18 @@ pub struct EnvConfig {
 
     /// Multiple routes (mutually exclusive with route)
     pub routes: Option<Vec<String>>,
-}
 
-/// Default server settings from [servers]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ServerDefaults {
-    /// Default number of instances (0 = on-demand)
+    /// Servers assigned to this environment.
     #[serde(default)]
-    pub instances: u8,
+    pub servers: Vec<String>,
 
-    /// Default port (80)
-    #[serde(default = "default_port")]
-    pub port: u16,
-
-    /// Idle timeout in seconds (300 = 5 minutes)
+    /// Idle timeout in seconds (300 = 5 minutes).
     #[serde(default = "default_idle_timeout")]
     pub idle_timeout: u32,
 }
 
-/// Per-server configuration from [servers.*]
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct ServerConfig {
-    /// Environment this server belongs to (required)
-    pub env: String,
-
-    /// Override number of instances for this server
-    pub instances: Option<u8>,
-
-    /// Override port for this server
-    pub port: Option<u16>,
-
-    /// Override idle timeout for this server
-    pub idle_timeout: Option<u32>,
-}
-
-fn default_port() -> u16 {
-    80
-}
-
 fn default_idle_timeout() -> u32 {
     300
-}
-
-impl Default for ServerDefaults {
-    fn default() -> Self {
-        Self {
-            instances: 0,
-            port: default_port(),
-            idle_timeout: default_idle_timeout(),
-        }
-    }
 }
 
 impl TakoToml {
@@ -175,30 +129,13 @@ impl TakoToml {
             return Ok(Self::default());
         }
 
-        // First parse into a raw Value to handle the dynamic server configs
+        // First parse into a raw Value so the current schema can be validated.
         let raw: toml::Value = toml::from_str(content)?;
-
-        if raw.get("dist").is_some() {
-            return Err(ConfigError::Validation(
-                "'dist' is no longer supported; set `main` and [build] settings instead"
-                    .to_string(),
-            ));
-        }
-        if raw.get("assets").is_some() {
-            return Err(ConfigError::Validation(
-                "'assets' is no longer supported at the top level; use [build].assets instead"
-                    .to_string(),
-            ));
-        }
+        validate_top_level_keys(&raw)?;
 
         // Parse top-level metadata
         let name = parse_optional_string(&raw, "name")?;
         let main = parse_optional_string(&raw, "main")?;
-        if raw.get("adapter").is_some() {
-            return Err(ConfigError::Validation(
-                "'adapter' is no longer supported at top level; use `runtime`".to_string(),
-            ));
-        }
         let runtime = parse_optional_string(&raw, "runtime")?;
         let preset = parse_optional_string(&raw, "preset")?;
         let build = parse_build_config(&raw)?;
@@ -239,42 +176,6 @@ impl TakoToml {
             for (env_name, env_value) in table {
                 let env_config: EnvConfig = toml::from_str(&toml::to_string(env_value)?)?;
                 config.envs.insert(env_name.clone(), env_config);
-            }
-        }
-
-        // Parse [servers] section - both defaults and per-server configs
-        if let Some(servers) = raw.get("servers")
-            && let Some(table) = servers.as_table()
-        {
-            for (key, value) in table {
-                match key.as_str() {
-                    // These are default values in [servers]
-                    "instances" => {
-                        if let Some(v) = value.as_integer() {
-                            config.server_defaults.instances = v as u8;
-                        }
-                    }
-                    "port" => {
-                        if let Some(v) = value.as_integer() {
-                            config.server_defaults.port = v as u16;
-                        }
-                    }
-                    "idle_timeout" => {
-                        if let Some(v) = value.as_integer() {
-                            config.server_defaults.idle_timeout = v as u32;
-                        }
-                    }
-                    // Anything else is a [servers.{name}] section
-                    server_name => {
-                        if value.is_table() {
-                            let server_config: ServerConfig =
-                                toml::from_str(&toml::to_string(value)?)?;
-                            config
-                                .servers
-                                .insert(server_name.to_string(), server_config);
-                        }
-                    }
-                }
             }
         }
 
@@ -387,37 +288,30 @@ impl TakoToml {
                     validate_route_pattern(route)?;
                 }
             }
-        }
-
-        // Validate default port
-        if self.server_defaults.port == 0 {
-            return Err(ConfigError::Validation("Port cannot be 0".to_string()));
-        }
-
-        // Validate each server config
-        for (server_name, server_config) in &self.servers {
-            // Validate server name format
-            validate_server_name(server_name)?;
-
-            // Validate that referenced environment exists (if we have envs defined)
-            if !self.envs.is_empty()
-                && !self.envs.contains_key(&server_config.env)
-                && server_config.env != "production"
-            {
+            if env_config.idle_timeout == 0 {
                 return Err(ConfigError::Validation(format!(
-                    "Server '{}' references unknown environment '{}'",
-                    server_name, server_config.env
+                    "Environment '{}' has invalid idle_timeout 0",
+                    env_name
                 )));
             }
+            for server_name in &env_config.servers {
+                validate_server_name(server_name)?;
+            }
+        }
 
-            // Validate port if overridden
-            if let Some(port) = server_config.port
-                && port == 0
-            {
-                return Err(ConfigError::Validation(format!(
-                    "Server '{}' has invalid port 0",
-                    server_name
-                )));
+        let mut memberships: HashMap<&str, &str> = HashMap::new();
+        for (env_name, env_config) in &self.envs {
+            if env_name == "development" {
+                continue;
+            }
+
+            for server_name in &env_config.servers {
+                if let Some(previous_env) = memberships.insert(server_name.as_str(), env_name) {
+                    return Err(ConfigError::Validation(format!(
+                        "Server '{}' cannot belong to both '{}' and '{}'",
+                        server_name, previous_env, env_name
+                    )));
+                }
             }
         }
 
@@ -426,35 +320,18 @@ impl TakoToml {
 
     /// Get servers for a specific environment
     pub fn get_servers_for_env(&self, env_name: &str) -> Vec<&str> {
-        self.servers
-            .iter()
-            .filter(|(_, config)| config.env == env_name)
-            .map(|(name, _)| name.as_str())
-            .collect()
+        self.envs
+            .get(env_name)
+            .map(|env| env.servers.iter().map(String::as_str).collect())
+            .unwrap_or_default()
     }
 
-    /// Get effective instances for a server (with defaults applied)
-    pub fn get_effective_instances(&self, server_name: &str) -> u8 {
-        self.servers
-            .get(server_name)
-            .and_then(|s| s.instances)
-            .unwrap_or(self.server_defaults.instances)
-    }
-
-    /// Get effective port for a server (with defaults applied)
-    pub fn get_effective_port(&self, server_name: &str) -> u16 {
-        self.servers
-            .get(server_name)
-            .and_then(|s| s.port)
-            .unwrap_or(self.server_defaults.port)
-    }
-
-    /// Get effective idle_timeout for a server (with defaults applied)
-    pub fn get_effective_idle_timeout(&self, server_name: &str) -> u32 {
-        self.servers
-            .get(server_name)
-            .and_then(|s| s.idle_timeout)
-            .unwrap_or(self.server_defaults.idle_timeout)
+    /// Get effective idle timeout for an environment.
+    pub fn get_idle_timeout(&self, env_name: &str) -> u32 {
+        self.envs
+            .get(env_name)
+            .map(|env| env.idle_timeout)
+            .unwrap_or_else(default_idle_timeout)
     }
 
     /// Get merged vars for an environment (global + per-env)
@@ -487,7 +364,7 @@ impl TakoToml {
         self.envs.keys().cloned().collect()
     }
 
-    /// Upsert `[servers.<name>] env = "<env>"` in `tako.toml` under the given directory.
+    /// Add a server to `[envs.<name>].servers` in `tako.toml` under the given directory.
     pub fn upsert_server_env_in_dir<P: AsRef<Path>>(
         dir: P,
         server_name: &str,
@@ -508,30 +385,64 @@ impl TakoToml {
             .as_table_mut()
             .ok_or_else(|| ConfigError::Validation("tako.toml must be a TOML table".to_string()))?;
 
-        let servers = root
-            .entry("servers")
+        let envs = root
+            .entry("envs")
             .or_insert_with(|| toml::Value::Table(toml::map::Map::new()))
             .as_table_mut()
             .ok_or_else(|| {
                 ConfigError::Validation(
-                    "Invalid [servers] section: expected table structure".to_string(),
+                    "Invalid [envs] section: expected table structure".to_string(),
                 )
             })?;
 
-        match servers.get_mut(server_name) {
-            Some(existing) => {
-                let Some(server_table) = existing.as_table_mut() else {
+        for (env_name, env_value) in envs.iter_mut() {
+            if env_name == "development" || env_name == env {
+                continue;
+            }
+            let Some(env_table) = env_value.as_table_mut() else {
+                return Err(ConfigError::Validation(format!(
+                    "Cannot update env '{}': [envs.{}] is not a table",
+                    env_name, env_name
+                )));
+            };
+            if let Some(existing_servers) = env_table.get_mut("servers") {
+                let Some(array) = existing_servers.as_array_mut() else {
                     return Err(ConfigError::Validation(format!(
-                        "Cannot map server '{}': [servers.{}] is not a table",
-                        server_name, server_name
+                        "Cannot update env '{}': [envs.{}].servers must be an array",
+                        env_name, env_name
                     )));
                 };
-                server_table.insert("env".to_string(), toml::Value::String(env.to_string()));
+                array.retain(|value| value.as_str() != Some(server_name));
+            }
+        }
+
+        let env_entry = envs
+            .entry(env.to_string())
+            .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+        let Some(env_table) = env_entry.as_table_mut() else {
+            return Err(ConfigError::Validation(format!(
+                "Cannot map server '{}': [envs.{}] is not a table",
+                server_name, env
+            )));
+        };
+
+        match env_table.get_mut("servers") {
+            Some(existing_servers) => {
+                let Some(array) = existing_servers.as_array_mut() else {
+                    return Err(ConfigError::Validation(format!(
+                        "Cannot map server '{}': [envs.{}].servers must be an array",
+                        server_name, env
+                    )));
+                };
+                if !array.iter().any(|value| value.as_str() == Some(server_name)) {
+                    array.push(toml::Value::String(server_name.to_string()));
+                }
             }
             None => {
-                let mut server_table = toml::map::Map::new();
-                server_table.insert("env".to_string(), toml::Value::String(env.to_string()));
-                servers.insert(server_name.to_string(), toml::Value::Table(server_table));
+                env_table.insert(
+                    "servers".to_string(),
+                    toml::Value::Array(vec![toml::Value::String(server_name.to_string())]),
+                );
             }
         }
 
@@ -570,6 +481,25 @@ fn parse_optional_string(raw: &toml::Value, key: &str) -> Result<Option<String>>
         .ok_or_else(|| ConfigError::Validation(format!("'{}' must be a string", key)))
 }
 
+fn validate_top_level_keys(raw: &toml::Value) -> Result<()> {
+    let Some(table) = raw.as_table() else {
+        return Err(ConfigError::Validation(
+            "tako.toml must be a TOML table".to_string(),
+        ));
+    };
+
+    for key in table.keys() {
+        if !matches!(
+            key.as_str(),
+            "name" | "runtime" | "preset" | "build" | "main" | "vars" | "envs"
+        ) {
+            return Err(ConfigError::Validation(format!("Unknown key '{}'", key)));
+        }
+    }
+
+    Ok(())
+}
+
 fn parse_build_config(raw: &toml::Value) -> Result<BuildConfig> {
     let Some(value) = raw.get("build") else {
         return Ok(BuildConfig::default());
@@ -578,16 +508,7 @@ fn parse_build_config(raw: &toml::Value) -> Result<BuildConfig> {
     let table = value
         .as_table()
         .ok_or_else(|| ConfigError::Validation("'build' must be a table ([build])".to_string()))?;
-    if table.contains_key("adapter") {
-        return Err(ConfigError::Validation(
-            "'build.adapter' is no longer supported; use top-level `runtime`".to_string(),
-        ));
-    }
-    if table.contains_key("preset") {
-        return Err(ConfigError::Validation(
-            "'build.preset' is no longer supported; use top-level `preset`".to_string(),
-        ));
-    }
+    validate_build_keys(table)?;
     let table_value = toml::Value::Table(table.clone());
 
     let include = parse_string_array(&table_value, "include")?.unwrap_or_default();
@@ -601,6 +522,16 @@ fn parse_build_config(raw: &toml::Value) -> Result<BuildConfig> {
         assets,
         stages,
     })
+}
+
+fn validate_build_keys(table: &toml::value::Table) -> Result<()> {
+    for key in table.keys() {
+        if !matches!(key.as_str(), "include" | "exclude" | "assets" | "stages") {
+            return Err(ConfigError::Validation(format!("Unknown key 'build.{key}'")));
+        }
+    }
+
+    Ok(())
 }
 
 fn parse_build_stages(table: &toml::value::Table) -> Result<Vec<BuildStage>> {
@@ -1087,35 +1018,48 @@ runtime = "deno"
     }
 
     #[test]
-    fn test_parse_rejects_old_adapter_and_build_preset_keys() {
+    fn test_parse_rejects_unknown_top_level_keys() {
         let top_level_adapter = r#"
 adapter = "node"
 "#;
         let err = TakoToml::parse(top_level_adapter).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("'adapter' is no longer supported at top level")
-        );
+        assert!(err.to_string().contains("Unknown key 'adapter'"));
 
+        let top_level_dist = r#"
+dist = ".tako/dist"
+"#;
+        let err = TakoToml::parse(top_level_dist).unwrap_err();
+        assert!(err.to_string().contains("Unknown key 'dist'"));
+
+        let top_level_assets = r#"
+assets = ["dist/client"]
+"#;
+        let err = TakoToml::parse(top_level_assets).unwrap_err();
+        assert!(err.to_string().contains("Unknown key 'assets'"));
+
+        let top_level_servers = r#"
+[servers]
+production = ["prod-1"]
+"#;
+        let err = TakoToml::parse(top_level_servers).unwrap_err();
+        assert!(err.to_string().contains("Unknown key 'servers'"));
+    }
+
+    #[test]
+    fn test_parse_rejects_unknown_build_keys() {
         let build_adapter = r#"
 [build]
 adapter = "bun"
 "#;
         let err = TakoToml::parse(build_adapter).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("'build.adapter' is no longer supported")
-        );
+        assert!(err.to_string().contains("Unknown key 'build.adapter'"));
 
         let build_preset = r#"
 [build]
 preset = "bun/tanstack-start"
 "#;
         let err = TakoToml::parse(build_preset).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("'build.preset' is no longer supported")
-        );
+        assert!(err.to_string().contains("Unknown key 'build.preset'"));
     }
 
     #[test]
@@ -1214,33 +1158,33 @@ routes = ["api.example.com", "*.api.example.com", "example.com/api/*"]
         let toml = r#"
 [envs.production]
 route = "api.example.com"
-LOG_LEVEL = "info"
-LOG_FORMAT = "json"
+log_level = "info"
 "#;
         let err = TakoToml::parse(toml).unwrap_err();
         assert!(err.to_string().contains("unknown field"));
     }
 
     #[test]
-    fn test_parse_server_defaults() {
+    fn test_parse_env_servers_and_idle_timeout() {
         let toml = r#"
-[servers]
-instances = 3
-port = 8080
+[envs.production]
+route = "api.example.com"
+servers = ["la-prod", "nyc-prod"]
 idle_timeout = 600
 "#;
         let config = TakoToml::parse(toml).unwrap();
-        assert_eq!(config.server_defaults.instances, 3);
-        assert_eq!(config.server_defaults.port, 8080);
-        assert_eq!(config.server_defaults.idle_timeout, 600);
+        let env = config.envs.get("production").unwrap();
+        assert_eq!(
+            env.servers,
+            vec!["la-prod".to_string(), "nyc-prod".to_string()]
+        );
+        assert_eq!(env.idle_timeout, 600);
     }
 
     #[test]
-    fn test_default_server_values() {
+    fn test_default_env_idle_timeout_is_five_minutes() {
         let config = TakoToml::default();
-        assert_eq!(config.server_defaults.instances, 0);
-        assert_eq!(config.server_defaults.port, 80);
-        assert_eq!(config.server_defaults.idle_timeout, 300);
+        assert_eq!(config.get_idle_timeout("production"), 300);
     }
 
     #[test]
@@ -1264,13 +1208,10 @@ LOG_LEVEL = "info"
 
 [envs.production]
 route = "api.example.com"
+servers = ["prod-1"]
 
 [envs.staging]
 routes = ["staging.example.com", "*.staging.example.com"]
-
-[servers]
-instances = 2
-port = 80
 "#;
         let config = TakoToml::parse(toml).unwrap();
 
@@ -1300,8 +1241,8 @@ port = 80
 
         let staging = config.envs.get("staging").unwrap();
         assert_eq!(staging.routes.as_ref().unwrap().len(), 2);
-
-        assert_eq!(config.server_defaults.instances, 2);
+        let prod = config.envs.get("production").unwrap();
+        assert_eq!(prod.servers, vec!["prod-1".to_string()]);
     }
 
     // ==================== Validation Tests ====================
@@ -1381,10 +1322,11 @@ routes = ["staging.example.com"]
     }
 
     #[test]
-    fn test_validate_port_cannot_be_zero() {
+    fn test_validate_idle_timeout_cannot_be_zero() {
         let toml = r#"
-[servers]
-port = 0
+[envs.production]
+route = "api.example.com"
+idle_timeout = 0
 "#;
         assert!(TakoToml::parse(toml).is_err());
     }
@@ -1517,32 +1459,12 @@ preset = "custom:tanstack-start"
     }
 
     #[test]
-    fn test_parse_rejects_old_build_string_property() {
+    fn test_parse_rejects_non_table_build_property() {
         let toml = r#"
 build = "bun run build"
 "#;
         let err = TakoToml::parse(toml).unwrap_err();
         assert!(err.to_string().contains("'build' must be a table"));
-    }
-
-    #[test]
-    fn test_parse_rejects_old_dist_property() {
-        let old_key = ["di", "st"].join("");
-        let toml = format!(r#"{old_key} = ".tako/dist""#);
-        let err = TakoToml::parse(&toml).unwrap_err();
-        assert!(err.to_string().contains("'dist' is no longer supported"));
-    }
-
-    #[test]
-    fn test_parse_rejects_old_top_level_assets_property() {
-        let toml = r#"
-assets = ["dist/client"]
-"#;
-        let err = TakoToml::parse(toml).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("'assets' is no longer supported at the top level")
-        );
     }
 
     #[test]
@@ -1720,61 +1642,18 @@ LOG_LEVEL = "info"
         assert_eq!(merged.len(), 1);
     }
 
-    // ==================== Per-Server Config Tests ====================
-
-    #[test]
-    fn test_parse_per_server_configs() {
-        let toml = r#"
-[envs.production]
-route = "api.example.com"
-
-[servers]
-instances = 2
-port = 80
-
-[servers.la-prod]
-env = "production"
-instances = 4
-
-[servers.nyc-prod]
-env = "production"
-port = 8080
-"#;
-        let config = TakoToml::parse(toml).unwrap();
-
-        // Check defaults
-        assert_eq!(config.server_defaults.instances, 2);
-        assert_eq!(config.server_defaults.port, 80);
-
-        // Check per-server configs
-        let la = config.servers.get("la-prod").unwrap();
-        assert_eq!(la.env, "production");
-        assert_eq!(la.instances, Some(4));
-        assert_eq!(la.port, None);
-
-        let nyc = config.servers.get("nyc-prod").unwrap();
-        assert_eq!(nyc.env, "production");
-        assert_eq!(nyc.instances, None);
-        assert_eq!(nyc.port, Some(8080));
-    }
+    // ==================== Environment Server Mapping Tests ====================
 
     #[test]
     fn test_get_servers_for_env() {
         let toml = r#"
 [envs.production]
-route = "prod.example.com"
+route = "api.example.com"
+servers = ["la-prod", "nyc-prod"]
 
 [envs.staging]
 route = "staging.example.com"
-
-[servers.la-prod]
-env = "production"
-
-[servers.nyc-prod]
-env = "production"
-
-[servers.staging-server]
-env = "staging"
+servers = ["staging-server"]
 "#;
         let config = TakoToml::parse(toml).unwrap();
 
@@ -1792,103 +1671,57 @@ env = "staging"
     }
 
     #[test]
-    fn test_get_effective_values() {
+    fn test_get_idle_timeout() {
         let toml = r#"
 [envs.production]
 route = "api.example.com"
-
-[servers]
-instances = 2
-port = 80
 idle_timeout = 300
 
-[servers.la-prod]
-env = "production"
-instances = 4
-port = 8080
+[envs.staging]
+route = "staging.example.com"
 idle_timeout = 600
 "#;
         let config = TakoToml::parse(toml).unwrap();
 
-        // Server with overrides
-        assert_eq!(config.get_effective_instances("la-prod"), 4);
-        assert_eq!(config.get_effective_port("la-prod"), 8080);
-        assert_eq!(config.get_effective_idle_timeout("la-prod"), 600);
-
-        // Non-existent server falls back to defaults
-        assert_eq!(config.get_effective_instances("unknown"), 2);
-        assert_eq!(config.get_effective_port("unknown"), 80);
-        assert_eq!(config.get_effective_idle_timeout("unknown"), 300);
+        assert_eq!(config.get_idle_timeout("production"), 300);
+        assert_eq!(config.get_idle_timeout("staging"), 600);
+        assert_eq!(config.get_idle_timeout("unknown"), 300);
     }
 
     #[test]
-    fn test_server_config_partial_overrides() {
+    fn test_duplicate_non_development_server_membership_is_rejected() {
         let toml = r#"
 [envs.production]
 route = "api.example.com"
+servers = ["shared"]
 
-[servers]
-instances = 2
-port = 80
-idle_timeout = 300
-
-[servers.la-prod]
-env = "production"
-instances = 4
-"#;
-        let config = TakoToml::parse(toml).unwrap();
-
-        // Only instances is overridden
-        assert_eq!(config.get_effective_instances("la-prod"), 4);
-        assert_eq!(config.get_effective_port("la-prod"), 80); // default
-        assert_eq!(config.get_effective_idle_timeout("la-prod"), 300); // default
-    }
-
-    #[test]
-    fn test_server_config_invalid_name() {
-        let toml = r#"
-[envs.production]
-route = "api.example.com"
-
-[servers.INVALID_NAME]
-env = "production"
-"#;
-        assert!(TakoToml::parse(toml).is_err());
-    }
-
-    #[test]
-    fn test_server_config_unknown_env() {
-        let toml = r#"
-[envs.production]
-route = "api.example.com"
-
-[servers.la-prod]
-env = "nonexistent"
-"#;
-        assert!(TakoToml::parse(toml).is_err());
-    }
-
-    #[test]
-    fn test_server_config_implicit_production_env_allowed() {
-        let toml = r#"
 [envs.staging]
 route = "staging.example.com"
+servers = ["shared"]
+"#;
+        let err = TakoToml::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("shared"));
+    }
 
-[servers.la-prod]
-env = "production"
+    #[test]
+    fn test_duplicate_server_membership_with_development_is_allowed() {
+        let toml = r#"
+[envs.production]
+route = "api.example.com"
+servers = ["shared"]
+
+[envs.development]
+servers = ["shared"]
 "#;
         assert!(TakoToml::parse(toml).is_ok());
     }
 
     #[test]
-    fn test_server_config_invalid_port() {
+    fn test_env_servers_reject_invalid_server_name() {
         let toml = r#"
 [envs.production]
 route = "api.example.com"
-
-[servers.la-prod]
-env = "production"
-port = 0
+servers = ["INVALID_NAME"]
 "#;
         assert!(TakoToml::parse(toml).is_err());
     }

@@ -13,7 +13,7 @@ Rust crate for the remote Tako runtime and proxy.
 - Perform active health probing.
 - Serve management commands over Unix socket.
 - Report per-build runtime status (multiple concurrently running builds during rollout).
-- Validate on-demand (`instances = 0`) deploy startup before finalizing idle state.
+- Validate on-demand deploy startup when the desired instance count is `0` before finalizing idle state.
 - Validate app ids, release ids, and deploy paths at the management socket boundary.
 - Persist app runtime registration (config/routes + release metadata) to SQLite and restore it on restart.
 - Read non-secret env vars from release `app.json` and secrets from per-app `secrets.json` (0600) under the data directory.

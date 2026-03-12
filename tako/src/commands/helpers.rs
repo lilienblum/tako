@@ -1,62 +1,34 @@
 use crate::config::{ServersToml, TakoToml};
 use crate::output;
 
-/// Result of server resolution, indicating whether an explicit mapping was
-/// found or the single-production-server fallback was used.
-#[derive(Debug)]
-pub struct ResolvedServers {
-    pub names: Vec<String>,
-    /// True when no explicit env mapping existed and the single production
-    /// server fallback was applied.
-    pub used_fallback: bool,
-}
-
 /// Resolve which servers to target for a given environment.
 ///
-/// 1. Returns explicitly mapped servers from `[servers.*]` env config.
-/// 2. If none mapped and `env == "production"` with exactly one global server,
-///    falls back to that server (sets `used_fallback = true`).
-/// 3. Otherwise returns an error.
-///
-/// Commands that need user confirmation before accepting the fallback should
-/// check `used_fallback` and prompt accordingly.
+/// Returns explicitly mapped servers from `[envs.<name>].servers`.
 pub fn resolve_servers_for_env(
     tako_config: &TakoToml,
     servers: &ServersToml,
     env: &str,
-) -> Result<ResolvedServers, String> {
+) -> Result<Vec<String>, String> {
     let mapped: Vec<String> = tako_config
         .get_servers_for_env(env)
         .into_iter()
         .map(|s| s.to_string())
         .collect();
     if !mapped.is_empty() {
-        return Ok(ResolvedServers {
-            names: mapped,
-            used_fallback: false,
-        });
-    }
-
-    if env == "production" && servers.len() == 1 {
-        if let Some(name) = servers.names().into_iter().next() {
-            return Ok(ResolvedServers {
-                names: vec![name.to_string()],
-                used_fallback: true,
-            });
-        }
+        return Ok(mapped);
     }
 
     if servers.is_empty() {
         return Err(format!(
             "No servers have been added. Run 'tako servers add <host>' first, \
-             then map it in tako.toml with [servers.<name>] env = \"{}\".",
+             then add it under [envs.{}].servers in tako.toml.",
             env
         ));
     }
 
     Err(format!(
         "No servers configured for environment '{}'. \
-         Add [servers.<name>] with env = \"{}\" to tako.toml.",
+         Add `servers = [\"<name>\"]` under [envs.{}] in tako.toml.",
         env, env
     ))
 }
@@ -95,7 +67,7 @@ pub fn validate_server_names(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ServerConfig, ServerEntry};
+    use crate::config::{EnvConfig, ServerEntry};
 
     fn one_server_config() -> ServersToml {
         let mut servers = ServersToml::default();
@@ -113,29 +85,18 @@ mod tests {
     #[test]
     fn explicit_mapping_returns_mapped_servers() {
         let mut tako_config = TakoToml::default();
-        tako_config.servers.insert(
-            "web1".to_string(),
-            ServerConfig {
-                env: "staging".to_string(),
+        tako_config.envs.insert(
+            "staging".to_string(),
+            EnvConfig {
+                route: Some("staging.example.com".to_string()),
+                servers: vec!["web1".to_string()],
                 ..Default::default()
             },
         );
         let servers = one_server_config();
 
         let resolved = resolve_servers_for_env(&tako_config, &servers, "staging").unwrap();
-        assert_eq!(resolved.names, vec!["web1"]);
-        assert!(!resolved.used_fallback);
-    }
-
-    #[test]
-    fn production_single_server_fallback() {
-        let tako_config = TakoToml::default();
-        let servers = one_server_config();
-
-        let resolved =
-            resolve_servers_for_env(&tako_config, &servers, "production").unwrap();
-        assert_eq!(resolved.names, vec!["solo"]);
-        assert!(resolved.used_fallback);
+        assert_eq!(resolved, vec!["web1"]);
     }
 
     #[test]

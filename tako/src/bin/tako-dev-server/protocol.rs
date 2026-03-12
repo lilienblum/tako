@@ -89,12 +89,10 @@ pub enum Response {
 pub enum DevEvent {
     RequestStarted {
         host: String,
-        #[serde(default)]
         path: String,
     },
     RequestFinished {
         host: String,
-        #[serde(default)]
         path: String,
     },
     AppStatusChanged {
@@ -360,19 +358,9 @@ mod tests {
     }
 
     #[test]
-    fn serde_event_defaults_path_to_empty_for_older_payloads() {
-        // Old dev-server sends RequestStarted without path field.
+    fn serde_request_started_requires_path() {
         let json = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.tako.test"}}"#;
-        let resp: Response = serde_json::from_str(json).unwrap();
-        match resp {
-            Response::Event {
-                event: DevEvent::RequestStarted { host, path },
-            } => {
-                assert_eq!(host, "a.tako.test");
-                assert_eq!(path, "");
-            }
-            other => panic!("unexpected: {other:?}"),
-        }
+        assert!(serde_json::from_str::<Response>(json).is_err());
     }
 
 }

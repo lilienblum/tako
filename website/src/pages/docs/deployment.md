@@ -90,8 +90,9 @@ Install/refresh server runtime commands:
 - Optional top-level preset selection controls runtime/build defaults:
   - `runtime` (optional override: `bun`, `node`, `deno`)
   - `preset` (optional runtime-local override such as `tanstack-start`; defaults to adapter base preset from top-level `runtime` or detection)
-- Defines server-to-environment mapping via `[servers.<name>] env = "..."`.
-- Defines per-server scaling settings (`instances`, `idle_timeout`) via global and per-server overrides.
+- Defines server membership per environment via `[envs.<name>].servers = ["..."]`.
+- Defines per-environment idle scaling policy via `[envs.<name>].idle_timeout`.
+- Deploy does not set the desired instance count. New apps start at `0` and you change the live value with `tako scale`.
 
 ### Source bundle and runtime manifest
 

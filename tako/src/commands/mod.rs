@@ -6,6 +6,7 @@ pub mod helpers;
 pub mod init;
 pub mod logs;
 pub mod releases;
+pub mod scale;
 pub mod secret;
 pub mod server;
 pub mod status;

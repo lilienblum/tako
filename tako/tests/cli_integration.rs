@@ -839,7 +839,7 @@ mod secret_commands {
             r#"
 name = "test-app"
 runtime = "bun"
-entry = "index.ts"
+main = "index.ts"
 
 [envs.production]
 route = "prod.example.com"
@@ -859,7 +859,7 @@ route = "prod.example.com"
             r#"
 name = "test-app"
 runtime = "bun"
-entry = "index.ts"
+main = "index.ts"
 "#,
         )
         .unwrap();
@@ -954,13 +954,11 @@ entry = "index.ts"
             r#"
 name = "test-app"
 runtime = "bun"
-entry = "index.ts"
+main = "index.ts"
 
 [envs.production]
 route = "prod.example.com"
-
-[servers.prod-server]
-env = "production"
+servers = ["prod-server"]
 "#,
         )
         .unwrap();
@@ -1027,6 +1025,10 @@ mod status_command {
     fn test_status_shows_app_info() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().to_path_buf();
+        let home = temp.path().join("home");
+        let tako_home = temp.path().join("tako-home");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&tako_home).unwrap();
 
         // Create tako.toml with proper env section
         fs::write(
@@ -1034,9 +1036,7 @@ mod status_command {
             r#"
 name = "my-test-app"
 runtime = "bun"
-entry = "index.ts"
-port = 3000
-instances = 2
+main = "index.ts"
 
 [envs.production]
 route = "prod.example.com"
@@ -1044,9 +1044,9 @@ route = "prod.example.com"
         )
         .unwrap();
 
-        let output = run_tako(&["servers", "status"], &project_dir);
+        let output = run_tako_with_env(&["servers", "status"], &project_dir, &home, &tako_home);
 
-        // Status should show discovered app info or global server/app summary.
+        // Status should show discovered app info, a summary header, or an empty inventory message.
         let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));
         assert!(
             combined.contains("my-test-app")
@@ -1126,7 +1126,7 @@ mod deploy_command {
             r#"
 name = "test-app"
 runtime = "bun"
-entry = "index.ts"
+main = "index.ts"
 "#,
         )
         .unwrap();
@@ -1161,9 +1161,7 @@ name = "test-app"
 
 [envs.development]
 route = "dev.example.com"
-
-[servers.dev-1]
-env = "development"
+servers = ["dev-1"]
 "#,
         )
         .unwrap();
@@ -1197,7 +1195,7 @@ env = "development"
             r#"
 name = "test-app"
 runtime = "bun"
-entry = "index.ts"
+main = "index.ts"
 
 [envs.production]
 route = "prod.example.com"
@@ -1284,9 +1282,7 @@ preset = "bun"
 
 [envs.production]
 route = "prod.example.com"
-
-[servers.test-server]
-env = "production"
+servers = ["test-server"]
 "#,
         )
         .unwrap();
@@ -1299,8 +1295,6 @@ env = "production"
 name = "test-server"
 host = "127.0.0.1"
 port = 22222
-
-[server_targets.test-server]
 arch = "x86_64"
 libc = "glibc"
 "#,
@@ -1365,9 +1359,7 @@ preset = "bun"
 
 [envs.production]
 route = "prod.example.com"
-
-[servers.test-server]
-env = "production"
+servers = ["test-server"]
 "#,
         )
         .unwrap();
@@ -1379,8 +1371,6 @@ env = "production"
 name = "test-server"
 host = "127.0.0.1"
 port = 22222
-
-[server_targets.test-server]
 arch = "x86_64"
 libc = "glibc"
 "#,
@@ -1418,8 +1408,7 @@ libc = "glibc"
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().to_path_buf();
 
-        // Create tako.toml referencing a server that doesn't exist
-        // Use [servers.name] section to properly configure the server reference
+        // Create tako.toml referencing a server that doesn't exist.
         fs::write(
             project_dir.join("tako.toml"),
             r#"
@@ -1427,10 +1416,7 @@ name = "test-app"
 
 [envs.production]
 route = "prod.example.com"
-# Reference server by name in servers section
-
-[servers.nonexistent-server]
-env = "production"
+servers = ["nonexistent-server"]
 "#,
         )
         .unwrap();
@@ -1478,7 +1464,7 @@ env = "production"
             r#"
 name = "test-app"
 runtime = "node"
-entry = "index.js"
+main = "index.js"
 
 [envs.production]
 route = "prod.example.com"
@@ -1532,9 +1518,7 @@ name = "test-app"
 
 [envs.production]
 routes = ["api.example.com"]
-
-[servers.test-server]
-env = "production"
+servers = ["test-server"]
 "#,
         )
         .unwrap();
@@ -1550,8 +1534,6 @@ env = "production"
 name = "test-server"
 host = "127.0.0.1"
 port = 22222
-
-[server_targets.test-server]
 arch = "x86_64"
 libc = "glibc"
 "#,
@@ -1592,7 +1574,7 @@ libc = "glibc"
             r#"
 name = "test-app"
 runtime = "node"
-entry = "index.js"
+main = "index.js"
 
 [envs.production]
 routes = ["api.example.com"]

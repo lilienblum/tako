@@ -246,7 +246,7 @@ async fn ping(c: &mut LineClient) -> Result<(), Box<dyn std::error::Error>> {
     Err(format!("unexpected response: {}", line).into())
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(dead_code)]
 pub enum DevServerEvent {
     RequestStarted {
@@ -266,6 +266,35 @@ pub enum DevServerEvent {
         project_dir: String,
         app_name: String,
     },
+}
+
+fn parse_event_line(line: &str) -> Option<DevServerEvent> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    if value.get("type").and_then(|t| t.as_str()) != Some("Event") {
+        return None;
+    }
+
+    let event = value.get("event")?;
+    match event.get("type").and_then(|t| t.as_str())? {
+        "RequestStarted" => Some(DevServerEvent::RequestStarted {
+            host: event.get("host")?.as_str()?.to_string(),
+            path: event.get("path")?.as_str()?.to_string(),
+        }),
+        "RequestFinished" => Some(DevServerEvent::RequestFinished {
+            host: event.get("host")?.as_str()?.to_string(),
+            path: event.get("path")?.as_str()?.to_string(),
+        }),
+        "AppStatusChanged" => Some(DevServerEvent::AppStatusChanged {
+            project_dir: event.get("project_dir")?.as_str()?.to_string(),
+            app_name: event.get("app_name")?.as_str()?.to_string(),
+            status: event.get("status")?.as_str()?.to_string(),
+        }),
+        "RestartRequested" => Some(DevServerEvent::RestartRequested {
+            project_dir: event.get("project_dir")?.as_str()?.to_string(),
+            app_name: event.get("app_name")?.as_str()?.to_string(),
+        }),
+        _ => None,
+    }
 }
 
 pub async fn subscribe_events()
@@ -294,82 +323,8 @@ pub async fn subscribe_events()
             if line.trim().is_empty() {
                 continue;
             }
-            let v: serde_json::Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-            if v.get("type").and_then(|t| t.as_str()) != Some("Event") {
+            let Some(ev) = parse_event_line(&line) else {
                 continue;
-            }
-            let ev = match v
-                .get("event")
-                .and_then(|e| e.get("type"))
-                .and_then(|t| t.as_str())
-            {
-                Some("RequestStarted") => {
-                    let event = v.get("event").unwrap();
-                    let host = event
-                        .get("host")
-                        .and_then(|h| h.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let path = event
-                        .get("path")
-                        .and_then(|p| p.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    DevServerEvent::RequestStarted { host, path }
-                }
-                Some("RequestFinished") => {
-                    let event = v.get("event").unwrap();
-                    let host = event
-                        .get("host")
-                        .and_then(|h| h.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    let path = event
-                        .get("path")
-                        .and_then(|p| p.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    DevServerEvent::RequestFinished { host, path }
-                }
-                Some("AppStatusChanged") => {
-                    let event = v.get("event").unwrap();
-                    DevServerEvent::AppStatusChanged {
-                        project_dir: event
-                            .get("project_dir")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        app_name: event
-                            .get("app_name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        status: event
-                            .get("status")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                    }
-                }
-                Some("RestartRequested") => {
-                    let event = v.get("event").unwrap();
-                    DevServerEvent::RestartRequested {
-                        project_dir: event
-                            .get("project_dir")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        app_name: event
-                            .get("app_name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                    }
-                }
-                _ => continue,
             };
             let _ = tx.send(ev);
         }
@@ -670,6 +625,24 @@ mod tests {
             (DEV_SERVER_STARTUP_WAIT_ATTEMPTS as u64) * DEV_SERVER_STARTUP_WAIT_INTERVAL_MS,
             15_000
         );
+    }
+
+    #[test]
+    fn parse_event_line_parses_request_started_event() {
+        let line = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.tako.test","path":"/api"}}"#;
+        assert_eq!(
+            parse_event_line(line),
+            Some(DevServerEvent::RequestStarted {
+                host: "a.tako.test".to_string(),
+                path: "/api".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_event_line_rejects_request_started_without_path() {
+        let line = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.tako.test"}}"#;
+        assert_eq!(parse_event_line(line), None);
     }
 
     #[test]

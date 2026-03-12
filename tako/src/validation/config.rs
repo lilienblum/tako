@@ -81,19 +81,6 @@ pub fn validate_tako_toml(config: &TakoToml) -> ValidationResult {
         }
     }
 
-    // Check for server configs without matching environments
-    for (server_name, server_config) in &config.servers {
-        if !config.envs.contains_key(&server_config.env)
-            && !config.envs.is_empty()
-            && server_config.env != "production"
-        {
-            result.error(format!(
-                "Server '{}' references unknown environment '{}'",
-                server_name, server_config.env
-            ));
-        }
-    }
-
     // Check for environments without servers (development is exempt: servers are ignored there)
     for env_name in config.envs.keys() {
         let servers = config.get_servers_for_env(env_name);
@@ -113,16 +100,18 @@ pub fn validate_tako_toml(config: &TakoToml) -> ValidationResult {
         }
     }
 
-    // Check port range
-    if config.server_defaults.port == 0 {
-        result.error("Default port cannot be 0".to_string());
-    }
-
-    for (server_name, server_config) in &config.servers {
-        if let Some(port) = server_config.port
-            && port == 0
-        {
-            result.error(format!("Server '{}' has invalid port 0", server_name));
+    let mut memberships = std::collections::HashMap::new();
+    for (env_name, env_config) in &config.envs {
+        if env_name == "development" {
+            continue;
+        }
+        for server_name in &env_config.servers {
+            if let Some(previous_env) = memberships.insert(server_name, env_name) {
+                result.error(format!(
+                    "Server '{}' cannot belong to both '{}' and '{}'",
+                    server_name, previous_env, env_name
+                ));
+            }
         }
     }
 
@@ -147,8 +136,8 @@ pub fn validate_servers_toml(config: &ServersToml) -> ValidationResult {
     result
 }
 
-/// Validate that tako.toml servers reference existing global servers.
-/// If `deploy_env` is set, only validates servers targeting that environment.
+/// Validate that tako.toml server references exist in global server inventory.
+/// If `deploy_env` is set, only validates servers in that environment.
 pub fn validate_server_references(
     tako_config: &TakoToml,
     servers_config: &ServersToml,
@@ -156,18 +145,20 @@ pub fn validate_server_references(
 ) -> ValidationResult {
     let mut result = ValidationResult::new();
 
-    for (server_name, server_config) in &tako_config.servers {
+    for (env_name, env_config) in &tako_config.envs {
         if let Some(env) = deploy_env
-            && server_config.env != env
+            && env_name != env
         {
             continue;
         }
-        if !servers_config.contains(server_name) {
-            result.error(format!(
-                "Server '{}' is configured in tako.toml but not found in ~/.tako/config.toml [[servers]]. \
-                  Run 'tako servers add --name {} <host>' to add it.",
-                server_name, server_name
-            ));
+        for server_name in &env_config.servers {
+            if !servers_config.contains(server_name) {
+                result.error(format!(
+                    "Server '{}' is configured in tako.toml but not found in ~/.tako/config.toml [[servers]]. \
+                      Run 'tako servers add --name {} <host>' to add it.",
+                    server_name, server_name
+                ));
+            }
         }
     }
 
@@ -196,61 +187,7 @@ pub fn validate_full_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{EnvConfig, ServerConfig, ServerEntry, ServersToml, TakoToml};
-
-    #[test]
-    fn validate_tako_toml_allows_implicit_production_server_env() {
-        let mut config = TakoToml::default();
-        let staging = EnvConfig {
-            route: Some("staging.example.com".to_string()),
-            ..Default::default()
-        };
-        config.envs.insert("staging".to_string(), staging);
-        config.servers.insert(
-            "prod-1".to_string(),
-            ServerConfig {
-                env: "production".to_string(),
-                instances: None,
-                port: None,
-                idle_timeout: None,
-            },
-        );
-
-        let result = validate_tako_toml(&config);
-        assert!(
-            !result
-                .errors
-                .iter()
-                .any(|e| e.contains("unknown environment"))
-        );
-    }
-
-    #[test]
-    fn validate_tako_toml_rejects_unknown_non_production_server_env() {
-        let mut config = TakoToml::default();
-        let staging = EnvConfig {
-            route: Some("staging.example.com".to_string()),
-            ..Default::default()
-        };
-        config.envs.insert("staging".to_string(), staging);
-        config.servers.insert(
-            "bad-1".to_string(),
-            ServerConfig {
-                env: "qa".to_string(),
-                instances: None,
-                port: None,
-                idle_timeout: None,
-            },
-        );
-
-        let result = validate_tako_toml(&config);
-        assert!(
-            result
-                .errors
-                .iter()
-                .any(|e| e.contains("unknown environment 'qa'"))
-        );
-    }
+    use crate::config::{EnvConfig, ServerEntry, ServersToml, TakoToml};
 
     #[test]
     fn validate_tako_toml_rejects_environment_without_routes() {
@@ -303,16 +240,11 @@ mod tests {
     #[test]
     fn validate_tako_toml_warns_when_servers_configured_for_development() {
         let mut config = TakoToml::default();
-        config
-            .envs
-            .insert("development".to_string(), EnvConfig::default());
-        config.servers.insert(
-            "dev-server".to_string(),
-            ServerConfig {
-                env: "development".to_string(),
-                instances: None,
-                port: None,
-                idle_timeout: None,
+        config.envs.insert(
+            "development".to_string(),
+            EnvConfig {
+                servers: vec!["dev-server".to_string()],
+                ..Default::default()
             },
         );
 
@@ -326,24 +258,46 @@ mod tests {
     }
 
     #[test]
-    fn validate_server_references_skips_servers_for_other_envs() {
+    fn validate_tako_toml_rejects_duplicate_server_membership_across_non_development_envs() {
         let mut tako_config = TakoToml::default();
-        tako_config.servers.insert(
-            "prod-server".to_string(),
-            ServerConfig {
-                env: "production".to_string(),
-                instances: None,
-                port: None,
-                idle_timeout: None,
+        tako_config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                route: Some("prod.example.com".to_string()),
+                servers: vec!["shared".to_string()],
+                ..Default::default()
             },
         );
-        tako_config.servers.insert(
-            "staging-server".to_string(),
-            ServerConfig {
-                env: "staging".to_string(),
-                instances: None,
-                port: None,
-                idle_timeout: None,
+        tako_config.envs.insert(
+            "staging".to_string(),
+            EnvConfig {
+                route: Some("staging.example.com".to_string()),
+                servers: vec!["shared".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let result = validate_tako_toml(&tako_config);
+        assert!(result.errors.iter().any(|e| e.contains("shared")));
+    }
+
+    #[test]
+    fn validate_server_references_skips_servers_for_other_envs() {
+        let mut tako_config = TakoToml::default();
+        tako_config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                route: Some("prod.example.com".to_string()),
+                servers: vec!["prod-server".to_string()],
+                ..Default::default()
+            },
+        );
+        tako_config.envs.insert(
+            "staging".to_string(),
+            EnvConfig {
+                route: Some("staging.example.com".to_string()),
+                servers: vec!["staging-server".to_string()],
+                ..Default::default()
             },
         );
 

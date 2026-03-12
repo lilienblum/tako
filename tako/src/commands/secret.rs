@@ -475,25 +475,13 @@ fn resolve_secret_sync_server_names(
     tako_config: &crate::config::TakoToml,
     servers: &crate::config::ServersToml,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let resolved = match super::helpers::resolve_servers_for_env(tako_config, servers, env_name) {
+    let mut resolved = match super::helpers::resolve_servers_for_env(tako_config, servers, env_name) {
         Ok(r) => r,
         Err(_) => return Ok(Vec::new()),
     };
-
-    if resolved.used_fallback {
-        let only = &resolved.names[0];
-        if !output::confirm(
-            &format!(
-                "No [servers.*] mapping for 'production'. Sync secrets to the only configured server ('{}')?",
-                only
-            ),
-            true,
-        )? {
-            return Ok(Vec::new());
-        }
-    }
-
-    Ok(resolved.names)
+    resolved.sort();
+    resolved.dedup();
+    Ok(resolved)
 }
 
 async fn import_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
@@ -702,8 +690,15 @@ mod tests {
     }
 
     #[test]
-    fn resolve_secret_sync_server_names_uses_single_production_server_fallback() {
-        let tako_config = TakoToml::default();
+    fn resolve_secret_sync_server_names_uses_explicit_mapping() {
+        let tako_config = TakoToml::parse(
+            r#"
+[envs.production]
+route = "app.example.com"
+servers = ["solo"]
+"#,
+        )
+        .unwrap();
         let mut servers = ServersToml::default();
         servers.servers.insert(
             "solo".to_string(),
