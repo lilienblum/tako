@@ -60,7 +60,12 @@ async fn run_async(
                 .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?,
             None => {
                 if !interactive {
-                    validate_project_delete_env("production", tako_config)
+                    let env = "production";
+                    output::muted(&format!(
+                        "Using {} environment",
+                        output::highlight_muted(env)
+                    ));
+                    validate_project_delete_env(env, tako_config)
                         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
                 } else {
                     let deployments = discover_remote_deployments_with_progress(&servers).await?;

@@ -624,9 +624,9 @@ pub enum Commands {
 
     /// View remote logs
     Logs {
-        /// Environment to view logs from
-        #[arg(long, default_value = "production")]
-        env: String,
+        /// Environment to view logs from (defaults to production)
+        #[arg(long)]
+        env: Option<String>,
 
         /// Stream logs continuously
         #[arg(long, conflicts_with = "days")]
@@ -738,7 +738,7 @@ impl Cli {
                 if let Some(dir) = dir {
                     std::env::set_current_dir(dir)?;
                 }
-                commands::logs::run(&env, tail, days)
+                commands::logs::run(env.as_deref(), tail, days)
             }
             Commands::Dev { command, args } => {
                 let rt = tokio::runtime::Runtime::new()?;

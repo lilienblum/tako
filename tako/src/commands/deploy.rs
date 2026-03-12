@@ -237,6 +237,13 @@ async fn run_async(
 
     output::set_suppress(false);
 
+    if requested_env.is_none() {
+        output::muted(&format!(
+            "Using {} environment",
+            output::highlight_muted(&env)
+        ));
+    }
+
     // Skip confirmation if the user explicitly passed --env production (they
     // already know which environment they're targeting).
     let env_was_explicit = requested_env.is_some();

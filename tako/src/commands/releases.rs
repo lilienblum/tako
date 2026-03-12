@@ -66,7 +66,7 @@ async fn run_async(cmd: ReleaseCommands) -> Result<(), Box<dyn std::error::Error
 }
 
 fn resolve_env_name(requested_env: Option<&str>, tako_config: &TakoToml) -> Result<String, String> {
-    let env = requested_env.unwrap_or("production").to_string();
+    let env = super::helpers::resolve_env(requested_env);
     if !tako_config.envs.contains_key(env.as_str()) {
         let mut available: Vec<String> = tako_config.envs.keys().cloned().collect();
         available.sort();

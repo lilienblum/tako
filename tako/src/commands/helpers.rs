@@ -1,4 +1,5 @@
 use crate::config::{ServersToml, TakoToml};
+use crate::output;
 
 /// Result of server resolution, indicating whether an explicit mapping was
 /// found or the single-production-server fallback was used.
@@ -58,6 +59,21 @@ pub fn resolve_servers_for_env(
          Add [servers.<name>] with env = \"{}\" to tako.toml.",
         env, env
     ))
+}
+
+/// Resolve the target environment name, defaulting to "production".
+/// When the default is used (no explicit `--env`), prints a muted hint line.
+pub fn resolve_env(requested: Option<&str>) -> String {
+    if let Some(env) = requested {
+        env.to_string()
+    } else {
+        let env = "production";
+        output::muted(&format!(
+            "Using {} environment",
+            output::highlight_muted(env)
+        ));
+        env.to_string()
+    }
 }
 
 /// Validate that all resolved server names exist in the global servers config.

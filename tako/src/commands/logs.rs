@@ -12,13 +12,17 @@ use crate::ssh::SshClient;
 const DIM: &str = "\x1b[2m";
 const RESET: &str = "\x1b[0m";
 
-pub fn run(env: &str, tail: bool, days: u32) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(
+    requested_env: Option<&str>,
+    tail: bool,
+    days: u32,
+) -> Result<(), Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(env, tail, days))
+    rt.block_on(run_async(requested_env, tail, days))
 }
 
 async fn run_async(
-    env: &str,
+    requested_env: Option<&str>,
     tail: bool,
     days: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -27,10 +31,12 @@ async fn run_async(
     let tako_config = TakoToml::load_from_dir(&project_dir)?;
     let mut servers = ServersToml::load()?;
 
+    let env = super::helpers::resolve_env(requested_env);
+
     let app_name = require_app_name_from_config(&project_dir)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
 
-    if !tako_config.envs.contains_key(env) {
+    if !tako_config.envs.contains_key(env.as_str()) {
         let available: Vec<_> = tako_config.envs.keys().collect();
         return Err(format!(
             "Environment '{}' not found. Available: {}",
@@ -48,7 +54,7 @@ async fn run_async(
         .into());
     }
 
-    let server_names = resolve_log_server_names(&tako_config, &mut servers, env).await?;
+    let server_names = resolve_log_server_names(&tako_config, &mut servers, &env).await?;
 
     let colorize = output::is_interactive();
     let show_prefix = server_names.len() > 1;
@@ -157,9 +163,16 @@ async fn fetch_logs(
     show_prefix: bool,
     colorize: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let phase = output::PhaseSpinner::start("Fetching logs…");
+    let total = server_names.len();
+    let progress_label = if total > 1 {
+        format!("Fetching logs… {}", output::brand_muted(format!("[0/{total}]")))
+    } else {
+        "Fetching logs…".to_string()
+    };
+    let phase = output::PhaseSpinner::start(&progress_label);
 
     let collected: Arc<Mutex<Vec<(String, String)>>> = Arc::new(Mutex::new(Vec::new()));
+    let done_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
     let mut tasks = Vec::new();
     for server_name in server_names {
@@ -172,24 +185,27 @@ async fn fetch_logs(
         let app_name = app_name.to_string();
         let server_name = server_name.to_string();
         let collected = collected.clone();
+        let done_count = done_count.clone();
+        let phase_pb = phase.pb().cloned();
 
         tasks.push(tokio::spawn(async move {
             let mut ssh = SshClient::connect_to(&host, port).await?;
 
+            // Pipe through zstd if available on the server; falls back to raw output.
             let log_cmd = format!(
-                "sudo journalctl -u tako-server --since '{days} days ago' --no-pager -o cat 2>/dev/null \
+                "{{ sudo journalctl -u tako-server --since '{days} days ago' --no-pager -o cat 2>/dev/null \
                  | grep '\"app\":\"{app}\"' \
-                 || cat /opt/tako/apps/{app}/shared/logs/*.log 2>/dev/null",
+                 || cat /opt/tako/apps/{app}/shared/logs/*.log 2>/dev/null; \
+                 }} | if command -v zstd >/dev/null 2>&1; then zstd -c; else cat; fi",
                 app = app_name,
                 days = days
             );
 
-            let collector = Arc::new(Mutex::new(LineCollector::new(
+            let collector = Arc::new(Mutex::new(ByteCollector::new(
                 server_name,
                 collected,
             )));
             let c_out = collector.clone();
-            let c_err = collector.clone();
 
             let _ = ssh
                 .exec_streaming(
@@ -199,18 +215,25 @@ async fn fetch_logs(
                             c.push(data);
                         }
                     },
-                    move |data| {
-                        if let Ok(mut c) = c_err.lock() {
-                            c.push(data);
-                        }
-                    },
+                    move |_| {},
                 )
                 .await?;
 
-            if let Ok(mut c) = collector.lock() {
-                c.flush();
+            if let Ok(c) = Arc::try_unwrap(collector) {
+                c.into_inner().unwrap().finish();
             }
             ssh.disconnect().await?;
+
+            if total > 1 {
+                let done = done_count.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                if let Some(ref pb) = phase_pb {
+                    pb.set_message(format!(
+                        "Fetching logs… {}",
+                        output::brand_muted(format!("[{done}/{total}]"))
+                    ));
+                }
+            }
+
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         }));
     }
@@ -235,7 +258,7 @@ async fn fetch_logs(
         return Ok(());
     }
 
-    phase.finish(&format!("{} lines fetched", lines.len()));
+    phase.finish("Logs fetched");
 
     // Format and dedup.
     let formatted = format_and_dedup(&lines, show_prefix, colorize);
@@ -287,12 +310,13 @@ fn format_and_dedup(
 
 fn push_repeat(out: &mut String, count: u32, colorize: bool) {
     if count > 0 {
+        // Indent to align with the message column (date + space + time + space = 20 chars).
         if colorize {
             out.push_str(&format!(
-                "         {DIM}… and {count} more{RESET}\n"
+                "                    {DIM}… and {count} more{RESET}\n"
             ));
         } else {
-            out.push_str(&format!("         … and {count} more\n"));
+            out.push_str(&format!("                    … and {count} more\n"));
         }
     }
 }
@@ -301,42 +325,43 @@ fn push_repeat(out: &mut String, count: u32, colorize: bool) {
 // Line collection (non-tail)
 // ---------------------------------------------------------------------------
 
-struct LineCollector {
-    buf: String,
+/// Zstd magic number (first 4 bytes of any zstd frame).
+const ZSTD_MAGIC: [u8; 4] = [0x28, 0xB5, 0x2F, 0xFD];
+
+struct ByteCollector {
+    bytes: Vec<u8>,
     server: String,
     lines: Arc<Mutex<Vec<(String, String)>>>,
 }
 
-impl LineCollector {
+impl ByteCollector {
     fn new(server: String, lines: Arc<Mutex<Vec<(String, String)>>>) -> Self {
         Self {
-            buf: String::new(),
+            bytes: Vec::new(),
             server,
             lines,
         }
     }
 
     fn push(&mut self, data: &[u8]) {
-        self.buf.push_str(&String::from_utf8_lossy(data));
-        while let Some(nl) = self.buf.find('\n') {
-            let line = self.buf[..nl].to_string();
-            self.buf = self.buf[nl + 1..].to_string();
-            if !line.is_empty() {
-                self.lines
-                    .lock()
-                    .unwrap()
-                    .push((self.server.clone(), line));
-            }
-        }
+        self.bytes.extend_from_slice(data);
     }
 
-    fn flush(&mut self) {
-        if !self.buf.is_empty() {
-            let line = std::mem::take(&mut self.buf);
-            self.lines
-                .lock()
-                .unwrap()
-                .push((self.server.clone(), line));
+    fn finish(self) {
+        let text = if self.bytes.len() >= 4 && self.bytes[..4] == ZSTD_MAGIC {
+            match zstd::stream::decode_all(std::io::Cursor::new(&self.bytes)) {
+                Ok(decompressed) => String::from_utf8_lossy(&decompressed).into_owned(),
+                Err(_) => String::from_utf8_lossy(&self.bytes).into_owned(),
+            }
+        } else {
+            String::from_utf8_lossy(&self.bytes).into_owned()
+        };
+
+        let mut lines = self.lines.lock().unwrap();
+        for line in text.lines() {
+            if !line.is_empty() {
+                lines.push((self.server.clone(), line.to_string()));
+            }
         }
     }
 }
@@ -479,7 +504,7 @@ fn parse_json_log(line: &str) -> Option<(String, String, String)> {
     }
 
     let hms = if timestamp.len() >= 19 {
-        timestamp[11..19].to_string()
+        format!("{} {}", &timestamp[..10], &timestamp[11..19])
     } else {
         timestamp.to_string()
     };
@@ -582,7 +607,7 @@ mod tests {
     fn parse_json_log_info() {
         let line = r#"{"timestamp":"2026-03-10T12:34:56.789012Z","level":"INFO","fields":{"message":"Instance is healthy","app":"bun-example","instance":"abc123"}}"#;
         let (hms, level, msg) = parse_json_log(line).unwrap();
-        assert_eq!(hms, "12:34:56");
+        assert_eq!(hms, "2026-03-10 12:34:56");
         assert_eq!(level, "INFO");
         assert!(msg.contains("Instance is healthy"));
         assert!(msg.contains("app=bun-example"));
@@ -593,7 +618,7 @@ mod tests {
     fn parse_json_log_warn() {
         let line = r#"{"timestamp":"2026-03-10T08:00:00.000Z","level":"WARN","fields":{"message":"timeout","app":"foo"}}"#;
         let (hms, level, msg) = parse_json_log(line).unwrap();
-        assert_eq!(hms, "08:00:00");
+        assert_eq!(hms, "2026-03-10 08:00:00");
         assert_eq!(level, "WARN");
         assert!(msg.starts_with("timeout"));
         assert!(msg.contains("app=foo"));
@@ -693,5 +718,36 @@ mod tests {
             err.to_string()
                 .contains("No servers configured for environment 'staging'")
         );
+    }
+
+    #[test]
+    fn byte_collector_decompresses_zstd() {
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let mut collector = ByteCollector::new("s1".to_string(), lines.clone());
+
+        let raw = b"line one\nline two\nline three\n";
+        let compressed = zstd::bulk::compress(raw, 3).unwrap();
+        collector.push(&compressed);
+        collector.finish();
+
+        let result = lines.lock().unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0], ("s1".to_string(), "line one".to_string()));
+        assert_eq!(result[1], ("s1".to_string(), "line two".to_string()));
+        assert_eq!(result[2], ("s1".to_string(), "line three".to_string()));
+    }
+
+    #[test]
+    fn byte_collector_handles_raw_text() {
+        let lines = Arc::new(Mutex::new(Vec::new()));
+        let mut collector = ByteCollector::new("s1".to_string(), lines.clone());
+
+        collector.push(b"hello\nworld\n");
+        collector.finish();
+
+        let result = lines.lock().unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].1, "hello");
+        assert_eq!(result[1].1, "world");
     }
 }

@@ -10,9 +10,9 @@ pub enum SecretCommands {
         /// Secret name (uppercase, underscores)
         name: String,
 
-        /// Environment to set the secret for
-        #[arg(long, default_value = "production")]
-        env: String,
+        /// Environment to set the secret for (defaults to production)
+        #[arg(long)]
+        env: Option<String>,
 
         /// Sync secrets to servers after setting
         #[arg(long)]
@@ -95,7 +95,10 @@ fn read_secret_value(prompt: &str) -> Result<String, Box<dyn std::error::Error>>
 
 async fn run_async(cmd: SecretCommands) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
-        SecretCommands::Set { name, env, sync } => set_secret(&name, &env, sync).await,
+        SecretCommands::Set { name, env, sync } => {
+            let env = super::helpers::resolve_env(env.as_deref());
+            set_secret(&name, &env, sync).await
+        }
         SecretCommands::Rm { name, env, sync } => remove_secret(&name, env.as_deref(), sync).await,
         SecretCommands::Ls => list_secrets().await,
         SecretCommands::Sync { env } => sync_secrets(env.as_deref()).await,
@@ -496,8 +499,8 @@ fn resolve_secret_sync_server_names(
 async fn import_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     use crate::crypto::EncryptionKey;
 
-    let env = target_env.unwrap_or("production");
-    let key_store = crate::crypto::KeyStore::for_env(env)?;
+    let env = super::helpers::resolve_env(target_env);
+    let key_store = crate::crypto::KeyStore::for_env(&env)?;
 
     let prompt = format!("Enter base64 key for environment '{}'", env);
 
@@ -512,15 +515,15 @@ async fn import_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::
 
     output::success(&format!(
         "Imported key for environment {}.",
-        output::highlight(env)
+        output::highlight(&env)
     ));
 
     Ok(())
 }
 
 async fn export_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    let env = target_env.unwrap_or("production");
-    let key_store = crate::crypto::KeyStore::for_env(env)?;
+    let env = super::helpers::resolve_env(target_env);
+    let key_store = crate::crypto::KeyStore::for_env(&env)?;
 
     if !key_store.key_exists() {
         return Err(format!("No key found for environment '{}'.", env).into());
@@ -531,7 +534,7 @@ async fn export_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::
 
     output::success(&format!(
         "Copied key for environment {} to clipboard.",
-        output::highlight(env)
+        output::highlight(&env)
     ));
 
     Ok(())

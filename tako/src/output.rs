@@ -227,6 +227,12 @@ pub fn highlight(value: &str) -> String {
     bold(&brand_accent(value))
 }
 
+/// Format a value in bold+accent that stays legible inside a `brand_muted()` context.
+/// e.g. `muted(&format!("Using {} environment", highlight_muted("production")))`
+pub fn highlight_muted(value: &str) -> String {
+    bold_muted(&brand_accent(value))
+}
+
 // ---------------------------------------------------------------------------
 // Spinner helpers
 // ---------------------------------------------------------------------------
@@ -510,6 +516,10 @@ impl PhaseSpinner {
             start: Instant::now(),
             finished: false,
         }
+    }
+
+    pub fn pb(&self) -> Option<&ProgressBar> {
+        self.pb.as_ref()
     }
 
     pub fn finish(mut self, success: &str) {

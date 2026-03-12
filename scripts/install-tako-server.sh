@@ -642,6 +642,9 @@ fi
 if ! need_cmd sudo; then
   install_pkgs sudo
 fi
+if ! need_cmd zstd; then
+  install_pkgs zstd
+fi
 ensure_mise_toolchain
 ensure_nc
 install_sqlite_runtime
