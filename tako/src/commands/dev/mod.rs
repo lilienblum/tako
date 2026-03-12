@@ -1941,7 +1941,7 @@ pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::er
             let _ = crate::dev_server_client::unregister_app(&app.project_dir).await;
             crate::output::success(&format!(
                 "Stopped {}",
-                crate::output::highlight(&app.app_name)
+                crate::output::strong(&app.app_name)
             ));
         }
         return Ok(());
@@ -1959,7 +1959,7 @@ pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::er
                 let _ = crate::dev_server_client::unregister_app(&app.project_dir).await;
                 crate::output::success(&format!(
                     "Stopped {}",
-                    crate::output::highlight(&app.app_name)
+                    crate::output::strong(&app.app_name)
                 ));
                 return Ok(());
             }
@@ -1975,7 +1975,7 @@ pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::er
             let _ = crate::dev_server_client::unregister_app(&a.project_dir).await;
             crate::output::success(&format!(
                 "Stopped {}",
-                crate::output::highlight(&a.app_name)
+                crate::output::strong(&a.app_name)
             ));
         }
         None => {
@@ -2110,12 +2110,12 @@ pub async fn run(
             crate::output::section("Dev Server");
             crate::output::warning(&format!(
                 "A dev server is already running with {}.",
-                crate::output::highlight(&restart_reason)
+                crate::output::strong(&restart_reason)
             ));
             let should_restart = crate::output::confirm(
                 &format!(
                     "Restart it with listen {}?",
-                    crate::output::highlight(&listen_addr)
+                    crate::output::strong(&listen_addr)
                 ),
                 true,
             )?;

@@ -60,7 +60,7 @@ async fn run_global_status(servers: &ServersToml) -> Result<(), Box<dyn std::err
         output::warning("No servers configured.");
         output::hint(&format!(
             "Run {} to add one.",
-            output::highlight("tako servers add")
+            output::strong("tako servers add")
         ));
         return Ok(());
     }
@@ -103,7 +103,7 @@ async fn collect_global_status_results(
     let total = join_set.len();
     let mut done = 0usize;
 
-    let spinner = output::TrackedSpinner::start(&format!("Retrieving [{done}/{total}]"));
+    let spinner = output::TrackedSpinner::start(&format!("Retrieving {}", output::muted_progress(done, total)));
 
     let mut server_results: HashMap<String, GlobalServerStatusResult> = HashMap::new();
 
@@ -112,14 +112,14 @@ async fn collect_global_status_results(
             Ok(pair) => pair,
             Err(err) => {
                 done += 1;
-                spinner.set_message(&format!("Retrieving [{done}/{total}]"));
+                spinner.set_message(&format!("Retrieving {}", output::muted_progress(done, total)));
                 eprintln!("Status task panicked: {err}");
                 continue;
             }
         };
 
         done += 1;
-        spinner.set_message(&format!("Retrieving [{done}/{total}]"));
+        spinner.set_message(&format!("Retrieving {}", output::muted_progress(done, total)));
 
         server_results.insert(server_name, status);
     }
@@ -186,7 +186,7 @@ fn render_global_status(
 
         let mut entries: Vec<CardEntry> = Vec::new();
 
-        let header = output::highlight(server_name).to_string();
+        let header = format!("Server {}", output::strong(server_name));
 
         // If retrieval failed, only show the error.
         if let Some(ref err) = global.error {
@@ -339,6 +339,7 @@ fn render_global_status(
     }
 
     // Render
+    let indent = output::INDENT;
     for card in &cards {
         println!("{}", card.header);
         if !card.entries.is_empty() {
@@ -351,10 +352,10 @@ fn render_global_status(
                     } => {
                         let colored_value = colorize(value, *color);
                         let padded = format!("{:<width$}", label, width = max_label);
-                        println!("{}  {colored_value}", output::brand_muted(&padded),);
+                        println!("{indent}{}  {colored_value}", output::brand_muted(&padded),);
                     }
                     CardEntry::Section { label, children } => {
-                        println!("{}", output::brand_muted(label));
+                        println!("{indent}{}", output::brand_muted(label));
 
                         for (ci, (child_label, child_value, child_color)) in
                             children.iter().enumerate()
@@ -371,7 +372,7 @@ fn render_global_status(
                                     width = max_label.saturating_sub(2)
                                 );
                                 println!(
-                                    "  {} {}  {colored_value}",
+                                    "{indent}  {} {}  {colored_value}",
                                     output::brand_muted(branch),
                                     output::brand_muted(&padded),
                                 );
@@ -380,7 +381,7 @@ fn render_global_status(
                                 let branch = if child_label.is_empty() { " " } else { "└" };
                                 let padded = format!("{:<width$}", child_label, width = max_label);
                                 println!(
-                                    "{} {}  {colored_value}",
+                                    "{indent}{} {}  {colored_value}",
                                     output::brand_muted(branch),
                                     output::brand_muted(&padded),
                                 );

@@ -13,7 +13,7 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 // ---------------------------------------------------------------------------
 
 fn print_paths() {
-    println!("{}", output::highlight("Paths"));
+    println!("{}", output::strong("Paths"));
 
     let config_dir = crate::paths::tako_config_dir()
         .map(|p| p.display().to_string())
@@ -41,7 +41,7 @@ fn print_paths() {
 
 fn print_certificate() {
     println!();
-    println!("{}", output::highlight("Local CA"));
+    println!("{}", output::strong("Local CA"));
 
     let store = match crate::dev::LocalCAStore::new() {
         Ok(s) => s,
@@ -86,7 +86,7 @@ async fn print_dev_server() {
     };
 
     println!();
-    println!("{}", output::highlight("Development server"));
+    println!("{}", output::strong("Development server"));
 
     let info = match crate::dev_server_client::info().await {
         Ok(info) => info,

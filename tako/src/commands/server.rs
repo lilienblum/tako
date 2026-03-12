@@ -1,6 +1,7 @@
 use crate::output;
 use crate::ssh::SshClient;
 use clap::Subcommand;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tako_core::ServerRuntimeInfo;
 
@@ -503,7 +504,7 @@ pub async fn add_server(
                 servers.save()?;
                 output::success(&format!(
                     "Updated description for server {} (tako@{}:{})",
-                    output::highlight(&server_name),
+                    output::strong(&server_name),
                     host,
                     port
                 ));
@@ -513,7 +514,7 @@ pub async fn add_server(
 
             output::success(&format!(
                 "Server {} is already configured (tako@{}:{})",
-                output::highlight(&server_name),
+                output::strong(&server_name),
                 host,
                 port
             ));
@@ -524,8 +525,8 @@ pub async fn add_server(
         let confirm = output::confirm(
             &format!(
                 "Host {} already exists as {}. Override?",
-                output::highlight(host),
-                output::highlight(&existing_name)
+                output::strong(host),
+                output::strong(&existing_name)
             ),
             false,
         )?;
@@ -632,7 +633,7 @@ pub async fn add_server(
     }
     servers.save()?;
 
-    output::success(&format!("Added server {}", output::highlight(&server_name),));
+    output::success(&format!("Added server {}", output::strong(&server_name),));
     record_server_history(host, &server_name, port);
 
     Ok(Some(server_name))
@@ -730,7 +731,7 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
         output::error("No servers configured.");
         output::hint(&format!(
             "Run {} to add a server.",
-            output::highlight("tako servers add")
+            output::strong("tako servers add")
         ));
         return Ok(());
     }
@@ -741,7 +742,7 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
         }
 
         let confirm = output::confirm(
-            &format!("Remove {}?", output::highlight(name)),
+            &format!("Remove {}?", output::strong(name)),
             false,
         )?;
 
@@ -753,7 +754,7 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
         servers.remove(name)?;
         servers.save()?;
 
-        output::success(&format!("Removed {}", output::highlight(name)));
+        output::success(&format!("Removed {}", output::strong(name)));
         return Ok(());
     }
 
@@ -798,13 +799,13 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
             // Step 1: Confirm
             1 => {
                 match output::confirm(
-                    &format!("Remove {}?", output::highlight(&selected_name)),
+                    &format!("Remove {}?", output::strong(&selected_name)),
                     false,
                 ) {
                     Ok(true) => {
                         servers.remove(&selected_name)?;
                         servers.save()?;
-                        output::success(&format!("Removed {}", output::highlight(&selected_name)));
+                        output::success(&format!("Removed {}", output::strong(&selected_name)));
                         return Ok(());
                     }
                     Ok(false) => {
@@ -831,7 +832,7 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
         output::warning("No servers configured");
         output::hint(&format!(
             "Run {} to add a server.",
-            output::highlight("tako servers add")
+            output::strong("tako servers add")
         ));
         return Ok(());
     }
@@ -848,12 +849,12 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
         let header = if entry.port != 22 {
             format!(
                 "{} ({}:{})",
-                output::highlight(name),
+                output::strong(name),
                 entry.host,
                 entry.port
             )
         } else {
-            format!("{} ({})", output::highlight(name), entry.host)
+            format!("{} ({})", output::strong(name), entry.host)
         };
         println!("{}", header);
 
@@ -881,7 +882,7 @@ async fn restart_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
     output::with_spinner_async(
-        &format!("Connecting to {}", output::highlight(name)),
+        &format!("Connecting to {}", output::strong(name)),
         "Connected",
         ssh.connect(),
     )
@@ -1055,7 +1056,7 @@ async fn upgrade_servers(
         output::error("No servers configured.");
         output::hint(&format!(
             "Run {} to add a server.",
-            output::highlight("tako servers add")
+            output::strong("tako servers add")
         ));
         return Ok(());
     }
@@ -1071,267 +1072,185 @@ async fn upgrade_servers(
         names
     };
 
-    output::muted(&format!(
-        "You're on {} channel",
-        output::bold_muted(channel.as_str())
-    ));
+    output::ContextBlock::new().channel(channel.as_str()).print();
 
-    // Upgrade all servers in parallel with a single spinner.
+    let interactive = output::is_interactive();
+    let indent = output::INDENT;
+    let channel_label = channel.as_str();
+
+    // The CLI version is the latest version (CLI and server are released together).
+    let latest_version = crate::cli::display_version();
+
+    // ── Phase 1: Get current versions from all servers ──────────────
     let total = names.len();
-    let mut join_set = tokio::task::JoinSet::new();
-    let total_start = std::time::Instant::now();
+    let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
+    struct VersionCheck {
+        name: String,
+        ssh: Option<SshClient>,
+        version: Option<String>,
+        error: Option<String>,
+    }
+
+    let mut version_set = tokio::task::JoinSet::new();
     for server_name in &names {
         let server = servers
             .get(server_name)
             .ok_or_else(|| format!("Server '{}' not found.", server_name))?
             .clone();
         let name = server_name.clone();
-        join_set.spawn(async move {
-            let start = std::time::Instant::now();
-            let result = upgrade_server_quiet(&name, &server, channel).await;
-            (name, start.elapsed(), result)
+        let done = Arc::clone(&done);
+        version_set.spawn(async move {
+            let ssh = match SshClient::connect_to(&server.host, server.port).await {
+                Ok(ssh) => ssh,
+                Err(e) => {
+                    done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    return VersionCheck {
+                        name,
+                        ssh: None,
+                        version: None,
+                        error: Some(e.to_string()),
+                    };
+                }
+            };
+            let version = ssh.tako_version().await.ok().flatten();
+            done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            VersionCheck {
+                name,
+                ssh: Some(ssh),
+                version,
+                error: None,
+            }
         });
     }
 
-    let interactive = output::is_interactive();
-
-    // Multi-progress: main header spinner + per-server spinners
-    let mp = if interactive {
+    let pb = if interactive {
         output::hide_cursor();
-        Some(indicatif::MultiProgress::new())
-    } else {
-        None
-    };
-
-    let spinner_with_elapsed = output::phase_spinner_style();
-
-    let main_pb = if let Some(ref mp) = mp {
-        let pb = mp.add(indicatif::ProgressBar::new_spinner());
-        pb.set_style(spinner_with_elapsed.clone());
-        if total == 1 {
-            pb.set_message(format!("Upgrading {}…", output::highlight(&names[0])));
+        let pb = indicatif::ProgressBar::new_spinner();
+        pb.set_style(output::phase_spinner_style());
+        let msg = if total == 1 {
+            format!("Getting current version for {}…", output::strong(&names[0]))
         } else {
-            pb.set_message(format!("Upgrading servers… [0/{}]", total));
-        }
+            format!("Getting current versions… {}", output::muted_progress(0, total))
+        };
+        pb.set_message(msg);
         pb.enable_steady_tick(Duration::from_millis(80));
         Some(pb)
     } else {
         None
     };
 
-    // Per-server spinner bars (inserted after the main bar)
-    let mut server_pbs: std::collections::HashMap<String, indicatif::ProgressBar> =
-        std::collections::HashMap::new();
-    let mut spacer_pb: Option<indicatif::ProgressBar> = None;
-    if let Some(ref mp) = mp {
-        // Empty line separator between header and per-server lines
-        let spacer = mp.add(indicatif::ProgressBar::new(0));
-        spacer.set_style(indicatif::ProgressStyle::with_template(" ").unwrap());
-        spacer.finish();
-        spacer_pb = Some(spacer);
-        for name in &names {
-            let pb = mp.add(indicatif::ProgressBar::new_spinner());
-            pb.set_style(spinner_with_elapsed.clone());
-            pb.set_message(format!("{}…", name));
-            pb.enable_steady_tick(Duration::from_millis(80));
-            server_pbs.insert(name.clone(), pb);
-        }
-    }
-
-    struct UpgradeResult {
-        name: String,
-        elapsed: Duration,
-        version: Option<String>,
-        error: Option<String>,
-    }
-
-    let mut results: Vec<UpgradeResult> = Vec::new();
-    let mut done = 0usize;
-    while let Some(join_result) = join_set.join_next().await {
-        let (name, elapsed, result) = match join_result {
+    let mut checks: Vec<VersionCheck> = Vec::new();
+    while let Some(join_result) = version_set.join_next().await {
+        let check = match join_result {
             Ok(v) => v,
             Err(e) => {
+                if let Some(ref pb) = pb {
+                    pb.finish_and_clear();
+                }
                 if interactive {
                     output::show_cursor();
                 }
                 return Err(e.to_string().into());
             }
         };
-        done += 1;
-        let time = {
-            let t = output::format_elapsed(elapsed);
-            if t.is_empty() { "(0s)".to_string() } else { t }
-        };
-
-        // Finish the per-server spinner with result
-        if let Some(spb) = server_pbs.get(&name) {
-            // Switch to a no-prefix style so the finished line has no spinner padding
-            spb.set_style(indicatif::ProgressStyle::with_template("{msg}").unwrap());
-            match &result {
-                Ok(version) => {
-                    let version_part = match version.as_deref() {
-                        Some(v) => format!(" {}", output::highlight(v)),
-                        None => String::new(),
-                    };
-                    spb.finish_with_message(format!(
-                        "{} {}{} {}",
-                        output::brand_success("✓"),
-                        name,
-                        version_part,
-                        output::brand_muted(&time),
-                    ));
-                }
-                Err(e) => {
-                    // Strip verbose details like "(owner: ...)" from error messages
-                    let clean_err = if let Some(pos) = e.find(" (owner:") {
-                        &e[..pos]
-                    } else {
-                        e.as_str()
-                    };
-                    spb.finish_with_message(format!(
-                        "{} {} {} {}",
-                        output::brand_error("✗"),
-                        name,
-                        output::brand_muted(&time),
-                        output::brand_error(clean_err),
-                    ));
-                }
-            }
-        }
-
-        // Update main progress
-        if let Some(ref pb) = main_pb {
+        if let Some(ref pb) = pb {
+            let finished = done.load(std::sync::atomic::Ordering::Relaxed);
             if total > 1 {
-                pb.set_message(format!("Upgrading servers… [{}/{}]", done, total));
+                pb.set_message(format!(
+                    "Getting current versions… {}",
+                    output::muted_progress(finished, total)
+                ));
             }
         }
-
-        match result {
-            Ok(version) => results.push(UpgradeResult {
-                name,
-                elapsed,
-                version,
-                error: None,
-            }),
-            Err(e) => results.push(UpgradeResult {
-                name,
-                elapsed,
-                version: None,
-                error: Some(e),
-            }),
-        }
+        checks.push(check);
     }
 
-    let total_elapsed = total_start.elapsed();
-
-    // Clear all spinners and print final output cleanly
-    if let Some(ref pb) = main_pb {
+    if let Some(ref pb) = pb {
         pb.finish_and_clear();
-    }
-    if let Some(ref sp) = spacer_pb {
-        sp.finish_and_clear();
-    }
-    for spb in server_pbs.values() {
-        spb.finish_and_clear();
     }
     if interactive {
         output::show_cursor();
     }
 
-    let succeeded = results.iter().filter(|r| r.error.is_none()).count();
-    let failed = results.iter().filter(|r| r.error.is_some()).count();
-    let total_time = output::format_elapsed(total_elapsed);
-
-    // Summary header
-    let muted_time = output::brand_muted(&total_time);
-    if total == 1 {
-        let r = &results[0];
-        if r.error.is_some() {
-            output::error(&format!("Upgrade failed {}", muted_time));
-        } else {
-            output::success(&format!("Upgrade complete {}", muted_time));
-        }
-    } else if failed == 0 {
-        output::success(&format!(
-            "Upgrade complete [{}/{}] {}",
-            succeeded, total, muted_time,
-        ));
-    } else {
-        output::error(&format!(
-            "Upgrade finished with errors [{}/{}] {}",
-            succeeded, total, muted_time,
-        ));
-    }
-
-    // Per-server results
-    if total > 1 {
-        println!();
-    }
-    // Sort results to match input order.
-    results.sort_by(|a, b| {
-        let pos_a = names
-            .iter()
-            .position(|n| n == &a.name)
-            .unwrap_or(usize::MAX);
-        let pos_b = names
-            .iter()
-            .position(|n| n == &b.name)
-            .unwrap_or(usize::MAX);
+    // Sort to match input order.
+    checks.sort_by(|a, b| {
+        let pos_a = names.iter().position(|n| n == &a.name).unwrap_or(usize::MAX);
+        let pos_b = names.iter().position(|n| n == &b.name).unwrap_or(usize::MAX);
         pos_a.cmp(&pos_b)
     });
-    for r in &results {
-        let time = {
-            let t = output::format_elapsed(r.elapsed);
-            if t.is_empty() { "(0s)".to_string() } else { t }
-        };
-        if let Some(ref err) = r.error {
-            let clean_err = if let Some(pos) = err.find(" (owner:") {
-                &err[..pos]
-            } else {
-                err
-            };
-            println!(
-                "{} {} {} {}",
-                output::brand_error("✗"),
-                r.name,
-                output::brand_muted(&time),
-                output::brand_error(clean_err),
-            );
-        } else {
-            let version_part = match r.version.as_deref() {
-                Some(v) => format!(" {}", output::highlight(v)),
-                None => String::new(),
-            };
-            println!(
-                "{} {}{} {}",
-                output::brand_success("✓"),
-                r.name,
-                version_part,
-                output::brand_muted(&time),
-            );
+
+    // ── Phase 2: Per-server upgrade ─────────────────────────────────
+    let mut has_error = false;
+    for (i, mut check) in checks.into_iter().enumerate() {
+        if i > 0 {
+            println!();
         }
+        output::server_heading(&check.name);
+
+        // Connection error — nothing else to do.
+        if let Some(ref err) = check.error {
+            println!(
+                "{indent}{} {}",
+                output::brand_error("✗"),
+                output::brand_error(err)
+            );
+            has_error = true;
+            continue;
+        }
+
+        if let Some(ref v) = check.version {
+            println!("{indent}{} {v}", output::brand_muted("Current version:"));
+        }
+
+        // Already on the latest version — skip the installer entirely.
+        if check.version.as_deref() == Some(&latest_version) {
+            println!(
+                "{indent}{} Already on the latest {channel_label} build",
+                output::brand_success("✓"),
+            );
+            if let Some(mut ssh) = check.ssh.take() {
+                let _ = ssh.disconnect().await;
+            }
+            continue;
+        }
+
+        // Run upgrade with a spinner.
+        let mut ssh = check.ssh.take().unwrap();
+        let spinner = output::PhaseSpinner::start_indented("Upgrading…");
+
+        match run_server_upgrade(&check.name, &mut ssh, channel, check.version.as_deref()).await {
+            Ok(version_after) => {
+                spinner.finish_ok_indented(&format!("Upgraded to: {}", version_after.as_deref().unwrap_or("unknown")));
+            }
+            Err(e) => {
+                has_error = true;
+                let clean_err = if let Some(pos) = e.find(" (owner:") {
+                    &e[..pos]
+                } else {
+                    e.as_str()
+                };
+                spinner.finish_err_indented(clean_err);
+            }
+        }
+
+        let _ = ssh.disconnect().await;
     }
 
-    if failed > 0 {
+    if has_error {
         std::process::exit(1);
     }
     Ok(())
 }
 
-/// Run the full upgrade flow for a single server without any output.
-/// Returns the new version string on success.
-async fn upgrade_server_quiet(
+/// Run the install → reload → verify cycle on an already-connected server.
+/// Returns the version string after upgrade, or an error message.
+async fn run_server_upgrade(
     name: &str,
-    server: &crate::config::ServerEntry,
+    ssh: &mut SshClient,
     channel: UpgradeChannel,
+    running_version: Option<&str>,
 ) -> Result<Option<String>, String> {
-    use crate::ssh::SshClient;
-
-    let mut ssh = SshClient::connect_to(&server.host, server.port)
-        .await
-        .map_err(|e| format!("SSH connection failed: {e}"))?;
-
     let owner = build_upgrade_owner(name);
     let mut upgrade_mode_entered = false;
 
@@ -1345,10 +1264,6 @@ async fn upgrade_server_quiet(
         if status != "active" {
             return Err(format!("tako-server not active (status: {status})"));
         }
-
-        // Get current binary version before installing
-        let version_before = ssh.tako_version().await.ok().flatten();
-        tracing::debug!(server = name, version = ?version_before, "version before install");
 
         // Install binary
         tracing::debug!(server = name, channel = ?channel, "running installer");
@@ -1372,12 +1287,14 @@ async fn upgrade_server_quiet(
             return Err(format_installer_failure(&install_output));
         }
 
-        // Check if the binary actually changed
-        let version_after = ssh.tako_version().await.ok().flatten();
-        tracing::debug!(server = name, version = ?version_after, "version after install");
-        if version_before.is_some() && version_before == version_after {
-            tracing::debug!(server = name, "binary unchanged, skipping reload");
-            return Ok(version_after);
+        // Check if the on-disk binary actually changed. `tako-server --version`
+        // reads the binary, not the running process, so this detects installer
+        // no-ops and skips the expensive reload+wait cycle.
+        let version_after_install = ssh.tako_version().await.ok().flatten();
+        tracing::debug!(server = name, version = ?version_after_install, "on-disk version after install");
+        if version_after_install.as_deref() == running_version {
+            tracing::debug!(server = name, "binary unchanged after install, skipping reload");
+            return Ok(version_after_install);
         }
 
         // Enter upgrading mode
@@ -1414,7 +1331,7 @@ async fn upgrade_server_quiet(
         );
 
         let info =
-            wait_for_primary_ready(&mut ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?;
+            wait_for_primary_ready(ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?;
         tracing::debug!(
             server = name,
             new_pid = info.pid,
@@ -1450,8 +1367,6 @@ async fn upgrade_server_quiet(
 
     if result.is_err() && upgrade_mode_entered {
         tracing::debug!(server = name, owner = %owner, "upgrade failed, attempting to release upgrade lock");
-        // Try to release the upgrade lock. Retry a few times in case the
-        // server is still restarting after the SIGHUP reload.
         for attempt in 0..5 {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(2)).await;
@@ -1468,7 +1383,6 @@ async fn upgrade_server_quiet(
         }
     }
 
-    let _ = ssh.disconnect().await;
     result
 }
 
@@ -1735,10 +1649,10 @@ pub async fn apply_dns_config(
     name: &str,
     config: &DnsConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let msg = format!("Configuring DNS on {}", output::highlight(name));
+    let msg = format!("Configuring DNS on {}", output::strong(name));
     output::with_spinner_async_err(
         &msg,
-        &format!("DNS configured on {}", output::highlight(name)),
+        &format!("DNS configured on {}", output::strong(name)),
         &msg,
         apply_dns_config_inner(ssh, name, config),
     )

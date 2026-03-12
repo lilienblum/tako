@@ -21,13 +21,18 @@ fn is_suppressed() -> bool {
     SUPPRESS.load(Ordering::Relaxed)
 }
 
-// Brand palette — RGB values matching dev/output.rs
-const BRAND_TEAL: (u8, u8, u8) = (155, 196, 182); // #9BC4B6 — accent, prompts
+// Brand palette
 #[allow(dead_code)]
-const BRAND_CORAL: (u8, u8, u8) = (232, 135, 131); // #E88783 — primary emphasis
+const BRAND_TEAL: (u8, u8, u8) = (155, 196, 182); // #9BC4B6
+#[allow(dead_code)]
+const BRAND_CORAL: (u8, u8, u8) = (232, 135, 131); // #E88783
 const BRAND_GREEN: (u8, u8, u8) = (155, 217, 179); // #9BD9B3 — success
 const BRAND_AMBER: (u8, u8, u8) = (234, 211, 156); // #EAD39C — warning
 const BRAND_RED: (u8, u8, u8) = (232, 163, 160); // #E8A3A0 — error
+
+// Terminal accent colors (distinct from brand palette)
+const ACCENT: (u8, u8, u8) = (125, 196, 228); // #7DC4E4
+const ACCENT_DIM: (u8, u8, u8) = (79, 107, 122); // #4F6B7A
 
 fn should_colorize() -> bool {
     if cfg!(test) {
@@ -45,11 +50,11 @@ fn rgb_fg<D: Display>(value: D, (r, g, b): (u8, u8, u8)) -> String {
 }
 
 pub fn brand_accent<D: Display>(value: D) -> String {
-    rgb_fg(value, BRAND_TEAL)
+    rgb_fg(value, ACCENT)
 }
 
 pub fn brand_secondary<D: Display>(value: D) -> String {
-    rgb_fg(value, BRAND_TEAL)
+    rgb_fg(value, ACCENT)
 }
 
 pub fn brand_fg<D: Display>(value: D) -> String {
@@ -59,7 +64,7 @@ pub fn brand_fg<D: Display>(value: D) -> String {
 pub fn brand_muted<D: Display>(value: D) -> String {
     if should_colorize() {
         // Re-apply dim after any embedded bold-reset (\x1b[22m) so that
-        // highlight()/bold() calls inside a muted() context don't cancel
+        // strong()/bold() calls inside a muted() context don't cancel
         // the dim styling for the surrounding text.
         let s = value.to_string().replace("\x1b[22m", "\x1b[22m\x1b[2m");
         format!("\x1b[2m{s}\x1b[22m")
@@ -96,19 +101,9 @@ pub fn bold(value: &str) -> String {
     }
 }
 
-/// Bold text for embedding inside a `muted()` string.
-/// Re-applies dim after the bold-reset so surrounding muted style is preserved.
 pub fn underline<D: Display>(value: D) -> String {
     if should_colorize() {
         format!("\x1b[4m{value}\x1b[24m")
-    } else {
-        value.to_string()
-    }
-}
-
-pub fn bold_muted(value: &str) -> String {
-    if should_colorize() {
-        format!("\x1b[1m{value}\x1b[22m\x1b[2m")
     } else {
         value.to_string()
     }
@@ -127,6 +122,30 @@ pub fn format_elapsed(duration: Duration) -> String {
         let remaining = secs as u64 % 60;
         format!("({}m{}s)", mins, remaining)
     }
+}
+
+/// Format elapsed for inline spinner display (no parens), e.g. `"1m10s"`.
+fn format_elapsed_inline(duration: Duration) -> String {
+    let secs = duration.as_secs();
+    if secs < 60 {
+        format!("({secs}s)")
+    } else {
+        let mins = secs / 60;
+        let remaining = secs % 60;
+        format!("({mins}m{remaining}s)")
+    }
+}
+
+/// Format a muted elapsed-time string, e.g. `"(3.2s)"` rendered in muted style.
+/// Returns empty string if duration is below display threshold.
+pub fn muted_elapsed(duration: Duration) -> String {
+    let s = format_elapsed(duration);
+    if s.is_empty() { s } else { brand_muted(&s) }
+}
+
+/// Format a muted progress counter, e.g. `"[2/5]"` rendered in muted style.
+pub fn muted_progress(done: usize, total: usize) -> String {
+    brand_muted(format!("[{done}/{total}]"))
 }
 
 pub fn set_verbose(verbose: bool) {
@@ -187,7 +206,7 @@ pub fn success(message: &str) {
     if is_suppressed() {
         return;
     }
-    println!("{} {}", bold(&brand_secondary("✔")), brand_fg(message));
+    println!("{} {}", brand_success("✓"), brand_fg(message));
 }
 
 pub fn warning(message: &str) {
@@ -216,32 +235,82 @@ pub fn muted(message: &str) {
 }
 
 /// Print a hint line in default text color (not muted).
-/// Use for actionable guidance like "Run X to do Y" where the command is highlight()'d.
+/// Use for actionable guidance like "Run X to do Y" where the command is strong()'d.
 pub fn hint(message: &str) {
     println!("{}", brand_fg(message));
 }
 
-/// Format a value in bold+accent. Use for dynamic names/values in output lines.
-/// e.g. `highlight("tako-demo")` → bold teal "tako-demo"
-pub fn highlight(value: &str) -> String {
-    bold(&brand_accent(value))
+/// Print a server heading: `Server {name}` with the name in strong (bold).
+pub fn server_heading(name: &str) {
+    println!("Server {}", strong(name));
 }
 
-/// Format a value in bold+accent that stays legible inside a `brand_muted()` context.
-/// e.g. `muted(&format!("Using {} environment", highlight_muted("production")))`
-pub fn highlight_muted(value: &str) -> String {
-    bold_muted(&brand_accent(value))
+/// Indentation prefix for lines under a heading (2 spaces).
+pub const INDENT: &str = "  ";
+
+/// Bold only (no color). The one thing you want the eye to catch.
+pub fn strong(value: &str) -> String {
+    bold(value)
+}
+
+/// Accent color only (no bold). Secondary emphasis.
+pub fn accent(value: &str) -> String {
+    brand_accent(value)
+}
+
+/// A block of context lines with a left amber border, printed together.
+///
+/// ```text
+/// │ Using production environment
+/// │ You're on canary channel
+/// ```
+pub struct ContextBlock {
+    lines: Vec<String>,
+}
+
+impl ContextBlock {
+    pub fn new() -> Self {
+        Self { lines: Vec::new() }
+    }
+
+    /// Add a free-form plain-text line.
+    pub fn line(mut self, text: &str) -> Self {
+        self.lines.push(text.to_string());
+        self
+    }
+
+    /// Add "Using {value} environment" (value in accent).
+    pub fn env(self, env: &str) -> Self {
+        self.line(&format!("Using {} environment", accent(env)))
+    }
+
+    /// Add "You're on {value} channel" (value in accent).
+    pub fn channel(self, channel: &str) -> Self {
+        self.line(&format!("You're on {} channel", accent(channel)))
+    }
+
+    /// Print the block (with trailing blank line). No-op if empty.
+    pub fn print(self) {
+        if self.lines.is_empty() || is_suppressed() {
+            return;
+        }
+        let border = rgb_fg("┃", ACCENT_DIM);
+        for line in &self.lines {
+            println!("{border} {line}");
+        }
+        println!();
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Spinner helpers
 // ---------------------------------------------------------------------------
 
-pub const SPINNER_TICKS: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", " "];
+pub const SPINNER_TICKS: &[&str] = &["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶", " "];
 
 fn teal_spinner_token() -> String {
     if should_colorize() {
-        let (r, g, b) = BRAND_TEAL;
+        let (r, g, b) = ACCENT;
         format!("\x1b[38;2;{r};{g};{b}m{{spinner}}\x1b[39m")
     } else {
         "{spinner}".to_string()
@@ -257,12 +326,14 @@ pub fn spinner_style() -> ProgressStyle {
 
 pub fn phase_spinner_style() -> ProgressStyle {
     let s = teal_spinner_token();
-    let elapsed = if should_colorize() {
-        "\x1b[2m({elapsed})\x1b[22m"
-    } else {
-        "({elapsed})"
-    };
-    ProgressStyle::with_template(&format!("{s} {{msg}} {elapsed}"))
+    ProgressStyle::with_template(&format!("{s} {{msg}}"))
+        .unwrap()
+        .tick_strings(SPINNER_TICKS)
+}
+
+fn phase_spinner_style_indented() -> ProgressStyle {
+    let s = teal_spinner_token();
+    ProgressStyle::with_template(&format!("{INDENT}{s} {{msg}}"))
         .unwrap()
         .tick_strings(SPINNER_TICKS)
 }
@@ -283,28 +354,50 @@ fn print_err_with_detail(loading: &str, detail: &dyn Display) {
     println!("{x} {loading}: {detail}");
 }
 
-/// Print a spinner result with elapsed (slow path — spinner was visible).
+/// Hide cursor and suppress keyboard echo while keeping signal handling
+/// (Ctrl+C etc.) intact. Call `show_cursor()` to restore.
 pub fn hide_cursor() {
+    suppress_echo(true);
     let _ = crossterm::execute!(std::io::stderr(), crossterm::cursor::Hide);
 }
 
+/// Show cursor and restore normal terminal input.
 pub fn show_cursor() {
     let _ = crossterm::execute!(std::io::stderr(), crossterm::cursor::Show);
+    suppress_echo(false);
+}
+
+/// Toggle the terminal ECHO flag without touching ISIG, so Ctrl+C still
+/// generates SIGINT.
+fn suppress_echo(suppress: bool) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::io::AsRawFd;
+        let fd = std::io::stdin().as_raw_fd();
+        unsafe {
+            let mut termios: libc::termios = std::mem::zeroed();
+            if libc::tcgetattr(fd, &mut termios) != 0 {
+                return;
+            }
+            if suppress {
+                termios.c_lflag &= !(libc::ECHO | libc::ICANON);
+            } else {
+                termios.c_lflag |= libc::ECHO | libc::ICANON;
+            }
+            let _ = libc::tcsetattr(fd, libc::TCSANOW, &termios);
+        }
+    }
 }
 
 fn finish_spinner_ok(pb: &ProgressBar, success: &str, elapsed: Duration) {
     pb.finish_and_clear();
     show_cursor();
     let check = brand_success("✓");
-    let elapsed_str = format_elapsed(elapsed);
-    if elapsed_str.is_empty() {
+    let time = muted_elapsed(elapsed);
+    if time.is_empty() {
         println!("{check} {}", brand_fg(success));
     } else {
-        println!(
-            "{check} {} {}",
-            brand_fg(success),
-            brand_muted(&elapsed_str)
-        );
+        println!("{check} {} {time}", brand_fg(success));
     }
 }
 
@@ -496,14 +589,29 @@ pub struct PhaseSpinner {
     pb: Option<ProgressBar>,
     start: Instant,
     finished: bool,
+    _elapsed_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl PhaseSpinner {
     pub fn start(message: &str) -> Self {
+        Self::new(message, false)
+    }
+
+    /// Start an indented phase spinner (prefixed with INDENT).
+    pub fn start_indented(message: &str) -> Self {
+        Self::new(message, true)
+    }
+
+    fn new(message: &str, indented: bool) -> Self {
         set_suppress(true);
+        let style = if indented {
+            phase_spinner_style_indented()
+        } else {
+            phase_spinner_style()
+        };
         let pb = if is_interactive() {
             let pb = ProgressBar::new_spinner();
-            pb.set_style(phase_spinner_style());
+            pb.set_style(style);
             pb.set_message(message.to_string());
             pb.enable_steady_tick(Duration::from_millis(80));
             hide_cursor();
@@ -511,10 +619,29 @@ impl PhaseSpinner {
         } else {
             None
         };
+
+        // Spawn a task that updates the message with elapsed time every second.
+        let elapsed_task = pb.as_ref().map(|pb| {
+            let pb = pb.clone();
+            let base = message.to_string();
+            let start = Instant::now();
+            tokio::spawn(async move {
+                // Wait 1s before showing elapsed at all.
+                tokio::time::sleep(Duration::from_secs(1)).await;
+                loop {
+                    let elapsed = start.elapsed();
+                    let time = format_elapsed_inline(elapsed);
+                    pb.set_message(format!("{base} {}", brand_muted(&time)));
+                    tokio::time::sleep(Duration::from_secs(1)).await;
+                }
+            })
+        });
+
         Self {
             pb,
             start: Instant::now(),
             finished: false,
+            _elapsed_task: elapsed_task,
         }
     }
 
@@ -523,6 +650,7 @@ impl PhaseSpinner {
     }
 
     pub fn finish(mut self, success: &str) {
+        self.abort_elapsed_task();
         set_suppress(false);
         if let Some(ref pb) = self.pb {
             finish_spinner_ok(pb, success, self.start.elapsed());
@@ -531,16 +659,55 @@ impl PhaseSpinner {
     }
 
     pub fn finish_err(mut self, loading: &str, detail: &str) {
+        self.abort_elapsed_task();
         set_suppress(false);
         if let Some(ref pb) = self.pb {
             finish_spinner_err_with_detail(pb, loading, &detail);
         }
         self.finished = true;
     }
+
+    /// Finish indented spinner with success: `  ✓ message (elapsed)`
+    pub fn finish_ok_indented(mut self, success: &str) {
+        self.abort_elapsed_task();
+        set_suppress(false);
+        if let Some(ref pb) = self.pb {
+            pb.finish_and_clear();
+            show_cursor();
+            let check = brand_success("✓");
+            let time = muted_elapsed(self.start.elapsed());
+            if time.is_empty() {
+                println!("{INDENT}{check} {}", brand_fg(success));
+            } else {
+                println!("{INDENT}{check} {} {time}", brand_fg(success));
+            }
+        }
+        self.finished = true;
+    }
+
+    /// Finish indented spinner with error: `  ✗ message`
+    pub fn finish_err_indented(mut self, detail: &str) {
+        self.abort_elapsed_task();
+        set_suppress(false);
+        if let Some(ref pb) = self.pb {
+            pb.finish_and_clear();
+            show_cursor();
+            let x = bold(&brand_error("✗"));
+            println!("{INDENT}{x} {}", brand_error(detail));
+        }
+        self.finished = true;
+    }
+
+    fn abort_elapsed_task(&mut self) {
+        if let Some(handle) = self._elapsed_task.take() {
+            handle.abort();
+        }
+    }
 }
 
 impl Drop for PhaseSpinner {
     fn drop(&mut self) {
+        self.abort_elapsed_task();
         set_suppress(false);
         if !self.finished {
             if let Some(ref pb) = self.pb {
@@ -912,7 +1079,7 @@ fn raw_text_input(
     terminal::enable_raw_mode()?;
 
     // Set cursor color to brand teal
-    let (cr, cg, cb) = BRAND_TEAL;
+    let (cr, cg, cb) = ACCENT;
     let _ = write!(out, "\x1b]12;rgb:{cr:02x}/{cg:02x}/{cb:02x}\x1b\\");
     let _ = out.flush();
 
@@ -1543,8 +1710,8 @@ mod tests {
     }
 
     #[test]
-    fn highlight_returns_plain_in_test() {
-        assert_eq!(highlight("production"), "production");
+    fn strong_returns_plain_in_test() {
+        assert_eq!(strong("production"), "production");
     }
 
     #[test]

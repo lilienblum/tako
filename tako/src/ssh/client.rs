@@ -190,7 +190,16 @@ impl SshClient {
         })
         .await
         .map_err(|_| SshError::Timeout("Connection timed out".to_string()))?
-        .map_err(|e| SshError::Connection(e.to_string()))?;
+        .map_err(|e| {
+            let msg = e.to_string();
+            // Strip verbose OS error codes like "(os error 61)"
+            let clean = if let Some(pos) = msg.find(" (os error") {
+                &msg[..pos]
+            } else {
+                &msg
+            };
+            SshError::Connection(format!("Connection failed: {clean}"))
+        })?;
 
         // Authenticate with SSH keys
         self.authenticate(&mut handle).await?;
@@ -535,15 +544,21 @@ impl SshClient {
         Ok(!output.stdout.contains("not_found"))
     }
 
-    /// Get tako-server version
+    /// Get tako-server version (just the version number, not the binary name prefix).
     pub async fn tako_version(&self) -> SshResult<Option<String>> {
         let output = self
             .exec("tako-server --version 2>/dev/null || true")
             .await?;
-        if output.stdout.trim().is_empty() {
+        let raw = output.stdout.trim();
+        if raw.is_empty() {
             Ok(None)
         } else {
-            Ok(Some(output.stdout.trim().to_string()))
+            // --version output is "tako-server <version>"; extract just the version
+            Ok(Some(
+                raw.strip_prefix("tako-server ")
+                    .unwrap_or(raw)
+                    .to_string(),
+            ))
         }
     }
 

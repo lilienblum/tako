@@ -434,19 +434,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     output::heading("Next steps");
     output::step(&format!(
         "1. Edit {} to set environment variables and more",
-        output::highlight("tako.toml")
+        output::strong("tako.toml")
     ));
     output::step(&format!(
         "2. Run {} to add deployment servers",
-        output::highlight("tako servers add")
+        output::strong("tako servers add")
     ));
     output::step(&format!(
         "3. Run {} to add secrets",
-        output::highlight("tako secrets set")
+        output::strong("tako secrets set")
     ));
     output::step(&format!(
         "4. Run {} to deploy your app",
-        output::highlight("tako deploy")
+        output::strong("tako deploy")
     ));
 
     Ok(())
@@ -598,7 +598,7 @@ fn fetch_family_presets_for_adapter(
             output::warning(&format!(
                 "Failed to fetch presets ({}). Using {} base preset.",
                 err,
-                output::highlight(adapter.default_preset())
+                output::strong(adapter.default_preset())
             ));
             Ok(Vec::new())
         }

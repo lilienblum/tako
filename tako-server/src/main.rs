@@ -56,21 +56,24 @@ use tracing_subscriber::EnvFilter;
 const DEFAULT_SERVER_LOG_FILTER: &str = "warn";
 const SIGNAL_PARENT_ON_READY_ENV: &str = "TAKO_SIGNAL_PARENT_ON_READY";
 
-fn server_version() -> String {
-    let base = env!("CARGO_PKG_VERSION");
-    match option_env!("TAKO_CANARY_SHA") {
-        Some(sha) if !sha.trim().is_empty() => {
-            let short = &sha.trim()[..sha.trim().len().min(7)];
-            format!("{base}-canary-{short}")
+fn server_version() -> &'static str {
+    static VERSION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let base = env!("CARGO_PKG_VERSION");
+        match option_env!("TAKO_CANARY_SHA") {
+            Some(sha) if !sha.trim().is_empty() => {
+                let short = &sha.trim()[..sha.trim().len().min(7)];
+                format!("{base}-canary-{short}")
+            }
+            _ => base.to_string(),
         }
-        _ => base.to_string(),
-    }
+    });
+    &VERSION
 }
 
 /// Tako Server - Application runtime and proxy
 #[derive(Parser)]
 #[command(name = "tako-server")]
-#[command(version)]
+#[command(version = server_version())]
 #[command(about = "Tako Server - Application runtime and proxy")]
 pub struct Args {
     /// Unix socket path for management commands
@@ -543,7 +546,7 @@ impl ServerState {
             Command::Hello { protocol_version } => {
                 let data = HelloResponse {
                     protocol_version: PROTOCOL_VERSION,
-                    server_version: server_version(),
+                    server_version: server_version().to_string(),
                     capabilities: vec![
                         "deploy_instances_idle_timeout".to_string(),
                         "on_demand_cold_start".to_string(),

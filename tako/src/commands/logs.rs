@@ -87,7 +87,7 @@ async fn stream_logs(
 ) -> Result<(), Box<dyn std::error::Error>> {
     output::step(&format!(
         "Streaming logs for {} {}",
-        output::highlight(app_name),
+        output::strong(app_name),
         output::brand_muted("(Ctrl+c to stop)")
     ));
 
@@ -165,7 +165,7 @@ async fn fetch_logs(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let total = server_names.len();
     let progress_label = if total > 1 {
-        format!("Fetching logs… {}", output::brand_muted(format!("[0/{total}]")))
+        format!("Fetching logs… {}", output::muted_progress(0, total))
     } else {
         "Fetching logs…".to_string()
     };
@@ -229,7 +229,7 @@ async fn fetch_logs(
                 if let Some(ref pb) = phase_pb {
                     pb.set_message(format!(
                         "Fetching logs… {}",
-                        output::brand_muted(format!("[{done}/{total}]"))
+                        output::muted_progress(done, total)
                     ));
                 }
             }

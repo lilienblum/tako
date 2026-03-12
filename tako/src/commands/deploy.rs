@@ -237,10 +237,7 @@ async fn run_async(
     output::set_suppress(false);
 
     if requested_env.is_none() {
-        output::muted(&format!(
-            "Using {} environment",
-            output::highlight_muted(&env)
-        ));
+        output::ContextBlock::new().env(&env).print();
     }
 
     // Skip confirmation if the user explicitly passed --env production (they
@@ -321,7 +318,7 @@ async fn run_async(
 
         let total = server_names.len();
         let spinner_msg = if total == 1 {
-            format!("Checking {}", output::highlight(&server_names[0]))
+            format!("Checking {}", output::strong(&server_names[0]))
         } else {
             format!("Checking {} servers", total)
         };
@@ -420,7 +417,7 @@ async fn run_async(
         } else {
             // No wildcard routes — just report servers are ready.
             if total == 1 {
-                output::success(&format!("{} is ready", output::highlight(&server_names[0]),));
+                output::success(&format!("{} is ready", output::strong(&server_names[0]),));
             } else {
                 output::success(&format!("{} servers ready", total));
             }
@@ -448,7 +445,7 @@ async fn run_async(
     } else if server_names.len() > 1 {
         output::info(&format!(
             "Deploying to {} servers",
-            output::highlight(&server_names.len().to_string())
+            output::strong(&server_names.len().to_string())
         ));
     }
 
@@ -517,13 +514,13 @@ async fn run_async(
     if output::is_verbose() {
         output::bullet(&format!(
             "Build preset: {} @ {}",
-            output::highlight(&resolved_preset.preset_ref),
+            output::strong(&resolved_preset.preset_ref),
             shorten_commit(&resolved_preset.commit)
         ));
     } else {
         output::bullet(&format!(
             "Build preset: {}",
-            output::highlight(&resolved_preset.preset_ref)
+            output::strong(&resolved_preset.preset_ref)
         ));
     }
     output::bullet(&format_runtime_summary(&build_preset.name, None));
@@ -891,7 +888,7 @@ fn should_confirm_production_deploy(env: &str, assume_yes: bool, interactive: bo
 }
 
 fn format_production_deploy_confirm_prompt() -> String {
-    format!("Deploy to {} now?", output::highlight("production"),)
+    format!("Deploy to {} now?", output::strong("production"),)
 }
 
 fn format_production_deploy_confirm_hint() -> String {
@@ -905,7 +902,7 @@ fn confirm_production_deploy(env: &str, assume_yes: bool) -> Result<(), String> 
 
     output::warning(&format!(
         "You are deploying to {}.",
-        output::highlight("production")
+        output::strong("production")
     ));
     let hint = format_production_deploy_confirm_hint();
     let confirmed = output::confirm_with_description(
@@ -980,8 +977,8 @@ async fn resolve_deploy_server_names_with_setup(
             persist_server_env_mapping(project_dir, &selected_server, env)?;
             output::info(&format!(
                 "Mapped server {} to {} in tako.toml",
-                output::highlight(&selected_server),
-                output::highlight(env)
+                output::strong(&selected_server),
+                output::strong(env)
             ));
             Ok(vec![selected_server])
         }
@@ -1015,7 +1012,7 @@ fn select_production_server_for_mapping(servers: &ServersToml) -> Result<String,
 
 #[cfg(test)]
 fn format_prepare_deploy_section(env: &str) -> String {
-    format!("Preparing deployment for {}", output::highlight(env))
+    format!("Preparing deployment for {}", output::strong(env))
 }
 
 fn format_deploy_overview_lines(

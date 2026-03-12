@@ -37,8 +37,8 @@ async fn run_async(
     output::section("Scale");
     output::step(&format!(
         "{} -> {} instance(s)",
-        output::highlight(&app_name),
-        output::highlight(&instances.to_string())
+        output::strong(&app_name),
+        output::strong(&instances.to_string())
     ));
 
     let mut tasks = Vec::new();
@@ -81,19 +81,19 @@ async fn run_async(
             Ok((server_name, Ok(scale_result))) => {
                 output::bullet(&format!(
                     "{}: {} instance(s)",
-                    output::highlight(&server_name),
+                    output::strong(&server_name),
                     scale_result.instances
                 ));
                 if scale_result.worker_limited {
                     output::warning(&format!(
                         "{}: worker mode limited scale to {} instance(s)",
-                        output::highlight(&server_name),
+                        output::strong(&server_name),
                         scale_result.instances
                     ));
                 }
             }
             Ok((server_name, Err(error))) => {
-                output::error(&format!("{}: {}", output::highlight(&server_name), error));
+                output::error(&format!("{}: {}", output::strong(&server_name), error));
                 failures.push(server_name);
             }
             Err(error) => {

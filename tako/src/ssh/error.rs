@@ -6,7 +6,7 @@ use thiserror::Error;
 /// Errors that can occur during SSH operations
 #[derive(Debug, Error)]
 pub enum SshError {
-    #[error("Connection failed: {0}")]
+    #[error("{0}")]
     Connection(String),
 
     #[error("Authentication failed: {0}")]

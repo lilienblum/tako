@@ -27,10 +27,10 @@ const METRICS_REFRESH_SECS: u64 = 2;
 
 const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
-// Brand teal border color (muted with dim so it's subtle, not screaming).
-const BORDER: &str = "\x1b[2;38;2;155;196;182m";
-// Primary coral for panel header text (22 = normal intensity, cancels inherited dim).
-const PRIMARY: &str = "\x1b[22;38;2;232;135;131m";
+// Accent dim border color (muted with dim so it's subtle, not screaming).
+const BORDER: &str = "\x1b[2;38;2;79;107;122m";
+// Accent for panel header text (22 = normal intensity, cancels inherited dim).
+const PRIMARY: &str = "\x1b[22;38;2;125;196;228m";
 
 // 3-row compact "tako.sh" logo.
 const LOGO_ROWS: [&str; 3] = [

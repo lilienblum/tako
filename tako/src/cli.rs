@@ -7,7 +7,7 @@ const DEV_PUBLIC_PORT: u16 = 47831;
 const VERSION_BASE: &str = env!("CARGO_PKG_VERSION");
 const VERSION_CANARY_SHA: Option<&str> = option_env!("TAKO_CANARY_SHA");
 
-fn display_version() -> String {
+pub fn display_version() -> String {
     format_display_version(VERSION_BASE, VERSION_CANARY_SHA)
 }
 

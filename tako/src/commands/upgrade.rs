@@ -49,13 +49,10 @@ pub fn run(canary: bool, stable: bool) -> Result<(), Box<dyn std::error::Error>>
     let channel = resolve_upgrade_channel(canary, stable)?;
 
     if channel == UpgradeChannel::Canary {
-        output::muted(&format!(
-            "You're on {} channel",
-            output::bold_muted("canary")
-        ));
+        output::ContextBlock::new().channel("canary").print();
         output::step(&format!(
             "Your current version: {}",
-            output::highlight(&current_version())
+            output::strong(&current_version())
         ));
     }
 
@@ -114,7 +111,7 @@ async fn run_installer_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn st
             let url = tarball_url_for_tag(&tag, os, arch);
             download_and_install(&url, &install_dir).await?;
 
-            output::success(&format!("Upgraded to {}", output::highlight(&version)));
+            output::success(&format!("Upgraded to {}", output::strong(&version)));
             return Ok(());
         }
         Err(_) => {
@@ -205,7 +202,7 @@ async fn run_canary_upgrade(
         // Save tarball hash so next time we can skip the download
         save_canary_hash(saved_hash_path.as_deref(), &archive_path);
 
-        output::success(&format!("Upgraded to {}", output::highlight(&version)));
+        output::success(&format!("Upgraded to {}", output::strong(&version)));
         Ok(())
     }
     .await;
