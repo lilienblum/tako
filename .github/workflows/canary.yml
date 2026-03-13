@@ -80,8 +80,8 @@ jobs:
 
           tmpdir="$(mktemp -d)"
           cp "$server_bin" "$tmpdir/tako-server"
-          tar -czf "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz" -C "$tmpdir" tako-server
-          sha256sum "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz" > "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz.sha256"
+          tar -cf - -C "$tmpdir" tako-server | zstd -19 -o "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.zst"
+          sha256sum "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.zst" > "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.zst.sha256"
           rm -rf "$tmpdir"
 
       - name: Package CLI artifact
@@ -100,8 +100,8 @@ jobs:
         with:
           name: canary-linux-${{ matrix.outarch }}-${{ matrix.libc }}
           path: |
-            dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz
-            dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.gz.sha256
+            dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.zst
+            dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.zst.sha256
           if-no-files-found: error
 
       - name: Upload Linux CLI artifact
@@ -216,14 +216,14 @@ jobs:
             dist/tako-linux-x86_64.tar.gz.sha256
             dist/tako-linux-aarch64.tar.gz
             dist/tako-linux-aarch64.tar.gz.sha256
-            dist/tako-server-linux-x86_64-glibc.tar.gz
-            dist/tako-server-linux-x86_64-glibc.tar.gz.sha256
-            dist/tako-server-linux-aarch64-glibc.tar.gz
-            dist/tako-server-linux-aarch64-glibc.tar.gz.sha256
-            dist/tako-server-linux-x86_64-musl.tar.gz
-            dist/tako-server-linux-x86_64-musl.tar.gz.sha256
-            dist/tako-server-linux-aarch64-musl.tar.gz
-            dist/tako-server-linux-aarch64-musl.tar.gz.sha256
+            dist/tako-server-linux-x86_64-glibc.tar.zst
+            dist/tako-server-linux-x86_64-glibc.tar.zst.sha256
+            dist/tako-server-linux-aarch64-glibc.tar.zst
+            dist/tako-server-linux-aarch64-glibc.tar.zst.sha256
+            dist/tako-server-linux-x86_64-musl.tar.zst
+            dist/tako-server-linux-x86_64-musl.tar.zst.sha256
+            dist/tako-server-linux-aarch64-musl.tar.zst
+            dist/tako-server-linux-aarch64-musl.tar.zst.sha256
           )
 
           for f in "${assets[@]}"; do test -f "$f"; done

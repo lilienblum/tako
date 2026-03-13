@@ -679,12 +679,13 @@ if [ -z "$download_url" ]; then
     fi
     download_base="https://github.com/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/releases/download/$tag"
   fi
-  download_url="$download_base/tako-server-linux-$arch-$libc.tar.gz"
+  download_url="$download_base/tako-server-linux-$arch-$libc.tar.zst"
 fi
 case "$download_url" in
+  *.tar.zst|file://*.tar.zst) ;;
   *.tar.gz|file://*.tar.gz) ;;
   *)
-    echo "error: TAKO_SERVER_URL must point to a .tar.gz archive" >&2
+    echo "error: TAKO_SERVER_URL must point to a .tar.zst or .tar.gz archive" >&2
     exit 1
     ;;
 esac
@@ -715,7 +716,14 @@ else
   exit 1
 fi
 
-tar -xzf "$tmp_payload" -C "$tmp_extract"
+case "$download_url" in
+  *.tar.zst|file://*.tar.zst)
+    zstd -d "$tmp_payload" --stdout | tar -x -C "$tmp_extract"
+    ;;
+  *)
+    tar -xzf "$tmp_payload" -C "$tmp_extract"
+    ;;
+esac
 tmp_bin="$(find "$tmp_extract" -type f -name tako-server | head -n 1 || true)"
 if [ -z "$tmp_bin" ]; then
   echo "error: archive did not contain a tako-server binary" >&2

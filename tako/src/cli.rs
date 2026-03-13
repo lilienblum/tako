@@ -20,7 +20,7 @@ fn format_display_version(base: &str, canary_sha: Option<&str>) -> String {
         return base.to_owned();
     }
     let short_sha = &sha[..sha.len().min(7)];
-    format!("canary-{short_sha}")
+    format!("{base}-canary-{short_sha}")
 }
 
 /// Tako - Modern application development, deployment, and runtime platform
@@ -622,13 +622,13 @@ mod tests {
     #[test]
     fn display_version_with_full_canary_sha_uses_short_hash() {
         let version = format_display_version("1.2.3", Some("0123456789abcdef"));
-        assert_eq!(version, "canary-0123456");
+        assert_eq!(version, "1.2.3-canary-0123456");
     }
 
     #[test]
     fn display_version_with_short_canary_sha_keeps_full_value() {
         let version = format_display_version("1.2.3", Some("abc"));
-        assert_eq!(version, "canary-abc");
+        assert_eq!(version, "1.2.3-canary-abc");
     }
 
     #[test]
