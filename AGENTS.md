@@ -27,17 +27,6 @@ Tako's protocol is v0: do not keep any legacy code, backward compatibility shims
 
 8. **Keep preset family files canonical** - Define family presets in `presets/<family>.toml` (for example `presets/js.toml`).
 
-9. **Keep CLI output simple and consistent** - For `tako` CLI output (this does **not** apply to `tako-server`, which should remain basic/plain for server-side usage):
-   - Keep output basic and easy to scan
-   - Use spinners for actions expected to take longer than ~500ms (approximate; no measurement needed)
-   - Use a single line state transition per action (pending text → final result text), with no intermediate line rewrites/results
-   - Use no icon for normal informational lines
-   - Use `•` bullets (or indentation) for sub-steps/details
-   - Reserve `✓` for completed, `✗` for failure, and `!` for warnings
-   - For deploy-style phase flows, show one `✓` per phase (for example Validate/Build/Deploy), not one per sub-step
-   - Put `--verbose` details under the related primary line, using muted styling
-   - Use Tako theme colors via shared output helpers instead of ad-hoc styling
-   - Prefer italic emphasis instead of quote-wrapping emphasized terms
 
 ## Project Structure
 

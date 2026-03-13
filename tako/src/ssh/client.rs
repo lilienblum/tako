@@ -162,6 +162,7 @@ impl SshClient {
 
     /// Connect to the remote server
     pub async fn connect(&mut self) -> SshResult<()> {
+        let _t = crate::output::timed(&crate::output::ctx(&self.config.host, "SSH connect"));
         let ssh_config = Config {
             inactivity_timeout: Some(self.config.timeout),
             keepalive_interval: Some(Duration::from_secs(15)),
@@ -205,7 +206,6 @@ impl SshClient {
         self.authenticate(&mut handle).await?;
 
         self.handle = Some(handle);
-        tracing::info!(host = %self.config.host, "SSH connection established");
 
         Ok(())
     }
