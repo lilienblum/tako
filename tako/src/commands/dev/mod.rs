@@ -631,7 +631,7 @@ fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::er
     crate::output::muted(&format!(
         "This writes {TAKO_RESOLVER_FILE} -> nameserver 127.0.0.1 port {port}."
     ));
-    crate::output::step("Configuring local DNS resolver (sudo)...");
+    crate::output::info("Configuring local DNS resolver (sudo)...");
 
     sudo_run_checked(
         &["install", "-d", "-m", "755", RESOLVER_DIR],
@@ -725,7 +725,7 @@ fn ensure_pf_forwarding() -> Result<(), Box<dyn std::error::Error>> {
          Rules persist across reboots."
     ));
 
-    crate::output::step("Configuring local 80/443 forwarding (sudo)...");
+    crate::output::info("Configuring local 80/443 forwarding (sudo)...");
 
     // Write anchor file.
     write_system_file_with_sudo(PF_ANCHOR_FILE, &pf_anchor_content())?;

@@ -103,7 +103,8 @@ async fn collect_global_status_results(
     let total = join_set.len();
     let mut done = 0usize;
 
-    let spinner = output::TrackedSpinner::start(&format!("Retrieving {}", output::muted_progress(done, total)));
+    let spinner = output::TrackedSpinner::start("Retrieving…");
+    spinner.set_message(&format!("Retrieving… {}", output::muted_progress(done, total)));
 
     let mut server_results: HashMap<String, GlobalServerStatusResult> = HashMap::new();
 
@@ -112,14 +113,14 @@ async fn collect_global_status_results(
             Ok(pair) => pair,
             Err(err) => {
                 done += 1;
-                spinner.set_message(&format!("Retrieving {}", output::muted_progress(done, total)));
-                eprintln!("Status task panicked: {err}");
+                spinner.set_message(&format!("Retrieving… {}", output::muted_progress(done, total)));
+                output::error(&format!("Status task panicked: {err}"));
                 continue;
             }
         };
 
         done += 1;
-        spinner.set_message(&format!("Retrieving {}", output::muted_progress(done, total)));
+        spinner.set_message(&format!("Retrieving… {}", output::muted_progress(done, total)));
 
         server_results.insert(server_name, status);
     }
@@ -341,7 +342,7 @@ fn render_global_status(
     // Render
     let indent = output::INDENT;
     for card in &cards {
-        println!("{}", card.header);
+        eprintln!("{}", card.header);
         if !card.entries.is_empty() {
             for entry in &card.entries {
                 match entry {
@@ -352,10 +353,10 @@ fn render_global_status(
                     } => {
                         let colored_value = colorize(value, *color);
                         let padded = format!("{:<width$}", label, width = max_label);
-                        println!("{indent}{}  {colored_value}", output::brand_muted(&padded),);
+                        eprintln!("{indent}{}  {colored_value}", output::brand_muted(&padded),);
                     }
                     CardEntry::Section { label, children } => {
-                        println!("{indent}{}", output::brand_muted(label));
+                        eprintln!("{indent}{}", output::brand_muted(label));
 
                         for (ci, (child_label, child_value, child_color)) in
                             children.iter().enumerate()
@@ -371,7 +372,7 @@ fn render_global_status(
                                     trimmed,
                                     width = max_label.saturating_sub(2)
                                 );
-                                println!(
+                                eprintln!(
                                     "{indent}  {} {}  {colored_value}",
                                     output::brand_muted(branch),
                                     output::brand_muted(&padded),
@@ -380,7 +381,7 @@ fn render_global_status(
                                 // Top-level child: └ prefix, or spaces if label is blank (continuation)
                                 let branch = if child_label.is_empty() { " " } else { "└" };
                                 let padded = format!("{:<width$}", child_label, width = max_label);
-                                println!(
+                                eprintln!(
                                     "{indent}{} {}  {colored_value}",
                                     output::brand_muted(branch),
                                     output::brand_muted(&padded),
@@ -391,7 +392,7 @@ fn render_global_status(
                 }
             }
         }
-        println!();
+        eprintln!();
     }
 }
 
@@ -443,6 +444,8 @@ async fn query_global_server_status(
     host: &str,
     port: u16,
 ) -> GlobalServerStatusResult {
+    output::log_debug(&output::ctx(server_name, &format!("Querying status ({host}:{port})…")));
+    let _t = output::timed(&output::ctx(server_name, "Query status"));
     let config = SshConfig::from_server(host, port);
     let mut client = SshClient::new(config);
 
@@ -460,7 +463,10 @@ async fn query_global_server_status(
 
     // Probe service status via socket — this is the fastest check.
     let service_status = match client.tako_status().await {
-        Ok(status) => status,
+        Ok(status) => {
+            output::log_debug(&output::ctx(server_name, &format!("service_status={status}")));
+            status
+        }
         Err(e) => {
             let _ = client.disconnect().await;
             return GlobalServerStatusResult {
@@ -487,6 +493,10 @@ async fn query_global_server_status(
         match client.tako_list_apps().await {
             Ok(response) => match parse_list_apps_response(response) {
                 Ok(app_names) => {
+                    output::log_debug(&output::ctx(
+                        server_name,
+                        &format!("Found {} app(s)", app_names.len()),
+                    ));
                     if service_status == "unknown" {
                         effective_service_status = "active".to_string();
                     }

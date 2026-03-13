@@ -650,7 +650,7 @@ mod server_commands {
             stderr_str(&ls)
         );
 
-        let out = stdout_str(&ls);
+        let out = stderr_str(&ls);
         assert!(
             out.contains("Description"),
             "expected description field: {}",

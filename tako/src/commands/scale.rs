@@ -35,11 +35,7 @@ async fn run_async(
     let server_names = resolve_scale_server_names(project_tako.as_ref(), &servers, env, server)?;
 
     output::section("Scale");
-    output::step(&format!(
-        "{} -> {} instance(s)",
-        output::strong(&app_name),
-        output::strong(&instances.to_string())
-    ));
+    output::info(&format!("{app_name} -> {instances} instance(s)"));
 
     let mut tasks = Vec::new();
     for server_name in &server_names {
@@ -80,20 +76,18 @@ async fn run_async(
         match result {
             Ok((server_name, Ok(scale_result))) => {
                 output::bullet(&format!(
-                    "{}: {} instance(s)",
-                    output::strong(&server_name),
+                    "{server_name}: {} instance(s)",
                     scale_result.instances
                 ));
                 if scale_result.worker_limited {
                     output::warning(&format!(
-                        "{}: worker mode limited scale to {} instance(s)",
-                        output::strong(&server_name),
+                        "{server_name}: worker mode limited scale to {} instance(s)",
                         scale_result.instances
                     ));
                 }
             }
             Ok((server_name, Err(error))) => {
-                output::error(&format!("{}: {}", output::strong(&server_name), error));
+                output::error(&format!("{server_name}: {error}"));
                 failures.push(server_name);
             }
             Err(error) => {
@@ -195,6 +189,11 @@ async fn scale_server(
     server: &ServerEntry,
     instances: u8,
 ) -> Result<ScaleResult, Box<dyn std::error::Error + Send + Sync>> {
+    output::log_debug(&output::ctx(
+        &server.host,
+        &format!("Scaling {app_name} to {instances} instance(s) ({}:{})…", server.host, server.port),
+    ));
+    let _t = output::timed(&output::ctx(&server.host, &format!("Scale {app_name}")));
     let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
     let command = serde_json::to_string(&Command::Scale {
         app: app_name.to_string(),
@@ -208,17 +207,24 @@ async fn scale_server(
     match serde_json::from_str::<Response>(&response_raw)
         .map_err(|error| format!("Invalid response from tako-server: {error}"))?
     {
-        Response::Ok { data } => Ok(ScaleResult {
-            instances: data
-                .get("instances")
-                .and_then(|value| value.as_u64())
-                .and_then(|value| u8::try_from(value).ok())
-                .unwrap_or(instances),
-            worker_limited: data
-                .get("worker_limited")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false),
-        }),
+        Response::Ok { data } => {
+            let result = ScaleResult {
+                instances: data
+                    .get("instances")
+                    .and_then(|value| value.as_u64())
+                    .and_then(|value| u8::try_from(value).ok())
+                    .unwrap_or(instances),
+                worker_limited: data
+                    .get("worker_limited")
+                    .and_then(|value| value.as_bool())
+                    .unwrap_or(false),
+            };
+            output::log_debug(&output::ctx(
+                &server.host,
+                &format!("Scale response: {} instance(s), worker_limited={}", result.instances, result.worker_limited),
+            ));
+            Ok(result)
+        }
         Response::Error { message } => Err(message.into()),
     }
 }

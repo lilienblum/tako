@@ -27,7 +27,7 @@ fn row(label: &str, value: &str, width: usize) {
 // ---------------------------------------------------------------------------
 
 fn print_paths() {
-    eprintln!("{}", output::strong("Paths"));
+    output::heading("Paths");
 
     let config_dir = crate::paths::tako_config_dir()
         .map(|p| p.display().to_string())
@@ -45,8 +45,7 @@ fn print_paths() {
 // ---------------------------------------------------------------------------
 
 fn print_certificate() {
-    eprintln!();
-    eprintln!("{}", output::strong("Local CA"));
+    output::heading("Local CA");
 
     let store = match crate::dev::LocalCAStore::new() {
         Ok(s) => s,
@@ -73,8 +72,7 @@ fn print_certificate() {
 async fn print_dev_server() {
     use super::dev::{LOCAL_DNS_PORT, is_dev_server_unavailable_error_message};
 
-    eprintln!();
-    eprintln!("{}", output::strong("Development server"));
+    output::heading("Development server");
 
     let info = match crate::dev_server_client::info().await {
         Ok(info) => info,
@@ -147,8 +145,7 @@ async fn print_dev_server() {
             .max()
             .unwrap_or(0);
 
-        eprintln!();
-        eprintln!("{}", output::strong("Forwarding"));
+        output::heading("Forwarding");
         row(
             "pf rules",
             &format_active_status(pf_active, "active", "not configured"),
@@ -171,8 +168,7 @@ async fn print_dev_server() {
         .await
         .unwrap_or_default();
     if !apps.is_empty() {
-        eprintln!();
-        eprintln!("{}", output::strong("Apps"));
+        output::heading("Apps");
         for a in &apps {
             let hosts = if a.hosts.is_empty() {
                 "(default)".to_string()
@@ -198,8 +194,7 @@ async fn print_dev_server() {
     {
         use super::dev::{TAKO_RESOLVER_FILE, local_dns_resolver_values, system_resolver_ipv4};
 
-        eprintln!();
-        eprintln!("{}", output::strong("Local DNS"));
+        output::heading("Local DNS");
 
         match local_dns_resolver_values() {
             Some((nameserver, port)) if nameserver == "127.0.0.1" && port == local_dns_port => {

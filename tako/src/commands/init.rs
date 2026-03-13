@@ -28,7 +28,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             || !output::confirm(
                 &format!(
                     "Configuration file {} already exists. Overwrite?",
-                    output::bold("tako.toml")
+                    output::strong("tako.toml")
                 ),
                 false,
             )?
@@ -432,19 +432,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     output::heading("Next steps");
-    output::step(&format!(
+    output::info(&format!(
         "1. Edit {} to set environment variables and more",
         output::strong("tako.toml")
     ));
-    output::step(&format!(
+    output::info(&format!(
         "2. Run {} to add deployment servers",
         output::strong("tako servers add")
     ));
-    output::step(&format!(
+    output::info(&format!(
         "3. Run {} to add secrets",
         output::strong("tako secrets set")
     ));
-    output::step(&format!(
+    output::info(&format!(
         "4. Run {} to deploy your app",
         output::strong("tako deploy")
     ));
@@ -588,17 +588,22 @@ fn fetch_family_presets_for_adapter(
     let runtime = tokio::runtime::Runtime::new().map_err(|e| {
         std::io::Error::other(format!("Failed to initialize preset fetch runtime: {e}"))
     })?;
+    output::log_debug(&format!("Fetching presets for family {:?}…", family));
+    let _t = output::timed(&format!("Fetch {:?} presets", family));
     let fetched = output::with_spinner_simple("Fetching presets", || {
         runtime.block_on(load_available_family_preset_definitions(family))
     });
 
     match fetched {
-        Ok(presets) => Ok(normalize_family_preset_definitions(adapter, presets)),
+        Ok(presets) => {
+            output::log_debug(&format!("Fetched {} preset(s)", presets.len()));
+            Ok(normalize_family_preset_definitions(adapter, presets))
+        }
         Err(err) => {
             output::warning(&format!(
                 "Failed to fetch presets ({}). Using {} base preset.",
                 err,
-                output::strong(adapter.default_preset())
+                adapter.default_preset()
             ));
             Ok(Vec::new())
         }

@@ -167,11 +167,11 @@ async fn run_async(
     let project_dir = current_dir()?;
     let source_root = source_bundle_root(&project_dir);
 
-    output::set_suppress(true);
     let validation = output::with_spinner(
         "Validating configuration",
         "Validated",
         || -> Result<ValidationResult, String> {
+            let _t = output::timed("Configuration validation");
             let tako_config = TakoToml::load_from_dir(&project_dir).map_err(|e| e.to_string())?;
             let servers = ServersToml::load().map_err(|e| e.to_string())?;
             let secrets = SecretsStore::load_from_dir(&project_dir).map_err(|e| e.to_string())?;
@@ -227,14 +227,13 @@ async fn run_async(
 
     let _bun_lockfile_checked = if preflight_runtime_adapter == BuildAdapter::Bun {
         output::with_spinner("Checking Bun lockfile", "Bun lockfile valid", || {
+            let _t = output::timed("Bun lockfile check");
             run_bun_lockfile_preflight(&source_root)
         })
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
     } else {
         false
     };
-
-    output::set_suppress(false);
 
     if requested_env.is_none() {
         output::ContextBlock::new().env(&env).print();
@@ -263,6 +262,7 @@ async fn run_async(
     // Preflight: check all servers in parallel — verify they're reachable,
     // not upgrading, and (if wildcard routes) have DNS provider configured.
     {
+        let _preflight_check_timer = output::timed("Server reachability preflight");
         use crate::commands::server::{apply_dns_config, fetch_dns_config, prompt_dns_setup};
 
         struct ServerCheck {
@@ -279,6 +279,8 @@ async fn run_async(
             let name = server_name.clone();
             let ssh_config = SshConfig::from_server(&server.host, server.port);
             check_set.spawn(async move {
+                output::log_debug(&output::ctx(&name, "Preflight check…"));
+                let _t = output::timed(&output::ctx(&name, "Preflight check"));
                 let mut ssh = SshClient::new(ssh_config);
                 ssh.connect().await?;
                 let info = ssh.tako_server_info().await?;
@@ -451,6 +453,7 @@ async fn run_async(
 
     // ===== Build =====
     let _phase = output::PhaseSpinner::start("Building…");
+    let _build_phase_timer = output::timed("Build phase");
 
     let executor = BuildExecutor::new(&project_dir);
     let cache = BuildCache::new(project_dir.join(".tako/artifacts"));
@@ -500,15 +503,24 @@ async fn run_async(
 
     let preset_ref = resolve_build_preset_ref(&project_dir, &tako_config)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    output::log_debug(&format!("Resolving preset ref: {}…", preset_ref));
     let runtime_adapter = resolve_effective_build_adapter(&project_dir, &tako_config, &preset_ref)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    let (mut build_preset, resolved_preset) = output::with_spinner_async(
-        "Resolving build preset",
-        "Build preset resolved",
-        load_build_preset(&project_dir, &preset_ref),
-    )
-    .await
-    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let (mut build_preset, resolved_preset) = {
+        let _t = output::timed("Preset resolution");
+        output::with_spinner_async(
+            "Resolving build preset",
+            "Build preset resolved",
+            load_build_preset(&project_dir, &preset_ref),
+        )
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
+    };
+    output::log_debug(&format!(
+        "Resolved preset: {} (commit {})",
+        resolved_preset.preset_ref,
+        shorten_commit(&resolved_preset.commit)
+    ));
     apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     if output::is_verbose() {
@@ -564,14 +576,23 @@ async fn run_async(
     let app_manifest_archive_path = archive_app_manifest_path(&app_subdir);
     let source_archive_size =
         output::with_spinner("Creating source archive", "Source archive created", || {
-            executor.create_source_archive_with_extra_files(
+            output::log_debug(&format!(
+                "Archiving source from {}…",
+                source_root.display()
+            ));
+            let _t = output::timed("Source archive creation");
+            let size = executor.create_source_archive_with_extra_files(
                 &source_root,
                 &source_archive_path,
                 &[(
                     app_manifest_archive_path.as_str(),
                     app_json_bytes.as_slice(),
                 )],
-            )
+            );
+            if let Ok(bytes) = &size {
+                output::log_debug(&format!("Source archive size: {}", format_size(*bytes)));
+            }
+            size
         })
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
@@ -627,10 +648,12 @@ async fn run_async(
     .await
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
+    drop(_build_phase_timer);
     _phase.finish("Build complete");
 
     // ===== Deploy =====
     let _phase = output::PhaseSpinner::start("Deploying…");
+    let _deploy_phase_timer = output::timed("Deploy phase");
 
     let secrets_hash = tako_core::compute_secrets_hash(&deploy_secrets);
     let deploy_config = Arc::new(DeployConfig {
@@ -686,10 +709,16 @@ async fn run_async(
     let mut missing_servers: Vec<String> = Vec::new();
     let mut not_running_servers: Vec<String> = Vec::new();
 
+    output::log_debug(&format!(
+        "Starting tako-server preflight for {} target(s)…",
+        targets.len()
+    ));
+    let _preflight_timer = output::timed("tako-server preflight");
     let mut preflight_handles = Vec::new();
     for target in &targets {
         let server_name = target.name.clone();
         let server = target.server.clone();
+        output::log_debug(&output::ctx(&server.host, &format!("Preflight check (port {})…", server.port)));
         preflight_handles.push(tokio::spawn(async move {
             let status = check_tako_server(&server).await;
             (server_name, status)
@@ -718,12 +747,15 @@ async fn run_async(
         }
         results
     };
+    drop(_preflight_timer);
 
     for result in preflight_results {
         let (server_name, status) =
             result.map_err(|e| format!("tako-server preflight task panic: {e}"))?;
         match status {
-            Ok(TakoServerStatus::Ready) => {}
+            Ok(TakoServerStatus::Ready) => {
+                output::log_debug(&output::ctx(&server_name, "Preflight: ready"));
+            }
             Ok(TakoServerStatus::Missing) => missing_servers.push(server_name),
             Ok(TakoServerStatus::NotRunning) => not_running_servers.push(server_name),
             Err(e) => {
@@ -751,6 +783,7 @@ async fn run_async(
         let deploy_config = deploy_config.clone();
         let idle_timeout = target.idle_timeout;
         let use_spinner = use_per_server_spinners;
+        output::log_debug(&output::ctx(&server_name, "Starting deploy…"));
         let handle = tokio::spawn(async move {
             let result = deploy_to_server(
                 &deploy_config,
@@ -792,6 +825,7 @@ async fn run_async(
         match result {
             Ok((server_name, server, result)) => match result {
                 Ok(()) => {
+                    output::log_debug(&output::ctx(&server_name, "Deploy succeeded"));
                     output::bullet(&format_server_deploy_success(&server_name, &server));
                 }
                 Err(e) => {
@@ -811,23 +845,24 @@ async fn run_async(
     }
 
     // ===== Summary =====
+    drop(_deploy_phase_timer);
     if errors.is_empty() {
         _phase.finish("Deploy complete");
-        println!();
-        println!(
+        eprintln!();
+        eprintln!(
             "  {}  {}",
             output::brand_muted("Revision"),
             version
         );
         for (index, route) in routes.iter().enumerate() {
             if index == 0 {
-                println!(
+                eprintln!(
                     "  {}       {}",
                     output::brand_muted("URL"),
                     format!("https://{}", route)
                 );
             } else {
-                println!(
+                eprintln!(
                     "            {}",
                     format!("https://{}", route)
                 );
@@ -1849,9 +1884,11 @@ fn has_bun_lockfile(workspace_root: &Path) -> bool {
 
 fn run_bun_lockfile_preflight(workspace_root: &Path) -> Result<bool, String> {
     if !has_bun_lockfile(workspace_root) {
+        output::log_debug("No Bun lockfile found, skipping check");
         return Ok(false);
     }
 
+    output::log_debug("Bun lockfile found, validating frozen lockfile…");
     let shell_runner = detect_local_shell_runner();
     let (program, args) = local_shell_command_program_and_args(
         shell_runner,
@@ -1864,6 +1901,7 @@ fn run_bun_lockfile_preflight(workspace_root: &Path) -> Result<bool, String> {
         .output()
         .map_err(|e| format!("Failed to run Bun lockfile check: {e}"))?;
     if output.status.success() {
+        output::log_debug("Bun lockfile validation passed");
         return Ok(true);
     }
 
@@ -2256,7 +2294,13 @@ async fn build_target_artifacts(
         let runtime_probe_success = format_runtime_probe_success(display_target_label);
         let runtime_version = if use_local_build_spinners {
             output::with_spinner(&runtime_probe_label, &runtime_probe_success, || {
-                if use_docker_build {
+                output::log_debug(&format!(
+                    "Probing {} version in {}…",
+                    runtime_tool,
+                    workspace.display()
+                ));
+                let _t = output::timed("Runtime probe");
+                let version = if use_docker_build {
                     resolve_runtime_version_with_docker_probe(
                         &workspace,
                         app_subdir,
@@ -2266,13 +2310,18 @@ async fn build_target_artifacts(
                     )
                 } else {
                     resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool)
+                };
+                if let Ok(v) = &version {
+                    output::log_debug(&format!("Detected {} {}", runtime_tool, v));
                 }
+                version
             })?
         } else {
             if output::is_verbose() {
                 output::muted(&runtime_probe_label);
             }
-            if use_docker_build {
+            let _t = output::timed("Runtime probe");
+            let version = if use_docker_build {
                 resolve_runtime_version_with_docker_probe(
                     &workspace,
                     app_subdir,
@@ -2282,7 +2331,10 @@ async fn build_target_artifacts(
                 )?
             } else {
                 resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool)?
-            }
+            };
+            drop(_t);
+            output::log_debug(&format!("Detected {} {}", runtime_tool, version));
+            version
         };
 
         let target_label_for_path = if has_multiple_targets {
@@ -2294,6 +2346,11 @@ async fn build_target_artifacts(
 
         match load_valid_cached_artifact(&cache_paths) {
             Ok(Some(cached)) => {
+                output::log_debug(&format!(
+                    "Artifact cache hit: {} ({})",
+                    format_path_relative_to(project_dir, &cached.path),
+                    format_size(cached.size_bytes)
+                ));
                 output::bullet(&format_artifact_cache_hit_message_for_output(
                     display_target_label,
                     &format_path_relative_to(project_dir, &cached.path),
@@ -2306,7 +2363,9 @@ async fn build_target_artifacts(
                 let _ = std::fs::remove_dir_all(&workspace);
                 continue;
             }
-            Ok(None) => {}
+            Ok(None) => {
+                output::log_debug("Artifact cache miss, building from source");
+            }
             Err(error) => {
                 output::warning(&format_artifact_cache_invalid_message(
                     display_target_label,
@@ -2321,6 +2380,11 @@ async fn build_target_artifacts(
             let build_success = format_build_artifact_success(display_target_label);
             if use_local_build_spinners {
                 output::with_spinner(&build_label, &build_success, || {
+                    output::log_debug(&format!(
+                        "Building target {} (docker={})…",
+                        build_target_label, use_docker_build
+                    ));
+                    let _t = output::timed("Target build");
                     run_target_build(
                         &workspace,
                         app_subdir,
@@ -2333,6 +2397,7 @@ async fn build_target_artifacts(
                 })?;
             } else {
                 output::bullet(&build_label);
+                let _t = output::timed("Target build");
                 run_target_build(
                     &workspace,
                     app_subdir,
@@ -2355,6 +2420,11 @@ async fn build_target_artifacts(
             let prepare_success = format_prepare_artifact_success(display_target_label);
             if use_local_build_spinners {
                 output::with_spinner(&prepare_label, &prepare_success, || {
+                    output::log_debug(&format!(
+                        "Packaging artifact for {}…",
+                        build_target_label
+                    ));
+                    let _t = output::timed("Artifact packaging");
                     package_target_artifact(
                         &workspace,
                         app_subdir,
@@ -2368,6 +2438,11 @@ async fn build_target_artifacts(
                 })
             } else {
                 output::bullet(&prepare_label);
+                output::log_debug(&format!(
+                    "Packaging artifact for {}…",
+                    build_target_label
+                ));
+                let _t = output::timed("Artifact packaging");
                 package_target_artifact(
                     &workspace,
                     app_subdir,
@@ -2543,6 +2618,8 @@ fn run_local_build(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
+        output::log_debug(&format!("Running {preset_stage_label} install: {install}…"));
+        let _t = output::timed(&format!("{preset_stage_label} install"));
         run_shell(workspace, install, "install", preset_stage_label)?;
     }
     if let Some(build) = target_build
@@ -2551,6 +2628,8 @@ fn run_local_build(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
+        output::log_debug(&format!("Running {preset_stage_label} build: {build}…"));
+        let _t = output::timed(&format!("{preset_stage_label} build"));
         run_shell(&app_dir, build, "run", preset_stage_label)?;
     }
 
@@ -2567,13 +2646,18 @@ fn run_local_build(
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
+            output::log_debug(&format!("Running {stage_label} install: {install}…"));
+            let _t = output::timed(&format!("{stage_label} install"));
             run_shell(&stage_cwd, install, "install", &stage_label)?;
         }
         let run_command = stage.run.trim();
         if run_command.is_empty() {
             return Err(format!("Local {stage_label} run command is empty"));
         }
+        output::log_debug(&format!("Running {stage_label}: {run_command}…"));
+        let _t = output::timed(&stage_label);
         run_shell(&stage_cwd, run_command, "run", &stage_label)?;
+        drop(_t);
         stage_number += 1;
     }
 
@@ -2964,6 +3048,11 @@ fn package_target_artifact(
         None,
     )
     .map_err(|e| format!("Failed to create artifact for {}: {}", target_label, e))?;
+    output::log_debug(&format!(
+        "Artifact size for {}: {}",
+        target_label,
+        format_size(artifact_size)
+    ));
 
     if let Err(error) =
         persist_cached_artifact(&artifact_temp_path, cache_paths, artifact_size)
@@ -3241,10 +3330,13 @@ async fn deploy_to_server(
     idle_timeout: u32,
     use_spinner: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    output::log_debug(&output::ctx(&server.host, &format!("Deploying (target: {target_label}, port: {})…", server.port)));
+    let _server_deploy_timer = output::timed(&output::ctx(&server.host, "Server deploy"));
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
     run_deploy_step("Connecting", "Connected", use_spinner, ssh.connect()).await?;
     let archive_size_bytes = std::fs::metadata(archive_path)?.len();
+    output::log_debug(&output::ctx(&server.host, &format!("Archive size: {}", format_size(archive_size_bytes))));
 
     run_deploy_step(
         "Checking remote disk space",
@@ -3313,6 +3405,7 @@ async fn deploy_to_server(
             .unwrap_or(false);
 
         if has_cached {
+            output::log_debug(&output::ctx(&server.host, "Remote artifact cache hit, skipping upload"));
             run_deploy_step(
                 "Linking cached artifact",
                 "Artifact cached (skip upload)",
@@ -3328,6 +3421,8 @@ async fn deploy_to_server(
             )
             .await?;
         } else {
+            output::log_debug(&output::ctx(&server.host, &format!("Uploading {} ({})…", archive_path.display(), format_size(archive_size_bytes))));
+            let upload_timer = output::timed(&output::ctx(&server.host, "Artifact upload"));
             run_deploy_step(
                 "Uploading artifact",
                 "Artifact uploaded",
@@ -3339,6 +3434,7 @@ async fn deploy_to_server(
                 },
             )
             .await?;
+            drop(upload_timer);
             // Cache the artifact for future deploys (best-effort).
             let _ = ssh
                 .exec(&format!(
@@ -3349,6 +3445,8 @@ async fn deploy_to_server(
         }
 
         // Extract archive, symlink shared dirs, and write runtime manifest in one exec.
+        output::log_debug(&output::ctx(&server.host, "Extracting and configuring release…"));
+        let extract_timer = output::timed(&output::ctx(&server.host, "Release extraction"));
         let resolved_main = config.main.clone();
         run_deploy_step("Extracting and configuring release", "Release configured", use_spinner, async {
             let main = resolved_main.clone();
@@ -3382,6 +3480,7 @@ async fn deploy_to_server(
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         })
         .await?;
+        drop(extract_timer);
         if output::is_verbose() {
             output::muted(&format_deploy_main_message(
                 &resolved_main,

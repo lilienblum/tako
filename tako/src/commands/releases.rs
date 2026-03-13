@@ -102,7 +102,7 @@ async fn list_releases(
     servers: &ServersToml,
 ) -> Result<(), Box<dyn std::error::Error>> {
     output::section("Releases");
-    output::step(&format!(
+    output::info(&format!(
         "{} ({})",
         output::strong(app_name),
         output::strong(env)
@@ -208,7 +208,7 @@ async fn rollback_release(
     }
 
     output::section("Rollback");
-    output::step(&format!(
+    output::info(&format!(
         "{} ({}) -> {}",
         output::strong(app_name),
         output::strong(env),
@@ -294,6 +294,11 @@ async fn fetch_releases_for_server(
     server: &ServerEntry,
     app_name: &str,
 ) -> Result<Vec<ReleaseInfo>, String> {
+    output::log_debug(&output::ctx(
+        &server.host,
+        &format!("Fetching releases for {app_name} ({}:{})…", server.host, server.port),
+    ));
+    let _t = output::timed(&output::ctx(&server.host, "Fetch releases"));
     let mut ssh = SshClient::connect_to(&server.host, server.port)
         .await
         .map_err(|e| e.to_string())?;
@@ -304,7 +309,14 @@ async fn fetch_releases_for_server(
     .map_err(|e| e.to_string())?;
     let response = ssh.tako_command(&cmd).await.map_err(|e| e.to_string())?;
     let _ = ssh.disconnect().await;
-    parse_release_list_response(&response)
+    let result = parse_release_list_response(&response);
+    if let Ok(ref releases) = result {
+        output::log_debug(&output::ctx(
+            &server.host,
+            &format!("Returned {} release(s)", releases.len()),
+        ));
+    }
+    result
 }
 
 async fn rollback_server_release(
@@ -312,6 +324,11 @@ async fn rollback_server_release(
     app_name: &str,
     release: &str,
 ) -> Result<(), String> {
+    output::log_debug(&output::ctx(
+        &server.host,
+        &format!("Rolling back {app_name} to {release} ({}:{})…", server.host, server.port),
+    ));
+    let _t = output::timed(&output::ctx(&server.host, &format!("Rollback {app_name}")));
     let mut ssh = SshClient::connect_to(&server.host, server.port)
         .await
         .map_err(|e| e.to_string())?;
@@ -323,7 +340,11 @@ async fn rollback_server_release(
     .map_err(|e| e.to_string())?;
     let response = ssh.tako_command(&cmd).await.map_err(|e| e.to_string())?;
     let _ = ssh.disconnect().await;
-    parse_ok_response(&response)
+    let result = parse_ok_response(&response);
+    if result.is_ok() {
+        output::log_debug(&output::ctx(&server.host, "Rollback succeeded"));
+    }
+    result
 }
 
 fn parse_release_list_response(raw: &str) -> Result<Vec<ReleaseInfo>, String> {
@@ -369,12 +390,8 @@ fn output_release_lines(release: &ReleaseInfo) {
     let deployed = format_release_deployed(release);
     let commit = format_release_commit_line(release);
 
-    println!(
-        "{} {}",
-        output::bold(&output::brand_fg(head)),
-        output::brand_muted(deployed)
-    );
-    println!("{}", output::brand_muted(commit));
+    output::info(&format!("{} {}", output::strong(&head), output::brand_muted(&deployed)));
+    output::muted(&commit);
 }
 
 fn format_release_head(release: &ReleaseInfo) -> String {

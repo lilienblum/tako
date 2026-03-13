@@ -253,38 +253,38 @@ async fn list_secrets() -> Result<(), Box<dyn std::error::Error>> {
     let all_envs = secrets.environment_names();
 
     // Print header
-    print!("{:<30}", "SECRET");
+    eprint!("{:<30}", "SECRET");
     for env in &all_envs {
-        print!(" {:<15}", env.to_uppercase());
+        eprint!(" {:<15}", env.to_uppercase());
     }
-    println!();
+    eprintln!();
 
-    print!("{}", "-".repeat(30));
+    eprint!("{}", "-".repeat(30));
     for _ in &all_envs {
-        print!(" {}", "-".repeat(15));
+        eprint!(" {}", "-".repeat(15));
     }
-    println!();
+    eprintln!();
 
     // Print each secret
     let discrepancies = secrets.find_discrepancies();
     let discrepancy_names: Vec<&str> = discrepancies.iter().map(|d| d.name.as_str()).collect();
 
     for name in &all_names {
-        print!("{:<30}", name);
+        eprint!("{:<30}", name);
         for env in &all_envs {
             if secrets.contains(env, name) {
-                print!(" {:<15}", "[set]");
+                eprint!(" {:<15}", "[set]");
             } else {
-                print!(" {:<15}", "-");
+                eprint!(" {:<15}", "-");
             }
         }
 
         // Show warning if this secret has discrepancies
         if discrepancy_names.contains(&name.as_str()) {
-            print!(" (missing in some envs)");
+            eprint!(" (missing in some envs)");
         }
 
-        println!();
+        eprintln!();
     }
 
     // Summary
@@ -404,6 +404,11 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
     let mut error_count = 0;
 
     for (env_name, server_name, server) in &sync_targets {
+        output::log_debug(&output::ctx(
+            server_name,
+            &format!("Syncing secrets for env {env_name} ({}:{})…", server.host, server.port),
+        ));
+        let _t = output::timed(&output::ctx(server_name, &format!("Sync secrets ({env_name})")));
         // Get decrypted secrets for this environment
         let env_secrets = match secrets.get_env(env_name) {
             Some(encrypted_secrets) => {
@@ -438,8 +443,13 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
             continue;
         }
 
+        output::log_debug(&output::ctx(
+            server_name,
+            &format!("Sending {} secret(s) for env {env_name}…", env_secrets.len()),
+        ));
         match sync_to_server(&app_name, server, &env_secrets).await {
             Ok(()) => {
+                output::log_debug(&output::ctx(server_name, &format!("Sync succeeded ({env_name})")));
                 success_count += 1;
             }
             Err(e) => {

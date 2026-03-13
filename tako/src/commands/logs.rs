@@ -85,7 +85,7 @@ async fn stream_logs(
     show_prefix: bool,
     colorize: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    output::step(&format!(
+    output::info(&format!(
         "Streaming logs for {} {}",
         output::strong(app_name),
         output::brand_muted("(Ctrl+c to stop)")
@@ -107,6 +107,8 @@ async fn stream_logs(
         let prefix = format_prefix(server_name, show_prefix, colorize);
 
         tasks.push(tokio::spawn(async move {
+            output::log_debug(&output::ctx(&host, &format!("Streaming logs ({host}:{port})…")));
+            let _t = output::timed(&output::ctx(&host, "Stream logs"));
             let mut ssh = SshClient::connect_to(&host, port).await?;
 
             let log_cmd = format!(
@@ -189,6 +191,8 @@ async fn fetch_logs(
         let phase_pb = phase.pb().cloned();
 
         tasks.push(tokio::spawn(async move {
+            output::log_debug(&output::ctx(&host, &format!("Fetching logs ({host}:{port}, last {days} days)…")));
+            let _t = output::timed(&output::ctx(&host, "Fetch logs"));
             let mut ssh = SshClient::connect_to(&host, port).await?;
 
             // Pipe through zstd if available on the server; falls back to raw output.

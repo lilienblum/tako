@@ -52,30 +52,44 @@ pub async fn setup_local_ca() -> Result<LocalCA, Box<dyn std::error::Error>> {
     let plan = plan_ca_setup(ca_exists, ca_trusted);
 
     let ca = match plan.source {
-        CaSource::Existing => store.load_ca()?,
+        CaSource::Existing => {
+            output::log_debug("Loading existing Tako CA from store…");
+            let _t = output::timed("Load existing CA");
+            store.load_ca()?
+        }
         CaSource::Generated => {
-            let ca = output::with_spinner(
-                "Generating new Tako CA",
-                "Tako CA generated",
-                LocalCA::generate,
-            )
-            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
-            output::with_spinner("Saving Tako CA to secure storage", "Tako CA saved", || {
-                store.save_ca(&ca)
-            })
-            .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+            output::log_debug("No existing CA found, generating new Tako CA…");
+            let ca = {
+                let _t = output::timed("Generate CA");
+                output::with_spinner(
+                    "Generating new Tako CA",
+                    "Tako CA generated",
+                    LocalCA::generate,
+                )
+                .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?
+            };
+            output::log_debug("Saving generated CA to secure storage…");
+            {
+                let _t = output::timed("Save CA to store");
+                output::with_spinner("Saving Tako CA to secure storage", "Tako CA saved", || {
+                    store.save_ca(&ca)
+                })
+                .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+            }
             ca
         }
     };
 
     if plan.install_trust {
+        output::log_debug("CA not yet trusted in system store, installing trust…");
         // Keep this non-spinner so the sudo password prompt is obvious.
         output::warning("Sudo password required.");
         for line in sudo_trust_explanation_lines() {
             output::muted(line);
         }
         output::muted("Enter your password at the prompt below.");
-        output::step("Installing Tako CA in system trust store (sudo)...");
+        output::info("Installing Tako CA in system trust store (sudo)...");
+        let _t = output::timed("Install CA trust");
         store
             .install_ca_trust()
             .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;

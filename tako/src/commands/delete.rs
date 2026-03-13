@@ -130,11 +130,7 @@ async fn run_async(
     }
 
     output::section("Delete");
-    output::step(&format!(
-        "Deleting {} from {}",
-        output::strong(&app_name),
-        output::strong(&env)
-    ));
+    output::info(&format!("Deleting {app_name} from {env}"));
 
     let total_servers = server_names.len();
     let mut success_count = 0usize;
@@ -330,12 +326,21 @@ async fn discover_server_deployments(
     server_name: &str,
     server: &ServerEntry,
 ) -> Result<Vec<RemoteDeployment>, Box<dyn std::error::Error + Send + Sync>> {
+    output::log_debug(&output::ctx(
+        server_name,
+        &format!("Discovering deployments ({}:{})…", server.host, server.port),
+    ));
+    let _t = output::timed(&output::ctx(server_name, "Discover deployments"));
     let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
 
     let result = async {
         let list = ssh.tako_list_apps().await?;
         let app_names = parse_list_apps_response(list)
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+        output::log_debug(&output::ctx(
+            server_name,
+            &format!("Found {} app(s)", app_names.len()),
+        ));
 
         let mut deployments = Vec::new();
         for app_name in app_names {
@@ -662,6 +667,11 @@ async fn delete_from_server(
     server: &ServerEntry,
     app_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    output::log_debug(&output::ctx(
+        &server.host,
+        &format!("Deleting app {app_name} ({}:{})…", server.host, server.port),
+    ));
+    let _t = output::timed(&output::ctx(&server.host, &format!("Delete {app_name}")));
     let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
 
     let result = async {
@@ -673,6 +683,10 @@ async fn delete_from_server(
         let response: Response = serde_json::from_str(&response_raw)?;
         parse_delete_response(response)
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
+        output::log_debug(&output::ctx(
+            &server.host,
+            &format!("Delete command succeeded for {app_name}"),
+        ));
 
         let remote_app_root = format!("/opt/tako/apps/{}", app_name);
         let cleanup_cmd = format!("rm -rf {}", shell_single_quote(&remote_app_root));

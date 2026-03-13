@@ -50,7 +50,7 @@ pub fn run(canary: bool, stable: bool) -> Result<(), Box<dyn std::error::Error>>
 
     if channel == UpgradeChannel::Canary {
         output::ContextBlock::new().channel("canary").print();
-        output::step(&format!(
+        output::info(&format!(
             "Your current version: {}",
             output::strong(&current_version())
         ));
@@ -292,7 +292,10 @@ async fn check_for_updates(channel: UpgradeChannel) -> Result<UpdateCheck, Strin
 }
 
 async fn check_for_updates_inner(channel: UpgradeChannel) -> Result<UpdateCheck, String> {
+    output::log_debug(&format!("Fetching tags from {}…", TAGS_API));
+    let _t = output::timed("Fetch version tags");
     let tags = fetch_tags().await?;
+    output::log_debug(&format!("Fetched {} tag(s)", tags.len()));
 
     // Canary upgrades are handled by run_canary_upgrade (hash-based comparison)
     assert!(channel == UpgradeChannel::Stable);
@@ -303,6 +306,10 @@ async fn check_for_updates_inner(channel: UpgradeChannel) -> Result<UpdateCheck,
         .ok_or_else(|| format!("no release found with prefix '{TAG_PREFIX}'"))?;
 
     let version = tag.name.strip_prefix(TAG_PREFIX).unwrap_or(&tag.name);
+    output::log_debug(&format!(
+        "Current: {}, latest: {}",
+        CURRENT_VERSION, version
+    ));
     if version == CURRENT_VERSION {
         Ok(UpdateCheck::AlreadyCurrent)
     } else {
@@ -398,11 +405,19 @@ async fn download_and_install_inner(
     }
 
     // Extract
+    output::log_debug("Extracting archive…");
+    {
+        let _t = output::timed("Extract archive");
+        let extract_dir_tmp = tmp_dir.join("extract");
+        std::fs::create_dir_all(&extract_dir_tmp)?;
+        extract_tarball(&archive_path, &extract_dir_tmp)?;
+    }
+
     let extract_dir = tmp_dir.join("extract");
-    std::fs::create_dir_all(&extract_dir)?;
-    extract_tarball(&archive_path, &extract_dir)?;
 
     // Install binaries
+    output::log_debug(&format!("Installing binaries to {}…", install_dir.display()));
+    let _t = output::timed("Install binaries");
     let tako_bin =
         find_binary(&extract_dir, "tako").ok_or("archive did not contain a tako binary")?;
     let dev_server_bin = find_binary(&extract_dir, "tako-dev-server")
@@ -416,6 +431,8 @@ async fn download_and_install_inner(
 }
 
 async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    output::log_debug(&format!("Downloading {}…", url));
+    let _t = output::timed("Download release archive");
     let client = reqwest::Client::new();
     let mut resp = client
         .get(url)
@@ -426,6 +443,10 @@ async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn st
         .map_err(|e| format!("download failed: {e}"))?;
 
     let total = resp.content_length();
+    output::log_debug(&format!(
+        "Download started, content_length={}",
+        total.map_or("unknown".to_string(), |n| format!("{n} bytes"))
+    ));
     let mut file = std::fs::File::create(dest)?;
     let mut downloaded = 0u64;
 
@@ -458,6 +479,7 @@ async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn st
         pb.finish_and_clear();
     }
 
+    output::log_debug(&format!("Downloaded {} bytes to {}", downloaded, dest.display()));
     Ok(())
 }
 
