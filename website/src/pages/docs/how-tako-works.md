@@ -25,7 +25,7 @@ CLI output conventions across commands:
 | Component          | Runs where      | Main role                                                                        |
 | ------------------ | --------------- | -------------------------------------------------------------------------------- |
 | `tako` CLI         | Your machine    | Project setup, dev client, build/deploy orchestration, server/secrets management |
-| `tako-dev-server`  | Your machine    | Local HTTPS ingress for `*.tako`, local app lifecycle                            |
+| `tako-dev-server`  | Your machine    | Local HTTPS ingress for `*.tako.test`, local app lifecycle                       |
 | `tako-server`      | Deployment host | Remote app lifecycle, routing, health checks, load balancing, TLS, metrics       |
 | Your app instances | Local or remote | Serve your app logic                                                             |
 
@@ -35,14 +35,14 @@ Tako reads from three main places:
 
 - Project config: `tako.toml`
 - Project secrets: `.tako/secrets` (encrypted)
-- Global server inventory: `~/.tako/config.toml` (`[[servers]]` entries)
+- Global server inventory: `config.toml` (`[[servers]]` entries, in platform config directory)
 
 Key config rules:
 
 - Non-development environments must define `route` or `routes`.
 - Each environment can use `route` or `routes`, not both.
 - Route values must include a hostname.
-- Development routes must be `{app}.tako` or a subdomain of it.
+- Development routes must be `{app}.tako.test` or a subdomain of it.
 
 See full config details in [`tako.toml` Reference](/docs/tako-toml).
 
@@ -55,12 +55,12 @@ When you run `tako dev`, the CLI behaves like a client for a persistent local da
   - Source-checkout runs can build `tako-dev-server` from the `tako` crate when needed.
 - It registers the current app directory with the daemon.
 - It starts one local instance immediately.
-- It exposes HTTPS routes on `*.tako` with a fixed daemon listen port (`127.0.0.1:47831`).
+- It exposes HTTPS routes on `*.tako.test` with a fixed daemon listen port (`127.0.0.1:47831`).
 
 Default route behavior:
 
 - If `[envs.development]` routes are configured, those are used.
-- Otherwise, Tako uses `{app}.tako`.
+- Otherwise, Tako uses `{app}.tako.test`.
 - App identity comes from top-level `name` when set, otherwise from sanitized project directory name.
 
 macOS local networking behavior:
@@ -86,7 +86,7 @@ High-level deploy flow:
 4. Resolve build preset (top-level runtime-local `preset` override or adapter base default from top-level `runtime`/detection), fetching unpinned official aliases from `master` (fetch failures fail resolution; runtime base aliases fall back to embedded defaults when missing from fetched family manifests), then write resolved metadata to `.tako/build.lock.json`.
 5. Build target-specific artifacts locally (Docker or local host based on preset `[build].container`, with defaults derived from `[build].targets`), running preset stage first then app `[[build.stages]]`, with deterministic local artifact cache reuse when inputs are unchanged.
 6. Deploy to target servers in parallel over SSH.
-7. On each server: lock, upload/extract target artifact, finalize `app.json`, compare secrets hash with server (only send secrets if changed), send deploy command (env vars come from `app.json`), run runtime prep (Bun dependency install), rolling update, unlock.
+7. On each server: lock, upload/extract target artifact, compare secrets hash with server (only send secrets if changed), send deploy command (non-secret env vars and idle timeout come from release `app.json`), run runtime prep (Bun dependency install), rolling update, unlock.
 
 Important deployment behavior:
 
@@ -109,19 +109,20 @@ Important deployment behavior:
 - Per target build order is fixed: preset `[build].install`/`[build].build` first, then app `[[build.stages]]` in declaration order.
 - Artifact filters use project `[build].include` (optional), plus effective preset `[build].exclude` and project `[build].exclude`.
 - Bun deploys exclude `node_modules` by default and install release dependencies on server before startup (`bun install --production`).
-- Final runtime `app.json` written on server includes optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
+- Deployed release `app.json` is the canonical runtime manifest and includes optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
 - Target artifacts are cached in `.tako/artifacts/` and reused across deploys when source/preset/target/build inputs are unchanged.
 - Cached artifacts are checksum-verified; invalid cached entries are rebuilt automatically.
 - Before packaging each target artifact, deploy verifies the resolved `main` exists in the post-build app directory.
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives (`*-source.tar.zst`), keeps 90 newest target artifacts (`artifact-cache-*.tar.zst`), and removes orphan target metadata files.
 - Deploy runtime `main` is resolved from `tako.toml main`, then preset top-level `main`; for JS runtimes (`bun`, `node`, `deno`) when preset `main` is `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`), Tako tries `index.<ext>` first, then `src/index.<ext>`.
 - Deploy app identity is resolved from top-level `name` when set, otherwise sanitized project directory name.
+- Remote deploy identity on the server is `{app}/{env}`, so multiple environments of the same app can share one server without overwriting each other.
 - Server install resolves host target (`arch` + `libc`) and downloads matching `tako-server-linux-<arch>-<libc>` artifact.
 - Server install also installs `mise` (package-manager first, then upstream installer fallback when unavailable).
 - For production without explicit server mapping:
   - With one global server, Tako can guide/persist mapping.
   - With multiple global servers (interactive), Tako prompts for selection.
-- Deploy lock path: `/opt/tako/apps/{app}/.deploy_lock`.
+- Deploy lock path: `/opt/tako/apps/{app}/{env}/.deploy_lock`.
 - Rolling updates are health-gated and rollback old traffic on failure.
 
 ## Runtime Traffic Routing
@@ -205,9 +206,9 @@ Certificate behavior:
 
 Typical remote layout:
 
-- `/opt/tako/apps/{app}/current` -> active release symlink
-- `/opt/tako/apps/{app}/releases/{version}/` -> release content (includes `app.json` with env vars and `secrets.json` with secrets at 0600)
-- `/opt/tako/apps/{app}/shared/` -> shared app data (for example logs)
+- `/opt/tako/apps/{app}/{env}/current` -> active release symlink
+- `/opt/tako/apps/{app}/{env}/releases/{version}/` -> release content (includes `app.json` with env vars and `secrets.json` with secrets at 0600)
+- `/opt/tako/apps/{app}/{env}/shared/` -> shared app data (for example logs)
 - `/var/run/tako/tako.sock` -> symlink to active management socket (`tako-{pid}.sock`)
 
 ## Operational Commands in Context

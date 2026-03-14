@@ -34,7 +34,7 @@ App names must be URL-friendly (DNS hostname compatible):
 
 This ensures names work in DNS (`{app-name}.tako.test` by default), URLs, and environment variables.
 `name` is optional in `tako.toml`. If omitted, Tako resolves app name from the project directory name.
-Using top-level `name` is recommended for stability: it must be unique per server. Renaming it later creates a new app identity/path; delete the old deployment manually.
+Using top-level `name` is recommended for stability. Remote server identity is `{name}/{env}`, so the same app name can be deployed to multiple environments on one server. Renaming `name` later creates a new app identity/path; delete the old deployment manually.
 
 ### tako.toml (Project Root - Required)
 
@@ -99,7 +99,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - App name resolution order for deploy/dev/logs/secrets/delete:
   1. top-level `name` (when set)
   2. sanitized project directory name fallback
-- For predictable deploy identity, set `name` explicitly and keep it unique per server.
+- Remote deployment identity on servers is `{app}/{env}`. Set `name` explicitly to keep the `{app}` segment stable across deploys.
 - Renaming app identity (`name` or directory fallback) is treated as a different app; remove the previous deployment manually if needed.
 - `main` in `tako.toml` is an optional runtime entrypoint override written to deployed `app.json`.
 - If `main` is omitted in `tako.toml`, deploy/dev use preset top-level `main` when present.
@@ -108,7 +108,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Top-level deploy/build keys in `tako.toml` are `main`, `runtime`, `preset`, and `[build]`; standalone top-level `dist` and `assets` keys are rejected.
 - Top-level `runtime` is optional; when set to `bun`, `node`, or `deno`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
 - Server membership is declared per environment with `[envs.<name>].servers`.
-- The same server name cannot be assigned to multiple non-development environments in one project.
+- The same server name may be assigned to multiple non-development environments in one project. Each environment deploys to its own server-side app identity and filesystem path under `/opt/tako/apps/{app}/{env}`.
 - `development` is for `tako dev`; `servers` declared there are ignored by deploy validation.
 - Top-level `preset` is optional; when omitted, `tako deploy`/`tako dev` use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`).
   - For `tako dev`, when top-level `preset` is omitted, Tako ignores preset top-level `dev` and runs a runtime-default command using resolved `main`:
@@ -186,9 +186,9 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Instances are not stopped while serving in-flight requests.
 - Explicit scale-down drains in-flight requests first, then stops excess instances.
 
-### ~/.tako/config.toml (Global User Config)
+### config.toml (Global User Config)
 
-Global user-level settings and server inventory (user's home directory, NOT in project).
+Global user-level settings and server inventory. Stored in the platform config directory (`~/Library/Application Support/tako/` on macOS, `~/.config/tako/` on Linux). NOT in the project.
 
 ```toml
 [[servers]]
@@ -217,7 +217,7 @@ Detected server build target metadata is stored directly in each `[[servers]]` e
 - `tako dev` uses a fixed local HTTPS listen port (`47831`).
 - On macOS, `tako dev` uses automatic local forwarding so public URLs stay on default ports (`:443` for HTTPS, `:80` for HTTP redirect).
 
-CLI prompt history is stored separately at `~/.tako/history.toml` (not in `config.toml`).
+CLI prompt history is stored separately at `history.toml` (not in `config.toml`).
 
 ### .tako/secrets (Project - Encrypted)
 
@@ -239,7 +239,7 @@ Secret names are plaintext; values encrypted.
 
 Encryption keys are file-based:
 
-- Environment-specific keys: `~/.tako/keys/{env}`
+- Environment-specific keys: `keys/{env}`
 
 `tako` can import/export these keys via `tako secrets key import` and `tako secrets key export`.
 
@@ -287,7 +287,7 @@ Canary distribution model:
 
 Upgrade channel state:
 
-- Global config key `upgrade_channel` in `~/.tako/config.toml` stores the default upgrade channel (`stable` or `canary`).
+- Global config key `upgrade_channel` in `config.toml` stores the default upgrade channel (`stable` or `canary`).
 - Explicit channel flags update this key.
 - Upgrade commands print the active channel before execution (`You're on {channel} channel`).
 
@@ -494,7 +494,7 @@ Each app block includes instance summary (`healthy/total`), build, and deployed 
 Status flow helpers:
 
 - `tako servers status` does not require `tako.toml` and can run from any directory.
-- Uses global server inventory from `~/.tako/config.toml`.
+- Uses global server inventory from `config.toml`.
 - If no servers are configured and the terminal is interactive, status offers to run the add-server wizard.
 - If no deployed apps are found, status reports that explicitly.
 
@@ -513,20 +513,20 @@ Logs flow helpers:
 
 ### tako servers add [host] [--name {name}] [--description {text}] [--port {port}]
 
-Add server to global `~/.tako/config.toml` (`[[servers]]`).
+Add server to global `config.toml` (`[[servers]]`).
 
 - With `host`: adds directly from CLI args.
 - With `host`: `--name` is required (no implicit default to hostname).
 - Without `host` (interactive terminal): launches a guided wizard (host, required server name, optional description, SSH port) with a final `Looks good?` confirmation. Choosing `No` restarts the wizard.
 - The add-server wizard supports `Tab` autocomplete suggestions for host/name/port from existing servers and persisted CLI history.
   - For name/port prompts, suggestions related to the selected host (and selected name for ports) are prioritized first, then global suggestions are shown.
-- Successful adds record host/name/port history in `~/.tako/history.toml` for future autocomplete.
-- `--description` stores optional human-readable metadata in `~/.tako/config.toml` (shown in `tako servers ls`).
+- Successful adds record host/name/port history in `history.toml` for future autocomplete.
+- `--description` stores optional human-readable metadata in `config.toml` (shown in `tako servers ls`).
 - Re-running with the same name/host/port is idempotent (reports already configured and succeeds).
 
 Tests SSH connection before adding. Connects as the `tako` user.
 
-During SSH checks, `tako servers add` also detects and stores target metadata (`arch`, `libc`) in the matching `[[servers]]` entry in `~/.tako/config.toml`.
+During SSH checks, `tako servers add` also detects and stores target metadata (`arch`, `libc`) in the matching `[[servers]]` entry in `config.toml`.
 
 If `--no-test` is used, SSH checks and target detection are skipped; deploy later fails for that server until target metadata is captured by re-adding the server with SSH checks enabled.
 
@@ -534,7 +534,7 @@ If `tako-server` is not installed on the target, `tako` warns and expects the us
 
 ### tako servers rm [name]
 
-Remove server from `~/.tako/config.toml` (`[[servers]]`).
+Remove server from `config.toml` (`[[servers]]`).
 
 When `name` is omitted in an interactive terminal, `tako` opens a server selector.
 In non-interactive mode, `name` is required.
@@ -545,7 +545,7 @@ Aliases: `tako servers remove [name]`, `tako servers delete [name]`.
 
 ### tako servers ls
 
-List all configured servers from global config (`~/.tako/config.toml`) as a table:
+List all configured servers from global config (`config.toml`) as a table:
 
 - Name
 - Host
@@ -603,7 +603,7 @@ Set/update secret for environment (defaults to production).
 
 When running in an interactive terminal, prompts for value with masked input. In non-interactive mode, reads a single line from stdin. Stores encrypted value locally in `.tako/secrets`.
 
-Uses the environment key at `~/.tako/keys/{env}` (creates it if missing).
+Uses the environment key at `keys/{env}` (creates it if missing).
 
 When `--sync` is provided, immediately syncs secrets to all servers in the target environment after the local change, triggering a rolling restart of running instances.
 
@@ -634,7 +634,7 @@ Source of truth: local `.tako/secrets`.
 By default, sync processes all environments declared in `tako.toml`.
 When `--env` is provided, sync processes only that environment.
 
-For each target environment, sync decrypts with `~/.tako/keys/{env}`.
+For each target environment, sync decrypts with `keys/{env}`.
 
 Shows a spinner with the total number of target servers while syncing, and reports the elapsed time on completion.
 
@@ -648,7 +648,7 @@ Sync flow helpers:
 
 Import a base64 key from masked terminal input.
 
-Writes `~/.tako/keys/{env}`.
+Writes `keys/{env}`.
 
 When `--env` is omitted, `production` is used.
 
@@ -656,7 +656,7 @@ When `--env` is omitted, `production` is used.
 
 Export a key to clipboard.
 
-Reads `~/.tako/keys/{env}`.
+Reads `keys/{env}`.
 
 When `--env` is omitted, `production` is used.
 
@@ -688,7 +688,7 @@ Deploy flow helpers:
 2. Resolve source bundle root (git root when available; otherwise app directory)
 3. Resolve app subdirectory relative to source bundle root
 4. Resolve deploy runtime `main` (`main` from `tako.toml`; otherwise preset top-level `main`, with JS index fallback order: `index.<ext>` then `src/index.<ext>` for `ts`/`tsx`/`js`/`jsx` when applicable)
-5. Create source archive (`.tako/artifacts/{version}-source.tar.zst`) and write `app.json` at app path inside archive
+5. Create source archive (`.tako/artifacts/{version}-source.tar.zst`) with canonical deployed `app.json` at app path inside archive
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
    - Best-effort local artifact cache prune runs before target builds (retention: 30 source archives, 90 target artifacts; orphan target metadata is removed).
 6. Resolve build preset (top-level `preset` override or adapter base preset from top-level `runtime`/detection), fetching unpinned official aliases from `master` (fetch failure still fails resolution; runtime base aliases fall back to embedded defaults when missing from fetched family manifests), then persist resolved metadata in `.tako/build.lock.json`
@@ -710,9 +710,8 @@ Deploy flow helpers:
    - Require `tako-server` to be pre-installed and running on each server
    - Acquire deploy lock (prevents concurrent deploys)
    - Upload and extract target-specific artifact
-   - Write final `app.json` in app directory using resolved runtime `main`
    - Query server for the app's current secrets hash; if it matches the local secrets hash, skip sending secrets (server keeps existing). If hashes differ (or app is new), include decrypted secrets in the deploy command.
-   - Send deploy command with merged environment payload (`TAKO_BUILD`, `TAKO_ENV`, runtime vars, user vars, and conditionally decrypted secrets)
+   - Send deploy command with routes and optional secrets payload; `tako-server` reads non-secret runtime/app config from release `app.json` and injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`) when spawning instances
    - Runtime prep runs on server before rolling update (Bun: dependency install in release directory)
    - Perform rolling update
    - Release lock and clean up old releases (>30 days)
@@ -743,9 +742,9 @@ Deploy flow helpers:
 - Target artifacts are cached locally by deterministic key and reused across deploys when build inputs are unchanged.
 - Cached artifacts are validated by checksum/size before reuse; invalid cache entries are rebuilt automatically.
 - Artifact cache keys include runtime tool + resolved runtime version + Docker/local mode to avoid cross-target and cross-runtime cache contamination.
-- Final `app.json` is written in the deployed app directory and contains runtime `main` used by `tako-server`.
-- Final `app.json` also includes optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
-- Deploy does not write a release `.env` file; runtime environment is provided through the `deploy` command payload and applied by `tako-server` when spawning instances.
+- Deploy artifacts include the canonical `app.json` used by `tako-server` at runtime.
+- Release `app.json` contains resolved runtime metadata (`runtime`, `main`, optional `install`/`start`), non-secret env vars, environment idle timeout, and optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
+- Deploy does not write a release `.env` file; non-secret env vars live in release `app.json`, secrets live in per-app `secrets.json`, and `tako-server` injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`) when spawning instances.
 - Deploy queries each server's secrets hash before sending the deploy command. If the hash matches the local secrets, secrets are omitted from the payload and the server keeps its existing secrets. This avoids unnecessary secret transmission and ensures new servers or servers with stale secrets are automatically provisioned.
 - Deploy requires valid `arch` and `libc` metadata in each selected `[[servers]]` entry.
 - Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
@@ -754,8 +753,8 @@ Deploy flow helpers:
 
 **Deploy lock (server-side):**
 
-- CLI acquires lock on each server by creating `/opt/tako/apps/{app}/.deploy_lock` (atomic `mkdir` over SSH)
-- Prevents concurrent deploys of the same app on the same server
+- CLI acquires lock on each server by creating `/opt/tako/apps/{app}/{env}/.deploy_lock` (atomic `mkdir` over SSH)
+- Prevents concurrent deploys of the same app environment on the same server
 - Lock is released at end of deploy (best-effort). If a deploy crashes mid-flight, the lock must be removed manually.
 
 **Rolling update (per server):**
@@ -797,9 +796,9 @@ When the stored desired instance count is `0`, rolling deploy still starts one w
 
 - If `[envs.<env>].servers` exists in `tako.toml` → deploy to those servers
 - If deploying to `production` with no `[envs.production].servers` mapping:
-  - exactly one server in `~/.tako/config.toml` `[[servers]]` → use it and persist it into `[envs.production].servers`
-  - multiple servers in `~/.tako/config.toml` `[[servers]]` (interactive terminal) → prompt to select one and persist it into `[envs.production].servers`
-- If no servers exist in `~/.tako/config.toml` `[[servers]]` → fail with hint to run `tako servers add <host>`
+  - exactly one server in `config.toml` `[[servers]]` → use it and persist it into `[envs.production].servers`
+  - multiple servers in `config.toml` `[[servers]]` (interactive terminal) → prompt to select one and persist it into `[envs.production].servers`
+- If no servers exist in `config.toml` `[[servers]]` → fail with hint to run `tako servers add <host>`
 - Otherwise, require explicit `[envs.<env>].servers` mapping in tako.toml
 
 ### tako releases ls [--env {environment}]
@@ -832,58 +831,51 @@ Change the desired instance count for a deployed app.
 
 - `instances` is the desired instance count per targeted server.
 - In a project directory, Tako resolves the app name from `tako.toml` (or directory fallback when top-level `name` is unset).
-- Outside a project directory, `--app` is required.
+- In project context, app-scoped server commands target the remote deployment identity `{app}/{env}`.
+- Outside a project directory, `--app` is required. Use `--app <app> --env <env>` or pass the full deployment id as `--app <app>/<env>`.
 - When `--server` is omitted, `--env` is required and Tako scales every server listed in `[envs.<env>].servers`.
 - When `--server` is provided, Tako scales only that server.
+- In a project directory, `tako scale --server <server>` defaults to `production`.
 - When both `--env` and `--server` are provided, the server must belong to that environment.
 - Scale uses persisted runtime app state on the server, so the desired instance count survives deploys, rollbacks, and server restarts.
 - Scaling to `0` drains and stops excess instances after in-flight requests finish (or drain timeout).
 
-### tako delete [--env {environment}] [--yes|-y] [DIR]
+### tako delete [--env {environment}] [--server {server}] [--yes|-y] [DIR]
 
-Delete a deployed app from environment servers.
+Delete a deployed app from one specific environment/server deployment target.
 
-Environment selection behavior:
+Target selection behavior:
 
-- If `--env` is provided, that environment is used.
-- If `--env` is omitted in an interactive terminal:
-  - when running in a project (`tako.toml` present), Tako discovers deployed app/env pairs and prompts for an environment selector filtered to the current app.
-  - when running outside a project, Tako discovers deployed app/env pairs across configured servers and prompts for a deployed app/environment target selector.
-- If `--env` is omitted in non-interactive mode, project mode defaults to `production`; outside project mode it fails (no safe target selector).
+- `tako delete` removes exactly one deployment target, not every server in an environment.
+- In an interactive terminal, when Tako needs more information it first loads deployment state with a `Getting deployment information` spinner.
+- In a project (`tako.toml` present), Tako resolves the app name from the project:
+  - with neither `--env` nor `--server`, Tako prompts with deployed targets like `production from hkg`
+  - with `--env` only, Tako prompts for a matching server
+  - with `--server` only, Tako prompts for a matching environment
+  - with both `--env` and `--server`, Tako skips discovery and goes straight to confirmation
+- Outside a project, Tako discovers deployed targets across configured servers and includes app selection when needed because there is no local app context.
+- In non-interactive mode, `--yes`, `--env`, and `--server` are all required. Outside a project, those flags must still identify a single deployed target; otherwise the command fails with guidance to rerun interactively from the app directory.
 
-Environment validation:
+Validation:
 
-- In project mode, target environment must be declared in `tako.toml` (`[envs.<name>]`).
-- Outside project mode, environments are discovered from deployed releases.
+- In project mode, `--env` must be declared in `tako.toml` (`[envs.<name>]`).
+- `--server` must name a configured server from `config.toml` `[[servers]]`.
 - `development` is reserved for `tako dev` and cannot be used with `tako delete`.
 
 Delete confirmation:
 
-- Interactive terminals: requires explicit confirmation unless `--yes` (or `-y`) is provided.
-- Non-interactive terminals: requires `--yes`.
+- Interactive terminals require explicit confirmation unless `--yes` (or `-y`) is provided.
+- The confirmation prompt always names the app, environment, and server being removed.
+- Non-interactive terminals require `--yes`.
 
-**Steps (per server):**
+**Steps:**
 
-1. Connect over SSH.
-2. Send `delete` to `tako-server` to remove runtime registration and routes for the app.
-3. Remove `/opt/tako/apps/{app-name}` from disk.
+1. Connect over SSH to the selected server.
+2. Send `delete` to `tako-server` for the remote deployment id `{app-name}/{env-name}`.
+3. Remove `/opt/tako/apps/{app-name}/{env-name}` from disk.
 
-Delete runs across target servers in parallel. If some servers fail while others succeed, all errors are reported and the command exits with failure.
-
-- For single-server interactive deletes, Tako shows a spinner for the server delete action.
-- For multi-server deletes, Tako keeps line-based per-server completion/failure output.
-- Default per-server delete result lines are compact; verbose mode includes full SSH target labels (`name (tako@host:port)`).
-
-Delete is idempotent for absent app runtime state (safe to re-run for cleanup).
-
-**Delete target:**
-
-- Project mode:
-  - If `[envs.<env>].servers` maps the target env → delete on those servers.
-  - If no servers exist in `~/.tako/config.toml` `[[servers]]` → fail with hint to run `tako servers add <host>`
-  - Otherwise, require explicit `[envs.<env>].servers` mapping in tako.toml.
-- Outside project mode:
-  - Tako targets the subset of configured servers where the selected app/environment is currently deployed.
+- Interactive single-target deletes show a spinner while the selected server is being cleaned up.
+- Delete is idempotent for absent app runtime state (safe to re-run for cleanup).
 
 ## Routing and Multi-App Support
 
@@ -1030,13 +1022,14 @@ Reference scripts in this repo:
 │   │   └── privkey.pem
 └── apps/
     └── {app-name}/
-        ├── current -> releases/{version}
-        ├── .deploy_lock/
-        ├── releases/{version}/
-        │   ├── build files...
-        │   └── logs -> /opt/tako/apps/{app-name}/shared/logs
-        └── shared/
-            └── logs/
+        └── {env-name}/
+            ├── current -> releases/{version}
+            ├── .deploy_lock/
+            ├── releases/{version}/
+            │   ├── build files...
+            │   └── logs -> /opt/tako/apps/{app-name}/{env-name}/shared/logs
+            └── shared/
+                └── logs/
 ```
 
 ## Communication Protocol
@@ -1089,7 +1082,6 @@ Response:
     "protocol_version": 0,
     "server_version": "0.1.0",
     "capabilities": [
-      "deploy_instances_idle_timeout",
       "on_demand_cold_start",
       "idle_scale_to_zero",
       "scale",
@@ -1123,33 +1115,32 @@ Response:
 ```json
 {
   "command": "deploy",
-  "app": "my-app",
+  "app": "my-app/production",
   "version": "1.0.0",
-  "path": "/opt/tako/apps/my-app/releases/1.0.0",
+  "path": "/opt/tako/apps/my-app/production/releases/1.0.0",
   "routes": ["api.example.com", "*.example.com/admin/*"],
   "secrets": {
     "DATABASE_URL": "...",
     "API_KEY": "..."
-  },
-  "idle_timeout": 300
+  }
 }
 ```
 
 - `scale` (updates the desired instance count for an app on one server):
 
 ```json
-{ "command": "scale", "app": "my-app", "instances": 3 }
+{ "command": "scale", "app": "my-app/production", "instances": 3 }
 ```
 
 - `get_secrets_hash` (returns the SHA-256 hash of an app's current secrets; used by deploy to skip sending secrets when unchanged):
 
 ```json
-{ "command": "get_secrets_hash", "app": "my-app" }
+{ "command": "get_secrets_hash", "app": "my-app/production" }
 ```
 
 Server-side validation on `deploy` and app-scoped commands:
 
-- `app` must be a normalized app id (`[a-z][a-z0-9-]{0,62}` with no trailing `-`).
+- `app` is the deployment id used on the server. CLI app-scoped commands send `{app}/{env}`. Each segment must be normalized (`[a-z][a-z0-9-]{0,62}` with no trailing `-`).
 - `version` must be a simple release id (letters/digits/`.-_`, no path separators).
 - `path` must resolve under `<data-dir>/apps/<app>/releases/`.
 
@@ -1368,13 +1359,13 @@ Used for health checks during rolling updates and monitoring.
 
 | Scenario                           | Behavior                                                                   |
 | ---------------------------------- | -------------------------------------------------------------------------- |
-| `~/.tako/` deleted                 | Auto-recreate on next command                                              |
-| `~/.tako/config.toml` corrupted    | Show parse error with line number, offer to recreate                       |
+| Config/data directory deleted       | Auto-recreate on next command                                              |
+| `config.toml` corrupted    | Show parse error with line number, offer to recreate                       |
 | `tako.toml` deleted                | Commands that require project config fail with guidance to run `tako init` |
 | `.tako/` deleted                   | Auto-recreate on next deploy                                               |
 | `.tako/secrets` deleted            | Warn user, prompt to restore secrets                                       |
 | Low free space under `/opt/tako`   | Deploy fails before upload with required vs available disk sizes           |
-| Deploy lock left behind            | Deploy fails until `/opt/tako/apps/{app}/.deploy_lock` is removed          |
+| Deploy lock left behind            | Deploy fails until `/opt/tako/apps/{app}/{env}/.deploy_lock` is removed    |
 | Deploy fails mid-transfer/setup    | Auto-clean newly-created partial release directory                         |
 | Health check fails                 | Automatic rollback to previous version                                     |
 | Network interruption during deploy | Partial failure handling, can retry                                        |

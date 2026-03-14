@@ -21,7 +21,6 @@ Rust crate for the remote Tako runtime and proxy.
 - Use a single-owner durable upgrade lock so only one upgrade controller can enter upgrading mode at a time.
 - Expose `server_info`, `enter_upgrading`, and `exit_upgrading` management commands for upgrade orchestration.
 - Enable zero-downtime reload handoff with SIGHUP child spawn, `SO_REUSEPORT` listener overlap, and pid-specific management sockets (`tako-{pid}.sock`) behind stable symlink `tako.sock`.
-- Support `--instance-port-offset` to shift preferred instance port ranges when overlapping server processes are running.
 
 Routing policy notes:
 
@@ -33,7 +32,7 @@ Routing policy notes:
 - Socket: `/var/run/tako/tako.sock`
 - Data root: `/opt/tako`
 - Runtime state DB: `/opt/tako/runtime-state.sqlite3`
-- App releases: `/opt/tako/apps/<app>/releases/<version>/`
+- App releases: `/opt/tako/apps/<app>/<env>/releases/<version>/`
 
 ## Run and Test
 

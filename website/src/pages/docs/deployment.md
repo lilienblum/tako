@@ -37,14 +37,14 @@ What happens during deploy:
 - On cache hit, deploy reuses the verified artifact; on cache mismatch/corruption, deploy rebuilds that target artifact automatically.
 - On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives (`*-source.tar.zst`), keeps 90 newest target artifacts (`artifact-cache-*.tar.zst`), and removes orphan target metadata files.
 - Deploys run to all target servers in parallel.
-- On each server, Tako writes final `app.json` (with env vars), queries the server's current secrets hash, and only sends secrets when they differ from the local copy (new servers or changed secrets are automatically provisioned). Secrets are stored in per-app `secrets.json` (0600 permissions). Then performs runtime prep (Bun dependency install) and rolling update from the uploaded target artifact.
+- On each server, Tako uses the extracted release `app.json` as the canonical runtime manifest, queries the server's current secrets hash, and only sends secrets when they differ from the local copy (new servers or changed secrets are automatically provisioned). Secrets are stored in per-app `secrets.json` (0600 permissions). Then it performs runtime prep (Bun dependency install) and rolling update from the uploaded target artifact.
 - Each server is handled independently, so partial success is possible.
 
 ## Pre-Deploy Checklist
 
 Before you ship, do a quick sanity pass:
 
-1. Ensure target hosts exist in `~/.tako/config.toml` (or check with `tako servers ls`) and were added with SSH checks enabled so target metadata was detected.
+1. Ensure target hosts exist in your server inventory (check with `tako servers ls`) and were added with SSH checks enabled so target metadata was detected.
 2. Confirm `tako.toml` has route/env/server mappings for the target environment.
 3. Verify secrets are present for the target env (`tako secrets sync` if needed).
 4. Run your local tests before deploy.
@@ -79,7 +79,7 @@ Install/refresh server runtime commands:
 
 - `tako.toml` is required in the project root.
 - App identity resolves from top-level `name` when set, otherwise sanitized project directory name.
-- Set `name` explicitly for stable identity and uniqueness per server; renaming identity later creates a new app path and requires manual cleanup of the old deployment.
+- Set `name` explicitly for stable identity; remote server identity is `{app}/{env}`, so multiple environments of one app can share a server while still getting separate paths and runtime state. Renaming identity later creates a new app path and requires manual cleanup of the old deployment.
 - Defines environments and routes.
 - Every non-development environment must define `route` or `routes`.
 - Empty route sets are rejected for non-development environments (no implicit catch-all mode).
@@ -92,13 +92,14 @@ Install/refresh server runtime commands:
   - `runtime` (optional override: `bun`, `node`, `deno`)
   - `preset` (optional runtime-local override such as `tanstack-start`; defaults to adapter base preset from top-level `runtime` or detection)
 - Defines server membership per environment via `[envs.<name>].servers = ["..."]`.
+- The same server can appear in multiple non-development environment mappings; each environment deploys under `/opt/tako/apps/{app}/{env}/`.
 - Defines per-environment idle scaling policy via `[envs.<name>].idle_timeout`.
 - Deploy does not set the desired instance count. New apps start at `0` and you change the live value with `tako scale`.
 
 ### Source bundle and runtime manifest
 
 - Archive payload is source-based and includes filtered files from the resolved source bundle root.
-- Archive includes a fallback `app.json` at app path inside the archive.
+- Archive includes the canonical deployed `app.json` at app path inside the artifact.
 - Build preset resolves from official alias; unpinned aliases fetch from `master` (fetch failures fail resolution; runtime base aliases fall back to embedded defaults when missing from fetched family manifests) and resolved source metadata is written to `.tako/build.lock.json`.
 - Preset runtime fields are top-level `main`/`install`/`start`.
 - Runtime base presets provide defaults for `install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`; explicit top-level `preset` also uses preset top-level `dev` in `tako dev`.
@@ -114,8 +115,8 @@ Install/refresh server runtime commands:
 - During local builds, stage commands run through `mise exec -- sh -lc ...` when `mise` is available.
 - Local artifact cache key includes source hash, target label, resolved preset source/commit, runtime tool/version, Docker/local mode, preset build commands, app `[[build.stages]]`, include/exclude patterns, asset roots, and app subdirectory.
 - `assets` are copied into app `public/` after container build (later entries overwrite earlier ones).
-- Final `app.json` is written in app directory after resolving runtime `main`.
-- Final `app.json` also carries optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
+- The deployed `app.json` in the release directory is the canonical runtime manifest.
+- It carries resolved runtime metadata, non-secret env vars, `idle_timeout`, and optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
 - Runtime startup on `tako-server` uses release `app.json`:
   - if `start` is present, that command is used (`{main}` placeholders are expanded)
   - if `start` is missing, runtime fallback is used (`bun` entrypoint, `node` entrypoint, or `deno` entrypoint — each goes through the per-runtime SDK entrypoint with `<main>`)
@@ -125,7 +126,7 @@ Install/refresh server runtime commands:
   3. top-level `main` from preset
 - Before artifact packaging, deploy checks that the resolved `main` exists in the built app directory and fails if it is missing.
 
-### Global server inventory (`~/.tako/config.toml`)
+### Global server inventory (`config.toml`)
 
 - Defines named servers (`host`, `port`, optional `description`).
 - Stores detected per-server build target metadata (`arch`, `libc`) directly in each `[[servers]]` entry.
@@ -136,22 +137,20 @@ Install/refresh server runtime commands:
 ## Deploy Flow (Per Server)
 
 1. Connect via SSH.
-2. Acquire per-app deploy lock at `/opt/tako/apps/<app>/.deploy_lock`.
+2. Acquire per-app deploy lock at `/opt/tako/apps/<app>/<env>/.deploy_lock`.
 3. Run disk-space preflight under `/opt/tako`.
 4. Ensure `tako-server` is installed and active.
 5. Validate route conflicts against current server routing state.
 6. Create release and shared directories.
-7. Upload and extract archive into `/opt/tako/apps/<app>/releases/<version>/`.
+7. Upload and extract archive into `/opt/tako/apps/<app>/<env>/releases/<version>/`.
 8. Link shared directories (for example `logs`).
-9. Resolve runtime `main`, write final app `app.json` (including optional commit metadata).
-10. Query server for current secrets hash; if it matches the local secrets, skip sending secrets (server keeps existing). Otherwise include decrypted secrets in the deploy command. Env vars are written to `app.json` in the release directory and secrets to a per-app `secrets.json` (0600); `tako-server` runs runtime prep (Bun dependency install) before rolling update.
-11. Update `current` symlink after server accepts deploy.
-12. Clean old release directories.
+9. Query server for current secrets hash; if it matches the local secrets, skip sending secrets (server keeps existing). Otherwise include decrypted secrets in the deploy command. Non-secret env vars and `idle_timeout` come from the release `app.json`, while secrets go to a per-app `secrets.json` (0600); `tako-server` runs runtime prep (Bun dependency install) before rolling update.
+10. Update `current` symlink after server accepts deploy and clean old release directories.
 
 ## Remote Layout
 
 ```text
-/opt/tako/apps/<app>/
+/opt/tako/apps/<app>/<env>/
   current -> releases/<version>
   .deploy_lock/
   releases/
@@ -159,7 +158,7 @@ Install/refresh server runtime commands:
       <app-subdir>/        # "." when deploying from app root
         ...app files...
         app.json
-      logs -> /opt/tako/apps/<app>/shared/logs
+      logs -> /opt/tako/apps/<app>/<env>/shared/logs
   shared/
     logs/
 ```

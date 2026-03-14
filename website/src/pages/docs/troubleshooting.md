@@ -74,7 +74,7 @@ Expected deploy behavior:
 - `Deploy lock left behind`:
   - Symptom: deploy fails immediately due to existing lock.
   - Fix: remove stale lock directory on affected host:
-    - `/opt/tako/apps/{app}/.deploy_lock`
+    - `/opt/tako/apps/{app}/{env}/.deploy_lock`
 - `Low disk space under /opt/tako`:
   - Symptom: deploy fails before upload with required vs available sizes.
   - Fix: free space, then redeploy.
@@ -138,11 +138,11 @@ Expected deploy behavior:
 
 From spec-defined behavior:
 
-- `~/.tako/` deleted: auto-recreated on next command.
+- Config/data directory deleted: auto-recreated on next command.
 - `.tako/` deleted: auto-recreated on next deploy.
 - `tako.toml` deleted: config-requiring commands fail with guidance to run `tako init`.
 - `.tako/secrets` deleted: warning is shown; restore secrets before deploy.
-- `~/.tako/config.toml` corrupted: parse error with line context.
+- `config.toml` corrupted: parse error with line context.
 
 ## Files and Paths Worth Inspecting
 
@@ -151,9 +151,9 @@ From spec-defined behavior:
   - `{TAKO_HOME}/ca/ca.crt`
 - Remote:
   - `/var/run/tako/tako.sock`
-  - `/opt/tako/apps/<app>/current`
-  - `/opt/tako/apps/<app>/releases/<version>/`
-  - `/opt/tako/apps/<app>/.deploy_lock`
+  - `/opt/tako/apps/<app>/<env>/current`
+  - `/opt/tako/apps/<app>/<env>/releases/<version>/`
+  - `/opt/tako/apps/<app>/<env>/.deploy_lock`
 
 ## Escalation Bundle
 

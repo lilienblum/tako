@@ -17,14 +17,14 @@ CLI output follows shared conventions: concise by default, append-only execution
 - Installed CLI distributions include both `tako` and `tako-dev-server`.
 - When running from source, the daemon binary is built from the `tako` package (`cargo build -p tako --bin tako-dev-server`).
 - `tako dev` owns your app process lifecycle and spawns the app locally on an ephemeral port.
-- `tako-dev-server` terminates HTTPS and routes by `Host` to that app port. App state is persisted in SQLite (`~/.tako/dev-server.db`).
+- `tako-dev-server` terminates HTTPS and routes by `Host` to that app port. App registrations are persisted in SQLite (in the platform data directory).
 - The client **registers** the app with the daemon (project directory is the unique key). App statuses: `running`, `idle`, `stopped`.
 - Press `b` to background the app — the CLI exits but the daemon keeps the process alive and routes active. Press `Ctrl+c` to stop the app.
 - `tako dev` watches [`tako.toml`](/docs/tako-toml) for changes. If dev env vars change, it restarts the app. If `[envs.development]` routes change, it re-registers routes with the daemon.
 
 ## Files Created
 
-Paths are under `~/.tako/` in normal installs.
+Paths follow platform conventions (`~/Library/Application Support/tako/` on macOS, `~/.local/share/tako/` and `~/.config/tako/` on Linux).
 When running from a source checkout in debug builds, Tako prefers `{repo}/local-dev/.tako/` instead.
 
 Created/used by `tako dev` / `tako doctor`:

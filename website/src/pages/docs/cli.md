@@ -38,7 +38,7 @@ Directory selection is command-scoped:
 
 ## Top-Level Commands
 
-- `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` (recommended unique per server), production `route`, runtime, and preset selection when family presets are available); detailed "Detected" summary is shown in verbose mode.
+- `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` for stable identity, production `route`, runtime, and preset selection when family presets are available); detailed "Detected" summary is shown in verbose mode.
 - `tako help`: show all commands with brief descriptions.
 - `tako upgrade [--canary|--stable]`: upgrade local CLI installation.
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
@@ -49,7 +49,7 @@ Directory selection is command-scoped:
 - `tako deploy [--env <ENV>] [-y|--yes] [DIR]`: build and deploy app.
 - `tako scale <N> [--env <ENV>] [--server <SERVER>] [--app <APP>]`: change the desired instance count for a deployed app.
 - `tako releases <subcommand>`: list release history and roll back to a previous release.
-- `tako delete [--env <ENV>] [-y|--yes] [DIR]`: delete deployed app (single-server interactive deletes show spinner progress; multi-server deletes use line-based status).
+- `tako delete [--env <ENV>] [--server <SERVER>] [-y|--yes] [DIR]`: delete one deployed environment/server target (interactive target selection loads deployment information first).
 - `tako servers <subcommand>`: manage server inventory and server runtime actions.
 - `tako secrets <subcommand>`: manage project secrets and keys.
 
@@ -110,9 +110,11 @@ Notes:
 - `N` is the desired instance count per targeted server.
 - New apps start at desired instance count `0`.
 - In a project directory, Tako resolves the app name from `tako.toml` (or directory fallback when top-level `name` is unset).
-- Outside a project directory, `--app` is required.
+- In a project directory, remote app-scoped server commands target `{app}/{env}` automatically.
+- Outside a project directory, `--app` is required. Use `--app <app> --env <env>` or pass `--app <app>/<env>`.
 - With `--env`, Tako scales every server listed in `[envs.<ENV>].servers`.
 - With `--server`, Tako scales only that server.
+- In a project directory, `tako scale <N> --server <SERVER>` defaults to `production`.
 - If both `--server` and `--env` are provided, the server must belong to that environment.
 - The desired instance count is stored on the server, so it survives deploys, rollbacks, and restarts.
 
@@ -279,10 +281,10 @@ Keep two warm instances on every production server:
 tako scale 2 --env production
 ```
 
-Remove production app:
+Remove the production deployment from one server:
 
 ```bash
-tako delete --env production
+tako delete --env production --server lax
 ```
 
 List release history for staging:

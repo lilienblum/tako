@@ -25,7 +25,7 @@ route = "my-app.example.com"
 `tako init` prompts for `name` and `[envs.production].route`, then prompts for runtime (top-level `runtime`, with `--runtime` flag). In interactive mode it fetches runtime-family presets (shows `Fetching presets...`) and offers base runtime preset + fetched family presets + a custom option; if no family presets are available, it skips preset selection and uses the runtime base preset. Top-level `preset` is written only when a non-base preset is selected (for base runtime preset or custom mode, it remains unset/commented). It only writes `main` when adapter inference finds an entrypoint that differs from the selected preset default. The detailed init "Detected" summary is shown in verbose mode.
 
 `name` is optional. If omitted, Tako uses a sanitized project directory name.
-Setting `name` is recommended for stable identity: keep it unique per server. Renaming it later creates a new app identity/path, so remove the old deployment manually when needed.
+Setting `name` is recommended for stable identity. Remote server identity is `{name}/{env}`, so the same app name can be deployed to multiple environments on one server. Renaming it later creates a new app identity/path, so remove the old deployment manually when needed.
 
 ## Top-Level App Fields
 
@@ -50,13 +50,13 @@ runtime = "bun"
 
 - `name`: optional stable app identifier used in deploy paths and local dev hostnames.
   - If omitted, Tako falls back to the sanitized project directory name.
-  - Keep it unique per server. Renaming it creates a new app identity/path; delete old deployment manually if needed.
-- `main`: optional runtime entry override written to deployed `app.json` and used by `tako dev`/`tako deploy`.
+  - Remote server identity is `{name}/{env}`, so the same app name can be deployed to multiple environments on one server. Renaming it creates a new app identity/path; delete old deployment manually if needed.
+- `main`: optional runtime entry override written into the deployed `app.json` and used by `tako dev`/`tako deploy`.
   - If omitted, Tako uses preset top-level `main` when present.
   - For JS runtimes (`bun`, `node`, `deno`), when preset `main` is `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`), Tako resolves in this order: existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`.
   - If neither `tako.toml main` nor preset `main` is set, deploy/dev fail.
   - During deploy artifact prep, Tako verifies this resolved path exists in the post-build app directory and fails if it is missing.
-  - Final runtime `app.json` written during deploy can also include release metadata (`commit_message`, `git_dirty`) for `tako releases ls`.
+  - The deployed `app.json` also includes `idle_timeout` plus optional release metadata (`commit_message`, `git_dirty`) for `tako releases ls`.
 - `runtime`: optional adapter override (`bun`, `node`, `deno`) used when selecting the default base preset.
 - `preset`: optional runtime-local build preset override. If omitted, deploy/dev use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`). In `tako dev`, omitted top-level `preset` ignores preset top-level `dev` and runs runtime-default command with resolved `main` (`bun run node_modules/tako.sh/src/entrypoints/bun.ts {main}`, `node --experimental-strip-types node_modules/tako.sh/src/entrypoints/node.ts {main}`, or `deno run --allow-net --allow-env --allow-read node_modules/tako.sh/src/entrypoints/deno.ts {main}`); explicit top-level `preset` uses preset top-level `dev`. Supports:
   - runtime-local aliases: `tanstack-start` (resolved under selected `runtime`)
@@ -143,8 +143,8 @@ log_level = "info"
 - `log_level`: app log verbosity for this environment. Accepts `debug`, `info`, `warn`, `error`. Default: `debug` for `development`, `info` for all other environments.
 - Environment sections accept `route`/`routes` and `log_level`. Put env vars in `[vars]` / `[vars.<environment>]`.
 - Every non-development environment must define `route` or `routes`.
-- `[envs.development]` may omit routes and defaults to `{app}.tako` for `tako dev`.
-- Development routes must be `{app}.tako` or a subdomain of it.
+- `[envs.development]` may omit routes and defaults to `{app}.tako.test` for `tako dev`.
+- Development routes must be `{app}.tako.test` or a subdomain of it.
 - Empty route sets are rejected for non-development environments. There is no implicit catch-all routing mode.
 - Routes must include a hostname (path-only routes are invalid).
 - `example.com` and `example.com/*` are equivalent and both match all paths on `example.com`.
@@ -173,9 +173,9 @@ log_level = "info"
 - `idle_timeout` is optional and defaults to `300` seconds.
 - New deploys start with desired instances `0` on each server. Change that runtime value with `tako scale`.
 - Desired instances are stored on the server, so they survive deploys, rollbacks, and restarts.
-- Non-development environments may not share the same server name.
+- Non-development environments may share the same server name. Server-side deploy identity is `{app}/{env}`, so each environment keeps separate runtime state and files.
 - `servers` under `development` are ignored by deploy validation.
-- `arch`/`libc` are not configured in `tako.toml`; Tako detects and stores them in each matching `[[servers]]` entry in global server config (`~/.tako/config.toml`) when adding servers.
+- `arch`/`libc` are not configured in `tako.toml`; Tako detects and stores them in each matching `[[servers]]` entry in the global server inventory (`config.toml`) when adding servers.
 
 ## Variable Merge Order
 
