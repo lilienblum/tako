@@ -5,55 +5,39 @@ description: "Rules and patterns for Tako CLI output across normal, --verbose, a
 
 # Tako CLI Output
 
-This skill defines how the `tako` CLI presents information to users. Every CLI command has three output personalities — normal (interactive), verbose (`--verbose`), and CI (`--ci`) — and the `output` module in `tako/src/output.rs` handles the branching so command code stays clean.
+Two output systems coexist in code. Only one renders at a time based on the mode.
 
-## Core Invariant
+## Architecture
 
-> Normal mode defines the user story. Verbose mode is a superset of the same story plus diagnostics. CI mode preserves the essential outcomes without interactivity or animation.
+- **Pretty output** (`output::info()`, `output::success()`, spinners, etc.) — renders in normal mode, no-op in verbose/CI.
+- **Tracing** (`tracing::debug!()`, `tracing::info!()`, etc.) — renders in verbose/CI mode, no-op in normal mode (no subscriber installed).
+
+Both systems are called side-by-side in command code. Each is invisible in the mode it doesn't belong to.
 
 ## The Three Modes
 
 ### Normal (default, interactive terminal)
 
-For any user-visible operation that takes time, show a spinner while work is in progress, then replace that same line with the final result when the work completes.
+Pretty output renders — spinners, colors, symbols, vanishing prompts. Tracing calls are no-ops (no subscriber installed).
 
-- Colors via the brand palette (see below)
-- Spinners for operations that may take >500ms
-- Single-line state transitions: spinner text → final result on same line
-- `✓` for success, `✗` for failure, `!` for warnings, `•` for bullets
-- Section headings in bold+accent for phase grouping
-- Prompts (confirm, text, select) vanish after the user answers
+- Colors via the brand palette
+- Spinners for operations >500ms
+- Single-line state transitions: spinner → result
+- `✓` success, `✗` failure, `!` warnings, `•` bullets
+- Section headings in bold+accent
+- Prompts vanish after the user answers
 
 ### Verbose (`--verbose` / `-v`)
 
-Replace spinner behavior with structured log lines. No spinners, no colors on non-interactive terminals.
+Tracing renders — all levels (TRACE through ERROR) with local timestamps and colored level labels. Pretty output functions are no-ops.
 
-Format: `HH:MM:SS.mmm LEVEL [context] message`
+Format: `HH:MM:SS.mmm LEVEL message`
 
-For any user-visible operation that takes time, emit two INFO records: one when it starts, one when it completes (with elapsed time). Between them, emit DEBUG/TRACE for internal detail.
-
-**Log level hierarchy:**
-
-- **INFO** — the outer user-visible operation, including completion with elapsed time. Maps 1:1 with what normal mode shows as spinners/results.
-- **DEBUG** — meaningful internal steps that help troubleshoot the command. What's connecting, what sizes, what was detected, what paths are being used.
-- **TRACE** — noisy, repetitive, or instrumentation-level details inside those internal steps. Timing spans (`timed()`), chunk progress, iteration detail.
-- **WARN** — same as normal `!` warnings
-- **ERROR** — same as normal `✗` errors
-
-**Style rule:** message text in verbose mode must be plain — no colors, no bold, no ANSI codes. Only the level label is colored (handled by `log()`).
-
-**Headings rule:** headings are not emitted in verbose mode. The `[context]` prefix on log lines replaces the grouping role that headings serve in normal mode — there is no need to repeat a server name as a heading when every log line already carries it as context.
-
-**Context rule:** if a log line relates to a specific target or execution context (server, app, environment), always include `[context]` via `ctx()`. Only omit context for truly global logs.
+Prompts remain interactive but use transcript style (no screen erasing). Prompts are NOT wrapped in tracing log-level prefixes — they print as plain `eprintln!` text.
 
 ### CI (`--ci`)
 
-Plain, stable, non-interactive output optimized for logs and automation.
-
-- Same symbols (`✓`, `✗`, `!`, `•`, `┃`) but without color codes
-- No spinners — work runs silently, only the final result line appears
-- Interactive prompts error out (must use `--yes` or defaults)
-- Context blocks still show with `┃` border (plain text)
+Same as verbose but without ANSI colors. Prompts use defaults (non-interactive).
 
 ### Example: how one operation maps across modes
 
@@ -65,35 +49,35 @@ Normal:
 
 Verbose:
 ```
-10:00:00.100  INFO [prod-la] Uploading artifact…
+10:00:00.100  INFO Uploading artifact…
 10:00:00.200 DEBUG [prod-la] Uploading artifact to /var/tako/releases (12.4 MB)
-10:00:00.300 TRACE [prod-la] Upload chunk 1/8
-10:00:00.400 TRACE [prod-la] Upload chunk 2/8
-10:00:00.811  INFO [prod-la] Uploaded artifact (711ms)
+10:00:00.300 TRACE [prod-la] Artifact upload done (711ms)
+10:00:00.811  INFO Uploaded artifact (711ms)
 ```
 
 CI:
 ```
-✓ Uploaded artifact (711ms)
+10:00:00.100  INFO Uploading artifact…
+10:00:00.811  INFO Uploaded artifact (711ms)
 ```
 
-## Output API Reference
+## Pretty Output API (normal mode only)
 
-These are the functions in `output.rs` that command code should use. The module handles mode branching internally.
+These functions print in normal mode, no-op in verbose/CI. Use `output::is_pretty()` to check.
 
 ### Text Output
 
-| Function | Normal mode | Verbose mode | When to use |
-|----------|-------------|--------------|-------------|
-| `section(title)` | `\n` + bold accent title | INFO log | Phase headings: "Build", "Deploy", "Scale" |
-| `heading(title)` | `\n` + bold title | no-op | Sub-headings, e.g. `heading(&format!("Server {}", strong(name)))` |
-| `info(message)` | Default-color text | INFO log | General informational lines |
-| `bullet(message)` | `  • message` | INFO log (indented) | Sub-items under a heading |
-| `success(message)` | `✓ message` | INFO log | Completed action |
-| `warning(message)` | `! message` | WARN log | Non-fatal issue |
-| `error(message)` | `✗ message` | ERROR log | Failed action |
-| `muted(message)` | Dim text | DEBUG log | Low-priority info |
-| `hint(message)` | Default-color text | INFO log | Actionable guidance ("Run X to do Y") |
+| Function | Normal mode | Verbose/CI |
+|----------|-------------|------------|
+| `section(title)` | `\n` + bold accent title | no-op |
+| `heading(title)` | `\n` + bold title | no-op |
+| `info(message)` | Default-color text | no-op |
+| `bullet(message)` | `  • message` | no-op |
+| `success(message)` | `✓ message` | no-op |
+| `warning(message)` | `! message` | no-op |
+| `error(message)` | `✗ message` | no-op |
+| `muted(message)` | Dim text | no-op |
+| `hint(message)` | Default-color text | no-op |
 
 ### Text Formatting
 
@@ -106,40 +90,6 @@ These are the functions in `output.rs` that command code should use. The module 
 | `brand_error(v)` | Red text | Status words: "unreachable", "error" |
 | `brand_muted(v)` | Dim text | Elapsed times, metadata |
 
-### Verbose-Only Logging
-
-These are no-ops in normal/CI mode.
-
-| Function | Level | When to use |
-|----------|-------|-------------|
-| `log_trace(msg)` | TRACE | Noisy/repetitive detail: timing spans, chunk progress, iteration counts |
-| `log_debug(msg)` | DEBUG | Meaningful internal steps: connections, sizes, paths, versions |
-| `log_info(msg)` | INFO | Rarely needed directly — prefer the text helpers above |
-| `log_warn(msg)` | WARN | Rarely needed — prefer `warning()` |
-
-### Timing
-
-```rust
-let _t = output::timed("SSH connect");
-// ... work ...
-// On drop: TRACE log "SSH connect done (250ms)"
-// Or explicitly:
-_t.done();           // "SSH connect done (250ms)"
-_t.finish("2 hosts"); // "SSH connect 2 hosts (250ms)"
-```
-
-`timed()` emits TRACE-level elapsed timing. Wrap any non-trivial async/blocking operation. Timing is always formatted in human-friendly units: `(3ms)`, `(1.2s)`, `(5s)`, `(1m10s)`.
-
-### Context Prefix
-
-```rust
-output::log_debug(&output::ctx("prod-la", "Deploy succeeded"));
-// Verbose: "[prod-la] Deploy succeeded"
-// Normal:  "Deploy succeeded"  (context stripped)
-```
-
-**Rule:** in verbose mode, every log line that relates to a specific target must include `[context]` via `ctx()`. Only omit context for truly global logs (e.g., "Fetching tags from GitHub…").
-
 ### Context Blocks
 
 A vertical-bar-bordered block for environment/channel info, shown before the main output.
@@ -151,13 +101,13 @@ output::ContextBlock::new()
     .print();
 ```
 
-Normal: dim accent-colored `┃` border. CI: plain `┃`. Verbose: INFO log lines.
+Normal: dim accent-colored `┃` border. Verbose/CI: tracing::info! log lines.
 
 ### Spinners
 
-Pick the right spinner for your use case:
+Spinners bridge both output systems: in normal mode they show visual animation, in verbose/CI they emit `tracing::info!` for start and completion (with elapsed time). Command code does NOT need to duplicate tracing calls for spinner operations.
 
-**`with_spinner(loading, success, work)`** — The workhorse. Shows a spinner if work takes >500ms. On success, prints `✓ success`. On error, the spinner stops and a failure line is printed. Sync version.
+**`with_spinner(loading, success, work)`** — Shows spinner if >1s. On success: `✓ success (elapsed)`.
 
 ```rust
 output::with_spinner("Validating", "Validated", || {
@@ -166,16 +116,15 @@ output::with_spinner("Validating", "Validated", || {
 })?;
 // Normal: ⠋ Validating... → ✓ Validated (1.2s)
 // Verbose: INFO Validating → INFO Validated (1.2s)
-// CI: (silent) → ✓ Validated (1.2s)
 ```
 
-**`with_spinner_async(loading, success, work)`** — Same behavior, async.
+**`with_spinner_async(loading, success, work)`** — Same, async.
 
-**`with_spinner_simple(message, work)`** — Spinner with no result line. Use when the result is communicated by subsequent output (e.g., a heading that follows). Sync.
+**`with_spinner_simple(message, work)`** — Spinner with no result line.
 
-**`with_spinner_async_simple(message, work)`** — Async version of above.
+**`with_spinner_async_simple(message, work)`** — Async version.
 
-**`PhaseSpinner::start(message)`** — For major phases (Build, Deploy). Shows elapsed time after 1s. Must be explicitly finished.
+**`PhaseSpinner::start(message)`** — Major phases (Build, Deploy). Shows elapsed after 1s.
 
 ```rust
 let phase = output::PhaseSpinner::start("Building…");
@@ -185,109 +134,153 @@ phase.finish("Build complete");
 // Verbose: INFO Building… → INFO Build complete (5.2s)
 ```
 
-**`PhaseSpinner::start_indented(message)`** — Same but indented (for sub-phases under a server heading).
-
-**`TrackedSpinner::start(message)`** — Spinner whose message can be updated. Use for progress tracking in normal mode.
-
-- **Normal mode**: live updates via `set_message()` (e.g., "Retrieving… 1/2" → "Retrieving… 2/2")
-- **Verbose mode**: logs only the initial `start()` message; `set_message()` is a no-op. Per-scope completion should be logged by the calling code via `log_debug()` with `ctx()`.
-- **CI mode**: no spinner, no progress updates, only final result.
-
-```rust
-// start() message is the verbose INFO line (no counts)
-let spinner = output::TrackedSpinner::start("Retrieving…");
-// set_message() updates normal-mode spinner only (no-op in verbose)
-spinner.set_message(&format!("Retrieving… {}", output::muted_progress(1, 2)));
-spinner.set_message(&format!("Retrieving… {}", output::muted_progress(2, 2)));
-spinner.finish();
-// Per-scope logging done separately:
-// log_debug(&ctx("prod-la", "Retrieved 420 lines"));
-```
+**`TrackedSpinner::start(message)`** — Updatable message. `set_message()` is a no-op in verbose/CI.
 
 ### Prompts
 
 All prompts work only in interactive mode. In CI mode, they use defaults or error.
 
+**Prompts are NOT log lines.** In verbose mode, prompts print as plain `eprintln!` text — no timestamp, no level prefix. The answer appears on the next line.
+
 | Function | Normal | Verbose |
 |----------|--------|---------|
-| `confirm(prompt, default)` | `(y/n) ›` vanishing prompt | `INFO prompt [Y/n]` then `INFO Confirmed: yes` |
-| `text_field(prompt, default)` | `Prompt (default) ›` vanishing | `INFO Prompt?` then `INFO Prompt received` |
-| `password_field(prompt)` | `Prompt › ••••` | Same but masked |
-| `select(prompt, items)` | Arrow-key list | `INFO Prompt` then `INFO Selected: X` |
+| `confirm(prompt, default)` | Vanishing `(y/n) ›` | Plain text transcript (no log prefix) |
+| `text_field(prompt, default)` | Vanishing input | Plain text transcript (no log prefix) |
+| `password_field(prompt)` | Masked `••••` | Same but masked |
+| `select(prompt, items)` | Arrow-key list | Numbered list (no log prefix) |
 
-### Wizard
+## Tracing API (verbose/CI mode only)
 
-For multi-step interactive flows with ESC-to-go-back support:
+Use standard tracing macros. They are no-ops in normal mode (no subscriber installed).
 
 ```rust
-let mut wizard = output::Wizard::new();
-let name = wizard.text("App name", Some("my-app"))?;
-let runtime = wizard.select("Runtime", &["bun", "node", "deno"])?;
+tracing::info!("Uploading artifact");
+tracing::debug!("[{name}] Artifact size: {size}");
+tracing::trace!("Upload chunk 1/8");
+tracing::warn!("Retrying after timeout");
+tracing::error!("Upload failed: {err}");
 ```
 
-Each step vanishes after answering. ESC goes back to previous step.
+### Level guidelines
 
-## Color Palette
+- **TRACE** — Noisy/repetitive detail, timing spans (`timed()`)
+- **DEBUG** — Meaningful internal steps: connections, sizes, paths, versions
+- **INFO** — User-visible operation milestones (rarely needed directly — spinners handle this)
+- **WARN** — Non-fatal issues
+- **ERROR** — Failures
 
-| Name | RGB | Use |
-|------|-----|-----|
-| ACCENT | `(125, 196, 228)` | **Primary CLI color.** Spinners, section titles, prompt labels, INFO level, `accent()` emphasis |
-| ACCENT_DIM | `(79, 107, 122)` | Context block borders |
-| BRAND_GREEN | `(155, 217, 179)` | `✓`, "active", "trusted", "enabled" |
-| BRAND_AMBER | `(234, 211, 156)` | `!`, "disabled", "untrusted", "not running" |
-| BRAND_RED | `(232, 163, 160)` | `✗`, "unreachable", "error", errors |
-| BRAND_TEAL | `(155, 196, 182)` | Dev TUI only — **never use in CLI output** (too close to green/success) |
-| BRAND_CORAL | `(232, 135, 131)` | Dev TUI logo only — **never use in CLI output** (too close to red/error) |
+### Message capitalization
 
-Use the semantic helpers (`brand_success`, `brand_warning`, `brand_error`, `accent()`) rather than raw colors.
+Tracing messages that start with a regular word must be capitalized. Messages that start with a name (e.g. `tako-server`, a variable) are fine as-is.
+
+```rust
+// Good:
+tracing::debug!("Downloading binary…");
+tracing::debug!("[{name}] Deploy succeeded");
+tracing::info!("tako-server restarted");
+
+// Bad:
+tracing::debug!("downloading binary…");
+tracing::debug!("[{name}] deploy succeeded");
+```
+
+### Scope prefix `[name]`
+
+Use a `[name]` message prefix for per-target context. Do NOT use tracing structured fields (`server = %name`).
+
+The scope is typically a server name. Pass labels to the SSH client via `SshConfig::with_label()` or `SshClient::connect_with_label()` so SSH-level logs also carry the scope.
+
+```rust
+tracing::debug!("[{name}] Deploy succeeded");
+// Output: 10:00:00.100 DEBUG [prod] Deploy succeeded
+
+let ssh_config = SshConfig::from_server(&server.host, server.port).with_label(server_name);
+let mut ssh = SshClient::new(ssh_config);
+// SSH logs automatically use: [prod] Connecting to 1.2.3.4:22
+```
+
+For `timed()` labels, use the same pattern:
+
+```rust
+let _t = output::timed(&format!("[{name}] Artifact upload"));
+```
+
+### Start/finish records
+
+Fast operations (< ~2s) need only **one** record — typically the result or a single summary line. Don't emit separate "Starting X…" and "X done" messages for each small step.
+
+For longer operations that do warrant a start+finish pair, the **start** message must end with `…` (ellipsis):
+
+```rust
+// Good: single record for fast operation
+tracing::debug!("[{name}] Server status: active");
+
+// Good: start+finish for slow operation
+tracing::debug!("[{name}] Downloading canary binary…");
+// ...work...
+tracing::debug!("[{name}] New server process ready (pid: 1234)");
+
+// Bad: start+finish for fast operation
+tracing::debug!("[{name}] Checking status…");    // unnecessary
+tracing::debug!("[{name}] Status: active");       // this alone is enough
+```
+
+### Timing
+
+```rust
+let _t = output::timed("SSH connect");
+// On drop: tracing::trace!("SSH connect done (250ms)")
+```
+
+`timed()` emits TRACE-level elapsed timing via tracing. Only visible in verbose/CI mode. For per-target timing, include context in the label:
+
+```rust
+let _t = output::timed(&format!("[{server_name}] Artifact upload"));
+```
 
 ## Patterns to Follow
 
-### 1. Single-line state transitions
+### 1. Coexist pretty + tracing
 
-Every action that shows a spinner should transition from its loading state to a final result on the same line. No intermediate rewrites, no multi-line progress.
+```rust
+// Tracing for verbose/CI (no-op in normal)
+tracing::info!("Deploying to {name}");
 
+// Pretty output for normal (no-op in verbose/CI)
+output::section("Deploy");
+
+// Spinner bridges both modes automatically
+let result = output::with_spinner_async("Uploading", "Uploaded", async {
+    // Detail tracing inside spinner body
+    tracing::debug!("[{name}] Uploading {size} to {path}");
+    upload().await
+}).await?;
+
+// Pretty result details (no-op in verbose/CI)
+output::bullet(&format!("Revision {} deployed", output::strong(rev)));
+```
+
+### 2. Single-line state transitions
+
+Every spinner transitions from loading to result on the same line:
 ```
 ⠋ Connecting…        → ✓ Connected
 ⠋ Building… (5s)     → ✓ Build complete (5.2s)
-⠋ Deploying…         → ✗ Deploy failed: connection refused
 ```
 
-### 2. Phase flow for deploy-style commands
+### 3. Phase flow for deploy-style commands
 
-Show one `✓` per major phase, not per sub-step:
-
+One `✓` per major phase:
 ```
 ✓ Validated
-Build                     ← section heading
+Build
 ✓ Build complete (5.2s)
-Deploy                    ← section heading
+Deploy
 ✓ Deployed (3.4s)
   • Revision abc1234 deployed to production
-  • 2 server(s) updated
 ```
 
-### 3. Verbose logging for every remote operation
-
-Every operation behind a spinner should have structured verbose logging at the right level:
-
-```rust
-// INFO: outer user-visible operation (maps to spinner)
-// This is handled automatically by the spinner helpers.
-
-// DEBUG: meaningful internal steps
-output::log_debug(&output::ctx(server, &format!("Uploading artifact to {} ({size})", path)));
-
-// TRACE: timing instrumentation
-let _t = output::timed(&output::ctx(server, "Artifact upload"));
-
-// DEBUG: completion detail
-output::log_debug(&output::ctx(server, "Upload complete"));
-```
-
-### 4. Context block before destructive/important commands
-
-Commands like deploy, delete, rollback should show a context block:
+### 4. Context block before destructive commands
 
 ```rust
 output::ContextBlock::new()
@@ -297,42 +290,52 @@ output::ContextBlock::new()
 
 ### 5. Accent for emphasis, not quotes
 
-When emphasizing a term in output text, use `accent()` instead of wrapping in quotes.
+Use `accent()` instead of wrapping in quotes.
 
 ### 6. stderr for human output, stdout for data
 
-Human-facing CLI output goes to stderr. Structured data and explicit data-output commands go to stdout.
+Human-facing CLI output goes to stderr. Structured data goes to stdout.
 
-| Command | Stream | Why |
-|---------|--------|-----|
-| `tako deploy` | stderr | Human-facing progress |
-| `tako --version` | stdout | Machine-readable version string |
-| `tako completion zsh` | stdout | Shell eval's the output |
+## Color Palette
+
+| Name | RGB | Use |
+|------|-----|-----|
+| ACCENT | `(125, 196, 228)` | Primary CLI color: spinners, section titles, prompt labels |
+| ACCENT_DIM | `(79, 107, 122)` | Context block borders |
+| BRAND_GREEN | `(155, 217, 179)` | `✓`, "active", "trusted", "enabled" |
+| BRAND_AMBER | `(234, 211, 156)` | `!`, "disabled", "untrusted" |
+| BRAND_RED | `(232, 163, 160)` | `✗`, "unreachable", "error" |
+| BRAND_TEAL | `(155, 196, 182)` | Dev TUI only |
+| BRAND_CORAL | `(232, 135, 131)` | Dev TUI logo only |
 
 ## Anti-Patterns to Avoid
 
-- **Ad-hoc ANSI codes** — Use the output helpers. They handle color/no-color branching.
-- **`println!` for user-facing output** — Use `eprintln!` or the output helpers (which use stderr).
-- **Multiple result lines per spinner** — One spinner → one result line. Use bullets after for details.
-- **Spinners for fast operations** — If it's always <100ms, just print the result directly.
-- **Interactive prompts without CI fallback** — Every prompt must work in `--ci` mode (use defaults or `--yes`).
-- **Styled text in verbose mode messages** — Message text must be plain (no colors, no bold, no ANSI). Only the level label is colored (handled by `log()`).
+- **Ad-hoc ANSI codes** — Use the output helpers.
+- **`println!` for user-facing output** — Use `eprintln!` or output helpers (stderr).
+- **Multiple result lines per spinner** — One spinner → one result. Use bullets for details.
+- **Spinners for fast operations** — If always <100ms, print result directly.
+- **Interactive prompts without CI fallback** — Every prompt must work in `--ci`.
 - **Missing `timed()` on remote operations** — Every SSH/network call should have a timing span.
-- **Missing `ctx()` on per-target logs** — Every verbose log that relates to a specific server/target must use `ctx()`.
-- **DEBUG for noisy repetitive detail** — Use TRACE for iteration progress, chunk counts, and timing spans. Reserve DEBUG for meaningful troubleshooting steps.
+- **DEBUG for noisy repetitive detail** — Use TRACE. Reserve DEBUG for meaningful steps.
+- **Sharing formatted messages between modes** — Normal and verbose modes construct messages independently. Never pass an ANSI-formatted string (from `strong()`, `accent()`, etc.) to a function that reaches tracing. Spinner loading/success messages must be plain text.
+- **Using `strip_ansi` to clean messages** — Don't strip ANSI as a workaround. Keep messages plain from the start.
+- **Duplicating spinner tracing** — Spinners emit tracing::info! for start/completion automatically. Don't add redundant tracing::info! calls outside spinners for the same operation.
+- **Tracing structured fields** — Don't use `server = %name` structured fields. Use `[name]` message prefix instead.
+- **Wrapping prompts in tracing** — Prompts use `eprintln!` in verbose mode, never `tracing::info!`.
+- **Dumping large remote commands** — Remote commands are auto-truncated in SSH client logging. Don't log full multi-line scripts.
+- **Start+finish for fast operations** — Operations under ~2s need only one record (the result). Don't emit separate "Starting X…" and "X done" pairs for quick steps.
+- **Start messages without `…`** — Every start message that has a corresponding finish must end with `…` (ellipsis).
 
 ## Quick Decision Tree
 
-Adding output to a command? Walk through this:
-
-1. **Is it a major phase** (Build, Deploy, Delete)? → `section()` + `PhaseSpinner`
-2. **Is it a single async operation** that might take >500ms? → `with_spinner_async()`
-3. **Is it a single sync operation** that might take >500ms? → `with_spinner()`
-4. **Is it a progress-tracking operation** (N of M)? → `TrackedSpinner`
-5. **Is it a result detail** under a phase? → `bullet()`
-6. **Is it a non-fatal issue**? → `warning()`
-7. **Is it a fatal error**? → `error()` then return Err
-8. **Is it a meaningful internal step** for debugging? → `log_debug()` with `ctx()` if per-target
-9. **Is it noisy/repetitive instrumentation**? → `log_trace()` or `timed()`
-10. **Is it environment/channel context**? → `ContextBlock`
-11. **Is it low-priority info**? → `muted()`
+1. **Major phase** (Build, Deploy)? → `section()` + `PhaseSpinner`
+2. **Single async operation >500ms**? → `with_spinner_async()`
+3. **Single sync operation >500ms**? → `with_spinner()`
+4. **Progress tracking** (N of M)? → `TrackedSpinner`
+5. **Result detail** under a phase? → `bullet()`
+6. **Non-fatal issue**? → `warning()`
+7. **Fatal error**? → `error()` then return Err
+8. **Meaningful internal step** for debugging? → `tracing::debug!()` with `[scope]` prefix
+9. **Noisy/repetitive instrumentation**? → `tracing::trace!()` or `timed()`
+10. **Environment/channel context**? → `ContextBlock`
+11. **Low-priority info**? → `muted()`
