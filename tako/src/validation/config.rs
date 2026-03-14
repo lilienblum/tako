@@ -100,21 +100,6 @@ pub fn validate_tako_toml(config: &TakoToml) -> ValidationResult {
         }
     }
 
-    let mut memberships = std::collections::HashMap::new();
-    for (env_name, env_config) in &config.envs {
-        if env_name == "development" {
-            continue;
-        }
-        for server_name in &env_config.servers {
-            if let Some(previous_env) = memberships.insert(server_name, env_name) {
-                result.error(format!(
-                    "Server '{}' cannot belong to both '{}' and '{}'",
-                    server_name, previous_env, env_name
-                ));
-            }
-        }
-    }
-
     result
 }
 
@@ -154,7 +139,7 @@ pub fn validate_server_references(
         for server_name in &env_config.servers {
             if !servers_config.contains(server_name) {
                 result.error(format!(
-                    "Server '{}' is configured in tako.toml but not found in ~/.tako/config.toml [[servers]]. \
+                    "Server '{}' is configured in tako.toml but not found in config.toml [[servers]]. \
                       Run 'tako servers add --name {} <host>' to add it.",
                     server_name, server_name
                 ));
@@ -258,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_tako_toml_rejects_duplicate_server_membership_across_non_development_envs() {
+    fn validate_tako_toml_allows_duplicate_server_membership_across_non_development_envs() {
         let mut tako_config = TakoToml::default();
         tako_config.envs.insert(
             "production".to_string(),
@@ -278,7 +263,7 @@ mod tests {
         );
 
         let result = validate_tako_toml(&tako_config);
-        assert!(result.errors.iter().any(|e| e.contains("shared")));
+        assert!(result.errors.iter().all(|error| !error.contains("shared")));
     }
 
     #[test]

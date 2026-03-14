@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 
 use console::Term;
 use indicatif::{ProgressBar, ProgressStyle};
+use tracing_subscriber::fmt::FmtContext;
+use tracing_subscriber::fmt::format::{self, FormatEvent, FormatFields};
+use tracing_subscriber::registry::LookupSpan;
 
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 static CI: AtomicBool = AtomicBool::new(false);
@@ -174,7 +177,7 @@ pub fn is_interactive() -> bool {
 
     #[cfg(not(test))]
     {
-        !is_ci() && !is_verbose() && std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
+        !is_ci() && std::io::stdin().is_terminal() && std::io::stderr().is_terminal()
     }
 }
 
@@ -186,130 +189,10 @@ pub fn is_ci() -> bool {
     CI.load(Ordering::Relaxed)
 }
 
-// ---------------------------------------------------------------------------
-// Structured log output (verbose / CI mode)
-// ---------------------------------------------------------------------------
-
-/// Log level for structured verbose output.
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    /// Right-aligned 5-char uppercase label.
-    fn label(self) -> &'static str {
-        match self {
-            LogLevel::Trace => "TRACE",
-            LogLevel::Debug => "DEBUG",
-            LogLevel::Info => " INFO",
-            LogLevel::Warn => " WARN",
-            LogLevel::Error => "ERROR",
-        }
-    }
-
-    fn color(self) -> (u8, u8, u8) {
-        match self {
-            LogLevel::Trace => (90, 90, 90),
-            LogLevel::Debug => (128, 128, 128),
-            LogLevel::Info => ACCENT,
-            LogLevel::Warn => BRAND_AMBER,
-            LogLevel::Error => BRAND_RED,
-        }
-    }
-}
-
-fn format_timestamp() -> String {
-    #[cfg(unix)]
-    {
-        let dur = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default();
-        let epoch = dur.as_secs() as libc::time_t;
-        let millis = dur.subsec_millis();
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        unsafe { libc::localtime_r(&epoch, &mut tm) };
-        format!("{:02}:{:02}:{:02}.{:03}", tm.tm_hour, tm.tm_min, tm.tm_sec, millis)
-    }
-    #[cfg(not(unix))]
-    {
-        let dur = std::time::SystemTime::now()
-            .duration_since(std::time::SystemTime::UNIX_EPOCH)
-            .unwrap_or_default();
-        let total_secs = dur.as_secs();
-        let millis = dur.subsec_millis();
-        let hours = (total_secs % 86400) / 3600;
-        let minutes = (total_secs % 3600) / 60;
-        let seconds = total_secs % 60;
-        format!("{:02}:{:02}:{:02}.{:03}", hours, minutes, seconds, millis)
-    }
-}
-
-/// Strip ANSI escape sequences from a string so verbose log messages are plain text.
-fn strip_ansi(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // Skip until 'm' (end of CSI sequence)
-            for c2 in chars.by_ref() {
-                if c2 == 'm' {
-                    break;
-                }
-            }
-        } else {
-            result.push(c);
-        }
-    }
-    result
-}
-
-/// Print a structured log line to stderr: `<time> <LEVEL> <message>`
-///
-/// The message text is always stripped of ANSI codes — only the level label
-/// is colored. This enforces the verbose-mode style rule.
-pub fn log(level: LogLevel, message: &str) {
-    let time = format_timestamp();
-    let time_display = if should_colorize() {
-        brand_dim(&time)
-    } else {
-        time
-    };
-    let label = level.label();
-    let level_display = if should_colorize() {
-        rgb_fg(label, level.color())
-    } else {
-        label.to_string()
-    };
-    let clean_message = strip_ansi(message);
-    eprintln!("{time_display} {level_display} {clean_message}");
-}
-
-/// Print a DEBUG log line (only shown in verbose mode).
-/// Use for meaningful internal steps that help troubleshoot.
-pub fn log_debug(message: &str) {
-    if is_verbose() {
-        log(LogLevel::Debug, message);
-    }
-}
-
-/// Print an INFO log line (always shown in verbose mode, no-op in normal mode).
-pub fn log_info(message: &str) {
-    log(LogLevel::Info, message);
-}
-
-/// Format a message with optional context prefix.
-/// In verbose mode: `[context] message`. In normal mode: just `message`.
-pub fn ctx(context: &str, message: &str) -> String {
-    if is_verbose() {
-        format!("[{context}] {message}")
-    } else {
-        message.to_string()
-    }
+/// True when pretty output should render (normal interactive mode).
+/// False in verbose or CI mode, where tracing handles all output.
+pub fn is_pretty() -> bool {
+    !is_verbose() && !is_ci()
 }
 
 /// Start a timed span for verbose logging. Returns a guard that logs elapsed
@@ -334,82 +217,211 @@ impl TimedSpan {
 
 impl Drop for TimedSpan {
     fn drop(&mut self) {
-        if is_verbose() {
-            let time = format_elapsed_trace(self.start.elapsed());
-            log(LogLevel::Trace, &format!("{} done {time}", self.label));
+        let time = format_elapsed_trace(self.start.elapsed());
+        tracing::trace!("{} {time}", self.label);
+    }
+}
+
+// ── Tracing scope support ───────────────────────────────────────────────────
+
+/// Custom timer that formats as local HH:MM:SS.mmm.
+pub struct LocalTimer;
+
+impl tracing_subscriber::fmt::time::FormatTime for LocalTimer {
+    fn format_time(&self, w: &mut tracing_subscriber::fmt::format::Writer<'_>) -> std::fmt::Result {
+        #[cfg(unix)]
+        {
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            let epoch = dur.as_secs() as libc::time_t;
+            let millis = dur.subsec_millis();
+            let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+            unsafe { libc::localtime_r(&epoch, &mut tm) };
+            write!(
+                w,
+                "{:02}:{:02}:{:02}.{:03}",
+                tm.tm_hour, tm.tm_min, tm.tm_sec, millis
+            )
+        }
+        #[cfg(not(unix))]
+        {
+            let dur = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default();
+            let total_secs = dur.as_secs();
+            let millis = dur.subsec_millis();
+            let hours = (total_secs % 86400) / 3600;
+            let minutes = (total_secs % 3600) / 60;
+            let seconds = total_secs % 60;
+            write!(
+                w,
+                "{:02}:{:02}:{:02}.{:03}",
+                hours, minutes, seconds, millis
+            )
         }
     }
 }
 
+/// Data stored in span extensions to carry the scope label.
+struct SpanScope(String);
+
+/// Visitor that extracts the `scope` field from span attributes.
+struct ScopeVisitor(Option<String>);
+
+impl tracing::field::Visit for ScopeVisitor {
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "scope" {
+            self.0 = Some(value.to_string());
+        }
+    }
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "scope" {
+            self.0 = Some(format!("{value:?}").trim_matches('"').to_string());
+        }
+    }
+}
+
+/// Layer that captures `scope` fields from spans into extensions.
+pub struct ScopeLayer;
+
+impl<S> tracing_subscriber::Layer<S> for ScopeLayer
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+{
+    fn on_new_span(
+        &self,
+        attrs: &tracing::span::Attributes<'_>,
+        id: &tracing::span::Id,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let mut visitor = ScopeVisitor(None);
+        attrs.record(&mut visitor);
+        if let Some(scope) = visitor.0 {
+            if let Some(span) = ctx.span(id) {
+                span.extensions_mut().insert(SpanScope(scope));
+            }
+        }
+    }
+}
+
+/// Custom event format: `HH:MM:SS.mmm LEVEL [scope] message`
+/// In CI mode: no timestamp (CI adds its own), no ANSI colors.
+pub struct ScopeFormat;
+
+impl<S, N> FormatEvent<S, N> for ScopeFormat
+where
+    S: tracing::Subscriber + for<'a> LookupSpan<'a>,
+    N: for<'a> FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &FmtContext<'_, S, N>,
+        mut writer: format::Writer<'_>,
+        event: &tracing::Event<'_>,
+    ) -> std::fmt::Result {
+        use tracing_subscriber::fmt::time::FormatTime;
+
+        let ci = is_ci();
+
+        // Timestamp (skipped in CI — CI systems add their own)
+        if !ci {
+            LocalTimer.format_time(&mut writer)?;
+        }
+
+        // Level (right-aligned, 5 chars)
+        let level = *event.metadata().level();
+        if should_colorize() {
+            let color = match level {
+                tracing::Level::ERROR => "\x1b[31m",
+                tracing::Level::WARN => "\x1b[33m",
+                tracing::Level::INFO => "\x1b[32m",
+                tracing::Level::DEBUG => "\x1b[34m",
+                tracing::Level::TRACE => "\x1b[35m",
+            };
+            write!(writer, " {color}{level:>5}\x1b[0m ")?;
+        } else {
+            write!(writer, " {level:>5} ")?;
+        }
+
+        // Scope from innermost span (leaf → root, take first match)
+        if let Some(scope) = ctx.event_scope() {
+            for span in scope {
+                if let Some(data) = span.extensions().get::<SpanScope>() {
+                    write!(writer, "[{}] ", data.0)?;
+                    break;
+                }
+            }
+        }
+
+        // Message
+        ctx.format_fields(writer.by_ref(), event)?;
+        writeln!(writer)
+    }
+}
+
+/// Create a tracing span that provides `[name]` scope prefix in verbose output.
+pub fn scope(name: &str) -> tracing::Span {
+    tracing::info_span!("", scope = %name)
+}
+
 pub fn section(title: &str) {
-    if is_verbose() {
-        log(LogLevel::Info, title);
-    } else {
+    if is_pretty() {
         eprintln!();
         eprintln!("{}", bold(&brand_accent(title)));
     }
 }
 
 pub fn heading(title: &str) {
-    if !is_verbose() {
+    if is_pretty() {
         eprintln!();
         eprintln!("{}", bold(title));
     }
-    // No-op in verbose: [context] prefixes on log lines provide grouping.
+}
+
+pub fn heading_no_gap(title: &str) {
+    if is_pretty() {
+        eprintln!("{}", bold(title));
+    }
 }
 
 pub fn info(message: &str) {
-    if is_verbose() {
-        log(LogLevel::Info, message);
-    } else {
+    if is_pretty() {
         eprintln!("{}", brand_fg(message));
     }
 }
 
 pub fn bullet(message: &str) {
-    if is_verbose() {
-        log(LogLevel::Info, &format!("  {message}"));
-    } else {
+    if is_pretty() {
         eprintln!("  {} {}", bold(&brand_secondary("•")), brand_fg(message));
     }
 }
 
 pub fn success(message: &str) {
-    if is_verbose() {
-        log(LogLevel::Info, message);
-    } else {
+    if is_pretty() {
         eprintln!("{} {}", brand_success("✓"), brand_fg(message));
     }
 }
 
 pub fn warning(message: &str) {
-    if is_verbose() {
-        log(LogLevel::Warn, message);
-    } else {
+    if is_pretty() {
         eprintln!("{} {}", bold(&brand_warning("!")), brand_fg(message));
     }
 }
 
 pub fn error(message: &str) {
-    if is_verbose() {
-        log(LogLevel::Error, message);
-    } else {
+    if is_pretty() {
         eprintln!("{} {}", bold(&brand_error("✗")), brand_fg(message));
     }
 }
 
+/// Always prints — used for fatal errors in main.rs.
 pub fn error_stderr(message: &str) {
-    if is_verbose() {
-        log(LogLevel::Error, message);
-    } else {
-        eprintln!("{} {}", bold(&brand_error("✗")), brand_fg(message));
-    }
+    eprintln!("{} {}", bold(&brand_error("✗")), brand_fg(message));
 }
 
 pub fn muted(message: &str) {
-    if is_verbose() {
-        log(LogLevel::Debug, message);
-    } else {
+    if is_pretty() {
         eprintln!("{}", brand_muted(message));
     }
 }
@@ -417,10 +429,10 @@ pub fn muted(message: &str) {
 /// Print a hint line in default text color (not muted).
 /// Use for actionable guidance like "Run X to do Y" where the command is strong()'d.
 pub fn hint(message: &str) {
-    if is_verbose() {
-        log(LogLevel::Info, message);
+    if is_pretty() {
+        eprintln!("{}", brand_dim(message));
     } else {
-        eprintln!("{}", brand_fg(message));
+        tracing::info!("{}", message);
     }
 }
 
@@ -438,52 +450,67 @@ pub fn accent(value: &str) -> String {
     brand_accent(value)
 }
 
-/// A block of context lines with a left amber border, printed together.
+/// A block of context lines with a left border, printed together.
 ///
 /// ```text
-/// │ Using production environment
-/// │ You're on canary channel
+/// ┃ Using production environment
+/// ┃ You're on canary channel
 /// ```
+///
+/// Stores raw data; formatting is applied at print time per output mode.
 pub struct ContextBlock {
-    lines: Vec<String>,
+    entries: Vec<ContextEntry>,
+}
+
+enum ContextEntry {
+    Env(String),
+    Channel(String),
 }
 
 impl ContextBlock {
     pub fn new() -> Self {
-        Self { lines: Vec::new() }
+        Self {
+            entries: Vec::new(),
+        }
     }
 
-    /// Add a free-form plain-text line.
-    pub fn line(mut self, text: &str) -> Self {
-        self.lines.push(text.to_string());
+    /// Add "Using {value} environment".
+    pub fn env(mut self, env: &str) -> Self {
+        self.entries.push(ContextEntry::Env(env.to_string()));
         self
     }
 
-    /// Add "Using {value} environment" (value in accent).
-    pub fn env(self, env: &str) -> Self {
-        self.line(&format!("Using {} environment", accent(env)))
+    /// Add "You're on {value} channel".
+    pub fn channel(mut self, channel: &str) -> Self {
+        self.entries
+            .push(ContextEntry::Channel(channel.to_string()));
+        self
     }
 
-    /// Add "You're on {value} channel" (value in accent).
-    pub fn channel(self, channel: &str) -> Self {
-        self.line(&format!("You're on {} channel", accent(channel)))
-    }
 
     /// Print the block (with trailing blank line). No-op if empty.
     pub fn print(self) {
-        if self.lines.is_empty() {
+        if self.entries.is_empty() {
             return;
         }
-        if is_verbose() {
-            for line in &self.lines {
-                log(LogLevel::Info, line);
-            }
-        } else {
+        if is_pretty() {
             let border = rgb_fg("┃", ACCENT_DIM);
-            for line in &self.lines {
+            for entry in &self.entries {
+                let line = match entry {
+                    ContextEntry::Env(v) => format!("Using {} environment", accent(v)),
+                    ContextEntry::Channel(v) => format!("You're on {} channel", accent(v)),
+                };
                 eprintln!("{border} {line}");
             }
             eprintln!();
+        } else {
+            for entry in &self.entries {
+                let line = match entry {
+                    ContextEntry::Env(v) => format!("Using {v} environment"),
+                    ContextEntry::Channel(v) => format!("You're on {v} channel"),
+                };
+                tracing::info!("{}", line);
+            }
         }
     }
 }
@@ -526,29 +553,29 @@ fn phase_spinner_style_indented() -> ProgressStyle {
 
 /// Print a spinner result without elapsed (fast path — spinner was never shown).
 fn print_ok(success_msg: &str) {
-    if is_verbose() {
-        log(LogLevel::Info, success_msg);
-    } else {
+    if is_pretty() {
         let check = brand_success("✓");
         eprintln!("{check} {}", brand_fg(success_msg));
+    } else {
+        tracing::info!("{}", success_msg);
     }
 }
 
 fn print_err(loading: &str) {
-    if is_verbose() {
-        log(LogLevel::Error, loading);
-    } else {
+    if is_pretty() {
         let x = bold(&brand_error("✗"));
         eprintln!("{x} {loading}");
+    } else {
+        tracing::error!("{}", loading);
     }
 }
 
 fn print_err_with_detail(loading: &str, detail: &dyn Display) {
-    if is_verbose() {
-        log(LogLevel::Error, &format!("{loading}: {detail}"));
-    } else {
+    if is_pretty() {
         let x = bold(&brand_error("✗"));
         eprintln!("{x} {loading}: {detail}");
+    } else {
+        tracing::error!("{}: {}", loading, detail);
     }
 }
 
@@ -590,44 +617,27 @@ fn suppress_echo(suppress: bool) {
 fn finish_spinner_ok(pb: &ProgressBar, success_msg: &str, elapsed: Duration) {
     pb.finish_and_clear();
     show_cursor();
-    if is_verbose() {
-        let time = format_elapsed(elapsed);
-        if time.is_empty() {
-            log(LogLevel::Info, success_msg);
-        } else {
-            log(LogLevel::Info, &format!("{success_msg} {time}"));
-        }
+    let check = brand_success("✓");
+    let time = muted_elapsed(elapsed);
+    if time.is_empty() {
+        eprintln!("{check} {}", brand_fg(success_msg));
     } else {
-        let check = brand_success("✓");
-        let time = muted_elapsed(elapsed);
-        if time.is_empty() {
-            eprintln!("{check} {}", brand_fg(success_msg));
-        } else {
-            eprintln!("{check} {} {time}", brand_fg(success_msg));
-        }
+        eprintln!("{check} {} {time}", brand_fg(success_msg));
     }
 }
 
 fn finish_spinner_err(pb: &ProgressBar, loading: &str) {
     pb.finish_and_clear();
     show_cursor();
-    if is_verbose() {
-        log(LogLevel::Error, loading);
-    } else {
-        let x = bold(&brand_error("✗"));
-        eprintln!("{x} {loading}");
-    }
+    let x = bold(&brand_error("✗"));
+    eprintln!("{x} {loading}");
 }
 
 fn finish_spinner_err_with_detail(pb: &ProgressBar, loading: &str, detail: &dyn Display) {
     pb.finish_and_clear();
     show_cursor();
-    if is_verbose() {
-        log(LogLevel::Error, &format!("{loading}: {detail}"));
-    } else {
-        let x = bold(&brand_error("✗"));
-        eprintln!("{x} {loading}: {detail}");
-    }
+    let x = bold(&brand_error("✗"));
+    eprintln!("{x} {loading}: {detail}");
 }
 
 /// Spinner that shows only if work takes >= 1s, then clears on completion.
@@ -640,9 +650,9 @@ pub fn with_spinner<T, E, F>(loading: &str, success: &str, work: F) -> Result<T,
 where
     F: FnOnce() -> Result<T, E>,
 {
-    // Verbose mode: log start, run work, log result.
-    if is_verbose() {
-        log(LogLevel::Info, loading);
+    // Verbose/CI mode: tracing for start/completion.
+    if !is_pretty() {
+        tracing::info!("{}", loading);
         let start = Instant::now();
         let result = work();
         let elapsed = start.elapsed();
@@ -650,12 +660,12 @@ where
             Ok(_) => {
                 let time = format_elapsed(elapsed);
                 if time.is_empty() {
-                    log(LogLevel::Info, success);
+                    tracing::info!("{}", success);
                 } else {
-                    log(LogLevel::Info, &format!("{success} {time}"));
+                    tracing::info!("{} {}", success, time);
                 }
             }
-            Err(_) => log(LogLevel::Error, loading),
+            Err(_) => tracing::error!("{}", loading),
         }
         return result;
     }
@@ -723,9 +733,9 @@ pub async fn with_spinner_async_err<T, E: Display, Fut>(
 where
     Fut: Future<Output = Result<T, E>>,
 {
-    // Verbose mode: log start, run work, log result.
-    if is_verbose() {
-        log(LogLevel::Info, loading);
+    // Verbose/CI mode: tracing for start/completion.
+    if !is_pretty() {
+        tracing::info!("{}", loading);
         let start = Instant::now();
         let result = work.await;
         let elapsed = start.elapsed();
@@ -733,12 +743,12 @@ where
             Ok(_) => {
                 let time = format_elapsed(elapsed);
                 if time.is_empty() {
-                    log(LogLevel::Info, success);
+                    tracing::info!("{}", success);
                 } else {
-                    log(LogLevel::Info, &format!("{success} {time}"));
+                    tracing::info!("{} {}", success, time);
                 }
             }
-            Err(e) => log(LogLevel::Error, &format!("{error_label}: {e}")),
+            Err(e) => tracing::error!("{}: {}", error_label, e),
         }
         return result;
     }
@@ -777,13 +787,13 @@ where
 }
 
 /// Simple spinner — shows only if work takes >= 1s, then clears. No result line.
-/// In verbose mode: prints a log line for the action.
+/// In verbose/CI mode: prints a tracing line for the action.
 pub fn with_spinner_simple<T, F>(message: &str, work: F) -> T
 where
     F: FnOnce() -> T,
 {
-    if is_verbose() {
-        log(LogLevel::Info, message);
+    if !is_pretty() {
+        tracing::info!("{}", message);
         return work();
     }
 
@@ -817,13 +827,13 @@ where
 }
 
 /// Async simple spinner — shows only if work takes >= 1s, then clears. No result line.
-/// In verbose mode: prints a log line for the action.
+/// In verbose/CI mode: prints a tracing line for the action.
 pub async fn with_spinner_async_simple<T, Fut>(message: &str, work: Fut) -> T
 where
     Fut: Future<Output = T>,
 {
-    if is_verbose() {
-        log(LogLevel::Info, message);
+    if !is_pretty() {
+        tracing::info!("{}", message);
         return work.await;
     }
 
@@ -874,10 +884,10 @@ impl PhaseSpinner {
     }
 
     fn new(message: &str, indented: bool) -> Self {
-        let verbose = is_verbose();
+        let verbose = !is_pretty();
 
         if verbose {
-            log(LogLevel::Info, message);
+            tracing::info!("{}", message);
             return Self {
                 pb: None,
                 start: Instant::now(),
@@ -936,12 +946,7 @@ impl PhaseSpinner {
     pub fn finish(mut self, success_msg: &str) {
         self.abort_elapsed_task();
         if self.verbose {
-            let time = format_elapsed(self.start.elapsed());
-            if time.is_empty() {
-                log(LogLevel::Info, success_msg);
-            } else {
-                log(LogLevel::Info, &format!("{success_msg} {time}"));
-            }
+            // In verbose mode the start message already persists — no result line needed.
         } else {
             if let Some(ref pb) = self.pb {
                 finish_spinner_ok(pb, success_msg, self.start.elapsed());
@@ -953,7 +958,7 @@ impl PhaseSpinner {
     pub fn finish_err(mut self, loading: &str, detail: &str) {
         self.abort_elapsed_task();
         if self.verbose {
-            log(LogLevel::Error, &format!("{loading}: {detail}"));
+            tracing::error!("{}: {}", loading, detail);
         } else {
             if let Some(ref pb) = self.pb {
                 finish_spinner_err_with_detail(pb, loading, &detail);
@@ -966,12 +971,7 @@ impl PhaseSpinner {
     pub fn finish_ok_indented(mut self, success_msg: &str) {
         self.abort_elapsed_task();
         if self.verbose {
-            let time = format_elapsed(self.start.elapsed());
-            if time.is_empty() {
-                log(LogLevel::Info, success_msg);
-            } else {
-                log(LogLevel::Info, &format!("{success_msg} {time}"));
-            }
+            // In verbose mode the start message already persists — no result line needed.
         } else if let Some(ref pb) = self.pb {
             pb.finish_and_clear();
             show_cursor();
@@ -990,7 +990,7 @@ impl PhaseSpinner {
     pub fn finish_err_indented(mut self, detail: &str) {
         self.abort_elapsed_task();
         if self.verbose {
-            log(LogLevel::Error, detail);
+            tracing::error!("{}", detail);
         } else if let Some(ref pb) = self.pb {
             pb.finish_and_clear();
             show_cursor();
@@ -1022,17 +1022,17 @@ impl Drop for PhaseSpinner {
 /// A spinner whose message can be updated while running.
 /// Does NOT suppress other output (unlike PhaseSpinner).
 ///
-/// In verbose mode: logs the initial message only; `set_message()` updates
+/// In verbose/CI mode: logs the initial message only; `set_message()` updates
 /// are a no-op (progress counts are normal-mode only). Per-scope completion
-/// should be logged by the calling code via `log_debug()` with context.
+/// should be logged by the calling code via `tracing::debug!()`.
 pub struct TrackedSpinner {
     pb: Option<ProgressBar>,
 }
 
 impl TrackedSpinner {
     pub fn start(message: &str) -> Self {
-        if is_verbose() {
-            log(LogLevel::Info, message);
+        if !is_pretty() {
+            tracing::info!("{}", message);
             return Self { pb: None };
         }
         let pb = if is_interactive() {
@@ -1097,14 +1097,16 @@ pub fn confirm_with_description(
         return Ok(default);
     }
 
-    // Verbose mode: transcript-style confirm (still interactive).
-    if is_verbose() {
+    // Verbose mode: transcript-style confirm (still interactive, no screen erasing).
+    // Prompts are NOT wrapped in tracing log lines — they print as plain text.
+    if !is_pretty() {
         use crossterm::{
             event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
             terminal,
         };
-        let hint = if default { "Y/n" } else { "y/N" };
-        log(LogLevel::Info, &format!("{prompt} [{hint}]"));
+        let hint = if default { "[Y/n]" } else { "[y/N]" };
+        eprint!("{} {} ", brand_accent(prompt), brand_muted(hint));
+        let _ = std::io::Write::flush(&mut std::io::stderr());
         terminal::enable_raw_mode()?;
         let result = loop {
             if let Event::Key(KeyEvent {
@@ -1114,18 +1116,17 @@ pub fn confirm_with_description(
                 match code {
                     KeyCode::Char('y') | KeyCode::Char('Y') => {
                         terminal::disable_raw_mode()?;
-                        log(LogLevel::Info, &format!("{prompt}: yes"));
+                        eprintln!("yes");
                         break Ok(true);
                     }
                     KeyCode::Char('n') | KeyCode::Char('N') => {
                         terminal::disable_raw_mode()?;
-                        log(LogLevel::Info, &format!("{prompt}: no"));
+                        eprintln!("no");
                         break Ok(false);
                     }
                     KeyCode::Enter => {
                         terminal::disable_raw_mode()?;
-                        let answer = if default { "yes" } else { "no" };
-                        log(LogLevel::Info, &format!("{prompt}: {answer}"));
+                        eprintln!("{}", if default { "yes" } else { "no" });
                         break Ok(default);
                     }
                     KeyCode::Esc => {
@@ -1158,11 +1159,11 @@ pub fn confirm_with_description(
         let _ = term.write_line(desc);
     }
 
-    // Print prompt with (Y/n) or (y/N) hint
+    // Print prompt with accent color while active
+    let hint_text = if default { "[Y/n]" } else { "[y/N]" };
+    let hint = brand_muted(hint_text);
     let separator = brand_muted("›");
-    let styled_hint = brand_muted("(y/n)");
-    let styled_prompt = format!("{} {styled_hint} {separator} ", brand_accent(prompt));
-    eprint!("{styled_prompt}");
+    eprint!("{} {hint} {separator} ", brand_accent(prompt));
 
     // Raw mode: read single keypress
     terminal::enable_raw_mode()?;
@@ -1174,13 +1175,15 @@ pub fn confirm_with_description(
             match code {
                 KeyCode::Char('y') | KeyCode::Char('Y') => {
                     terminal::disable_raw_mode()?;
-                    eprintln!("y");
                     break Ok(true);
                 }
                 KeyCode::Char('n') | KeyCode::Char('N') => {
                     terminal::disable_raw_mode()?;
-                    eprintln!("n");
                     break Ok(false);
+                }
+                KeyCode::Enter => {
+                    terminal::disable_raw_mode()?;
+                    break Ok(default);
                 }
                 KeyCode::Esc => {
                     terminal::disable_raw_mode()?;
@@ -1195,14 +1198,28 @@ pub fn confirm_with_description(
                         "Operation interrupted",
                     ));
                 }
-                _ => {} // ignore other keys
+                _ => continue,
             }
         }
     };
 
-    // Vanish the prompt (and description if present)
-    let lines = if description.is_some() { 2 } else { 1 };
-    let _ = term.clear_last_lines(lines);
+    // Calculate how many terminal lines the prompt occupied (may wrap)
+    let prompt_visual = format!("{prompt} › ");
+    let prompt_width = console::measure_text_width(&prompt_visual);
+    let term_width = term.size().1.max(1) as usize;
+    let prompt_rows = (prompt_width + term_width - 1) / term_width;
+    let mut total_rows = prompt_rows;
+    if description.is_some() {
+        total_rows += 1;
+    }
+
+    // Move to next line so cursor is at a known position, then clear
+    eprintln!();
+    let _ = term.clear_last_lines(total_rows);
+    if let Ok(answer) = &result {
+        let answer_text = if *answer { "yes" } else { "no" };
+        let _ = term.write_line(&format!("{prompt} {separator} {answer_text}"));
+    }
 
     result
 }
@@ -1215,6 +1232,7 @@ pub fn text_field(prompt: &str, default: Option<&str>) -> std::io::Result<String
     TextField::new(prompt).default_opt(default).prompt()
 }
 
+#[derive(Clone)]
 pub struct TextField<'a> {
     label: &'a str,
     hint: Option<&'a str>,
@@ -1302,18 +1320,8 @@ impl<'a> TextField<'a> {
             };
         }
 
-        // Verbose mode: transcript-style text input (still interactive).
-        if is_verbose() {
-            let default_hint = match self.default {
-                Some(d) => format!(" [default: {d}]"),
-                None => String::new(),
-            };
-            if self.password {
-                log(LogLevel::Info, &format!("{}?", self.label));
-            } else {
-                log(LogLevel::Info, &format!("{}?{default_hint}", self.label));
-            }
-            // Use simple line-based input for verbose mode
+        // Verbose mode: same interactive input, no screen erasing after.
+        if !is_pretty() {
             let display_label = match self.hint {
                 Some(hint) => format!(
                     "{} {}",
@@ -1331,15 +1339,10 @@ impl<'a> TextField<'a> {
                 self.required,
                 self.trimmed,
             )?;
-            if self.password {
-                log(LogLevel::Info, &format!("{} received", self.label));
-            } else {
-                log(LogLevel::Debug, &format!("Resolved {}: {value}", self.label));
-            }
             return Ok(value);
         }
 
-        let display_label = match self.hint {
+        let active_label = match self.hint {
             Some(hint) => format!(
                 "{} {}",
                 brand_accent(self.label),
@@ -1349,7 +1352,7 @@ impl<'a> TextField<'a> {
         };
 
         let value = raw_text_input(
-            &display_label,
+            &active_label,
             self.default,
             self.suggestions,
             self.password,
@@ -1357,6 +1360,20 @@ impl<'a> TextField<'a> {
             self.required,
             self.trimmed,
         )?;
+
+        // Replace the colored prompt with a plain one
+        let term = Term::stderr();
+        let _ = term.clear_last_lines(1);
+        let separator = brand_muted("›");
+        let plain_label = match self.hint {
+            Some(hint) => format!("{} {}", self.label, brand_muted(&format!("({hint})"))),
+            None => self.label.to_string(),
+        };
+        if self.password {
+            let _ = term.write_line(&format!("{plain_label} {separator} ••••••"));
+        } else {
+            let _ = term.write_line(&format!("{plain_label} {separator} {value}"));
+        }
 
         Ok(value)
     }
@@ -1681,13 +1698,8 @@ pub fn select_with_default<T>(
     }
 
     // Verbose mode: numbered list with simple input.
-    if is_verbose() {
-        log(LogLevel::Info, &format!("{title}:"));
-        for (i, (label, _)) in options.iter().enumerate() {
-            let marker = if i == default { " (default)" } else { "" };
-            log(LogLevel::Info, &format!("  {}) {label}{marker}", i + 1));
-        }
-        // Use raw_select under the hood (still interactive, just logged)
+    // Prompts are NOT wrapped in tracing log lines — they print as plain text.
+    if !is_pretty() {
         let labels: Vec<&str> = options.iter().map(|(label, _)| label.as_str()).collect();
         let term = Term::stderr();
         let full_prompt = match description {
@@ -1695,8 +1707,6 @@ pub fn select_with_default<T>(
             None => title.to_string(),
         };
         let index = raw_select(&term, &full_prompt, &labels, &[], default)?;
-        let selected_label = &options[index].0;
-        log(LogLevel::Info, &format!("Selected: {selected_label}"));
         return Ok(options.into_iter().nth(index).unwrap().1);
     }
 
@@ -1821,10 +1831,18 @@ fn raw_select(
     terminal::disable_raw_mode()?;
     crossterm::execute!(out, cursor::Show)?;
 
-    // Clear the list + prompt
-    let prompt_lines = prompt.chars().filter(|c| *c == '\n').count() + 1;
-    let total = labels.len() + prompt_lines;
-    let _ = term.clear_last_lines(total);
+    if is_pretty() {
+        // Clear the list + prompt, replace with a summary line
+        let prompt_lines = prompt.chars().filter(|c| *c == '\n').count() + 1;
+        let total = labels.len() + prompt_lines;
+        let _ = term.clear_last_lines(total);
+
+        if let Ok(idx) = &result {
+            let title = prompt.lines().next().unwrap_or(prompt);
+            let separator = brand_muted("›");
+            let _ = term.write_line(&format!("{title} {separator} {}", labels[*idx]));
+        }
+    }
 
     result
 }
@@ -1836,14 +1854,14 @@ fn raw_select(
 struct WizardField {
     label: String,
     value: Option<String>,
-    subsection: bool,
     visible: bool,
+    /// How many terminal lines this field occupies when answered (answer + info lines).
+    lines: usize,
 }
 
 pub struct Wizard {
     fields: Vec<WizardField>,
     term: Term,
-    lines_on_screen: usize,
     confirmation: bool,
 }
 
@@ -1852,21 +1870,20 @@ impl Wizard {
         Self {
             fields: Vec::new(),
             term: Term::stderr(),
-            lines_on_screen: 0,
             confirmation: false,
         }
     }
 
     /// Define all fields upfront with their order and subsection grouping.
-    /// Each entry is `(label, subsection)`.
+    /// Each entry is `(label, subsection)`. Subsection fields start hidden.
     pub fn with_fields(mut self, fields: &[(&str, bool)]) -> Self {
         self.fields = fields
             .iter()
             .map(|(label, subsection)| WizardField {
                 label: label.to_string(),
                 value: None,
-                subsection: *subsection,
-                visible: !subsection, // root fields visible by default
+                visible: !subsection,
+                lines: 0,
             })
             .collect();
         self
@@ -1878,16 +1895,21 @@ impl Wizard {
         self
     }
 
-    /// Set a field's value.
-    pub fn set(&mut self, label: &str, value: &str) {
+    /// Set a field's value and how many screen lines it occupies.
+    fn set_with_lines(&mut self, label: &str, value: &str, lines: usize) {
         if let Some(field) = self.fields.iter_mut().find(|f| f.label == label) {
             field.value = if value.is_empty() {
                 None
             } else {
                 Some(value.to_string())
             };
+            field.lines = lines;
         }
-        self.redraw();
+    }
+
+    /// Set a field's value (1 screen line).
+    pub fn set(&mut self, label: &str, value: &str) {
+        self.set_with_lines(label, value, 1);
     }
 
     /// Clear a field's value back to pending.
@@ -1908,7 +1930,7 @@ impl Wizard {
         }
     }
 
-    /// Remove the last visible answered field's value and redraw
+    /// Remove the last visible answered field's value
     /// (for correcting invalid input like bad port numbers).
     pub fn undo_last(&mut self) {
         if let Some(field) = self
@@ -1919,50 +1941,37 @@ impl Wizard {
         {
             field.value = None;
         }
-        self.redraw();
     }
 
-    fn redraw(&mut self) {
-        if self.lines_on_screen > 0 {
-            let _ = self.term.clear_last_lines(self.lines_on_screen);
+    /// Whether this is the first visible field (no previous answered fields).
+    fn is_first_field(&self, label: &str) -> bool {
+        let idx = self
+            .fields
+            .iter()
+            .position(|f| f.label == label)
+            .unwrap_or(0);
+        !self.fields[..idx]
+            .iter()
+            .any(|f| f.visible && f.value.is_some())
+    }
+
+    /// In pretty mode on ESC: clear `current_lines` (the current prompt) plus
+    /// the previous answered field's lines (if any). In verbose mode: no-op.
+    fn clear_back(&self, current_label: &str, current_lines: usize) {
+        if !is_pretty() {
+            return;
         }
-
-        let visible: Vec<&WizardField> = self.fields.iter().filter(|f| f.visible).collect();
-
-        let max_label = visible.iter().map(|f| f.label.len()).max().unwrap_or(0);
-
-        let mut first_sub = true;
-        for field in &visible {
-            let label = brand_muted(&format!("{:<width$}", field.label, width = max_label));
-            if field.subsection {
-                let branch = brand_muted(if first_sub { "└" } else { " " });
-                first_sub = false;
-                match &field.value {
-                    Some(value) => {
-                        let _ = self.term.write_line(&format!("{branch} {label}  {value}"));
-                    }
-                    None => {
-                        let _ = self.term.write_line(&format!("{branch} {label}"));
-                    }
-                }
-            } else {
-                first_sub = true; // reset for next subsection group
-                match &field.value {
-                    Some(value) => {
-                        let _ = self.term.write_line(&format!("{label}  {value}"));
-                    }
-                    None => {
-                        let _ = self.term.write_line(&label.to_string());
-                    }
-                }
-            }
-        }
-
-        self.lines_on_screen = visible.len();
-        if !visible.is_empty() {
-            let _ = self.term.write_line("");
-            self.lines_on_screen += 1;
-        }
+        let idx = self
+            .fields
+            .iter()
+            .position(|f| f.label == current_label)
+            .unwrap_or(0);
+        let prev_lines = self.fields[..idx]
+            .iter()
+            .rev()
+            .find(|f| f.visible && f.value.is_some())
+            .map_or(0, |f| f.lines);
+        let _ = self.term.clear_last_lines(current_lines + prev_lines);
     }
 
     pub fn input(
@@ -1971,26 +1980,35 @@ impl Wizard {
         default: Option<&str>,
         info: Option<&str>,
     ) -> std::io::Result<String> {
-        self.redraw();
-        if let Some(text) = info {
-            let _ = self.term.write_line(&format!(
-                "{} {}",
-                bold(&brand_warning("!")),
-                brand_warning(text)
-            ));
-            self.lines_on_screen += 1;
-        }
-        match text_field(label, default) {
-            Ok(value) => {
-                self.lines_on_screen += 1;
-                self.set(label, &value);
-                Ok(value)
+        let first = self.is_first_field(label);
+        loop {
+            if let Some(text) = info {
+                let _ = self.term.write_line(&format!(
+                    "{} {}",
+                    bold(&brand_warning("!")),
+                    brand_warning(text)
+                ));
             }
-            Err(e) if is_wizard_back(&e) => {
-                self.lines_on_screen += 1; // prompt line
-                Err(wizard_back_error())
+            match text_field(label, default) {
+                Ok(value) => {
+                    let lines = if info.is_some() { 2 } else { 1 };
+                    self.set_with_lines(label, &value, lines);
+                    return Ok(value);
+                }
+                Err(e) if is_wizard_back(&e) => {
+                    let lines = if info.is_some() { 2 } else { 1 };
+                    if first {
+                        // First field: clear prompt and re-show it
+                        if is_pretty() {
+                            let _ = self.term.clear_last_lines(lines);
+                        }
+                        continue;
+                    }
+                    self.clear_back(label, lines);
+                    return Err(wizard_back_error());
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) => Err(e),
         }
     }
 
@@ -2008,39 +2026,52 @@ impl Wizard {
                 "No options available for selection",
             ));
         }
-        self.redraw();
 
-        let labels: Vec<&str> = options.iter().map(|(l, _)| l.as_str()).collect();
-        match raw_select(&self.term, prompt, &labels, hints, default) {
-            Ok(index) => {
-                let display_label = options[index].0.clone();
-                let value = options.into_iter().nth(index).unwrap().1;
-                self.set(label, &display_label);
-                Ok(value)
+        let first = self.is_first_field(label);
+        loop {
+            let labels: Vec<&str> = options.iter().map(|(l, _)| l.as_str()).collect();
+            match raw_select(&self.term, prompt, &labels, hints, default) {
+                Ok(index) => {
+                    let display_label = options[index].0.clone();
+                    let value = options.into_iter().nth(index).unwrap().1;
+                    self.set(label, &display_label);
+                    return Ok(value);
+                }
+                Err(e) if is_wizard_back(&e) => {
+                    // raw_select already cleared its own display
+                    if first {
+                        continue;
+                    }
+                    self.clear_back(label, 0);
+                    return Err(wizard_back_error());
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) if is_wizard_back(&e) => {
-                // raw_select already cleaned up its own display
-                Err(wizard_back_error())
-            }
-            Err(e) => Err(e),
         }
     }
 
     /// Accept a fully configured [`TextField`] builder and track the answer.
     pub fn text_field(&mut self, builder: TextField) -> std::io::Result<String> {
-        self.redraw();
         let label = builder.label.to_string();
-        match builder.prompt() {
-            Ok(value) => {
-                self.lines_on_screen += 1;
-                self.set(&label, &value);
-                Ok(value)
+        let first = self.is_first_field(&label);
+        loop {
+            match builder.clone().prompt() {
+                Ok(value) => {
+                    self.set(&label, &value);
+                    return Ok(value);
+                }
+                Err(e) if is_wizard_back(&e) => {
+                    if first {
+                        if is_pretty() {
+                            let _ = self.term.clear_last_lines(1);
+                        }
+                        continue;
+                    }
+                    self.clear_back(&label, 1);
+                    return Err(wizard_back_error());
+                }
+                Err(e) => return Err(e),
             }
-            Err(e) if is_wizard_back(&e) => {
-                self.lines_on_screen += 1; // prompt line
-                Err(wizard_back_error())
-            }
-            Err(e) => Err(e),
         }
     }
 
@@ -2053,7 +2084,6 @@ impl Wizard {
         prompt: &str,
         description: Option<&str>,
     ) -> std::io::Result<bool> {
-        self.redraw();
         match confirm_with_description(prompt, description, true) {
             Err(e) if is_wizard_back(&e) => Err(wizard_back_error()),
             result => result,
@@ -2072,11 +2102,6 @@ impl Wizard {
             Ok(false) => Ok(false),
             Err(e) => Err(e),
         }
-    }
-
-    /// Track a line drawn by an external prompt (for proper clear on next redraw).
-    pub fn track_line(&mut self) {
-        self.lines_on_screen += 1;
     }
 }
 
@@ -2258,44 +2283,10 @@ mod tests {
     }
 
     #[test]
-    fn log_level_label_right_aligned_5_chars() {
-        assert_eq!(LogLevel::Trace.label(), "TRACE");
-        assert_eq!(LogLevel::Debug.label(), "DEBUG");
-        assert_eq!(LogLevel::Info.label(), " INFO");
-        assert_eq!(LogLevel::Warn.label(), " WARN");
-        assert_eq!(LogLevel::Error.label(), "ERROR");
-        // All labels are 5 characters wide for alignment
-        for level in [LogLevel::Trace, LogLevel::Debug, LogLevel::Info, LogLevel::Warn, LogLevel::Error] {
-            assert_eq!(level.label().len(), 5);
-        }
-    }
-
-    #[test]
-    fn format_timestamp_is_valid_hh_mm_ss_mmm() {
-        let ts = format_timestamp();
-        assert_eq!(ts.len(), 12, "Timestamp should be HH:MM:SS.mmm format: {ts}");
-        assert_eq!(&ts[2..3], ":", "Expected colon at position 2: {ts}");
-        assert_eq!(&ts[5..6], ":", "Expected colon at position 5: {ts}");
-        assert_eq!(&ts[8..9], ".", "Expected dot at position 8: {ts}");
-    }
-
-    #[test]
     fn with_spinner_runs_work_in_non_tty() {
         // Non-interactive: work runs directly, result returned
         let result: Result<usize, String> = with_spinner("Loading", "Done", || Ok(42));
         assert_eq!(result.unwrap(), 42);
-    }
-
-    #[test]
-    fn strip_ansi_removes_escape_sequences() {
-        assert_eq!(strip_ansi("hello"), "hello");
-        assert_eq!(strip_ansi("\x1b[1mbold\x1b[22m"), "bold");
-        assert_eq!(strip_ansi("\x1b[38;2;125;196;228mcolored\x1b[39m"), "colored");
-        assert_eq!(
-            strip_ansi("Server \x1b[1mprod\x1b[22m is \x1b[38;2;155;217;179mactive\x1b[39m"),
-            "Server prod is active"
-        );
-        assert_eq!(strip_ansi(""), "");
     }
 
     #[test]

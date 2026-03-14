@@ -6,6 +6,14 @@ use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::SshClient;
 use tako_core::{Command, Response};
+use tracing::Instrument;
+
+#[derive(Debug, Clone)]
+struct ScaleTarget {
+    display_app_name: String,
+    remote_app_name: String,
+    env_name: Option<String>,
+}
 
 pub fn run(
     instances: u8,
@@ -30,38 +38,56 @@ async fn run_async(
         None
     };
 
-    let app_name = resolve_app_name(project_tako.as_ref(), &project_dir, app)?;
+    let target = resolve_scale_target(project_tako.as_ref(), &project_dir, app, env, server)?;
     let servers = ServersToml::load()?;
-    let server_names = resolve_scale_server_names(project_tako.as_ref(), &servers, env, server)?;
+    let server_names = resolve_scale_server_names(
+        project_tako.as_ref(),
+        &servers,
+        target.env_name.as_deref(),
+        server,
+    )?;
 
     output::section("Scale");
-    output::info(&format!("{app_name} -> {instances} instance(s)"));
+    if let Some(env_name) = target.env_name.as_deref() {
+        output::info(&format!(
+            "{} ({}) -> {instances} instance(s)",
+            target.display_app_name, env_name
+        ));
+    } else {
+        output::info(&format!(
+            "{} -> {instances} instance(s)",
+            target.display_app_name
+        ));
+    }
 
     let mut tasks = Vec::new();
     for server_name in &server_names {
         let Some(entry) = servers.get(server_name) else {
-            return Err(format!("Server '{}' not found in ~/.tako/config.toml", server_name).into());
+            return Err(
+                format!("Server '{}' not found in config.toml", server_name).into(),
+            );
         };
         let server_name = server_name.clone();
         let entry = entry.clone();
-        let app_name = app_name.clone();
-        tasks.push(tokio::spawn(async move {
-            let result = scale_server(&app_name, &entry, instances).await;
-            (server_name, result)
-        }));
+        let app_name = target.remote_app_name.clone();
+        let span = output::scope(&server_name);
+        tasks.push(tokio::spawn(
+            async move {
+                let result = scale_server(&app_name, &entry, instances).await;
+                (server_name, result)
+            }
+            .instrument(span),
+        ));
     }
 
     let results = if output::is_interactive() && tasks.len() > 1 {
-        output::with_spinner_async_simple(
-            &format!("Scaling {} server(s)", tasks.len()),
-            async {
-                let mut results = Vec::new();
-                for task in tasks {
-                    results.push(task.await);
-                }
-                results
-            },
-        )
+        output::with_spinner_async_simple(&format!("Scaling {} server(s)", tasks.len()), async {
+            let mut results = Vec::new();
+            for task in tasks {
+                results.push(task.await);
+            }
+            results
+        })
         .await
     } else {
         let mut results = Vec::new();
@@ -105,14 +131,17 @@ async fn run_async(
     }
 }
 
-fn resolve_app_name(
+fn resolve_scale_target(
     project_tako: Option<&TakoToml>,
     project_dir: &std::path::Path,
     explicit_app: Option<&str>,
-) -> Result<String, Box<dyn std::error::Error>> {
+    env: Option<&str>,
+    server: Option<&str>,
+) -> Result<ScaleTarget, Box<dyn std::error::Error>> {
     if let Some(tako_config) = project_tako {
-        let resolved = require_app_name_from_config(project_dir)
-            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string()))?;
+        let resolved = require_app_name_from_config(project_dir).map_err(|error| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
+        })?;
         if let Some(app_name) = explicit_app
             && app_name != resolved
         {
@@ -122,13 +151,44 @@ fn resolve_app_name(
             )
             .into());
         }
-        let _ = tako_config;
-        return Ok(resolved);
+        let env_name = match (env, server) {
+            (Some(env_name), _) => Some(env_name.to_string()),
+            (None, Some(_)) => Some(super::helpers::resolve_env(None)),
+            (None, None) => None,
+        };
+        if let Some(env_name) = env_name.as_deref()
+            && !tako_config.envs.contains_key(env_name)
+        {
+            return Err(format!("Environment '{}' not found in tako.toml.", env_name).into());
+        }
+        let remote_app_name = env_name
+            .as_deref()
+            .map(|env_name| tako_core::deployment_app_id(&resolved, env_name))
+            .unwrap_or_else(|| resolved.clone());
+        return Ok(ScaleTarget {
+            display_app_name: resolved,
+            remote_app_name,
+            env_name,
+        });
     }
 
-    explicit_app
-        .map(str::to_string)
-        .ok_or_else(|| "Run `tako scale` from a project directory or pass --app.".into())
+    let explicit_app = explicit_app
+        .ok_or_else(|| "Run `tako scale` from a project directory or pass --app.".to_string())?;
+    let remote_app_name = match env {
+        Some(env_name) if tako_core::split_deployment_app_id(explicit_app).is_none() => {
+            tako_core::deployment_app_id(explicit_app, env_name)
+        }
+        _ => explicit_app.to_string(),
+    };
+    let (display_app_name, env_name) = match tako_core::split_deployment_app_id(&remote_app_name) {
+        Some((app_name, env_name)) => (app_name.to_string(), Some(env_name.to_string())),
+        None => (explicit_app.to_string(), env.map(str::to_string)),
+    };
+    Ok(ScaleTarget {
+        display_app_name,
+        remote_app_name,
+        env_name,
+    })
 }
 
 fn resolve_scale_server_names(
@@ -139,30 +199,33 @@ fn resolve_scale_server_names(
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
     if let Some(server_name) = server {
         if !servers.contains(server_name) {
-            return Err(format!("Server '{}' not found in ~/.tako/config.toml", server_name).into());
+            return Err(
+                format!("Server '{}' not found in config.toml", server_name).into(),
+            );
         }
         if let Some(env_name) = env {
-            let tako_config = project_tako.ok_or_else(|| {
-                "Using --env requires project context because environment mappings live in tako.toml."
-                    .to_string()
-            })?;
-            if !tako_config.envs.contains_key(env_name) {
-                return Err(format!("Environment '{}' not found in tako.toml.", env_name).into());
-            }
-            if !tako_config.get_servers_for_env(env_name).contains(&server_name) {
-                return Err(format!(
-                    "Server '{}' is not configured for environment '{}'.",
-                    server_name, env_name
-                )
-                .into());
+            if let Some(tako_config) = project_tako {
+                if !tako_config.envs.contains_key(env_name) {
+                    return Err(
+                        format!("Environment '{}' not found in tako.toml.", env_name).into(),
+                    );
+                }
+                if !tako_config
+                    .get_servers_for_env(env_name)
+                    .contains(&server_name)
+                {
+                    return Err(format!(
+                        "Server '{}' is not configured for environment '{}'.",
+                        server_name, env_name
+                    )
+                    .into());
+                }
             }
         }
         return Ok(vec![server_name.to_string()]);
     }
 
-    let env_name = env.ok_or_else(|| {
-        "Pass --env when --server is omitted.".to_string()
-    })?;
+    let env_name = env.ok_or_else(|| "Pass --env when --server is omitted.".to_string())?;
     let tako_config = project_tako.ok_or_else(|| {
         "Scaling by environment requires project context because environment mappings live in tako.toml."
             .to_string()
@@ -189,11 +252,8 @@ async fn scale_server(
     server: &ServerEntry,
     instances: u8,
 ) -> Result<ScaleResult, Box<dyn std::error::Error + Send + Sync>> {
-    output::log_debug(&output::ctx(
-        &server.host,
-        &format!("Scaling {app_name} to {instances} instance(s) ({}:{})…", server.host, server.port),
-    ));
-    let _t = output::timed(&output::ctx(&server.host, &format!("Scale {app_name}")));
+    tracing::debug!("Scaling {app_name} to {instances} instance(s)…");
+    let _t = output::timed(&format!("Scale {app_name}"));
     let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
     let command = serde_json::to_string(&Command::Scale {
         app: app_name.to_string(),
@@ -219,10 +279,11 @@ async fn scale_server(
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false),
             };
-            output::log_debug(&output::ctx(
-                &server.host,
-                &format!("Scale response: {} instance(s), worker_limited={}", result.instances, result.worker_limited),
-            ));
+            tracing::debug!(
+                "Scale response: {} instance(s), worker_limited={}",
+                result.instances,
+                result.worker_limited
+            );
             Ok(result)
         }
         Response::Error { message } => Err(message.into()),

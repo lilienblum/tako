@@ -11,6 +11,7 @@ use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::SshClient;
 use tako_core::{Command, ListReleasesResponse, ReleaseInfo, Response};
+use tracing::Instrument;
 
 static LOCAL_OFFSET: OnceLock<UtcOffset> = OnceLock::new();
 
@@ -101,6 +102,7 @@ async fn list_releases(
     server_names: &[String],
     servers: &ServersToml,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let remote_app_name = tako_core::deployment_app_id(app_name, env);
     output::section("Releases");
     output::info(&format!(
         "{} ({})",
@@ -115,11 +117,15 @@ async fn list_releases(
         };
         let server_name = server_name.clone();
         let server = server.clone();
-        let app_name = app_name.to_string();
-        tasks.push(tokio::spawn(async move {
-            let result = fetch_releases_for_server(&server, &app_name).await;
-            (server_name, result)
-        }));
+        let remote_app_name = remote_app_name.clone();
+        let span = output::scope(&server_name);
+        tasks.push(tokio::spawn(
+            async move {
+                let result = fetch_releases_for_server(&server, &remote_app_name).await;
+                (server_name, result)
+            }
+            .instrument(span),
+        ));
     }
 
     let mut merged: BTreeMap<String, ReleaseInfo> = BTreeMap::new();
@@ -192,6 +198,7 @@ async fn rollback_release(
     server_names: &[String],
     servers: &ServersToml,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let remote_app_name = tako_core::deployment_app_id(app_name, env);
     if should_confirm_production_rollback(env, assume_yes, output::is_interactive()) {
         let confirmed = output::confirm(
             &format!(
@@ -222,12 +229,16 @@ async fn rollback_release(
         };
         let server_name = server_name.clone();
         let server = server.clone();
-        let app_name = app_name.to_string();
+        let remote_app_name = remote_app_name.clone();
         let release = release.to_string();
-        tasks.push(tokio::spawn(async move {
-            let result = rollback_server_release(&server, &app_name, &release).await;
-            (server_name, server, result)
-        }));
+        let span = output::scope(&server_name);
+        tasks.push(tokio::spawn(
+            async move {
+                let result = rollback_server_release(&server, &remote_app_name, &release).await;
+                (server_name, server, result)
+            }
+            .instrument(span),
+        ));
     }
 
     let mut success_count = 0usize;
@@ -294,11 +305,8 @@ async fn fetch_releases_for_server(
     server: &ServerEntry,
     app_name: &str,
 ) -> Result<Vec<ReleaseInfo>, String> {
-    output::log_debug(&output::ctx(
-        &server.host,
-        &format!("Fetching releases for {app_name} ({}:{})…", server.host, server.port),
-    ));
-    let _t = output::timed(&output::ctx(&server.host, "Fetch releases"));
+    tracing::debug!("Fetching releases for {app_name}…");
+    let _t = output::timed("Fetch releases");
     let mut ssh = SshClient::connect_to(&server.host, server.port)
         .await
         .map_err(|e| e.to_string())?;
@@ -311,10 +319,7 @@ async fn fetch_releases_for_server(
     let _ = ssh.disconnect().await;
     let result = parse_release_list_response(&response);
     if let Ok(ref releases) = result {
-        output::log_debug(&output::ctx(
-            &server.host,
-            &format!("Returned {} release(s)", releases.len()),
-        ));
+        tracing::debug!("Returned {} release(s)", releases.len());
     }
     result
 }
@@ -324,11 +329,8 @@ async fn rollback_server_release(
     app_name: &str,
     release: &str,
 ) -> Result<(), String> {
-    output::log_debug(&output::ctx(
-        &server.host,
-        &format!("Rolling back {app_name} to {release} ({}:{})…", server.host, server.port),
-    ));
-    let _t = output::timed(&output::ctx(&server.host, &format!("Rollback {app_name}")));
+    tracing::debug!("Rolling back {app_name} to {release}…");
+    let _t = output::timed(&format!("Rollback {app_name}"));
     let mut ssh = SshClient::connect_to(&server.host, server.port)
         .await
         .map_err(|e| e.to_string())?;
@@ -342,7 +344,7 @@ async fn rollback_server_release(
     let _ = ssh.disconnect().await;
     let result = parse_ok_response(&response);
     if result.is_ok() {
-        output::log_debug(&output::ctx(&server.host, "Rollback succeeded"));
+        tracing::debug!("Rollback succeeded");
     }
     result
 }
@@ -390,7 +392,11 @@ fn output_release_lines(release: &ReleaseInfo) {
     let deployed = format_release_deployed(release);
     let commit = format_release_commit_line(release);
 
-    output::info(&format!("{} {}", output::strong(&head), output::brand_muted(&deployed)));
+    output::info(&format!(
+        "{} {}",
+        output::strong(&head),
+        output::brand_muted(&deployed)
+    ));
     output::muted(&commit);
 }
 

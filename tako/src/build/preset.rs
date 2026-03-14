@@ -4,13 +4,13 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use crate::build::adapter::{BuildAdapter, PresetFamily, builtin_base_preset_content_for_alias};
+use crate::build::adapter::{BuildAdapter, PresetGroup, builtin_base_preset_content_for_alias};
 
 pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const FALLBACK_OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const OFFICIAL_PRESET_BRANCH: &str = "master";
-const EMBEDDED_JS_FAMILY_PRESETS_PATH: &str = "presets/js.toml";
+const EMBEDDED_JS_GROUP_PRESETS_PATH: &str = "presets/js.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -21,7 +21,7 @@ pub enum PresetReference {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FamilyPresetDefinition {
+pub struct PresetDefinition {
     pub name: String,
     pub main: Option<String>,
 }
@@ -187,8 +187,8 @@ pub fn qualify_runtime_local_preset_ref(
         );
     }
 
-    let preset_family = runtime.preset_family();
-    if preset_family == PresetFamily::Unknown {
+    let preset_group = runtime.preset_group();
+    if preset_group == PresetGroup::Unknown {
         return Err(format!(
             "Cannot resolve preset '{}' without a known runtime. Set top-level `runtime` explicitly.",
             trimmed
@@ -209,8 +209,8 @@ pub fn qualify_runtime_local_preset_ref(
     };
 
     Ok(match commit {
-        Some(commit) => format!("{}/{}@{}", preset_family.id(), name, commit),
-        None => format!("{}/{}", preset_family.id(), name),
+        Some(commit) => format!("{}/{}@{}", preset_group.id(), name, commit),
+        None => format!("{}/{}", preset_group.id(), name),
     })
 }
 
@@ -224,7 +224,7 @@ fn validate_official_alias(raw_value: &str, alias: &str) -> Result<(), String> {
     let segments: Vec<&str> = alias.split('/').collect();
     if segments.len() > 2 {
         return Err(format!(
-            "Invalid preset alias '{}'. Expected '<name>' or '<family>/<name>'.",
+            "Invalid preset alias '{}'. Expected '<name>' or '<group>/<name>'.",
             raw_value
         ));
     }
@@ -333,10 +333,10 @@ pub async fn load_build_preset(
 
 fn official_alias_to_path(alias: &str) -> String {
     match alias.split_once('/') {
-        Some((family, _)) => format!("presets/{family}.toml"),
+        Some((group, _)) => format!("presets/{group}.toml"),
         None => {
             if let Some(adapter) = BuildAdapter::from_id(alias) {
-                format!("presets/{}.toml", adapter.preset_family().id())
+                format!("presets/{}.toml", adapter.preset_group().id())
             } else {
                 format!("presets/{alias}.toml")
             }
@@ -344,22 +344,22 @@ fn official_alias_to_path(alias: &str) -> String {
     }
 }
 
-fn official_family_manifest_path(family: PresetFamily) -> Option<&'static str> {
-    match family {
-        PresetFamily::Js => Some(EMBEDDED_JS_FAMILY_PRESETS_PATH),
-        PresetFamily::Unknown => None,
+fn official_group_manifest_path(group: PresetGroup) -> Option<&'static str> {
+    match group {
+        PresetGroup::Js => Some(EMBEDDED_JS_GROUP_PRESETS_PATH),
+        PresetGroup::Unknown => None,
     }
 }
 
-fn parse_family_manifest_preset_definitions(
+fn parse_group_manifest_preset_definitions(
     path: &str,
     content: &str,
-) -> Result<Vec<FamilyPresetDefinition>, String> {
+) -> Result<Vec<PresetDefinition>, String> {
     let parsed: toml::Value = toml::from_str(content)
-        .map_err(|e| format!("Failed to parse preset family manifest '{}': {e}", path))?;
+        .map_err(|e| format!("Failed to parse preset group manifest '{}': {e}", path))?;
     let manifest = parsed.as_table().ok_or_else(|| {
         format!(
-            "Preset family manifest '{}' must be a TOML table with [preset-name] sections.",
+            "Preset group manifest '{}' must be a TOML table with [preset-name] sections.",
             path
         )
     })?;
@@ -379,7 +379,7 @@ fn parse_family_manifest_preset_definitions(
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(str::to_string);
-        definitions.push(FamilyPresetDefinition {
+        definitions.push(PresetDefinition {
             name: trimmed.to_string(),
             main,
         });
@@ -389,38 +389,38 @@ fn parse_family_manifest_preset_definitions(
     Ok(definitions)
 }
 
-fn parse_family_manifest_preset_names(path: &str, content: &str) -> Result<Vec<String>, String> {
-    Ok(parse_family_manifest_preset_definitions(path, content)?
+fn parse_group_manifest_preset_names(path: &str, content: &str) -> Result<Vec<String>, String> {
+    Ok(parse_group_manifest_preset_definitions(path, content)?
         .into_iter()
         .map(|definition| definition.name)
         .collect())
 }
 
-pub async fn load_available_family_preset_definitions(
-    family: PresetFamily,
-) -> Result<Vec<FamilyPresetDefinition>, String> {
-    let Some(path) = official_family_manifest_path(family) else {
+pub async fn load_available_group_preset_definitions(
+    group: PresetGroup,
+) -> Result<Vec<PresetDefinition>, String> {
+    let Some(path) = official_group_manifest_path(group) else {
         return Err(format!(
-            "Preset family '{}' is not supported for preset listing.",
-            family.id()
+            "Preset group '{}' is not supported for preset listing.",
+            group.id()
         ));
     };
 
     let official_repo = official_preset_repo();
     let (_commit, content) = fetch_preset_content_from_master_branch(&official_repo, path).await?;
-    parse_family_manifest_preset_definitions(path, &content)
+    parse_group_manifest_preset_definitions(path, &content)
 }
 
-pub async fn load_available_family_presets(family: PresetFamily) -> Result<Vec<String>, String> {
-    let Some(path) = official_family_manifest_path(family) else {
+pub async fn load_available_group_presets(group: PresetGroup) -> Result<Vec<String>, String> {
+    let Some(path) = official_group_manifest_path(group) else {
         return Err(format!(
-            "Preset family '{}' is not supported for preset listing.",
-            family.id()
+            "Preset group '{}' is not supported for preset listing.",
+            group.id()
         ));
     };
     let official_repo = official_preset_repo();
     let (_commit, content) = fetch_preset_content_from_master_branch(&official_repo, path).await?;
-    parse_family_manifest_preset_names(path, &content)
+    parse_group_manifest_preset_names(path, &content)
 }
 
 fn parse_resolved_preset_from_content(
@@ -440,12 +440,12 @@ fn parse_official_alias_preset_content(
     path: &str,
     content: &str,
 ) -> Result<BuildPreset, String> {
-    if let Some((_family, preset_name)) = alias.split_once('/') {
-        return parse_family_preset_content(path, content, preset_name);
+    if let Some((_group, preset_name)) = alias.split_once('/') {
+        return parse_group_preset_content(path, content, preset_name);
     }
     if BuildAdapter::from_id(alias).is_some() {
-        return parse_family_preset_content(path, content, alias).or_else(|error| {
-            if error == missing_family_preset_error(alias, path) {
+        return parse_group_preset_content(path, content, alias).or_else(|error| {
+            if error == missing_group_preset_error(alias, path) {
                 parse_embedded_runtime_base_preset(alias)
             } else {
                 Err(error)
@@ -455,7 +455,7 @@ fn parse_official_alias_preset_content(
     parse_and_validate_preset(content, alias)
 }
 
-fn missing_family_preset_error(preset_name: &str, path: &str) -> String {
+fn missing_group_preset_error(preset_name: &str, path: &str) -> String {
     format!("Preset '{}' was not found in '{}'.", preset_name, path)
 }
 
@@ -469,16 +469,16 @@ fn parse_embedded_runtime_base_preset(alias: &str) -> Result<BuildPreset, String
     parse_and_validate_preset(content, alias)
 }
 
-fn parse_family_preset_content(
+fn parse_group_preset_content(
     path: &str,
     content: &str,
     preset_name: &str,
 ) -> Result<BuildPreset, String> {
     let parsed: toml::Value = toml::from_str(content)
-        .map_err(|e| format!("Failed to parse preset family manifest '{}': {e}", path))?;
+        .map_err(|e| format!("Failed to parse preset group manifest '{}': {e}", path))?;
     let manifest = parsed.as_table().ok_or_else(|| {
         format!(
-            "Preset family manifest '{}' must be a TOML table with [preset-name] sections.",
+            "Preset group manifest '{}' must be a TOML table with [preset-name] sections.",
             path
         )
     })?;
@@ -627,8 +627,8 @@ pub fn infer_adapter_from_preset_reference(preset_ref: &str) -> BuildAdapter {
 }
 
 fn infer_adapter_from_official_alias_name(alias: &str) -> BuildAdapter {
-    let family_or_name = alias.split('/').next().unwrap_or(alias);
-    BuildAdapter::from_id(family_or_name).unwrap_or(BuildAdapter::Unknown)
+    let group_or_name = alias.split('/').next().unwrap_or(alias);
+    BuildAdapter::from_id(group_or_name).unwrap_or(BuildAdapter::Unknown)
 }
 
 fn parse_build_target_labels(raw_targets: Option<toml::Value>) -> Result<Vec<String>, String> {
@@ -865,7 +865,7 @@ mod tests {
     }
 
     #[test]
-    fn official_alias_to_path_maps_family_layout() {
+    fn official_alias_to_path_maps_group_layout() {
         assert_eq!(official_alias_to_path("bun"), "presets/js.toml");
         assert_eq!(
             official_alias_to_path("js/tanstack-start"),
@@ -876,17 +876,17 @@ mod tests {
     }
 
     #[test]
-    fn official_family_manifest_path_supports_known_families() {
+    fn official_group_manifest_path_supports_known_families() {
         assert_eq!(
-            official_family_manifest_path(PresetFamily::Js),
+            official_group_manifest_path(PresetGroup::Js),
             Some("presets/js.toml")
         );
-        assert_eq!(official_family_manifest_path(PresetFamily::Unknown), None);
+        assert_eq!(official_group_manifest_path(PresetGroup::Unknown), None);
     }
 
     #[test]
-    fn parse_family_manifest_preset_names_collects_sorted_sections() {
-        let names = parse_family_manifest_preset_names(
+    fn parse_group_manifest_preset_names_collects_sorted_sections() {
+        let names = parse_group_manifest_preset_names(
             "presets/js.toml",
             r#"
 [zeta]
@@ -903,8 +903,8 @@ main = "a.ts"
     }
 
     #[test]
-    fn parse_family_manifest_preset_definitions_reads_optional_main() {
-        let definitions = parse_family_manifest_preset_definitions(
+    fn parse_group_manifest_preset_definitions_reads_optional_main() {
+        let definitions = parse_group_manifest_preset_definitions(
             "presets/js.toml",
             r#"
 [tanstack-start]
@@ -918,11 +918,11 @@ foo = "bar"
         assert_eq!(
             definitions,
             vec![
-                FamilyPresetDefinition {
+                PresetDefinition {
                     name: "no-main".to_string(),
                     main: None,
                 },
-                FamilyPresetDefinition {
+                PresetDefinition {
                     name: "tanstack-start".to_string(),
                     main: Some("dist/server/tako-entry.mjs".to_string()),
                 },
@@ -931,10 +931,10 @@ foo = "bar"
     }
 
     #[test]
-    fn load_available_family_presets_rejects_unknown_family() {
+    fn load_available_group_presets_rejects_unknown_group() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let err = runtime
-            .block_on(load_available_family_presets(PresetFamily::Unknown))
+            .block_on(load_available_group_presets(PresetGroup::Unknown))
             .unwrap_err();
         assert!(err.contains("not supported"));
     }
@@ -982,13 +982,13 @@ main = "dist/server/tako-entry.mjs"
     }
 
     #[test]
-    fn parse_official_alias_preset_content_rejects_missing_non_runtime_family_alias() {
+    fn parse_official_alias_preset_content_rejects_missing_non_runtime_group_alias() {
         let content = r#"
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
 "#;
         let err = parse_official_alias_preset_content("js/missing", "presets/js.toml", content)
-            .expect_err("non-runtime family alias should still require manifest section");
+            .expect_err("non-runtime group alias should still require manifest section");
         assert!(err.contains("Preset 'missing' was not found"));
     }
 

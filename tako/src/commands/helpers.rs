@@ -46,14 +46,11 @@ pub fn resolve_env(requested: Option<&str>) -> String {
 }
 
 /// Validate that all resolved server names exist in the global servers config.
-pub fn validate_server_names(
-    names: &[String],
-    servers: &ServersToml,
-) -> Result<(), String> {
+pub fn validate_server_names(names: &[String], servers: &ServersToml) -> Result<(), String> {
     for name in names {
         if !servers.contains(name) {
             return Err(format!(
-                "Server '{}' not found in ~/.tako/config.toml",
+                "Server '{}' not found in config.toml",
                 name
             ));
         }
@@ -101,8 +98,8 @@ mod tests {
         let tako_config = TakoToml::default();
         let servers = one_server_config();
 
-        let err = resolve_servers_for_env(&tako_config, &servers, "staging")
-            .expect_err("should fail");
+        let err =
+            resolve_servers_for_env(&tako_config, &servers, "staging").expect_err("should fail");
         assert!(err.contains("No servers configured for environment 'staging'"));
     }
 
@@ -111,8 +108,8 @@ mod tests {
         let tako_config = TakoToml::default();
         let servers = ServersToml::default();
 
-        let err = resolve_servers_for_env(&tako_config, &servers, "production")
-            .expect_err("should fail");
+        let err =
+            resolve_servers_for_env(&tako_config, &servers, "production").expect_err("should fail");
         assert!(err.contains("No servers have been added"));
     }
 
@@ -125,8 +122,8 @@ mod tests {
     #[test]
     fn validate_server_names_fails_for_unknown_server() {
         let servers = one_server_config();
-        let err = validate_server_names(&["missing".to_string()], &servers)
-            .expect_err("should fail");
+        let err =
+            validate_server_names(&["missing".to_string()], &servers).expect_err("should fail");
         assert!(err.contains("missing"));
     }
 }

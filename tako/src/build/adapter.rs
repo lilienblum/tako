@@ -2,16 +2,16 @@ use std::fs;
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PresetFamily {
+pub enum PresetGroup {
     Js,
     Unknown,
 }
 
-impl PresetFamily {
+impl PresetGroup {
     pub fn id(self) -> &'static str {
         match self {
-            PresetFamily::Js => "js",
-            PresetFamily::Unknown => "unknown",
+            PresetGroup::Js => "js",
+            PresetGroup::Unknown => "unknown",
         }
     }
 }
@@ -202,10 +202,10 @@ impl BuildAdapter {
         }
     }
 
-    pub fn preset_family(self) -> PresetFamily {
+    pub fn preset_group(self) -> PresetGroup {
         match self {
-            BuildAdapter::Bun | BuildAdapter::Node | BuildAdapter::Deno => PresetFamily::Js,
-            BuildAdapter::Unknown => PresetFamily::Unknown,
+            BuildAdapter::Bun | BuildAdapter::Node | BuildAdapter::Deno => PresetGroup::Js,
+            BuildAdapter::Unknown => PresetGroup::Unknown,
         }
     }
 
@@ -374,7 +374,7 @@ fn parse_embedded_preset_default_main(content: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildAdapter, PresetFamily, builtin_base_preset_content_for_alias, detect_build_adapter,
+        BuildAdapter, PresetGroup, builtin_base_preset_content_for_alias, detect_build_adapter,
     };
     use tempfile::TempDir;
 
@@ -488,11 +488,11 @@ mod tests {
     }
 
     #[test]
-    fn build_adapter_maps_to_preset_family() {
-        assert_eq!(BuildAdapter::Bun.preset_family(), PresetFamily::Js);
-        assert_eq!(BuildAdapter::Node.preset_family(), PresetFamily::Js);
-        assert_eq!(BuildAdapter::Deno.preset_family(), PresetFamily::Js);
-        assert_eq!(BuildAdapter::Unknown.preset_family(), PresetFamily::Unknown);
-        assert_eq!(PresetFamily::Js.id(), "js");
+    fn build_adapter_maps_to_preset_group() {
+        assert_eq!(BuildAdapter::Bun.preset_group(), PresetGroup::Js);
+        assert_eq!(BuildAdapter::Node.preset_group(), PresetGroup::Js);
+        assert_eq!(BuildAdapter::Deno.preset_group(), PresetGroup::Js);
+        assert_eq!(BuildAdapter::Unknown.preset_group(), PresetGroup::Unknown);
+        assert_eq!(PresetGroup::Js.id(), "js");
     }
 }

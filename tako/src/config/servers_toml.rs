@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 use super::error::{ConfigError, Result};
 
-/// Server inventory from ~/.tako/config.toml `[[servers]]`.
+/// Server inventory from config.toml `[[servers]]`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct ServersToml {
     /// Map of server name to server entry

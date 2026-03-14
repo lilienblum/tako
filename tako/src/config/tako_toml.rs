@@ -334,22 +334,6 @@ impl TakoToml {
             }
         }
 
-        let mut memberships: HashMap<&str, &str> = HashMap::new();
-        for (env_name, env_config) in &self.envs {
-            if env_name == "development" {
-                continue;
-            }
-
-            for server_name in &env_config.servers {
-                if let Some(previous_env) = memberships.insert(server_name.as_str(), env_name) {
-                    return Err(ConfigError::Validation(format!(
-                        "Server '{}' cannot belong to both '{}' and '{}'",
-                        server_name, previous_env, env_name
-                    )));
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -469,7 +453,10 @@ impl TakoToml {
                         server_name, env
                     )));
                 };
-                if !array.iter().any(|value| value.as_str() == Some(server_name)) {
+                if !array
+                    .iter()
+                    .any(|value| value.as_str() == Some(server_name))
+                {
                     array.push(toml::Value::String(server_name.to_string()));
                 }
             }
@@ -562,7 +549,9 @@ fn parse_build_config(raw: &toml::Value) -> Result<BuildConfig> {
 fn validate_build_keys(table: &toml::value::Table) -> Result<()> {
     for key in table.keys() {
         if !matches!(key.as_str(), "include" | "exclude" | "assets" | "stages") {
-            return Err(ConfigError::Validation(format!("Unknown key 'build.{key}'")));
+            return Err(ConfigError::Validation(format!(
+                "Unknown key 'build.{key}'"
+            )));
         }
     }
 
@@ -1105,7 +1094,10 @@ TAKO_APP_LOG_LEVEL = "info"
 API_URL = "https://api.example.com"
 "#;
         let config = TakoToml::parse(toml).unwrap();
-        assert_eq!(config.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
+        assert_eq!(
+            config.vars.get("TAKO_APP_LOG_LEVEL"),
+            Some(&"info".to_string())
+        );
         assert_eq!(
             config.vars.get("API_URL"),
             Some(&"https://api.example.com".to_string())
@@ -1269,7 +1261,10 @@ routes = ["staging.example.com", "*.staging.example.com"]
                 run: "bun run build".to_string(),
             }
         );
-        assert_eq!(config.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
+        assert_eq!(
+            config.vars.get("TAKO_APP_LOG_LEVEL"),
+            Some(&"info".to_string())
+        );
 
         let prod = config.envs.get("production").unwrap();
         assert_eq!(prod.route, Some("api.example.com".to_string()));
@@ -1622,11 +1617,17 @@ DATABASE_URL = "postgres://staging"
         let config = TakoToml::parse(toml).unwrap();
 
         // Global var
-        assert_eq!(config.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
+        assert_eq!(
+            config.vars.get("TAKO_APP_LOG_LEVEL"),
+            Some(&"info".to_string())
+        );
 
         // Per-env vars
         let prod_vars = config.vars_per_env.get("production").unwrap();
-        assert_eq!(prod_vars.get("TAKO_APP_LOG_LEVEL"), Some(&"warn".to_string()));
+        assert_eq!(
+            prod_vars.get("TAKO_APP_LOG_LEVEL"),
+            Some(&"warn".to_string())
+        );
         assert_eq!(
             prod_vars.get("DATABASE_URL"),
             Some(&"postgres://prod".to_string())
@@ -1724,7 +1725,7 @@ idle_timeout = 600
     }
 
     #[test]
-    fn test_duplicate_non_development_server_membership_is_rejected() {
+    fn test_duplicate_non_development_server_membership_is_allowed() {
         let toml = r#"
 [envs.production]
 route = "api.example.com"
@@ -1734,8 +1735,9 @@ servers = ["shared"]
 route = "staging.example.com"
 servers = ["shared"]
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
-        assert!(err.to_string().contains("shared"));
+        let config = TakoToml::parse(toml).unwrap();
+        assert_eq!(config.get_servers_for_env("production"), vec!["shared"]);
+        assert_eq!(config.get_servers_for_env("staging"), vec!["shared"]);
     }
 
     #[test]
@@ -1807,10 +1809,7 @@ log_level = "{level}"
 "#
             );
             let config = TakoToml::parse(&toml).unwrap();
-            assert_eq!(
-                config.envs["production"].log_level.as_deref(),
-                Some(level)
-            );
+            assert_eq!(config.envs["production"].log_level.as_deref(), Some(level));
         }
     }
 
@@ -1850,10 +1849,7 @@ route = "example.com"
     fn test_resolve_app_log_level_default_for_development() {
         assert_eq!(resolve_app_log_level(None, "development"), "debug");
         let config = EnvConfig::default();
-        assert_eq!(
-            resolve_app_log_level(Some(&config), "development"),
-            "debug"
-        );
+        assert_eq!(resolve_app_log_level(Some(&config), "development"), "debug");
     }
 
     #[test]

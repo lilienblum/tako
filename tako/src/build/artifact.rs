@@ -276,7 +276,10 @@ mod tests {
         create_filtered_archive(&source, &archive, &[String::from("**/*")], &[]).unwrap();
 
         BuildExecutor::extract_archive(&archive, &dest).unwrap();
-        assert!(dest.join("node_modules/tako.sh/src/entrypoints/bun.ts").exists());
+        assert!(
+            dest.join("node_modules/tako.sh/src/entrypoints/bun.ts")
+                .exists()
+        );
     }
 
     #[cfg(unix)]

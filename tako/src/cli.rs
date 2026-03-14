@@ -293,14 +293,16 @@ mod tests {
     #[test]
     fn secrets_remove_aliases_parse() {
         let cli = Cli::try_parse_from(["tako", "secrets", "remove", "API_KEY"]).unwrap();
-        let Some(Commands::Secrets(secret::SecretCommands::Rm { name, env, .. })) = cli.command else {
+        let Some(Commands::Secrets(secret::SecretCommands::Rm { name, env, .. })) = cli.command
+        else {
             panic!("expected Secrets::Rm");
         };
         assert_eq!(name, "API_KEY");
         assert!(env.is_none());
 
         let cli = Cli::try_parse_from(["tako", "secrets", "delete", "API_KEY"]).unwrap();
-        let Some(Commands::Secrets(secret::SecretCommands::Rm { name, env, .. })) = cli.command else {
+        let Some(Commands::Secrets(secret::SecretCommands::Rm { name, env, .. })) = cli.command
+        else {
             panic!("expected Secrets::Rm");
         };
         assert_eq!(name, "API_KEY");
@@ -434,10 +436,14 @@ mod tests {
     #[test]
     fn delete_without_env_parses_env_as_none() {
         let cli = Cli::try_parse_from(["tako", "delete"]).unwrap();
-        let Some(Commands::Delete { env, yes, .. }) = cli.command else {
+        let Some(Commands::Delete {
+            env, server, yes, ..
+        }) = cli.command
+        else {
             panic!("expected Delete");
         };
         assert!(env.is_none());
+        assert!(server.is_none());
         assert!(!yes);
     }
 
@@ -454,6 +460,35 @@ mod tests {
             panic!("expected Delete");
         };
         assert_eq!(env.as_deref(), Some("staging"));
+    }
+
+    #[test]
+    fn delete_parses_server_flag() {
+        let cli = Cli::try_parse_from(["tako", "delete", "--server", "lax"]).unwrap();
+        let Some(Commands::Delete {
+            env, server, yes, ..
+        }) = cli.command
+        else {
+            panic!("expected Delete");
+        };
+        assert!(env.is_none());
+        assert_eq!(server.as_deref(), Some("lax"));
+        assert!(!yes);
+    }
+
+    #[test]
+    fn delete_parses_env_and_server_flags_together() {
+        let cli = Cli::try_parse_from(["tako", "delete", "--env", "production", "--server", "lax"])
+            .unwrap();
+        let Some(Commands::Delete {
+            env, server, yes, ..
+        }) = cli.command
+        else {
+            panic!("expected Delete");
+        };
+        assert_eq!(env.as_deref(), Some("production"));
+        assert_eq!(server.as_deref(), Some("lax"));
+        assert!(!yes);
     }
 
     #[test]
@@ -638,6 +673,12 @@ mod tests {
     }
 
     #[test]
+    fn version_subcommand_parses() {
+        let cli = Cli::try_parse_from(["tako", "version"]).unwrap();
+        assert!(matches!(cli.command, Some(Commands::Version)));
+    }
+
+    #[test]
     fn ci_flag_parses_globally() {
         let cli = Cli::try_parse_from(["tako", "--ci", "deploy"]).unwrap();
         assert!(cli.ci);
@@ -711,7 +752,7 @@ pub enum Commands {
         dir: Option<std::path::PathBuf>,
     },
 
-    /// Start development server with hot reloading
+    /// Start development server
     #[command(args_conflicts_with_subcommands = true)]
     Dev {
         #[command(subcommand)]
@@ -762,12 +803,16 @@ pub enum Commands {
         dir: Option<std::path::PathBuf>,
     },
 
-    /// Delete a deployed app from an environment
+    /// Delete a deployed app from a specific environment/server deployment
     #[command(visible_aliases = ["rm", "remove", "undeploy", "destroy"])]
     Delete {
         /// Environment to delete from
         #[arg(long)]
         env: Option<String>,
+
+        /// Specific server to delete from
+        #[arg(long)]
+        server: Option<String>,
 
         /// Skip confirmation prompts
         #[arg(short = 'y', long = "yes")]
@@ -777,6 +822,9 @@ pub enum Commands {
         #[arg(value_name = "DIR")]
         dir: Option<std::path::PathBuf>,
     },
+
+    /// Show version information
+    Version,
 
     /// Change the desired instance count for a deployed app
     Scale {
@@ -811,6 +859,10 @@ impl Cli {
         };
 
         match command {
+            Commands::Version => {
+                println!("{}", display_version());
+                Ok(())
+            }
             Commands::Init { dir } => {
                 if let Some(dir) = dir {
                     std::env::set_current_dir(dir)?;
@@ -857,11 +909,16 @@ impl Cli {
                 }
                 commands::deploy::run(env.as_deref(), yes)
             }
-            Commands::Delete { env, yes, dir } => {
+            Commands::Delete {
+                env,
+                server,
+                yes,
+                dir,
+            } => {
                 if let Some(dir) = dir {
                     std::env::set_current_dir(dir)?;
                 }
-                delete::run(env.as_deref(), yes)
+                delete::run(env.as_deref(), server.as_deref(), yes)
             }
             Commands::Scale {
                 instances,

@@ -1730,9 +1730,7 @@ mod output_modes {
         // Verbose output should contain timestamp-prefixed lines (HH:MM:SS)
         let has_timestamp = err.lines().any(|line| {
             let trimmed = line.trim();
-            trimmed.len() >= 8
-                && trimmed.as_bytes()[2] == b':'
-                && trimmed.as_bytes()[5] == b':'
+            trimmed.len() >= 8 && trimmed.as_bytes()[2] == b':' && trimmed.as_bytes()[5] == b':'
         });
         assert!(
             has_timestamp,
@@ -1763,16 +1761,14 @@ mod output_modes {
         assert!(output.status.success());
 
         let err = stderr_str(&output);
-        // Should have timestamps (verbose) but no ANSI codes (CI)
+        // CI mode skips timestamps (CI systems add their own) and ANSI codes
         let has_timestamp = err.lines().any(|line| {
             let trimmed = line.trim();
-            trimmed.len() >= 8
-                && trimmed.as_bytes()[2] == b':'
-                && trimmed.as_bytes()[5] == b':'
+            trimmed.len() >= 8 && trimmed.as_bytes()[2] == b':' && trimmed.as_bytes()[5] == b':'
         });
         assert!(
-            has_timestamp,
-            "CI+verbose should produce timestamped output: {err}"
+            !has_timestamp,
+            "CI mode should not produce timestamps (CI systems add their own): {err}"
         );
         assert!(
             !err.contains("\x1b["),
@@ -1804,9 +1800,6 @@ mod output_modes {
 
         let err = stderr_str(&output);
         // Verbose log lines should be on stderr, not stdout
-        assert!(
-            !err.is_empty(),
-            "Verbose output should appear on stderr"
-        );
+        assert!(!err.is_empty(), "Verbose output should appear on stderr");
     }
 }

@@ -252,39 +252,51 @@ async fn list_secrets() -> Result<(), Box<dyn std::error::Error>> {
     let all_names = secrets.all_secret_names();
     let all_envs = secrets.environment_names();
 
-    // Print header
-    eprint!("{:<30}", "SECRET");
-    for env in &all_envs {
-        eprint!(" {:<15}", env.to_uppercase());
-    }
-    eprintln!();
-
-    eprint!("{}", "-".repeat(30));
-    for _ in &all_envs {
-        eprint!(" {}", "-".repeat(15));
-    }
-    eprintln!();
-
-    // Print each secret
     let discrepancies = secrets.find_discrepancies();
-    let discrepancy_names: Vec<&str> = discrepancies.iter().map(|d| d.name.as_str()).collect();
 
-    for name in &all_names {
-        eprint!("{:<30}", name);
+    if output::is_pretty() {
+        // Print header
+        eprint!("{:<30}", "SECRET");
         for env in &all_envs {
-            if secrets.contains(env, name) {
-                eprint!(" {:<15}", "[set]");
-            } else {
-                eprint!(" {:<15}", "-");
-            }
+            eprint!(" {:<15}", env.to_uppercase());
         }
-
-        // Show warning if this secret has discrepancies
-        if discrepancy_names.contains(&name.as_str()) {
-            eprint!(" (missing in some envs)");
-        }
-
         eprintln!();
+
+        eprint!("{}", "-".repeat(30));
+        for _ in &all_envs {
+            eprint!(" {}", "-".repeat(15));
+        }
+        eprintln!();
+
+        // Print each secret
+        let discrepancy_names: Vec<&str> = discrepancies.iter().map(|d| d.name.as_str()).collect();
+
+        for name in &all_names {
+            eprint!("{:<30}", name);
+            for env in &all_envs {
+                if secrets.contains(env, name) {
+                    eprint!(" {:<15}", "[set]");
+                } else {
+                    eprint!(" {:<15}", "-");
+                }
+            }
+
+            // Show warning if this secret has discrepancies
+            if discrepancy_names.contains(&name.as_str()) {
+                eprint!(" (missing in some envs)");
+            }
+
+            eprintln!();
+        }
+    } else {
+        for name in &all_names {
+            let envs_with_secret: Vec<&str> = all_envs
+                .iter()
+                .filter(|env| secrets.contains(env, name))
+                .map(|s| s.as_str())
+                .collect();
+            tracing::info!("{name}: set in {}", envs_with_secret.join(", "));
+        }
     }
 
     // Summary
@@ -393,22 +405,16 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
     }
 
     let total_servers = sync_targets.len();
-    let spinner_msg = format!(
-        "Syncing secrets to {} server(s)",
-        output::strong(&total_servers.to_string())
-    );
-    let spinner = output::TrackedSpinner::start(&format!("{spinner_msg}…"));
+    let spinner =
+        output::TrackedSpinner::start(&format!("Syncing secrets to {total_servers} server(s)…"));
     let sync_start = std::time::Instant::now();
 
     let mut success_count = 0;
     let mut error_count = 0;
 
     for (env_name, server_name, server) in &sync_targets {
-        output::log_debug(&output::ctx(
-            server_name,
-            &format!("Syncing secrets for env {env_name} ({}:{})…", server.host, server.port),
-        ));
-        let _t = output::timed(&output::ctx(server_name, &format!("Sync secrets ({env_name})")));
+        let _scope = output::scope(server_name).entered();
+        let _t = output::timed(&format!("Sync secrets ({env_name})"));
         // Get decrypted secrets for this environment
         let env_secrets = match secrets.get_env(env_name) {
             Some(encrypted_secrets) => {
@@ -443,13 +449,10 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
             continue;
         }
 
-        output::log_debug(&output::ctx(
-            server_name,
-            &format!("Sending {} secret(s) for env {env_name}…", env_secrets.len()),
-        ));
-        match sync_to_server(&app_name, server, &env_secrets).await {
+        let remote_app_name = tako_core::deployment_app_id(&app_name, env_name);
+        match sync_to_server(&remote_app_name, server, &env_secrets).await {
             Ok(()) => {
-                output::log_debug(&output::ctx(server_name, &format!("Sync succeeded ({env_name})")));
+                tracing::debug!("Synced {} secret(s) for {env_name}", env_secrets.len());
                 success_count += 1;
             }
             Err(e) => {
@@ -485,7 +488,8 @@ fn resolve_secret_sync_server_names(
     tako_config: &crate::config::TakoToml,
     servers: &crate::config::ServersToml,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let mut resolved = match super::helpers::resolve_servers_for_env(tako_config, servers, env_name) {
+    let mut resolved = match super::helpers::resolve_servers_for_env(tako_config, servers, env_name)
+    {
         Ok(r) => r,
         Err(_) => return Ok(Vec::new()),
     };

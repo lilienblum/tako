@@ -13,6 +13,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tako_core::{Command, Response, ServerRuntimeInfo};
 
+/// Truncate a remote command for logging: show only the first line (up to 120 chars).
 const TAKO_SERVER_SERVICE_HELPER: &str = "/usr/local/bin/tako-server-service";
 
 /// SSH connection configuration
@@ -162,7 +163,7 @@ impl SshClient {
 
     /// Connect to the remote server
     pub async fn connect(&mut self) -> SshResult<()> {
-        let _t = crate::output::timed(&crate::output::ctx(&self.config.host, "SSH connect"));
+        let _t = crate::output::timed("SSH connected");
         let ssh_config = Config {
             inactivity_timeout: Some(self.config.timeout),
             keepalive_interval: Some(Duration::from_secs(15)),
@@ -179,12 +180,7 @@ impl SshClient {
 
         let addr = format!("{}:{}", self.config.host, self.config.port);
 
-        tracing::debug!(
-            host = %self.config.host,
-            port = self.config.port,
-            known_hosts = %known_hosts_path.display(),
-            "Connecting to SSH server"
-        );
+        tracing::debug!("Connecting to {}:{}…", self.config.host, self.config.port);
 
         let mut handle = tokio::time::timeout(self.config.timeout, async {
             client::connect(Arc::new(ssh_config), addr, handler).await
@@ -228,18 +224,16 @@ impl SshClient {
             }
 
             found_any_key_file = true;
-            tracing::debug!(key = %key_path.display(), "Trying SSH key");
 
             match self.try_key_auth(handle, &key_path).await {
                 Ok(true) => {
-                    tracing::debug!(key = %key_path.display(), "Authentication successful");
                     return Ok(());
                 }
                 Ok(false) => {
-                    tracing::debug!(key = %key_path.display(), "Key not accepted");
+                    tracing::trace!("Key not accepted ({key_name})");
                 }
                 Err(e) => {
-                    tracing::debug!(key = %key_path.display(), error = %e, "Key auth failed");
+                    tracing::trace!("Key auth failed ({key_name}): {e}");
                     last_error = Some(e);
                 }
             }
@@ -379,8 +373,6 @@ impl SshClient {
     async fn exec_with_stdin(&self, command: &str, stdin: &[u8]) -> SshResult<CommandOutput> {
         let handle = self.handle.as_ref().ok_or(SshError::NotConnected)?;
 
-        tracing::debug!(command = %command, "Executing remote command");
-
         let mut channel = handle
             .channel_open_session()
             .await
@@ -436,13 +428,6 @@ impl SshClient {
             stdout: String::from_utf8_lossy(&stdout).to_string(),
             stderr: String::from_utf8_lossy(&stderr).to_string(),
         };
-
-        tracing::debug!(
-            exit_code = output.exit_code,
-            stdout_len = output.stdout.len(),
-            stderr_len = output.stderr.len(),
-            "Command completed"
-        );
 
         Ok(output)
     }
@@ -555,9 +540,7 @@ impl SshClient {
         } else {
             // --version output is "tako-server <version>"; extract just the version
             Ok(Some(
-                raw.strip_prefix("tako-server ")
-                    .unwrap_or(raw)
-                    .to_string(),
+                raw.strip_prefix("tako-server ").unwrap_or(raw).to_string(),
             ))
         }
     }

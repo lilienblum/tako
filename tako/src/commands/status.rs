@@ -5,6 +5,7 @@ use crate::ssh::{SshClient, SshConfig};
 use std::collections::HashMap;
 use tako_core::{AppState, AppStatus, InstanceState, Response};
 use time::OffsetDateTime;
+use tracing::Instrument;
 
 /// Server status result from querying a remote server
 #[derive(Debug, Clone)]
@@ -94,17 +95,24 @@ async fn collect_global_status_results(
         let name = server_name.clone();
         let host = entry.host.clone();
         let port = entry.port;
-        join_set.spawn(async move {
-            let status = query_global_server_status(&name, &host, port).await;
-            (name, status)
-        });
+        let span = output::scope(&name);
+        join_set.spawn(
+            async move {
+                let status = query_global_server_status(&name, &host, port).await;
+                (name, status)
+            }
+            .instrument(span),
+        );
     }
 
     let total = join_set.len();
     let mut done = 0usize;
 
     let spinner = output::TrackedSpinner::start("Retrieving…");
-    spinner.set_message(&format!("Retrieving… {}", output::muted_progress(done, total)));
+    spinner.set_message(&format!(
+        "Retrieving… {}",
+        output::muted_progress(done, total)
+    ));
 
     let mut server_results: HashMap<String, GlobalServerStatusResult> = HashMap::new();
 
@@ -113,14 +121,20 @@ async fn collect_global_status_results(
             Ok(pair) => pair,
             Err(err) => {
                 done += 1;
-                spinner.set_message(&format!("Retrieving… {}", output::muted_progress(done, total)));
+                spinner.set_message(&format!(
+                    "Retrieving… {}",
+                    output::muted_progress(done, total)
+                ));
                 output::error(&format!("Status task panicked: {err}"));
                 continue;
             }
         };
 
         done += 1;
-        spinner.set_message(&format!("Retrieving… {}", output::muted_progress(done, total)));
+        spinner.set_message(&format!(
+            "Retrieving… {}",
+            output::muted_progress(done, total)
+        ));
 
         server_results.insert(server_name, status);
     }
@@ -444,8 +458,7 @@ async fn query_global_server_status(
     host: &str,
     port: u16,
 ) -> GlobalServerStatusResult {
-    output::log_debug(&output::ctx(server_name, &format!("Querying status ({host}:{port})…")));
-    let _t = output::timed(&output::ctx(server_name, "Query status"));
+    let _t = output::timed("Query status");
     let config = SshConfig::from_server(host, port);
     let mut client = SshClient::new(config);
 
@@ -464,7 +477,7 @@ async fn query_global_server_status(
     // Probe service status via socket — this is the fastest check.
     let service_status = match client.tako_status().await {
         Ok(status) => {
-            output::log_debug(&output::ctx(server_name, &format!("service_status={status}")));
+            tracing::debug!("Service status: {status}");
             status
         }
         Err(e) => {
@@ -493,20 +506,19 @@ async fn query_global_server_status(
         match client.tako_list_apps().await {
             Ok(response) => match parse_list_apps_response(response) {
                 Ok(app_names) => {
-                    output::log_debug(&output::ctx(
-                        server_name,
-                        &format!("Found {} app(s)", app_names.len()),
-                    ));
+                    tracing::debug!("Found {} app(s)", app_names.len());
                     if service_status == "unknown" {
                         effective_service_status = "active".to_string();
                     }
 
-                    for app_name in app_names {
+                    for remote_app_name in app_names {
+                        let (display_app_name, env_from_name) =
+                            parse_remote_app_name(&remote_app_name);
                         let status = query_connected_app_status(
                             &client,
                             &effective_service_status,
                             server_version.clone(),
-                            &app_name,
+                            &remote_app_name,
                         )
                         .await;
                         for mut build_status in expand_status_by_running_builds(status) {
@@ -518,19 +530,24 @@ async fn query_global_server_status(
                             let env_name = if let Some(app_version) = app_version {
                                 let (deployed_at, env) = fetch_app_deploy_info(
                                     &client,
-                                    &app_name,
+                                    &remote_app_name,
                                     &app_version,
                                     server_name,
                                 )
                                 .await;
                                 build_status.deployed_at_unix_secs = deployed_at;
-                                env.unwrap_or_else(|| "unknown".to_string())
+                                env_from_name
+                                    .clone()
+                                    .or(env)
+                                    .unwrap_or_else(|| "unknown".to_string())
                             } else {
-                                "unknown".to_string()
+                                env_from_name
+                                    .clone()
+                                    .unwrap_or_else(|| "unknown".to_string())
                             };
 
                             apps.push(GlobalAppStatusResult {
-                                app_name: app_name.clone(),
+                                app_name: display_app_name.clone(),
                                 env_name,
                                 status: build_status,
                             });
@@ -646,10 +663,11 @@ async fn fetch_routes(client: &SshClient) -> Vec<(String, String)> {
                         .get("app")
                         .and_then(|v| v.as_str())
                         .unwrap_or("unknown");
+                    let app = format_remote_app_label(app);
                     if let Some(patterns) = entry.get("routes").and_then(|v| v.as_array()) {
                         for pattern in patterns {
                             if let Some(p) = pattern.as_str() {
-                                result.push((app.to_string(), p.to_string()));
+                                result.push((app.clone(), p.to_string()));
                             }
                         }
                     }
@@ -753,6 +771,21 @@ fn sort_global_apps(apps: &mut [GlobalAppStatusResult]) {
             .unwrap_or_default();
         (&a.app_name, &a.env_name, a_version).cmp(&(&b.app_name, &b.env_name, b_version))
     });
+}
+
+fn parse_remote_app_name(app_name: &str) -> (String, Option<String>) {
+    match tako_core::split_deployment_app_id(app_name) {
+        Some((base_app_name, env_name)) => (base_app_name.to_string(), Some(env_name.to_string())),
+        None => (app_name.to_string(), None),
+    }
+}
+
+fn format_remote_app_label(app_name: &str) -> String {
+    let (base_app_name, env_name) = parse_remote_app_name(app_name);
+    match env_name {
+        Some(env_name) => format!("{base_app_name} ({env_name})"),
+        None => base_app_name,
+    }
 }
 
 async fn query_connected_app_status(
@@ -1085,7 +1118,6 @@ mod tests {
                         instances: vec![InstanceStatus {
                             id: "abc1".to_string(),
                             state: InstanceState::Healthy,
-                            port: 3001,
                             pid: Some(111),
                             uptime_secs: 10,
                             requests_total: 0,
@@ -1097,7 +1129,6 @@ mod tests {
                         instances: vec![InstanceStatus {
                             id: "abc2".to_string(),
                             state: InstanceState::Healthy,
-                            port: 3002,
                             pid: Some(222),
                             uptime_secs: 12,
                             requests_total: 0,
@@ -1171,6 +1202,15 @@ mod tests {
 
         let names = parse_list_apps_response(response).unwrap();
         assert_eq!(names, vec!["api".to_string(), "web".to_string()]);
+    }
+
+    #[test]
+    fn parse_remote_app_name_extracts_env_from_deployment_id() {
+        assert_eq!(
+            parse_remote_app_name("web/staging"),
+            ("web".to_string(), Some("staging".to_string()))
+        );
+        assert_eq!(format_remote_app_label("web/staging"), "web (staging)");
     }
 
     #[test]
@@ -1299,7 +1339,6 @@ servers = ["second"]
                     InstanceStatus {
                         id: "abc1".to_string(),
                         state: InstanceState::Healthy,
-                        port: 3001,
                         pid: Some(111),
                         uptime_secs: 10,
                         requests_total: 0,
@@ -1307,7 +1346,6 @@ servers = ["second"]
                     InstanceStatus {
                         id: "abc2".to_string(),
                         state: InstanceState::Healthy,
-                        port: 3002,
                         pid: Some(112),
                         uptime_secs: 10,
                         requests_total: 0,
@@ -1315,7 +1353,6 @@ servers = ["second"]
                     InstanceStatus {
                         id: "abc3".to_string(),
                         state: InstanceState::Starting,
-                        port: 3003,
                         pid: Some(113),
                         uptime_secs: 1,
                         requests_total: 0,

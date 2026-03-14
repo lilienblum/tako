@@ -14,7 +14,7 @@ pub struct MergedConfig {
     /// Project configuration from tako.toml
     pub project: TakoToml,
 
-    /// Global servers from ~/.tako/config.toml [[servers]]
+    /// Global servers from config.toml [[servers]]
     pub global_servers: ServersToml,
 
     /// Secrets from project .tako/secrets
@@ -182,7 +182,7 @@ impl MergedConfig {
             .get(server_name)
             .ok_or_else(|| {
                 ConfigError::Validation(format!(
-                    "Server '{}' is configured in tako.toml but not found in ~/.tako/config.toml [[servers]]. \
+                    "Server '{}' is configured in tako.toml but not found in config.toml [[servers]]. \
                       Run 'tako servers add --name {} <host>' to add it.",
                     server_name, server_name
                 ))
@@ -228,7 +228,7 @@ impl MergedConfig {
 
         if !missing.is_empty() {
             return Err(ConfigError::Validation(format!(
-                "Servers configured in tako.toml but not found in ~/.tako/config.toml [[servers]]: {}",
+                "Servers configured in tako.toml but not found in config.toml [[servers]]: {}",
                 missing.join(", ")
             )));
         }
@@ -378,7 +378,10 @@ host = "5.6.7.8"
         let prod = config.resolve_env("production").unwrap();
         assert_eq!(prod.name, "production");
         assert_eq!(prod.routes, vec!["api.example.com"]);
-        assert_eq!(prod.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"warn".to_string())); // overridden
+        assert_eq!(
+            prod.vars.get("TAKO_APP_LOG_LEVEL"),
+            Some(&"warn".to_string())
+        ); // overridden
         assert_eq!(prod.servers.len(), 1);
         assert_eq!(prod.servers[0].name, "prod-1");
     }
@@ -562,10 +565,16 @@ route = "api.example.com"
 
         let prod = config.resolve_env("production").unwrap();
         // TAKO_APP_LOG_LEVEL should be overridden to "warn" in production
-        assert_eq!(prod.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"warn".to_string()));
+        assert_eq!(
+            prod.vars.get("TAKO_APP_LOG_LEVEL"),
+            Some(&"warn".to_string())
+        );
 
         let staging = config.resolve_env("staging").unwrap();
         // TAKO_APP_LOG_LEVEL should be "info" in staging (no override)
-        assert_eq!(staging.vars.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
+        assert_eq!(
+            staging.vars.get("TAKO_APP_LOG_LEVEL"),
+            Some(&"info".to_string())
+        );
     }
 }

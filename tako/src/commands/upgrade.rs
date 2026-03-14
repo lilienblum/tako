@@ -50,10 +50,9 @@ pub fn run(canary: bool, stable: bool) -> Result<(), Box<dyn std::error::Error>>
 
     if channel == UpgradeChannel::Canary {
         output::ContextBlock::new().channel("canary").print();
-        output::info(&format!(
-            "Your current version: {}",
-            output::strong(&current_version())
-        ));
+        let ver = current_version();
+        output::info(&format!("Your current version: {}", output::strong(&ver)));
+        tracing::info!("Current version: {ver}");
     }
 
     let rt = tokio::runtime::Runtime::new()?;
@@ -147,6 +146,7 @@ async fn run_canary_upgrade(
         if let Some(ref path) = saved_hash_path {
             if let Ok(saved_hash) = std::fs::read_to_string(path) {
                 if saved_hash.trim() == remote_hash {
+                    tracing::info!("Already on the latest canary build");
                     output::success("Already on the latest canary build");
                     return Ok(());
                 }
@@ -184,6 +184,7 @@ async fn run_canary_upgrade(
             if current_hash == new_hash {
                 // Save tarball hash so next time we can skip the download
                 save_canary_hash(saved_hash_path.as_deref(), &archive_path);
+                tracing::info!("Already on the latest canary build");
                 output::success("Already on the latest canary build");
                 return Ok(());
             }
@@ -202,6 +203,7 @@ async fn run_canary_upgrade(
         // Save tarball hash so next time we can skip the download
         save_canary_hash(saved_hash_path.as_deref(), &archive_path);
 
+        tracing::info!("Upgraded to {version}");
         output::success(&format!("Upgraded to {}", output::strong(&version)));
         Ok(())
     }
@@ -292,10 +294,10 @@ async fn check_for_updates(channel: UpgradeChannel) -> Result<UpdateCheck, Strin
 }
 
 async fn check_for_updates_inner(channel: UpgradeChannel) -> Result<UpdateCheck, String> {
-    output::log_debug(&format!("Fetching tags from {}…", TAGS_API));
+    tracing::debug!("Fetching tags from {}…", TAGS_API);
     let _t = output::timed("Fetch version tags");
     let tags = fetch_tags().await?;
-    output::log_debug(&format!("Fetched {} tag(s)", tags.len()));
+    tracing::debug!("Fetched {} tag(s)", tags.len());
 
     // Canary upgrades are handled by run_canary_upgrade (hash-based comparison)
     assert!(channel == UpgradeChannel::Stable);
@@ -306,10 +308,7 @@ async fn check_for_updates_inner(channel: UpgradeChannel) -> Result<UpdateCheck,
         .ok_or_else(|| format!("no release found with prefix '{TAG_PREFIX}'"))?;
 
     let version = tag.name.strip_prefix(TAG_PREFIX).unwrap_or(&tag.name);
-    output::log_debug(&format!(
-        "Current: {}, latest: {}",
-        CURRENT_VERSION, version
-    ));
+    tracing::debug!("Current: {}, latest: {}", CURRENT_VERSION, version);
     if version == CURRENT_VERSION {
         Ok(UpdateCheck::AlreadyCurrent)
     } else {
@@ -405,7 +404,7 @@ async fn download_and_install_inner(
     }
 
     // Extract
-    output::log_debug("Extracting archive…");
+    tracing::debug!("Extracting archive…");
     {
         let _t = output::timed("Extract archive");
         let extract_dir_tmp = tmp_dir.join("extract");
@@ -416,7 +415,7 @@ async fn download_and_install_inner(
     let extract_dir = tmp_dir.join("extract");
 
     // Install binaries
-    output::log_debug(&format!("Installing binaries to {}…", install_dir.display()));
+    tracing::debug!("Installing binaries to {}…", install_dir.display());
     let _t = output::timed("Install binaries");
     let tako_bin =
         find_binary(&extract_dir, "tako").ok_or("archive did not contain a tako binary")?;
@@ -431,7 +430,7 @@ async fn download_and_install_inner(
 }
 
 async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    output::log_debug(&format!("Downloading {}…", url));
+    tracing::debug!("Downloading {}…", url);
     let _t = output::timed("Download release archive");
     let client = reqwest::Client::new();
     let mut resp = client
@@ -443,14 +442,14 @@ async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn st
         .map_err(|e| format!("download failed: {e}"))?;
 
     let total = resp.content_length();
-    output::log_debug(&format!(
+    tracing::debug!(
         "Download started, content_length={}",
         total.map_or("unknown".to_string(), |n| format!("{n} bytes"))
-    ));
+    );
     let mut file = std::fs::File::create(dest)?;
     let mut downloaded = 0u64;
 
-    let pb = if output::is_interactive() {
+    let pb = if output::is_pretty() && output::is_interactive() {
         let pb = if let Some(total) = total {
             let pb = ProgressBar::new(total);
             pb.set_style(download_bar_style());
@@ -479,7 +478,7 @@ async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn st
         pb.finish_and_clear();
     }
 
-    output::log_debug(&format!("Downloaded {} bytes to {}", downloaded, dest.display()));
+    tracing::debug!("Downloaded {} bytes to {}", downloaded, dest.display());
     Ok(())
 }
 

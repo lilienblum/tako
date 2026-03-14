@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::app::require_app_name_from_config;
 use crate::build::{
     BuildAdapter, BuildCache, BuildError, BuildExecutor, BuildPreset, BuildStageCommand,
-    PresetFamily, apply_adapter_base_runtime_defaults, compute_file_hash,
+    PresetGroup, apply_adapter_base_runtime_defaults, compute_file_hash,
     create_filtered_archive_with_prefix, infer_adapter_from_preset_reference, js,
     load_build_preset, qualify_runtime_local_preset_ref, run_container_build,
 };
@@ -20,6 +20,7 @@ use crate::validation::{
     validate_full_config, validate_no_route_conflicts, validate_secrets_for_deployment,
 };
 use tako_core::{Command, Response};
+use tracing::Instrument;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum TakoServerStatus {
@@ -39,12 +40,7 @@ struct DeployConfig {
     /// SHA-256 hash of the decrypted secrets for this deploy.
     secrets_hash: String,
     app_subdir: String,
-    runtime: String,
     main: String,
-    deploy_install: Option<String>,
-    deploy_start: Vec<String>,
-    git_commit_message: Option<String>,
-    git_dirty: Option<bool>,
     use_unified_target_process: bool,
 }
 
@@ -55,7 +51,6 @@ struct ServerDeployTarget {
     target_label: String,
     archive_path: PathBuf,
     artifact_sha256: String,
-    idle_timeout: u32,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -65,8 +60,17 @@ struct DeployArchiveManifest {
     version: String,
     runtime: String,
     main: String,
+    idle_timeout: u32,
     env_vars: BTreeMap<String, String>,
     secret_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    install: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    start: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    commit_message: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    git_dirty: Option<bool>,
 }
 
 struct ValidationResult {
@@ -123,7 +127,6 @@ impl LocalArtifactCacheCleanupSummary {
     }
 }
 
-
 impl DeployConfig {
     fn release_dir(&self) -> String {
         format!("{}/releases/{}", self.remote_base, self.version)
@@ -135,14 +138,6 @@ impl DeployConfig {
         } else {
             format!("{}/{}", self.release_dir(), self.app_subdir)
         }
-    }
-
-    fn release_app_manifest_path(&self) -> String {
-        format!(
-            "{}/{}",
-            self.release_app_dir(),
-            DEPLOY_ARCHIVE_MANIFEST_FILE
-        )
     }
 
     fn current_link(&self) -> String {
@@ -221,7 +216,7 @@ async fn run_async(
         resolve_effective_build_adapter(&project_dir, &tako_config, &preflight_preset_ref)
             .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    if preflight_runtime_adapter.preset_family() == PresetFamily::Js {
+    if preflight_runtime_adapter.preset_group() == PresetGroup::Js {
         let _ = js::write_types(&project_dir);
     }
 
@@ -278,49 +273,53 @@ async fn run_async(
                 .ok_or_else(|| format!("Server '{}' not found in servers.toml", server_name))?;
             let name = server_name.clone();
             let ssh_config = SshConfig::from_server(&server.host, server.port);
-            check_set.spawn(async move {
-                output::log_debug(&output::ctx(&name, "Preflight check…"));
-                let _t = output::timed(&output::ctx(&name, "Preflight check"));
-                let mut ssh = SshClient::new(ssh_config);
-                ssh.connect().await?;
-                let info = ssh.tako_server_info().await?;
+            let span = output::scope(&name);
+            check_set.spawn(
+                async move {
+                    tracing::debug!("Preflight check…");
+                    let _t = output::timed("Preflight check");
+                    let mut ssh = SshClient::new(ssh_config);
+                    ssh.connect().await?;
+                    let info = ssh.tako_server_info().await?;
 
-                let mut mode = info.mode;
+                    let mut mode = info.mode;
 
-                // If server is stuck in upgrading mode, try to clear it.
-                // This handles Ctrl+C / crash during a previous upgrade.
-                if mode == tako_core::UpgradeMode::Upgrading {
-                    // Reset the state via SQLite directly (the upgrade lock's
-                    // owner may be unknown, and ExitUpgrading requires it).
-                    let reset_cmd = SshClient::run_with_root_or_sudo(
-                        "sqlite3 /opt/tako/runtime-state.sqlite3 \
+                    // If server is stuck in upgrading mode, try to clear it.
+                    // This handles Ctrl+C / crash during a previous upgrade.
+                    if mode == tako_core::UpgradeMode::Upgrading {
+                        // Reset the state via SQLite directly (the upgrade lock's
+                        // owner may be unknown, and ExitUpgrading requires it).
+                        let reset_cmd = SshClient::run_with_root_or_sudo(
+                            "sqlite3 /opt/tako/runtime-state.sqlite3 \
                          \"UPDATE server_state SET server_mode = 'normal' WHERE id = 1; \
                           DELETE FROM upgrade_lock WHERE id = 1;\"",
-                    );
-                    if ssh.exec_checked(&reset_cmd).await.is_ok() {
-                        // Restart to pick up the cleared state
-                        let _ = ssh.tako_restart().await;
-                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                        // Re-check
-                        if let Ok(new_info) = ssh.tako_server_info().await {
-                            mode = new_info.mode;
+                        );
+                        if ssh.exec_checked(&reset_cmd).await.is_ok() {
+                            // Restart to pick up the cleared state
+                            let _ = ssh.tako_restart().await;
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            // Re-check
+                            if let Ok(new_info) = ssh.tako_server_info().await {
+                                mode = new_info.mode;
+                            }
                         }
                     }
+
+                    let _ = ssh.disconnect().await;
+
+                    Ok::<_, crate::ssh::SshError>(ServerCheck {
+                        name,
+                        mode,
+                        dns_provider: info.dns_provider,
+                    })
                 }
-
-                let _ = ssh.disconnect().await;
-
-                Ok::<_, crate::ssh::SshError>(ServerCheck {
-                    name,
-                    mode,
-                    dns_provider: info.dns_provider,
-                })
-            });
+                .instrument(span),
+            );
         }
 
         let total = server_names.len();
         let spinner_msg = if total == 1 {
-            format!("Checking {}", output::strong(&server_names[0]))
+            format!("Checking {}", &server_names[0])
         } else {
             format!("Checking {} servers", total)
         };
@@ -464,46 +463,44 @@ async fn run_async(
         cache.cache_dir(),
         LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS,
     ) {
-        Ok(summary) if summary.total_removed() > 0 && output::is_verbose() => {
-            output::muted(&format!(
+        Ok(summary) if summary.total_removed() > 0 => {
+            tracing::debug!(
                 "Local artifact cache cleanup: removed {} old artifact(s), {} stale metadata file(s)",
                 summary.removed_target_artifacts,
                 summary.removed_target_metadata
-            ))
+            );
         }
         Ok(_) => {}
         Err(error) => output::warning(&format!("Local artifact cache cleanup skipped: {}", error)),
     }
     let build_workspace_root = project_dir.join(LOCAL_BUILD_WORKSPACE_RELATIVE_DIR);
     match cleanup_local_build_workspaces(&build_workspace_root) {
-        Ok(removed) if removed > 0 && output::is_verbose() => output::muted(&format!(
-            "Local build workspace cleanup: removed {} workspace(s)",
-            removed
-        )),
+        Ok(removed) if removed > 0 => {
+            tracing::debug!(
+                "Local build workspace cleanup: removed {} workspace(s)",
+                removed
+            );
+        }
         Ok(_) => {}
         Err(error) => output::warning(&format!("Local build workspace cleanup skipped: {}", error)),
     }
 
     let app_subdir = resolve_app_subdir(&source_root, &project_dir)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    if output::is_verbose() {
-        output::muted(&format!("Source root: {}", source_root.display()));
-        if !app_subdir.is_empty() {
-            output::muted(&format!("App directory: {}", app_subdir));
-        }
+    tracing::debug!("Source root: {}", source_root.display());
+    if !app_subdir.is_empty() {
+        tracing::debug!("App directory: {}", app_subdir);
     }
 
     // Generate version string
     let (version, _source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)?;
     let git_commit_message = resolve_git_commit_message(&source_root);
     let git_dirty = executor.is_git_dirty().ok();
-    if output::is_verbose() {
-        output::muted(&format!("Version: {}", version));
-    }
+    tracing::debug!("Version: {}", version);
 
     let preset_ref = resolve_build_preset_ref(&project_dir, &tako_config)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::log_debug(&format!("Resolving preset ref: {}…", preset_ref));
+    tracing::debug!("Resolving preset ref: {}…", preset_ref);
     let runtime_adapter = resolve_effective_build_adapter(&project_dir, &tako_config, &preset_ref)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let (mut build_preset, resolved_preset) = {
@@ -516,25 +513,22 @@ async fn run_async(
         .await
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
     };
-    output::log_debug(&format!(
+    tracing::debug!(
         "Resolved preset: {} (commit {})",
         resolved_preset.preset_ref,
         shorten_commit(&resolved_preset.commit)
-    ));
+    );
     apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    if output::is_verbose() {
-        output::bullet(&format!(
-            "Build preset: {} @ {}",
-            output::strong(&resolved_preset.preset_ref),
-            shorten_commit(&resolved_preset.commit)
-        ));
-    } else {
-        output::bullet(&format!(
-            "Build preset: {}",
-            output::strong(&resolved_preset.preset_ref)
-        ));
-    }
+    output::bullet(&format!(
+        "Build preset: {}",
+        output::strong(&resolved_preset.preset_ref)
+    ));
+    tracing::debug!(
+        "Build preset: {} @ {}",
+        resolved_preset.preset_ref,
+        shorten_commit(&resolved_preset.commit)
+    );
     output::bullet(&format_runtime_summary(&build_preset.name, None));
     let runtime_tool = resolve_runtime_tool_for_mise(&build_preset.name, &build_preset)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -546,18 +540,23 @@ async fn run_async(
         build_preset.main.as_deref(),
     )
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    if output::is_verbose() {
-        output::muted(&format_entry_point_summary(
-            &project_dir.join(&manifest_main),
-        ));
-    }
+    tracing::debug!(
+        "{}",
+        format_entry_point_summary(&project_dir.join(&manifest_main),)
+    );
 
+    let env_idle_timeout = tako_config.get_idle_timeout(&env);
     let manifest = build_deploy_archive_manifest(
         &app_name,
         &env,
         &version,
         runtime_adapter.id(),
         &manifest_main,
+        env_idle_timeout,
+        build_preset.install.clone(),
+        build_preset.start.clone(),
+        git_commit_message.clone(),
+        git_dirty,
         tako_config.get_merged_vars(&env),
         HashMap::new(),
         secrets.get_env(&env),
@@ -576,10 +575,7 @@ async fn run_async(
     let app_manifest_archive_path = archive_app_manifest_path(&app_subdir);
     let source_archive_size =
         output::with_spinner("Creating source archive", "Source archive created", || {
-            output::log_debug(&format!(
-                "Archiving source from {}…",
-                source_root.display()
-            ));
+            tracing::debug!("Archiving source from {}…", source_root.display());
             let _t = output::timed("Source archive creation");
             let size = executor.create_source_archive_with_extra_files(
                 &source_root,
@@ -590,17 +586,18 @@ async fn run_async(
                 )],
             );
             if let Ok(bytes) = &size {
-                output::log_debug(&format!("Source archive size: {}", format_size(*bytes)));
+                tracing::debug!("Source archive size: {}", format_size(*bytes));
             }
             size
         })
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
-    output::bullet(&format_source_archive_created_message(
-        &format_path_relative_to(&project_dir, &source_archive_path),
-        &format_size(source_archive_size),
-        output::is_verbose(),
-    ));
+    output::bullet(&format_source_archive_created_message());
+    tracing::debug!(
+        "Source archive created: {} ({})",
+        format_path_relative_to(&project_dir, &source_archive_path),
+        format_size(source_archive_size),
+    );
 
     let include_patterns = build_artifact_include_patterns(&tako_config);
     let exclude_patterns = build_artifact_exclude_patterns(&build_preset, &tako_config);
@@ -621,11 +618,10 @@ async fn run_async(
         should_use_docker_build(&build_preset),
         &build_preset,
     );
-    if output::is_verbose()
-        && let Some(server_targets_summary) =
-            format_server_targets_summary(&server_targets, use_unified_js_target_process)
+    if let Some(server_targets_summary) =
+        format_server_targets_summary(&server_targets, use_unified_js_target_process)
     {
-        output::muted(&server_targets_summary);
+        tracing::debug!("{}", server_targets_summary);
     }
 
     let artifacts_by_target = build_target_artifacts(
@@ -656,20 +652,16 @@ async fn run_async(
     let _deploy_phase_timer = output::timed("Deploy phase");
 
     let secrets_hash = tako_core::compute_secrets_hash(&deploy_secrets);
+    let deployment_app_name = tako_core::deployment_app_id(&app_name, &env);
     let deploy_config = Arc::new(DeployConfig {
-        app_name: app_name.clone(),
+        app_name: deployment_app_name.clone(),
         version: version.clone(),
-        remote_base: format!("/opt/tako/apps/{}", app_name),
+        remote_base: format!("/opt/tako/apps/{}", deployment_app_name),
         routes: routes.clone(),
         env_vars: deploy_secrets,
         secrets_hash,
         app_subdir,
-        runtime: runtime_adapter.id().to_string(),
         main: manifest_main,
-        deploy_install: build_preset.install.clone(),
-        deploy_start: build_preset.start.clone(),
-        git_commit_message,
-        git_dirty,
         use_unified_target_process: use_unified_js_target_process,
     });
     let target_by_server: HashMap<String, ServerTarget> = server_targets.into_iter().collect();
@@ -698,7 +690,6 @@ async fn run_async(
             target_label,
             archive_path: archive_path.clone(),
             artifact_sha256,
-            idle_timeout: tako_config.get_idle_timeout(&env),
         });
     }
     if targets.len() > 1 {
@@ -709,20 +700,23 @@ async fn run_async(
     let mut missing_servers: Vec<String> = Vec::new();
     let mut not_running_servers: Vec<String> = Vec::new();
 
-    output::log_debug(&format!(
+    tracing::debug!(
         "Starting tako-server preflight for {} target(s)…",
         targets.len()
-    ));
+    );
     let _preflight_timer = output::timed("tako-server preflight");
     let mut preflight_handles = Vec::new();
     for target in &targets {
         let server_name = target.name.clone();
         let server = target.server.clone();
-        output::log_debug(&output::ctx(&server.host, &format!("Preflight check (port {})…", server.port)));
-        preflight_handles.push(tokio::spawn(async move {
-            let status = check_tako_server(&server).await;
-            (server_name, status)
-        }));
+        let span = output::scope(&server_name);
+        preflight_handles.push(tokio::spawn(
+            async move {
+                let status = check_tako_server(&server).await;
+                (server_name, status)
+            }
+            .instrument(span),
+        ));
     }
 
     let preflight_results = if output::is_interactive() && preflight_handles.len() > 1 {
@@ -754,7 +748,7 @@ async fn run_async(
             result.map_err(|e| format!("tako-server preflight task panic: {e}"))?;
         match status {
             Ok(TakoServerStatus::Ready) => {
-                output::log_debug(&output::ctx(&server_name, "Preflight: ready"));
+                tracing::debug!("{server_name} preflight: ready");
             }
             Ok(TakoServerStatus::Missing) => missing_servers.push(server_name),
             Ok(TakoServerStatus::NotRunning) => not_running_servers.push(server_name),
@@ -781,22 +775,23 @@ async fn run_async(
         let archive_path = target.archive_path.clone();
         let artifact_sha256 = target.artifact_sha256.clone();
         let deploy_config = deploy_config.clone();
-        let idle_timeout = target.idle_timeout;
         let use_spinner = use_per_server_spinners;
-        output::log_debug(&output::ctx(&server_name, "Starting deploy…"));
-        let handle = tokio::spawn(async move {
-            let result = deploy_to_server(
-                &deploy_config,
-                &server,
-                &archive_path,
-                &artifact_sha256,
-                &target_label,
-                idle_timeout,
-                use_spinner,
-            )
-            .await;
-            (server_name, server, result)
-        });
+        let span = output::scope(&server_name);
+        let handle = tokio::spawn(
+            async move {
+                let result = deploy_to_server(
+                    &deploy_config,
+                    &server,
+                    &archive_path,
+                    &artifact_sha256,
+                    &target_label,
+                    use_spinner,
+                )
+                .await;
+                (server_name, server, result)
+            }
+            .instrument(span),
+        );
         handles.push(handle);
     }
 
@@ -825,7 +820,7 @@ async fn run_async(
         match result {
             Ok((server_name, server, result)) => match result {
                 Ok(()) => {
-                    output::log_debug(&output::ctx(&server_name, "Deploy succeeded"));
+                    tracing::debug!("{server_name} deploy succeeded");
                     output::bullet(&format_server_deploy_success(&server_name, &server));
                 }
                 Err(e) => {
@@ -848,24 +843,24 @@ async fn run_async(
     drop(_deploy_phase_timer);
     if errors.is_empty() {
         _phase.finish("Deploy complete");
-        eprintln!();
-        eprintln!(
-            "  {}  {}",
-            output::brand_muted("Revision"),
-            version
-        );
-        for (index, route) in routes.iter().enumerate() {
-            if index == 0 {
-                eprintln!(
-                    "  {}       {}",
-                    output::brand_muted("URL"),
-                    format!("https://{}", route)
-                );
-            } else {
-                eprintln!(
-                    "            {}",
-                    format!("https://{}", route)
-                );
+        if output::is_pretty() {
+            eprintln!();
+            eprintln!("  {}  {}", output::brand_muted("Revision"), version);
+            for (index, route) in routes.iter().enumerate() {
+                if index == 0 {
+                    eprintln!(
+                        "  {}       {}",
+                        output::brand_muted("URL"),
+                        format!("https://{}", route)
+                    );
+                } else {
+                    eprintln!("            {}", format!("https://{}", route));
+                }
+            }
+        } else {
+            tracing::info!("Revision: {version}");
+            for route in &routes {
+                tracing::info!("URL: https://{route}");
             }
         }
 
@@ -972,9 +967,7 @@ async fn resolve_deploy_server_names_with_setup(
     project_dir: &Path,
 ) -> Result<Vec<String>, String> {
     match resolve_deploy_server_names(tako_config, servers, env) {
-        Ok(names) => {
-            Ok(names)
-        }
+        Ok(names) => Ok(names),
         Err(original_error) => {
             if env != "production" {
                 return Err(original_error);
@@ -1107,9 +1100,8 @@ fn format_box_lines(title: &str, rows: &[String]) -> Vec<String> {
 fn format_build_stages_summary_for_output(
     stage_summary: &[String],
     target_label: Option<&str>,
-    verbose: bool,
 ) -> Option<String> {
-    if !verbose || stage_summary.is_empty() {
+    if stage_summary.is_empty() {
         return None;
     }
     Some(format_build_stages_summary(stage_summary, target_label))
@@ -1136,19 +1128,8 @@ fn format_runtime_probe_success(target_label: Option<&str>) -> String {
     }
 }
 
-fn format_source_archive_created_message(
-    artifact_path: &str,
-    artifact_size: &str,
-    verbose: bool,
-) -> String {
-    if verbose {
-        format!(
-            "Source archive created: {} ({})",
-            artifact_path, artifact_size
-        )
-    } else {
-        "Source archive created".to_string()
-    }
+fn format_source_archive_created_message() -> String {
+    "Source archive created".to_string()
 }
 
 fn format_build_artifact_message(target_label: Option<&str>) -> String {
@@ -1186,30 +1167,7 @@ fn format_prepare_artifact_success(target_label: Option<&str>) -> String {
     }
 }
 
-fn format_artifact_cache_hit_message(
-    target_label: Option<&str>,
-    artifact_path: &str,
-    artifact_size: &str,
-) -> String {
-    match target_label {
-        Some(label) => format!(
-            "Artifact cache hit for {}: {} ({})",
-            label, artifact_path, artifact_size
-        ),
-        None => format!("Artifact cache hit: {} ({})", artifact_path, artifact_size),
-    }
-}
-
-fn format_artifact_cache_hit_message_for_output(
-    target_label: Option<&str>,
-    artifact_path: &str,
-    artifact_size: &str,
-    verbose: bool,
-) -> String {
-    if verbose {
-        return format_artifact_cache_hit_message(target_label, artifact_path, artifact_size);
-    }
-
+fn format_artifact_cache_hit_message_for_output(target_label: Option<&str>) -> String {
     match target_label {
         Some(label) => format!("Artifact cache hit for {}", label),
         None => "Artifact cache hit".to_string(),
@@ -1240,16 +1198,7 @@ fn format_artifact_ready_message(
     }
 }
 
-fn format_artifact_ready_message_for_output(
-    target_label: Option<&str>,
-    artifact_path: &str,
-    artifact_size: &str,
-    verbose: bool,
-) -> String {
-    if verbose {
-        return format_artifact_ready_message(target_label, artifact_path, artifact_size);
-    }
-
+fn format_artifact_ready_message_for_output(target_label: Option<&str>) -> String {
     match target_label {
         Some(label) => format!("Artifact ready for {}", label),
         None => "Artifact ready".to_string(),
@@ -1330,7 +1279,7 @@ fn format_no_global_servers_error() -> String {
 
 fn format_server_not_found_error(server_name: &str) -> String {
     format!(
-        "Server '{}' not found in ~/.tako/config.toml [[servers]]. Run 'tako servers add --name {} <host>'.",
+        "Server '{}' not found in config.toml [[servers]]. Run 'tako servers add --name {} <host>'.",
         server_name, server_name
     )
 }
@@ -1528,6 +1477,11 @@ fn build_deploy_archive_manifest(
     version: &str,
     runtime_name: &str,
     main: &str,
+    idle_timeout: u32,
+    install: Option<String>,
+    start: Vec<String>,
+    commit_message: Option<String>,
+    git_dirty: Option<bool>,
     app_env_vars: HashMap<String, String>,
     runtime_env_vars: HashMap<String, String>,
     env_secrets: Option<&HashMap<String, String>>,
@@ -1549,8 +1503,13 @@ fn build_deploy_archive_manifest(
         version: version.to_string(),
         runtime: runtime_name.to_string(),
         main: main.to_string(),
+        idle_timeout,
         env_vars,
         secret_names,
+        install,
+        start,
+        commit_message,
+        git_dirty,
     }
 }
 
@@ -1884,11 +1843,11 @@ fn has_bun_lockfile(workspace_root: &Path) -> bool {
 
 fn run_bun_lockfile_preflight(workspace_root: &Path) -> Result<bool, String> {
     if !has_bun_lockfile(workspace_root) {
-        output::log_debug("No Bun lockfile found, skipping check");
+        tracing::debug!("No Bun lockfile found, skipping check");
         return Ok(false);
     }
 
-    output::log_debug("Bun lockfile found, validating frozen lockfile…");
+    tracing::debug!("Bun lockfile found, validating frozen lockfile…");
     let shell_runner = detect_local_shell_runner();
     let (program, args) = local_shell_command_program_and_args(
         shell_runner,
@@ -1901,7 +1860,7 @@ fn run_bun_lockfile_preflight(workspace_root: &Path) -> Result<bool, String> {
         .output()
         .map_err(|e| format!("Failed to run Bun lockfile check: {e}"))?;
     if output.status.success() {
-        output::log_debug("Bun lockfile validation passed");
+        tracing::debug!("Bun lockfile validation passed");
         return Ok(true);
     }
 
@@ -1990,8 +1949,8 @@ fn cleanup_local_artifact_cache(
             Err(_) => return Ok(()),
         };
         for entry in entries {
-            let entry = entry
-                .map_err(|e| format!("Failed to read dir entry in {}: {e}", dir.display()))?;
+            let entry =
+                entry.map_err(|e| format!("Failed to read dir entry in {}: {e}", dir.display()))?;
             let path = entry.path();
             let file_name = match path.file_name().and_then(|name| name.to_str()) {
                 Some(name) => name,
@@ -2018,13 +1977,17 @@ fn cleanup_local_artifact_cache(
         Ok(())
     }
 
-    scan_artifact_dir(cache_dir, &mut all_artifacts, &mut all_metadata, Some(&mut subdirs))?;
+    scan_artifact_dir(
+        cache_dir,
+        &mut all_artifacts,
+        &mut all_metadata,
+        Some(&mut subdirs),
+    )?;
     for subdir in subdirs {
         scan_artifact_dir(&subdir, &mut all_artifacts, &mut all_metadata, None)?;
     }
 
-    all_artifacts
-        .sort_by(|left, right| right.1.cmp(&left.1).then_with(|| right.0.cmp(&left.0)));
+    all_artifacts.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| right.0.cmp(&left.0)));
 
     for (path, _) in all_artifacts.into_iter().skip(keep_target_artifacts) {
         std::fs::remove_file(&path)
@@ -2266,12 +2229,10 @@ async fn build_target_artifacts(
         let target_build = resolve_build_target(preset, &build_target_label)?;
         let use_local_build_spinners = should_use_local_build_spinners(output::is_interactive());
         let stage_summary = summarize_build_stages(&target_build, custom_stages);
-        if let Some(stage_summary_message) = format_build_stages_summary_for_output(
-            &stage_summary,
-            display_target_label,
-            output::is_verbose(),
-        ) {
-            output::muted(&stage_summary_message);
+        if let Some(stage_summary_message) =
+            format_build_stages_summary_for_output(&stage_summary, display_target_label)
+        {
+            tracing::debug!("{}", stage_summary_message);
         }
         std::fs::create_dir_all(build_workspace_root)
             .map_err(|e| format!("Failed to create {}: {e}", build_workspace_root.display()))?;
@@ -2294,11 +2255,11 @@ async fn build_target_artifacts(
         let runtime_probe_success = format_runtime_probe_success(display_target_label);
         let runtime_version = if use_local_build_spinners {
             output::with_spinner(&runtime_probe_label, &runtime_probe_success, || {
-                output::log_debug(&format!(
+                tracing::debug!(
                     "Probing {} version in {}…",
                     runtime_tool,
                     workspace.display()
-                ));
+                );
                 let _t = output::timed("Runtime probe");
                 let version = if use_docker_build {
                     resolve_runtime_version_with_docker_probe(
@@ -2312,14 +2273,12 @@ async fn build_target_artifacts(
                     resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool)
                 };
                 if let Ok(v) = &version {
-                    output::log_debug(&format!("Detected {} {}", runtime_tool, v));
+                    tracing::debug!("Detected {} {}", runtime_tool, v);
                 }
                 version
             })?
         } else {
-            if output::is_verbose() {
-                output::muted(&runtime_probe_label);
-            }
+            tracing::debug!("{}", runtime_probe_label);
             let _t = output::timed("Runtime probe");
             let version = if use_docker_build {
                 resolve_runtime_version_with_docker_probe(
@@ -2333,7 +2292,7 @@ async fn build_target_artifacts(
                 resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool)?
             };
             drop(_t);
-            output::log_debug(&format!("Detected {} {}", runtime_tool, version));
+            tracing::debug!("Detected {} {}", runtime_tool, version);
             version
         };
 
@@ -2346,16 +2305,13 @@ async fn build_target_artifacts(
 
         match load_valid_cached_artifact(&cache_paths) {
             Ok(Some(cached)) => {
-                output::log_debug(&format!(
+                tracing::debug!(
                     "Artifact cache hit: {} ({})",
                     format_path_relative_to(project_dir, &cached.path),
                     format_size(cached.size_bytes)
-                ));
+                );
                 output::bullet(&format_artifact_cache_hit_message_for_output(
                     display_target_label,
-                    &format_path_relative_to(project_dir, &cached.path),
-                    &format_size(cached.size_bytes),
-                    output::is_verbose(),
                 ));
                 for target_label in &target_group.target_labels {
                     artifacts.insert(target_label.clone(), cached.path.clone());
@@ -2364,7 +2320,7 @@ async fn build_target_artifacts(
                 continue;
             }
             Ok(None) => {
-                output::log_debug("Artifact cache miss, building from source");
+                tracing::debug!("Artifact cache miss, building from source");
             }
             Err(error) => {
                 output::warning(&format_artifact_cache_invalid_message(
@@ -2380,10 +2336,11 @@ async fn build_target_artifacts(
             let build_success = format_build_artifact_success(display_target_label);
             if use_local_build_spinners {
                 output::with_spinner(&build_label, &build_success, || {
-                    output::log_debug(&format!(
+                    tracing::debug!(
                         "Building target {} (docker={})…",
-                        build_target_label, use_docker_build
-                    ));
+                        build_target_label,
+                        use_docker_build
+                    );
                     let _t = output::timed("Target build");
                     run_target_build(
                         &workspace,
@@ -2420,10 +2377,7 @@ async fn build_target_artifacts(
             let prepare_success = format_prepare_artifact_success(display_target_label);
             if use_local_build_spinners {
                 output::with_spinner(&prepare_label, &prepare_success, || {
-                    output::log_debug(&format!(
-                        "Packaging artifact for {}…",
-                        build_target_label
-                    ));
+                    tracing::debug!("Packaging artifact for {}…", build_target_label);
                     let _t = output::timed("Artifact packaging");
                     package_target_artifact(
                         &workspace,
@@ -2438,10 +2392,7 @@ async fn build_target_artifacts(
                 })
             } else {
                 output::bullet(&prepare_label);
-                output::log_debug(&format!(
-                    "Packaging artifact for {}…",
-                    build_target_label
-                ));
+                tracing::debug!("Packaging artifact for {}…", build_target_label);
                 let _t = output::timed("Artifact packaging");
                 package_target_artifact(
                     &workspace,
@@ -2460,10 +2411,15 @@ async fn build_target_artifacts(
 
         output::bullet(&format_artifact_ready_message_for_output(
             display_target_label,
-            &format_path_relative_to(project_dir, &cache_paths.artifact_path),
-            &format_size(artifact_size),
-            output::is_verbose(),
         ));
+        tracing::debug!(
+            "{}",
+            format_artifact_ready_message(
+                display_target_label,
+                &format_path_relative_to(project_dir, &cache_paths.artifact_path),
+                &format_size(artifact_size),
+            )
+        );
         for target_label in &target_group.target_labels {
             artifacts.insert(target_label.clone(), cache_paths.artifact_path.clone());
         }
@@ -2618,7 +2574,7 @@ fn run_local_build(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        output::log_debug(&format!("Running {preset_stage_label} install: {install}…"));
+        tracing::debug!("Running {preset_stage_label} install: {install}…");
         let _t = output::timed(&format!("{preset_stage_label} install"));
         run_shell(workspace, install, "install", preset_stage_label)?;
     }
@@ -2628,7 +2584,7 @@ fn run_local_build(
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        output::log_debug(&format!("Running {preset_stage_label} build: {build}…"));
+        tracing::debug!("Running {preset_stage_label} build: {build}…");
         let _t = output::timed(&format!("{preset_stage_label} build"));
         run_shell(&app_dir, build, "run", preset_stage_label)?;
     }
@@ -2646,7 +2602,7 @@ fn run_local_build(
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            output::log_debug(&format!("Running {stage_label} install: {install}…"));
+            tracing::debug!("Running {stage_label} install: {install}…");
             let _t = output::timed(&format!("{stage_label} install"));
             run_shell(&stage_cwd, install, "install", &stage_label)?;
         }
@@ -2654,7 +2610,7 @@ fn run_local_build(
         if run_command.is_empty() {
             return Err(format!("Local {stage_label} run command is empty"));
         }
-        output::log_debug(&format!("Running {stage_label}: {run_command}…"));
+        tracing::debug!("Running {stage_label}: {run_command}…");
         let _t = output::timed(&stage_label);
         run_shell(&stage_cwd, run_command, "run", &stage_label)?;
         drop(_t);
@@ -3048,15 +3004,13 @@ fn package_target_artifact(
         None,
     )
     .map_err(|e| format!("Failed to create artifact for {}: {}", target_label, e))?;
-    output::log_debug(&format!(
+    tracing::debug!(
         "Artifact size for {}: {}",
         target_label,
         format_size(artifact_size)
-    ));
+    );
 
-    if let Err(error) =
-        persist_cached_artifact(&artifact_temp_path, cache_paths, artifact_size)
-    {
+    if let Err(error) = persist_cached_artifact(&artifact_temp_path, cache_paths, artifact_size) {
         let _ = std::fs::remove_file(&artifact_temp_path);
         let _ = std::fs::remove_file(&cache_paths.metadata_path);
         return Err(format!(
@@ -3265,9 +3219,7 @@ where
             .await
             .map_err(Into::into)
     } else {
-        if output::is_verbose() {
-            output::muted(loading);
-        }
+        tracing::debug!("{}", loading);
         work.await.map_err(Into::into)
     }
 }
@@ -3312,14 +3264,6 @@ fn build_remote_extract_archive_command(release_dir: &str, remote_archive: &str)
     )
 }
 
-fn build_remote_write_manifest_command(app_json_path: &str, encoded: &str) -> String {
-    format!(
-        "printf '%s' '{}' | base64 -d | tee {} >/dev/null",
-        encoded,
-        shell_single_quote(app_json_path)
-    )
-}
-
 /// Deploy to a single server
 async fn deploy_to_server(
     config: &DeployConfig,
@@ -3327,16 +3271,15 @@ async fn deploy_to_server(
     archive_path: &Path,
     artifact_sha256: &str,
     target_label: &str,
-    idle_timeout: u32,
     use_spinner: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    output::log_debug(&output::ctx(&server.host, &format!("Deploying (target: {target_label}, port: {})…", server.port)));
-    let _server_deploy_timer = output::timed(&output::ctx(&server.host, "Server deploy"));
+    tracing::debug!("Deploying (target: {target_label}, port: {})…", server.port);
+    let _server_deploy_timer = output::timed("Server deploy");
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
     run_deploy_step("Connecting", "Connected", use_spinner, ssh.connect()).await?;
     let archive_size_bytes = std::fs::metadata(archive_path)?.len();
-    output::log_debug(&output::ctx(&server.host, &format!("Archive size: {}", format_size(archive_size_bytes))));
+    tracing::debug!("Archive size: {}", format_size(archive_size_bytes));
 
     run_deploy_step(
         "Checking remote disk space",
@@ -3405,7 +3348,7 @@ async fn deploy_to_server(
             .unwrap_or(false);
 
         if has_cached {
-            output::log_debug(&output::ctx(&server.host, "Remote artifact cache hit, skipping upload"));
+            tracing::debug!("Remote artifact cache hit, skipping upload");
             run_deploy_step(
                 "Linking cached artifact",
                 "Artifact cached (skip upload)",
@@ -3421,8 +3364,8 @@ async fn deploy_to_server(
             )
             .await?;
         } else {
-            output::log_debug(&output::ctx(&server.host, &format!("Uploading {} ({})…", archive_path.display(), format_size(archive_size_bytes))));
-            let upload_timer = output::timed(&output::ctx(&server.host, "Artifact upload"));
+            tracing::debug!("Uploading artifact ({})…", format_size(archive_size_bytes));
+            let upload_timer = output::timed("Artifact upload");
             run_deploy_step(
                 "Uploading artifact",
                 "Artifact uploaded",
@@ -3445,24 +3388,9 @@ async fn deploy_to_server(
         }
 
         // Extract archive, symlink shared dirs, and write runtime manifest in one exec.
-        output::log_debug(&output::ctx(&server.host, "Extracting and configuring release…"));
-        let extract_timer = output::timed(&output::ctx(&server.host, "Release extraction"));
-        let resolved_main = config.main.clone();
+        tracing::debug!("Extracting and configuring release…");
+        let extract_timer = output::timed("Release extraction");
         run_deploy_step("Extracting and configuring release", "Release configured", use_spinner, async {
-            let main = resolved_main.clone();
-            let app_json = serde_json::to_vec_pretty(&serde_json::json!({
-                "runtime": config.runtime,
-                "main": main,
-                "install": config.deploy_install.clone(),
-                "start": config.deploy_start.clone(),
-                "commit_message": config.git_commit_message.clone(),
-                "git_dirty": config.git_dirty,
-            }))
-            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-            let encoded =
-                base64::Engine::encode(&base64::engine::general_purpose::STANDARD, app_json);
-            let app_json_path = config.release_app_manifest_path();
-
             let extract_cmd = build_remote_extract_archive_command(&release_dir, &remote_archive);
             let shared_link_cmd = format!(
                 "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
@@ -3470,24 +3398,17 @@ async fn deploy_to_server(
                 config.shared_dir(),
                 release_dir
             );
-            let write_manifest_cmd = build_remote_write_manifest_command(&app_json_path, &encoded);
-
-            let combined_cmd = format!(
-                "{} && {} && {}",
-                extract_cmd, shared_link_cmd, write_manifest_cmd
-            );
+            let combined_cmd = format!("{} && {}", extract_cmd, shared_link_cmd);
             ssh.exec_checked(&combined_cmd).await?;
             Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
         })
         .await?;
         drop(extract_timer);
-        if output::is_verbose() {
-            output::muted(&format_deploy_main_message(
-                &resolved_main,
-                target_label,
-                config.use_unified_target_process,
-            ));
-        }
+        tracing::debug!("{}", format_deploy_main_message(
+            &config.main,
+            target_label,
+            config.use_unified_target_process,
+        ));
 
         // Check if server already has up-to-date secrets by comparing hashes.
         // If hashes match, skip sending secrets (server keeps existing ones).
@@ -3503,7 +3424,6 @@ async fn deploy_to_server(
             path: release_app_dir.clone(),
             routes: config.routes.clone(),
             secrets: deploy_secrets,
-            idle_timeout,
         };
         let json = serde_json::to_string(&cmd)?;
         let response =
@@ -3546,11 +3466,7 @@ async fn deploy_to_server(
         && !release_dir_preexisted
         && let Err(e) = cleanup_partial_release(&ssh, &release_dir).await
     {
-        tracing::warn!(
-            release_dir = %release_dir,
-            error = %e,
-            "Failed to cleanup partial release directory"
-        );
+        tracing::warn!("Failed to cleanup partial release directory {release_dir}: {e}");
     }
 
     // Always disconnect (best-effort).
@@ -3779,7 +3695,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_effective_build_adapter_uses_preset_family_when_detection_is_unknown() {
+    fn resolve_effective_build_adapter_uses_preset_group_when_detection_is_unknown() {
         let temp = TempDir::new().unwrap();
         let config = TakoToml::default();
 
@@ -4132,22 +4048,13 @@ route = "app.example.com"
             env_vars: HashMap::new(),
             secrets_hash: String::new(),
             app_subdir: "examples/bun".to_string(),
-            runtime: "bun".to_string(),
             main: "index.ts".to_string(),
-            deploy_install: Some("bun install --production --frozen-lockfile".to_string()),
-            deploy_start: vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()],
-            git_commit_message: Some("feat: add endpoint".to_string()),
-            git_dirty: Some(false),
             use_unified_target_process: false,
         };
         assert_eq!(cfg.release_dir(), "/opt/tako/apps/my-app/releases/v1");
         assert_eq!(
             cfg.release_app_dir(),
             "/opt/tako/apps/my-app/releases/v1/examples/bun"
-        );
-        assert_eq!(
-            cfg.release_app_manifest_path(),
-            "/opt/tako/apps/my-app/releases/v1/examples/bun/app.json"
         );
         assert_eq!(cfg.current_link(), "/opt/tako/apps/my-app/current");
         assert_eq!(cfg.shared_dir(), "/opt/tako/apps/my-app/shared");
@@ -4523,10 +4430,16 @@ route = "app.example.com"
             "v123",
             "bun",
             "server/index.ts",
+            300,
+            Some("bun install --production".to_string()),
+            vec!["bun".to_string(), "run".to_string(), "{main}".to_string()],
+            Some("feat: ship it".to_string()),
+            Some(false),
             HashMap::new(),
             HashMap::new(),
             None,
         );
+        assert_eq!(manifest.idle_timeout, 300);
         assert_eq!(
             manifest.env_vars.get("TAKO_BUILD"),
             Some(&"v123".to_string())
@@ -4535,6 +4448,13 @@ route = "app.example.com"
             manifest.env_vars.get("TAKO_ENV"),
             Some(&"production".to_string())
         );
+        assert_eq!(manifest.install.as_deref(), Some("bun install --production"));
+        assert_eq!(
+            manifest.start,
+            vec!["bun".to_string(), "run".to_string(), "{main}".to_string()]
+        );
+        assert_eq!(manifest.commit_message.as_deref(), Some("feat: ship it"));
+        assert_eq!(manifest.git_dirty, Some(false));
     }
 
     #[test]
@@ -5175,36 +5095,25 @@ route = "app.example.com"
     }
 
     #[test]
-    fn build_stage_summary_output_is_hidden_in_concise_mode() {
-        let summary = vec!["stage 1 (preset)".to_string()];
-        assert_eq!(
-            format_build_stages_summary_for_output(&summary, None, false),
-            None
-        );
+    fn build_stage_summary_output_is_hidden_when_empty() {
+        let summary: Vec<String> = vec![];
+        assert_eq!(format_build_stages_summary_for_output(&summary, None), None);
     }
 
     #[test]
-    fn build_stage_summary_output_is_shown_in_verbose_mode() {
+    fn build_stage_summary_output_is_shown_when_non_empty() {
         let summary = vec!["stage 1 (preset)".to_string(), "stage 2".to_string()];
         assert_eq!(
-            format_build_stages_summary_for_output(&summary, Some("linux-x86_64-glibc"), true),
+            format_build_stages_summary_for_output(&summary, Some("linux-x86_64-glibc")),
             Some("Build stages for linux-x86_64-glibc: stage 1 (preset) -> stage 2".to_string())
         );
     }
 
     #[test]
-    fn source_archive_message_is_compact_in_concise_mode() {
+    fn source_archive_message_is_compact() {
         assert_eq!(
-            format_source_archive_created_message(".tako/artifacts/app.tar.zst", "10 KB", false),
+            format_source_archive_created_message(),
             "Source archive created"
-        );
-    }
-
-    #[test]
-    fn source_archive_message_includes_path_and_size_in_verbose_mode() {
-        assert_eq!(
-            format_source_archive_created_message(".tako/artifacts/app.tar.zst", "10 KB", true),
-            "Source archive created: .tako/artifacts/app.tar.zst (10 KB)"
         );
     }
 
@@ -5572,14 +5481,6 @@ route = "app.example.com"
     }
 
     #[test]
-    fn build_remote_write_manifest_command_uses_tee() {
-        let cmd =
-            build_remote_write_manifest_command("/opt/tako/apps/my-app/current/app.json", "e30=");
-        assert!(cmd.contains("printf '%s' 'e30=' | base64 -d | tee"));
-        assert!(!cmd.contains("echo "));
-    }
-
-    #[test]
     fn resolve_deploy_version_uses_source_hash_when_git_commit_missing() {
         let temp = TempDir::new().unwrap();
         let source_root = temp.path().join("source");
@@ -5615,6 +5516,11 @@ route = "app.example.com"
             "v1",
             "bun",
             "server/index.mjs",
+            600,
+            None,
+            vec![],
+            None,
+            Some(true),
             app_env_vars,
             runtime_env_vars,
             Some(&secrets),
@@ -5625,6 +5531,10 @@ route = "app.example.com"
         assert_eq!(manifest.version, "v1");
         assert_eq!(manifest.runtime, "bun");
         assert_eq!(manifest.main, "server/index.mjs");
+        assert_eq!(manifest.idle_timeout, 600);
+        assert!(manifest.install.is_none());
+        assert!(manifest.start.is_empty());
+        assert_eq!(manifest.git_dirty, Some(true));
         assert_eq!(
             manifest.env_vars.keys().cloned().collect::<Vec<_>>(),
             vec![

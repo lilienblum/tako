@@ -362,5 +362,4 @@ mod tests {
         let json = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.tako.test"}}"#;
         assert!(serde_json::from_str::<Response>(json).is_err());
     }
-
 }

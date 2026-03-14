@@ -5,8 +5,8 @@ use std::path::Path;
 use crate::app::resolve_app_name;
 use crate::build::js;
 use crate::build::{
-    BuildAdapter, FamilyPresetDefinition, PresetFamily, detect_build_adapter,
-    load_available_family_preset_definitions,
+    BuildAdapter, PresetDefinition, PresetGroup, detect_build_adapter,
+    load_available_group_preset_definitions,
 };
 use crate::config::TakoToml;
 use crate::output;
@@ -64,8 +64,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let mut step = 0usize;
     let mut step_history: Vec<usize> = Vec::new();
 
-    // Cached family presets (keyed by adapter to avoid re-fetching)
-    let mut family_presets_cache: Option<(BuildAdapter, Vec<FamilyPresetDefinition>)> = None;
+    // Cached group presets (keyed by adapter to avoid re-fetching)
+    let mut group_presets_cache: Option<(BuildAdapter, Vec<PresetDefinition>)> = None;
 
     // Accumulated values — pre-filled from existing config when overwriting
     let mut adapter = existing
@@ -193,19 +193,19 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             // Step 2: Build preset + compute derived state
             2 => {
-                let family_presets = match &family_presets_cache {
+                let group_presets = match &group_presets_cache {
                     Some((cached, presets)) if *cached == adapter => presets.clone(),
                     _ => {
-                        let presets = fetch_family_presets_for_adapter(adapter)?;
-                        family_presets_cache = Some((adapter, presets.clone()));
+                        let presets = fetch_group_presets_for_adapter(adapter)?;
+                        group_presets_cache = Some((adapter, presets.clone()));
                         presets
                     }
                 };
-                let family_preset_names: Vec<String> =
-                    family_presets.iter().map(|p| p.name.clone()).collect();
+                let group_preset_names: Vec<String> =
+                    group_presets.iter().map(|p| p.name.clone()).collect();
                 let existing_preset_ref = existing.as_ref().and_then(|c| c.preset.as_deref());
 
-                if let Some(options) = build_preset_selection_options(adapter, &family_preset_names)
+                if let Some(options) = build_preset_selection_options(adapter, &group_preset_names)
                 {
                     let default_index = selected_preset
                         .as_deref()
@@ -244,7 +244,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
                 is_custom = selected_preset.is_none();
                 let preset_dm = selected_preset
                     .as_deref()
-                    .and_then(|preset| preset_default_main(preset, adapter, &family_presets));
+                    .and_then(|preset| preset_default_main(preset, adapter, &group_presets));
                 let inferred_main = adapter.infer_main_entrypoint(&project_dir);
 
                 step_history.push(2);
@@ -425,10 +425,10 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     fs::write(&tako_toml_path, template)?;
 
-    output::success("Created tako.toml");
-
     if js::write_types(&project_dir)? {
-        output::success("Created tako.d.ts");
+        output::success("Created tako.toml and tako.d.ts");
+    } else {
+        output::success("Created tako.toml");
     }
 
     output::heading("Next steps");
@@ -509,10 +509,11 @@ fn run_non_interactive(
     );
 
     fs::write(tako_toml_path, template)?;
-    output::success("Created tako.toml");
 
     if js::write_types(project_dir)? {
-        output::success("Created tako.d.ts");
+        output::success("Created tako.toml and tako.d.ts");
+    } else {
+        output::success("Created tako.toml");
     }
 
     Ok(())
@@ -562,43 +563,39 @@ fn infer_default_main_entrypoint(project_dir: &Path, adapter: BuildAdapter) -> S
 fn preset_default_main(
     preset_ref: &str,
     adapter: BuildAdapter,
-    family_presets: &[FamilyPresetDefinition],
+    group_presets: &[PresetDefinition],
 ) -> Option<String> {
     match preset_ref {
         "bun" | "node" | "deno" => adapter.embedded_preset_default_main(),
-        _ => family_presets
+        _ => group_presets
             .iter()
             .find(|preset| preset.name == preset_ref)
             .and_then(|preset| preset.main.clone()),
     }
 }
 
-fn fetch_family_presets_for_adapter(
+fn fetch_group_presets_for_adapter(
     adapter: BuildAdapter,
-) -> std::io::Result<Vec<FamilyPresetDefinition>> {
+) -> std::io::Result<Vec<PresetDefinition>> {
     if !output::is_interactive() {
         return Ok(Vec::new());
     }
 
-    let family = adapter.preset_family();
-    if family == PresetFamily::Unknown {
+    let group = adapter.preset_group();
+    if group == PresetGroup::Unknown {
         return Ok(Vec::new());
     }
 
     let runtime = tokio::runtime::Runtime::new().map_err(|e| {
         std::io::Error::other(format!("Failed to initialize preset fetch runtime: {e}"))
     })?;
-    output::log_debug(&format!("Fetching presets for family {:?}…", family));
-    let _t = output::timed(&format!("Fetch {:?} presets", family));
+    let _t = output::timed("Fetch presets");
     let fetched = output::with_spinner_simple("Fetching presets", || {
-        runtime.block_on(load_available_family_preset_definitions(family))
+        runtime.block_on(load_available_group_preset_definitions(group))
     });
 
     match fetched {
-        Ok(presets) => {
-            output::log_debug(&format!("Fetched {} preset(s)", presets.len()));
-            Ok(normalize_family_preset_definitions(adapter, presets))
-        }
+        Ok(presets) => Ok(normalize_group_preset_definitions(adapter, presets)),
         Err(err) => {
             output::warning(&format!(
                 "Failed to fetch presets ({}). Using {} base preset.",
@@ -610,10 +607,10 @@ fn fetch_family_presets_for_adapter(
     }
 }
 
-fn normalize_family_preset_definitions(
+fn normalize_group_preset_definitions(
     adapter: BuildAdapter,
-    preset_definitions: Vec<FamilyPresetDefinition>,
-) -> Vec<FamilyPresetDefinition> {
+    preset_definitions: Vec<PresetDefinition>,
+) -> Vec<PresetDefinition> {
     let base = adapter.default_preset();
     let mut normalized = Vec::new();
     for preset in preset_definitions {
@@ -623,11 +620,11 @@ fn normalize_family_preset_definitions(
         }
         if normalized
             .iter()
-            .any(|existing: &FamilyPresetDefinition| existing.name == trimmed)
+            .any(|existing: &PresetDefinition| existing.name == trimmed)
         {
             continue;
         }
-        normalized.push(FamilyPresetDefinition {
+        normalized.push(PresetDefinition {
             name: trimmed.to_string(),
             main: preset.main,
         });
@@ -637,14 +634,14 @@ fn normalize_family_preset_definitions(
 
 fn build_preset_selection_options(
     _adapter: BuildAdapter,
-    family_presets: &[String],
+    group_presets: &[String],
 ) -> Option<Vec<(String, Option<String>)>> {
-    if family_presets.is_empty() {
+    if group_presets.is_empty() {
         return None;
     }
 
-    let mut options: Vec<(String, Option<String>)> = Vec::with_capacity(family_presets.len() + 1);
-    for preset in family_presets {
+    let mut options: Vec<(String, Option<String>)> = Vec::with_capacity(group_presets.len() + 1);
+    for preset in group_presets {
         options.push((preset.clone(), Some(preset.clone())));
     }
     options.push(("custom".to_string(), None));
@@ -652,7 +649,10 @@ fn build_preset_selection_options(
     Some(options)
 }
 
-fn prompt_assets(wizard: &mut output::Wizard, existing: &[String]) -> std::io::Result<Vec<String>> {
+fn prompt_assets(
+    _wizard: &mut output::Wizard,
+    existing: &[String],
+) -> std::io::Result<Vec<String>> {
     let mut assets = Vec::new();
     for existing_asset in existing.iter() {
         match output::TextField::new("Asset directory")
@@ -661,7 +661,6 @@ fn prompt_assets(wizard: &mut output::Wizard, existing: &[String]) -> std::io::R
             .prompt()
         {
             Ok(value) => {
-                wizard.track_line();
                 if value.is_empty() {
                     return Ok(assets);
                 }
@@ -682,7 +681,6 @@ fn prompt_assets(wizard: &mut output::Wizard, existing: &[String]) -> std::io::R
             .prompt()
         {
             Ok(value) => {
-                wizard.track_line();
                 if value.is_empty() {
                     return Ok(assets);
                 }
@@ -700,7 +698,7 @@ fn prompt_assets(wizard: &mut output::Wizard, existing: &[String]) -> std::io::R
 }
 
 fn prompt_excludes(
-    wizard: &mut output::Wizard,
+    _wizard: &mut output::Wizard,
     existing: &[String],
 ) -> std::io::Result<Vec<String>> {
     let mut excludes = Vec::new();
@@ -711,7 +709,6 @@ fn prompt_excludes(
             .prompt()
         {
             Ok(value) => {
-                wizard.track_line();
                 if value.is_empty() {
                     return Ok(excludes);
                 }
@@ -732,7 +729,6 @@ fn prompt_excludes(
             .prompt()
         {
             Ok(value) => {
-                wizard.track_line();
                 if value.is_empty() {
                     return Ok(excludes);
                 }
@@ -871,9 +867,9 @@ route = "{production_route}"
 mod tests {
     use super::{
         build_preset_selection_options, generate_template, infer_default_main_entrypoint,
-        normalize_family_preset_definitions, preset_default_main, resolve_adapter,
+        normalize_group_preset_definitions, preset_default_main, resolve_adapter,
     };
-    use crate::build::{BuildAdapter, FamilyPresetDefinition};
+    use crate::build::{BuildAdapter, PresetDefinition};
     use tempfile::TempDir;
 
     #[test]
@@ -1151,7 +1147,7 @@ mod tests {
 
     #[test]
     fn embedded_bun_tanstack_start_preset_default_main_is_set() {
-        let presets = vec![FamilyPresetDefinition {
+        let presets = vec![PresetDefinition {
             name: "tanstack-start".to_string(),
             main: Some("dist/server/tako-entry.mjs".to_string()),
         }];
@@ -1162,27 +1158,27 @@ mod tests {
     }
 
     #[test]
-    fn normalize_family_preset_names_excludes_base_and_deduplicates() {
-        let names = normalize_family_preset_definitions(
+    fn normalize_group_preset_names_excludes_base_and_deduplicates() {
+        let names = normalize_group_preset_definitions(
             BuildAdapter::Bun,
             vec![
-                FamilyPresetDefinition {
+                PresetDefinition {
                     name: "".to_string(),
                     main: None,
                 },
-                FamilyPresetDefinition {
+                PresetDefinition {
                     name: "bun".to_string(),
                     main: None,
                 },
-                FamilyPresetDefinition {
+                PresetDefinition {
                     name: " tanstack-start ".to_string(),
                     main: Some("dist/server/tako-entry.mjs".to_string()),
                 },
-                FamilyPresetDefinition {
+                PresetDefinition {
                     name: "tanstack-start".to_string(),
                     main: Some("dist/server/ignored.mjs".to_string()),
                 },
-                FamilyPresetDefinition {
+                PresetDefinition {
                     name: "custom".to_string(),
                     main: None,
                 },
@@ -1191,11 +1187,11 @@ mod tests {
         assert_eq!(
             names,
             vec![
-                FamilyPresetDefinition {
+                PresetDefinition {
                     name: "tanstack-start".to_string(),
                     main: Some("dist/server/tako-entry.mjs".to_string()),
                 },
-                FamilyPresetDefinition {
+                PresetDefinition {
                     name: "custom".to_string(),
                     main: None,
                 },
@@ -1204,7 +1200,7 @@ mod tests {
     }
 
     #[test]
-    fn build_preset_selection_options_returns_none_when_no_family_presets_found() {
+    fn build_preset_selection_options_returns_none_when_no_group_presets_found() {
         let options = build_preset_selection_options(BuildAdapter::Bun, &[]);
         assert!(options.is_none());
     }

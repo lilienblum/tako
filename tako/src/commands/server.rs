@@ -4,6 +4,7 @@ use clap::Subcommand;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tako_core::ServerRuntimeInfo;
+use tracing::Instrument;
 
 use crate::config::{UpgradeChannel, resolve_upgrade_channel};
 
@@ -292,19 +293,20 @@ async fn run_add_server_wizard(
         let ssh_config = SshConfig::from_server(&host, port);
         let mut ssh = SshClient::new(ssh_config);
 
-        let _t = output::timed(&format!("SSH connect + detect {host}:{port}"));
+        let host_span = output::scope(&host);
+        let _t = output::timed("SSH connected");
         let result: Result<WizardConnectionResult, String> = output::with_spinner_async_err(
             "Connecting",
             "Connection successful",
             "Connection failed",
             async {
-                output::log_debug(&output::ctx(&host, &format!("Testing SSH connection to {host}:{port}…")));
+                tracing::debug!("Testing SSH connection to {host}:{port}…");
                 ssh.connect().await.map_err(|e| e.to_string())?;
 
                 let target = detect_server_target(&ssh)
                     .await
                     .map_err(|e| format!("Target detection failed: {e}"))?;
-                output::log_debug(&output::ctx(&host, &format!("Detected target: {}", target.label())));
+                tracing::debug!("Detected target: {}", target.label());
 
                 let (installed, version, server_name_from_info) =
                     match ssh.is_tako_installed().await {
@@ -329,17 +331,19 @@ async fn run_add_server_wizard(
                     installed,
                     server_name: server_name_from_info,
                 })
-            },
+            }
+            .instrument(host_span),
         )
         .await;
         drop(_t);
 
+        let _host_scope = output::scope(&host).entered();
         match result {
             Ok(info) => {
-                output::log_debug(&output::ctx(&host, &format!("Target: {}", info.target.label())));
+                tracing::debug!("Target: {}", info.target.label());
                 if let Some(ref ver) = info.version {
                     let ver = ver.strip_prefix("tako-server ").unwrap_or(ver);
-                    output::log_debug(&output::ctx(&host, &format!("Server version: {ver}")));
+                    tracing::debug!("Server version: {ver}");
                 }
                 if !info.installed {
                     output::warning("tako-server not installed");
@@ -356,7 +360,9 @@ async fn run_add_server_wizard(
         }
     }
 
-    eprintln!();
+    if output::is_pretty() {
+        eprintln!();
+    }
 
     // --- Wizard 2: Server identity ---
     let mut id_wizard =
@@ -592,23 +598,26 @@ pub async fn add_server(
         )
         .await;
 
-        match result {
-            Ok(info) => {
-                output::log_debug(&output::ctx(&host, &format!("Target: {}", info.target.label())));
-                if let Some(ref ver) = info.version {
-                    let ver = ver.strip_prefix("tako-server ").unwrap_or(ver);
-                    output::log_debug(&output::ctx(&host, &format!("Server version: {ver}")));
+        {
+            let _host_scope = output::scope(host).entered();
+            match result {
+                Ok(info) => {
+                    tracing::debug!("Target: {}", info.target.label());
+                    if let Some(ref ver) = info.version {
+                        let ver = ver.strip_prefix("tako-server ").unwrap_or(ver);
+                        tracing::debug!("Server version: {ver}");
+                    }
+                    if !info.installed {
+                        output::warning("tako-server not installed");
+                        output::muted(
+                            "Install it on the server as root (see scripts/install-tako-server.sh), then re-run deploy.",
+                        );
+                    }
+                    detected_target = Some(info.target);
                 }
-                if !info.installed {
-                    output::warning("tako-server not installed");
-                    output::muted(
-                        "Install it on the server as root (see scripts/install-tako-server.sh), then re-run deploy.",
-                    );
+                Err(e) => {
+                    return Err(e.into());
                 }
-                detected_target = Some(info.target);
-            }
-            Err(e) => {
-                return Err(e.into());
             }
         }
     } else if detected_target.is_none() {
@@ -703,10 +712,8 @@ fn parse_detected_libc(stdout: &str) -> Result<String, String> {
 fn record_server_history(host: &str, name: &str, port: u16) {
     let mut history = crate::config::CliHistoryToml::load().unwrap_or_default();
     history.record_server_prompt_values(host, name, port);
-    if let Err(e) = history.save()
-        && output::is_verbose()
-    {
-        output::warning(&format!("Could not save CLI history: {}", e));
+    if let Err(e) = history.save() {
+        tracing::warn!("Could not save CLI history: {e}");
     }
 }
 
@@ -823,6 +830,7 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
     let servers = ServersToml::load()?;
 
     if servers.is_empty() {
+        tracing::warn!("No servers configured");
         output::warning("No servers configured");
         output::hint(&format!(
             "Run {} to add a server.",
@@ -845,6 +853,8 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
         } else {
             format!("{} ({})", output::strong(name), entry.host)
         };
+        let _scope = output::scope(name).entered();
+        tracing::info!("Server listed ({}:{})", entry.host, entry.port);
         output::info(&header);
 
         if let Some(desc) = entry
@@ -868,20 +878,16 @@ async fn restart_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
         .get(name)
         .ok_or_else(|| format!("Server '{}' not found.", name))?;
 
+    let _scope = output::scope(name).entered();
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
-    output::log_debug(&format!("Connecting to {}:{}…", server.host, server.port));
-    let _t = output::timed(&format!("SSH connect to {name}"));
-    output::with_spinner_async(
-        &format!("Connecting to {}", output::strong(name)),
-        "Connected",
-        ssh.connect(),
-    )
-    .await?;
+    let _t = output::timed("SSH connected");
+    output::with_spinner_async(&format!("Connecting to {name}"), "Connected", ssh.connect())
+        .await?;
     drop(_t);
 
-    output::log_debug(&output::ctx(name, "Sending restart command…"));
-    let _t = output::timed(&output::ctx(name, "Restart tako-server"));
+    tracing::debug!("Sending restart command…");
+    let _t = output::timed("Restart tako-server");
     match output::with_spinner_async(
         "Restarting tako-server",
         "tako-server restarted",
@@ -939,8 +945,46 @@ fn first_non_empty_line(value: &str) -> Option<&str> {
 const REPO_OWNER: &str = "lilienblum";
 const REPO_NAME: &str = "tako";
 const SERVER_TAG_PREFIX: &str = "tako-server-v";
-const SERVER_TAGS_API: &str =
-    "https://api.github.com/repos/lilienblum/tako/tags?per_page=100";
+const SERVER_TAGS_API: &str = "https://api.github.com/repos/lilienblum/tako/tags?per_page=100";
+
+/// Fetch the latest canary server version from the GitHub release body.
+/// The release body contains "master (SHA)" — we extract the SHA and construct
+/// the version string like "canary-<sha>".
+async fn fetch_canary_server_version() -> Result<String, String> {
+    let url = format!(
+        "https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/tags/canary-latest"
+    );
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "tako-cli")
+        .send()
+        .await
+        .map_err(|e| format!("Failed to fetch canary release: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("GitHub API returned {}", resp.status()));
+    }
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {e}"))?;
+    let raw: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("Failed to parse release: {e}"))?;
+
+    // Body format: "Latest canary build from master (SHA) on DATE."
+    let body = raw["body"].as_str().unwrap_or("");
+    if let Some(start) = body.find('(') {
+        if let Some(end) = body[start..].find(')') {
+            let sha = &body[start + 1..start + end];
+            if !sha.is_empty() && sha.len() <= 40 {
+                let short = &sha[..sha.len().min(7)];
+                return Ok(format!("canary-{short}"));
+            }
+        }
+    }
+
+    Err("Could not parse canary version from release".to_string())
+}
 
 fn server_binary_download_url(
     channel: UpgradeChannel,
@@ -969,9 +1013,7 @@ fn default_download_base(channel: UpgradeChannel, tag: Option<&str>) -> String {
     } else {
         tag.unwrap_or("canary-latest").to_string()
     };
-    format!(
-        "https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{release_tag}"
-    )
+    format!("https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{release_tag}")
 }
 
 /// Build a remote command that downloads and replaces the tako-server binary.
@@ -1019,7 +1061,6 @@ async fn resolve_latest_server_tag() -> Result<String, String> {
         "no release found with prefix '{SERVER_TAG_PREFIX}'"
     ))
 }
-
 
 async fn wait_for_primary_ready(
     ssh: &mut crate::ssh::SshClient,
@@ -1123,11 +1164,30 @@ async fn upgrade_servers(
         .channel(channel.as_str())
         .print();
 
-    let interactive = output::is_interactive();
-    let channel_label = channel.as_str();
+    let interactive = output::is_pretty() && output::is_interactive();
 
-    // The CLI version is the latest version (CLI and server are released together).
-    let latest_version = crate::cli::display_version();
+    // Resolve latest version. For stable the CLI version is the latest
+    // (CLI and server are released together). For canary, fetch from GitHub.
+    let latest_version: Option<String> = if channel == UpgradeChannel::Stable {
+        let ver = crate::cli::display_version();
+        tracing::info!("Latest version: {ver}");
+        output::info(&format!("Latest version: {}", output::strong(&ver)));
+        Some(ver)
+    } else {
+        let start = std::time::Instant::now();
+        let ver = output::with_spinner_async_simple(
+            "Getting latest version…",
+            fetch_canary_server_version(),
+        )
+        .await
+        .ok();
+        if let Some(ref ver) = ver {
+            let time = output::format_elapsed_trace(start.elapsed());
+            tracing::info!("Latest version: {ver} {time}");
+            output::success(&format!("Latest version: {}", output::strong(ver)));
+        }
+        ver
+    };
 
     // ── Phase 1: Get current versions from all servers ──────────────
     let total = names.len();
@@ -1139,6 +1199,7 @@ async fn upgrade_servers(
         version: Option<String>,
         target: Option<crate::config::ServerTarget>,
         error: Option<String>,
+        elapsed: Duration,
     }
 
     let mut version_set = tokio::task::JoinSet::new();
@@ -1149,31 +1210,38 @@ async fn upgrade_servers(
             .clone();
         let name = server_name.clone();
         let done = Arc::clone(&done);
-        version_set.spawn(async move {
-            let ssh = match SshClient::connect_to(&server.host, server.port).await {
-                Ok(ssh) => ssh,
-                Err(e) => {
-                    done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    return VersionCheck {
-                        name,
-                        ssh: None,
-                        version: None,
-                        target: None,
-                        error: Some(e.to_string()),
-                    };
+        let span = output::scope(&name);
+        version_set.spawn(
+            async move {
+                let start = std::time::Instant::now();
+                let ssh = match SshClient::connect_to(&server.host, server.port).await {
+                    Ok(ssh) => ssh,
+                    Err(e) => {
+                        done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        return VersionCheck {
+                            name,
+                            ssh: None,
+                            version: None,
+                            target: None,
+                            error: Some(e.to_string()),
+                            elapsed: start.elapsed(),
+                        };
+                    }
+                };
+                let version = ssh.tako_version().await.ok().flatten();
+                let target = detect_server_target(&ssh).await.ok();
+                done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                VersionCheck {
+                    name,
+                    ssh: Some(ssh),
+                    version,
+                    target,
+                    error: None,
+                    elapsed: start.elapsed(),
                 }
-            };
-            let version = ssh.tako_version().await.ok().flatten();
-            let target = detect_server_target(&ssh).await.ok();
-            done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            VersionCheck {
-                name,
-                ssh: Some(ssh),
-                version,
-                target,
-                error: None,
             }
-        });
+            .instrument(span),
+        );
     }
 
     let pb = if interactive {
@@ -1192,22 +1260,15 @@ async fn upgrade_servers(
         pb.enable_steady_tick(Duration::from_millis(80));
         Some(pb)
     } else {
-        if output::is_verbose() {
-            if total == 1 {
-                output::log(
-                    output::LogLevel::Info,
-                    &format!("Getting current version for {}…", &names[0]),
-                );
-            } else {
-                output::log(
-                    output::LogLevel::Info,
-                    &format!("Getting current versions for {} servers…", total),
-                );
-            }
+        if total == 1 {
+            tracing::info!("Getting current version for {}…", &names[0]);
+        } else {
+            tracing::info!("Getting current versions for {} servers…", total);
         }
         None
     };
-    let version_check_start = std::time::Instant::now();
+
+    let channel_label = channel.as_str();
 
     let mut checks: Vec<VersionCheck> = Vec::new();
     while let Some(join_result) = version_set.join_next().await {
@@ -1233,15 +1294,12 @@ async fn upgrade_servers(
             }
         }
         if let Some(ref v) = check.version {
-            output::log_debug(&output::ctx(&check.name, &format!("Current version: {v}")));
+            let _scope = output::scope(&check.name).entered();
+            let time = output::format_elapsed_trace(check.elapsed);
+            tracing::debug!("Current version: {v} {time}");
         }
         checks.push(check);
     }
-
-    output::log_info(&format!(
-        "Version check complete {}",
-        output::format_elapsed_trace(version_check_start.elapsed())
-    ));
 
     if let Some(ref pb) = pb {
         pb.finish_and_clear();
@@ -1265,43 +1323,76 @@ async fn upgrade_servers(
 
     // ── Phase 2: Per-server upgrade ─────────────────────────────────
     let mut has_error = false;
-    for (_i, mut check) in checks.into_iter().enumerate() {
-        output::heading(&format!("Server {}", output::strong(&check.name)));
+    for (i, mut check) in checks.into_iter().enumerate() {
+        // First heading uses no leading blank (ContextBlock already printed one).
+        if i > 0 {
+            output::heading(&format!("Server {}", output::strong(&check.name)));
+        } else {
+            output::heading_no_gap(&format!("Server {}", output::strong(&check.name)));
+        }
+
+        let _upgrade_scope = output::scope(&check.name).entered();
+        let current_ver = check.version.as_deref().unwrap_or("unknown");
 
         // Connection error — nothing else to do.
         if let Some(ref err) = check.error {
-            output::error(&output::ctx(&check.name, err));
+            output::error(err);
             has_error = true;
             continue;
         }
 
-        // Already on the latest version — skip the installer entirely.
-        if check.version.as_deref() == Some(&latest_version) {
-            output::success(&output::ctx(&check.name, &format!("Already on latest {channel_label} build")));
-            if let Some(mut ssh) = check.ssh.take() {
-                let _ = ssh.disconnect().await;
+        // Already on the latest version — skip the download entirely.
+        if let Some(ref latest) = latest_version {
+            let matches = if channel == UpgradeChannel::Canary {
+                // For canary, compare the "canary-<sha>" suffix (base versions differ).
+                check
+                    .version
+                    .as_deref()
+                    .and_then(|v| v.find("-canary-").map(|pos| &v[pos + 1..]))
+                    == Some(latest.as_str())
+            } else {
+                check.version.as_deref() == Some(latest.as_str())
+            };
+            if matches {
+                output::success(&format!(
+                    "Already on latest {channel_label} build ({current_ver})"
+                ));
+                if let Some(mut ssh) = check.ssh.take() {
+                    let _ = ssh.disconnect().await;
+                }
+                continue;
             }
-            continue;
         }
 
         // Run upgrade with a spinner.
         let mut ssh = check.ssh.take().unwrap();
-        let spinner = output::PhaseSpinner::start_indented(&output::ctx(&check.name, "Upgrading…"));
+        let spinner = output::PhaseSpinner::start_indented(&format!("Upgrading to {current_ver}…"));
 
         let target = match check.target {
             Some(t) => t,
             None => {
                 has_error = true;
-                spinner.finish_err_indented(&output::ctx(&check.name, "Could not detect server target"));
+                spinner.finish_err_indented("Could not detect server target");
                 let _ = ssh.disconnect().await;
                 continue;
             }
         };
-        match run_server_upgrade(&check.name, &mut ssh, channel, check.version.as_deref(), &target).await {
+        match run_server_upgrade(
+            &check.name,
+            &mut ssh,
+            channel,
+            check.version.as_deref(),
+            &target,
+        )
+        .await
+        {
             Ok(version_after) => {
                 let ver = version_after.as_deref().unwrap_or("unknown");
-                spinner
-                    .finish_ok_indented(&output::ctx(&check.name, &format!("Upgraded to: {ver}")));
+                if ver == current_ver {
+                    spinner.finish_ok_indented(&format!("Already on the latest version ({ver})"));
+                } else {
+                    spinner.finish_ok_indented(&format!("{current_ver} -> {ver}"));
+                }
             }
             Err(e) => {
                 has_error = true;
@@ -1310,7 +1401,7 @@ async fn upgrade_servers(
                 } else {
                     e.as_str()
                 };
-                spinner.finish_err_indented(&output::ctx(&check.name, clean_err));
+                spinner.finish_err_indented(clean_err);
             }
         }
 
@@ -1336,24 +1427,20 @@ async fn run_server_upgrade(
     let mut upgrade_mode_entered = false;
 
     let result: Result<Option<String>, String> = async {
-        tracing::debug!(server = name, "checking server status");
-        output::log_debug(&output::ctx(&name, "Checking server status…"));
         let status = ssh
             .tako_status()
             .await
             .map_err(|e| format!("Failed to query status: {e}"))?;
-        tracing::debug!(server = name, status = %status, "server status");
         if status != "active" {
             return Err(format!("tako-server not active (status: {status})"));
         }
-        output::log_debug(&output::ctx(&name, &format!("Server status: {status}")));
 
         // Resolve download URL
         let stable_tag = if channel == UpgradeChannel::Stable {
             let tag = resolve_latest_server_tag()
                 .await
                 .map_err(|e| format!("Failed to resolve latest server tag: {e}"))?;
-            output::log_debug(&output::ctx(&name, &format!("Resolved tag: {tag}")));
+            tracing::debug!("Resolved tag: {tag}");
             Some(tag)
         } else {
             None
@@ -1361,22 +1448,18 @@ async fn run_server_upgrade(
         let url = server_binary_download_url(channel, stable_tag.as_deref(), target);
 
         // Download and replace binary
-        output::log_debug(&output::ctx(&name, &format!("Downloading {} binary…", channel.as_str())));
-        let _t = output::timed(&output::ctx(&name, "Binary download"));
+        tracing::debug!("Downloading {} binary…", channel.as_str());
+        let _t = output::timed("Binary download");
         let install_output = ssh
             .exec(&remote_binary_replace_command(&url))
             .await
             .map_err(|e| format!("Binary download failed: {e}"))?;
         drop(_t);
         if !install_output.success() {
-            tracing::debug!(
-                server = name,
-                stderr = %install_output.stderr.trim(),
-                "binary replace failed"
-            );
+            tracing::debug!("Binary replace failed: {}", install_output.stderr.trim());
             let combined = install_output.combined();
-            let message = first_non_empty_line(combined.trim())
-                .unwrap_or("binary download/install failed");
+            let message =
+                first_non_empty_line(combined.trim()).unwrap_or("binary download/install failed");
             return Err(message.to_string());
         }
 
@@ -1384,17 +1467,13 @@ async fn run_server_upgrade(
         // reads the binary, not the running process, so this detects installer
         // no-ops and skips the expensive reload+wait cycle.
         let version_after_install = ssh.tako_version().await.ok().flatten();
-        tracing::debug!(server = name, version = ?version_after_install, "on-disk version after install");
         if version_after_install.as_deref() == running_version {
-            tracing::debug!(server = name, "binary unchanged after install, skipping reload");
-            output::log_debug(&output::ctx(&name, "Binary unchanged, skipping reload"));
+            tracing::debug!("Binary unchanged, skipping reload");
             return Ok(version_after_install);
         }
 
         // Enter upgrading mode
-        tracing::debug!(server = name, owner = %owner, "entering upgrading mode");
-        output::log_debug(&output::ctx(&name, "Entering upgrade mode…"));
-        let _t = output::timed(&output::ctx(&name, "Enter upgrade mode"));
+        let _t = output::timed("Enter upgrade mode");
         ssh.tako_enter_upgrading(&owner)
             .await
             .map_err(|e| match &e {
@@ -1411,48 +1490,25 @@ async fn run_server_upgrade(
             .map_err(|e| format!("Failed to read runtime config: {e}"))?
             .pid;
 
-        tracing::debug!(
-            server = name,
-            old_pid,
-            "captured current server PID before reload"
-        );
-
-        output::log_debug(&output::ctx(&name, &format!("Reloading server (old PID {old_pid})…")));
-        let _t = output::timed(&output::ctx(&name, "Reload + wait for new process"));
+        tracing::debug!("Reloading server (pid: {old_pid})…");
+        let _t = output::timed("Reload + wait for new process");
         ssh.tako_reload()
             .await
             .map_err(|e| format!("Reload failed: {e}"))?;
 
-        tracing::debug!(
-            server = name,
-            old_pid,
-            "reload sent, waiting for new server process"
-        );
-        output::log_debug(&output::ctx(&name, "Waiting for new server process…"));
-
-        let info =
-            wait_for_primary_ready(ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?;
+        let info = wait_for_primary_ready(ssh, UPGRADE_SOCKET_WAIT_TIMEOUT, old_pid, name).await?;
         drop(_t);
-        tracing::debug!(
-            server = name,
-            new_pid = info.pid,
-            "new server process ready"
-        );
-        output::log_debug(&output::ctx(&name, &format!("New server process ready (PID {})", info.pid)));
+        tracing::debug!("New server process ready (pid: {})", info.pid);
 
         // Exit upgrading mode. After a SIGHUP reload the new server process
         // starts fresh in Normal mode and clears the orphaned upgrade lock, so
         // "owner does not hold the upgrade lock" is expected and harmless.
-        tracing::debug!(server = name, owner = %owner, "exiting upgrading mode");
         match ssh.tako_exit_upgrading(&owner).await {
             Ok(()) => {}
             Err(e) => {
                 let msg = e.to_string();
                 if msg.contains("does not hold the upgrade lock") {
-                    tracing::debug!(
-                        server = name,
-                        "upgrade lock already cleared by new server process"
-                    );
+                    tracing::debug!("Upgrade lock already cleared by new server process");
                 } else {
                     return Err(format!("Failed to exit upgrading mode: {e}"));
                 }
@@ -1462,25 +1518,26 @@ async fn run_server_upgrade(
 
         // Get new version
         let version = ssh.tako_version().await.ok().flatten();
-        tracing::debug!(server = name, version = ?version, "upgrade complete");
-        output::log_debug(&output::ctx(&name, &format!("Upgrade complete: {}", version.as_deref().unwrap_or("unknown"))));
+        tracing::debug!("Upgrade complete (version: {version:?})");
         Ok(version)
     }
     .await;
 
     if result.is_err() && upgrade_mode_entered {
-        tracing::debug!(server = name, owner = %owner, "upgrade failed, attempting to release upgrade lock");
+        tracing::debug!("Upgrade failed, attempting to release upgrade lock (owner: {owner})");
         for attempt in 0..5 {
             if attempt > 0 {
                 tokio::time::sleep(Duration::from_secs(2)).await;
             }
             match ssh.tako_exit_upgrading(&owner).await {
                 Ok(()) => {
-                    tracing::debug!(server = name, attempt, "upgrade lock released");
+                    tracing::debug!("Upgrade lock released (attempt {attempt})");
                     break;
                 }
                 Err(e) => {
-                    tracing::debug!(server = name, attempt, error = %e, "failed to release upgrade lock, retrying");
+                    tracing::debug!(
+                        "Failed to release upgrade lock, retrying (attempt {attempt}): {e}"
+                    );
                 }
             }
         }
@@ -1721,9 +1778,7 @@ pub async fn prompt_dns_setup(ssh: &SshClient) -> Result<DnsConfig, Box<dyn std:
 
     // Quick credential validation via provider API before touching the server.
     if let Some(verify_cmd) = credential_verify_command(&provider, &credentials) {
-        output::log_debug(&format!(
-            "Verifying credentials for DNS provider {provider}…"
-        ));
+        tracing::debug!("Verifying credentials for DNS provider {provider}…");
         let _t = output::timed(&format!("DNS credential verification ({provider})"));
         output::with_spinner_async_err(
             "Verifying credentials",
@@ -1756,10 +1811,10 @@ pub async fn apply_dns_config(
     name: &str,
     config: &DnsConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let msg = format!("Configuring DNS on {}", output::strong(name));
+    let msg = format!("Configuring DNS on {name}");
     output::with_spinner_async_err(
         &msg,
-        &format!("DNS configured on {}", output::strong(name)),
+        &format!("DNS configured on {name}"),
         &msg,
         apply_dns_config_inner(ssh, name, config),
     )
@@ -1772,11 +1827,11 @@ async fn apply_dns_config_inner(
     config: &DnsConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let provider = &config.provider;
-    output::log_debug(&output::ctx(&name, &format!("Configuring DNS provider {provider}…")));
+    let _scope = output::scope(name).entered();
+    tracing::debug!("Configuring DNS provider {provider}…");
 
     // Detect server architecture for lego download
-    output::log_debug(&output::ctx(&name, "Detecting server architecture…"));
-    let _t = output::timed(&output::ctx(&name, "Arch detection"));
+    let _t = output::timed("Arch detection");
     let arch_output = ssh.exec("uname -m").await?;
     drop(_t);
     let arch = arch_output.stdout.trim();
@@ -1785,20 +1840,18 @@ async fn apply_dns_config_inner(
         "aarch64" | "arm64" => "aarch64",
         other => return Err(format!("Unsupported server architecture: {}", other).into()),
     };
-    output::log_debug(&output::ctx(&name, &format!("Server architecture: {arch}")));
+    tracing::debug!("Server architecture: {arch}");
 
     // Install lego binary
-    output::log_debug(&output::ctx(&name, "Installing lego binary…"));
-    let _t = output::timed(&output::ctx(&name, "Lego install"));
+    let _t = output::timed("Lego install");
     let install_cmd = install_lego_command(arch);
     let install_cmd = SshClient::run_with_root_or_sudo(&install_cmd);
     ssh.exec_checked(&install_cmd).await?;
     drop(_t);
-    output::log_debug(&output::ctx(&name, "Lego binary installed"));
+    tracing::debug!("Lego binary installed");
 
     // Write credentials env file
-    output::log_debug(&output::ctx(&name, "Writing credentials env file…"));
-    let _t = output::timed(&output::ctx(&name, "Credentials write"));
+    let _t = output::timed("Credentials write");
     let escaped_content = config.credentials_env.replace('\'', "'\\''");
     let write_creds_cmd = SshClient::run_with_root_or_sudo(&format!(
         "printf '%s' '{}' > {} && chmod 0600 {} && chown tako:tako {}",
@@ -1806,7 +1859,6 @@ async fn apply_dns_config_inner(
     ));
     ssh.exec_checked(&write_creds_cmd).await?;
     drop(_t);
-    output::log_debug(&output::ctx(&name, "Credentials written"));
 
     // Merge dns.provider into config.json
     let escaped_provider = provider.replace('\\', "\\\\").replace('"', "\\\"");
@@ -1827,8 +1879,7 @@ async fn apply_dns_config_inner(
     ssh.exec_checked(&merge_config_cmd).await?;
 
     // Write systemd drop-in for EnvironmentFile (credentials only), reload, and restart
-    output::log_debug(&output::ctx(&name, "Writing systemd drop-in and restarting…"));
-    let _t = output::timed(&output::ctx(&name, "Systemd reload + restart"));
+    let _t = output::timed("Systemd reload + restart");
     let dropin = format!("[Service]\nEnvironmentFile={}\n", DNS_CREDENTIALS_ENV,);
     let escaped_dropin = dropin.replace('\'', "'\\''");
     let write_dropin_cmd = SshClient::run_with_root_or_sudo(&format!(
@@ -1840,7 +1891,7 @@ async fn apply_dns_config_inner(
     ));
     ssh.exec_checked(&write_dropin_cmd).await?;
     drop(_t);
-    output::log_debug(&output::ctx(&name, "Systemd reloaded, tako-server restarted"));
+    tracing::debug!("DNS configured, tako-server restarted");
 
     // Verify the new config took effect (retry up to 5 times)
     for attempt in 0..5 {
@@ -1958,11 +2009,8 @@ mod tests {
             arch: "aarch64".to_string(),
             libc: "musl".to_string(),
         };
-        let url = server_binary_download_url(
-            UpgradeChannel::Stable,
-            Some("tako-server-v0.1.0"),
-            &target,
-        );
+        let url =
+            server_binary_download_url(UpgradeChannel::Stable, Some("tako-server-v0.1.0"), &target);
         assert_eq!(
             url,
             "https://github.com/lilienblum/tako/releases/download/tako-server-v0.1.0/tako-server-linux-aarch64-musl.tar.zst"

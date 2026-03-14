@@ -316,6 +316,7 @@ struct State {
     control_clients: u32,
 
     db: Option<state::DevStateStore>,
+    apps: std::collections::HashMap<String, state::RuntimeApp>,
 }
 
 impl State {
@@ -346,6 +347,7 @@ impl State {
             control_clients: 0,
 
             db: None,
+            apps: std::collections::HashMap::new(),
         }
     }
 
@@ -477,18 +479,22 @@ async fn handle_client(
                 };
 
                 if let Some(db) = &s.db {
-                    let _ = db.register_app(
-                        &project_dir,
-                        &app_name,
-                        &hosts,
-                        upstream_port,
-                        &state::AppStatus::Running,
-                        &command,
-                        &env,
-                        &log_path,
-                        client_pid,
-                    );
+                    let _ = db.register(&project_dir, &app_name);
                 }
+                s.apps.insert(
+                    project_dir.clone(),
+                    state::RuntimeApp {
+                        name: app_name.clone(),
+                        hosts: hosts.clone(),
+                        upstream_port,
+                        status: state::AppStatus::Running,
+                        command,
+                        env,
+                        log_path,
+                        pid: None,
+                        client_pid,
+                    },
+                );
 
                 let route_id = format!("reg:{}", project_dir);
                 s.routes
@@ -521,15 +527,11 @@ async fn handle_client(
             }
             Request::UnregisterApp { project_dir } => {
                 let mut s = state.lock().unwrap();
-                let mut app_name = String::new();
-
-                if let Some(db) = &s.db {
-                    if let Ok(Some(app)) = db.get_app(&project_dir) {
-                        app_name = app.app_name.clone();
-                        let _ = db.set_status(&project_dir, &state::AppStatus::Stopped);
-                        let _ = db.set_pid(&project_dir, None);
-                    }
-                }
+                let app_name = s
+                    .apps
+                    .remove(&project_dir)
+                    .map(|a| a.name)
+                    .unwrap_or_default();
 
                 let route_id = format!("reg:{}", project_dir);
                 s.routes.remove_app(&route_id);
@@ -544,22 +546,22 @@ async fn handle_client(
                     });
                 }
 
-                // Check if daemon should idle-exit.
-                if let Some(db) = &s.db {
-                    if db.list_active_apps().ok().is_none_or(|a| a.is_empty()) {
-                        s.schedule_idle_exit();
-                    }
+                let has_active = s.apps.values().any(|a| {
+                    a.status == state::AppStatus::Running || a.status == state::AppStatus::Idle
+                });
+                if !has_active {
+                    s.schedule_idle_exit();
                 }
 
                 Response::AppUnregistered { project_dir }
             }
             Request::RestartApp { project_dir } => {
                 let s = state.lock().unwrap();
-                let app_name =
-                    s.db.as_ref()
-                        .and_then(|db| db.get_app(&project_dir).ok().flatten())
-                        .map(|a| a.app_name.clone())
-                        .unwrap_or_default();
+                let app_name = s
+                    .apps
+                    .get(&project_dir)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default();
                 s.events.broadcast(Response::Event {
                     event: protocol::DevEvent::RestartRequested {
                         project_dir: project_dir.clone(),
@@ -572,27 +574,23 @@ async fn handle_client(
                 project_dir,
                 status,
             } => {
-                let s = state.lock().unwrap();
+                let mut s = state.lock().unwrap();
                 let parsed = state::AppStatus::from_str(&status);
                 match parsed {
                     None => Response::Error {
                         message: format!("unknown status: {status}"),
                     },
                     Some(app_status) => {
-                        if let Some(db) = &s.db {
-                            let _ = db.set_status(&project_dir, &app_status);
-                        }
-
                         let route_id = format!("reg:{}", project_dir);
                         let active = app_status == state::AppStatus::Running;
                         s.routes.set_active(&route_id, active);
 
-                        let mut app_name = String::new();
-                        if let Some(db) = &s.db {
-                            if let Ok(Some(app)) = db.get_app(&project_dir) {
-                                app_name = app.app_name.clone();
-                            }
-                        }
+                        let app_name = if let Some(app) = s.apps.get_mut(&project_dir) {
+                            app.status = app_status;
+                            app.name.clone()
+                        } else {
+                            String::new()
+                        };
 
                         if !app_name.is_empty() {
                             s.events.broadcast(Response::Event {
@@ -612,11 +610,12 @@ async fn handle_client(
                 }
             }
             Request::HandoffApp { project_dir, pid } => {
-                let s = state.lock().unwrap();
-                if let Some(db) = &s.db {
-                    let _ = db.set_pid(&project_dir, Some(pid));
-                    let _ = db.set_status(&project_dir, &state::AppStatus::Running);
+                let mut s = state.lock().unwrap();
+                if let Some(app) = s.apps.get_mut(&project_dir) {
+                    app.pid = Some(pid);
+                    app.status = state::AppStatus::Running;
                 }
+                state::write_pid_file(&project_dir, pid);
 
                 // Spawn a PID monitor: if the process dies, mark as idle.
                 let state_for_monitor = state.clone();
@@ -629,45 +628,37 @@ async fn handle_client(
             }
             Request::ListRegisteredApps => {
                 let s = state.lock().unwrap();
-                let apps = if let Some(db) = &s.db {
-                    db.list_apps()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|a| protocol::RegisteredAppInfo {
-                            project_dir: a.project_dir,
-                            app_name: a.app_name,
-                            hosts: a.hosts,
-                            upstream_port: a.upstream_port,
-                            status: match a.status {
-                                state::AppStatus::Running => "running".to_string(),
-                                state::AppStatus::Idle => "idle".to_string(),
-                                state::AppStatus::Stopped => "stopped".to_string(),
-                            },
-                            pid: a.pid,
-                            client_pid: a.client_pid,
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let apps = s
+                    .apps
+                    .iter()
+                    .map(|(project_dir, a)| protocol::RegisteredAppInfo {
+                        project_dir: project_dir.clone(),
+                        app_name: a.name.clone(),
+                        hosts: a.hosts.clone(),
+                        upstream_port: a.upstream_port,
+                        status: a.status.as_str().to_string(),
+                        pid: a.pid,
+                        client_pid: a.client_pid,
+                    })
+                    .collect();
                 Response::RegisteredApps { apps }
             }
             Request::ListApps => {
                 let s = state.lock().unwrap();
-                let apps = if let Some(db) = &s.db {
-                    db.list_active_apps()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|a| AppInfo {
-                            app_name: a.app_name,
-                            hosts: a.hosts,
-                            upstream_port: a.upstream_port,
-                            pid: a.pid,
-                        })
-                        .collect()
-                } else {
-                    Vec::new()
-                };
+                let apps = s
+                    .apps
+                    .values()
+                    .filter(|a| {
+                        a.status == state::AppStatus::Running
+                            || a.status == state::AppStatus::Idle
+                    })
+                    .map(|a| AppInfo {
+                        app_name: a.name.clone(),
+                        hosts: a.hosts.clone(),
+                        upstream_port: a.upstream_port,
+                        pid: a.pid,
+                    })
+                    .collect();
                 Response::Apps { apps }
             }
             Request::Info => {
@@ -800,13 +791,14 @@ async fn monitor_handoff_pid(state: Arc<Mutex<State>>, project_dir: String, pid:
 
         sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]), false);
         if sys.process(sysinfo_pid).is_none() {
-            let s = state.lock().unwrap();
-            if let Some(db) = &s.db {
-                let _ = db.set_status(&project_dir, &state::AppStatus::Idle);
-                let _ = db.set_pid(&project_dir, None);
+            let mut s = state.lock().unwrap();
+            if let Some(app) = s.apps.get_mut(&project_dir) {
+                app.status = state::AppStatus::Idle;
+                app.pid = None;
             }
             let route_id = format!("reg:{}", project_dir);
             s.routes.set_active(&route_id, false);
+            state::remove_pid_file(&project_dir);
             tracing::info!(project_dir = %project_dir, pid = pid, "handoff'd process exited, marking idle");
             break;
         }
@@ -815,7 +807,8 @@ async fn monitor_handoff_pid(state: Arc<Mutex<State>>, project_dir: String, pid:
 
 /// Spawn an app process for wake-on-request. Returns the child PID on success.
 async fn spawn_app_for_wake(
-    app: &state::DevApp,
+    project_dir: &str,
+    app: &state::RuntimeApp,
 ) -> Result<tokio::process::Child, Box<dyn std::error::Error + Send + Sync>> {
     if app.command.is_empty() {
         return Err("app has empty command".into());
@@ -825,7 +818,7 @@ async fn spawn_app_for_wake(
     if app.command.len() > 1 {
         cmd.args(&app.command[1..]);
     }
-    cmd.current_dir(&app.project_dir)
+    cmd.current_dir(project_dir)
         .env("PORT", app.upstream_port.to_string())
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -886,74 +879,56 @@ async fn drain_pipe_to_log(pipe: impl tokio::io::AsyncRead + Unpin, log_path: &s
 /// Handle wake-on-request: when a RequestStarted event arrives for an idle app,
 /// spawn the process and mark it as running.
 async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: String) {
-    // Quick check under lock: is the route already active?
-    // Also grab the DB path so we can query outside the lock.
-    let (route_active, db_path) = {
+    // Check under lock: is the route already active? Find an idle app matching this host.
+    let app_info: Option<(String, state::RuntimeApp)> = {
         let s = state.lock().unwrap();
-        let active = s.routes.lookup(&host, &path).is_some_and(|(_, _, a, _)| a);
-        let db_p = s.db.as_ref().map(|db| db.path());
-        (active, db_p)
-    };
-
-    if route_active {
-        return;
-    }
-    let Some(db_path) = db_path else { return };
-
-    // Query SQLite outside the mutex to avoid holding the lock during I/O.
-    let app_info = {
-        let Ok(db) = state::DevStateStore::open(&db_path) else {
+        if s.routes.lookup(&host, &path).is_some_and(|(_, _, a, _)| a) {
             return;
-        };
-        let apps = db.list_active_apps().unwrap_or_default();
-        apps.into_iter().find(|a| {
-            if a.status != state::AppStatus::Idle {
-                return false;
-            }
-            // Check if any of the app's stored route patterns match the request.
-            a.hosts.iter().any(|route_pattern| {
-                let (pat_host, pat_path) = split_route_pattern(route_pattern);
-                let host_ok = pat_host == host
-                    || (pat_host.starts_with("*.")
-                        && host
-                            .split_once('.')
-                            .is_some_and(|(_, rest)| format!("*.{rest}") == pat_host));
-                if !host_ok {
+        }
+        s.apps
+            .iter()
+            .find(|(_, a)| {
+                if a.status != state::AppStatus::Idle {
                     return false;
                 }
-                match pat_path {
-                    None => true,
-                    Some(_) => {
-                        // If the route has a path component, it will match
-                        // at the proxy layer. For wake purposes, hostname
-                        // match is sufficient — the app handles all its paths.
-                        true
+                a.hosts.iter().any(|route_pattern| {
+                    let (pat_host, pat_path) = split_route_pattern(route_pattern);
+                    let host_ok = pat_host == host
+                        || (pat_host.starts_with("*.")
+                            && host
+                                .split_once('.')
+                                .is_some_and(|(_, rest)| format!("*.{rest}") == pat_host));
+                    if !host_ok {
+                        return false;
                     }
-                }
+                    match pat_path {
+                        None => true,
+                        Some(_) => true,
+                    }
+                })
             })
-        })
+            .map(|(dir, a)| (dir.clone(), a.clone()))
     };
 
-    let Some(app) = app_info else { return };
+    let Some((project_dir, app)) = app_info else {
+        return;
+    };
 
     tracing::info!(
-        app_name = %app.app_name,
+        app_name = %app.name,
         host = %host,
         "waking idle app on request"
     );
 
-    match spawn_app_for_wake(&app).await {
+    match spawn_app_for_wake(&project_dir, &app).await {
         Ok(mut child) => {
             let pid = child.id();
-            let project_dir = app.project_dir.clone();
 
             {
-                let s = state.lock().unwrap();
-                if let Some(db) = &s.db {
-                    let _ = db.set_status(&project_dir, &state::AppStatus::Running);
-                    if let Some(pid) = pid {
-                        let _ = db.set_pid(&project_dir, Some(pid));
-                    }
+                let mut s = state.lock().unwrap();
+                if let Some(rt) = s.apps.get_mut(&project_dir) {
+                    rt.status = state::AppStatus::Running;
+                    rt.pid = pid;
                 }
                 let route_id = format!("reg:{}", project_dir);
                 s.routes.set_active(&route_id, true);
@@ -961,27 +936,43 @@ async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: St
 
             // Monitor the spawned process.
             if let Some(pid) = pid {
+                state::write_pid_file(&project_dir, pid);
                 let state = state.clone();
                 let project_dir = project_dir.clone();
                 tokio::spawn(async move {
                     let _ = child.wait().await;
-                    let s = state.lock().unwrap();
-                    if let Some(db) = &s.db {
-                        let _ = db.set_status(&project_dir, &state::AppStatus::Idle);
-                        let _ = db.set_pid(&project_dir, None);
+                    let mut s = state.lock().unwrap();
+                    if let Some(rt) = s.apps.get_mut(&project_dir) {
+                        rt.status = state::AppStatus::Idle;
+                        rt.pid = None;
                     }
                     let route_id = format!("reg:{}", project_dir);
                     s.routes.set_active(&route_id, false);
+                    state::remove_pid_file(&project_dir);
                     tracing::info!(project_dir = %project_dir, pid = pid, "wake-spawned process exited, marking idle");
                 });
             }
         }
         Err(e) => {
             tracing::warn!(
-                app_name = %app.app_name,
+                app_name = %app.name,
                 error = %e,
                 "failed to spawn app for wake-on-request"
             );
+        }
+    }
+}
+
+/// Kill all app processes tracked in memory (both wake-spawned and handed-off).
+fn kill_all_app_processes(state: &Arc<Mutex<State>>) {
+    let s = state.lock().unwrap();
+    for (project_dir, app) in &s.apps {
+        if let Some(pid) = app.pid {
+            if pid > 0 {
+                tracing::info!(app = %app.name, pid = pid, "killing app process on shutdown");
+                unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+                state::remove_pid_file(project_dir);
+            }
         }
     }
 }
@@ -991,23 +982,17 @@ async fn stale_app_cleanup_loop(state: Arc<Mutex<State>>) {
     let mut ticker = tokio::time::interval(Duration::from_secs(60));
     loop {
         ticker.tick().await;
-        // Get the DB path under lock, then do the (potentially slow) FS cleanup outside it.
-        let db_path = {
-            let s = state.lock().unwrap();
-            s.db.as_ref().map(|db| db.path())
-        };
-        let Some(db_path) = db_path else { continue };
-        let Ok(db) = state::DevStateStore::open(&db_path) else {
-            continue;
-        };
-        if let Ok(removed) = db.cleanup_stale() {
-            if !removed.is_empty() {
-                let s = state.lock().unwrap();
+        let mut s = state.lock().unwrap();
+        if let Some(db) = &s.db {
+            if let Ok(removed) = db.cleanup_stale() {
                 for dir in &removed {
+                    s.apps.remove(dir);
                     let route_id = format!("reg:{}", dir);
-                    s.routes.set_active(&route_id, false);
+                    s.routes.remove_app(&route_id);
                 }
-                tracing::info!(count = removed.len(), "cleaned up stale app registrations");
+                if !removed.is_empty() {
+                    tracing::info!(count = removed.len(), "cleaned up stale app registrations");
+                }
             }
         }
     }
@@ -1133,21 +1118,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         args.dns_ip,
     );
 
-    // Open the SQLite state store and populate routes from persisted apps.
+    // Open the SQLite state store (persistent registrations only; runtime state is in-memory).
     let db_path = paths::tako_data_dir()
         .unwrap_or_else(|_| PathBuf::from("."))
         .join("dev-server.db");
     match state::DevStateStore::open(db_path) {
         Ok(db) => {
-            if let Ok(active_apps) = db.list_active_apps() {
-                for app in &active_apps {
-                    let id = format!("reg:{}", app.project_dir);
-                    let active = app.status == state::AppStatus::Running;
-                    st.routes
-                        .set_routes(id, app.hosts.clone(), app.upstream_port, active);
-                }
-                if !active_apps.is_empty() {
-                    st.cancel_idle_exit();
+            // Kill any orphaned app processes from a previous (crashed) server run.
+            if let Ok(apps) = db.list() {
+                for app in &apps {
+                    state::kill_orphaned_process(&app.project_dir);
                 }
             }
             st.db = Some(db);
@@ -1189,6 +1169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             _ = shutdown_rx.changed() => {
                 if *shutdown_rx.borrow() {
                     tracing::info!("tako-dev-server shutting down");
+                    kill_all_app_processes(&state);
                     let _ = std::fs::remove_file(&sock);
                     std::process::exit(0);
                 }
@@ -1352,34 +1333,34 @@ mod tests {
         (Arc::new(Mutex::new(st)), tmp)
     }
 
+    fn insert_test_app(state: &Arc<Mutex<State>>, project_dir: &str, name: &str) {
+        let mut s = state.lock().unwrap();
+        s.apps.insert(
+            project_dir.to_string(),
+            state::RuntimeApp {
+                name: name.to_string(),
+                hosts: vec![format!("{name}.tako.test")],
+                upstream_port: 3000,
+                status: state::AppStatus::Running,
+                command: vec!["bun".to_string()],
+                env: std::collections::HashMap::new(),
+                log_path: "/log".to_string(),
+                pid: None,
+                client_pid: None,
+            },
+        );
+        s.routes.set_routes(
+            format!("reg:{project_dir}"),
+            vec![format!("{name}.tako.test")],
+            3000,
+            true,
+        );
+    }
+
     #[tokio::test]
     async fn unregister_app_broadcasts_stopped_event_to_subscriber() {
         let (state, _tmp) = test_state();
-
-        // Register an app first.
-        {
-            let s = state.lock().unwrap();
-            if let Some(db) = &s.db {
-                db.register_app(
-                    "/proj",
-                    "my-app",
-                    &["my-app.tako.test".to_string()],
-                    3000,
-                    &state::AppStatus::Running,
-                    &["bun".to_string()],
-                    &std::collections::HashMap::new(),
-                    "/log",
-                    None,
-                )
-                .unwrap();
-            }
-            s.routes.set_routes(
-                "reg:/proj".to_string(),
-                vec!["my-app.tako.test".to_string()],
-                3000,
-                true,
-            );
-        }
+        insert_test_app(&state, "/proj", "my-app");
 
         // Subscribe to events.
         let mut ev_rx = {
@@ -1436,25 +1417,7 @@ mod tests {
     #[tokio::test]
     async fn restart_app_broadcasts_restart_requested_event() {
         let (state, _tmp) = test_state();
-
-        // Register an app.
-        {
-            let s = state.lock().unwrap();
-            if let Some(db) = &s.db {
-                db.register_app(
-                    "/proj",
-                    "my-app",
-                    &["my-app.tako.test".to_string()],
-                    3000,
-                    &state::AppStatus::Running,
-                    &["bun".to_string()],
-                    &std::collections::HashMap::new(),
-                    "/log",
-                    None,
-                )
-                .unwrap();
-            }
-        }
+        insert_test_app(&state, "/proj", "my-app");
 
         // Subscribe to events.
         let mut ev_rx = {
@@ -1509,25 +1472,7 @@ mod tests {
     #[tokio::test]
     async fn set_app_status_broadcasts_status_changed_event() {
         let (state, _tmp) = test_state();
-
-        // Register an app.
-        {
-            let s = state.lock().unwrap();
-            if let Some(db) = &s.db {
-                db.register_app(
-                    "/proj",
-                    "my-app",
-                    &["my-app.tako.test".to_string()],
-                    3000,
-                    &state::AppStatus::Running,
-                    &["bun".to_string()],
-                    &std::collections::HashMap::new(),
-                    "/log",
-                    None,
-                )
-                .unwrap();
-            }
-        }
+        insert_test_app(&state, "/proj", "my-app");
 
         let mut ev_rx = {
             let s = state.lock().unwrap();
@@ -1617,31 +1562,7 @@ mod tests {
     #[tokio::test]
     async fn subscriber_receives_stopped_event_over_socket_when_app_unregistered() {
         let (state, _tmp) = test_state();
-
-        // Register an app.
-        {
-            let s = state.lock().unwrap();
-            if let Some(db) = &s.db {
-                db.register_app(
-                    "/proj",
-                    "my-app",
-                    &["my-app.tako.test".to_string()],
-                    3000,
-                    &state::AppStatus::Running,
-                    &["bun".to_string()],
-                    &std::collections::HashMap::new(),
-                    "/log",
-                    None,
-                )
-                .unwrap();
-            }
-            s.routes.set_routes(
-                "reg:/proj".to_string(),
-                vec!["my-app.tako.test".to_string()],
-                3000,
-                true,
-            );
-        }
+        insert_test_app(&state, "/proj", "my-app");
 
         // Client B: subscribe to events via a real socket handler.
         let (sub_a, sub_b) = tokio::net::UnixStream::pair().unwrap();
@@ -1805,5 +1726,45 @@ mod tests {
 
         // Same DER bytes → same cert object was returned from cache.
         assert_eq!(first.to_der().unwrap(), second.to_der().unwrap());
+    }
+
+    #[test]
+    fn kill_all_app_processes_sends_sigterm_to_tracked_pids() {
+        let (state, _tmp) = test_state();
+
+        // Spawn a long-lived process we can check.
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+
+        // Register it in memory with a PID.
+        {
+            let mut s = state.lock().unwrap();
+            s.apps.insert(
+                "/proj".to_string(),
+                state::RuntimeApp {
+                    name: "my-app".to_string(),
+                    hosts: vec!["my-app.tako.test".to_string()],
+                    upstream_port: 3000,
+                    status: state::AppStatus::Running,
+                    command: vec!["sleep".to_string(), "60".to_string()],
+                    env: std::collections::HashMap::new(),
+                    log_path: "/log".to_string(),
+                    pid: Some(pid),
+                    client_pid: None,
+                },
+            );
+        }
+
+        // Verify the process is alive.
+        assert_eq!(unsafe { libc::kill(pid as i32, 0) }, 0);
+
+        kill_all_app_processes(&state);
+
+        // wait() will return once the process has been terminated by SIGTERM.
+        let status = child.wait().unwrap();
+        assert!(!status.success());
     }
 }

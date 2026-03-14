@@ -23,7 +23,7 @@ tako-socket = { path = "../tako-socket", version = "0.0.1" }
 clap = { version = "4.5", features = ["derive", "env"] }
 tokio = { version = "1.49", features = ["full"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 console = "0.16"
 indicatif = "0.17"
 crossterm = "0.29"

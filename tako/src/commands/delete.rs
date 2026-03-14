@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 use std::env::current_dir;
 
 use crate::app::require_app_name_from_config;
@@ -6,28 +6,35 @@ use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::SshClient;
 use tako_core::{AppStatus, Command, Response};
+use tracing::Instrument;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct RemoteDeployment {
+    remote_app_id: String,
     app: String,
     env: String,
     server_name: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct AppEnvOption {
-    app: String,
-    env: String,
-    server_count: usize,
+struct DeleteSelectionOptions {
+    title: String,
+    description: String,
+    choices: Vec<(String, RemoteDeployment)>,
 }
 
-pub fn run(env: Option<&str>, assume_yes: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(
+    env: Option<&str>,
+    server: Option<&str>,
+    assume_yes: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(env, assume_yes))
+    rt.block_on(run_async(env, server, assume_yes))
 }
 
 async fn run_async(
     requested_env: Option<&str>,
+    requested_server: Option<&str>,
     assume_yes: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
@@ -47,206 +54,101 @@ async fn run_async(
 
     validate_confirmation_mode(assume_yes, interactive)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    validate_target_flags_for_mode(requested_env, requested_server, interactive)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
-    let mut discovered_deployments: Option<Vec<RemoteDeployment>> = None;
+    if let Some(env) = requested_env {
+        if let Some(tako_config) = project_tako.as_ref() {
+            validate_project_delete_env(env, tako_config)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        } else {
+            validate_non_project_delete_env(env)
+                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        }
+    }
 
-    let (app_name, env) = if let Some(tako_config) = project_tako.as_ref() {
-        let app_name = project_app
-            .clone()
-            .ok_or_else(|| "Could not resolve app name from project context".to_string())?;
+    if let Some(server_name) = requested_server {
+        validate_delete_server(server_name, &servers)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    }
 
-        let env = match requested_env {
-            Some(env) => validate_project_delete_env(env, tako_config)
-                .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?,
-            None => {
-                if !interactive {
-                    let env = "production";
-                    output::ContextBlock::new().env(env).print();
-                    validate_project_delete_env(env, tako_config)
-                        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
-                } else {
-                    let deployments = discover_remote_deployments_with_progress(&servers).await?;
-                    let options = app_env_options(&deployments, Some(&app_name));
-                    if options.is_empty() {
-                        return Err(format!(
-                            "No deployed environments found for app '{}' on configured servers.",
-                            app_name
-                        )
-                        .into());
-                    }
-                    select_env_for_app(&app_name, &options)?
-                }
-            }
-        };
-
-        (app_name, env)
+    let target = if let (Some(app_name), Some(env), Some(server_name)) =
+        (project_app.as_deref(), requested_env, requested_server)
+    {
+        RemoteDeployment {
+            remote_app_id: tako_core::deployment_app_id(app_name, env),
+            app: app_name.to_string(),
+            env: env.to_string(),
+            server_name: server_name.to_string(),
+        }
     } else {
         let deployments = discover_remote_deployments_with_progress(&servers).await?;
         if deployments.is_empty() {
             return Err("No deployed apps found on configured servers.".into());
         }
 
-        let target = match requested_env {
-            Some(env) => {
-                validate_non_project_delete_env(env)
-                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-                let app = resolve_app_for_env_without_project(&deployments, env, interactive)?;
-                (app, env.to_string())
-            }
-            None => {
-                if !interactive {
-                    return Err(
-                        "No project context and no --env. Run this command interactively to select app/environment, or run from a project directory."
-                            .into(),
-                    );
-                }
-                let options = app_env_options(&deployments, None);
-                select_app_env(&options)?
-            }
-        };
-
-        discovered_deployments = Some(deployments);
-        target
-    };
-
-    let server_names = if let Some(tako_config) = project_tako.as_ref() {
-        resolve_delete_server_names(tako_config, &servers, &env)
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
-    } else {
-        let deployments = discovered_deployments
-            .as_deref()
-            .ok_or_else(|| "Missing deployment discovery data".to_string())?;
-        resolve_delete_server_names_from_deployments(deployments, &app_name, &env)
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
+        resolve_delete_target_from_candidates(
+            &deployments,
+            project_app.as_deref(),
+            requested_env,
+            requested_server,
+            interactive,
+        )
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
     };
 
     if should_confirm_delete(assume_yes, interactive) {
-        let prompt = format_delete_confirm_prompt(&app_name, &env, server_names.len());
-        let description = format_delete_confirm_hint(&app_name, &server_names);
+        let prompt = format_delete_confirm_prompt(&target.app, &target.env, &target.server_name);
+        let description = format_delete_confirm_hint(&target.app, &target.server_name);
         let confirmed = output::confirm_with_description(&prompt, Some(&description), false)?;
         if !confirmed {
             return Err("Delete cancelled.".into());
         }
     }
 
+    let server = servers
+        .get(&target.server_name)
+        .ok_or_else(|| format_server_not_found_error(&target.server_name))?;
+
     output::section("Delete");
-    output::info(&format!("Deleting {app_name} from {env}"));
+    output::info(&format!(
+        "Deleting {} from {} on {}",
+        target.app, target.env, target.server_name
+    ));
 
-    let total_servers = server_names.len();
-    let mut success_count = 0usize;
-    let mut errors = Vec::new();
-    let use_per_server_spinner = should_use_per_server_delete_spinner(total_servers, interactive);
-    if use_per_server_spinner {
-        for server_name in &server_names {
-            let Some(server) = servers.get(server_name) else {
-                return Err(format_server_not_found_error(server_name).into());
-            };
-            let result = output::with_spinner_async(
-                &format!("Deleting from {}", output::strong(server_name)),
-                &format!("Deleted from {}", output::strong(server_name)),
-                delete_from_server(server, &app_name),
-            )
-            .await;
-            match result {
-                Ok(()) => {
-                    output::bullet(&format_server_delete_success_for_output(
-                        server_name,
-                        server,
-                        output::is_verbose(),
-                    ));
-                    success_count += 1;
-                }
-                Err(e) => {
-                    output::error(&format_server_delete_failure_for_output(
-                        server_name,
-                        server,
-                        &e.to_string(),
-                        output::is_verbose(),
-                    ));
-                    errors.push(format!("{}: {}", server_name, e));
-                }
-            }
-        }
+    let span = output::scope(&target.server_name);
+    let result: Result<(), String> = if interactive {
+        output::with_spinner_async(
+            &format!("Deleting from {}", target.server_name),
+            &format!("Deleted from {}", target.server_name),
+            delete_from_server(server, &target.remote_app_id).instrument(span),
+        )
+        .await
+        .map_err(|e| e.to_string())
     } else {
-        let mut handles = Vec::new();
-        for server_name in &server_names {
-            let Some(server) = servers.get(server_name) else {
-                return Err(format_server_not_found_error(server_name).into());
-            };
-
-            let server_name = server_name.clone();
-            let server = server.clone();
-            let app_name = app_name.clone();
-            let handle = tokio::spawn(async move {
-                let result = delete_from_server(&server, &app_name).await;
-                (server_name, server, result)
-            });
-            handles.push(handle);
-        }
-
-        let delete_results = if interactive && handles.len() > 1 {
-            output::with_spinner_async_simple(
-                &format!("Deleting from {} servers", handles.len()),
-                async {
-                    let mut results = Vec::new();
-                    for handle in handles {
-                        results.push(handle.await);
-                    }
-                    results
-                },
-            )
+        delete_from_server(server, &target.remote_app_id)
             .await
-        } else {
-            let mut results = Vec::new();
-            for handle in handles {
-                results.push(handle.await);
-            }
-            results
-        };
+            .map_err(|e| e.to_string())
+    };
 
-        for result in delete_results {
-            match result {
-                Ok((server_name, server, Ok(()))) => {
-                    output::bullet(&format_server_delete_success_for_output(
-                        &server_name,
-                        &server,
-                        output::is_verbose(),
-                    ));
-                    success_count += 1;
-                }
-                Ok((server_name, server, Err(e))) => {
-                    output::error(&format_server_delete_failure_for_output(
-                        &server_name,
-                        &server,
-                        &e.to_string(),
-                        output::is_verbose(),
-                    ));
-                    errors.push(format!("{}: {}", server_name, e));
-                }
-                Err(e) => errors.push(format!("Task panic: {}", e)),
-            }
-        }
-    }
-
-    if errors.is_empty() {
-        output::success("Delete");
-        output::section("Summary");
-        output::info(&format!(
-            "Deleted {} from {}",
-            output::strong(&app_name),
-            output::strong(&env)
-        ));
-        Ok(())
-    } else {
+    if let Err(error) = result {
         output::error("Delete");
         output::section("Summary");
-        output::warning(&format_delete_summary_warning(success_count, total_servers));
-        for err in &errors {
-            output::error(err);
-        }
-
-        Err(format!("{} server(s) failed", errors.len()).into())
+        output::error(&format!("{} delete failed: {}", target.server_name, error));
+        return Err(format!("Delete failed on {}: {}", target.server_name, error).into());
     }
+
+    if interactive {
+        output::success("Delete");
+    }
+    output::section("Summary");
+    output::info(&format!(
+        "Deleted {} from {} on {}",
+        output::strong(&target.app),
+        output::strong(&target.env),
+        output::strong(&target.server_name)
+    ));
+    Ok(())
 }
 
 fn load_optional_project_tako_toml(
@@ -277,10 +179,14 @@ async fn discover_remote_deployments(
 
         let server_name_for_task = server_name.clone();
         let server = server.clone();
-        handles.push(tokio::spawn(async move {
-            let result = discover_server_deployments(&server_name_for_task, &server).await;
-            (server_name_for_task, result)
-        }));
+        let span = output::scope(&server_name_for_task);
+        handles.push(tokio::spawn(
+            async move {
+                let result = discover_server_deployments(&server_name_for_task, &server).await;
+                (server_name_for_task, result)
+            }
+            .instrument(span),
+        ));
     }
 
     let mut all = Vec::new();
@@ -309,14 +215,17 @@ async fn discover_remote_deployments_with_progress(
     servers: &ServersToml,
 ) -> Result<Vec<RemoteDeployment>, Box<dyn std::error::Error>> {
     if output::is_interactive() {
-        let deployments =
-            output::with_spinner_async("Discovering deployed apps", "Apps discovered", async {
+        let deployments = output::with_spinner_async(
+            "Getting deployment information",
+            "Deployment information loaded",
+            async {
                 discover_remote_deployments(servers)
                     .await
                     .map_err(|e| e.to_string())
-            })
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+            },
+        )
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
         return Ok(deployments);
     }
     discover_remote_deployments(servers).await
@@ -326,29 +235,30 @@ async fn discover_server_deployments(
     server_name: &str,
     server: &ServerEntry,
 ) -> Result<Vec<RemoteDeployment>, Box<dyn std::error::Error + Send + Sync>> {
-    output::log_debug(&output::ctx(
-        server_name,
-        &format!("Discovering deployments ({}:{})…", server.host, server.port),
-    ));
-    let _t = output::timed(&output::ctx(server_name, "Discover deployments"));
+    tracing::debug!("Discovering deployments…");
+    let _t = output::timed("Discover deployments");
     let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
 
     let result = async {
         let list = ssh.tako_list_apps().await?;
         let app_names = parse_list_apps_response(list)
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
-        output::log_debug(&output::ctx(
-            server_name,
-            &format!("Found {} app(s)", app_names.len()),
-        ));
+        tracing::debug!("Found {} app(s)", app_names.len());
 
         let mut deployments = Vec::new();
         for app_name in app_names {
-            let env = query_connected_app_env(&ssh, &app_name, server_name)
-                .await
-                .unwrap_or_else(|| "unknown".to_string());
+            let (app, env) = if let Some((app, env)) = tako_core::split_deployment_app_id(&app_name)
+            {
+                (app.to_string(), env.to_string())
+            } else {
+                let env = query_connected_app_env(&ssh, &app_name, server_name)
+                    .await
+                    .unwrap_or_else(|| "unknown".to_string());
+                (app_name.clone(), env)
+            };
             deployments.push(RemoteDeployment {
-                app: app_name,
+                remote_app_id: app_name,
+                app,
                 env,
                 server_name: server_name.to_string(),
             });
@@ -449,133 +359,146 @@ fn parse_server_env_from_tako_toml(content: &str, server_name: &str) -> Option<S
     }
 }
 
-fn app_env_options(
+fn delete_targets(
     deployments: &[RemoteDeployment],
     app_filter: Option<&str>,
-) -> Vec<AppEnvOption> {
-    let mut grouped: BTreeMap<(String, String), BTreeSet<String>> = BTreeMap::new();
-
-    for deployment in deployments {
-        if let Some(filter) = app_filter
-            && deployment.app != filter
-        {
-            continue;
-        }
-
-        grouped
-            .entry((deployment.app.clone(), deployment.env.clone()))
-            .or_default()
-            .insert(deployment.server_name.clone());
-    }
-
-    grouped
-        .into_iter()
-        .map(|((app, env), servers)| AppEnvOption {
-            app,
-            env,
-            server_count: servers.len(),
-        })
-        .collect()
-}
-
-fn select_env_for_app(
-    app_name: &str,
-    options: &[AppEnvOption],
-) -> Result<String, Box<dyn std::error::Error>> {
-    let choices = options
+    requested_env: Option<&str>,
+    requested_server: Option<&str>,
+) -> Vec<RemoteDeployment> {
+    let mut targets = deployments
         .iter()
-        .map(|option| {
-            (
-                format!("{} ({} server(s))", option.env, option.server_count),
-                option.env.clone(),
-            )
+        .filter(|deployment| match app_filter {
+            Some(app_name) => deployment.app == app_name,
+            None => true,
         })
+        .filter(|deployment| match requested_env {
+            Some(env) => deployment.env == env,
+            None => true,
+        })
+        .filter(|deployment| match requested_server {
+            Some(server_name) => deployment.server_name == server_name,
+            None => true,
+        })
+        .cloned()
         .collect::<Vec<_>>();
-
-    output::select(
-        &format!("Select environment to delete '{}' from", app_name),
-        Some("Choose an environment and press Enter."),
-        choices,
-    )
-    .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })
+    targets.sort();
+    targets.dedup();
+    targets
 }
 
-fn select_app_env(
-    options: &[AppEnvOption],
-) -> Result<(String, String), Box<dyn std::error::Error>> {
-    let choices = options
-        .iter()
-        .map(|option| {
-            (
-                format!(
-                    "{}  app={} ({} server(s))",
-                    option.env, option.app, option.server_count
-                ),
-                (option.app.clone(), option.env.clone()),
-            )
-        })
-        .collect::<Vec<_>>();
+fn delete_target_selection_options(
+    targets: &[RemoteDeployment],
+    app_known: bool,
+    requested_env: Option<&str>,
+    requested_server: Option<&str>,
+) -> DeleteSelectionOptions {
+    let include_app = !app_known && unique_values(targets, |target| target.app.as_str()).len() > 1;
 
-    output::select(
-        "Select app/environment to delete",
-        Some("Choose a deployed target and press Enter."),
-        choices,
-    )
-    .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })
-}
-
-fn resolve_app_for_env_without_project(
-    deployments: &[RemoteDeployment],
-    env: &str,
-    interactive: bool,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let options = app_env_options(deployments, None)
-        .into_iter()
-        .filter(|option| option.env == env)
-        .collect::<Vec<_>>();
-
-    if options.is_empty() {
-        return Err(format!(
-            "No deployed apps found for environment '{}' on configured servers.",
-            env
-        )
-        .into());
-    }
-
-    let mut apps: Vec<String> = options.iter().map(|option| option.app.clone()).collect();
-    apps.sort();
-    apps.dedup();
-
-    if apps.len() == 1 {
-        return Ok(apps.remove(0));
-    }
-
-    if !interactive {
-        return Err(format!(
-            "Multiple apps are deployed to environment '{}'. Run interactively to select one.",
-            env
-        )
-        .into());
-    }
-
-    let app_choices = apps
-        .into_iter()
-        .map(|app| {
-            let server_count = options
+    match (requested_env, requested_server) {
+        (None, None) => DeleteSelectionOptions {
+            title: "Select deployment to delete".to_string(),
+            description: "Choose a deployment target and press Enter.".to_string(),
+            choices: targets
                 .iter()
-                .find(|option| option.app == app)
-                .map(|option| option.server_count)
-                .unwrap_or(0);
-            (format!("{} ({} server(s))", app, server_count), app)
-        })
-        .collect::<Vec<_>>();
+                .cloned()
+                .map(|target| {
+                    let label = if include_app {
+                        format!("{} {} from {}", target.app, target.env, target.server_name)
+                    } else {
+                        format!("{} from {}", target.env, target.server_name)
+                    };
+                    (label, target)
+                })
+                .collect(),
+        },
+        (Some(_), None) => DeleteSelectionOptions {
+            title: if include_app {
+                "Select deployment to delete".to_string()
+            } else {
+                "Select server to delete from".to_string()
+            },
+            description: "Choose a server and press Enter.".to_string(),
+            choices: targets
+                .iter()
+                .cloned()
+                .map(|target| {
+                    let label = if include_app {
+                        format!("{} from {}", target.app, target.server_name)
+                    } else {
+                        target.server_name.clone()
+                    };
+                    (label, target)
+                })
+                .collect(),
+        },
+        (None, Some(_)) => DeleteSelectionOptions {
+            title: if include_app {
+                "Select deployment to delete".to_string()
+            } else {
+                "Select environment to delete".to_string()
+            },
+            description: "Choose an environment and press Enter.".to_string(),
+            choices: targets
+                .iter()
+                .cloned()
+                .map(|target| {
+                    let label = if include_app {
+                        format!("{} in {}", target.app, target.env)
+                    } else {
+                        target.env.clone()
+                    };
+                    (label, target)
+                })
+                .collect(),
+        },
+        (Some(_), Some(_)) => DeleteSelectionOptions {
+            title: "Select app to delete".to_string(),
+            description: "Choose an app and press Enter.".to_string(),
+            choices: targets
+                .iter()
+                .cloned()
+                .map(|target| (target.app.clone(), target))
+                .collect(),
+        },
+    }
+}
 
-    output::select(
-        &format!("Select app to delete from '{}'", env),
-        Some("Choose an app and press Enter."),
-        app_choices,
-    )
-    .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })
+fn resolve_delete_target_from_candidates(
+    deployments: &[RemoteDeployment],
+    app_filter: Option<&str>,
+    requested_env: Option<&str>,
+    requested_server: Option<&str>,
+    interactive: bool,
+) -> Result<RemoteDeployment, String> {
+    let targets = delete_targets(deployments, app_filter, requested_env, requested_server);
+
+    match targets.as_slice() {
+        [] => Err(format_no_delete_targets_error(
+            app_filter,
+            requested_env,
+            requested_server,
+        )),
+        [target] => Ok(target.clone()),
+        _ if !interactive => Err(format_ambiguous_delete_targets_error(
+            app_filter,
+            requested_env,
+            requested_server,
+        )),
+        _ => {
+            let selection = delete_target_selection_options(
+                &targets,
+                app_filter.is_some(),
+                requested_env,
+                requested_server,
+            );
+            output::select(
+                &selection.title,
+                Some(selection.description.as_str()),
+                selection.choices,
+            )
+            .map_err(|e| format!("Failed to read selection: {e}"))
+        }
+    }
 }
 
 fn validate_project_delete_env(env: &str, tako_config: &TakoToml) -> Result<String, String> {
@@ -611,38 +534,95 @@ fn available_environment_names(tako_config: &TakoToml) -> Vec<String> {
     names
 }
 
-fn resolve_delete_server_names(
-    tako_config: &TakoToml,
-    servers: &ServersToml,
-    env: &str,
-) -> Result<Vec<String>, String> {
-    let mut names = super::helpers::resolve_servers_for_env(tako_config, servers, env)?;
-    names.sort();
-    names.dedup();
-    Ok(names)
+fn unique_values<'a, F>(targets: &'a [RemoteDeployment], select: F) -> BTreeSet<&'a str>
+where
+    F: Fn(&'a RemoteDeployment) -> &'a str,
+{
+    targets.iter().map(select).collect()
 }
 
-fn resolve_delete_server_names_from_deployments(
-    deployments: &[RemoteDeployment],
-    app_name: &str,
-    env: &str,
-) -> Result<Vec<String>, String> {
-    let mut names: Vec<String> = deployments
-        .iter()
-        .filter(|d| d.app == app_name && d.env == env)
-        .map(|d| d.server_name.clone())
-        .collect();
-    names.sort();
-    names.dedup();
-
-    if names.is_empty() {
-        return Err(format!(
+fn format_no_delete_targets_error(
+    app_filter: Option<&str>,
+    requested_env: Option<&str>,
+    requested_server: Option<&str>,
+) -> String {
+    match (app_filter, requested_env, requested_server) {
+        (Some(app_name), Some(env), Some(server_name)) => format!(
+            "App '{}' is not deployed to environment '{}' on server '{}'.",
+            app_name, env, server_name
+        ),
+        (Some(app_name), Some(env), None) => format!(
             "App '{}' is not deployed to environment '{}' on configured servers.",
             app_name, env
-        ));
+        ),
+        (Some(app_name), None, Some(server_name)) => format!(
+            "App '{}' is not deployed on server '{}'.",
+            app_name, server_name
+        ),
+        (Some(app_name), None, None) => format!(
+            "No deployed environments found for app '{}' on configured servers.",
+            app_name
+        ),
+        (None, Some(env), Some(server_name)) => format!(
+            "No deployed apps found for environment '{}' on server '{}'.",
+            env, server_name
+        ),
+        (None, Some(env), None) => format!(
+            "No deployed apps found for environment '{}' on configured servers.",
+            env
+        ),
+        (None, None, Some(server_name)) => {
+            format!("No deployed apps found on server '{}'.", server_name)
+        }
+        (None, None, None) => "No deployed apps found on configured servers.".to_string(),
     }
+}
 
-    Ok(names)
+fn format_ambiguous_delete_targets_error(
+    app_filter: Option<&str>,
+    requested_env: Option<&str>,
+    requested_server: Option<&str>,
+) -> String {
+    match (app_filter, requested_env, requested_server) {
+        (Some(app_name), Some(env), None) => format!(
+            "Multiple deployments match app '{}' in environment '{}'. Re-run interactively or pass --server.",
+            app_name, env
+        ),
+        (Some(app_name), None, Some(server_name)) => format!(
+            "Multiple deployments match app '{}' on server '{}'. Re-run interactively or pass --env.",
+            app_name, server_name
+        ),
+        (Some(app_name), None, None) => format!(
+            "Multiple deployments match app '{}'. Re-run interactively or pass --env/--server.",
+            app_name
+        ),
+        (None, Some(env), Some(server_name)) => format!(
+            "Multiple deployments match environment '{}' on server '{}'. Re-run interactively from the app directory to choose one.",
+            env, server_name
+        ),
+        (None, Some(env), None) => format!(
+            "Multiple deployments match environment '{}'. Re-run interactively or run from the app directory to choose one.",
+            env
+        ),
+        (None, None, Some(server_name)) => format!(
+            "Multiple deployments match server '{}'. Re-run interactively or run from the app directory to choose one.",
+            server_name
+        ),
+        (None, None, None) => {
+            "Multiple deployments match. Re-run interactively to choose a target.".to_string()
+        }
+        (Some(app_name), Some(env), Some(server_name)) => format!(
+            "Multiple deployments match app '{}' in environment '{}' on server '{}'. Re-run interactively to choose one.",
+            app_name, env, server_name
+        ),
+    }
+}
+
+fn validate_delete_server(server_name: &str, servers: &ServersToml) -> Result<(), String> {
+    if servers.get(server_name).is_none() {
+        return Err(format_server_not_found_error(server_name));
+    }
+    Ok(())
 }
 
 fn validate_confirmation_mode(assume_yes: bool, interactive: bool) -> Result<(), String> {
@@ -655,40 +635,46 @@ fn validate_confirmation_mode(assume_yes: bool, interactive: bool) -> Result<(),
     Ok(())
 }
 
+fn validate_target_flags_for_mode(
+    requested_env: Option<&str>,
+    requested_server: Option<&str>,
+    interactive: bool,
+) -> Result<(), String> {
+    if interactive {
+        return Ok(());
+    }
+
+    if requested_env.is_none() || requested_server.is_none() {
+        return Err("Delete requires both --env and --server in non-interactive mode.".to_string());
+    }
+
+    Ok(())
+}
+
 fn should_confirm_delete(assume_yes: bool, interactive: bool) -> bool {
     !assume_yes && interactive
 }
 
-fn should_use_per_server_delete_spinner(server_count: usize, interactive: bool) -> bool {
-    interactive && server_count == 1
-}
-
 async fn delete_from_server(
     server: &ServerEntry,
-    app_name: &str,
+    remote_app_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    output::log_debug(&output::ctx(
-        &server.host,
-        &format!("Deleting app {app_name} ({}:{})…", server.host, server.port),
-    ));
-    let _t = output::timed(&output::ctx(&server.host, &format!("Delete {app_name}")));
+    tracing::debug!("Deleting app {remote_app_name}…");
+    let _t = output::timed(&format!("Delete {remote_app_name}"));
     let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
 
     let result = async {
         let cmd = Command::Delete {
-            app: app_name.to_string(),
+            app: remote_app_name.to_string(),
         };
         let json = serde_json::to_string(&cmd)?;
         let response_raw = ssh.tako_command(&json).await?;
         let response: Response = serde_json::from_str(&response_raw)?;
         parse_delete_response(response)
             .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })?;
-        output::log_debug(&output::ctx(
-            &server.host,
-            &format!("Delete command succeeded for {app_name}"),
-        ));
+        tracing::debug!("Delete command succeeded for {remote_app_name}");
 
-        let remote_app_root = format!("/opt/tako/apps/{}", app_name);
+        let remote_app_root = format!("/opt/tako/apps/{}", remote_app_name);
         let cleanup_cmd = format!("rm -rf {}", shell_single_quote(&remote_app_root));
         ssh.exec_checked(&cleanup_cmd).await?;
 
@@ -711,92 +697,26 @@ fn parse_delete_response(response: Response) -> Result<(), String> {
     }
 }
 
-fn format_delete_confirm_prompt(app_name: &str, env: &str, server_count: usize) -> String {
+fn format_delete_confirm_prompt(app_name: &str, env: &str, server_name: &str) -> String {
     format!(
-        "Please confirm you want to remove application {} from {} on {} server(s).",
+        "Please confirm you want to remove application {} from {} on {}.",
         output::strong(app_name),
         output::strong(env),
-        server_count
+        output::strong(server_name)
     )
 }
 
-fn format_delete_confirm_hint(app_name: &str, server_names: &[String]) -> String {
-    let app = output::strong(app_name);
-    if server_names.len() == 1 {
-        return format!(
-            "This removes application {} from {}.",
-            app,
-            output::strong(&server_names[0])
-        );
-    }
-
-    let servers = server_names
-        .iter()
-        .map(|name| output::strong(name))
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("This removes application {} from {}.", app, servers)
-}
-
-fn format_delete_summary_warning(success_count: usize, total_servers: usize) -> String {
-    if success_count == 0 {
-        return format!(
-            "Deletion failed: {}/{} servers succeeded",
-            success_count, total_servers
-        );
-    }
-
+fn format_delete_confirm_hint(app_name: &str, server_name: &str) -> String {
     format!(
-        "Deletion partially failed: {}/{} servers succeeded",
-        success_count, total_servers
+        "This removes application {} from {}.",
+        output::strong(app_name),
+        output::strong(server_name)
     )
-}
-
-fn format_server_delete_target(name: &str, entry: &ServerEntry) -> String {
-    format!("{name} (tako@{}:{})", entry.host, entry.port)
-}
-
-fn format_server_delete_success(name: &str, entry: &ServerEntry) -> String {
-    format!(
-        "{} deleted successfully",
-        format_server_delete_target(name, entry)
-    )
-}
-
-fn format_server_delete_success_for_output(
-    name: &str,
-    entry: &ServerEntry,
-    verbose: bool,
-) -> String {
-    if verbose {
-        return format_server_delete_success(name, entry);
-    }
-    format!("{name} deleted")
-}
-
-fn format_server_delete_failure(name: &str, entry: &ServerEntry, error: &str) -> String {
-    format!(
-        "{} delete failed: {}",
-        format_server_delete_target(name, entry),
-        error
-    )
-}
-
-fn format_server_delete_failure_for_output(
-    name: &str,
-    entry: &ServerEntry,
-    error: &str,
-    verbose: bool,
-) -> String {
-    if verbose {
-        return format_server_delete_failure(name, entry, error);
-    }
-    format!("{name} delete failed: {error}")
 }
 
 fn format_server_not_found_error(server_name: &str) -> String {
     format!(
-        "Server '{}' not found in ~/.tako/config.toml [[servers]]. Run 'tako servers add --name {} <host>'.",
+        "Server '{}' not found in config.toml [[servers]]. Run 'tako servers add --name {} <host>'.",
         server_name, server_name
     )
 }
@@ -804,18 +724,10 @@ fn format_server_not_found_error(server_name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::EnvConfig;
-
-    fn server_entry(host: &str) -> ServerEntry {
-        ServerEntry {
-            host: host.to_string(),
-            port: 22,
-            description: None,
-        }
-    }
 
     fn deployment(app: &str, env: &str, server: &str) -> RemoteDeployment {
         RemoteDeployment {
+            remote_app_id: tako_core::deployment_app_id(app, env),
             app: app.to_string(),
             env: env.to_string(),
             server_name: server.to_string(),
@@ -823,97 +735,154 @@ mod tests {
     }
 
     #[test]
-    fn app_env_options_filters_by_app_and_counts_servers() {
+    fn delete_targets_filter_to_per_server_entries_for_app() {
         let deployments = vec![
-            deployment("web", "production", "s1"),
-            deployment("web", "production", "s2"),
-            deployment("web", "staging", "s1"),
-            deployment("api", "production", "s1"),
+            deployment("web", "production", "hkg"),
+            deployment("web", "production", "lax"),
+            deployment("web", "staging", "ord"),
+            deployment("api", "production", "lax"),
         ];
 
-        let options = app_env_options(&deployments, Some("web"));
+        let targets = delete_targets(&deployments, Some("web"), None, None);
         assert_eq!(
-            options,
+            targets,
             vec![
-                AppEnvOption {
-                    app: "web".to_string(),
-                    env: "production".to_string(),
-                    server_count: 2,
-                },
-                AppEnvOption {
-                    app: "web".to_string(),
-                    env: "staging".to_string(),
-                    server_count: 1,
-                },
+                deployment("web", "production", "hkg"),
+                deployment("web", "production", "lax"),
+                deployment("web", "staging", "ord"),
             ]
         );
     }
 
     #[test]
-    fn resolve_app_for_env_without_project_uses_single_app_automatically() {
+    fn delete_targets_filter_by_environment_and_server() {
         let deployments = vec![
-            deployment("web", "production", "s1"),
-            deployment("web", "production", "s2"),
+            deployment("web", "production", "hkg"),
+            deployment("web", "production", "lax"),
+            deployment("web", "staging", "lax"),
+            deployment("api", "production", "lax"),
         ];
 
-        let app = resolve_app_for_env_without_project(&deployments, "production", false).unwrap();
-        assert_eq!(app, "web");
+        let targets = delete_targets(&deployments, Some("web"), Some("production"), Some("lax"));
+        assert_eq!(targets, vec![deployment("web", "production", "lax")]);
     }
 
     #[test]
-    fn should_use_per_server_delete_spinner_only_for_single_interactive_target() {
-        assert!(should_use_per_server_delete_spinner(1, true));
-        assert!(!should_use_per_server_delete_spinner(2, true));
-        assert!(!should_use_per_server_delete_spinner(1, false));
-    }
-
-    #[test]
-    fn server_delete_success_message_is_compact_by_default() {
-        let entry = server_entry("example.com");
-        let message = format_server_delete_success_for_output("prod", &entry, false);
-        assert_eq!(message, "prod deleted");
-    }
-
-    #[test]
-    fn server_delete_success_message_includes_target_in_verbose_mode() {
-        let entry = server_entry("example.com");
-        let message = format_server_delete_success_for_output("prod", &entry, true);
-        assert_eq!(message, "prod (tako@example.com:22) deleted successfully");
-    }
-
-    #[test]
-    fn server_delete_failure_message_is_compact_by_default() {
-        let entry = server_entry("example.com");
-        let message = format_server_delete_failure_for_output("prod", &entry, "boom", false);
-        assert_eq!(message, "prod delete failed: boom");
-    }
-
-    #[test]
-    fn resolve_app_for_env_without_project_requires_interactive_when_multiple_apps() {
-        let deployments = vec![
-            deployment("web", "production", "s1"),
-            deployment("api", "production", "s2"),
+    fn select_delete_target_prompt_without_flags_uses_env_from_server_labels() {
+        let targets = vec![
+            deployment("web", "production", "hkg"),
+            deployment("web", "production", "lax"),
+            deployment("web", "staging", "ord"),
         ];
 
-        let err = resolve_app_for_env_without_project(&deployments, "production", false)
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("Multiple apps are deployed"));
+        let options = delete_target_selection_options(&targets, true, None, None);
+        assert_eq!(options.title, "Select deployment to delete");
+        assert_eq!(
+            options
+                .choices
+                .iter()
+                .map(|(label, _)| label.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                "production from hkg".to_string(),
+                "production from lax".to_string(),
+                "staging from ord".to_string(),
+            ]
+        );
     }
 
     #[test]
-    fn resolve_delete_server_names_from_deployments_filters_by_app_and_env() {
-        let deployments = vec![
-            deployment("web", "production", "s1"),
-            deployment("web", "production", "s2"),
-            deployment("web", "staging", "s3"),
-            deployment("api", "production", "s4"),
+    fn select_delete_target_prompt_for_env_uses_server_labels() {
+        let targets = vec![
+            deployment("web", "production", "hkg"),
+            deployment("web", "production", "lax"),
         ];
 
-        let servers =
-            resolve_delete_server_names_from_deployments(&deployments, "web", "production")
-                .unwrap();
-        assert_eq!(servers, vec!["s1".to_string(), "s2".to_string()]);
+        let options = delete_target_selection_options(&targets, true, Some("production"), None);
+        assert_eq!(options.title, "Select server to delete from");
+        assert_eq!(
+            options
+                .choices
+                .iter()
+                .map(|(label, _)| label.clone())
+                .collect::<Vec<_>>(),
+            vec!["hkg".to_string(), "lax".to_string()]
+        );
+    }
+
+    #[test]
+    fn select_delete_target_prompt_for_server_uses_environment_labels() {
+        let targets = vec![
+            deployment("web", "production", "lax"),
+            deployment("web", "staging", "lax"),
+        ];
+
+        let options = delete_target_selection_options(&targets, true, None, Some("lax"));
+        assert_eq!(options.title, "Select environment to delete");
+        assert_eq!(
+            options
+                .choices
+                .iter()
+                .map(|(label, _)| label.clone())
+                .collect::<Vec<_>>(),
+            vec!["production".to_string(), "staging".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_delete_target_from_candidates_returns_exact_match() {
+        let deployments = vec![
+            deployment("web", "production", "hkg"),
+            deployment("web", "production", "lax"),
+            deployment("web", "staging", "lax"),
+        ];
+
+        let target = resolve_delete_target_from_candidates(
+            &deployments,
+            Some("web"),
+            Some("production"),
+            Some("lax"),
+            false,
+        )
+        .unwrap();
+        assert_eq!(target, deployment("web", "production", "lax"));
+    }
+
+    #[test]
+    fn resolve_delete_target_from_candidates_errors_when_non_interactive_selection_is_needed() {
+        let deployments = vec![
+            deployment("web", "production", "hkg"),
+            deployment("web", "production", "lax"),
+        ];
+
+        let err = resolve_delete_target_from_candidates(
+            &deployments,
+            Some("web"),
+            Some("production"),
+            None,
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("Multiple deployments match"));
+        assert!(err.contains("--server"));
+    }
+
+    #[test]
+    fn resolve_delete_target_from_candidates_returns_not_found_error_for_unknown_server() {
+        let deployments = vec![
+            deployment("web", "production", "hkg"),
+            deployment("web", "production", "lax"),
+        ];
+
+        let err = resolve_delete_target_from_candidates(
+            &deployments,
+            Some("web"),
+            Some("production"),
+            Some("ord"),
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("not deployed"));
     }
 
     #[test]
@@ -935,74 +904,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_delete_server_names_prefers_env_mapping() {
-        let mut config = TakoToml::default();
-        config.envs.insert(
-            "production".to_string(),
-            EnvConfig {
-                servers: vec!["prod-a".to_string()],
-                ..Default::default()
-            },
-        );
-
-        let mut servers = ServersToml::default();
-        servers
-            .servers
-            .insert("prod-a".to_string(), server_entry("1.2.3.4"));
-        servers
-            .servers
-            .insert("fallback".to_string(), server_entry("5.6.7.8"));
-
-        let names = resolve_delete_server_names(&config, &servers, "production").unwrap();
-        assert_eq!(names, vec!["prod-a".to_string()]);
-    }
-
-    #[test]
-    fn resolve_delete_server_names_requires_explicit_mapping() {
-        let mut config = TakoToml::default();
-        config
-            .envs
-            .insert("production".to_string(), Default::default());
-
-        let mut servers = ServersToml::default();
-        servers
-            .servers
-            .insert("solo".to_string(), server_entry("127.0.0.1"));
-
-        let err = resolve_delete_server_names(&config, &servers, "production").unwrap_err();
-        assert!(err.contains("No servers configured for environment 'production'"));
-    }
-
-    #[test]
-    fn resolve_delete_server_names_errors_without_mapping_for_non_production() {
-        let mut config = TakoToml::default();
-        config
-            .envs
-            .insert("staging".to_string(), Default::default());
-
-        let mut servers = ServersToml::default();
-        servers
-            .servers
-            .insert("solo".to_string(), server_entry("127.0.0.1"));
-
-        let err = resolve_delete_server_names(&config, &servers, "staging").unwrap_err();
-        assert!(err.contains("No servers configured for environment 'staging'"));
-    }
-
-    #[test]
-    fn resolve_delete_server_names_errors_when_no_servers_exist() {
-        let mut config = TakoToml::default();
-        config
-            .envs
-            .insert("staging".to_string(), Default::default());
-
-        let servers = ServersToml::default();
-        let err = resolve_delete_server_names(&config, &servers, "staging").unwrap_err();
-        assert!(err.contains("No servers have been added"));
-        assert!(err.contains("[envs.staging].servers"));
-    }
-
-    #[test]
     fn parse_delete_response_converts_error_response() {
         let err = parse_delete_response(Response::error("boom")).unwrap_err();
         assert!(err.contains("boom"));
@@ -1010,47 +911,36 @@ mod tests {
 
     #[test]
     fn format_delete_confirm_hint_uses_app_and_single_server() {
-        let hint = format_delete_confirm_hint("bun-example", &[String::from("prod-1")]);
+        let hint = format_delete_confirm_hint("bun-example", "prod-1");
         assert_eq!(hint, "This removes application bun-example from prod-1.");
     }
 
     #[test]
-    fn format_delete_confirm_hint_lists_multiple_servers() {
-        let hint = format_delete_confirm_hint(
-            "bun-example",
-            &[String::from("prod-1"), String::from("prod-2")],
-        );
-        assert_eq!(
-            hint,
-            "This removes application bun-example from prod-1, prod-2."
-        );
+    fn format_delete_confirm_hint_clarifies_single_deployment_scope() {
+        let hint = format_delete_confirm_hint("bun-example", "prod-1");
+        assert_eq!(hint, "This removes application bun-example from prod-1.");
     }
 
     #[test]
-    fn format_delete_confirm_prompt_uses_confirm_wording() {
-        let prompt = format_delete_confirm_prompt("bun-example", "production", 2);
+    fn format_delete_confirm_prompt_uses_single_server_wording() {
+        let prompt = format_delete_confirm_prompt("bun-example", "production", "prod-1");
         assert_eq!(
             prompt,
-            "Please confirm you want to remove application bun-example from production on 2 server(s)."
+            "Please confirm you want to remove application bun-example from production on prod-1."
         );
-    }
-
-    #[test]
-    fn format_delete_summary_warning_uses_all_servers_failed_when_none_succeed() {
-        let warning = format_delete_summary_warning(0, 1);
-        assert_eq!(warning, "Deletion failed: 0/1 servers succeeded");
-    }
-
-    #[test]
-    fn format_delete_summary_warning_uses_partial_when_some_succeed() {
-        let warning = format_delete_summary_warning(1, 2);
-        assert_eq!(warning, "Deletion partially failed: 1/2 servers succeeded");
     }
 
     #[test]
     fn validate_confirmation_mode_requires_yes_for_non_interactive() {
         let err = validate_confirmation_mode(false, false).unwrap_err();
         assert!(err.contains("--yes"));
+    }
+
+    #[test]
+    fn validate_target_flags_for_mode_requires_env_and_server_non_interactive() {
+        let err = validate_target_flags_for_mode(Some("production"), None, false).unwrap_err();
+        assert!(err.contains("--env"));
+        assert!(err.contains("--server"));
     }
 
     #[test]

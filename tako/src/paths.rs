@@ -91,7 +91,6 @@ pub fn dev_tako_home_from_exe(exe_path: &Path) -> Option<PathBuf> {
     repo_root_from_exe(exe_path).map(|root| root.join("local-dev").join(".tako"))
 }
 
-
 #[cfg(test)]
 pub(crate) fn test_tako_home_env_lock() -> MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
