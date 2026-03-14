@@ -10,54 +10,21 @@ pub(crate) fn entrypoint_relative_path(runtime: &str) -> Option<&'static str> {
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct DeployArchiveManifest {
+#[derive(Debug, Clone, serde::Deserialize)]
+struct ReleaseManifest {
     runtime: String,
     main: String,
+    idle_timeout: u32,
     #[serde(default)]
-    start: Option<Vec<String>>,
-}
-
-/// Minimal manifest fields needed to read env vars for the app process.
-#[derive(serde::Deserialize)]
-struct AppEnvManifest {
+    start: Vec<String>,
     #[serde(default)]
     env_vars: HashMap<String, String>,
+    #[serde(default)]
+    install: Option<String>,
 }
 
-/// Read non-secret environment variables from the `app.json` deploy manifest.
-///
-/// Returns an empty map if the file is missing or the `env_vars` field is absent.
-pub fn env_vars_from_release_dir(release_dir: &Path) -> Result<HashMap<String, String>, String> {
+fn load_release_manifest(release_dir: &Path) -> Result<ReleaseManifest, String> {
     let manifest_path = release_dir.join("app.json");
-    if !manifest_path.exists() {
-        return Ok(HashMap::new());
-    }
-    let content = std::fs::read_to_string(&manifest_path)
-        .map_err(|e| format!("read {}: {}", manifest_path.display(), e))?;
-    let manifest: AppEnvManifest = serde_json::from_str(&content)
-        .map_err(|e| format!("parse {}: {}", manifest_path.display(), e))?;
-    Ok(manifest.env_vars)
-}
-
-/// Determine the command to launch an app from its release directory.
-///
-/// Release launch behavior is derived from deploy manifest (`app.json`) only.
-pub fn command_for_release_dir(release_dir: &Path) -> Result<Vec<String>, String> {
-    command_from_archive_manifest(release_dir)?.ok_or_else(|| {
-        format!(
-            "missing deploy manifest {}",
-            release_dir.join("app.json").display()
-        )
-    })
-}
-
-fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String>>, String> {
-    let manifest_path = release_dir.join("app.json");
-    if !manifest_path.exists() {
-        return Ok(None);
-    }
-
     let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
         format!(
             "failed to read deploy manifest {}: {}",
@@ -65,13 +32,44 @@ fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String
             e
         )
     })?;
-    let manifest: DeployArchiveManifest = serde_json::from_str(&content).map_err(|e| {
+    serde_json::from_str(&content).map_err(|e| {
         format!(
             "failed to parse deploy manifest {}: {}",
             manifest_path.display(),
             e
         )
-    })?;
+    })
+}
+
+pub fn env_vars_from_release_dir(release_dir: &Path) -> Result<HashMap<String, String>, String> {
+    Ok(load_release_manifest(release_dir)?.env_vars)
+}
+
+pub fn idle_timeout_secs_from_release_dir(release_dir: &Path) -> Result<u32, String> {
+    Ok(load_release_manifest(release_dir)?.idle_timeout)
+}
+
+pub fn runtime_from_release_dir(release_dir: &Path) -> Result<String, String> {
+    let manifest = load_release_manifest(release_dir)?;
+    if manifest.runtime.trim().is_empty() {
+        return Err(format!(
+            "deploy manifest {} has empty runtime field",
+            release_dir.join("app.json").display()
+        ));
+    }
+    Ok(manifest.runtime)
+}
+
+pub fn install_command_from_release_dir(release_dir: &Path) -> Result<Option<String>, String> {
+    Ok(load_release_manifest(release_dir)?.install)
+}
+
+/// Determine the command to launch an app from its release directory.
+///
+/// Release launch behavior is derived from deploy manifest (`app.json`) only.
+pub fn command_for_release_dir(release_dir: &Path) -> Result<Vec<String>, String> {
+    let manifest_path = release_dir.join("app.json");
+    let manifest = load_release_manifest(release_dir)?;
     if manifest.main.trim().is_empty() {
         return Err(format!(
             "deploy manifest {} has empty main field",
@@ -79,11 +77,10 @@ fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String
         ));
     }
 
-    if let Some(start) = manifest.start
-        && !start.is_empty()
-    {
-        return Ok(Some(
-            start
+    if !manifest.start.is_empty() {
+        return Ok(
+            manifest
+                .start
                 .into_iter()
                 .map(|arg| {
                     if arg == "{main}" {
@@ -93,7 +90,7 @@ fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String
                     }
                 })
                 .collect(),
-        ));
+        );
     }
 
     let rel_path = entrypoint_relative_path(&manifest.runtime).ok_or_else(|| {
@@ -106,19 +103,19 @@ fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String
     let entrypoint = resolve_entrypoint_path(release_dir, rel_path);
 
     match manifest.runtime.as_str() {
-        "bun" => Ok(Some(vec![
+        "bun" => Ok(vec![
             "bun".to_string(),
             "run".to_string(),
             entrypoint,
             manifest.main,
-        ])),
-        "node" => Ok(Some(vec![
+        ]),
+        "node" => Ok(vec![
             "node".to_string(),
             "--experimental-strip-types".to_string(),
             entrypoint,
             manifest.main,
-        ])),
-        "deno" => Ok(Some(vec![
+        ]),
+        "deno" => Ok(vec![
             "deno".to_string(),
             "run".to_string(),
             "--allow-net".to_string(),
@@ -126,7 +123,7 @@ fn command_from_archive_manifest(release_dir: &Path) -> Result<Option<Vec<String
             "--allow-read".to_string(),
             entrypoint,
             manifest.main,
-        ])),
+        ]),
         _ => unreachable!(),
     }
 }
@@ -156,7 +153,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","env_vars":{"NODE_ENV":"production","TAKO_BUILD":"v1"}}"#,
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"env_vars":{"NODE_ENV":"production","TAKO_BUILD":"v1"}}"#,
         )
         .unwrap();
         let vars = env_vars_from_release_dir(dir.path()).unwrap();
@@ -169,7 +166,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts"}"#,
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
         )
         .unwrap();
         let vars = env_vars_from_release_dir(dir.path()).unwrap();
@@ -177,10 +174,10 @@ mod tests {
     }
 
     #[test]
-    fn env_vars_from_release_dir_returns_empty_when_manifest_missing() {
+    fn env_vars_from_release_dir_errors_when_manifest_is_missing() {
         let dir = TempDir::new().unwrap();
-        let vars = env_vars_from_release_dir(dir.path()).unwrap();
-        assert!(vars.is_empty());
+        let err = env_vars_from_release_dir(dir.path()).unwrap_err();
+        assert!(err.contains("failed to read deploy manifest"));
     }
 
     #[test]
@@ -192,17 +189,29 @@ mod tests {
     }
 
     #[test]
+    fn idle_timeout_secs_from_release_dir_reads_required_field() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":42}"#,
+        )
+        .unwrap();
+        assert_eq!(idle_timeout_secs_from_release_dir(dir.path()).unwrap(), 42);
+    }
+
+    #[test]
     fn uses_manifest_main_when_present() {
         let dir = TempDir::new().unwrap();
         std::fs::create_dir_all(dir.path().join("node_modules/tako.sh/src/entrypoints")).unwrap();
         std::fs::write(
-            dir.path().join("node_modules/tako.sh/src/entrypoints/bun.ts"),
+            dir.path()
+                .join("node_modules/tako.sh/src/entrypoints/bun.ts"),
             "export {};",
         )
         .unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"server/entry.js"}"#,
+            r#"{"runtime":"bun","main":"server/entry.js","idle_timeout":300}"#,
         )
         .unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();
@@ -227,7 +236,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"server/entry.js","start":["bun","run","node_modules/tako.sh/src/entrypoints/bun.ts","{main}"]}"#,
+            r#"{"runtime":"bun","main":"server/entry.js","idle_timeout":300,"start":["bun","run","node_modules/tako.sh/src/entrypoints/bun.ts","{main}"]}"#,
         )
         .unwrap();
 
@@ -247,7 +256,7 @@ mod tests {
     fn errors_when_manifest_is_missing() {
         let dir = TempDir::new().unwrap();
         let err = command_for_release_dir(dir.path()).unwrap_err();
-        assert!(err.contains("missing deploy manifest"));
+        assert!(err.contains("failed to read deploy manifest"));
     }
 
     #[test]
@@ -255,7 +264,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"python","main":"server/index.js"}"#,
+            r#"{"runtime":"python","main":"server/index.js","idle_timeout":300}"#,
         )
         .unwrap();
         let err = command_for_release_dir(dir.path()).unwrap_err();
@@ -267,7 +276,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"node","main":"server/index.mjs"}"#,
+            r#"{"runtime":"node","main":"server/index.mjs","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -290,7 +299,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"deno","main":"server/main.ts"}"#,
+            r#"{"runtime":"deno","main":"server/main.ts","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -316,7 +325,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"  "}"#,
+            r#"{"runtime":"bun","main":"  ","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -339,7 +348,7 @@ mod tests {
         std::fs::write(app_dir.join("src/app.ts"), "export default {};\n").unwrap();
         std::fs::write(
             app_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"src/app.ts"}"#,
+            r#"{"runtime":"bun","main":"src/app.ts","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -360,7 +369,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"src/app.ts"}"#,
+            r#"{"runtime":"bun","main":"src/app.ts","idle_timeout":300}"#,
         )
         .unwrap();
         std::fs::create_dir_all(dir.path().join("src")).unwrap();

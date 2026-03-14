@@ -22,7 +22,10 @@ mod socket;
 mod state_store;
 mod tls;
 
-use crate::app_command::{command_for_release_dir, env_vars_from_release_dir};
+use crate::app_command::{
+    command_for_release_dir, env_vars_from_release_dir, idle_timeout_secs_from_release_dir,
+    install_command_from_release_dir, runtime_from_release_dir,
+};
 use crate::instances::{
     App, AppConfig, AppManager, HealthChecker, HealthConfig, InstanceEvent, RollingUpdateConfig,
     RollingUpdater, target_new_instances_for_build,
@@ -108,10 +111,6 @@ pub struct Args {
     #[arg(long, default_value_t = 12)]
     pub renewal_interval_hours: u64,
 
-    /// Offset added to persisted app base ports (used for temporary upgrade candidates).
-    #[arg(long, default_value_t = 0)]
-    pub instance_port_offset: u16,
-
     /// Run as a worker: serve traffic with minimal scaling (max 1 instance
     /// per app), skip management socket and ACME. Monitors the primary
     /// server's socket — promotes to full mode if primary is unavailable,
@@ -143,7 +142,6 @@ pub struct ServerRuntimeConfig {
     acme_staging: bool,
     acme_email: Option<String>,
     renewal_interval_hours: u64,
-    instance_port_offset: u16,
     dns_provider: Option<String>,
     worker: bool,
     metrics_port: Option<u16>,
@@ -162,7 +160,6 @@ impl ServerRuntimeConfig {
             acme_staging: false,
             acme_email: None,
             renewal_interval_hours: 12,
-            instance_port_offset: 0,
             dns_provider: None,
             worker: false,
             metrics_port: Some(9898),
@@ -182,7 +179,6 @@ impl ServerRuntimeConfig {
             acme_staging: self.acme_staging,
             acme_email: self.acme_email.clone(),
             renewal_interval_hours: self.renewal_interval_hours,
-            instance_port_offset: self.instance_port_offset,
             dns_provider: self.dns_provider.clone(),
             worker: self.worker,
             metrics_port: self.metrics_port,
@@ -465,7 +461,7 @@ impl ServerState {
 
         for persisted in apps {
             let mut config = persisted.config.clone();
-            let app_name = config.name.clone();
+            let app_name = config.deployment_id();
             let routes = persisted.routes.clone();
 
             // In worker mode, cap scaling to 1 instance to minimize resources.
@@ -475,15 +471,15 @@ impl ServerState {
             }
 
             let should_start = config.min_instances > 0;
-            config.base_port =
-                self.select_runtime_base_port(config.base_port, config.max_instances);
-            config.app_socket_dir = self.runtime.app_socket_dir();
-
-            // Populate env vars from the release manifest and secrets file.
-            config.env_vars = env_vars_from_release_dir(&config.path).unwrap_or_else(|e| {
-                tracing::warn!(app = %app_name, "Failed to read env vars from app.json: {}", e);
-                HashMap::new()
-            });
+            let release_path = release_app_path(&self.runtime.data_dir, &config);
+            if let Err(error) = apply_release_runtime_to_config(
+                &mut config,
+                release_path,
+                self.runtime.app_socket_dir(),
+            ) {
+                tracing::error!(app = %app_name, "Failed to restore app config: {}", error);
+                continue;
+            }
             config.secrets =
                 read_secrets_file(&secrets_file_path(&self.runtime.data_dir, &app_name))
                     .unwrap_or_else(|e| {
@@ -492,7 +488,7 @@ impl ServerState {
                     });
 
             // Pre-install mise-managed tools so cold starts don't stall on download.
-            if let Err(e) = ensure_mise_tools_installed(&config.cwd).await {
+            if let Err(e) = ensure_mise_tools_installed(&config.path).await {
                 tracing::warn!(app = %app_name, "Failed to pre-install mise tools: {}", e);
             }
 
@@ -548,7 +544,6 @@ impl ServerState {
                     protocol_version: PROTOCOL_VERSION,
                     server_version: server_version().to_string(),
                     capabilities: vec![
-                        "deploy_instances_idle_timeout".to_string(),
                         "on_demand_cold_start".to_string(),
                         "idle_scale_to_zero".to_string(),
                         "scale".to_string(),
@@ -574,7 +569,6 @@ impl ServerState {
                 path,
                 routes,
                 secrets,
-                idle_timeout,
             } => {
                 if let Err(msg) = validate_app_name(&app) {
                     return Response::error(msg);
@@ -585,15 +579,8 @@ impl ServerState {
                 if let Some(resp) = self.reject_mutating_when_upgrading("deploy").await {
                     return resp;
                 }
-                self.deploy_app(
-                    &app,
-                    &version,
-                    &path,
-                    routes,
-                    secrets,
-                    idle_timeout,
-                )
-                .await
+                self.deploy_app(&app, &version, &path, routes, secrets)
+                    .await
             }
             Command::Scale { app, instances } => {
                 if let Err(msg) = validate_app_name(&app) {
@@ -711,7 +698,6 @@ impl ServerState {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn deploy_app(
         &self,
         app_name: &str,
@@ -719,7 +705,6 @@ impl ServerState {
         path: &str,
         routes: Vec<String>,
         secrets: Option<HashMap<String, String>>,
-        idle_timeout: u32,
     ) -> Response {
         tracing::info!(app = app_name, version = version, "Deploying app");
 
@@ -754,35 +739,10 @@ impl ServerState {
             }
         };
 
-        if let Err(error) = prepare_release_runtime(&release_path, &HashMap::new()).await {
-            return Response::error(format!("Invalid app release: {}", error));
-        }
-
-        // Allow tako-app (in tako group) to read the release directory
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&release_path, std::fs::Permissions::from_mode(0o750));
-        }
-
-        // Read non-secret env vars from app.json in the release dir
-        let mut env_vars = env_vars_from_release_dir(&release_path).unwrap_or_else(|e| {
-            tracing::warn!(
-                app = app_name,
-                "Failed to read env vars from app.json: {}",
-                e
-            );
-            HashMap::new()
-        });
-
-        // Trust mise configs in the release dir so mise shims don't error
-        // in non-interactive mode when resolving runtimes.
-        if release_path.join("mise.toml").exists() || release_path.join(".mise.toml").exists() {
-            env_vars.insert(
-                "MISE_TRUSTED_CONFIG_PATHS".to_string(),
-                release_path.to_string_lossy().to_string(),
-            );
-        }
+        let env_vars = match env_vars_from_release_dir(&release_path) {
+            Ok(vars) => vars,
+            Err(error) => return Response::error(format!("Invalid app release: {}", error)),
+        };
 
         // Resolve secrets: if provided, write to disk; otherwise keep existing.
         let secrets_path = secrets_file_path(&self.runtime.data_dir, app_name);
@@ -794,6 +754,29 @@ impl ServerState {
         } else {
             read_secrets_file(&secrets_path).unwrap_or_default()
         };
+        let mut release_env = env_vars.clone();
+        release_env.extend(secrets.clone());
+
+        if let Err(error) = prepare_release_runtime(&release_path, &release_env).await {
+            return Response::error(format!("Invalid app release: {}", error));
+        }
+
+        // Allow tako-app (in tako group) to read the release directory
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&release_path, std::fs::Permissions::from_mode(0o750));
+        }
+
+        let app_subdir = match app_subdir_from_release_path(
+            &self.runtime.data_dir,
+            app_name,
+            version,
+            &release_path,
+        ) {
+            Ok(value) => value,
+            Err(error) => return Response::error(error),
+        };
 
         // Get or create app
         let (app, deploy_config, is_new_app) =
@@ -801,42 +784,38 @@ impl ServerState {
                 // Update existing app config. We'll perform a rolling update if instances are running.
                 let mut config = existing.config.read().clone();
                 config.version = version.to_string();
-                config.path = release_path.clone();
-                config.cwd = release_path.clone();
-                config.env_vars = env_vars;
+                config.app_subdir = app_subdir.clone();
                 config.secrets = secrets;
-                config.idle_timeout = Duration::from_secs(idle_timeout as u64);
-                config.app_socket_dir = self.runtime.app_socket_dir();
-                config.command = match command_for_release_dir(&config.cwd) {
-                    Ok(cmd) => cmd,
-                    Err(e) => {
-                        return Response::error(format!("Invalid app release: {}", e));
-                    }
-                };
+                if let Err(error) = apply_release_runtime_to_config(
+                    &mut config,
+                    release_path.clone(),
+                    self.runtime.app_socket_dir(),
+                ) {
+                    return Response::error(format!("Invalid app release: {}", error));
+                }
                 existing.update_config(config.clone());
                 (existing, config, false)
             } else {
                 // Create new app
+                let (name, environment) = requested_deployment_identity(app_name);
                 let config = AppConfig {
-                    name: app_name.to_string(),
+                    name,
+                    environment,
                     version: version.to_string(),
-                    path: release_path.clone(),
-                    cwd: release_path.clone(),
-                    command: match command_for_release_dir(&release_path) {
-                        Ok(cmd) => cmd,
-                        Err(e) => {
-                            return Response::error(format!("Invalid app release: {}", e));
-                        }
-                    },
-                    env_vars,
+                    app_subdir,
                     secrets,
                     min_instances: 0,
                     max_instances: 4,
-                    base_port: self.allocate_port_range(),
-                    app_socket_dir: self.runtime.app_socket_dir(),
-                    idle_timeout: Duration::from_secs(idle_timeout as u64),
                     ..Default::default()
                 };
+                let mut config = config;
+                if let Err(error) = apply_release_runtime_to_config(
+                    &mut config,
+                    release_path.clone(),
+                    self.runtime.app_socket_dir(),
+                ) {
+                    return Response::error(format!("Invalid app release: {}", error));
+                }
 
                 let deploy_config = config.clone();
                 let app = self.app_manager.register_app(config);
@@ -1000,8 +979,6 @@ impl ServerState {
         next_config.min_instances = effective_instances as u32;
         if next_config.max_instances < next_config.min_instances {
             next_config.max_instances = next_config.min_instances.max(4);
-            next_config.base_port =
-                self.select_runtime_base_port(next_config.base_port, next_config.max_instances);
         }
         app.update_config(next_config.clone());
 
@@ -1022,7 +999,12 @@ impl ServerState {
 
             for _ in 0..to_add {
                 let instance = app.allocate_instance();
-                match self.app_manager.spawner().spawn(&app, instance.clone()).await {
+                match self
+                    .app_manager
+                    .spawner()
+                    .spawn(&app, instance.clone())
+                    .await
+                {
                     Ok(()) => started_instances.push(instance),
                     Err(error) => {
                         for started in started_instances {
@@ -1128,7 +1110,8 @@ impl ServerState {
             locks.remove(app_name);
         }
 
-        if let Err(e) = self.state_store.delete_app(app_name) {
+        let (name, environment) = requested_deployment_identity(app_name);
+        if let Err(e) = self.state_store.delete_app(&name, &environment) {
             tracing::warn!(
                 app = app_name,
                 "Failed to delete persisted app state: {}",
@@ -1194,7 +1177,6 @@ impl ServerState {
 
         let app_root = self.runtime.data_dir.join("apps").join(app_name);
         let releases_root = app_root.join("releases");
-        let app_subdir = infer_release_app_subdir(&app_root, &config.version, &config.path);
         let current_version = current_release_version(&app_root);
 
         let mut releases = Vec::new();
@@ -1225,7 +1207,7 @@ impl ServerState {
                 continue;
             };
 
-            let manifest_path = release_manifest_path(&release_root, app_subdir.as_deref());
+            let manifest_path = release_manifest_path(&release_root, &config.app_subdir);
             let (commit_message, git_dirty) = read_release_manifest_metadata(&manifest_path);
             releases.push(ReleaseInfo {
                 current: current_version.as_deref() == Some(version.as_str()),
@@ -1270,8 +1252,7 @@ impl ServerState {
         let config = app.config.read().clone();
 
         let app_root = self.runtime.data_dir.join("apps").join(app_name);
-        let app_subdir = infer_release_app_subdir(&app_root, &config.version, &config.path);
-        let target_path = rollback_release_path(&app_root, version, app_subdir.as_deref());
+        let target_path = rollback_release_path(&app_root, version, &config.app_subdir);
 
         if !target_path.is_dir() {
             return Response::error(format!(
@@ -1291,14 +1272,12 @@ impl ServerState {
             ));
         }
 
-        let idle_timeout = u32::try_from(config.idle_timeout.as_secs()).unwrap_or(u32::MAX);
         self.deploy_app(
             app_name,
             version,
             &target_path.to_string_lossy(),
             routes,
             None, // keep existing secrets on rollback
-            idle_timeout,
         )
         .await
     }
@@ -1379,51 +1358,6 @@ impl ServerState {
             })),
             Err(e) => Response::error(format!("Certificate request failed: {}", e)),
         }
-    }
-
-    /// Allocate a base port for a new app
-    fn allocate_port_range(&self) -> u16 {
-        // Pick an unused local port as the base.
-        // This avoids hard-coding ports like 3000, which often collide in dev/test.
-        std::net::TcpListener::bind("127.0.0.1:0")
-            .ok()
-            .and_then(|l| l.local_addr().ok().map(|a| a.port()))
-            .unwrap_or(3000)
-    }
-
-    fn select_runtime_base_port(&self, persisted_base: u16, max_instances: u32) -> u16 {
-        let width = max_instances.clamp(1, 64);
-        let preferred = persisted_base.saturating_add(self.runtime.instance_port_offset);
-
-        if Self::port_range_is_available(preferred, width) {
-            return preferred;
-        }
-
-        for _ in 0..128 {
-            let candidate = self.allocate_port_range();
-            if Self::port_range_is_available(candidate, width) {
-                return candidate;
-            }
-        }
-
-        preferred
-    }
-
-    fn port_range_is_available(base: u16, width: u32) -> bool {
-        let Ok(width_u16) = u16::try_from(width) else {
-            return false;
-        };
-        if base.checked_add(width_u16.saturating_sub(1)).is_none() {
-            return false;
-        }
-
-        for offset in 0..width_u16 {
-            let port = base + offset;
-            if std::net::TcpListener::bind(("127.0.0.1", port)).is_err() {
-                return false;
-            }
-        }
-        true
     }
 
     async fn start_on_demand_warm_instance(&self, app: &Arc<App>) -> Result<(), String> {
@@ -1537,32 +1471,74 @@ fn current_release_version(app_root: &Path) -> Option<String> {
     target.file_name()?.to_str().map(|value| value.to_string())
 }
 
-fn infer_release_app_subdir(
-    app_root: &Path,
-    current_version: &str,
-    current_path: &Path,
-) -> Option<PathBuf> {
-    let current_release_root = app_root.join("releases").join(current_version);
-    let rel = current_path.strip_prefix(current_release_root).ok()?;
-    if rel.as_os_str().is_empty() {
-        None
-    } else {
-        Some(rel.to_path_buf())
+fn app_release_root(data_dir: &Path, app_name: &str, version: &str) -> PathBuf {
+    data_dir.join("apps").join(app_name).join("releases").join(version)
+}
+
+fn release_app_path(data_dir: &Path, config: &AppConfig) -> PathBuf {
+    rollback_release_path(
+        &data_dir.join("apps").join(config.deployment_id()),
+        &config.version,
+        &config.app_subdir,
+    )
+}
+
+fn app_subdir_from_release_path(
+    data_dir: &Path,
+    app_name: &str,
+    version: &str,
+    release_path: &Path,
+) -> Result<String, String> {
+    let release_root = app_release_root(data_dir, app_name, version);
+    let release_root = std::fs::canonicalize(&release_root).unwrap_or(release_root);
+    let relative = release_path.strip_prefix(&release_root).map_err(|_| {
+        format!(
+            "Invalid release path: '{}' must stay under '{}'",
+            release_path.display(),
+            release_root.display()
+        )
+    })?;
+    Ok(relative.to_string_lossy().to_string())
+}
+
+fn insert_mise_trusted_config_path(env_vars: &mut HashMap<String, String>, release_dir: &Path) {
+    if release_dir.join("mise.toml").exists() || release_dir.join(".mise.toml").exists() {
+        env_vars.insert(
+            "MISE_TRUSTED_CONFIG_PATHS".to_string(),
+            release_dir.to_string_lossy().to_string(),
+        );
     }
 }
 
-fn rollback_release_path(app_root: &Path, version: &str, app_subdir: Option<&Path>) -> PathBuf {
+fn apply_release_runtime_to_config(
+    config: &mut AppConfig,
+    release_path: PathBuf,
+    app_socket_dir: PathBuf,
+) -> Result<(), String> {
+    config.path = release_path;
+    config.command = command_for_release_dir(&config.path)?;
+    config.env_vars = env_vars_from_release_dir(&config.path)?;
+    insert_mise_trusted_config_path(&mut config.env_vars, &config.path);
+    config.idle_timeout =
+        Duration::from_secs(u64::from(idle_timeout_secs_from_release_dir(&config.path)?));
+    config.app_socket_dir = app_socket_dir;
+    Ok(())
+}
+
+fn rollback_release_path(app_root: &Path, version: &str, app_subdir: &str) -> PathBuf {
     let release_root = app_root.join("releases").join(version);
-    match app_subdir {
-        Some(subdir) => release_root.join(subdir),
-        None => release_root,
+    if app_subdir.is_empty() {
+        release_root
+    } else {
+        release_root.join(app_subdir)
     }
 }
 
-fn release_manifest_path(release_root: &Path, app_subdir: Option<&Path>) -> PathBuf {
-    let app_dir = match app_subdir {
-        Some(subdir) => release_root.join(subdir),
-        None => release_root.to_path_buf(),
+fn release_manifest_path(release_root: &Path, app_subdir: &str) -> PathBuf {
+    let app_dir = if app_subdir.is_empty() {
+        release_root.to_path_buf()
+    } else {
+        release_root.join(app_subdir)
     };
     app_dir.join("app.json")
 }
@@ -1605,50 +1581,8 @@ fn derive_build_state(instances: &[InstanceStatus]) -> AppState {
     AppState::Stopped
 }
 
-#[derive(Debug, serde::Deserialize)]
-struct ReleaseRuntimeManifest {
-    runtime: String,
-    #[serde(default)]
-    install: Option<String>,
-}
-
-fn load_release_runtime_manifest(
-    release_dir: &Path,
-) -> Result<Option<ReleaseRuntimeManifest>, String> {
-    let manifest_path = release_dir.join("app.json");
-    if !manifest_path.exists() {
-        return Ok(None);
-    }
-
-    let raw = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        format!(
-            "failed to read deploy manifest {}: {}",
-            manifest_path.display(),
-            e
-        )
-    })?;
-    let manifest: ReleaseRuntimeManifest = serde_json::from_str(&raw).map_err(|e| {
-        format!(
-            "failed to parse deploy manifest {}: {}",
-            manifest_path.display(),
-            e
-        )
-    })?;
-    Ok(Some(manifest))
-}
-
-fn resolve_release_runtime(release_dir: &Path) -> Result<Option<String>, String> {
-    let Some(manifest) = load_release_runtime_manifest(release_dir)? else {
-        return Ok(None);
-    };
-    let manifest_path = release_dir.join("app.json");
-    if manifest.runtime.trim().is_empty() {
-        return Err(format!(
-            "deploy manifest {} has empty runtime field",
-            manifest_path.display()
-        ));
-    }
-    Ok(Some(manifest.runtime))
+fn resolve_release_runtime(release_dir: &Path) -> Result<String, String> {
+    runtime_from_release_dir(release_dir)
 }
 
 async fn run_release_install_command(
@@ -1732,7 +1666,13 @@ async fn ensure_mise_tools_installed(release_dir: &Path) -> Result<(), String> {
         .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str())
         .output()
         .await
-        .map_err(|e| format!("Failed to run 'mise install' in {}: {}", release_dir.display(), e))?;
+        .map_err(|e| {
+            format!(
+                "Failed to run 'mise install' in {}: {}",
+                release_dir.display(),
+                e
+            )
+        })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1749,31 +1689,23 @@ async fn prepare_release_runtime(
     release_dir: &Path,
     env: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let Some(manifest) = load_release_runtime_manifest(release_dir)? else {
-        return Ok(());
-    };
-    if manifest.runtime.trim().is_empty() {
-        return Err(format!(
-            "deploy manifest {} has empty runtime field",
-            release_dir.join("app.json").display()
-        ));
-    }
+    let runtime = runtime_from_release_dir(release_dir)?;
+    let install_command = install_command_from_release_dir(release_dir)?;
 
     // Pre-install mise-managed tools before dependency install or app start.
     ensure_mise_tools_installed(release_dir).await?;
 
-    if let Some(install_cmd) = manifest
-        .install
+    if let Some(install_cmd) = install_command
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
         run_release_install_command(release_dir, install_cmd, env).await?;
-    } else if manifest.runtime == "bun" {
+    } else if runtime == "bun" {
         install_bun_dependencies_for_release(release_dir, env).await?;
     }
 
-    if let Some(rel_path) = crate::app_command::entrypoint_relative_path(&manifest.runtime) {
+    if let Some(rel_path) = crate::app_command::entrypoint_relative_path(&runtime) {
         let entrypoint_path = release_dir.join(rel_path);
         if !entrypoint_path.is_file() {
             return Err(format!(
@@ -1886,7 +1818,7 @@ fn should_use_self_signed_route_cert(domain: &str) -> bool {
     is_private_local_hostname(domain)
 }
 
-fn validate_app_name(app_name: &str) -> Result<(), String> {
+fn validate_app_name_segment(app_name: &str) -> Result<(), String> {
     if app_name.is_empty() {
         return Err("Invalid app name: must not be empty".to_string());
     }
@@ -1913,6 +1845,23 @@ fn validate_app_name(app_name: &str) -> Result<(), String> {
         );
     }
     Ok(())
+}
+
+fn validate_app_name(app_name: &str) -> Result<(), String> {
+    if let Some((app, env)) = tako_core::split_deployment_app_id(app_name) {
+        validate_app_name_segment(app)?;
+        validate_app_name_segment(env)?;
+        return Ok(());
+    }
+
+    validate_app_name_segment(app_name)
+}
+
+fn requested_deployment_identity(app_id: &str) -> (String, String) {
+    if let Some((name, environment)) = tako_core::split_deployment_app_id(app_id) {
+        return (name.to_string(), environment.to_string());
+    }
+    (app_id.to_string(), "production".to_string())
 }
 
 fn validate_release_version(version: &str) -> Result<(), String> {
@@ -2246,7 +2195,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         acme_staging: args.acme_staging,
         acme_email: args.acme_email.clone(),
         renewal_interval_hours: args.renewal_interval_hours,
-        instance_port_offset: args.instance_port_offset,
         dns_provider: config_dns_provider.clone(),
         worker,
         metrics_port: if args.metrics_port == 0 {
@@ -2939,8 +2887,8 @@ mod tests {
         ensure_mise_tools_installed, extract_zstd_archive, handle_idle_event,
         install_rustls_crypto_provider, prepare_release_runtime, read_secrets_file,
         read_server_config, resolve_release_runtime, run_extract_archive_mode, secrets_file_path,
-        should_signal_parent_on_ready, should_use_self_signed_route_cert, validate_deploy_routes,
-        write_secrets_file,
+        should_signal_parent_on_ready, should_use_self_signed_route_cert, validate_app_name,
+        validate_deploy_routes, write_secrets_file,
     };
     use crate::instances::AppConfig;
     use crate::socket::{AppState, Command, InstanceState, Response};
@@ -2949,6 +2897,7 @@ mod tests {
     use serde_json::Value;
     use std::collections::HashMap;
     use std::io::Cursor;
+    use std::path::Path;
     use std::process::{Command as StdCommand, Stdio};
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::Duration;
@@ -2957,6 +2906,33 @@ mod tests {
 
     fn empty_challenge_tokens() -> super::ChallengeTokens {
         Arc::new(parking_lot::RwLock::new(HashMap::new()))
+    }
+
+    fn write_release_manifest(
+        release_dir: &Path,
+        runtime: &str,
+        main: &str,
+        start: &[&str],
+        install: Option<&str>,
+        idle_timeout: u32,
+    ) {
+        let mut manifest = serde_json::json!({
+            "runtime": runtime,
+            "main": main,
+            "idle_timeout": idle_timeout,
+        });
+        if !start.is_empty() {
+            manifest["start"] =
+                serde_json::Value::Array(start.iter().map(|value| (*value).into()).collect());
+        }
+        if let Some(install) = install {
+            manifest["install"] = install.into();
+        }
+        std::fs::write(
+            release_dir.join("app.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
     }
 
     #[test]
@@ -3095,6 +3071,11 @@ mod tests {
         assert!(err.contains("non-empty"));
     }
 
+    #[test]
+    fn validate_app_name_accepts_app_env_identifier() {
+        assert!(validate_app_name("my-app/staging").is_ok());
+    }
+
     #[tokio::test]
     async fn deploy_rejects_invalid_app_name() {
         let temp = TempDir::new().unwrap();
@@ -3117,7 +3098,6 @@ mod tests {
                 path: temp.path().to_string_lossy().to_string(),
                 routes: vec!["api.example.com".to_string()],
                 secrets: Some(HashMap::new()),
-                idle_timeout: 300,
             })
             .await;
 
@@ -3152,7 +3132,6 @@ mod tests {
                 path: outside_release.to_string_lossy().to_string(),
                 routes: vec!["api.example.com".to_string()],
                 secrets: Some(HashMap::new()),
-                idle_timeout: 300,
             })
             .await;
 
@@ -3195,7 +3174,6 @@ mod tests {
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["api.example.com".to_string()],
                 secrets: Some(HashMap::new()),
-                idle_timeout: 300,
             })
             .await;
 
@@ -3225,23 +3203,17 @@ mod tests {
     }
 
     #[test]
-    fn resolve_release_runtime_returns_none_when_manifest_missing() {
+    fn resolve_release_runtime_requires_manifest() {
         let temp = TempDir::new().unwrap();
-        assert_eq!(resolve_release_runtime(temp.path()).unwrap(), None);
+        let err = resolve_release_runtime(temp.path()).unwrap_err();
+        assert!(err.contains("failed to read deploy manifest"));
     }
 
     #[test]
     fn resolve_release_runtime_reads_manifest_runtime() {
         let temp = TempDir::new().unwrap();
-        std::fs::write(
-            temp.path().join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts"}"#,
-        )
-        .unwrap();
-        assert_eq!(
-            resolve_release_runtime(temp.path()).unwrap(),
-            Some("bun".to_string())
-        );
+        write_release_manifest(temp.path(), "bun", "index.ts", &[], None, 300);
+        assert_eq!(resolve_release_runtime(temp.path()).unwrap(), "bun".to_string());
     }
 
     #[test]
@@ -3274,7 +3246,7 @@ mod tests {
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
             release_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts"}"#,
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
         )
         .unwrap();
         std::fs::write(
@@ -3329,7 +3301,7 @@ exit 1
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
             release_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts"}"#,
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
         )
         .unwrap();
 
@@ -3379,7 +3351,7 @@ exit 1
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
             release_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","install":"mkdir -p node_modules/tako.sh/src/entrypoints && printf 'export {};\n' > node_modules/tako.sh/src/entrypoints/bun.ts"}"#,
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"install":"mkdir -p node_modules/tako.sh/src/entrypoints && printf 'export {};\n' > node_modules/tako.sh/src/entrypoints/bun.ts"}"#,
         )
         .unwrap();
         std::fs::write(
@@ -3405,6 +3377,22 @@ exit 1
             .stderr(Stdio::null())
             .status()
             .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    fn python3_can_bind_unix_socket() -> bool {
+        let temp = TempDir::new().unwrap();
+        let socket_path = temp.path().join("probe.sock");
+        StdCommand::new("python3")
+            .args([
+                "-c",
+                "import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()",
+            ])
+            .arg(&socket_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
             .unwrap_or(false)
     }
 
@@ -3470,7 +3458,6 @@ exit 1
             name: "my-app".to_string(),
             version: "v1".to_string(),
             path: release_dir.clone(),
-            cwd: release_dir.clone(),
             command: vec![
                 "/bin/sh".to_string(),
                 "-lc".to_string(),
@@ -3661,7 +3648,6 @@ exit 1
             acme_staging: false,
             acme_email: Some("ops@example.com".to_string()),
             renewal_interval_hours: 24,
-            instance_port_offset: 10000,
             dns_provider: None,
             worker: false,
             metrics_port: Some(9898),
@@ -3696,10 +3682,6 @@ exit 1
         assert_eq!(data.get("http_port").and_then(Value::as_u64), Some(8080));
         assert_eq!(data.get("https_port").and_then(Value::as_u64), Some(8443));
         assert_eq!(data.get("no_acme").and_then(Value::as_bool), Some(true));
-        assert_eq!(
-            data.get("instance_port_offset").and_then(Value::as_u64),
-            Some(10000)
-        );
     }
 
     #[tokio::test]
@@ -3775,10 +3757,7 @@ exit 1
             panic!("expected ok response: {response:?}");
         };
         let empty_hash = data.get("hash").and_then(Value::as_str).unwrap();
-        assert_eq!(
-            empty_hash,
-            tako_core::compute_secrets_hash(&HashMap::new())
-        );
+        assert_eq!(empty_hash, tako_core::compute_secrets_hash(&HashMap::new()));
 
         // Write secrets and check hash changes
         let secrets: HashMap<String, String> = [("KEY".to_string(), "val".to_string())]
@@ -3796,10 +3775,7 @@ exit 1
         };
         let with_secrets_hash = data.get("hash").and_then(Value::as_str).unwrap();
         assert_ne!(with_secrets_hash, empty_hash);
-        assert_eq!(
-            with_secrets_hash,
-            tako_core::compute_secrets_hash(&secrets)
-        );
+        assert_eq!(with_secrets_hash, tako_core::compute_secrets_hash(&secrets));
     }
 
     #[tokio::test]
@@ -3818,10 +3794,9 @@ exit 1
         .unwrap();
 
         // Pre-write secrets for the app
-        let secrets: HashMap<String, String> =
-            [("API_KEY".to_string(), "original".to_string())]
-                .into_iter()
-                .collect();
+        let secrets: HashMap<String, String> = [("API_KEY".to_string(), "original".to_string())]
+            .into_iter()
+            .collect();
         let release_dir = temp
             .path()
             .join("apps")
@@ -3829,6 +3804,14 @@ exit 1
             .join("releases")
             .join("v1");
         std::fs::create_dir_all(&release_dir).unwrap();
+        write_release_manifest(
+            &release_dir,
+            "node",
+            "index.js",
+            &["/bin/sh", "-lc", "sleep 600"],
+            Some("true"),
+            300,
+        );
         write_secrets_file(&secrets_file_path(temp.path(), "keep-app"), &secrets).unwrap();
 
         // Deploy with secrets: None — should keep existing
@@ -3839,7 +3822,6 @@ exit 1
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["keep.localhost".to_string()],
                 secrets: None,
-                idle_timeout: 300,
             })
             .await;
 
@@ -3851,6 +3833,7 @@ exit 1
     #[tokio::test]
     async fn restore_from_state_store_rehydrates_apps_routes_and_secrets() {
         let temp = TempDir::new().unwrap();
+        let app_id = "my-app/production";
         let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
@@ -3867,21 +3850,30 @@ exit 1
             .path()
             .join("apps")
             .join("my-app")
+            .join("production")
             .join("releases")
             .join("v1");
         std::fs::create_dir_all(&release_dir).unwrap();
+        write_release_manifest(
+            &release_dir,
+            "node",
+            "index.js",
+            &["/bin/sh", "-lc", "sleep 600"],
+            Some("true"),
+            300,
+        );
 
         let app_secrets: HashMap<String, String> =
             [("DATABASE_URL".to_string(), "postgres://db".to_string())]
                 .into_iter()
                 .collect();
-        write_secrets_file(&secrets_file_path(temp.path(), "my-app"), &app_secrets).unwrap();
+        write_secrets_file(&secrets_file_path(temp.path(), app_id), &app_secrets).unwrap();
 
         let app = state_a.app_manager.register_app(AppConfig {
             name: "my-app".to_string(),
+            environment: "production".to_string(),
             version: "v1".to_string(),
             path: release_dir.clone(),
-            cwd: release_dir,
             command: vec![
                 "/bin/sh".to_string(),
                 "-lc".to_string(),
@@ -3889,7 +3881,6 @@ exit 1
             ],
             min_instances: 0,
             max_instances: 4,
-            base_port: 4200,
             idle_timeout: Duration::from_secs(300),
             ..Default::default()
         });
@@ -3897,14 +3888,14 @@ exit 1
         {
             let mut route_table = state_a.routes.write().await;
             route_table.set_app_routes(
-                "my-app".to_string(),
+                app_id.to_string(),
                 vec![
                     "api.example.com".to_string(),
                     "example.com/api/*".to_string(),
                 ],
             );
         }
-        state_a.persist_app_state("my-app").await;
+        state_a.persist_app_state(app_id).await;
         drop(state_a);
 
         let state_b = ServerState::new(
@@ -3916,12 +3907,12 @@ exit 1
         .unwrap();
         state_b.restore_from_state_store().await.unwrap();
 
-        let restored = state_b.app_manager.get_app("my-app").expect("app restored");
+        let restored = state_b.app_manager.get_app(app_id).expect("app restored");
         assert_eq!(restored.version(), "v1");
         assert_eq!(restored.state(), crate::socket::AppState::Idle);
         let route_table = state_b.routes.read().await;
         assert_eq!(
-            route_table.routes_for_app("my-app"),
+            route_table.routes_for_app(app_id),
             vec![
                 "api.example.com".to_string(),
                 "example.com/api/*".to_string()
@@ -3958,7 +3949,7 @@ exit 1
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
             release_dir.join("app.json"),
-            r#"{"runtime":"node","main":"index.js","start":["/bin/sh","-lc","sleep 600"]}"#,
+            r#"{"runtime":"node","main":"index.js","idle_timeout":300,"start":["/bin/sh","-lc","sleep 600"]}"#,
         )
         .unwrap();
 
@@ -3966,7 +3957,6 @@ exit 1
             name: "my-app".to_string(),
             version: "v1".to_string(),
             path: release_dir.clone(),
-            cwd: release_dir,
             command: vec![
                 "/bin/sh".to_string(),
                 "-lc".to_string(),
@@ -3974,7 +3964,6 @@ exit 1
             ],
             min_instances: 2,
             max_instances: 4,
-            base_port: 4200,
             idle_timeout: Duration::from_secs(300),
             ..Default::default()
         });
@@ -4039,7 +4028,7 @@ exit 1
         std::fs::create_dir_all(&current_release).unwrap();
         std::fs::write(
             current_release.join("app.json"),
-            r#"{"runtime":"node","main":"index.js","start":["/bin/sh","-lc","sleep 600"]}"#,
+            r#"{"runtime":"node","main":"index.js","idle_timeout":300,"start":["/bin/sh","-lc","sleep 600"]}"#,
         )
         .unwrap();
 
@@ -4047,7 +4036,6 @@ exit 1
             name: "my-app".to_string(),
             version: "v1".to_string(),
             path: current_release.clone(),
-            cwd: current_release,
             command: vec![
                 "/bin/sh".to_string(),
                 "-lc".to_string(),
@@ -4055,7 +4043,6 @@ exit 1
             ],
             min_instances: 2,
             max_instances: 4,
-            base_port: 4300,
             idle_timeout: Duration::from_secs(300),
             ..Default::default()
         });
@@ -4077,7 +4064,7 @@ exit 1
         std::fs::create_dir_all(&broken_release).unwrap();
         std::fs::write(
             broken_release.join("app.json"),
-            r#"{"runtime":"node","main":"index.js","start":["/bin/sh","-lc","exit 1"]}"#,
+            r#"{"runtime":"node","main":"index.js","idle_timeout":300,"start":["/bin/sh","-lc","exit 1"]}"#,
         )
         .unwrap();
 
@@ -4088,7 +4075,6 @@ exit 1
                 path: broken_release.to_string_lossy().to_string(),
                 routes: vec!["api.example.com".to_string()],
                 secrets: Some(HashMap::new()),
-                idle_timeout: 300,
             })
             .await;
 
@@ -4097,7 +4083,7 @@ exit 1
     }
 
     #[tokio::test]
-    async fn restore_rebases_base_port_when_range_is_unavailable() {
+    async fn restore_uses_persisted_app_subdir() {
         let temp = TempDir::new().unwrap();
         let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
             cert_dir: temp.path().join("certs"),
@@ -4116,13 +4102,22 @@ exit 1
             .join("my-app")
             .join("releases")
             .join("v1");
-        std::fs::create_dir_all(&release_dir).unwrap();
+        let app_dir = release_dir.join("apps/web");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        write_release_manifest(
+            &app_dir,
+            "node",
+            "index.js",
+            &["/bin/sh", "-lc", "sleep 600"],
+            Some("true"),
+            300,
+        );
 
         let app = state_a.app_manager.register_app(AppConfig {
             name: "my-app".to_string(),
             version: "v1".to_string(),
-            path: release_dir.clone(),
-            cwd: release_dir,
+            app_subdir: "apps/web".to_string(),
+            path: app_dir.clone(),
             command: vec![
                 "/bin/sh".to_string(),
                 "-lc".to_string(),
@@ -4130,7 +4125,7 @@ exit 1
             ],
             min_instances: 0,
             max_instances: 4,
-            base_port: 65_000,
+            idle_timeout: Duration::from_secs(300),
             ..Default::default()
         });
         state_a.load_balancer.register_app(app);
@@ -4151,7 +4146,6 @@ exit 1
             acme_staging: false,
             acme_email: None,
             renewal_interval_hours: 12,
-            instance_port_offset: 10_000,
             dns_provider: None,
             worker: false,
             metrics_port: Some(9898),
@@ -4167,7 +4161,8 @@ exit 1
         .unwrap();
         state_b.restore_from_state_store().await.unwrap();
         let restored = state_b.app_manager.get_app("my-app").expect("app restored");
-        assert_ne!(restored.config.read().base_port, 65_000);
+        assert_eq!(restored.config.read().app_subdir, "apps/web");
+        assert_eq!(restored.config.read().path, app_dir);
     }
 
     #[tokio::test]
@@ -4192,11 +4187,18 @@ exit 1
             .join("releases")
             .join("v1");
         std::fs::create_dir_all(&release_dir).unwrap();
+        write_release_manifest(
+            &release_dir,
+            "node",
+            "index.js",
+            &["/bin/sh", "-lc", "sleep 600"],
+            Some("true"),
+            300,
+        );
         let app = state_a.app_manager.register_app(AppConfig {
             name: "my-app".to_string(),
             version: "v1".to_string(),
             path: release_dir.clone(),
-            cwd: release_dir,
             command: vec![
                 "/bin/sh".to_string(),
                 "-lc".to_string(),
@@ -4208,13 +4210,16 @@ exit 1
         state_a.load_balancer.register_app(app);
         {
             let mut route_table = state_a.routes.write().await;
-            route_table.set_app_routes("my-app".to_string(), vec!["api.example.com".to_string()]);
+            route_table.set_app_routes(
+                "my-app/production".to_string(),
+                vec!["api.example.com".to_string()],
+            );
         }
-        state_a.persist_app_state("my-app").await;
+        state_a.persist_app_state("my-app/production").await;
 
         let response = state_a
             .handle_command(Command::Delete {
-                app: "my-app".to_string(),
+                app: "my-app/production".to_string(),
             })
             .await;
         assert!(matches!(response, Response::Ok { .. }));
@@ -4227,7 +4232,7 @@ exit 1
         )
         .unwrap();
         state_b.restore_from_state_store().await.unwrap();
-        assert!(state_b.app_manager.get_app("my-app").is_none());
+        assert!(state_b.app_manager.get_app("my-app/production").is_none());
     }
 
     #[tokio::test]
@@ -4253,14 +4258,8 @@ exit 1
             .join("v1");
         std::fs::create_dir_all(&release_dir).unwrap();
         std::fs::write(
-            release_dir.join("package.json"),
-            r#"{"name":"broken-app","scripts":{"dev":"bun run index.ts"}}"#,
-        )
-        .unwrap();
-        // This script exits immediately and never exposes the internal status endpoint.
-        std::fs::write(
-            release_dir.join("index.ts"),
-            "console.log('boot then exit');",
+            release_dir.join("app.json"),
+            r#"{"runtime":"node","main":"index.js","idle_timeout":300,"install":"true","start":["/bin/sh","-lc","exit 1"]}"#,
         )
         .unwrap();
 
@@ -4271,7 +4270,6 @@ exit 1
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["broken.localhost".to_string()],
                 secrets: Some(HashMap::new()),
-                idle_timeout: 300,
             })
             .await;
 
@@ -4283,12 +4281,9 @@ exit 1
 
     #[tokio::test]
     async fn deploy_on_demand_keeps_one_warm_instance_after_successful_deploy() {
-        if !python3_ok() {
+        if !python3_ok() || !python3_can_bind_unix_socket() {
             return;
         }
-        let Some(base_port) = pick_free_port() else {
-            return;
-        };
 
         let temp = TempDir::new().unwrap();
         let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
@@ -4296,14 +4291,10 @@ exit 1
             ..Default::default()
         }));
         // Use a runtime config with the socket inside temp dir so that
-        // app_socket_dir resolves to a writable location (not /var/run).
+        // app_socket_dir resolves to a short writable location (not /var/run),
+        // keeping the unix socket path under platform limits.
         let runtime = ServerRuntimeConfig {
-            socket: temp
-                .path()
-                .join("tako")
-                .join("tako.sock")
-                .to_string_lossy()
-                .to_string(),
+            socket: "/tmp/tako-warm.sock".to_string(),
             ..ServerRuntimeConfig::for_defaults(temp.path().to_path_buf())
         };
         let state = ServerState::new_with_runtime(
@@ -4382,7 +4373,7 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
         .unwrap();
         std::fs::write(
             release_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","install":"true"}"#,
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"install":"true"}"#,
         )
         .unwrap();
 
@@ -4390,7 +4381,6 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
             name: "warm-app".to_string(),
             version: "v0".to_string(),
             path: release_dir.clone(),
-            cwd: release_dir.clone(),
             command: vec![
                 "/bin/sh".to_string(),
                 "-lc".to_string(),
@@ -4398,7 +4388,6 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
             ],
             min_instances: 0,
             max_instances: 4,
-            base_port,
             ..Default::default()
         });
         state.load_balancer.register_app(app);
@@ -4417,7 +4406,6 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["warm.localhost".to_string()],
                 secrets: Some(env),
-                idle_timeout: 300,
             })
             .await;
         assert!(
@@ -4581,5 +4569,4 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
         assert!(config.server_name.is_none());
         assert!(config.dns.is_none());
     }
-
 }

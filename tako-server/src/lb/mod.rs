@@ -233,7 +233,6 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let config = AppConfig {
             name: "test-app".to_string(),
-            base_port: 3000,
             ..Default::default()
         };
         Arc::new(App::new(config, tx))
@@ -254,16 +253,24 @@ mod tests {
         let lb = AppLoadBalancer::new(app, Strategy::RoundRobin);
 
         // Should cycle through instances
-        let mut ports = vec![];
+        let mut instance_ids = vec![];
         for _ in 0..6 {
             let instance = lb.get_instance().unwrap();
-            ports.push(instance.port);
+            instance_ids.push(instance.id.clone());
         }
 
-        // Should see each port twice
-        assert_eq!(ports.iter().filter(|&&p| p == 3000).count(), 2);
-        assert_eq!(ports.iter().filter(|&&p| p == 3001).count(), 2);
-        assert_eq!(ports.iter().filter(|&&p| p == 3002).count(), 2);
+        assert_eq!(
+            instance_ids.iter().filter(|id| **id == i1.id).count(),
+            2
+        );
+        assert_eq!(
+            instance_ids.iter().filter(|id| **id == i2.id).count(),
+            2
+        );
+        assert_eq!(
+            instance_ids.iter().filter(|id| **id == i3.id).count(),
+            2
+        );
     }
 
     #[test]
@@ -321,7 +328,6 @@ mod tests {
 
         let config = AppConfig {
             name: "my-app".to_string(),
-            base_port: 4000,
             ..Default::default()
         };
         let app = manager.register_app(config);
@@ -352,7 +358,6 @@ mod tests {
 
         let config = AppConfig {
             name: "my-app".to_string(),
-            base_port: 4000,
             app_socket_dir: temp.path().to_path_buf(),
             ..Default::default()
         };
@@ -384,7 +389,6 @@ mod tests {
 
         let app = manager.register_app(AppConfig {
             name: "test-app".to_string(),
-            base_port: 3000,
             app_socket_dir: TempDir::new().unwrap().path().to_path_buf(),
             ..Default::default()
         });
@@ -413,7 +417,6 @@ mod tests {
 
         let app = manager.register_app(AppConfig {
             name: "test-app".to_string(),
-            base_port: 3000,
             ..Default::default()
         });
         lb.register_app(app.clone());

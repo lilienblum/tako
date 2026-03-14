@@ -179,7 +179,8 @@ fn on_demand_startup_failure_does_not_hang() {
 "#,
     )
     .expect("write failing app");
-    fs::create_dir_all(app_dir.join("node_modules/tako.sh/src/entrypoints")).expect("create entrypoint dir");
+    fs::create_dir_all(app_dir.join("node_modules/tako.sh/src/entrypoints"))
+        .expect("create entrypoint dir");
     fs::write(
         app_dir.join("node_modules/tako.sh/src/entrypoints/bun.ts"),
         "export default {};",

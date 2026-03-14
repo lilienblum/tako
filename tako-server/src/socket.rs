@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_parse_deploy_command() {
-        let json = r#"{"command": "deploy", "app": "my-app", "version": "1.0.0", "path": "/var/lib/tako/my-app/releases/1.0.0", "routes": ["api.example.com", "example.com/api/*"], "idle_timeout": 300}"#;
+        let json = r#"{"command": "deploy", "app": "my-app", "version": "1.0.0", "path": "/var/lib/tako/my-app/releases/1.0.0", "routes": ["api.example.com", "example.com/api/*"]}"#;
         let cmd: Command = serde_json::from_str(json).unwrap();
 
         match cmd {
@@ -179,14 +179,12 @@ mod tests {
                 path,
                 routes,
                 secrets,
-                idle_timeout,
             } => {
                 assert_eq!(app, "my-app");
                 assert_eq!(version, "1.0.0");
                 assert!(path.contains("releases"));
                 assert_eq!(routes.len(), 2);
                 assert!(secrets.is_none());
-                assert_eq!(idle_timeout, 300);
             }
             _ => panic!("Expected Deploy command"),
         }

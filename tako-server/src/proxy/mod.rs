@@ -1638,7 +1638,6 @@ mod tests {
             name: "test-app".to_string(),
             version: "v1".to_string(),
             min_instances: 0,
-            base_port: 3010,
             ..Default::default()
         });
         lb.register_app(app.clone());

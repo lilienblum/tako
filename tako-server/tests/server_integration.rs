@@ -439,11 +439,7 @@ mod health_check {
         let server = TestServer::start();
 
         let response = server
-            .http_get_with_host_and_headers(
-                "tako",
-                "/status",
-                &[("X-Forwarded-Proto", "https")],
-            )
+            .http_get_with_host_and_headers("tako", "/status", &[("X-Forwarded-Proto", "https")])
             .expect("status endpoint request should succeed");
 
         assert!(

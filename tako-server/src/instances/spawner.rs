@@ -53,13 +53,12 @@ impl Spawner {
     /// Spawn a new instance
     pub async fn spawn(&self, app: &App, instance: Arc<Instance>) -> Result<(), InstanceError> {
         let config = app.config.read().clone();
-        let app_name = config.name.clone();
+        let app_name = config.deployment_id();
         let instance_id = instance.id.clone();
 
         tracing::info!(
             app = %app_name,
             instance = %instance_id,
-            port = instance.port,
             "Spawning instance"
         );
 
@@ -239,7 +238,7 @@ fn build_child_command(
     let mut child_cmd = Command::new(&config.command[0]);
     child_cmd
         .args(&config.command[1..])
-        .current_dir(&config.cwd)
+        .current_dir(&config.path)
         .envs(env)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -471,7 +470,10 @@ mod tests {
         let env = build_instance_env(&app.config.read().clone(), &instance);
         assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
         assert_eq!(env.get("SECRET").map(String::as_str), Some("shh"));
-        assert_eq!(env.get("TAKO_INSTANCE").map(String::as_str), Some(instance.id.as_str()));
+        assert_eq!(
+            env.get("TAKO_INSTANCE").map(String::as_str),
+            Some(instance.id.as_str())
+        );
         assert!(env.contains_key("TAKO_APP_SOCKET"));
         assert!(!env.contains_key("PORT"));
     }
@@ -515,7 +517,6 @@ mod tests {
         let (instance_tx, _instance_rx) = mpsc::channel(4);
         let config = AppConfig {
             name: "test-app".to_string(),
-            base_port: 31_000,
             app_socket_dir: temp.path().to_path_buf(),
             health_check_path: "/status".to_string(),
             health_check_host: "tako".to_string(),
@@ -537,7 +538,6 @@ mod tests {
         let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
             return;
         };
-        let port = listener.local_addr().unwrap().port();
         let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
 
         tokio::spawn(async move {
@@ -551,7 +551,6 @@ mod tests {
         let (instance_tx, _instance_rx) = mpsc::channel(4);
         let config = AppConfig {
             name: "test-app".to_string(),
-            base_port: port,
             app_socket_dir: temp.path().to_path_buf(),
             health_check_path: "/status".to_string(),
             health_check_host: "tako".to_string(),
@@ -559,10 +558,6 @@ mod tests {
         };
         let app = App::new(config, instance_tx);
         let instance = app.allocate_instance();
-        assert_eq!(
-            instance.port, port,
-            "test precondition: expected listener port"
-        );
         instance.set_pid(std::process::id());
 
         let socket_path = instance
@@ -576,12 +571,7 @@ mod tests {
         let spawner = Spawner::new();
         assert!(
             !spawner
-                .probe_health(
-                    &instance,
-                    "/status",
-                    "tako",
-                    Duration::from_millis(200),
-                )
+                .probe_health(&instance, "/status", "tako", Duration::from_millis(200),)
                 .await
         );
         let accepted = accepted_rx

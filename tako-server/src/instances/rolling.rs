@@ -261,7 +261,6 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let config = AppConfig {
             name: name.to_string(),
-            base_port: 3000,
             min_instances: 1,
             ..Default::default()
         };

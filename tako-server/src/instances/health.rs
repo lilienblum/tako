@@ -309,7 +309,6 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let config = AppConfig {
             name: "test-app".to_string(),
-            base_port: 3000,
             ..Default::default()
         };
         Arc::new(App::new(config, tx))
@@ -453,7 +452,6 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let config = AppConfig {
             name: "test-app".to_string(),
-            base_port: 31_001,
             app_socket_dir: temp.path().to_path_buf(),
             min_instances: 1,
             ..Default::default()
@@ -502,7 +500,6 @@ mod tests {
         let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
             return;
         };
-        let port = listener.local_addr().unwrap().port();
         let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
 
         tokio::spawn(async move {
@@ -516,17 +513,12 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let config = AppConfig {
             name: "test-app".to_string(),
-            base_port: port,
             app_socket_dir: temp.path().to_path_buf(),
             min_instances: 1,
             ..Default::default()
         };
         let app = App::new(config, tx);
         let instance = app.allocate_instance();
-        assert_eq!(
-            instance.port, port,
-            "test precondition: expected listener port"
-        );
         instance.set_pid(std::process::id());
 
         let socket_path = instance
@@ -537,13 +529,8 @@ mod tests {
             "test precondition: unix socket should be absent"
         );
 
-        let healthy = probe_instance_health(
-            &instance,
-            "tako",
-            "/status",
-            Duration::from_millis(200),
-        )
-        .await;
+        let healthy =
+            probe_instance_health(&instance, "tako", "/status", Duration::from_millis(200)).await;
         assert!(!healthy);
         let accepted = accepted_rx
             .await

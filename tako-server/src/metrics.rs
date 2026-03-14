@@ -184,11 +184,7 @@ pub fn set_instances_running(app: &str, count: i64) {
 pub fn init(server_name: Option<&str>) {
     let label = server_name
         .map(String::from)
-        .or_else(|| {
-            hostname::get()
-                .ok()
-                .and_then(|h| h.into_string().ok())
-        })
+        .or_else(|| hostname::get().ok().and_then(|h| h.into_string().ok()))
         .unwrap_or_else(|| "unknown".to_string());
     let _ = SERVER_LABEL.set(label);
 

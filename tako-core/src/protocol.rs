@@ -8,6 +8,24 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 
 pub const PROTOCOL_VERSION: u32 = 0;
+const DEPLOYMENT_APP_ID_SEPARATOR: char = '/';
+
+pub fn deployment_app_id(app_name: &str, env_name: &str) -> String {
+    format!("{app_name}{DEPLOYMENT_APP_ID_SEPARATOR}{env_name}")
+}
+
+pub fn split_deployment_app_id(app_id: &str) -> Option<(&str, &str)> {
+    let (app_name, env_name) = app_id.split_once(DEPLOYMENT_APP_ID_SEPARATOR)?;
+    if app_name.is_empty() || env_name.is_empty() || env_name.contains(DEPLOYMENT_APP_ID_SEPARATOR)
+    {
+        return None;
+    }
+    Some((app_name, env_name))
+}
+
+pub fn deployment_app_id_filename(app_id: &str) -> String {
+    app_id.replace(DEPLOYMENT_APP_ID_SEPARATOR, "%2F")
+}
 
 /// Commands that can be sent to the server
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,9 +47,6 @@ pub enum Command {
         /// When `None`, the server keeps existing secrets for this app.
         #[serde(default)]
         secrets: Option<HashMap<String, String>>,
-
-        /// Idle timeout in seconds (instances are stopped after this long with no requests).
-        idle_timeout: u32,
     },
 
     /// Update the desired minimum number of instances for an app.
@@ -109,7 +124,6 @@ pub struct ServerRuntimeInfo {
     pub acme_staging: bool,
     pub acme_email: Option<String>,
     pub renewal_interval_hours: u64,
-    pub instance_port_offset: u16,
     #[serde(default)]
     pub dns_provider: Option<String>,
     #[serde(default)]
@@ -192,7 +206,6 @@ pub struct BuildStatus {
 pub struct InstanceStatus {
     pub id: String,
     pub state: InstanceState,
-    pub port: u16,
     pub pid: Option<u32>,
     pub uptime_secs: u64,
     pub requests_total: u64,
@@ -309,13 +322,15 @@ mod tests {
             version: "v1".to_string(),
             path: "/opt/tako/apps/my-app/releases/v1".to_string(),
             routes: vec!["example.com".to_string()],
-            secrets: Some(HashMap::from([("API_KEY".to_string(), "secret123".to_string())])),
-            idle_timeout: 300,
+            secrets: Some(HashMap::from([(
+                "API_KEY".to_string(),
+                "secret123".to_string(),
+            )])),
         };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains(r#""command":"deploy""#));
         assert!(json.contains(r#""secrets":{"API_KEY":"secret123"}"#));
-        assert!(json.contains(r#""idle_timeout":300"#));
+        assert!(!json.contains(r#""idle_timeout":"#));
     }
 
     #[test]
@@ -325,14 +340,39 @@ mod tests {
             "app":"my-app",
             "version":"v1",
             "path":"/opt/tako/apps/my-app/releases/v1",
-            "routes":["example.com"],
-            "idle_timeout":300
+            "routes":["example.com"]
         }"#;
         let cmd: Command = serde_json::from_str(json).unwrap();
         match cmd {
             Command::Deploy { secrets, .. } => assert!(secrets.is_none()),
             _ => panic!("Expected deploy command"),
         }
+    }
+
+    #[test]
+    fn test_deployment_app_id_round_trip() {
+        let app_id = deployment_app_id("my-app", "staging");
+        assert_eq!(app_id, "my-app/staging");
+        assert_eq!(
+            split_deployment_app_id(&app_id),
+            Some(("my-app", "staging"))
+        );
+    }
+
+    #[test]
+    fn test_split_deployment_app_id_rejects_invalid_values() {
+        assert_eq!(split_deployment_app_id("my-app"), None);
+        assert_eq!(split_deployment_app_id("/staging"), None);
+        assert_eq!(split_deployment_app_id("my-app/"), None);
+        assert_eq!(split_deployment_app_id("my-app/staging/blue"), None);
+    }
+
+    #[test]
+    fn test_deployment_app_id_filename_encodes_separator() {
+        assert_eq!(
+            deployment_app_id_filename("my-app/staging"),
+            "my-app%2Fstaging"
+        );
     }
 
     #[test]
@@ -498,8 +538,10 @@ mod tests {
 
     #[test]
     fn test_compute_secrets_hash_deterministic() {
-        let secrets =
-            HashMap::from([("B".to_string(), "2".to_string()), ("A".to_string(), "1".to_string())]);
+        let secrets = HashMap::from([
+            ("B".to_string(), "2".to_string()),
+            ("A".to_string(), "1".to_string()),
+        ]);
         let hash1 = compute_secrets_hash(&secrets);
         let hash2 = compute_secrets_hash(&secrets);
         assert_eq!(hash1, hash2);
@@ -542,7 +584,6 @@ mod tests {
             path: "/opt/tako/apps/my-app/releases/v1".to_string(),
             routes: vec!["example.com".to_string()],
             secrets: None,
-            idle_timeout: 300,
         };
         let json = serde_json::to_string(&cmd).unwrap();
         let parsed: Command = serde_json::from_str(&json).unwrap();
@@ -565,7 +606,6 @@ mod tests {
             acme_staging: false,
             acme_email: None,
             renewal_interval_hours: 12,
-            instance_port_offset: 0,
             dns_provider: None,
             worker: false,
             metrics_port: Some(9898),
