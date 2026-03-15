@@ -188,7 +188,7 @@ fn on_demand_startup_failure_does_not_hang() {
     .expect("write entrypoint");
     fs::write(
         app_dir.join("app.json"),
-        r#"{"runtime":"bun","main":"src/index.ts","install":"true","start":["bun","{main}"]}"#,
+        r#"{"runtime":"bun","main":"src/index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
     )
     .expect("write deploy manifest");
 

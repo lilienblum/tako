@@ -342,7 +342,7 @@ mod instance_management {
         .unwrap();
         fs::write(
             app_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","install":"true","start":["bun","{main}"]}"#,
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
         )
         .unwrap();
         fs::write(

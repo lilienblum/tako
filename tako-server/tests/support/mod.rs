@@ -300,7 +300,7 @@ pub fn write_bun_app(app_dir: &Path, body: &str) {
     .unwrap();
     fs::write(
         app_dir.join("app.json"),
-        r#"{"runtime":"bun","main":"src/index.ts","install":"true","start":["bun","{main}"]}"#,
+        r#"{"runtime":"bun","main":"src/index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
     )
     .unwrap();
     fs::write(
