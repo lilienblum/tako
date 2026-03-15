@@ -30,7 +30,7 @@ describe("Types", () => {
         status: "healthy",
         app: "my-app",
         version: "abc123",
-        instance_id: 1,
+        instance_id: "1",
         pid: 12345,
         uptime_seconds: 100,
       };
@@ -44,7 +44,7 @@ describe("Types", () => {
           status: s,
           app: "my-app",
           version: "abc123",
-          instance_id: 1,
+          instance_id: "1",
           pid: 12345,
           uptime_seconds: 100,
         };

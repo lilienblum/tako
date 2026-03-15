@@ -7,7 +7,7 @@ describe("handleTakoEndpoint", () => {
     status: "healthy",
     app: "test-app",
     version: "abc123",
-    instance_id: 1,
+    instance_id: "1",
     pid: 12345,
     uptime_seconds: 3600,
   };
