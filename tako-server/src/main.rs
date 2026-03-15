@@ -249,13 +249,26 @@ fn write_secrets_file(path: &Path, secrets: &HashMap<String, String>) -> Result<
     }
     let content =
         serde_json::to_string_pretty(secrets).map_err(|e| format!("serialize secrets: {}", e))?;
-    std::fs::write(path, content.as_bytes())
-        .map_err(|e| format!("write secrets {}: {}", path.display(), e))?;
+    // Create with 0600 from the start to avoid a window where secrets are
+    // world-readable (TOCTOU between write and chmod).
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-            .map_err(|e| format!("chmod {}: {}", path.display(), e))?;
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| format!("write secrets {}: {}", path.display(), e))?;
+        f.write_all(content.as_bytes())
+            .map_err(|e| format!("write secrets {}: {}", path.display(), e))?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, content.as_bytes())
+            .map_err(|e| format!("write secrets {}: {}", path.display(), e))?;
     }
     Ok(())
 }
