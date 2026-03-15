@@ -55,6 +55,8 @@ use tokio::process::Command as TokioCommand;
 use tokio::sync::RwLock;
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 const DEFAULT_SERVER_LOG_FILTER: &str = "warn";
 const SIGNAL_PARENT_ON_READY_ENV: &str = "TAKO_SIGNAL_PARENT_ON_READY";
@@ -2033,14 +2035,20 @@ fn sd_notify_ready() {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     install_rustls_crypto_provider();
 
-    // Initialize tracing with JSON output for structured log consumption.
-    tracing_subscriber::fmt()
-        .json()
-        .with_env_filter(
+    // Initialize tracing with a non-blocking writer so log I/O never stalls
+    // Tokio worker threads (critical under high request volume / DDoS).
+    let (non_blocking, _guard) = tracing_appender::non_blocking(std::io::stdout());
+    tracing_subscriber::registry()
+        .with(
             EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| EnvFilter::new(DEFAULT_SERVER_LOG_FILTER)),
         )
-        .with_target(false)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .json()
+                .with_target(false)
+                .with_writer(non_blocking),
+        )
         .init();
 
     let args = Args::parse();
