@@ -172,17 +172,27 @@ impl KeyStore {
                 .map_err(|e| ConfigError::FileWrite(parent.to_path_buf(), e))?;
         }
 
-        // Write key with restrictive permissions
+        // Write key with restrictive permissions.
+        // On Unix, create with 0600 from the start to avoid a window where the
+        // key is world-readable (TOCTOU between write and chmod).
         let encoded = key.to_base64();
-        fs::write(&self.key_path, &encoded)
-            .map_err(|e| ConfigError::FileWrite(self.key_path.clone(), e))?;
-
-        // Set file permissions to 600 (owner read/write only) on Unix
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(0o600);
-            fs::set_permissions(&self.key_path, permissions)
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&self.key_path)
+                .map_err(|e| ConfigError::FileWrite(self.key_path.clone(), e))?;
+            f.write_all(encoded.as_bytes())
+                .map_err(|e| ConfigError::FileWrite(self.key_path.clone(), e))?;
+        }
+        #[cfg(not(unix))]
+        {
+            fs::write(&self.key_path, &encoded)
                 .map_err(|e| ConfigError::FileWrite(self.key_path.clone(), e))?;
         }
 
