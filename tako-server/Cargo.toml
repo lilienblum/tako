@@ -44,7 +44,7 @@ tar = "0.4"
 zstd = "0.13"
 nanoid = "0.4"
 mimalloc = "0.1"
-prometheus = "0.13"
+prometheus = "0.14"
 hostname = "0.4"
 
 [dev-dependencies]
