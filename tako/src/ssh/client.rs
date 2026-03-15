@@ -457,12 +457,75 @@ impl SshClient {
     /// Upload file contents to a remote path by piping bytes through `cat`.
     /// Uses the existing SSH connection (no SFTP subsystem needed).
     pub async fn upload(&self, local_path: &Path, remote_path: &str) -> SshResult<()> {
+        self.upload_with_progress(local_path, remote_path, None)
+            .await
+    }
+
+    /// Upload a file with optional progress callback `(transferred, total)`.
+    pub async fn upload_with_progress(
+        &self,
+        local_path: &Path,
+        remote_path: &str,
+        progress: Option<Box<dyn Fn(u64, u64) + Send>>,
+    ) -> SshResult<()> {
         let content = tokio::fs::read(local_path)
             .await
             .map_err(|_| SshError::FileNotFound(local_path.to_path_buf()))?;
 
-        self.exec_checked_with_stdin(&format!("cat > {}", shell_quote(remote_path)), &content)
-            .await?;
+        let total = content.len() as u64;
+        let handle = self.handle.as_ref().ok_or(SshError::NotConnected)?;
+
+        let mut channel = handle
+            .channel_open_session()
+            .await
+            .map_err(|e| SshError::Channel(e.to_string()))?;
+
+        channel
+            .exec(true, format!("cat > {}", shell_quote(remote_path)))
+            .await
+            .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+
+        const CHUNK: usize = 64 * 1024;
+        let mut sent = 0u64;
+        for chunk in content.chunks(CHUNK) {
+            channel
+                .data(chunk)
+                .await
+                .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+            sent += chunk.len() as u64;
+            if let Some(ref cb) = progress {
+                cb(sent, total);
+            }
+        }
+
+        channel
+            .eof()
+            .await
+            .map_err(|e| SshError::CommandFailed(e.to_string()))?;
+
+        // Wait for exit status
+        let mut exit_code = 0u32;
+        let mut stderr_buf = Vec::new();
+        loop {
+            match channel.wait().await {
+                Some(ChannelMsg::ExitStatus { exit_status }) => {
+                    exit_code = exit_status;
+                }
+                Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                    stderr_buf.extend_from_slice(&data);
+                }
+                Some(ChannelMsg::Eof) => {}
+                None => break,
+                _ => {}
+            }
+        }
+
+        if exit_code != 0 {
+            return Err(SshError::NonZeroExit {
+                code: exit_code,
+                stderr: String::from_utf8_lossy(&stderr_buf).to_string(),
+            });
+        }
 
         Ok(())
     }

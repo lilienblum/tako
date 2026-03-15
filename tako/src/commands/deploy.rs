@@ -3364,17 +3364,26 @@ async fn deploy_to_server(
         } else {
             tracing::debug!("Uploading artifact ({})…", format_size(archive_size_bytes));
             let upload_timer = output::timed("Artifact upload");
-            run_deploy_step(
-                "Uploading artifact",
-                "Artifact uploaded",
-                use_spinner,
-                async {
-                    ssh.upload(archive_path, &remote_archive)
-                        .await
-                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
-                },
-            )
-            .await?;
+            if use_spinner {
+                let tp = std::sync::Arc::new(output::TransferProgress::new(
+                    "Uploading",
+                    "Upload complete",
+                    archive_size_bytes,
+                ));
+                let tp2 = tp.clone();
+                ssh.upload_with_progress(
+                    archive_path,
+                    &remote_archive,
+                    Some(Box::new(move |done, _total| tp2.set_position(done))),
+                )
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                tp.finish();
+            } else {
+                ssh.upload(archive_path, &remote_archive)
+                    .await
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            }
             drop(upload_timer);
             // Cache the artifact for future deploys (best-effort).
             let _ = ssh
@@ -3560,21 +3569,9 @@ async fn ensure_tako_running(
     .into())
 }
 
-/// Format file size in human-readable format
+/// Alias for the shared size formatter.
 fn format_size(bytes: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = KB * 1024;
-    const GB: u64 = MB * 1024;
-
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} bytes", bytes)
-    }
+    output::format_size(bytes)
 }
 
 fn format_path_relative_to(project_dir: &Path, path: &Path) -> String {

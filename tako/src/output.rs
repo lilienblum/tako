@@ -161,6 +161,25 @@ pub fn muted_progress(done: usize, total: usize) -> String {
     brand_muted(format!("[{done}/{total}]"))
 }
 
+/// Format a byte count as a human-readable size string.
+///
+/// Examples: `"999 bytes"`, `"1.00 KB"`, `"4.56 MB"`, `"1.23 GB"`.
+pub fn format_size(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes >= GB {
+        format!("{:.2} GB", bytes as f64 / GB as f64)
+    } else if bytes >= MB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else if bytes >= KB {
+        format!("{:.2} KB", bytes as f64 / KB as f64)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
 pub fn set_verbose(verbose: bool) {
     VERBOSE.store(verbose, Ordering::Relaxed);
 }
@@ -1096,6 +1115,174 @@ impl Drop for TrackedSpinner {
             show_cursor();
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Transfer progress — two-line download/upload bar with gradient
+// ---------------------------------------------------------------------------
+
+/// Bar width in characters.
+const BAR_WIDTH: usize = 24;
+
+/// Two-line transfer progress:
+///
+/// ```text
+/// ⣼ Downloading… 1.23 MB / 4.56 MB (3s)
+///   ████████████·············
+/// ```
+///
+/// On completion the spinner line becomes a checkbox and the bar stays filled:
+///
+/// ```text
+/// ✓ Download complete (3.2s)
+///   ████████████████████████
+/// ```
+pub struct TransferProgress {
+    pb: Option<ProgressBar>,
+    start: Instant,
+    loading_label: String,
+    success_msg: String,
+    total: u64,
+    finished: std::sync::atomic::AtomicBool,
+}
+
+impl TransferProgress {
+    /// Create a new transfer progress bar.
+    ///
+    /// - `loading` — verb phrase shown while in progress, e.g. `"Downloading"`
+    /// - `success` — message shown on finish, e.g. `"Download complete"`
+    /// - `total` — total byte count (0 if unknown)
+    pub fn new(loading: &str, success: &str, total: u64) -> Self {
+        let start = Instant::now();
+        let label = format!("{loading}…");
+        let pb = if is_pretty() && is_interactive() {
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(spinner_style());
+            pb.set_message(format!("{label}\n{INDENT}{}", render_gradient_bar(0.0)));
+            pb.enable_steady_tick(Duration::from_millis(80));
+            hide_cursor();
+            Some(pb)
+        } else {
+            tracing::info!("{loading}");
+            None
+        };
+        Self {
+            pb,
+            start,
+            loading_label: label,
+            success_msg: success.to_string(),
+            total,
+            finished: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Update bytes transferred. Call this from the transfer loop.
+    pub fn set_position(&self, bytes: u64) {
+        if let Some(ref pb) = self.pb {
+            let fraction = if self.total > 0 {
+                (bytes as f64 / self.total as f64).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let elapsed = self.start.elapsed();
+            let time = format_elapsed_inline(elapsed);
+            let size_text = if self.total > 0 {
+                format!("{} / {}", format_size(bytes), format_size(self.total))
+            } else {
+                format_size(bytes)
+            };
+            let bar = render_gradient_bar(fraction);
+            pb.set_message(format!(
+                "{} {}\n{INDENT}{} {}",
+                self.loading_label,
+                brand_muted(&time),
+                bar,
+                brand_muted(&size_text),
+            ));
+        }
+    }
+
+    /// Finish with success — shows `✓ <success_msg> (time)` and full bar.
+    pub fn finish(&self) {
+        if self.finished.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            return;
+        }
+        if let Some(ref pb) = self.pb {
+            pb.finish_and_clear();
+            show_cursor();
+            let check = brand_success("✓");
+            let time = muted_elapsed(self.start.elapsed());
+            let bar = render_gradient_bar(1.0);
+            let total_text = if self.total > 0 {
+                format!(" {}", brand_muted(&format_size(self.total)))
+            } else {
+                String::new()
+            };
+            if time.is_empty() {
+                eprintln!(
+                    "{check} {}\n{INDENT}{bar}{total_text}",
+                    brand_fg(&self.success_msg)
+                );
+            } else {
+                eprintln!(
+                    "{check} {} {time}\n{INDENT}{bar}{total_text}",
+                    brand_fg(&self.success_msg)
+                );
+            }
+        } else {
+            tracing::info!("{}", &self.success_msg);
+        }
+    }
+}
+
+impl Drop for TransferProgress {
+    fn drop(&mut self) {
+        if !*self.finished.get_mut() {
+            if let Some(ref pb) = self.pb {
+                pb.finish_and_clear();
+                show_cursor();
+            }
+        }
+    }
+}
+
+/// Render a progress bar string.
+///
+/// Filled portion uses solid accent color (`█`); unfilled uses dim braille dots (`⣀`).
+fn render_gradient_bar(fraction: f64) -> String {
+    let f = fraction.clamp(0.0, 1.0);
+    let filled = (f * BAR_WIDTH as f64).round() as usize;
+    let empty = BAR_WIDTH.saturating_sub(filled);
+
+    let mut buf = String::with_capacity(BAR_WIDTH * 20);
+    let colorize = should_colorize();
+
+    // Filled blocks in accent color
+    if filled > 0 {
+        if colorize {
+            let (r, g, b) = ACCENT;
+            buf.push_str(&format!("\x1b[38;2;{r};{g};{b}m"));
+        }
+        for _ in 0..filled {
+            buf.push('█');
+        }
+    }
+
+    // Unfilled: dim braille dot pattern
+    if empty > 0 {
+        if colorize {
+            let (r, g, b) = ACCENT_DIM;
+            buf.push_str(&format!("\x1b[38;2;{r};{g};{b}m"));
+        }
+        for _ in 0..empty {
+            buf.push('⣿');
+        }
+    }
+
+    if colorize {
+        buf.push_str("\x1b[0m");
+    }
+    buf
 }
 
 // ---------------------------------------------------------------------------
@@ -2327,6 +2514,24 @@ mod tests {
         // Non-interactive: work runs directly, result returned
         let result: Result<usize, String> = with_spinner("Loading", "Done", || Ok(42));
         assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn format_size_uses_expected_units() {
+        assert_eq!(format_size(0), "0 bytes");
+        assert_eq!(format_size(999), "999 bytes");
+        assert_eq!(format_size(1024), "1.00 KB");
+        assert_eq!(format_size(1536), "1.50 KB");
+        assert_eq!(format_size(1024 * 1024), "1.00 MB");
+        assert_eq!(format_size(1024 * 1024 * 1024), "1.00 GB");
+    }
+
+    #[test]
+    fn transfer_progress_in_non_tty() {
+        // Non-interactive: creates TransferProgress without a progress bar
+        let tp = TransferProgress::new("Downloading", "Download complete", 1024);
+        tp.set_position(512);
+        tp.finish();
     }
 
     #[test]

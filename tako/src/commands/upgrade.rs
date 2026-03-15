@@ -1,9 +1,7 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
 
-use indicatif::{ProgressBar, ProgressStyle};
 use sha2::{Digest, Sha256};
 
 use crate::config::{UpgradeChannel, resolve_upgrade_channel};
@@ -454,57 +452,29 @@ async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn st
         .error_for_status()
         .map_err(|e| format!("download failed: {e}"))?;
 
-    let total = resp.content_length();
+    let total = resp.content_length().unwrap_or(0);
     tracing::debug!(
         "Download started, content_length={}",
-        total.map_or("unknown".to_string(), |n| format!("{n} bytes"))
+        if total > 0 {
+            format!("{total} bytes")
+        } else {
+            "unknown".to_string()
+        }
     );
     let mut file = std::fs::File::create(dest)?;
     let mut downloaded = 0u64;
 
-    let pb = if output::is_pretty() && output::is_interactive() {
-        let pb = if let Some(total) = total {
-            let pb = ProgressBar::new(total);
-            pb.set_style(download_bar_style());
-            pb
-        } else {
-            let pb = ProgressBar::new_spinner();
-            pb.set_style(download_spinner_style());
-            pb.enable_steady_tick(Duration::from_millis(80));
-            pb
-        };
-        pb.set_message("Downloading");
-        Some(pb)
-    } else {
-        None
-    };
+    let tp = output::TransferProgress::new("Downloading", "Download complete", total);
 
     while let Some(chunk) = resp.chunk().await? {
         file.write_all(&chunk)?;
         downloaded += chunk.len() as u64;
-        if let Some(pb) = &pb {
-            pb.set_position(downloaded);
-        }
+        tp.set_position(downloaded);
     }
 
-    if let Some(pb) = &pb {
-        pb.finish_and_clear();
-    }
-
+    tp.finish();
     tracing::debug!("Downloaded {} bytes to {}", downloaded, dest.display());
     Ok(())
-}
-
-fn download_bar_style() -> ProgressStyle {
-    ProgressStyle::with_template("{msg}\n{bar:40} {pos}/{len}")
-        .unwrap()
-        .progress_chars("██░")
-}
-
-fn download_spinner_style() -> ProgressStyle {
-    ProgressStyle::with_template("{spinner} {msg} ({bytes})")
-        .unwrap()
-        .tick_strings(crate::output::SPINNER_TICKS)
 }
 
 // ---------------------------------------------------------------------------
