@@ -91,18 +91,6 @@ impl StaticFile {
         self.last_modified > since
     }
 
-    /// HTTP Last-Modified header value
-    pub fn last_modified_header(&self) -> String {
-        // Format as HTTP-date (RFC 7231)
-        let duration = self
-            .last_modified
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default();
-        let secs = duration.as_secs();
-
-        // Simple formatting (a real implementation would use chrono or time crate)
-        format!("{}", secs)
-    }
 }
 
 /// Static file server for an app
@@ -273,27 +261,29 @@ impl AppStaticServer {
         })
     }
 
-    /// Normalize a URL path (remove leading slash, handle ..)
+    /// Normalize a URL path (remove leading slash, percent-decode, reject traversal)
     fn normalize_path(&self, path: &str) -> Result<String, StaticFileError> {
         // Remove leading slash
         let path = path.trim_start_matches('/');
 
-        // Decode URL encoding (simplified - real impl would use percent-encoding crate)
-        let path = path.replace("%20", " ");
+        // Full percent-decode so encoded traversal sequences (%2e%2e) are caught
+        let decoded = percent_encoding::percent_decode_str(path)
+            .decode_utf8()
+            .map_err(|_| StaticFileError::InvalidPath("invalid UTF-8 in path".to_string()))?;
 
-        // Check for path traversal attempts
-        if path.contains("..") {
-            return Err(StaticFileError::PathTraversal(path.to_string()));
-        }
-
-        // Remove any null bytes
-        if path.contains('\0') {
+        // Reject null bytes (after decoding so %00 is caught)
+        if decoded.contains('\0') {
             return Err(StaticFileError::InvalidPath(
                 "null byte in path".to_string(),
             ));
         }
 
-        Ok(path.to_string())
+        // Check for path traversal attempts (after decoding)
+        if decoded.contains("..") {
+            return Err(StaticFileError::PathTraversal(decoded.to_string()));
+        }
+
+        Ok(decoded.to_string())
     }
 
     /// Generate an ETag for caching

@@ -46,6 +46,7 @@ zstd = "0.13"
 nanoid = "0.4"
 bytes = "1"
 mimalloc = "0.1"
+percent-encoding = "2"
 prometheus = "0.14"
 hostname = "0.4"
 

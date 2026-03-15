@@ -174,6 +174,12 @@ impl IpRequestTracker {
     /// Release a slot for this IP.
     fn release(&self, ip: IpAddr) {
         if let Some(entry) = self.connections.get(&ip) {
+            let prev = entry.value().load(AtomicOrdering::Relaxed);
+            if prev == 0 {
+                // Guard against underflow — should not happen in normal operation
+                // but prevents permanently locking out an IP if it does.
+                return;
+            }
             let prev = entry.value().fetch_sub(1, AtomicOrdering::Relaxed);
             // Clean up zero-count entries to prevent unbounded map growth.
             // Use prev == 1 (meaning we just decremented to 0).
@@ -993,13 +999,11 @@ async fn stream_static_file(
             break;
         }
 
-        let is_last = bytes_read < CHUNK_SIZE;
+        // A short read (bytes_read < CHUNK_SIZE) does NOT mean EOF — the OS
+        // can return fewer bytes for many reasons. Only bytes_read == 0 is EOF.
         session
-            .write_response_body(Some(buffer[..bytes_read].to_vec().into()), is_last)
+            .write_response_body(Some(buffer[..bytes_read].to_vec().into()), false)
             .await?;
-        if is_last {
-            break;
-        }
     }
 
     Ok(())
