@@ -174,18 +174,32 @@ impl IpRequestTracker {
     /// Release a slot for this IP.
     fn release(&self, ip: IpAddr) {
         if let Some(entry) = self.connections.get(&ip) {
-            let prev = entry.value().load(AtomicOrdering::Relaxed);
-            if prev == 0 {
-                // Guard against underflow — should not happen in normal operation
-                // but prevents permanently locking out an IP if it does.
-                return;
-            }
-            let prev = entry.value().fetch_sub(1, AtomicOrdering::Relaxed);
-            // Clean up zero-count entries to prevent unbounded map growth.
-            // Use prev == 1 (meaning we just decremented to 0).
-            if prev == 1 {
-                drop(entry);
-                self.connections.remove_if(&ip, |_, v| v.load(AtomicOrdering::Relaxed) == 0);
+            // Use compare-exchange loop to prevent underflow: two concurrent
+            // release calls that both see count=1 would otherwise both
+            // decrement, wrapping to u32::MAX and permanently locking the IP.
+            loop {
+                let current = entry.value().load(AtomicOrdering::Relaxed);
+                if current == 0 {
+                    return;
+                }
+                if entry
+                    .value()
+                    .compare_exchange_weak(
+                        current,
+                        current - 1,
+                        AtomicOrdering::Relaxed,
+                        AtomicOrdering::Relaxed,
+                    )
+                    .is_ok()
+                {
+                    // Clean up zero-count entries to prevent unbounded map growth.
+                    if current == 1 {
+                        drop(entry);
+                        self.connections
+                            .remove_if(&ip, |_, v| v.load(AtomicOrdering::Relaxed) == 0);
+                    }
+                    return;
+                }
             }
         }
     }
@@ -559,7 +573,13 @@ impl ProxyHttp for TakoProxy {
 
             if should_redirect_http_request(is_effective_https, self.config.redirect_http_to_https)
             {
-                let redirect_url = format!("https://{}{}", host, path);
+                let path_and_query = session
+                    .req_header()
+                    .uri
+                    .path_and_query()
+                    .map(|pq| pq.as_str())
+                    .unwrap_or(&path);
+                let redirect_url = format!("https://{}{}", host, path_and_query);
                 let body = "Redirecting to HTTPS";
 
                 let mut header = ResponseHeader::build(307, None)?;
