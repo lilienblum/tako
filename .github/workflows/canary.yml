@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -97,7 +97,7 @@ jobs:
           rm -rf "$tmpdir"
 
       - name: Upload Linux server artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: canary-linux-${{ matrix.outarch }}-${{ matrix.libc }}
           path: |
@@ -107,7 +107,7 @@ jobs:
 
       - name: Upload Linux CLI artifact
         if: matrix.libc == 'glibc'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: canary-linux-cli-${{ matrix.outarch }}
           path: |
@@ -121,7 +121,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -160,7 +160,7 @@ jobs:
           ls -1 dist/tako-darwin-*.tar.gz dist/tako-darwin-*.tar.gz.sha256
 
       - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: canary-darwin
           path: |
@@ -180,20 +180,20 @@ jobs:
       contents: write
     steps:
       - name: Checkout (for tag update)
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
       - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: canary-linux-*
           merge-multiple: true
           path: dist
 
       - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: canary-darwin
           path: dist

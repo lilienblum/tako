@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -42,7 +42,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -71,10 +71,10 @@ jobs:
       E2E_CARGO_TARGET_DIR: ${{ github.workspace }}/.e2e-cache/target
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Cache E2E Cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.E2E_CARGO_HOME_DIR }}
           key: ${{ runner.os }}-e2e-cargo-home-${{ hashFiles('Cargo.lock') }}
@@ -82,7 +82,7 @@ jobs:
             ${{ runner.os }}-e2e-cargo-home-
 
       - name: Cache E2E Cargo target
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ env.E2E_CARGO_TARGET_DIR }}
           key: ${{ runner.os }}-e2e-cargo-target-${{ hashFiles('Cargo.lock') }}
