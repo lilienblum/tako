@@ -122,6 +122,9 @@ pub struct AcmeClient {
     cert_manager: Arc<CertManager>,
     /// HTTP-01 challenge tokens (token -> key_authorization)
     challenge_tokens: ChallengeTokens,
+    /// Tracks which challenge tokens belong to which domain, so
+    /// clear_domain_tokens only removes that domain's tokens (not all).
+    domain_tokens: RwLock<HashMap<String, Vec<String>>>,
     /// Cached ACME account
     account: RwLock<Option<Account>>,
 }
@@ -143,6 +146,7 @@ impl AcmeClient {
             config,
             cert_manager,
             challenge_tokens,
+            domain_tokens: RwLock::new(HashMap::new()),
             account: RwLock::new(None),
         }
     }
@@ -294,6 +298,13 @@ impl AcmeClient {
                     {
                         let mut tokens = self.challenge_tokens.write();
                         tokens.insert(token.clone(), key_auth.as_str().to_string());
+                    }
+                    // Track which tokens belong to this domain for targeted cleanup
+                    {
+                        let mut dt = self.domain_tokens.write();
+                        dt.entry(domain.to_string())
+                            .or_default()
+                            .push(token.clone());
                     }
 
                     tracing::info!(
@@ -530,12 +541,16 @@ impl AcmeClient {
         Ok(cert_info)
     }
 
-    /// Clear challenge tokens for a domain
-    fn clear_domain_tokens(&self, _domain: &str) {
-        // For now, we clear all tokens since we only handle one domain at a time
-        // In the future, we could track which tokens belong to which domain
+    /// Clear only the challenge tokens belonging to the given domain.
+    fn clear_domain_tokens(&self, domain: &str) {
+        let domain_token_keys = {
+            let mut dt = self.domain_tokens.write();
+            dt.remove(domain).unwrap_or_default()
+        };
         let mut tokens = self.challenge_tokens.write();
-        tokens.clear();
+        for key in &domain_token_keys {
+            tokens.remove(key);
+        }
     }
 
     /// Renew a certificate
