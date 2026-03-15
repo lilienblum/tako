@@ -594,10 +594,9 @@ impl SshClient {
 
     /// Write content to a remote file
     pub async fn write_file(&self, path: &str, content: &str) -> SshResult<()> {
-        let escaped = content.replace('\'', "'\\''");
         self.exec_checked(&format!(
             "printf '%s' {} > {}",
-            shell_quote(&escaped),
+            shell_quote(content),
             shell_quote(path)
         ))
         .await?;
@@ -607,7 +606,7 @@ impl SshClient {
     /// List directory contents
     pub async fn ls(&self, path: &str) -> SshResult<Vec<String>> {
         let output = self
-            .exec(&format!("ls -1 {} 2>/dev/null || true", path))
+            .exec(&format!("ls -1 {} 2>/dev/null || true", shell_quote(path)))
             .await?;
         Ok(output
             .stdout
