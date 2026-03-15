@@ -1583,6 +1583,18 @@ fn derive_build_state(instances: &[InstanceStatus]) -> AppState {
     AppState::Stopped
 }
 
+/// Resolve the tako-app user for running install commands with dropped privileges.
+#[cfg(unix)]
+fn resolve_app_user_for_install() -> Option<(u32, u32)> {
+    use std::ffi::CString;
+    let name = CString::new("tako-app").ok()?;
+    let pw = unsafe { libc::getpwnam(name.as_ptr()) };
+    if pw.is_null() {
+        return None;
+    }
+    Some(unsafe { ((*pw).pw_uid, (*pw).pw_gid) })
+}
+
 fn resolve_release_runtime(release_dir: &Path) -> Result<String, String> {
     runtime_from_release_dir(release_dir)
 }
@@ -1592,8 +1604,8 @@ async fn run_release_install_command(
     command: &str,
     env: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let output = TokioCommand::new("sh")
-        .args(["-lc", command])
+    let mut cmd = TokioCommand::new("sh");
+    cmd.args(["-lc", command])
         .current_dir(release_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1604,17 +1616,26 @@ async fn run_release_install_command(
         // Trust mise configs in the release dir — the deployed content is user-controlled.
         // MISE_TRUSTED_CONFIG_PATHS marks all configs under this path as trusted so mise
         // doesn't error out in non-interactive mode (MISE_YES does not help here).
-        .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str())
-        .output()
-        .await
-        .map_err(|e| {
-            format!(
-                "Failed to run release install command '{}' in {}: {}",
-                command,
-                release_dir.display(),
-                e
-            )
-        })?;
+        .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str());
+
+    // Drop privileges to tako-app user for install commands (same as app processes)
+    // so user-controlled install scripts cannot run as root.
+    #[cfg(unix)]
+    if unsafe { libc::geteuid() } == 0 {
+        if let Some((uid, gid)) = resolve_app_user_for_install() {
+            cmd.uid(uid);
+            cmd.gid(gid);
+        }
+    }
+
+    let output = cmd.output().await.map_err(|e| {
+        format!(
+            "Failed to run release install command '{}' in {}: {}",
+            command,
+            release_dir.display(),
+            e
+        )
+    })?;
 
     if output.status.success() {
         return Ok(());
