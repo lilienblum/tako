@@ -9,6 +9,7 @@ use openssl::pkey::PKey;
 use openssl::ssl::SslRef;
 use openssl::x509::X509;
 use pingora_core::listeners::TlsAccept;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -53,18 +54,59 @@ static NO_SNI_LIMITER: std::sync::LazyLock<LogRateLimiter> =
 static UNKNOWN_HOST_LIMITER: std::sync::LazyLock<LogRateLimiter> =
     std::sync::LazyLock::new(|| LogRateLimiter::new(std::time::Duration::from_secs(10)));
 
-/// SNI-based certificate resolver that selects certificates based on hostname
+/// Cached parsed certificate and key pair.
+#[derive(Clone)]
+struct CachedCert {
+    cert: X509,
+    key: PKey<openssl::pkey::Private>,
+}
+
+/// SNI-based certificate resolver that selects certificates based on hostname.
+/// Caches parsed certs in memory so `certificate_callback` never reads from disk
+/// on the hot path (critical under TLS connection floods).
 pub struct SniCertResolver {
     cert_manager: Arc<CertManager>,
+    cache: dashmap::DashMap<PathBuf, CachedCert>,
 }
 
 impl SniCertResolver {
     /// Create a new SNI certificate resolver
     pub fn new(cert_manager: Arc<CertManager>) -> Self {
-        Self { cert_manager }
+        Self {
+            cert_manager,
+            cache: dashmap::DashMap::new(),
+        }
     }
 
-    /// Load certificate and key from files
+    /// Get or load a certificate from the in-memory cache.
+    /// On first access the cert is read from disk and cached. On ACME renewal
+    /// the CertManager updates the on-disk files; the next call here detects the
+    /// mtime change and reloads.
+    fn get_or_load_cert(
+        &self,
+        cert_path: &std::path::Path,
+        key_path: &std::path::Path,
+    ) -> Result<CachedCert, openssl::error::ErrorStack> {
+        if let Some(cached) = self.cache.get(cert_path) {
+            return Ok(cached.clone());
+        }
+
+        let loaded = Self::load_cert_and_key(cert_path, key_path)?;
+        let cached = CachedCert {
+            cert: loaded.0,
+            key: loaded.1,
+        };
+        self.cache.insert(cert_path.to_path_buf(), cached.clone());
+        Ok(cached)
+    }
+
+    /// Invalidate cached cert so the next handshake reloads from disk.
+    /// Called after ACME renewal writes new cert files.
+    pub fn invalidate(&self, cert_path: &std::path::Path) {
+        self.cache.remove(cert_path);
+    }
+
+    /// Load certificate and key from files (cold path only)
     fn load_cert_and_key(
         cert_path: &std::path::Path,
         key_path: &std::path::Path,
@@ -104,12 +146,12 @@ impl SniCertResolver {
 
     fn set_default_cert(&self, ssl: &mut SslRef, reason: &str) {
         if let Some(cert_info) = self.default_cert_info() {
-            match Self::load_cert_and_key(&cert_info.cert_path, &cert_info.key_path) {
-                Ok((cert, key)) => {
-                    if let Err(e) = ssl.set_certificate(&cert) {
+            match self.get_or_load_cert(&cert_info.cert_path, &cert_info.key_path) {
+                Ok(cached) => {
+                    if let Err(e) = ssl.set_certificate(&cached.cert) {
                         tracing::error!("Failed to set default certificate ({reason}): {}", e);
                     }
-                    if let Err(e) = ssl.set_private_key(&key) {
+                    if let Err(e) = ssl.set_private_key(&cached.key) {
                         tracing::error!("Failed to set default private key ({reason}): {}", e);
                     }
                 }
@@ -159,15 +201,15 @@ impl TlsAccept for SniCertResolver {
                     "Found certificate for hostname"
                 );
 
-                match Self::load_cert_and_key(&cert_info.cert_path, &cert_info.key_path) {
-                    Ok((cert, key)) => {
-                        if let Err(e) = ssl.set_certificate(&cert) {
+                match self.get_or_load_cert(&cert_info.cert_path, &cert_info.key_path) {
+                    Ok(cached) => {
+                        if let Err(e) = ssl.set_certificate(&cached.cert) {
                             tracing::error!(
                                 hostname = %sni_hostname,
                                 "Failed to set certificate: {}", e
                             );
                         }
-                        if let Err(e) = ssl.set_private_key(&key) {
+                        if let Err(e) = ssl.set_private_key(&cached.key) {
                             tracing::error!(
                                 hostname = %sni_hostname,
                                 "Failed to set private key: {}", e
