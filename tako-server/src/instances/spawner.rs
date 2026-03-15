@@ -97,6 +97,13 @@ impl Spawner {
         {
             Ok(Ok(())) => {
                 instance.set_state(InstanceState::Healthy);
+
+                // Now that the instance is healthy, drain stdout/stderr so the
+                // OS pipe buffer never fills (which would block the app process).
+                // We keep pipes open during startup so startup_exit_detail can
+                // read error output if the process crashes before becoming healthy.
+                instance.drain_pipes();
+
                 tracing::info!(
                     app = %app_name,
                     instance = %instance_id,

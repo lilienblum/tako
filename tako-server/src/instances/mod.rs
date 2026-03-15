@@ -22,6 +22,18 @@ use tako_core::deployment_app_id_filename;
 use tokio::process::Child;
 use tokio::sync::mpsc;
 
+/// Read and discard all output from a pipe until EOF.
+/// Keeps the OS pipe buffer drained so the child process never blocks on write.
+async fn drain_pipe<R: tokio::io::AsyncRead + Unpin>(mut pipe: R) {
+    let mut buf = [0u8; 8192];
+    loop {
+        match tokio::io::AsyncReadExt::read(&mut pipe, &mut buf).await {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {}
+        }
+    }
+}
+
 fn now_unix_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -256,6 +268,21 @@ impl Instance {
             }
         } else {
             false
+        }
+    }
+
+    /// Start draining stdout/stderr pipes so the OS pipe buffer never fills.
+    /// Called after the instance becomes healthy — before this point, the pipes
+    /// are kept readable for startup_exit_detail error reporting.
+    pub fn drain_pipes(&self) {
+        let mut process = self.process.write();
+        if let Some(ref mut child) = *process {
+            if let Some(stdout) = child.stdout.take() {
+                tokio::spawn(drain_pipe(stdout));
+            }
+            if let Some(stderr) = child.stderr.take() {
+                tokio::spawn(drain_pipe(stderr));
+            }
         }
     }
 
