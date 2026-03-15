@@ -774,6 +774,7 @@ async fn wait_for_https_host_reachable_via_ip(
     Err(last_error)
 }
 
+#[cfg(target_os = "macos")]
 fn local_https_probe_error(
     host: &str,
     public_port: u16,
@@ -919,13 +920,15 @@ mod tests {
         doctor_dev_server_lines, doctor_local_forwarding_preflight_lines,
         ensure_dev_server_tls_material_for_home, ensure_local_dns_resolver_configured,
         host_and_port_from_url, is_dev_server_unavailable_error_message,
-        local_dns_resolver_contents, local_dns_sudo_action_line, local_https_probe_error,
+        local_dns_resolver_contents, local_dns_sudo_action_line,
         local_https_probe_host, parse_local_dns_resolver, parse_stored_log_line,
         port_from_listen, preferred_public_url, replay_and_follow_logs,
         resolve_dev_preset_ref, resolve_dev_run_command, resolve_effective_dev_build_adapter,
         restart_required_for_requested_listen, route_hostname_matches,
         should_drop_child_log_line, sudo_setup_action_items, tcp_probe, trim_child_log_message,
     };
+    #[cfg(target_os = "macos")]
+    use super::local_https_probe_error;
     use crate::build::{BuildAdapter, parse_and_validate_preset};
     use crate::config::TakoToml;
     use crate::dev::LocalCA;
@@ -1520,12 +1523,14 @@ dev = ["bun", "run", "dev"]
         assert!(lines.iter().any(|line| line.contains("loaded")));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn local_https_probe_error_mentions_launchd_when_server_directly_reachable() {
         let msg = local_https_probe_error("bun-example.tako.test", 47831, "timed out", true);
         assert!(msg.contains("launchd"));
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
     fn local_https_probe_error_mentions_doctor_when_server_not_directly_reachable() {
         let msg = local_https_probe_error("bun-example.tako.test", 47831, "timed out", false);
@@ -2142,23 +2147,23 @@ pub async fn run(
             LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS,
         )
         .await;
-        if let Err(loopback_error) = probe_result.as_ref() {
-            let server_directly_reachable = wait_for_https_host_reachable_via_ip(
-                probe_host,
-                std::net::Ipv4Addr::new(127, 0, 0, 1),
-                public_port,
-                LOCALHOST_443_HTTPS_PROBE_ATTEMPTS,
-                LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS,
-                LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS,
-            )
-            .await
-            .is_ok();
+        if let Err(_loopback_error) = probe_result.as_ref() {
             #[cfg(target_os = "macos")]
             {
+                let server_directly_reachable = wait_for_https_host_reachable_via_ip(
+                    probe_host,
+                    std::net::Ipv4Addr::new(127, 0, 0, 1),
+                    public_port,
+                    LOCALHOST_443_HTTPS_PROBE_ATTEMPTS,
+                    LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS,
+                    LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS,
+                )
+                .await
+                .is_ok();
                 return Err(local_https_probe_error(
                     probe_host,
                     public_port,
-                    loopback_error,
+                    _loopback_error,
                     server_directly_reachable,
                 )
                 .into());
