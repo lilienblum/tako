@@ -17,6 +17,10 @@ path = "src/main.rs"
 name = "tako-dev-server"
 path = "src/bin/tako-dev-server/main.rs"
 
+[[bin]]
+name = "tako-loopback-proxy"
+path = "src/bin/tako-loopback-proxy/main.rs"
+
 [dependencies]
 tako-core = { path = "../tako-core", version = "0.0.1" }
 tako-socket = { path = "../tako-socket", version = "0.0.1" }

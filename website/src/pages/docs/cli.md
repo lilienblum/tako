@@ -45,7 +45,7 @@ Directory selection is command-scoped:
 - `tako dev [DIR]`: run local development mode.
 - `tako dev stop [NAME] [--all]`: stop a running/idle dev app (defaults to current directory's app).
 - `tako dev ls`: list all registered dev apps with status.
-- `tako doctor`: print local dev diagnostics (DNS, socket, listener, apps, and local forwarding preflight checks).
+- `tako doctor`: print local dev diagnostics (DNS, socket, listener, apps, and macOS loopback-proxy preflight checks, including boot-helper and loopback-alias status).
 - `tako deploy [--env <ENV>] [-y|--yes] [DIR]`: build and deploy app.
 - `tako scale <N> [--env <ENV>] [--server <SERVER>] [--app <APP>]`: change the desired instance count for a deployed app.
 - `tako releases <subcommand>`: list release history and roll back to a previous release.
@@ -67,7 +67,7 @@ Notes:
 - local CLI upgrade strategy is install-aware:
   - Homebrew installs use `brew upgrade tako`
   - Cargo installs under `~/.cargo/bin/tako` use `cargo install tako --locked`
-  - fallback uses hosted installer script (`https://tako.sh/install`) via `curl`/`wget` (installs both `tako` and `tako-dev-server`)
+  - fallback uses hosted installer script (`https://tako.sh/install`) via `curl`/`wget` (installs `tako`, `tako-dev-server`, and `tako-loopback-proxy`)
   - `--canary` forces hosted installer mode and sets `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary`
   - `--stable` forces stable channel and persists it as default
   - without channel flags, upgrade uses persisted global `upgrade_channel` (default: `stable`)

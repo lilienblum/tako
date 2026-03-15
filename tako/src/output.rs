@@ -397,6 +397,18 @@ pub fn bullet(message: &str) {
     }
 }
 
+fn format_warning_full_line(message: &str) -> String {
+    format!("{} {}", brand_warning(brand_muted("┃")), brand_warning(message))
+}
+
+fn format_warning_bullet_line(message: &str) -> String {
+    format!(
+        "{} {}",
+        brand_warning(brand_muted("┃")),
+        brand_warning(format!("• {message}"))
+    )
+}
+
 pub fn success(message: &str) {
     if is_pretty() {
         eprintln!("{} {}", brand_success("✓"), brand_fg(message));
@@ -406,6 +418,18 @@ pub fn success(message: &str) {
 pub fn warning(message: &str) {
     if is_pretty() {
         eprintln!("{} {}", bold(&brand_warning("!")), brand_fg(message));
+    }
+}
+
+pub fn warning_full(message: &str) {
+    if is_pretty() {
+        eprintln!("{}", format_warning_full_line(message));
+    }
+}
+
+pub fn warning_bullet(message: &str) {
+    if is_pretty() {
+        eprintln!("{}", format_warning_bullet_line(message));
     }
 }
 
@@ -2270,7 +2294,20 @@ mod tests {
     fn brand_accent_returns_plain_in_test() {
         assert_eq!(brand_accent("hello"), "hello");
         assert_eq!(brand_success("ok"), "ok");
+        assert_eq!(brand_warning("warn"), "warn");
         assert_eq!(brand_error("fail"), "fail");
+    }
+
+    #[test]
+    fn warning_formatters_render_plain_text_in_tests() {
+        assert_eq!(
+            format_warning_full_line("One-time sudo required"),
+            "┃ One-time sudo required"
+        );
+        assert_eq!(
+            format_warning_bullet_line("Configure local DNS for *.tako.test"),
+            "┃ • Configure local DNS for *.tako.test"
+        );
     }
 
     #[test]

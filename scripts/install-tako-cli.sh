@@ -7,7 +7,7 @@ set -eu
 #   curl -fsSL https://tako.sh/install | sh
 #
 # What it does:
-# - downloads and installs `tako` and `tako-dev-server` for your OS/architecture
+# - downloads and installs `tako`, `tako-dev-server`, and `tako-loopback-proxy` for your OS/architecture
 # - installs binaries to ~/.local/bin by default
 #
 # Optional env vars:
@@ -161,15 +161,23 @@ if [ -z "$tmp_dev_server_bin" ]; then
   echo "error: archive did not contain a tako-dev-server binary" >&2
   exit 1
 fi
+tmp_loopback_proxy_bin="$(find "$tmp_extract" -type f -name tako-loopback-proxy | head -n 1 || true)"
+if [ -z "$tmp_loopback_proxy_bin" ]; then
+  echo "error: archive did not contain a tako-loopback-proxy binary" >&2
+  exit 1
+fi
 
 mkdir -p "$TAKO_INSTALL_DIR"
 target_tako="$TAKO_INSTALL_DIR/tako"
 target_dev_server="$TAKO_INSTALL_DIR/tako-dev-server"
+target_loopback_proxy="$TAKO_INSTALL_DIR/tako-loopback-proxy"
 install -m 0755 "$tmp_tako_bin" "$target_tako"
 install -m 0755 "$tmp_dev_server_bin" "$target_dev_server"
+install -m 0755 "$tmp_loopback_proxy_bin" "$target_loopback_proxy"
 
 echo "OK installed tako to $target_tako"
 echo "OK installed tako-dev-server to $target_dev_server"
+echo "OK installed tako-loopback-proxy to $target_loopback_proxy"
 
 case ":$PATH:" in
   *":$TAKO_INSTALL_DIR:"*)

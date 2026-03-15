@@ -196,9 +196,12 @@ async fn run_canary_upgrade(
         // Install
         let new_dev_server = find_binary(&extract_dir, "tako-dev-server")
             .ok_or("archive did not contain a tako-dev-server binary")?;
+        let new_loopback_proxy = find_binary(&extract_dir, "tako-loopback-proxy")
+            .ok_or("archive did not contain a tako-loopback-proxy binary")?;
         std::fs::create_dir_all(install_dir)?;
         install_binary(&new_tako, install_dir, "tako")?;
         install_binary(&new_dev_server, install_dir, "tako-dev-server")?;
+        install_binary(&new_loopback_proxy, install_dir, "tako-loopback-proxy")?;
 
         // Save tarball hash so next time we can skip the download
         save_canary_hash(saved_hash_path.as_deref(), &archive_path);
@@ -421,10 +424,13 @@ async fn download_and_install_inner(
         find_binary(&extract_dir, "tako").ok_or("archive did not contain a tako binary")?;
     let dev_server_bin = find_binary(&extract_dir, "tako-dev-server")
         .ok_or("archive did not contain a tako-dev-server binary")?;
+    let loopback_proxy_bin = find_binary(&extract_dir, "tako-loopback-proxy")
+        .ok_or("archive did not contain a tako-loopback-proxy binary")?;
 
     std::fs::create_dir_all(install_dir)?;
     install_binary(&tako_bin, install_dir, "tako")?;
     install_binary(&dev_server_bin, install_dir, "tako-dev-server")?;
+    install_binary(&loopback_proxy_bin, install_dir, "tako-loopback-proxy")?;
 
     Ok(())
 }

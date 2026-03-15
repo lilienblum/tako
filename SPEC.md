@@ -215,7 +215,7 @@ Detected server build target metadata is stored directly in each `[[servers]]` e
 - If no suitable key files are found or usable, `tako` falls back to `ssh-agent` via `SSH_AUTH_SOCK` (when available).
 
 - `tako dev` uses a fixed local HTTPS listen port (`47831`).
-- On macOS, `tako dev` uses automatic local forwarding so public URLs stay on default ports (`:443` for HTTPS, `:80` for HTTP redirect).
+- On macOS, `tako dev` uses a dedicated loopback alias plus a launchd-managed loopback proxy so public URLs stay on default ports (`:443` for HTTPS, `:80` for HTTP redirect).
 
 CLI prompt history is stored separately at `history.toml` (not in `config.toml`).
 
@@ -253,7 +253,7 @@ Install the CLI on your local machine:
 curl -fsSL https://tako.sh/install | sh
 ```
 
-The hosted installer installs both `tako` and `tako-dev-server` binaries from the same channel/archive.
+The hosted installer installs `tako`, `tako-dev-server`, and `tako-loopback-proxy` from the same channel/archive.
 
 Install canary CLI artifacts directly:
 
@@ -267,7 +267,7 @@ Install from crates.io:
 cargo install tako
 ```
 
-`cargo install tako` also installs both `tako` and `tako-dev-server` binaries from the same package/version.
+`cargo install tako` also installs `tako`, `tako-dev-server`, and `tako-loopback-proxy` from the same package/version.
 
 Upgrade local CLI:
 
@@ -377,7 +377,9 @@ CLI upgrade strategy:
 Start (or attach to) a local development session for the current app, backed by a persistent dev daemon.
 
 - `tako dev` is a **client**: it ensures `tako-dev-server` is running, then registers the current app directory with the daemon.
+  - On macOS, `tako dev` also ensures the socket-activated `tako-loopback-proxy` helper is installed and loaded for loopback-only `:80/:443` ingress.
   - When running from a source checkout, `tako dev` prefers the repo-local `target/debug|release/tako-dev-server` binary.
+  - When running from a source checkout on macOS, `tako dev` can also build the repo-local `tako-loopback-proxy` binary when the helper needs installation or repair.
   - If no local daemon binary exists, `tako dev` falls back to `tako-dev-server` on `PATH`.
   - If that fallback binary is missing:
     - source checkout flow reports a build hint (`cargo build -p tako --bin tako-dev-server`)
@@ -401,10 +403,12 @@ Start (or attach to) a local development session for the current app, backed by 
 - The daemon supports **multiple concurrent apps** and maintains hostname-based routing for `*.tako.test`.
 - Utility flags:
   - `tako doctor`: print a diagnostic report and exit.
-    - Reports dev daemon listen info, local 80/443 forwarding status, and local DNS status.
+    - Reports dev daemon listen info, macOS loopback proxy status, and local DNS status.
     - On macOS, includes a preflight section with clear checks for:
-      - pf redirect rule for `{loopback-address}:443 -> 127.0.0.1:<dev-port>`
-      - pf redirect rule for `{loopback-address}:80 -> 127.0.0.1:<http-redirect-port>`
+      - loopback proxy install status
+      - loopback boot-helper load status
+      - dedicated loopback alias status
+      - launchd load status
       - TCP reachability on `{loopback-address}:443` and `{loopback-address}:80`
     - If the local dev daemon is not running (missing/stale socket), doctor reports `status: not running` with a hint to start `tako dev`, and exits successfully.
 - When running in an interactive terminal, `tako dev` prints a branded header (logo + version + app info) once at startup, then streams logs and status updates directly to stdout.
@@ -431,16 +435,19 @@ Start (or attach to) a local development session for the current app, backed by 
 - By default, Tako registers `https://{app}.tako.test:47831/` on non-macOS and `https://{app}.tako.test/` on macOS.
   - On macOS, Tako configures split DNS for `tako.test` by writing `/etc/resolver/tako.test` (one-time sudo), pointing to a local DNS listener on `127.0.0.1:53535`.
   - The dev daemon answers `A` queries for active `*.tako.test` hosts.
-    - On macOS, it maps to a dedicated loopback address (`127.77.0.1`) used by pf forwarding.
+    - On macOS, it maps to a dedicated loopback address (`127.77.0.1`) used by the loopback proxy.
     - On non-macOS, it maps to `127.0.0.1`.
-  - On macOS, `tako dev` automatically tries to enable scoped local forwarding when missing (one-time sudo prompt):
+  - On macOS, `tako dev` automatically installs and repairs a launchd-managed loopback proxy when missing (one-time sudo prompt):
+    - Tako also installs a boot-time launchd helper that ensures the dedicated loopback alias (`127.77.0.1`) exists before the proxy is re-registered
+    - launchd owns listening sockets only on `127.77.0.1`
     - `127.77.0.1:443 -> 127.0.0.1:47831`
     - `127.77.0.1:80 -> 127.0.0.1:47830` (HTTP redirect to HTTPS)
-  - If forwarding later appears inactive, `tako dev` explains why it is re-requesting sudo before repair (missing pf rules, runtime forwarding reset after reboot/pf reset, or conflicting local listeners on `127.0.0.1:80/443`).
-  - On macOS, Tako always requires this forwarding and always advertises `https://{app}.tako.test/` (no explicit port).
-  - After applying or repairing local forwarding, Tako retries loopback 80/443 reachability and fails startup if those endpoints remain unreachable.
+  - The loopback proxy is socket-activated and may exit after a long idle window; launchd reactivates it on the next request.
+  - If the loopback proxy later appears inactive, `tako dev` explains that it is reloading or reinstalling the launchd helper before prompting for sudo.
+  - On macOS, Tako always requires this loopback proxy and always advertises `https://{app}.tako.test/` (no explicit port).
+  - After applying or repairing the loopback proxy, Tako retries loopback 80/443 reachability and fails startup if those endpoints remain unreachable.
   - On macOS, Tako probes HTTPS for the app host via loopback and fails startup if that probe does not succeed.
-  - If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.tako.test/` still fails, Tako reports a targeted hint that local `:443` traffic is being intercepted/bypassed before reaching Tako.
+  - If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.tako.test/` still fails, Tako reports a targeted hint that the local launchd loopback proxy is not forwarding correctly.
   - `tako dev` uses routes from `[envs.development]` when configured; otherwise it defaults to `{app}.tako.test`.
     - Dev routes must be `{app}.tako.test` or a subdomain of it.
     - Dev routing matches exact hostnames only; wildcard host entries are ignored.
@@ -980,7 +987,7 @@ Reference scripts in this repo:
 - Renewal: Every 12 hours
 - HTTP requests redirect to HTTPS (`307`, non-cacheable) by default.
 - Exception: `/.well-known/acme-challenge/*` stays on HTTP.
-- Forwarded requests for private/local hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing, so local forwarding setups do not enter redirect loops.
+- Forwarded requests for private/local hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing, so local loopback proxy setups do not enter redirect loops.
 - Upstream response caching is enabled at the edge proxy for `GET`/`HEAD` requests (websocket upgrades are excluded).
 - Cache admission follows response headers (`Cache-Control` / `Expires`) with no implicit TTL defaults; responses without explicit cache directives are not stored.
 - Cache key includes request host + URI so different route hosts are isolated.

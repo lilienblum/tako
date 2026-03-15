@@ -26,6 +26,7 @@ CLI output conventions across commands:
 | ------------------ | --------------- | -------------------------------------------------------------------------------- |
 | `tako` CLI         | Your machine    | Project setup, dev client, build/deploy orchestration, server/secrets management |
 | `tako-dev-server`  | Your machine    | Local HTTPS ingress for `*.tako.test`, local app lifecycle                       |
+| `tako-loopback-proxy` | macOS only  | Loopback-only `:80/:443` ingress for a dedicated `127.77.0.1` alias, socket-activated by launchd |
 | `tako-server`      | Deployment host | Remote app lifecycle, routing, health checks, load balancing, TLS, metrics       |
 | Your app instances | Local or remote | Serve your app logic                                                             |
 
@@ -51,8 +52,8 @@ See full config details in [`tako.toml` Reference](/docs/tako-toml).
 When you run `tako dev`, the CLI behaves like a client for a persistent local daemon.
 
 - It ensures `tako-dev-server` is running.
-  - Installed CLI distributions provide `tako-dev-server` alongside `tako`.
-  - Source-checkout runs can build `tako-dev-server` from the `tako` crate when needed.
+  - Installed CLI distributions provide `tako-dev-server` and `tako-loopback-proxy` alongside `tako`.
+  - Source-checkout runs can build `tako-dev-server` and, on macOS, `tako-loopback-proxy` from the `tako` crate when needed.
 - It registers the current app directory with the daemon.
 - It starts one local instance immediately.
 - It exposes HTTPS routes on `*.tako.test` with a fixed daemon listen port (`127.0.0.1:47831`).
@@ -65,9 +66,11 @@ Default route behavior:
 
 macOS local networking behavior:
 
-- Tako sets up local forwarding so public URLs stay on default ports (`:443` and `:80` redirect behavior).
-- On first setup/trust flow, elevated access may be required to install/trust the local CA and configure forwarding.
-- If forwarding later appears inactive, `tako dev` prints the detected reason before prompting again (missing pf rules, runtime reset after reboot/pf reset, or local listeners on `127.0.0.1:80/443`).
+- Tako installs a launchd-managed loopback proxy so public URLs stay on default ports (`:443` and `:80` redirect behavior).
+- A small boot-time launchd helper restores the dedicated `127.77.0.1` loopback alias before the proxy is re-registered.
+- The proxy binds only `127.77.0.1:443` and `127.77.0.1:80`, then forwards raw TCP to `127.0.0.1:47831` and `127.0.0.1:47830`.
+- The proxy is socket-activated and may exit after a long idle window; launchd starts it again on the next request.
+- On first setup/trust flow, elevated access may be required to install/trust the local CA, install `/etc/resolver/tako.test`, and install the launchd helper.
 
 Session and idle behavior:
 

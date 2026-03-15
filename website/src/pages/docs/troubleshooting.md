@@ -40,9 +40,9 @@ If local URL fails:
 Important local behavior:
 
 - `tako dev` uses fixed HTTPS port `127.0.0.1:47831`.
-- On macOS, Tako configures local forwarding and split DNS so you can use `https://{app}.tako.test/` without port suffix.
-- On first trust/setup flow, elevated access may be required for local CA trust + forwarding setup.
-- If `tako dev` says local forwarding looks inactive, read the diagnostics printed right before sudo: they call out missing pf rules, runtime pf reset (common after reboot), or local listeners on `127.0.0.1:80/443`.
+- On macOS, Tako configures split DNS, a dedicated `127.77.0.1` loopback alias, and a launchd-managed loopback proxy so you can use `https://{app}.tako.test/` without port suffix.
+- On first trust/setup flow, elevated access may be required for local CA trust, resolver setup, and loopback-proxy install.
+- If `tako dev` says local loopback proxy setup looks inactive, run `tako doctor` and check both `launchctl print system/sh.tako.loopback-proxy` and `ifconfig lo0 | rg 127.77.0.1`.
 
 Config-related local failures:
 

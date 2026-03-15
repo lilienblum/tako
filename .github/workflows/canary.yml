@@ -65,7 +65,7 @@ jobs:
           if [ "${{ matrix.libc }}" = "musl" ]; then
             cargo build -p tako-server --release --target ${{ matrix.target }}
           else
-            cargo build -p tako --bin tako --bin tako-dev-server --release
+            cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release
             cargo build -p tako-server --release
           fi
 
@@ -91,7 +91,8 @@ jobs:
           tmpdir="$(mktemp -d)"
           cp target/release/tako "$tmpdir/tako"
           cp target/release/tako-dev-server "$tmpdir/tako-dev-server"
-          tar -czf "dist/tako-linux-${{ matrix.outarch }}.tar.gz" -C "$tmpdir" tako tako-dev-server
+          cp target/release/tako-loopback-proxy "$tmpdir/tako-loopback-proxy"
+          tar -czf "dist/tako-linux-${{ matrix.outarch }}.tar.gz" -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
           sha256sum "dist/tako-linux-${{ matrix.outarch }}.tar.gz" > "dist/tako-linux-${{ matrix.outarch }}.tar.gz.sha256"
           rm -rf "$tmpdir"
 
@@ -136,19 +137,21 @@ jobs:
           mkdir -p dist
           export TAKO_CANARY_SHA="$GITHUB_SHA"
 
-          cargo build -p tako --bin tako --bin tako-dev-server --release --target aarch64-apple-darwin
-          cargo build -p tako --bin tako --bin tako-dev-server --release --target x86_64-apple-darwin
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target aarch64-apple-darwin
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target x86_64-apple-darwin
 
           tmpdir="$(mktemp -d)"
           cp target/aarch64-apple-darwin/release/tako "$tmpdir/tako"
           cp target/aarch64-apple-darwin/release/tako-dev-server "$tmpdir/tako-dev-server"
-          tar -czf dist/tako-darwin-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server
+          cp target/aarch64-apple-darwin/release/tako-loopback-proxy "$tmpdir/tako-loopback-proxy"
+          tar -czf dist/tako-darwin-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
           rm -rf "$tmpdir"
 
           tmpdir="$(mktemp -d)"
           cp target/x86_64-apple-darwin/release/tako "$tmpdir/tako"
           cp target/x86_64-apple-darwin/release/tako-dev-server "$tmpdir/tako-dev-server"
-          tar -czf dist/tako-darwin-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server
+          cp target/x86_64-apple-darwin/release/tako-loopback-proxy "$tmpdir/tako-loopback-proxy"
+          tar -czf dist/tako-darwin-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
           rm -rf "$tmpdir"
 
           shasum -a 256 dist/tako-darwin-aarch64.tar.gz > dist/tako-darwin-aarch64.tar.gz.sha256

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, OptionalExtension, params};
-
-pub const DEV_ENVIRONMENT: &str = "development";
+use rusqlite::{Connection, params};
+#[cfg(test)]
+use rusqlite::OptionalExtension;
 
 const PID_FILE: &str = ".tako/dev.pid";
 
@@ -35,6 +35,7 @@ impl AppStatus {
 }
 
 /// Persistent app registration (survives server restarts).
+#[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct RegisteredApp {
     pub project_dir: String,
@@ -170,6 +171,7 @@ impl DevStateStore {
         Ok(rows > 0)
     }
 
+    #[cfg(test)]
     pub fn get(&self, project_dir: &str) -> Result<Option<RegisteredApp>, String> {
         self.conn
             .query_row(
@@ -196,6 +198,7 @@ impl DevStateStore {
             .map_err(|e| format!("list collect: {e}"))
     }
 
+    #[cfg(test)]
     pub fn set_enabled(&self, project_dir: &str, enabled: bool) -> Result<bool, String> {
         let now = unix_now() as i64;
         let rows = self

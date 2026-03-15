@@ -35,7 +35,7 @@ COPY tako-socket/src tako-socket/src
 COPY tako/src tako/src
 COPY tako-server/src tako-server/src
 
-RUN if [ "$BUILD_TAKO" = "1" ]; then cargo build -p tako --bin tako --bin tako-dev-server --release; fi \
+RUN if [ "$BUILD_TAKO" = "1" ]; then cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release; fi \
     && if [ "$BUILD_TAKO_SERVER" = "1" ]; then cargo build -p tako-server --release; fi
 
 
@@ -73,7 +73,7 @@ COPY tako-socket/src tako-socket/src
 COPY tako/src tako/src
 COPY tako-server/src tako-server/src
 
-RUN if [ "$BUILD_TAKO" = "1" ]; then cargo build -p tako --bin tako --bin tako-dev-server --release; fi \
+RUN if [ "$BUILD_TAKO" = "1" ]; then cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release; fi \
     && if [ "$BUILD_TAKO_SERVER" = "1" ]; then cargo build -p tako-server --release; fi
 
 
@@ -81,25 +81,31 @@ FROM alpine:3.20 AS tako-artifact-musl
 
 COPY --from=builder-musl /work/target/release/tako /tako
 COPY --from=builder-musl /work/target/release/tako-dev-server /tako-dev-server
+COPY --from=builder-musl /work/target/release/tako-loopback-proxy /tako-loopback-proxy
 RUN sha256sum /tako > /tako.sha256 \
-    && sha256sum /tako-dev-server > /tako-dev-server.sha256
+    && sha256sum /tako-dev-server > /tako-dev-server.sha256 \
+    && sha256sum /tako-loopback-proxy > /tako-loopback-proxy.sha256
 
 
 FROM debian:bookworm-slim AS tako-artifact-glibc
 
 COPY --from=builder-glibc /work/target/release/tako /tako
 COPY --from=builder-glibc /work/target/release/tako-dev-server /tako-dev-server
+COPY --from=builder-glibc /work/target/release/tako-loopback-proxy /tako-loopback-proxy
 RUN sha256sum /tako > /tako.sha256 \
-    && sha256sum /tako-dev-server > /tako-dev-server.sha256
+    && sha256sum /tako-dev-server > /tako-dev-server.sha256 \
+    && sha256sum /tako-loopback-proxy > /tako-loopback-proxy.sha256
 
 
 FROM debian:bookworm-slim AS tako-and-server-artifact-glibc
 
 COPY --from=builder-glibc /work/target/release/tako /tako
 COPY --from=builder-glibc /work/target/release/tako-dev-server /tako-dev-server
+COPY --from=builder-glibc /work/target/release/tako-loopback-proxy /tako-loopback-proxy
 COPY --from=builder-glibc /work/target/release/tako-server /tako-server
 RUN sha256sum /tako > /tako.sha256 \
     && sha256sum /tako-dev-server > /tako-dev-server.sha256 \
+    && sha256sum /tako-loopback-proxy > /tako-loopback-proxy.sha256 \
     && sha256sum /tako-server > /tako-server.sha256
 
 

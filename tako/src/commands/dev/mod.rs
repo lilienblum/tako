@@ -8,6 +8,7 @@
 //! - Idle timeout (stops app process after inactivity)
 
 mod ca_setup;
+mod loopback_proxy;
 mod output;
 mod watcher;
 
@@ -41,6 +42,8 @@ use crate::dev::LocalCA;
 use crate::validation::validate_dev_route;
 
 pub use ca_setup::setup_local_ca;
+#[cfg(target_os = "macos")]
+pub(crate) use loopback_proxy::{LoopbackProxyStatus, LOOPBACK_PROXY_LABEL, status as loopback_proxy_status};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LogLevel {
@@ -180,18 +183,7 @@ const DEV_TLS_NAMES_FILENAME: &str = "names.json";
 const LOCALHOST_443_HTTPS_PROBE_ATTEMPTS: usize = 12;
 const LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS: u64 = 500;
 const LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS: u64 = 150;
-const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
-
-#[cfg(any(target_os = "macos", test))]
-const PF_ANCHOR_NAME: &str = "tako";
-#[cfg(any(target_os = "macos", test))]
-const PF_ANCHOR_FILE: &str = "/etc/pf.anchors/tako";
-#[cfg(target_os = "macos")]
-const PF_CONF_FILE: &str = "/etc/pf.conf";
-#[cfg(any(target_os = "macos", test))]
-const PF_HOOK_BEGIN: &str = "# >>> tako >>>";
-#[cfg(any(target_os = "macos", test))]
-const PF_HOOK_END: &str = "# <<< tako <<<";
+pub(crate) const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
 /// Fixed HTTPS port tako-dev-server listens on (matches DEV_PUBLIC_PORT in cli.rs).
 #[cfg(any(target_os = "macos", test))]
 const DEV_HTTPS_LISTEN_PORT: u16 = 47831;
@@ -626,11 +618,6 @@ fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::er
         .into());
     }
 
-    crate::output::warning("Sudo password required.");
-    crate::output::muted("One-time sudo required to configure local DNS for *.tako.test.");
-    crate::output::muted(&format!(
-        "This writes {TAKO_RESOLVER_FILE} -> nameserver 127.0.0.1 port {port}."
-    ));
     crate::output::info("Configuring local DNS resolver (sudo)...");
 
     sudo_run_checked(
@@ -653,100 +640,49 @@ fn ensure_local_dns_resolver_configured(_port: u16) -> Result<(), Box<dyn std::e
     Ok(())
 }
 
-/// Content for the pf anchor file that redirects loopback 443/80 → tako ports.
-/// macOS routes all of 127.0.0.0/8 to lo0, so no ifconfig alias is needed.
 #[cfg(any(target_os = "macos", test))]
-fn pf_anchor_content() -> String {
-    format!(
-        "rdr pass on lo0 proto tcp from any to {DEV_LOOPBACK_ADDR} port 443 -> 127.0.0.1 port {DEV_HTTPS_LISTEN_PORT}\n\
-         rdr pass on lo0 proto tcp from any to {DEV_LOOPBACK_ADDR} port 80 -> 127.0.0.1 port {DEV_HTTP_REDIRECT_PORT}\n"
-    )
+fn local_dns_sudo_action_line() -> &'static str {
+    "Configure local DNS for *.tako.test"
 }
 
-/// Insert or replace the tako hook block in the pf.conf content.
 #[cfg(any(target_os = "macos", test))]
-fn pf_conf_with_hook(pf_conf: &str) -> String {
-    let hook = format!(
-        "{PF_HOOK_BEGIN}\nrdr-anchor \"{PF_ANCHOR_NAME}\"\nload anchor \"{PF_ANCHOR_NAME}\" from \"{PF_ANCHOR_FILE}\"\n{PF_HOOK_END}\n"
-    );
-    if let Some(start) = pf_conf.find(PF_HOOK_BEGIN) {
-        if let Some(rel_end) = pf_conf[start..].find(PF_HOOK_END) {
-            let end = start + rel_end + PF_HOOK_END.len();
-            // consume trailing newline if present
-            let end = if pf_conf.as_bytes().get(end) == Some(&b'\n') {
-                end + 1
-            } else {
-                end
-            };
-            return format!("{}{}{}", &pf_conf[..start], hook, &pf_conf[end..]);
-        }
-        // Begin marker exists but end marker is missing (truncated/hand-edited).
-        // Replace from the begin marker to end of file.
-        return format!("{}{}", &pf_conf[..start], hook);
+fn sudo_setup_action_items(
+    ca_action: Option<&str>,
+    local_dns_needed: bool,
+    loopback_proxy_action: Option<&str>,
+) -> Vec<String> {
+    let mut items = Vec::new();
+    if let Some(action) = ca_action {
+        items.push(action.to_string());
     }
-    let trimmed = pf_conf.trim_end_matches('\n');
-    format!("{trimmed}\n{hook}")
+    if local_dns_needed {
+        items.push(local_dns_sudo_action_line().to_string());
+    }
+    if let Some(action) = loopback_proxy_action {
+        items.push(action.to_string());
+    }
+    items
 }
 
-/// Returns true if the pf anchor file and pf.conf hook are in place.
-/// Rules written to /etc/pf.conf persist across reboots (pf loads them at boot).
 #[cfg(target_os = "macos")]
-pub(crate) fn pf_rules_active() -> bool {
-    let anchor_ok = std::fs::read_to_string(PF_ANCHOR_FILE)
-        .map(|a| a == pf_anchor_content())
-        .unwrap_or(false);
-    let conf_ok = std::fs::read_to_string(PF_CONF_FILE)
-        .map(|c| c.contains(PF_HOOK_BEGIN))
-        .unwrap_or(false);
-    anchor_ok && conf_ok
-}
-
-/// Ensure pf forwarding rules redirect 127.77.0.1:443/80 → tako's dev ports.
-///
-/// On first run (or if macOS reset /etc/pf.conf), writes the anchor file and
-/// updates pf.conf, then reloads pf — all via a single sudo prompt.
-/// Rules persist across reboots; subsequent runs return immediately.
-#[cfg(target_os = "macos")]
-fn ensure_pf_forwarding() -> Result<(), Box<dyn std::error::Error>> {
-    if pf_rules_active() {
+fn explain_pending_sudo_setup(port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    if !crate::output::is_interactive() {
         return Ok(());
     }
 
-    if !crate::output::is_interactive() {
-        return Err(
-            "pf forwarding rules are not configured; run `tako dev` interactively once to set them up".into()
-        );
+    let items = sudo_setup_action_items(
+        ca_setup::pending_sudo_action()?,
+        !local_dns_resolver_configured(port),
+        loopback_proxy::pending_sudo_action()?,
+    );
+    if items.is_empty() {
+        return Ok(());
     }
 
-    crate::output::warning("Sudo password required.");
-    crate::output::muted("One-time sudo required to configure local 443/80 forwarding via pf.");
-    crate::output::muted(&format!(
-        "Writes {PF_ANCHOR_FILE} and adds a hook to {PF_CONF_FILE}. \
-         Rules persist across reboots."
-    ));
-
-    crate::output::info("Configuring local 80/443 forwarding (sudo)...");
-
-    // Write anchor file.
-    write_system_file_with_sudo(PF_ANCHOR_FILE, &pf_anchor_content())?;
-
-    // Read current pf.conf, insert/update our hook, write back.
-    let current_conf = std::fs::read_to_string(PF_CONF_FILE).unwrap_or_default();
-    let new_conf = pf_conf_with_hook(&current_conf);
-    write_system_file_with_sudo(PF_CONF_FILE, &new_conf)?;
-
-    // Load rules (reload if pf already enabled).
-    sudo_run_checked(&["pfctl", "-f", PF_CONF_FILE], "loading pf rules")?;
-    // Enable pf — ignore exit code 1 ("pf already enabled").
-    let _ = sudo_run_checked(&["pfctl", "-e"], "enabling pf");
-
-    if !pf_rules_active() {
-        return Err("pf forwarding rules were not applied successfully".into());
+    crate::output::warning_full("One-time sudo is required for:");
+    for item in items {
+        crate::output::warning_bullet(&item);
     }
-
-    crate::output::success(&format!(
-        "Local 443/80 forwarding active ({DEV_LOOPBACK_ADDR}:443/80 → 127.0.0.1:{DEV_HTTPS_LISTEN_PORT}/{DEV_HTTP_REDIRECT_PORT})."
-    ));
     Ok(())
 }
 
@@ -838,103 +774,23 @@ async fn wait_for_https_host_reachable_via_ip(
     Err(last_error)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalForwardingRepairPlan {
-    ReinstallRules,
-    ReloadRuntime,
-    ListenerConflict,
-}
-
-fn local_forwarding_repair_plan(
-    pf_rules_present: bool,
-    listener_on_443: bool,
-    listener_on_80: bool,
-) -> LocalForwardingRepairPlan {
-    if listener_on_443 || listener_on_80 {
-        LocalForwardingRepairPlan::ListenerConflict
-    } else if pf_rules_present {
-        LocalForwardingRepairPlan::ReloadRuntime
-    } else {
-        LocalForwardingRepairPlan::ReinstallRules
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn local_listener_on_port(port: u16) -> bool {
-    use std::process::Command;
-
-    let Ok(output) = Command::new("lsof")
-        .args(["-nP", &format!("-iTCP:{port}"), "-sTCP:LISTEN"])
-        .output()
-    else {
-        return false;
-    };
-
-    output.status.success() && !output.stdout.is_empty()
-}
-
-#[cfg(target_os = "macos")]
-fn reload_pf_forwarding_runtime() -> Result<(), Box<dyn std::error::Error>> {
-    if !crate::output::is_interactive() {
-        return Err(
-            "local pf forwarding looks inactive; run `tako dev` interactively once to repair it"
-                .into(),
-        );
-    }
-
-    crate::output::warning("Sudo password required.");
-    crate::output::muted(
-        "Local pf forwarding rules look installed but inactive. This can happen after reboot or pf reset.",
-    );
-    crate::output::muted(&format!(
-        "Reloading {PF_CONF_FILE} and re-enabling pf should restore {DEV_LOOPBACK_ADDR}:443/80 forwarding."
-    ));
-    crate::output::info("Repairing local 80/443 forwarding (sudo)...");
-
-    sudo_run_checked(&["pfctl", "-f", PF_CONF_FILE], "loading pf rules")?;
-    let _ = sudo_run_checked(&["pfctl", "-e"], "enabling pf");
-    Ok(())
-}
-
-#[cfg(target_os = "macos")]
-fn repair_local_forwarding(
-    plan: LocalForwardingRepairPlan,
-) -> Result<bool, Box<dyn std::error::Error>> {
-    match plan {
-        LocalForwardingRepairPlan::ReinstallRules => {
-            ensure_pf_forwarding()?;
-            Ok(true)
-        }
-        LocalForwardingRepairPlan::ReloadRuntime => {
-            reload_pf_forwarding_runtime()?;
-            Ok(true)
-        }
-        LocalForwardingRepairPlan::ListenerConflict => Ok(false),
-    }
-}
-
 fn local_https_probe_error(
     host: &str,
     public_port: u16,
     loopback_error: &str,
-    repair_plan: Option<LocalForwardingRepairPlan>,
+    server_directly_reachable: bool,
 ) -> String {
-    match repair_plan {
-        Some(LocalForwardingRepairPlan::ListenerConflict) => format!(
+    if server_directly_reachable {
+        format!(
             "Local HTTPS endpoint is unreachable at https://{host}/ ({loopback_error}). \
-             Tako dev server is reachable directly on 127.0.0.1:{public_port}, so port 443 \
-             is likely intercepted by another listener. \
-             Check `lsof -nP -iTCP:443 -sTCP:LISTEN`, then re-run `tako dev`."
-        ),
-        Some(LocalForwardingRepairPlan::ReloadRuntime) => format!(
+             Tako dev server is reachable directly on 127.0.0.1:{public_port}, so the local launchd loopback proxy is not forwarding correctly. \
+             Check `launchctl print system/{LOOPBACK_PROXY_LABEL}`, then re-run `tako dev`."
+        )
+    } else {
+        format!(
             "Local HTTPS endpoint is unreachable at https://{host}/ ({loopback_error}). \
-             Tako dev server is reachable directly on 127.0.0.1:{public_port}, and pf rules look installed but inactive. \
-             This usually happens after reboot or a pf reset. Re-run `tako dev` interactively so Tako can reload pf."
-        ),
-        Some(LocalForwardingRepairPlan::ReinstallRules) | None => format!(
-            "Local HTTPS endpoint is unreachable at https://{host}/ ({loopback_error}). \
-             Check that pf forwarding rules are active (`tako doctor`) and try again."
-        ),
+             Check that the local loopback proxy is loaded (`tako doctor`) and try again."
+        )
     }
 }
 
@@ -988,27 +844,27 @@ pub(crate) fn doctor_dev_server_lines(
 #[cfg(test)]
 pub(crate) fn doctor_local_forwarding_preflight_lines(
     advertised_ip: &str,
-    pf_active: bool,
+    proxy_loaded: bool,
     https_tcp_ok: bool,
     http_tcp_ok: bool,
 ) -> Vec<String> {
     vec![
         "preflight:".to_string(),
         format!(
-            "- pf forwarding ({})",
-            if pf_active {
-                "active"
+            "- loopback proxy ({})",
+            if proxy_loaded {
+                "loaded"
             } else {
-                "not configured"
+                "not loaded"
             }
         ),
         format!(
-            "- tcp {}:443 ({})",
+            "- TCP {}:443 ({})",
             advertised_ip,
             if https_tcp_ok { "ok" } else { "unreachable" }
         ),
         format!(
-            "- tcp {}:80 ({})",
+            "- TCP {}:80 ({})",
             advertised_ip,
             if http_tcp_ok { "ok" } else { "unreachable" }
         ),
@@ -1056,20 +912,19 @@ pub(crate) fn local_dns_resolver_values() -> Option<(String, u16)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DevEvent, LogLevel, PF_HOOK_BEGIN, PF_HOOK_END, ScopedLog, StoredLogEvent, app_log_scope,
+        DevEvent, LogLevel, ScopedLog, StoredLogEvent, app_log_scope,
         child_log_level_and_message, compute_dev_hosts, compute_display_routes, dev_idle_timeout,
         dev_initial_instance_count, dev_server_ready_log, dev_server_starting_log,
         dev_server_tls_names_path_for_home, dev_server_tls_paths_for_home, dev_startup_lines,
         doctor_dev_server_lines, doctor_local_forwarding_preflight_lines,
         ensure_dev_server_tls_material_for_home, ensure_local_dns_resolver_configured,
         host_and_port_from_url, is_dev_server_unavailable_error_message,
-        local_dns_resolver_contents, local_forwarding_repair_plan, local_https_probe_error,
+        local_dns_resolver_contents, local_dns_sudo_action_line, local_https_probe_error,
         local_https_probe_host, parse_local_dns_resolver, parse_stored_log_line,
-        pf_anchor_content, pf_conf_with_hook, port_from_listen, preferred_public_url,
-        replay_and_follow_logs, resolve_dev_preset_ref, resolve_dev_run_command,
-        resolve_effective_dev_build_adapter, restart_required_for_requested_listen,
-        route_hostname_matches, should_drop_child_log_line, tcp_probe,
-        trim_child_log_message, LocalForwardingRepairPlan,
+        port_from_listen, preferred_public_url, replay_and_follow_logs,
+        resolve_dev_preset_ref, resolve_dev_run_command, resolve_effective_dev_build_adapter,
+        restart_required_for_requested_listen, route_hostname_matches,
+        should_drop_child_log_line, sudo_setup_action_items, tcp_probe, trim_child_log_message,
     };
     use crate::build::{BuildAdapter, parse_and_validate_preset};
     use crate::config::TakoToml;
@@ -1644,128 +1499,37 @@ dev = ["bun", "run", "dev"]
     }
 
     #[test]
-    fn doctor_preflight_lines_show_pf_not_configured() {
+    fn doctor_preflight_lines_show_proxy_not_loaded() {
         let lines = doctor_local_forwarding_preflight_lines("127.77.0.1", false, false, true);
-        assert!(lines.iter().any(|line| line.contains("not configured")));
+        assert!(lines.iter().any(|line| line.contains("not loaded")));
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("tcp 127.77.0.1:443 (unreachable)"))
+                .any(|line| line.contains("TCP 127.77.0.1:443 (unreachable)"))
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("tcp 127.77.0.1:80 (ok)"))
+                .any(|line| line.contains("TCP 127.77.0.1:80 (ok)"))
         );
     }
 
     #[test]
-    fn doctor_preflight_lines_show_pf_active() {
+    fn doctor_preflight_lines_show_proxy_loaded() {
         let lines = doctor_local_forwarding_preflight_lines("127.77.0.1", true, true, true);
-        assert!(lines.iter().any(|line| line.contains("active")));
+        assert!(lines.iter().any(|line| line.contains("loaded")));
     }
 
     #[test]
-    fn local_forwarding_repair_plan_detects_listener_conflict() {
-        assert_eq!(
-            local_forwarding_repair_plan(true, true, false),
-            LocalForwardingRepairPlan::ListenerConflict
-        );
+    fn local_https_probe_error_mentions_launchd_when_server_directly_reachable() {
+        let msg = local_https_probe_error("bun-example.tako.test", 47831, "timed out", true);
+        assert!(msg.contains("launchd"));
     }
 
     #[test]
-    fn local_forwarding_repair_plan_detects_runtime_reset() {
-        assert_eq!(
-            local_forwarding_repair_plan(true, false, false),
-            LocalForwardingRepairPlan::ReloadRuntime
-        );
-    }
-
-    #[test]
-    fn local_forwarding_repair_plan_detects_missing_rules() {
-        assert_eq!(
-            local_forwarding_repair_plan(false, false, false),
-            LocalForwardingRepairPlan::ReinstallRules
-        );
-    }
-
-    #[test]
-    fn local_https_probe_error_mentions_interception_when_listener_conflicts() {
-        let msg = local_https_probe_error(
-            "bun-example.tako.test",
-            47831,
-            "timed out",
-            Some(LocalForwardingRepairPlan::ListenerConflict),
-        );
-        assert!(msg.contains("intercepted") || msg.contains("listener"));
-    }
-
-    #[test]
-    fn local_https_probe_error_mentions_pf_reload_when_runtime_reset() {
-        let msg = local_https_probe_error(
-            "bun-example.tako.test",
-            47831,
-            "timed out",
-            Some(LocalForwardingRepairPlan::ReloadRuntime),
-        );
-        assert!(msg.contains("reboot") || msg.contains("pf reset") || msg.contains("reload"));
-    }
-
-    #[test]
-    fn local_https_probe_error_mentions_pf_when_rules_missing() {
-        let msg = local_https_probe_error(
-            "bun-example.tako.test",
-            47831,
-            "timed out",
-            Some(LocalForwardingRepairPlan::ReinstallRules),
-        );
-        assert!(msg.contains("pf"));
-    }
-
-    #[test]
-    fn local_https_probe_error_mentions_pf_when_server_not_directly_reachable() {
-        let msg = local_https_probe_error("bun-example.tako.test", 47831, "timed out", None);
-        assert!(msg.contains("pf"));
-    }
-
-    #[test]
-    fn pf_anchor_content_contains_loopback_and_ports() {
-        let content = pf_anchor_content();
-        assert!(content.contains("127.77.0.1"));
-        assert!(content.contains("port 443"));
-        assert!(content.contains("port 80"));
-        assert!(content.contains("47831"));
-        assert!(content.contains("47830"));
-    }
-
-    #[test]
-    fn pf_conf_with_hook_appends_when_no_existing_block() {
-        let conf = "set skip on lo0\npass all\n";
-        let result = pf_conf_with_hook(conf);
-        assert!(result.contains(PF_HOOK_BEGIN));
-        assert!(result.contains(PF_HOOK_END));
-        assert!(result.contains("rdr-anchor"));
-        assert!(result.starts_with(conf.trim_end_matches('\n')));
-    }
-
-    #[test]
-    fn pf_conf_with_hook_replaces_existing_block() {
-        let conf = format!("pass all\n{PF_HOOK_BEGIN}\nold stuff\n{PF_HOOK_END}\nother rules\n");
-        let result = pf_conf_with_hook(&conf);
-        assert!(!result.contains("old stuff"));
-        assert!(result.contains("rdr-anchor"));
-        assert!(result.contains("other rules"));
-        // Exactly one begin/end block.
-        assert_eq!(result.matches(PF_HOOK_BEGIN).count(), 1);
-        assert_eq!(result.matches(PF_HOOK_END).count(), 1);
-    }
-
-    #[test]
-    fn pf_conf_with_hook_is_idempotent() {
-        let conf = "pass all\n";
-        let once = pf_conf_with_hook(conf);
-        let twice = pf_conf_with_hook(&once);
-        assert_eq!(once, twice);
+    fn local_https_probe_error_mentions_doctor_when_server_not_directly_reachable() {
+        let msg = local_https_probe_error("bun-example.tako.test", 47831, "timed out", false);
+        assert!(msg.contains("tako doctor"));
     }
 
     #[test]
@@ -1927,6 +1691,29 @@ dev = ["bun", "run", "dev"]
         let text = err.to_string();
         assert!(text.contains("/etc/resolver/tako"));
         assert!(text.contains("run `tako dev` interactively once"));
+    }
+
+    #[test]
+    fn sudo_setup_action_items_uses_expected_order() {
+        let items = sudo_setup_action_items(
+            Some("Trust the Tako local CA for trusted https://*.tako.test"),
+            true,
+            Some("Install the local loopback proxy for 127.77.0.1:80/443"),
+        );
+        assert_eq!(
+            items,
+            vec![
+                "Trust the Tako local CA for trusted https://*.tako.test".to_string(),
+                local_dns_sudo_action_line().to_string(),
+                "Install the local loopback proxy for 127.77.0.1:80/443".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn sudo_setup_action_items_omits_absent_steps() {
+        let items = sudo_setup_action_items(None, false, Some("Repair loopback proxy"));
+        assert_eq!(items, vec!["Repair loopback proxy".to_string()]);
     }
 
     #[test]
@@ -2188,12 +1975,16 @@ pub async fn run(
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?
     };
     let domain = LocalCA::app_domain(&app_name);
+
+    #[cfg(target_os = "macos")]
+    explain_pending_sudo_setup(LOCAL_DNS_PORT)?;
+
     let local_ca = setup_local_ca().await?;
     let tls_material_updated = ensure_dev_server_tls_material(&local_ca, &app_name)?;
     ensure_local_dns_resolver_configured(LOCAL_DNS_PORT)?;
 
     #[cfg(target_os = "macos")]
-    ensure_pf_forwarding()?;
+    loopback_proxy::ensure_installed()?;
 
     #[cfg(target_os = "macos")]
     let public_url_port: u16 = 443;
@@ -2340,8 +2131,8 @@ pub async fn run(
             return Err(format!("Invalid loopback address: {DEV_LOOPBACK_ADDR}").into());
         };
         let probe_host = local_https_probe_host(&primary_host);
-        // Probe the dev server's health endpoint via the loopback address to
-        // verify the full pf forwarding chain (DNS → 127.77.0.1:443 → dev server).
+        // Probe the dev server's health endpoint via the advertised loopback
+        // address to verify the full macOS local ingress path.
         let probe_result = wait_for_https_host_reachable_via_ip(
             probe_host,
             loopback_ip,
@@ -2364,52 +2155,13 @@ pub async fn run(
             .is_ok();
             #[cfg(target_os = "macos")]
             {
-                if server_directly_reachable {
-                    let repair_plan = local_forwarding_repair_plan(
-                        pf_rules_active(),
-                        local_listener_on_port(443),
-                        local_listener_on_port(80),
-                    );
-                    if repair_local_forwarding(repair_plan)? {
-                        match wait_for_https_host_reachable_via_ip(
-                            probe_host,
-                            loopback_ip,
-                            443,
-                            LOCALHOST_443_HTTPS_PROBE_ATTEMPTS,
-                            LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS,
-                            LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS,
-                        )
-                        .await
-                        {
-                            Ok(()) => {}
-                            Err(repaired_error) => {
-                                return Err(local_https_probe_error(
-                                    probe_host,
-                                    public_port,
-                                    &repaired_error,
-                                    Some(repair_plan),
-                                )
-                                .into());
-                            }
-                        }
-                    } else {
-                        return Err(local_https_probe_error(
-                            probe_host,
-                            public_port,
-                            loopback_error,
-                            Some(repair_plan),
-                        )
-                        .into());
-                    }
-                } else {
-                    return Err(local_https_probe_error(
-                        probe_host,
-                        public_port,
-                        loopback_error,
-                        None,
-                    )
-                    .into());
-                }
+                return Err(local_https_probe_error(
+                    probe_host,
+                    public_port,
+                    loopback_error,
+                    server_directly_reachable,
+                )
+                .into());
             }
             #[cfg(not(target_os = "macos"))]
             {

@@ -102,26 +102,29 @@ _prebuild-tako:
     @mkdir -p dist
     @echo "Prebuilding tako for macOS installer targets..."
     rustup target add aarch64-apple-darwin x86_64-apple-darwin
-    cargo build -p tako --bin tako --bin tako-dev-server --release --target aarch64-apple-darwin
-    cargo build -p tako --bin tako --bin tako-dev-server --release --target x86_64-apple-darwin
+    cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target aarch64-apple-darwin
+    cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target x86_64-apple-darwin
     @echo "Prebuilding tako for Linux targets..."
     just build::tako-linux
     @echo "Packaging tako release archives..."
     tmpdir="$(mktemp -d)"; \
     cp target/aarch64-apple-darwin/release/tako "$tmpdir/tako"; \
     cp target/aarch64-apple-darwin/release/tako-dev-server "$tmpdir/tako-dev-server"; \
-    tar -czf dist/tako-darwin-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server; \
+    cp target/aarch64-apple-darwin/release/tako-loopback-proxy "$tmpdir/tako-loopback-proxy"; \
+    tar -czf dist/tako-darwin-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server tako-loopback-proxy; \
     rm -rf "$tmpdir"; \
     tmpdir="$(mktemp -d)"; \
     cp target/x86_64-apple-darwin/release/tako "$tmpdir/tako"; \
     cp target/x86_64-apple-darwin/release/tako-dev-server "$tmpdir/tako-dev-server"; \
-    tar -czf dist/tako-darwin-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server; \
+    cp target/x86_64-apple-darwin/release/tako-loopback-proxy "$tmpdir/tako-loopback-proxy"; \
+    tar -czf dist/tako-darwin-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server tako-loopback-proxy; \
     rm -rf "$tmpdir"; \
     for arch in x86_64 aarch64; do \
         tmpdir="$(mktemp -d)"; \
         cp "dist/tako-linux-$arch" "$tmpdir/tako"; \
         cp "dist/tako-dev-server-linux-$arch" "$tmpdir/tako-dev-server"; \
-        tar -czf "dist/tako-linux-$arch.tar.gz" -C "$tmpdir" tako tako-dev-server; \
+        cp "dist/tako-loopback-proxy-linux-$arch" "$tmpdir/tako-loopback-proxy"; \
+        tar -czf "dist/tako-linux-$arch.tar.gz" -C "$tmpdir" tako tako-dev-server tako-loopback-proxy; \
         rm -rf "$tmpdir"; \
     done; \
     if command -v sha256sum >/dev/null 2>&1; then \

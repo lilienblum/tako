@@ -1,12 +1,13 @@
 # tako
 
-Rust crate for the `tako` CLI and `tako-dev-server` local daemon binaries.
+Rust crate for the `tako` CLI, `tako-dev-server`, and `tako-loopback-proxy` local binaries.
 
 ## Responsibilities
 
 - Project initialization (`tako init`).
 - Local development flow (`tako dev`, `tako doctor`).
 - Local development daemon runtime (`tako-dev-server`).
+- macOS loopback-only local ingress helper (`tako-loopback-proxy`).
 - Deployment orchestration (`tako deploy`).
 - Release history and rollback (`tako releases ls`, `tako releases rollback`).
 - Remote operational commands (`logs`, `delete`, `servers`, `secrets`).
@@ -41,6 +42,7 @@ Operational behavior highlights:
 - `tako deploy` always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/` from source bundles.
 - `tako deploy` resolves preset from top-level `preset` when set, otherwise falls back to adapter base preset from top-level `runtime` (when set) or adapter detection (`unknown` falls back to `bun`); unpinned official aliases are fetched from `master` on each resolve and the resolved source metadata is written to `.tako/build.lock.json`.
 - `tako deploy` builds per-target artifacts locally before upload, using Docker only when preset `[build].container` resolves to `true`; built-in JS base presets (`bun`, `node`, `deno`) default to local build mode (`container = false`) unless explicitly overridden.
+- On macOS, `tako dev` uses a dedicated `127.77.0.1` loopback alias plus a launchd-managed `tako-loopback-proxy` so `https://{app}.tako.test/` works on default ports without binding the main network interfaces.
 - Container builds stay ephemeral; dependency downloads are reused via per-target Docker cache volumes keyed by target label and builder image.
 - Containerized deploy builds default to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - `tako deploy` caches target artifacts in `.tako/artifacts` and reuses verified cache hits when build inputs are unchanged; invalid cache entries are rebuilt automatically.
@@ -60,6 +62,7 @@ From repository root:
 ```bash
 cargo run -p tako --bin tako -- --help
 cargo run -p tako --bin tako-dev-server -- --help
+cargo run -p tako --bin tako-loopback-proxy -- --help
 cargo test -p tako
 ```
 

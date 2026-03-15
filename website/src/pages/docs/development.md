@@ -14,10 +14,11 @@ CLI output follows shared conventions: concise by default, append-only execution
 ## Overview
 
 - `tako dev` is a **client** that talks to a background daemon: `tako-dev-server`.
-- Installed CLI distributions include both `tako` and `tako-dev-server`.
-- When running from source, the daemon binary is built from the `tako` package (`cargo build -p tako --bin tako-dev-server`).
+- Installed CLI distributions include `tako`, `tako-dev-server`, and `tako-loopback-proxy`.
+- When running from source, the local helper binaries are built from the `tako` package (`cargo build -p tako --bin tako-dev-server --bin tako-loopback-proxy`).
 - `tako dev` owns your app process lifecycle and spawns the app locally on an ephemeral port.
 - `tako-dev-server` terminates HTTPS and routes by `Host` to that app port. App registrations are persisted in SQLite (in the platform data directory).
+- On macOS, `tako dev` also ensures a dedicated `127.77.0.1` loopback alias plus a socket-activated `launchd` helper (`tako-loopback-proxy`) for loopback-only `:80/:443` ingress.
 - The client **registers** the app with the daemon (project directory is the unique key). App statuses: `running`, `idle`, `stopped`.
 - Press `b` to background the app — the CLI exits but the daemon keeps the process alive and routes active. Press `Ctrl+c` to stop the app.
 - `tako dev` watches [`tako.toml`](/docs/tako-toml) for changes. If dev env vars change, it restarts the app. If `[envs.development]` routes change, it re-registers routes with the daemon.
@@ -57,7 +58,7 @@ Useful commands:
 
 Default URL:
 
-- macOS (with local forwarding): `https://{app}.tako.test/`
+- macOS (with loopback proxy): `https://{app}.tako.test/`
 - Other platforms: `https://{app}.tako.test:47831/`
 
 ## Vite Apps
@@ -72,7 +73,7 @@ If your app runs `vite dev` under `tako dev` and uses `tako.sh/vite`:
 
 Fastest happy-path loop:
 
-1. Run `tako doctor` to confirm local prerequisites and DNS/forwarding state.
+1. Run `tako doctor` to confirm local prerequisites and DNS/loopback-proxy state.
 2. Run `tako dev` from your app directory.
 3. Open the development URL and verify app responses.
 4. Make code/config edits while `tako dev` stays running.
@@ -90,9 +91,11 @@ If your browser still complains about certs:
 ## Ports and Privileges
 
 - `tako-dev-server` listens on fixed local HTTPS port `47831`.
-- On macOS, Tako uses scoped local forwarding so public dev URLs can use `:443` (no explicit port in the URL).
-- Binding `:443` requires elevated privileges, so Tako requests one-time setup when needed.
-- If forwarding later looks inactive, `tako dev` can ask again and now prints the detected reason before sudo (missing pf rules, runtime reset after reboot/pf reset, or local listeners on `127.0.0.1:80/443`).
+- On macOS, Tako installs a root `launchd` setup helper that restores the `127.77.0.1` loopback alias at boot, then re-registers the loopback proxy.
+- The proxy itself listens only on `127.77.0.1:443` and `127.77.0.1:80`.
+- That proxy forwards raw TCP to `127.0.0.1:47831` and `127.0.0.1:47830`, so public dev URLs can use `:443` with no explicit port.
+- The helper is socket-activated and may exit after a long idle window; launchd starts it again on the next request.
+- Installing or repairing the helper requires elevated privileges, so Tako requests one-time setup when needed.
 
 ## Running Slow E2E Tests
 
@@ -123,6 +126,8 @@ Name resolution for `.tako.test` is done via local split DNS:
 
 - `tako dev` installs `/etc/resolver/tako.test` (one-time sudo) pointing to `127.0.0.1:53535`.
 - `tako-dev-server` answers `*.tako.test` queries for registered app hosts and maps them to loopback.
+  - On macOS, app hosts resolve to `127.77.0.1`.
+  - On other platforms, app hosts resolve to `127.0.0.1`.
 
 ## Environment Variables
 
@@ -162,4 +167,5 @@ If resolution fails:
 
 - Verify `/etc/resolver/tako.test` exists and points to `127.0.0.1:53535`.
 - Ensure `tako dev` is running and your app is listed in `tako doctor`.
+- On macOS, verify `tako doctor` shows the loopback proxy boot helper loaded, the `127.77.0.1` alias present, and `tcp 127.77.0.1:443` reachable.
 - Confirm no local process is conflicting on UDP `127.0.0.1:53535`.

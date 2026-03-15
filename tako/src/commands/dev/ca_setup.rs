@@ -17,12 +17,8 @@ struct CaSetupPlan {
     install_trust: bool,
 }
 
-fn sudo_trust_explanation_lines() -> [&'static str; 3] {
-    [
-        "One-time sudo required to trust the Tako local CA.",
-        "This enables trusted https://*.tako.test without browser warnings.",
-        "Tako only updates the system trust entry and then continues startup.",
-    ]
+fn sudo_action_line() -> &'static str {
+    "Trust the Tako local CA for trusted https://*.tako.test"
 }
 
 fn plan_ca_setup(ca_exists: bool, ca_trusted: bool) -> CaSetupPlan {
@@ -35,6 +31,12 @@ fn plan_ca_setup(ca_exists: bool, ca_trusted: bool) -> CaSetupPlan {
         // Default flow: ensure trusted HTTPS without prompting.
         install_trust: !ca_trusted,
     }
+}
+
+pub(crate) fn pending_sudo_action() -> Result<Option<&'static str>, Box<dyn std::error::Error>> {
+    let store = LocalCAStore::new()?;
+    let plan = plan_ca_setup(store.ca_exists(), store.is_ca_trusted());
+    Ok(plan.install_trust.then_some(sudo_action_line()))
 }
 
 /// Setup the local CA for development
@@ -50,6 +52,12 @@ pub async fn setup_local_ca() -> Result<LocalCA, Box<dyn std::error::Error>> {
     let ca_exists = store.ca_exists();
     let ca_trusted = store.is_ca_trusted();
     let plan = plan_ca_setup(ca_exists, ca_trusted);
+
+    if plan.install_trust && !output::is_interactive() {
+        return Err(
+            "local CA is not trusted; run `tako dev` interactively once to install it".into(),
+        );
+    }
 
     let ca = match plan.source {
         CaSource::Existing => {
@@ -82,12 +90,6 @@ pub async fn setup_local_ca() -> Result<LocalCA, Box<dyn std::error::Error>> {
 
     if plan.install_trust {
         tracing::debug!("CA not yet trusted in system store, installing trust…");
-        // Keep this non-spinner so the sudo password prompt is obvious.
-        output::warning("Sudo password required.");
-        for line in sudo_trust_explanation_lines() {
-            output::muted(line);
-        }
-        output::muted("Enter your password at the prompt below.");
         output::info("Installing Tako CA in system trust store (sudo)...");
         let _t = output::timed("Install CA trust");
         store
@@ -140,9 +142,9 @@ mod tests {
     }
 
     #[test]
-    fn sudo_trust_explanation_mentions_trusted_local_domains() {
-        let lines = sudo_trust_explanation_lines();
-        assert!(lines[0].contains("sudo"));
-        assert!(lines[1].contains("https://*.tako.test"));
+    fn sudo_action_line_mentions_trusted_local_domains() {
+        let line = sudo_action_line();
+        assert!(line.contains("local CA"));
+        assert!(line.contains("https://*.tako.test"));
     }
 }
