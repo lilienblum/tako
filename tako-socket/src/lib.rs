@@ -15,9 +15,38 @@ where
     R: AsyncBufRead + Unpin,
     T: DeserializeOwned,
 {
+    // Read incrementally, checking the limit at each chunk boundary so a
+    // malicious sender without a newline cannot force unbounded allocation.
     let mut buf = Vec::new();
-    let n = reader.read_until(b'\n', &mut buf).await?;
-    if n == 0 {
+    loop {
+        let available = reader.fill_buf().await?;
+        if available.is_empty() {
+            // EOF
+            if buf.is_empty() {
+                return Ok(None);
+            }
+            break;
+        }
+        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+            buf.extend_from_slice(&available[..=pos]);
+            reader.consume(pos + 1);
+            break;
+        }
+        buf.extend_from_slice(available);
+        let consumed = available.len();
+        reader.consume(consumed);
+        if buf.len() > max_bytes {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "json line exceeds max length ({} > {})",
+                    buf.len(),
+                    max_bytes
+                ),
+            ));
+        }
+    }
+    if buf.is_empty() {
         return Ok(None);
     }
     if buf.len() > max_bytes {
