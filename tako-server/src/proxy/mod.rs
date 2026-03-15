@@ -801,15 +801,30 @@ impl ProxyHttp for TakoProxy {
 
     async fn upstream_request_filter(
         &self,
-        _session: &mut Session,
+        session: &mut Session,
         upstream_request: &mut RequestHeader,
         ctx: &mut Self::CTX,
     ) -> Result<()> {
-        // Add X-Forwarded headers
+        // Set authoritative forwarded headers from the actual transport state.
+        // We strip any client-supplied values since tako-server is the edge
+        // proxy and cannot trust forwarded headers from arbitrary clients.
         let proto = if ctx.is_https { "https" } else { "http" };
         upstream_request
             .insert_header("X-Forwarded-Proto", proto)
             .unwrap();
+
+        // Set X-Forwarded-For from the real client IP (overwrite any spoofed value)
+        if let Some(ip) = client_ip_from_session(session) {
+            upstream_request
+                .insert_header("X-Forwarded-For", ip.to_string())
+                .unwrap();
+        } else {
+            let _ = upstream_request.remove_header("X-Forwarded-For");
+        }
+
+        // Remove Forwarded header (RFC 7239) — we don't generate it but
+        // strip any client-supplied value to prevent spoofing.
+        let _ = upstream_request.remove_header("Forwarded");
 
         // Track the request on the instance
         if let Some(ref backend) = ctx.backend
