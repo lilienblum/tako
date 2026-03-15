@@ -468,11 +468,17 @@ impl SshClient {
         remote_path: &str,
         progress: Option<Box<dyn Fn(u64, u64) + Send>>,
     ) -> SshResult<()> {
-        let content = tokio::fs::read(local_path)
+        use tokio::io::AsyncReadExt;
+
+        let mut file = tokio::fs::File::open(local_path)
             .await
             .map_err(|_| SshError::FileNotFound(local_path.to_path_buf()))?;
+        let total = file
+            .metadata()
+            .await
+            .map_err(|_| SshError::FileNotFound(local_path.to_path_buf()))?
+            .len();
 
-        let total = content.len() as u64;
         let handle = self.handle.as_ref().ok_or(SshError::NotConnected)?;
 
         let mut channel = handle
@@ -486,13 +492,21 @@ impl SshClient {
             .map_err(|e| SshError::CommandFailed(e.to_string()))?;
 
         const CHUNK: usize = 64 * 1024;
+        let mut buf = vec![0u8; CHUNK];
         let mut sent = 0u64;
-        for chunk in content.chunks(CHUNK) {
+        loop {
+            let n = file
+                .read(&mut buf)
+                .await
+                .map_err(|_| SshError::FileNotFound(local_path.to_path_buf()))?;
+            if n == 0 {
+                break;
+            }
             channel
-                .data(chunk)
+                .data(&buf[..n])
                 .await
                 .map_err(|e| SshError::CommandFailed(e.to_string()))?;
-            sent += chunk.len() as u64;
+            sent += n as u64;
             if let Some(ref cb) = progress {
                 cb(sent, total);
             }
