@@ -31,7 +31,7 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v6
         with:
-          registry-url: https://registry.npmjs.org
+          node-version: lts/*
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -57,4 +57,4 @@ jobs:
           npm pkg set version="${{ steps.version.outputs.version }}"
           bun install
           bun run build
-          NODE_AUTH_TOKEN="" npm publish --tag "${{ steps.version.outputs.tag }}" --provenance --access public
+          npm publish --verbose --tag "${{ steps.version.outputs.tag }}"
