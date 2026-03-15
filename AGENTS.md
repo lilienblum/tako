@@ -27,7 +27,6 @@ Tako's protocol is v0: do not keep any legacy code, backward compatibility shims
 
 8. **Keep preset family files canonical** - Define family presets in `presets/<family>.toml` (for example `presets/js.toml`).
 
-
 ## Project Structure
 
 **Rust Crates:**

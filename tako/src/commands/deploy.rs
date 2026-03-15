@@ -4446,7 +4446,10 @@ route = "app.example.com"
             manifest.env_vars.get("TAKO_ENV"),
             Some(&"production".to_string())
         );
-        assert_eq!(manifest.install.as_deref(), Some("bun install --production"));
+        assert_eq!(
+            manifest.install.as_deref(),
+            Some("bun install --production")
+        );
         assert_eq!(
             manifest.start,
             vec!["bun".to_string(), "run".to_string(), "{main}".to_string()]

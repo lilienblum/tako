@@ -117,7 +117,10 @@ impl RequestTimer {
         HTTP_ACTIVE_CONNECTIONS
             .with_label_values(&[server(), &app])
             .inc();
-        Self { app, start: Instant::now() }
+        Self {
+            app,
+            start: Instant::now(),
+        }
     }
 
     pub fn finish(self, status: u16) {

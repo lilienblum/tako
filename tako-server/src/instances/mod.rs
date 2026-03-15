@@ -427,7 +427,11 @@ impl App {
         } else {
             None
         };
-        let instance = Arc::new(Instance::new(id.clone(), config.version.clone(), socket_template));
+        let instance = Arc::new(Instance::new(
+            id.clone(),
+            config.version.clone(),
+            socket_template,
+        ));
         self.instances.insert(id, instance.clone());
         instance
     }

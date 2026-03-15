@@ -259,18 +259,9 @@ mod tests {
             instance_ids.push(instance.id.clone());
         }
 
-        assert_eq!(
-            instance_ids.iter().filter(|id| **id == i1.id).count(),
-            2
-        );
-        assert_eq!(
-            instance_ids.iter().filter(|id| **id == i2.id).count(),
-            2
-        );
-        assert_eq!(
-            instance_ids.iter().filter(|id| **id == i3.id).count(),
-            2
-        );
+        assert_eq!(instance_ids.iter().filter(|id| **id == i1.id).count(), 2);
+        assert_eq!(instance_ids.iter().filter(|id| **id == i2.id).count(), 2);
+        assert_eq!(instance_ids.iter().filter(|id| **id == i3.id).count(), 2);
     }
 
     #[test]

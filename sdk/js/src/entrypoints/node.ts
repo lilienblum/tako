@@ -56,7 +56,9 @@ async function writeResponse(webResponse: Response, res: ServerResponse): Promis
     return;
   }
 
-  const nodeStream = Readable.fromWeb(webResponse.body as unknown as import("node:stream/web").ReadableStream);
+  const nodeStream = Readable.fromWeb(
+    webResponse.body as unknown as import("node:stream/web").ReadableStream,
+  );
   nodeStream.pipe(res);
   await new Promise<void>((resolve, reject) => {
     nodeStream.on("end", resolve);

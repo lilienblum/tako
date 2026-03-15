@@ -38,7 +38,7 @@ Directory selection is command-scoped:
 
 ## Top-Level Commands
 
-- `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` for stable identity, production `route`, runtime, and preset selection when family presets are available); detailed "Detected" summary is shown in verbose mode.
+- `tako init [--force] [--runtime <bun|node|deno>] [DIR]`: initialize `tako.toml` in a project (prompts for app `name` for stable identity, production `route`, runtime, and preset selection when family presets are available), and updates `.gitignore` so the app's `.tako/*` stays ignored while `.tako/secrets.json` remains trackable; detailed "Detected" summary is shown in verbose mode.
 - `tako help`: show all commands with brief descriptions.
 - `tako upgrade [--canary|--stable]`: upgrade local CLI installation.
 - `tako logs [--env <ENV>]`: stream remote logs (default env: `production`).
@@ -255,7 +255,7 @@ Initialize in current directory:
 tako init
 ```
 
-`tako init` prompts for app name and production route, prompts for runtime (top-level `runtime`), fetches family presets (`Fetching presets...`) and offers base runtime preset + fetched family presets + a custom option; when no family presets are available it skips preset selection and uses the runtime base preset. It only prompts for `main` when neither adapter inference nor preset default provides it. The detailed "Detected" block is shown with `--verbose`.
+`tako init` prompts for app name and production route, prompts for runtime (top-level `runtime`), fetches family presets (`Fetching presets...`) and offers base runtime preset + fetched family presets + a custom option; when no family presets are available it skips preset selection and uses the runtime base preset. It only prompts for `main` when neither adapter inference nor preset default provides it. It also updates `.gitignore` so the app's `.tako/*` stays ignored while `.tako/secrets.json` remains trackable, using the repo-root `.gitignore` when the app lives inside a git repo and the app-local `.gitignore` otherwise. The detailed "Detected" block is shown with `--verbose`.
 
 Run local app (streams logs directly to stdout in interactive terminals):
 

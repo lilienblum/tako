@@ -1487,7 +1487,11 @@ fn current_release_version(app_root: &Path) -> Option<String> {
 }
 
 fn app_release_root(data_dir: &Path, app_name: &str, version: &str) -> PathBuf {
-    data_dir.join("apps").join(app_name).join("releases").join(version)
+    data_dir
+        .join("apps")
+        .join(app_name)
+        .join("releases")
+        .join(version)
 }
 
 fn release_app_path(data_dir: &Path, config: &AppConfig) -> PathBuf {
@@ -3266,7 +3270,10 @@ mod tests {
     fn resolve_release_runtime_reads_manifest_runtime() {
         let temp = TempDir::new().unwrap();
         write_release_manifest(temp.path(), "bun", "index.ts", &[], None, 300);
-        assert_eq!(resolve_release_runtime(temp.path()).unwrap(), "bun".to_string());
+        assert_eq!(
+            resolve_release_runtime(temp.path()).unwrap(),
+            "bun".to_string()
+        );
     }
 
     #[test]

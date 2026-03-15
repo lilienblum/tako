@@ -43,7 +43,9 @@ use crate::validation::validate_dev_route;
 
 pub use ca_setup::setup_local_ca;
 #[cfg(target_os = "macos")]
-pub(crate) use loopback_proxy::{LoopbackProxyStatus, LOOPBACK_PROXY_LABEL, status as loopback_proxy_status};
+pub(crate) use loopback_proxy::{
+    LOOPBACK_PROXY_LABEL, LoopbackProxyStatus, status as loopback_proxy_status,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum LogLevel {
@@ -847,11 +849,7 @@ pub(crate) fn doctor_local_forwarding_preflight_lines(
         "preflight:".to_string(),
         format!(
             "- loopback proxy ({})",
-            if proxy_loaded {
-                "loaded"
-            } else {
-                "not loaded"
-            }
+            if proxy_loaded { "loaded" } else { "not loaded" }
         ),
         format!(
             "- TCP {}:443 ({})",
@@ -906,23 +904,22 @@ pub(crate) fn local_dns_resolver_values() -> Option<(String, u16)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DevEvent, LogLevel, ScopedLog, StoredLogEvent, app_log_scope,
-        child_log_level_and_message, compute_dev_hosts, compute_display_routes, dev_idle_timeout,
-        dev_initial_instance_count, dev_server_ready_log, dev_server_starting_log,
-        dev_server_tls_names_path_for_home, dev_server_tls_paths_for_home, dev_startup_lines,
-        doctor_dev_server_lines, doctor_local_forwarding_preflight_lines,
-        ensure_dev_server_tls_material_for_home, ensure_local_dns_resolver_configured,
-        host_and_port_from_url, is_dev_server_unavailable_error_message,
-        local_dns_resolver_contents, local_dns_sudo_action_line,
-        local_https_probe_host, parse_local_dns_resolver, parse_stored_log_line,
-        port_from_listen, preferred_public_url, replay_and_follow_logs,
-        resolve_dev_preset_ref, resolve_dev_run_command, resolve_effective_dev_build_adapter,
-        restart_required_for_requested_listen, route_hostname_matches,
-        should_drop_child_log_line, sudo_setup_action_items, tcp_probe, trim_child_log_message,
-    };
     #[cfg(target_os = "macos")]
     use super::local_https_probe_error;
+    use super::{
+        DevEvent, LogLevel, ScopedLog, StoredLogEvent, app_log_scope, child_log_level_and_message,
+        compute_dev_hosts, compute_display_routes, dev_idle_timeout, dev_initial_instance_count,
+        dev_server_ready_log, dev_server_starting_log, dev_server_tls_names_path_for_home,
+        dev_server_tls_paths_for_home, dev_startup_lines, doctor_dev_server_lines,
+        doctor_local_forwarding_preflight_lines, ensure_dev_server_tls_material_for_home,
+        ensure_local_dns_resolver_configured, host_and_port_from_url,
+        is_dev_server_unavailable_error_message, local_dns_resolver_contents,
+        local_dns_sudo_action_line, local_https_probe_host, parse_local_dns_resolver,
+        parse_stored_log_line, port_from_listen, preferred_public_url, replay_and_follow_logs,
+        resolve_dev_preset_ref, resolve_dev_run_command, resolve_effective_dev_build_adapter,
+        restart_required_for_requested_listen, route_hostname_matches, should_drop_child_log_line,
+        sudo_setup_action_items, tcp_probe, trim_child_log_message,
+    };
     use crate::build::{BuildAdapter, parse_and_validate_preset};
     use crate::config::TakoToml;
     use crate::dev::LocalCA;

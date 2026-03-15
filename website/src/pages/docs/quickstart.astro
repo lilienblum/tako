@@ -99,8 +99,9 @@ import DocsLayout from "../../layouts/DocsLayout.astro";
   <p>Initialize Tako config:</p>
   <Snippet code="tako init" lang="bash" />
   <p>
-    <code>tako init</code> prompts for app name and production route, and writes them to
-    <code>tako.toml</code>.
+    <code>tako init</code> prompts for app name and production route, writes them to
+    <code>tako.toml</code>, and updates <code>.gitignore</code> so
+    <code>.tako/secrets.json</code> stays trackable.
   </p>
 
   <p>

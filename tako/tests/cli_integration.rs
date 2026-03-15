@@ -900,7 +900,7 @@ main = "index.ts"
             stderr_str(&output)
         );
 
-        let secrets_path = project_dir.join(".tako").join("secrets");
+        let secrets_path = project_dir.join(".tako").join("secrets.json");
         assert!(secrets_path.exists(), "secrets file should be created");
 
         let raw = fs::read_to_string(&secrets_path).expect("read secrets file");
@@ -920,8 +920,8 @@ main = "index.ts"
 
         // Simulate deleted secrets file.
         fs::create_dir_all(project_dir.join(".tako")).unwrap();
-        fs::write(project_dir.join(".tako").join("secrets"), "{}").unwrap();
-        fs::remove_file(project_dir.join(".tako").join("secrets")).unwrap();
+        fs::write(project_dir.join(".tako").join("secrets.json"), "{}").unwrap();
+        fs::remove_file(project_dir.join(".tako").join("secrets.json")).unwrap();
 
         let output = run_tako(&["secrets", "sync", "--env", "production"], &project_dir);
         let combined = format!("{}{}", stdout_str(&output), stderr_str(&output));

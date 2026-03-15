@@ -58,12 +58,7 @@ fn label_width(labels: &[&str]) -> usize {
 
 fn row(buf: &mut Vec<String>, label: &str, value: &str, width: usize) {
     let padding = width.saturating_sub(label.len());
-    buf.push(format!(
-        "  {}{}  {}",
-        label,
-        " ".repeat(padding),
-        value,
-    ));
+    buf.push(format!("  {}{}  {}", label, " ".repeat(padding), value,));
 }
 
 fn hint(buf: &mut Vec<String>, text: &str) {
@@ -138,8 +133,7 @@ fn gather_macos_data(
     let local_dns_port = match dev_info {
         Ok(info) => {
             let i = info.get("info").unwrap_or(&serde_json::Value::Null);
-            i
-                .get("local_dns_port")
+            i.get("local_dns_port")
                 .and_then(|v| v.as_u64())
                 .and_then(|v| u16::try_from(v).ok())
                 .unwrap_or(LOCAL_DNS_PORT)
@@ -310,7 +304,14 @@ fn format_macos_sections(
 ) {
     let tcp_443 = format!("TCP {}:443", macos.advertised_ip);
     let tcp_80 = format!("TCP {}:80", macos.advertised_ip);
-    let fwd_width = label_width(&["Installed", "Boot Helper", "Alias", "Launchd", &tcp_443, &tcp_80]);
+    let fwd_width = label_width(&[
+        "Installed",
+        "Boot Helper",
+        "Alias",
+        "Launchd",
+        &tcp_443,
+        &tcp_80,
+    ]);
 
     heading(buf, "Loopback Proxy");
     hinted_row(
@@ -407,9 +408,7 @@ fn format_local_dns(
     let dns_w = label_width(&dns_labels);
 
     match &macos.resolver_values {
-        Some((nameserver, port))
-            if nameserver == "127.0.0.1" && *port == macos.local_dns_port =>
-        {
+        Some((nameserver, port)) if nameserver == "127.0.0.1" && *port == macos.local_dns_port => {
             hinted_row(
                 buf,
                 "Resolver",
@@ -432,10 +431,7 @@ fn format_local_dns(
                     TAKO_RESOLVER_FILE,
                     output::brand_muted("→"),
                     format_args!("{nameserver}:{port}"),
-                    output::brand_warning(format!(
-                        "(expected 127.0.0.1:{})",
-                        macos.local_dns_port
-                    ))
+                    output::brand_warning(format!("(expected 127.0.0.1:{})", macos.local_dns_port))
                 ),
                 dns_w,
                 "Resolver file that should direct *.tako.test lookups to the local DNS server",
@@ -537,7 +533,10 @@ mod tests {
             advertised_ip: "127.77.0.1".to_string(),
             local_dns_port: 53535,
             resolver_values: Some(("127.0.0.1".to_string(), 53535)),
-            host_dns_results: vec![("bun-example.tako.test".to_string(), Some("127.77.0.1".to_string()))],
+            host_dns_results: vec![(
+                "bun-example.tako.test".to_string(),
+                Some("127.77.0.1".to_string()),
+            )],
         };
 
         format_paths(&mut buf, "/tmp/tako-config", "/tmp/tako-data");
@@ -549,41 +548,35 @@ mod tests {
             buf.iter()
                 .any(|line| line.contains("Directory where Tako stores local configuration files"))
         );
-        assert!(
-            buf.iter()
-                .any(|line| line.contains("Directory where Tako stores runtime state and cached assets"))
-        );
-        assert!(
-            buf.iter().any(|line| line.contains(
-                "Trust state of the Tako local certificate authority for https://*.tako.test"
-            ))
-        );
-        assert!(
-            buf.iter().any(|line| {
-                line.contains("Address where the Tako development server listens for local proxy traffic")
-            })
-        );
-        assert!(
-            buf.iter().any(|line| {
-                line.contains("Whether the Tako development server has its local DNS responder enabled")
-            })
-        );
+        assert!(buf.iter().any(|line| {
+            line.contains("Directory where Tako stores runtime state and cached assets")
+        }));
+        assert!(buf.iter().any(|line| line.contains(
+            "Trust state of the Tako local certificate authority for https://*.tako.test"
+        )));
+        assert!(buf.iter().any(|line| {
+            line.contains(
+                "Address where the Tako development server listens for local proxy traffic",
+            )
+        }));
+        assert!(buf.iter().any(|line| {
+            line.contains("Whether the Tako development server has its local DNS responder enabled")
+        }));
         assert!(
             buf.iter()
                 .any(|line| line.contains("UDP port used by the local Tako DNS responder"))
         );
-        assert!(
-            buf.iter().any(|line| line.contains(
-                "Resolver file that should direct *.tako.test lookups to the local DNS server"
-            ))
-        );
+        assert!(buf.iter().any(|line| line.contains(
+            "Resolver file that should direct *.tako.test lookups to the local DNS server"
+        )));
     }
 
     #[test]
     fn format_dev_server_uses_single_status_hint_for_unavailable_state() {
         let mut buf = Vec::new();
-        let dev_info: Result<serde_json::Value, Box<dyn std::error::Error>> =
-            Err(std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused").into());
+        let dev_info: Result<serde_json::Value, Box<dyn std::error::Error>> = Err(
+            std::io::Error::new(std::io::ErrorKind::ConnectionRefused, "connection refused").into(),
+        );
 
         format_dev_server(&mut buf, &dev_info);
 
@@ -591,7 +584,8 @@ mod tests {
         assert!(buf.iter().any(|line| line.contains("not running")));
         assert_eq!(
             buf.iter()
-                .filter(|line| line.contains("Current health of the local Tako development server process"))
+                .filter(|line| line
+                    .contains("Current health of the local Tako development server process"))
                 .count(),
             1
         );
@@ -630,11 +624,9 @@ mod tests {
             buf.iter()
                 .any(|line| line.contains("Binary and support files are present on disk"))
         );
-        assert!(
-            buf.iter().any(|line| line.contains(
-                "Boot-time helper is loaded so Tako can restore loopback proxy setup"
-            ))
-        );
+        assert!(buf.iter().any(|line| {
+            line.contains("Boot-time helper is loaded so Tako can restore loopback proxy setup")
+        }));
         assert!(
             buf.iter()
                 .any(|line| line.contains("127.77.0.1 is assigned on the lo0 loopback interface"))
@@ -643,16 +635,14 @@ mod tests {
             buf.iter()
                 .any(|line| line.contains("macOS launchd has loaded the proxy service definition"))
         );
-        assert!(
-            buf.iter().any(|line| line.contains(
-                "HTTPS proxy is listening on the loopback address and accepts connections"
-            ))
-        );
-        assert!(
-            buf.iter().any(|line| line.contains(
-                "HTTP proxy is listening on the loopback address and accepts connections"
-            ))
-        );
+        assert!(buf.iter().any(|line| {
+            line.contains(
+                "HTTPS proxy is listening on the loopback address and accepts connections",
+            )
+        }));
+        assert!(buf.iter().any(|line| {
+            line.contains("HTTP proxy is listening on the loopback address and accepts connections")
+        }));
     }
 
     #[test]
@@ -720,7 +710,8 @@ mod tests {
             "expected successful loopback resolution in output: {buf:?}"
         );
         assert!(
-            !buf.iter().any(|line| line.contains("(expected 127.77.0.1)")),
+            !buf.iter()
+                .any(|line| line.contains("(expected 127.77.0.1)")),
             "did not expect mismatch warning in output: {buf:?}"
         );
     }

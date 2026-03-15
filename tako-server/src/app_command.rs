@@ -78,19 +78,17 @@ pub fn command_for_release_dir(release_dir: &Path) -> Result<Vec<String>, String
     }
 
     if !manifest.start.is_empty() {
-        return Ok(
-            manifest
-                .start
-                .into_iter()
-                .map(|arg| {
-                    if arg == "{main}" {
-                        manifest.main.clone()
-                    } else {
-                        arg
-                    }
-                })
-                .collect(),
-        );
+        return Ok(manifest
+            .start
+            .into_iter()
+            .map(|arg| {
+                if arg == "{main}" {
+                    manifest.main.clone()
+                } else {
+                    arg
+                }
+            })
+            .collect());
     }
 
     let rel_path = entrypoint_relative_path(&manifest.runtime).ok_or_else(|| {

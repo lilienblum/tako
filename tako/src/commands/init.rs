@@ -424,6 +424,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     fs::write(&tako_toml_path, template)?;
+    ensure_project_gitignore_tracks_secrets(&project_dir)?;
 
     if js::write_types(&project_dir)? {
         output::success("Created tako.toml and tako.d.ts");
@@ -509,6 +510,7 @@ fn run_non_interactive(
     );
 
     fs::write(tako_toml_path, template)?;
+    ensure_project_gitignore_tracks_secrets(project_dir)?;
 
     if js::write_types(project_dir)? {
         output::success("Created tako.toml and tako.d.ts");
@@ -517,6 +519,63 @@ fn run_non_interactive(
     }
 
     Ok(())
+}
+
+fn ensure_project_gitignore_tracks_secrets(project_dir: &Path) -> std::io::Result<()> {
+    let gitignore_root =
+        find_git_repo_root(project_dir).unwrap_or_else(|| project_dir.to_path_buf());
+    let gitignore_path = gitignore_root.join(".gitignore");
+    let relative_project_dir = project_dir
+        .strip_prefix(&gitignore_root)
+        .unwrap_or(project_dir);
+    let tracked_dir = if relative_project_dir.as_os_str().is_empty() {
+        ".tako".to_string()
+    } else {
+        format!(
+            "{}/.tako",
+            relative_project_dir.to_string_lossy().replace('\\', "/")
+        )
+    };
+    let rules = [
+        format!("!{tracked_dir}/"),
+        format!("{tracked_dir}/*"),
+        format!("!{tracked_dir}/secrets.json"),
+    ];
+
+    let mut content = if gitignore_path.exists() {
+        fs::read_to_string(&gitignore_path)?
+    } else {
+        String::new()
+    };
+    let mut existing_lines = content
+        .lines()
+        .map(|line| line.trim_end().to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut changed = false;
+
+    for rule in rules {
+        if existing_lines.insert(rule.clone()) {
+            if !content.is_empty() && !content.ends_with('\n') {
+                content.push('\n');
+            }
+            content.push_str(&rule);
+            content.push('\n');
+            changed = true;
+        }
+    }
+
+    if changed {
+        fs::write(gitignore_path, content)?;
+    }
+
+    Ok(())
+}
+
+fn find_git_repo_root(project_dir: &Path) -> Option<std::path::PathBuf> {
+    project_dir
+        .ancestors()
+        .find(|dir| dir.join(".git").exists())
+        .map(Path::to_path_buf)
 }
 
 /// Strip http(s):// prefix and trailing slash from a route hostname.
@@ -866,8 +925,9 @@ route = "{production_route}"
 #[cfg(test)]
 mod tests {
     use super::{
-        build_preset_selection_options, generate_template, infer_default_main_entrypoint,
-        normalize_group_preset_definitions, preset_default_main, resolve_adapter,
+        build_preset_selection_options, ensure_project_gitignore_tracks_secrets, generate_template,
+        infer_default_main_entrypoint, normalize_group_preset_definitions, preset_default_main,
+        resolve_adapter,
     };
     use crate::build::{BuildAdapter, PresetDefinition};
     use tempfile::TempDir;
@@ -1135,6 +1195,59 @@ mod tests {
         );
         assert!(rendered.contains("preset = \"tanstack-start\""));
         assert!(!rendered.contains("preset = \"js/tanstack-start\""));
+    }
+
+    #[test]
+    fn init_gitignore_uses_repo_root_for_nested_project() {
+        let temp = TempDir::new().unwrap();
+        let repo_root = temp.path();
+        let project_dir = repo_root.join("apps/web");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(repo_root.join(".git"), "gitdir: /tmp/fake-git-dir\n").unwrap();
+
+        ensure_project_gitignore_tracks_secrets(&project_dir).unwrap();
+
+        let gitignore = std::fs::read_to_string(repo_root.join(".gitignore")).unwrap();
+        assert!(
+            gitignore
+                .contains("!apps/web/.tako/\napps/web/.tako/*\n!apps/web/.tako/secrets.json\n"),
+            "expected repo root .gitignore to track nested app secrets file: {gitignore}"
+        );
+        assert!(
+            !project_dir.join(".gitignore").exists(),
+            "expected nested app .gitignore to remain untouched"
+        );
+    }
+
+    #[test]
+    fn init_gitignore_falls_back_to_project_dir_outside_git_repo() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("app");
+        std::fs::create_dir_all(&project_dir).unwrap();
+
+        ensure_project_gitignore_tracks_secrets(&project_dir).unwrap();
+
+        let gitignore = std::fs::read_to_string(project_dir.join(".gitignore")).unwrap();
+        assert_eq!(
+            gitignore, "!.tako/\n.tako/*\n!.tako/secrets.json\n",
+            "expected project-local .gitignore when no repo root is found"
+        );
+    }
+
+    #[test]
+    fn init_gitignore_does_not_duplicate_existing_rules() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().to_path_buf();
+
+        ensure_project_gitignore_tracks_secrets(&project_dir).unwrap();
+        ensure_project_gitignore_tracks_secrets(&project_dir).unwrap();
+
+        let gitignore = std::fs::read_to_string(project_dir.join(".gitignore")).unwrap();
+        assert_eq!(
+            gitignore.matches("!.tako/secrets.json").count(),
+            1,
+            "expected secrets tracking rule to remain deduplicated"
+        );
     }
 
     #[test]

@@ -1,11 +1,13 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::error::{ConfigError, Result};
 
-/// Secrets storage from .tako/secrets
+const SECRETS_FILE_NAME: &str = "secrets.json";
+
+/// Secrets storage from .tako/secrets.json
 ///
 /// Format:
 /// ```json
@@ -30,9 +32,9 @@ pub struct SecretsStore {
 }
 
 impl SecretsStore {
-    /// Get the default path for secrets (.tako/secrets in project root)
+    /// Get the default path for secrets (.tako/secrets.json in project root)
     pub fn default_path<P: AsRef<Path>>(project_dir: P) -> PathBuf {
-        project_dir.as_ref().join(".tako").join("secrets")
+        project_dir.as_ref().join(".tako").join(SECRETS_FILE_NAME)
     }
 
     /// Load secrets from a project directory
@@ -93,7 +95,7 @@ impl SecretsStore {
                 .map_err(|e| ConfigError::FileWrite(parent.to_path_buf(), e))?;
         }
 
-        let content = serde_json::to_string_pretty(&self.environments)?;
+        let content = serde_json::to_string_pretty(&sorted_environments(&self.environments))?;
         fs::write(path.as_ref(), content)
             .map_err(|e| ConfigError::FileWrite(path.as_ref().to_path_buf(), e))?;
 
@@ -251,6 +253,21 @@ impl SecretsStore {
     pub fn total_count(&self) -> usize {
         self.environments.values().map(|s| s.len()).sum()
     }
+}
+
+fn sorted_environments(
+    environments: &HashMap<String, HashMap<String, String>>,
+) -> BTreeMap<&String, BTreeMap<&String, &String>> {
+    environments
+        .iter()
+        .map(|(env_name, secrets)| {
+            let sorted_secrets = secrets
+                .iter()
+                .map(|(secret_name, value)| (secret_name, value))
+                .collect::<BTreeMap<_, _>>();
+            (env_name, sorted_secrets)
+        })
+        .collect()
 }
 
 /// Represents a secret that is missing in some environments
@@ -636,6 +653,15 @@ mod tests {
     }
 
     #[test]
+    fn test_default_path_uses_secrets_json() {
+        let temp_dir = TempDir::new().unwrap();
+        assert_eq!(
+            SecretsStore::default_path(temp_dir.path()),
+            temp_dir.path().join(".tako").join("secrets.json")
+        );
+    }
+
+    #[test]
     fn test_load_nonexistent_returns_default() {
         let temp_dir = TempDir::new().unwrap();
         let store = SecretsStore::load_from_dir(&temp_dir).unwrap();
@@ -643,9 +669,51 @@ mod tests {
     }
 
     #[test]
+    fn test_save_to_dir_writes_new_secrets_json_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut store = SecretsStore::default();
+        store
+            .set("production", "API_KEY", "secret123".to_string())
+            .unwrap();
+
+        store.save_to_dir(temp_dir.path()).unwrap();
+
+        assert!(temp_dir.path().join(".tako").join("secrets.json").exists());
+        assert!(!temp_dir.path().join(".tako").join("secrets").exists());
+    }
+
+    #[test]
+    fn test_save_to_file_orders_environments_and_secret_names_stably() {
+        let temp_dir = TempDir::new().unwrap();
+        let path = temp_dir.path().join(".tako").join("secrets.json");
+        let mut store = SecretsStore::default();
+        store.set("staging", "Z_KEY", "z".to_string()).unwrap();
+        store.set("production", "B_KEY", "b".to_string()).unwrap();
+        store.set("production", "A_KEY", "a".to_string()).unwrap();
+
+        store.save_to_file(&path).unwrap();
+
+        let raw = fs::read_to_string(path).unwrap();
+        let production_pos = raw.find("\"production\"").unwrap();
+        let staging_pos = raw.find("\"staging\"").unwrap();
+        let a_key_pos = raw.find("\"A_KEY\"").unwrap();
+        let b_key_pos = raw.find("\"B_KEY\"").unwrap();
+
+        assert!(
+            production_pos < staging_pos,
+            "expected sorted environments: {raw}"
+        );
+        assert!(a_key_pos < b_key_pos, "expected sorted secret names: {raw}");
+    }
+
+    #[test]
     fn test_creates_parent_directory() {
         let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().join("subdir").join(".tako").join("secrets");
+        let path = temp_dir
+            .path()
+            .join("subdir")
+            .join(".tako")
+            .join("secrets.json");
 
         let mut store = SecretsStore::default();
         store

@@ -10,8 +10,6 @@ mod static_files;
 pub use static_files::*;
 
 use crate::lb::{Backend, LoadBalancer};
-use std::net::IpAddr;
-use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use crate::metrics::RequestTimer;
 use crate::routing::RouteTable;
 use crate::scaling::{ColdStartManager, WaitForReadyOutcome};
@@ -34,7 +32,9 @@ use pingora_core::upstreams::peer::HttpPeer;
 use pingora_http::{RequestHeader, ResponseHeader};
 use pingora_proxy::{ProxyHttp, Session};
 use std::collections::HashMap;
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use tokio::io::AsyncReadExt;

@@ -165,7 +165,11 @@ mod macos {
             return Err(std::io::Error::from_raw_os_error(rc).into());
         }
         if fds.is_null() || count == 0 {
-            return Err(format!("launchd did not provide any sockets for {}", name.to_string_lossy()).into());
+            return Err(format!(
+                "launchd did not provide any sockets for {}",
+                name.to_string_lossy()
+            )
+            .into());
         }
 
         let raw_fds = take_activated_socket_fds(fds, count);
@@ -226,7 +230,9 @@ mod macos {
 
     fn rebootstrap_proxy_launchd_job() -> Result<(), Box<dyn std::error::Error>> {
         let label = format!("system/{LOOPBACK_PROXY_LABEL}");
-        let bootout = Command::new("launchctl").args(["bootout", &label]).status()?;
+        let bootout = Command::new("launchctl")
+            .args(["bootout", &label])
+            .status()?;
         if !(bootout.success() || bootout.code() == Some(3)) {
             return Err("booting out loopback proxy launchd service failed".into());
         }
@@ -240,10 +246,7 @@ mod macos {
         )
     }
 
-    fn run_checked(
-        command: &mut Command,
-        context: &str,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    fn run_checked(command: &mut Command, context: &str) -> Result<(), Box<dyn std::error::Error>> {
         let output = command.output()?;
         if output.status.success() {
             return Ok(());

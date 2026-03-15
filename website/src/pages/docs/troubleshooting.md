@@ -141,7 +141,7 @@ From spec-defined behavior:
 - Config/data directory deleted: auto-recreated on next command.
 - `.tako/` deleted: auto-recreated on next deploy.
 - `tako.toml` deleted: config-requiring commands fail with guidance to run `tako init`.
-- `.tako/secrets` deleted: warning is shown; restore secrets before deploy.
+- `.tako/secrets.json` deleted: warning is shown; restore secrets before deploy.
 - `config.toml` corrupted: parse error with line context.
 
 ## Files and Paths Worth Inspecting

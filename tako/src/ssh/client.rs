@@ -461,11 +461,8 @@ impl SshClient {
             .await
             .map_err(|_| SshError::FileNotFound(local_path.to_path_buf()))?;
 
-        self.exec_checked_with_stdin(
-            &format!("cat > {}", shell_quote(remote_path)),
-            &content,
-        )
-        .await?;
+        self.exec_checked_with_stdin(&format!("cat > {}", shell_quote(remote_path)), &content)
+            .await?;
 
         Ok(())
     }
@@ -1119,8 +1116,7 @@ l4QMs5cmnWfrM0GQ==\n\
 
     #[test]
     fn run_with_root_or_sudo_escapes_inner_single_quotes() {
-        let cmd =
-            SshClient::run_with_root_or_sudo("printf '%s' 'TOKEN=abc' > /etc/creds");
+        let cmd = SshClient::run_with_root_or_sudo("printf '%s' 'TOKEN=abc' > /etc/creds");
         // Inner single quotes must be escaped for the outer sh -c wrapper
         assert!(cmd.contains("sudo sh -c 'printf '\\''%s'\\'' '\\''TOKEN=abc'\\'' > /etc/creds'"));
     }

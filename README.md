@@ -60,7 +60,7 @@ tako servers add <host-or-ip>
 From your app directory:
 
 ```bash
-tako init    # prompts for app name + production route, writes tako.toml
+tako init    # prompts for app name + production route, writes tako.toml, updates .gitignore for .tako/secrets.json
 tako deploy
 ```
 

@@ -239,4 +239,3 @@ impl SftpClient {
         Ok(metadata.size.unwrap_or(0))
     }
 }
-

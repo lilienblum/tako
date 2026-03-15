@@ -219,7 +219,7 @@ Detected server build target metadata is stored directly in each `[[servers]]` e
 
 CLI prompt history is stored separately at `history.toml` (not in `config.toml`).
 
-### .tako/secrets (Project - Encrypted)
+### .tako/secrets.json (Project - Encrypted)
 
 Per-environment encrypted secrets (JSON format, AES-256-GCM encryption):
 
@@ -236,6 +236,11 @@ Per-environment encrypted secrets (JSON format, AES-256-GCM encryption):
 ```
 
 Secret names are plaintext; values encrypted.
+
+`tako init` ensures the app's `.tako/` directory stays ignored while `.tako/secrets.json` remains trackable:
+
+- inside a git repo, it updates the repo root `.gitignore` with app-relative rules
+- outside a git repo, it creates or updates `.gitignore` in the app directory
 
 Encryption keys are file-based:
 
@@ -328,6 +333,7 @@ Template behavior:
   - `[envs.production].route`
   - top-level `runtime`
   - top-level `preset` only when a non-base preset is selected (for base adapter presets and custom mode, it remains commented/unset)
+- Updates `.gitignore` so the app's `.tako/*` stays ignored while `.tako/secrets.json` remains trackable (repo-root `.gitignore` when inside git, app-local `.gitignore` otherwise)
 - Includes commented examples/explanations for all supported `tako.toml` options:
   - `name`, `main`, top-level `runtime`/`preset`, and `[build]` (`include`, `exclude`, `assets`, `[[build.stages]]`)
   - `[vars]`
@@ -608,7 +614,7 @@ Failure behavior:
 
 Set/update secret for environment (defaults to production).
 
-When running in an interactive terminal, prompts for value with masked input. In non-interactive mode, reads a single line from stdin. Stores encrypted value locally in `.tako/secrets`.
+When running in an interactive terminal, prompts for value with masked input. In non-interactive mode, reads a single line from stdin. Stores encrypted value locally in `.tako/secrets.json`.
 
 Uses the environment key at `keys/{env}` (creates it if missing).
 
@@ -618,7 +624,7 @@ When `--sync` is provided, immediately syncs secrets to all servers in the targe
 
 Remove secret from environment.
 
-Removes from local `.tako/secrets`. Omitting `--env` removes the secret from all environments.
+Removes from local `.tako/secrets.json`. Omitting `--env` removes the secret from all environments.
 
 When `--sync` is provided, immediately syncs secrets to servers after the local change. If `--env` is specified, syncs to that environment; otherwise syncs to all environments.
 
@@ -636,7 +642,7 @@ Alias: `tako secrets list`.
 
 Sync local secrets to servers.
 
-Source of truth: local `.tako/secrets`.
+Source of truth: local `.tako/secrets.json`.
 
 By default, sync processes all environments declared in `tako.toml`.
 When `--env` is provided, sync processes only that environment.
@@ -1227,15 +1233,15 @@ Tako-server exposes a Prometheus-compatible metrics endpoint for observability.
 
 **Exposed metrics:**
 
-| Metric | Type | Labels | Description |
-|---|---|---|---|
-| `tako_http_requests_total` | Counter | `server`, `app`, `status` | Total proxied requests, grouped by status class (2xx/3xx/4xx/5xx) |
-| `tako_http_request_duration_seconds` | Histogram | `server`, `app` | Request latency distribution |
-| `tako_http_active_connections` | Gauge | `server`, `app` | Currently active connections |
-| `tako_cold_starts_total` | Counter | `server`, `app` | Total cold starts triggered (scale-to-zero apps) |
-| `tako_cold_start_duration_seconds` | Histogram | `server`, `app` | Cold start duration distribution |
-| `tako_instance_health` | Gauge | `server`, `app`, `instance` | Instance health status (1=healthy, 0=unhealthy) |
-| `tako_instances_running` | Gauge | `server`, `app` | Number of running instances |
+| Metric                               | Type      | Labels                      | Description                                                       |
+| ------------------------------------ | --------- | --------------------------- | ----------------------------------------------------------------- |
+| `tako_http_requests_total`           | Counter   | `server`, `app`, `status`   | Total proxied requests, grouped by status class (2xx/3xx/4xx/5xx) |
+| `tako_http_request_duration_seconds` | Histogram | `server`, `app`             | Request latency distribution                                      |
+| `tako_http_active_connections`       | Gauge     | `server`, `app`             | Currently active connections                                      |
+| `tako_cold_starts_total`             | Counter   | `server`, `app`             | Total cold starts triggered (scale-to-zero apps)                  |
+| `tako_cold_start_duration_seconds`   | Histogram | `server`, `app`             | Cold start duration distribution                                  |
+| `tako_instance_health`               | Gauge     | `server`, `app`, `instance` | Instance health status (1=healthy, 0=unhealthy)                   |
+| `tako_instances_running`             | Gauge     | `server`, `app`             | Number of running instances                                       |
 
 All metrics carry a `server` label (machine hostname) so multi-server deployments are distinguishable without scraper-side relabeling. A single scrape returns data for all deployed apps on that server.
 
@@ -1366,11 +1372,11 @@ Used for health checks during rolling updates and monitoring.
 
 | Scenario                           | Behavior                                                                   |
 | ---------------------------------- | -------------------------------------------------------------------------- |
-| Config/data directory deleted       | Auto-recreate on next command                                              |
-| `config.toml` corrupted    | Show parse error with line number, offer to recreate                       |
+| Config/data directory deleted      | Auto-recreate on next command                                              |
+| `config.toml` corrupted            | Show parse error with line number, offer to recreate                       |
 | `tako.toml` deleted                | Commands that require project config fail with guidance to run `tako init` |
 | `.tako/` deleted                   | Auto-recreate on next deploy                                               |
-| `.tako/secrets` deleted            | Warn user, prompt to restore secrets                                       |
+| `.tako/secrets.json` deleted       | Warn user, prompt to restore secrets                                       |
 | Low free space under `/opt/tako`   | Deploy fails before upload with required vs available disk sizes           |
 | Deploy lock left behind            | Deploy fails until `/opt/tako/apps/{app}/{env}/.deploy_lock` is removed    |
 | Deploy fails mid-transfer/setup    | Auto-clean newly-created partial release directory                         |

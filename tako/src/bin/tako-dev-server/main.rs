@@ -649,8 +649,7 @@ async fn handle_client(
                     .apps
                     .values()
                     .filter(|a| {
-                        a.status == state::AppStatus::Running
-                            || a.status == state::AppStatus::Idle
+                        a.status == state::AppStatus::Running || a.status == state::AppStatus::Idle
                     })
                     .map(|a| AppInfo {
                         app_name: a.name.clone(),

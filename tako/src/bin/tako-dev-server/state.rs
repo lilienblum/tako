@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use rusqlite::{Connection, params};
 #[cfg(test)]
 use rusqlite::OptionalExtension;
+use rusqlite::{Connection, params};
 
 const PID_FILE: &str = ".tako/dev.pid";
 
@@ -342,9 +342,7 @@ mod tests {
         std::fs::create_dir_all(&real_proj).unwrap();
         std::fs::write(real_proj.join("tako.toml"), "name = \"real\"").unwrap();
 
-        store
-            .register(real_proj.to_str().unwrap(), "real")
-            .unwrap();
+        store.register(real_proj.to_str().unwrap(), "real").unwrap();
         store.register("/nonexistent/proj", "stale").unwrap();
 
         let removed = store.cleanup_stale().unwrap();

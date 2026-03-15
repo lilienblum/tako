@@ -398,7 +398,11 @@ pub fn bullet(message: &str) {
 }
 
 fn format_warning_full_line(message: &str) -> String {
-    format!("{} {}", brand_warning(brand_muted("┃")), brand_warning(message))
+    format!(
+        "{} {}",
+        brand_warning(brand_muted("┃")),
+        brand_warning(message)
+    )
 }
 
 fn format_warning_bullet_line(message: &str) -> String {
@@ -510,7 +514,6 @@ impl ContextBlock {
             .push(ContextEntry::Channel(channel.to_string()));
         self
     }
-
 
     /// Print the block (with trailing blank line). No-op if empty.
     pub fn print(self) {

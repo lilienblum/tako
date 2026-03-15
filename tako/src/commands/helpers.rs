@@ -49,10 +49,7 @@ pub fn resolve_env(requested: Option<&str>) -> String {
 pub fn validate_server_names(names: &[String], servers: &ServersToml) -> Result<(), String> {
     for name in names {
         if !servers.contains(name) {
-            return Err(format!(
-                "Server '{}' not found in config.toml",
-                name
-            ));
+            return Err(format!("Server '{}' not found in config.toml", name));
         }
     }
     Ok(())

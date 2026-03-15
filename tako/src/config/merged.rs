@@ -17,7 +17,7 @@ pub struct MergedConfig {
     /// Global servers from config.toml [[servers]]
     pub global_servers: ServersToml,
 
-    /// Secrets from project .tako/secrets
+    /// Secrets from project .tako/secrets.json
     pub secrets: SecretsStore,
 
     /// Resolved app name (top-level `name` when set, otherwise directory fallback)

@@ -22,20 +22,20 @@ CLI output conventions across commands:
 
 ## Components and Roles
 
-| Component          | Runs where      | Main role                                                                        |
-| ------------------ | --------------- | -------------------------------------------------------------------------------- |
-| `tako` CLI         | Your machine    | Project setup, dev client, build/deploy orchestration, server/secrets management |
-| `tako-dev-server`  | Your machine    | Local HTTPS ingress for `*.tako.test`, local app lifecycle                       |
-| `tako-loopback-proxy` | macOS only  | Loopback-only `:80/:443` ingress for a dedicated `127.77.0.1` alias, socket-activated by launchd |
-| `tako-server`      | Deployment host | Remote app lifecycle, routing, health checks, load balancing, TLS, metrics       |
-| Your app instances | Local or remote | Serve your app logic                                                             |
+| Component             | Runs where      | Main role                                                                                        |
+| --------------------- | --------------- | ------------------------------------------------------------------------------------------------ |
+| `tako` CLI            | Your machine    | Project setup, dev client, build/deploy orchestration, server/secrets management                 |
+| `tako-dev-server`     | Your machine    | Local HTTPS ingress for `*.tako.test`, local app lifecycle                                       |
+| `tako-loopback-proxy` | macOS only      | Loopback-only `:80/:443` ingress for a dedicated `127.77.0.1` alias, socket-activated by launchd |
+| `tako-server`         | Deployment host | Remote app lifecycle, routing, health checks, load balancing, TLS, metrics                       |
+| Your app instances    | Local or remote | Serve your app logic                                                                             |
 
 ## Configuration Sources
 
 Tako reads from three main places:
 
 - Project config: `tako.toml`
-- Project secrets: `.tako/secrets` (encrypted)
+- Project secrets: `.tako/secrets.json` (encrypted)
 - Global server inventory: `config.toml` (`[[servers]]` entries, in platform config directory)
 
 Key config rules:

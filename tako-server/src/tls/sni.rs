@@ -10,8 +10,8 @@ use openssl::ssl::SslRef;
 use openssl::x509::X509;
 use pingora_core::listeners::TlsAccept;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 /// Rate limiter for log messages that may fire on every TLS handshake.

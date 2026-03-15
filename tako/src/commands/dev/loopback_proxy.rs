@@ -8,10 +8,7 @@ use sha2::Digest;
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
-use super::{
-    DEV_LOOPBACK_ADDR, sudo_run_checked,
-    tcp_port_open, write_system_file_with_sudo,
-};
+use super::{DEV_LOOPBACK_ADDR, sudo_run_checked, tcp_port_open, write_system_file_with_sudo};
 
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const LOOPBACK_PROXY_LABEL: &str = "sh.tako.loopback-proxy";
@@ -477,46 +474,50 @@ pub(crate) fn ensure_installed() -> Result<(), Box<dyn std::error::Error>> {
         LoopbackProxyRepairPlan::None => unreachable!(),
     };
 
-    crate::output::with_spinner(loading, success, || -> Result<(), Box<dyn std::error::Error>> {
-        match current_plan {
-            LoopbackProxyRepairPlan::InstallOrUpdate => {
-                let desired_binary = locate_proxy_source_binary()?;
-                install_or_update(&desired_binary)?;
+    crate::output::with_spinner(
+        loading,
+        success,
+        || -> Result<(), Box<dyn std::error::Error>> {
+            match current_plan {
+                LoopbackProxyRepairPlan::InstallOrUpdate => {
+                    let desired_binary = locate_proxy_source_binary()?;
+                    install_or_update(&desired_binary)?;
+                }
+                LoopbackProxyRepairPlan::ReloadService => {
+                    reload_service()?;
+                }
+                LoopbackProxyRepairPlan::None => unreachable!(),
             }
-            LoopbackProxyRepairPlan::ReloadService => {
-                reload_service()?;
+
+            // Check non-network state once (files, launchd, alias won't change by waiting).
+            let verified = status();
+            if !(verified.installed
+                && verified.bootstrap_loaded
+                && verified.alias_ready
+                && verified.launchd_loaded)
+            {
+                return Err("local loopback proxy setup verification failed".into());
             }
-            LoopbackProxyRepairPlan::None => unreachable!(),
-        }
 
-        // Check non-network state once (files, launchd, alias won't change by waiting).
-        let verified = status();
-        if !(verified.installed
-            && verified.bootstrap_loaded
-            && verified.alias_ready
-            && verified.launchd_loaded)
-        {
-            return Err("local loopback proxy setup verification failed".into());
-        }
-
-        // The service was just (re)started — give it time to bind its ports.
-        let (mut https_ok, mut http_ok) = (verified.https_ready, verified.http_ready);
-        if !(https_ok && http_ok) {
-            for _ in 0..20 {
-                std::thread::sleep(std::time::Duration::from_millis(250));
-                https_ok = https_ok || tcp_port_open(DEV_LOOPBACK_ADDR, 443, 150);
-                http_ok = http_ok || tcp_port_open(DEV_LOOPBACK_ADDR, 80, 150);
-                if https_ok && http_ok {
-                    break;
+            // The service was just (re)started — give it time to bind its ports.
+            let (mut https_ok, mut http_ok) = (verified.https_ready, verified.http_ready);
+            if !(https_ok && http_ok) {
+                for _ in 0..20 {
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    https_ok = https_ok || tcp_port_open(DEV_LOOPBACK_ADDR, 443, 150);
+                    http_ok = http_ok || tcp_port_open(DEV_LOOPBACK_ADDR, 80, 150);
+                    if https_ok && http_ok {
+                        break;
+                    }
                 }
             }
-        }
-        if !(https_ok && http_ok) {
-            return Err("local loopback proxy setup verification failed".into());
-        }
+            if !(https_ok && http_ok) {
+                return Err("local loopback proxy setup verification failed".into());
+            }
 
-        Ok(())
-    })?;
+            Ok(())
+        },
+    )?;
     Ok(())
 }
 
@@ -539,7 +540,6 @@ mod tests {
             "Repair local loopback proxy for 127.77.0.1:80/443"
         );
     }
-
 
     #[test]
     fn launchd_plist_configures_socket_activation_on_loopback_ports() {

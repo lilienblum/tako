@@ -90,7 +90,6 @@ impl StaticFile {
     pub fn modified_since(&self, since: SystemTime) -> bool {
         self.last_modified > since
     }
-
 }
 
 /// Static file server for an app
