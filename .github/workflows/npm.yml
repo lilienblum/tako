@@ -57,4 +57,4 @@ jobs:
           npm pkg set version="${{ steps.version.outputs.version }}"
           bun install
           bun run build
-          npm publish --verbose --tag "${{ steps.version.outputs.tag }}"
+          npm publish --tag "${{ steps.version.outputs.tag }}"

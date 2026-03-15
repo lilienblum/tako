@@ -65,3 +65,4 @@ If no P0/P1 issues remain:
 - Fewer high-confidence findings over many weak ones.
 - Don't report best practices unless the code demonstrably violates them in a way that matters.
 - Suspicious-but-unprovable items go in a short "Blind spots" list at the end, not in findings.
+- Ignore issues in code paths that exist only for development or testing (e.g. `#[cfg(test)]` modules, test helper commands, dev-only socket commands). Focus on code that runs in production builds.
