@@ -313,14 +313,14 @@ fn format_macos_sections(
     let fwd_width = label_width(&["Installed", "Boot Helper", "Alias", "Launchd", &tcp_443, &tcp_80]);
 
     heading(buf, "Loopback Proxy");
-    row(
+    hinted_row(
         buf,
         "Installed",
         &format_active_status(macos.loopback_proxy.installed, "ok", "missing"),
         fwd_width,
+        "Binary and support files are present on disk",
     );
-    hint(buf, "Binary and support files are present on disk");
-    row(
+    hinted_row(
         buf,
         "Boot Helper",
         &format_active_status(
@@ -329,43 +329,34 @@ fn format_macos_sections(
             "not loaded",
         ),
         fwd_width,
-    );
-    hint(
-        buf,
         "Boot-time helper is loaded so Tako can restore loopback proxy setup",
     );
-    row(
+    hinted_row(
         buf,
         "Alias",
         &format_active_status(macos.loopback_proxy.alias_ready, "ok", "missing"),
         fwd_width,
+        "127.77.0.1 is assigned on the lo0 loopback interface",
     );
-    hint(buf, "127.77.0.1 is assigned on the lo0 loopback interface");
-    row(
+    hinted_row(
         buf,
         "Launchd",
         &format_active_status(macos.loopback_proxy.launchd_loaded, "loaded", "not loaded"),
         fwd_width,
+        "macOS launchd has loaded the proxy service definition",
     );
-    hint(buf, "macOS launchd has loaded the proxy service definition");
-    row(
+    hinted_row(
         buf,
         &tcp_443,
         &format_active_status(macos.https_tcp_ok, "ok", "unreachable"),
         fwd_width,
-    );
-    hint(
-        buf,
         "HTTPS proxy is listening on the loopback address and accepts connections",
     );
-    row(
+    hinted_row(
         buf,
         &tcp_80,
         &format_active_status(macos.http_tcp_ok, "ok", "unreachable"),
         fwd_width,
-    );
-    hint(
-        buf,
         "HTTP proxy is listening on the loopback address and accepts connections",
     );
 }
