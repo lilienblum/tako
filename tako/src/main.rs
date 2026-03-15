@@ -3,6 +3,7 @@ mod commands;
 mod dev_server_client;
 mod output;
 mod paths;
+pub mod shell;
 
 // Internal modules (moved from tako-core)
 pub mod app;

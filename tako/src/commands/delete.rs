@@ -686,9 +686,7 @@ async fn delete_from_server(
     result
 }
 
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
+use crate::shell::shell_single_quote;
 
 fn parse_delete_response(response: Response) -> Result<(), String> {
     match response {

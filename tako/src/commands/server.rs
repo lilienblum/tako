@@ -1018,12 +1018,14 @@ fn default_download_base(channel: UpgradeChannel, tag: Option<&str>) -> String {
 
 /// Build a remote command that downloads and replaces the tako-server binary.
 fn remote_binary_replace_command(url: &str) -> String {
+    use crate::shell::shell_single_quote;
+    let url_q = shell_single_quote(url);
     // Download tar.zst, extract the binary, install it, set capabilities.
     let script = format!(
         "set -eu; \
          tmp=$(mktemp -d); \
          trap 'rm -rf \"$tmp\"' EXIT; \
-         curl -fsSL '{url}' | zstd -d | tar -x -C \"$tmp\"; \
+         curl -fsSL {url_q} | zstd -d | tar -x -C \"$tmp\"; \
          bin=$(find \"$tmp\" -type f -name tako-server | head -n 1); \
          if [ -z \"$bin\" ]; then echo 'error: archive did not contain tako-server binary' >&2; exit 1; fi; \
          install -m 0755 \"$bin\" /usr/local/bin/tako-server; \

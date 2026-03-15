@@ -999,9 +999,7 @@ fn format_unix_timestamp_local(unix_secs: i64) -> Option<String> {
         .or_else(|| format_unix_timestamp_with_offset(unix_secs, local_offset()))
 }
 
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
+use crate::shell::shell_single_quote;
 
 #[cfg(test)]
 fn format_unix_timestamp_with_offset(unix_secs: i64, offset: time::UtcOffset) -> Option<String> {

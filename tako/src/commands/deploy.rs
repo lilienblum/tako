@@ -3095,9 +3095,7 @@ const DEPLOY_DISK_CHECK_PATH: &str = "/opt/tako";
 const DEPLOY_DISK_SPACE_MULTIPLIER: u64 = 3;
 const DEPLOY_DISK_SPACE_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
 
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
+use crate::shell::shell_single_quote;
 
 fn required_remote_free_bytes(archive_size_bytes: u64) -> u64 {
     archive_size_bytes

@@ -309,9 +309,7 @@ fn resolve_app_dir(app_subdir: &str) -> Result<(String, String), String> {
     Ok((normalized.clone(), format!("/workspace/{normalized}")))
 }
 
-fn shell_single_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
+use crate::shell::shell_single_quote;
 
 fn dependency_cache_mounts(
     target_label: &str,
