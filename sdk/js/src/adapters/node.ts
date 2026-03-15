@@ -22,7 +22,7 @@ import { TAKO_INTERNAL_HOST, TAKO_INTERNAL_STATUS_PATH } from "../endpoints";
 
 // Re-export core classes
 export { Tako } from "../tako";
-export type { TakoOptions, TakoStatus } from "../types";
+export type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 
 // Environment variables set by tako
 const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";
