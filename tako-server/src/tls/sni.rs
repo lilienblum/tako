@@ -9,7 +9,49 @@ use openssl::pkey::PKey;
 use openssl::ssl::SslRef;
 use openssl::x509::X509;
 use pingora_core::listeners::TlsAccept;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
+
+/// Rate limiter for log messages that may fire on every TLS handshake.
+/// Allows one log emission per `interval` seconds; suppressed events are
+/// counted and reported in the next allowed emission.
+struct LogRateLimiter {
+    suppressed: AtomicU64,
+    last_log: parking_lot::Mutex<Instant>,
+    interval: std::time::Duration,
+}
+
+impl LogRateLimiter {
+    fn new(interval: std::time::Duration) -> Self {
+        Self {
+            suppressed: AtomicU64::new(0),
+            last_log: parking_lot::Mutex::new(Instant::now() - interval),
+            interval,
+        }
+    }
+
+    /// Returns `Some(suppressed_count)` if a log should be emitted now,
+    /// `None` if the event should be suppressed.
+    fn check(&self) -> Option<u64> {
+        let now = Instant::now();
+        let mut last = self.last_log.lock();
+        if now.duration_since(*last) >= self.interval {
+            *last = now;
+            let count = self.suppressed.swap(0, Ordering::Relaxed);
+            Some(count)
+        } else {
+            self.suppressed.fetch_add(1, Ordering::Relaxed);
+            None
+        }
+    }
+}
+
+static NO_SNI_LIMITER: std::sync::LazyLock<LogRateLimiter> =
+    std::sync::LazyLock::new(|| LogRateLimiter::new(std::time::Duration::from_secs(10)));
+
+static UNKNOWN_HOST_LIMITER: std::sync::LazyLock<LogRateLimiter> =
+    std::sync::LazyLock::new(|| LogRateLimiter::new(std::time::Duration::from_secs(10)));
 
 /// SNI-based certificate resolver that selects certificates based on hostname
 pub struct SniCertResolver {
@@ -92,7 +134,13 @@ impl TlsAccept for SniCertResolver {
         let sni_hostname = match ssl.servername(openssl::ssl::NameType::HOST_NAME) {
             Some(name) => name.to_string(),
             None => {
-                tracing::warn!("No SNI hostname in TLS handshake");
+                if let Some(suppressed) = NO_SNI_LIMITER.check() {
+                    if suppressed > 0 {
+                        tracing::warn!(suppressed, "No SNI hostname in TLS handshake (repeated)");
+                    } else {
+                        tracing::warn!("No SNI hostname in TLS handshake");
+                    }
+                }
                 if should_allow_default_cert_fallback_for_missing_sni() {
                     self.set_default_cert(ssl, "no-sni");
                 }
@@ -136,10 +184,20 @@ impl TlsAccept for SniCertResolver {
                 }
             }
             None => {
-                tracing::warn!(
-                    hostname = %sni_hostname,
-                    "No certificate found for hostname, TLS handshake will fail"
-                );
+                if let Some(suppressed) = UNKNOWN_HOST_LIMITER.check() {
+                    if suppressed > 0 {
+                        tracing::warn!(
+                            hostname = %sni_hostname,
+                            suppressed,
+                            "No certificate found for hostname, TLS handshake will fail (repeated)"
+                        );
+                    } else {
+                        tracing::warn!(
+                            hostname = %sni_hostname,
+                            "No certificate found for hostname, TLS handshake will fail"
+                        );
+                    }
+                }
                 // No fallback cert — let the handshake fail so misconfigurations
                 // are immediately obvious rather than silently serving a mismatched cert.
             }
