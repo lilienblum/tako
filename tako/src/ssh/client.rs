@@ -626,9 +626,14 @@ impl SshClient {
     /// (pipes, redirects, `&&` chains) correctly — the entire script runs as
     /// root. Requires that the sudoers policy allows running `sh`.
     pub fn run_with_root_or_sudo(shell_script: &str) -> String {
+        // Escape single quotes in the inner script so it can be safely
+        // embedded inside the outer `sh -c '...'` wrapper. The standard
+        // POSIX idiom: replace every ' with '\\'' (end current quote,
+        // insert a literal escaped quote, resume quoting).
+        let escaped = shell_script.replace('\'', "'\\''");
         format!(
             "if [ \"$(id -u)\" -eq 0 ]; then sh -c '{0}'; elif command -v sudo >/dev/null 2>&1; then sudo sh -c '{0}'; else echo \"error: this operation requires root privileges (run as root or install/configure sudo)\" >&2; exit 1; fi",
-            shell_script
+            escaped
         )
     }
 
@@ -1110,6 +1115,14 @@ l4QMs5cmnWfrM0GQ==\n\
         let cmd = SshClient::run_with_root_or_sudo("cat /etc/foo && echo ok");
         // sh -c wrapping for complex shell constructs
         assert!(cmd.contains("sudo sh -c 'cat /etc/foo && echo ok'"));
+    }
+
+    #[test]
+    fn run_with_root_or_sudo_escapes_inner_single_quotes() {
+        let cmd =
+            SshClient::run_with_root_or_sudo("printf '%s' 'TOKEN=abc' > /etc/creds");
+        // Inner single quotes must be escaped for the outer sh -c wrapper
+        assert!(cmd.contains("sudo sh -c 'printf '\\''%s'\\'' '\\''TOKEN=abc'\\'' > /etc/creds'"));
     }
 
     #[test]
