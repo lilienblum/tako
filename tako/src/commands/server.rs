@@ -994,6 +994,11 @@ fn server_binary_download_url(
     let base = if let Ok(env_base) = std::env::var("TAKO_DOWNLOAD_BASE_URL") {
         let trimmed = env_base.trim().trim_end_matches('/').to_string();
         if !trimmed.is_empty() {
+            if !trimmed.starts_with("https://") {
+                crate::output::warning(&format!(
+                    "TAKO_DOWNLOAD_BASE_URL uses non-HTTPS scheme — binary will be downloaded over an insecure connection: {trimmed}"
+                ));
+            }
             trimmed
         } else {
             default_download_base(channel, tag)
