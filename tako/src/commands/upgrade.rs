@@ -61,7 +61,7 @@ fn current_version() -> String {
     match CANARY_SHA {
         Some(sha) if !sha.trim().is_empty() => {
             let short = &sha.trim()[..sha.trim().len().min(7)];
-            format!("{CURRENT_VERSION}-canary-{short}")
+            format!("canary-{short}")
         }
         _ => CURRENT_VERSION.to_string(),
     }
