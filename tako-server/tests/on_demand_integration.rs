@@ -60,24 +60,23 @@ fn run_on_demand_case() -> Result<(), String> {
     }
 
     // Deploy should leave one warm instance so the app is immediately reachable.
-    let warm_status = server.send_command(&serde_json::json!({
-        "command": "status",
-        "app": "test-app",
-    }));
-    let Some(warm_data) = warm_status.get("data") else {
+    // Poll status since the app may take a moment to become visible.
+    let mut warm_status = serde_json::Value::Null;
+    let warm_ok = wait_for(Duration::from_secs(10), || {
+        let resp = server.send_command(&serde_json::json!({
+            "command": "status",
+            "app": "test-app",
+        }));
+        warm_status = resp.clone();
+        resp.get("data")
+            .and_then(|d| d.get("instances"))
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.len() == 1)
+            .unwrap_or(false)
+    });
+    if !warm_ok {
         return Err(format!(
-            "missing status payload after deploy: {warm_status:?}"
-        ));
-    };
-    let Some(warm_instances) = warm_data.get("instances").and_then(|v| v.as_array()) else {
-        return Err(format!(
-            "missing instance list in status payload after deploy: {warm_status:?}"
-        ));
-    };
-    if warm_instances.len() != 1 {
-        return Err(format!(
-            "expected one warm instance after on-demand deploy, got {}: {warm_status:?}",
-            warm_instances.len()
+            "expected one warm instance after on-demand deploy: {warm_status:?}"
         ));
     }
 
