@@ -10,6 +10,8 @@ mod static_files;
 pub use static_files::*;
 
 use crate::lb::{Backend, LoadBalancer};
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 use crate::metrics::RequestTimer;
 use crate::routing::RouteTable;
 use crate::scaling::{ColdStartManager, WaitForReadyOutcome};
@@ -134,6 +136,51 @@ impl ProxyConfig {
     }
 }
 
+/// Maximum concurrent requests from a single IP address.
+const MAX_REQUESTS_PER_IP: u32 = 2048;
+
+/// Per-IP concurrent request tracker for basic DDoS mitigation.
+/// Tracks in-flight requests per client IP with O(1) increment/decrement.
+struct IpRequestTracker {
+    connections: dashmap::DashMap<IpAddr, AtomicU32>,
+}
+
+impl IpRequestTracker {
+    fn new() -> Self {
+        Self {
+            connections: dashmap::DashMap::new(),
+        }
+    }
+
+    /// Try to acquire a slot for this IP. Returns false if over the limit.
+    fn try_acquire(&self, ip: IpAddr) -> bool {
+        let entry = self
+            .connections
+            .entry(ip)
+            .or_insert_with(|| AtomicU32::new(0));
+        let prev = entry.value().fetch_add(1, AtomicOrdering::Relaxed);
+        if prev >= MAX_REQUESTS_PER_IP {
+            entry.value().fetch_sub(1, AtomicOrdering::Relaxed);
+            false
+        } else {
+            true
+        }
+    }
+
+    /// Release a slot for this IP.
+    fn release(&self, ip: IpAddr) {
+        if let Some(entry) = self.connections.get(&ip) {
+            let prev = entry.value().fetch_sub(1, AtomicOrdering::Relaxed);
+            // Clean up zero-count entries to prevent unbounded map growth.
+            // Use prev == 1 (meaning we just decremented to 0).
+            if prev == 1 {
+                drop(entry);
+                self.connections.remove_if(&ip, |_, v| v.load(AtomicOrdering::Relaxed) == 0);
+            }
+        }
+    }
+}
+
 /// Tako HTTP proxy service
 pub struct TakoProxy {
     /// Load balancer
@@ -151,6 +198,8 @@ pub struct TakoProxy {
     response_cache: Option<ResponseCacheRuntime>,
     /// Reused per-app static file server state for hot path requests
     static_servers: SyncRwLock<HashMap<String, Arc<AppStaticServer>>>,
+    /// Per-IP concurrent request limiter (DDoS mitigation)
+    ip_tracker: IpRequestTracker,
 }
 
 impl TakoProxy {
@@ -172,6 +221,7 @@ impl TakoProxy {
             cold_start,
             response_cache,
             static_servers: SyncRwLock::new(HashMap::new()),
+            ip_tracker: IpRequestTracker::new(),
         }
     }
 
@@ -195,6 +245,7 @@ impl TakoProxy {
             cold_start,
             response_cache,
             static_servers: SyncRwLock::new(HashMap::new()),
+            ip_tracker: IpRequestTracker::new(),
         }
     }
 
@@ -320,6 +371,8 @@ pub struct RequestCtx {
     is_https: bool,
     matched_route_path: Option<String>,
     request_timer: Option<RequestTimer>,
+    /// Client IP for per-IP rate limit tracking (released in logging phase)
+    client_ip: Option<IpAddr>,
 }
 
 enum BackendResolution {
@@ -389,10 +442,28 @@ impl ProxyHttp for TakoProxy {
             is_https: false,
             matched_route_path: None,
             request_timer: None,
+            client_ip: None,
         }
     }
 
     async fn request_filter(&self, session: &mut Session, ctx: &mut Self::CTX) -> Result<bool> {
+        // Per-IP rate limiting: reject requests when a single IP exceeds the
+        // concurrent request cap (basic DDoS / resource exhaustion mitigation).
+        if let Some(ip) = client_ip_from_session(session) {
+            if !self.ip_tracker.try_acquire(ip) {
+                let body = "Too Many Requests";
+                let mut header = ResponseHeader::build(429, None)?;
+                header.insert_header("Retry-After", "1")?;
+                insert_body_headers(&mut header, "text/plain", body)?;
+                session
+                    .write_response_header(Box::new(header), false)
+                    .await?;
+                session.write_response_body(Some(body.into()), true).await?;
+                return Ok(true);
+            }
+            ctx.client_ip = Some(ip);
+        }
+
         let path = session.req_header().uri.path().to_string();
         let host = request_host(session.req_header());
         let hostname = host.split(':').next().unwrap_or(host);
@@ -700,6 +771,11 @@ impl ProxyHttp for TakoProxy {
     }
 
     async fn logging(&self, session: &mut Session, _e: Option<&Error>, ctx: &mut Self::CTX) {
+        // Release per-IP rate limit slot
+        if let Some(ip) = ctx.client_ip.take() {
+            self.ip_tracker.release(ip);
+        }
+
         // Mark connection completed in load balancer
         if let Some(ref backend) = ctx.backend {
             self.lb
@@ -886,6 +962,16 @@ async fn stream_static_file(
 /// Extract the host/authority from a request.
 ///
 /// For HTTP/2, the hostname lives in the `:authority` pseudo-header which
+/// Extract the client IP from a Pingora session.
+fn client_ip_from_session(session: &Session) -> Option<IpAddr> {
+    session
+        .digest()
+        .and_then(|d| d.socket_digest.as_ref())
+        .and_then(|sd| sd.peer_addr())
+        .and_then(|addr| addr.as_inet())
+        .map(|inet| inet.ip())
+}
+
 /// Pingora exposes via `uri.authority()`.  For HTTP/1.1, it lives in the
 /// `Host` header.  We try both so routing works regardless of protocol.
 fn request_host<'a>(req: &'a pingora_http::RequestHeader) -> &'a str {
