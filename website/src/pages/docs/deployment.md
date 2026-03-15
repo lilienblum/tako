@@ -1,214 +1,458 @@
 ---
 layout: ../../layouts/DocsLayout.astro
-title: Tako Docs - Deployment
+title: "Tako Docs - Deployment"
 heading: Deployment
 current: deployment
 ---
 
 # Deployment
 
-This guide explains what `tako deploy` actually does and what your remote servers need in place.
+This guide covers everything involved in deploying apps with Tako: setting up servers, running deploys, managing scaling, handling secrets, and keeping things running smoothly in production.
 
-## Overview
+## Server setup
 
-From an app directory, run:
+Before you can deploy, each target server needs `tako-server` installed and running.
+
+### Installing tako-server
+
+Run the hosted installer as root on your server:
 
 ```bash
-tako deploy [--env <environment>]
+# Stable channel
+sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"
+
+# Canary channel (latest from master)
+sudo sh -c "$(curl -fsSL https://tako.sh/install-server-canary)"
 ```
 
-What happens during deploy:
+The installer handles everything:
 
-- CLI output is concise by default; use `--verbose` for an append-only execution transcript with timestamps and log levels.
-- In interactive terminals, long-running deploy steps use spinner progress indicators.
-- For CI/CD pipelines, use `--ci` for deterministic plain-text output (no colors, no spinners, no prompts). Combine with `--verbose` for full transcript output in build logs.
-- Deploy packages source files into a versioned source archive, then builds target-specific artifacts locally.
-- Source bundle root is resolved in this order: git root, current app directory.
-- Source filtering uses `.gitignore`.
-- Non-overridable excludes: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
-- A versioned source tarball is created under `.tako/artifacts/`.
-- Deploy version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`.
-- Build preset is resolved from top-level `preset` (runtime-local alias; namespaced aliases like `js/tanstack-start` are rejected and `github:` refs are not supported) or adapter base default from top-level `runtime`/detection when omitted; unpinned official aliases are fetched from `master` on each resolve, fetch failures fail resolution, runtime base aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from fetched family manifests, and resolved metadata is written to `.tako/build.lock.json`.
-- For each required server target (`arch`/`libc`), Tako runs preset install/build first, then app `[[build.stages]]` (if configured), and packages a target artifact tarball (Docker/local based on preset `[build].container`; built-in JS base presets default to local mode with `container = false`).
-- Before packaging each target artifact, Tako verifies the resolved deploy `main` file exists in the post-build app directory.
-- Docker build containers stay ephemeral, but dependency downloads are reused from per-target Docker cache volumes keyed by cache kind + target label + builder image.
-- Default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
-- Target artifacts are cached locally in `.tako/artifacts/` using a deterministic build-input key.
-- On cache hit, deploy reuses the verified artifact; on cache mismatch/corruption, deploy rebuilds that target artifact automatically.
-- On every deploy, Tako prunes local `.tako/artifacts/` cache (best-effort): keeps 30 newest source archives (`*-source.tar.zst`), keeps 90 newest target artifacts (`artifact-cache-*.tar.zst`), and removes orphan target metadata files.
-- Deploys run to all target servers in parallel.
-- On each server, Tako uses the extracted release `app.json` as the canonical runtime manifest, queries the server's current secrets hash, and only sends secrets when they differ from the local copy (new servers or changed secrets are automatically provisioned). Secrets are stored in per-app `secrets.json` (0600 permissions). Then it performs runtime prep (Bun dependency install) and rolling update from the uploaded target artifact.
-- Each server is handled independently, so partial success is possible.
+- Creates dedicated OS users (`tako` for SSH access and `tako-app` for process separation)
+- Detects host architecture and libc (`x86_64`/`aarch64`, `glibc`/`musl`) and downloads the matching `tako-server` binary
+- Installs `tako-server` to `/usr/local/bin/tako-server`
+- Sets up a service definition (systemd unit or OpenRC init script)
+- Creates required directories (`/opt/tako` for data, `/var/run/tako` for sockets)
+- Configures privileged port binding (`:80` and `:443`) via service capabilities
+- Installs `mise` for runtime version management
+- Installs restricted maintenance helpers and sudoers policy for non-interactive upgrades
+- Ensures `nc` (netcat), `tar`, `base64`, and standard shell tools are available
+- Verifies `tako-server` starts successfully after installation
 
-## Pre-Deploy Checklist
+**SSH key setup:** The installer needs an SSH public key for the `tako` user so the CLI can connect later.
 
-Before you ship, do a quick sanity pass:
+- Set `TAKO_SSH_PUBKEY` before running the installer, or
+- The installer prompts for a key when a terminal is available (including piped installs like `curl ... | sudo sh`)
+- If no key input is available, the installer tries to reuse a key from the invoking sudo user's `~/.ssh/authorized_keys`
 
-1. Ensure target hosts exist in your server inventory (check with `tako servers ls`) and were added with SSH checks enabled so target metadata was detected.
-2. Confirm `tako.toml` has route/env/server mappings for the target environment.
-3. Verify secrets are present for the target env (`tako secrets sync` if needed).
-4. Run your local tests before deploy.
-5. Ensure deploy entrypoint is set either in `tako.toml` (`main = "..."`) or preset top-level `main`.
-6. Ensure your build output includes that entrypoint path (deploy validates this before artifact packaging).
-7. If preset build mode resolves to container (`[build].container = true`), ensure Docker is available locally.
+### Server prerequisites
 
-## Server Prerequisites
+Each server needs:
 
-Each target server should have:
+- SSH access as the `tako` user
+- Local `~/.ssh/known_hosts` entry for each host (unknown/changed host keys are rejected)
+- `tako-server` installed and running
+- A supported service manager: systemd or OpenRC
 
-- SSH access as the configured deployment user (typically `tako`).
-- For hosted installer usage, provide `TAKO_SSH_PUBKEY` or paste a public key when prompted (the installer prompts on a terminal when available, including common piped installs, re-prompts on invalid key lines, and if input cannot be read it tries the invoking sudo user's `~/.ssh/authorized_keys` before warning + skip).
-- Local SSH `known_hosts` entry for each target host (unknown/changed host keys are rejected).
-- `tako-server` installed and running.
-- `tako-server` installed via the hosted installer (or equivalent) for the host target; installer resolves `arch` + `libc` and downloads matching `tako-server-linux-<arch>-<libc>`.
-- On installer-managed hosts, `tako` user has scoped passwordless sudo access for Tako maintenance helpers (`tako-server-install-refresh`, `tako-server-service`) used by `tako servers upgrade`/`restart`.
-- A supported service manager present and active (`systemd` or OpenRC via `rc-service`), required by the installer and by `tako servers upgrade`.
-- `mise` installed on host (`install-server` attempts distro package manager first, then upstream installer fallback).
-- `nc` (netcat), `tar`, `base64`, and standard shell tools (`mkdir`, `find`, `stat`).
-- Writable runtime paths under `/opt/tako` and socket access at `/var/run/tako/tako.sock`.
-- Privileged bind capability for `tako-server` on `:80/:443` (provided by installer-managed service capability setup on systemd hosts, plus `setcap` on the binary when available).
+### Default server configuration
 
-Install/refresh server runtime commands:
+Out of the box, `tako-server` runs with sensible defaults and no configuration file is needed:
 
-- stable: `sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"`
-- canary: `sudo sh -c "$(curl -fsSL https://tako.sh/install-server-canary)"`
+- HTTP on port 80, HTTPS on port 443
+- Data directory at `/opt/tako`
+- Management socket at `/var/run/tako/tako.sock`
+- Let's Encrypt production ACME
+- Certificate renewal every 12 hours
 
-## Configuration Inputs
+## Adding servers to your inventory
 
-### Project config ([`tako.toml`](/docs/tako-toml))
+Once a server is set up, register it locally so Tako knows where to deploy.
 
-- `tako.toml` is required in the project root.
-- App identity resolves from top-level `name` when set, otherwise sanitized project directory name.
-- Set `name` explicitly for stable identity; remote server identity is `{app}/{env}`, so multiple environments of one app can share a server while still getting separate paths and runtime state. Renaming identity later creates a new app path and requires manual cleanup of the old deployment.
-- Defines environments and routes.
-- Every non-development environment must define `route` or `routes`.
-- Empty route sets are rejected for non-development environments (no implicit catch-all mode).
-- Optional `main` overrides runtime entrypoint in deployed `app.json`.
-- Optional `[build]` controls artifact generation:
-  - `include` / `exclude` artifact globs
-  - `assets` directories merged into app `public/` after container build in listed order
-  - `[[build.stages]]` for app-level custom build stages (`name`, optional `working_dir`, optional `install`, required `run`)
-- Optional top-level preset selection controls runtime/build defaults:
-  - `runtime` (optional override: `bun`, `node`, `deno`)
-  - `preset` (optional runtime-local override such as `tanstack-start`; defaults to adapter base preset from top-level `runtime` or detection)
-- Defines server membership per environment via `[envs.<name>].servers = ["..."]`.
-- The same server can appear in multiple non-development environment mappings; each environment deploys under `/opt/tako/apps/{app}/{env}/`.
-- Defines per-environment idle scaling policy via `[envs.<name>].idle_timeout`.
-- Deploy does not set the desired instance count. New apps start at `0` and you change the live value with `tako scale`.
+### `tako servers add`
 
-### Source bundle and runtime manifest
+Add a server interactively with a guided wizard:
 
-- Archive payload is source-based and includes filtered files from the resolved source bundle root.
-- Archive includes the canonical deployed `app.json` at app path inside the artifact.
-- Build preset resolves from official alias; unpinned aliases fetch from `master` (fetch failures fail resolution; runtime base aliases fall back to embedded defaults when missing from fetched family manifests) and resolved source metadata is written to `.tako/build.lock.json`.
-- Preset runtime fields are top-level `main`/`install`/`start`.
-- Runtime base presets provide defaults for `install`/`start`, `[build].install`/`[build].build`, and `[build].exclude`/`[build].targets`/`[build].container`; explicit top-level `preset` also uses preset top-level `dev` in `tako dev`.
-- In `tako dev`, omitted top-level `preset` ignores preset top-level `dev` and runs runtime-default command with resolved `main` (`bun run node_modules/tako.sh/src/entrypoints/bun.ts {main}`, `node --experimental-strip-types node_modules/tako.sh/src/entrypoints/node.ts {main}`, or `deno run --allow-net --allow-env --allow-read node_modules/tako.sh/src/entrypoints/deno.ts {main}`).
-- JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds default to local host mode unless preset `container = true` is set.
-- Preset `[build].exclude` appends to runtime-base excludes (base-first, deduplicated), while preset `[build].targets` and `[build].container` override when set.
-- Preset `[[build.stages]]` is not supported; app-level custom stages are configured in `tako.toml` under `[[build.stages]]`.
-- Artifact include precedence is `build.include` then `**/*`; artifact excludes are effective preset `[build].exclude` plus `build.exclude`.
-- For each server target label, Tako runs build commands in fixed order: preset `[build].install` + `[build].build` first, then app `[[build.stages]]` in declaration order (Docker/local mode from preset `[build].container`; when unset, generic preset parser defaults to Docker only when `[build].targets` is non-empty).
-- Containerized deploy builds reuse per-target dependency cache volumes (mise + runtime cache mounts) while still creating fresh build containers.
-- Containerized deploy builds default to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
-- Runtime version is resolved with `mise` when available (`mise exec -- <tool> --version`), with fallback to `mise.toml`, then `latest`.
-- During local builds, stage commands run through `mise exec -- sh -lc ...` when `mise` is available.
-- Local artifact cache key includes source hash, target label, resolved preset source/commit, runtime tool/version, Docker/local mode, preset build commands, app `[[build.stages]]`, include/exclude patterns, asset roots, and app subdirectory.
-- `assets` are copied into app `public/` after container build (later entries overwrite earlier ones).
-- The deployed `app.json` in the release directory is the canonical runtime manifest.
-- It carries resolved runtime metadata, non-secret env vars, `idle_timeout`, and optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
-- Runtime startup on `tako-server` uses release `app.json`:
-  - if `start` is present, that command is used (`{main}` placeholders are expanded)
-  - if `start` is missing, runtime fallback is used (`bun` entrypoint, `node` entrypoint, or `deno` entrypoint — each goes through the per-runtime SDK entrypoint with `<main>`)
-- Runtime `main` resolution order:
-  1. `main` from `tako.toml`
-  2. for JS runtimes (`bun`, `node`, `deno`) when preset `main` is `index.<ext>` or `src/index.<ext>` (`ts`/`tsx`/`js`/`jsx`): existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`
-  3. top-level `main` from preset
-- Before artifact packaging, deploy checks that the resolved `main` exists in the built app directory and fails if it is missing.
+```bash
+tako servers add
+```
 
-### Global server inventory (`config.toml`)
+Or directly from CLI arguments:
 
-- Defines named servers (`host`, `port`, optional `description`).
-- Stores detected per-server build target metadata (`arch`, `libc`) directly in each `[[servers]]` entry.
-- Managed via `tako servers ...` commands.
-- Deploy requires target metadata for every selected server and fails early if it is missing/invalid.
-- Deploy does not probe target metadata at deploy-time; re-add affected servers to refresh metadata.
+```bash
+tako servers add 1.2.3.4 --name la --port 22
+```
 
-## Deploy Flow (Per Server)
+When adding, Tako tests the SSH connection (as the `tako` user) and detects the server's architecture and libc. This target metadata is stored in your global `config.toml` and is required for deploy to build the correct artifact.
 
-1. Connect via SSH.
-2. Acquire per-app deploy lock at `/opt/tako/apps/<app>/<env>/.deploy_lock`.
-3. Run disk-space preflight under `/opt/tako`.
-4. Ensure `tako-server` is installed and active.
-5. Validate route conflicts against current server routing state.
-6. Create release and shared directories.
-7. Upload and extract archive into `/opt/tako/apps/<app>/<env>/releases/<version>/`.
-8. Link shared directories (for example `logs`).
-9. Query server for current secrets hash; if it matches the local secrets, skip sending secrets (server keeps existing). Otherwise include decrypted secrets in the deploy command. Non-secret env vars and `idle_timeout` come from the release `app.json`, while secrets go to a per-app `secrets.json` (0600); `tako-server` runs runtime prep (Bun dependency install) before rolling update.
-10. Update `current` symlink after server accepts deploy and clean old release directories.
+If `tako-server` is not found on the host, Tako warns you to install it manually.
 
-## Remote Layout
+Use `--no-test` to skip SSH checks, but deploy will fail for that server until you re-add it with checks enabled.
 
-```text
+Other server management commands:
+
+```bash
+tako servers ls          # List all configured servers
+tako servers rm la       # Remove a server
+tako servers status      # See deployed apps and health across all servers
+```
+
+## Deploy workflow
+
+From your app directory, run:
+
+```bash
+tako deploy
+```
+
+This targets the `production` environment by default. Use `--env` for other environments:
+
+```bash
+tako deploy --env staging
+```
+
+In interactive terminals, deploying to `production` requires confirmation unless you pass `--yes` or `-y`.
+
+### What happens during deploy
+
+1. **Pre-validation** -- Checks that secrets are present, server target metadata exists for all selected servers, and routes are valid.
+2. **Source bundling** -- Packages source files into a versioned archive under `.tako/artifacts/`. The bundle root is the git root when available, otherwise the app directory. Filtering uses `.gitignore`, and `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/` are always excluded.
+3. **Entrypoint resolution** -- Resolves the deploy `main` file from `tako.toml`, then preset defaults, with JS-specific fallback order (`index.<ext>`, then `src/index.<ext>`).
+4. **Preset resolution** -- Resolves the build preset from `tako.toml` `preset` or the adapter base preset. Unpinned official presets are fetched from `master` on each deploy.
+5. **Artifact build** -- Builds one target artifact per unique server architecture. Uses local cache when build inputs are unchanged. Runs preset build commands first, then app `[[build.stages]]`.
+6. **Parallel deploy** -- Deploys to all target servers simultaneously. Each server is handled independently, so partial success is possible.
+
+### Per-server deploy steps
+
+For each server, the CLI:
+
+1. Connects via SSH
+2. Acquires a deploy lock
+3. Runs a disk-space preflight check
+4. Validates `tako-server` is active
+5. Checks for route conflicts
+6. Creates release and shared directories
+7. Uploads and extracts the target artifact into `/opt/tako/apps/<app>/<env>/releases/<version>/`
+8. Links shared directories (e.g., `logs`)
+9. Syncs secrets if needed (compares hashes; only sends when changed)
+10. Runs runtime prep (e.g., `bun install --production` for Bun apps)
+11. Performs a rolling update
+12. Updates the `current` symlink and cleans up old releases (older than 30 days)
+
+### CLI output modes
+
+- **Default:** Concise output with spinners for long-running steps
+- **`--verbose`:** Append-only transcript with timestamps and log levels
+- **`--ci`:** No colors, no spinners, no prompts -- deterministic for pipelines
+- **`--ci --verbose`:** Detailed transcript without formatting
+
+## Version naming
+
+Deploy versions are derived from your git state:
+
+| Git state | Version format | Example |
+|---|---|---|
+| Clean tree | `{commit_hash}` | `abc1234` |
+| Dirty tree | `{commit}_{content_hash}` | `abc1234_9f8e7d6c` |
+| No git repo | `nogit_{content_hash}` | `nogit_9f8e7d6c` |
+
+Each hash uses the first 8 characters.
+
+## Rolling updates
+
+When a deploy reaches a server, Tako performs a rolling update to replace instances with zero downtime.
+
+### How rolling updates work
+
+1. Start a new instance with the new release
+2. Wait for the health check to pass (30-second timeout)
+3. Add the new instance to the load balancer
+4. Gracefully stop the old instance (drain connections, 30-second timeout)
+5. Repeat until all instances are replaced
+6. Update the `current` symlink to the new release
+7. Clean up releases older than 30 days
+
+The rolling update targets the app's current desired instance count on that server. Even when desired instances is `0` (on-demand mode), deploy starts one warm instance so the app is immediately reachable afterward. If that warm instance fails to start, the deploy fails.
+
+### Failure and rollback
+
+If a health check fails during rolling update, Tako automatically rolls back: new instances are killed and old ones keep running. The error is reported back to the CLI.
+
+You can also manually roll back to any previous release:
+
+```bash
+tako releases ls --env production         # See release history
+tako releases rollback abc1234 --env production  # Roll back to a specific release
+```
+
+Rollback uses the same rolling-update mechanism, so it is also zero-downtime.
+
+## Scaling
+
+### Changing instance counts
+
+Use `tako scale` to set the number of instances per server:
+
+```bash
+tako scale 3                             # Scale production on all mapped servers
+tako scale 3 --env staging               # Scale a specific environment
+tako scale 3 --server la                 # Scale on one server only
+tako scale 0                             # Switch to on-demand mode
+```
+
+Outside a project directory, use `--app`:
+
+```bash
+tako scale 2 --app my-app --env production --server la
+```
+
+The desired instance count is persisted on the server and survives deploys, rollbacks, and server restarts. Deploy does not set instance counts -- new apps start at `0` and you change the count with `tako scale`.
+
+### On-demand vs always-on
+
+**On-demand (desired instances = 0):**
+
+- Instances are started when a request arrives (cold start)
+- After deploy, one warm instance is kept running so the app is reachable immediately
+- Idle instances are stopped after the configured timeout (default: 5 minutes)
+- Cold start waits up to 30 seconds for readiness; timeout returns `504`
+- If cold start setup fails, proxy returns `502`
+- During a cold start, up to 100 requests queue; overflow returns `503` with `Retry-After: 1`
+
+**Always-on (desired instances > 0):**
+
+- At least N instances stay running on that server at all times
+- Scaling down drains in-flight requests before stopping excess instances
+
+### Idle timeout
+
+Configure per-environment in `tako.toml`:
+
+```toml
+[envs.production]
+route = "api.example.com"
+servers = ["la", "nyc"]
+idle_timeout = 300  # 5 minutes (default)
+
+[envs.staging]
+route = "staging.example.com"
+servers = ["staging"]
+idle_timeout = 120  # 2 minutes
+```
+
+Instances are never stopped while serving in-flight requests.
+
+## Secrets management
+
+Secrets are encrypted locally in `.tako/secrets.json` and synced to servers during deploy.
+
+### How secrets flow during deploy
+
+During deploy, the CLI compares a hash of local secrets against the server's current secrets. Secrets are only transmitted when they differ (or when the app is new). On the server, secrets are stored in a per-app `secrets.json` file with `0600` permissions.
+
+### Managing secrets
+
+```bash
+tako secrets set DATABASE_URL                      # Set for production (default)
+tako secrets set API_KEY --env staging              # Set for a specific environment
+tako secrets rm OLD_KEY                             # Remove from all environments
+tako secrets rm OLD_KEY --env staging               # Remove from one environment
+tako secrets ls                                    # See which secrets exist per environment
+tako secrets sync                                  # Push local secrets to all servers
+tako secrets sync --env production                 # Push to one environment
+```
+
+Use `--sync` with `set` or `rm` to immediately push changes to servers (triggers a rolling restart of running instances):
+
+```bash
+tako secrets set DATABASE_URL --sync
+```
+
+### Secret validation
+
+- Deploy fails if the target environment is missing secret keys that other environments have
+- Deploy warns (but proceeds) if the target environment has extra keys not present elsewhere
+
+### Encryption keys
+
+Each environment has its own encryption key stored at `keys/{env}`. Keys are created automatically when you first set a secret for an environment. Share keys with teammates using:
+
+```bash
+tako secrets key export --env production   # Copy key to clipboard
+tako secrets key import --env production   # Import from masked terminal input
+```
+
+## Deploy lock
+
+Each deploy acquires a per-app, per-environment lock on each server by creating `/opt/tako/apps/<app>/<env>/.deploy_lock/` (atomic `mkdir` over SSH). This prevents concurrent deploys of the same app environment on the same server.
+
+The lock is released when the deploy finishes. If a deploy crashes mid-flight, the lock directory must be removed manually before the next deploy can proceed.
+
+## Multi-server and multi-environment deployments
+
+### Assigning servers to environments
+
+Declare which servers handle which environments in `tako.toml`:
+
+```toml
+[envs.production]
+route = "api.example.com"
+servers = ["la", "nyc"]
+
+[envs.staging]
+route = "staging.example.com"
+servers = ["staging"]
+```
+
+The same server can appear in multiple environments. Each environment deploys to its own path under `/opt/tako/apps/{app}/{env}/`.
+
+### How multi-server deploy works
+
+All target servers for an environment are deployed to in parallel. Each server is independent, so:
+
+- Some servers may succeed while others fail
+- Failures are reported at the end with per-server detail
+- Re-run deploy after fixing failed hosts
+
+For single-server deploys, the CLI shows spinner progress. For multi-server deploys, line-based progress is used to avoid overlapping output.
+
+### Server auto-selection for production
+
+If `[envs.production].servers` is empty when you deploy:
+
+- With one global server: it is selected automatically and written to `tako.toml`
+- With multiple servers in an interactive terminal: you are prompted to pick one
+
+## Disk space preflight
+
+Before uploading artifacts, deploy checks free space under `/opt/tako` on each server. The check accounts for archive size plus unpack headroom. If space is insufficient, deploy fails early and reports the required vs. available sizes.
+
+## Failed deploy cleanup
+
+If a deploy fails after creating a release directory on a server, Tako automatically removes that partial release directory before returning the error. This keeps the server clean and avoids orphaned release artifacts.
+
+## Remote directory layout
+
+```
 /opt/tako/apps/<app>/<env>/
   current -> releases/<version>
   .deploy_lock/
   releases/
     <version>/
-      <app-subdir>/        # "." when deploying from app root
-        ...app files...
-        app.json
+      ...app files...
+      app.json
       logs -> /opt/tako/apps/<app>/<env>/shared/logs
   shared/
     logs/
 ```
 
-## Environment and Secrets
+The `current` symlink always points to the active release. The `app.json` file in each release is the canonical runtime manifest used by `tako-server`.
 
-- Deploy sends `TAKO_BUILD="<version>"` in the deploy command payload and `tako-server` injects it into app process environment.
-- During deploy, the CLI compares the local secrets hash against the server's current secrets hash. Secrets are only sent when they differ (or when the app is new). This avoids unnecessary transmission and ensures convergence.
-- Bun runtime dependency install runs on server from the uploaded release (`bun install --production`, and `--frozen-lockfile` when lockfile exists).
-- Deploy pre-validation fails when target environment is missing secret keys used by other environments.
-- Deploy pre-validation warns (does not fail) when target environment has extra secret keys not present in other secret environments.
-- Manage secrets with:
-  - `tako secrets set [--sync]`
-  - `tako secrets rm [--sync]`
-  - `tako secrets sync`
+## Server upgrade
 
-## Operational Notes
-
-- Use `tako servers status` to inspect deployed app state and per-server service/connectivity state.
-- Use `tako logs --env <environment>` to stream remote logs.
-- Use `tako releases ls --env <environment>` to inspect release/build history before deciding on rollback.
-- Use `tako releases rollback <release-id> --env <environment>` to roll back to a previous release id using normal rolling-update behavior.
-- `tako servers upgrade <name> [--canary|--stable]` installs the updated server binary then performs an in-place reload via host service manager (`systemctl reload tako-server` on systemd or `rc-service tako-server reload` on OpenRC) using root privileges (root login or sudo-capable user). A supported service manager is required. `--canary` installs server artifacts from the moving canary prerelease; without flags it uses persisted global `upgrade_channel` (default: `stable`).
-- `tako-server` exposes Prometheus metrics on `http://127.0.0.1:9898/` by default (localhost only). Configure with `--metrics-port` (set to 0 to disable). Scrape with self-hosted Prometheus, a hosted monitoring agent (Grafana Cloud, Datadog), or expose the port over Tailscale/WireGuard.
-- HTTP requests are redirected to HTTPS by default (307 with `Cache-Control: no-store`).
-- Exception on HTTP: `/.well-known/acme-challenge/*`.
-- Forwarded private/local hosts (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) are treated as already HTTPS when proxy proto metadata is missing to avoid local redirect loops.
-- Edge proxy response caching is enabled for proxied `GET`/`HEAD` requests (websocket upgrades excluded).
-- Cache admission follows response `Cache-Control` / `Expires` headers with no implicit TTL defaults.
-- Cache keys are host + URI, with in-memory LRU limits of 256 MiB total and 8 MiB max per cached response body.
-- Requests are routed strictly by configured routes.
-- Exact path route matches normalize trailing slash (`example.com/api` and `example.com/api/` are equivalent).
-- Static asset requests (file-extension paths) are served from the deployed app `public/` directory when present, including path-prefixed routes via prefix-stripped static lookup.
-- Private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`) get self-signed certs during deploy; public hostnames use ACME.
-- If no certificate matches an SNI hostname yet, Tako serves a fallback self-signed default cert so HTTPS completes and unmatched hosts/routes return `404`.
-
-## Post-Deploy Verification
-
-Right after deploy:
-
-1. Run `tako servers status` and confirm routes/instances are healthy for the target environment/app.
-2. Open one or more public routes and validate response headers/body.
-3. Tail logs with `tako logs --env <environment>` for startup/runtime errors.
-4. If only a subset of servers succeeded, re-run deploy after fixing failed hosts.
-
-## Running Deploy E2E Tests
-
-Deploy E2E tests are opt-in and Docker-backed:
+Upgrade `tako-server` on a running host without downtime:
 
 ```bash
-just e2e e2e/fixtures/js/bun
-just e2e e2e/fixtures/js/tanstack-start
+tako servers upgrade la               # Upgrade using default channel
+tako servers upgrade la --canary      # Use canary prerelease
+tako servers upgrade la --stable      # Use stable release
 ```
+
+The upgrade process:
+
+1. Verifies `tako-server` is active on the host
+2. Downloads and installs the new binary
+3. Acquires an upgrade lock (temporarily rejects mutating commands like deploy)
+4. Signals the service manager to reload (`systemctl reload` or `rc-service reload`)
+5. Waits for the management socket to report ready
+6. Releases the upgrade lock
+
+A supported service manager (systemd or OpenRC) is required. The reload uses `SIGHUP` for graceful in-place restart.
+
+If the reload was sent but the socket does not become ready in time, the CLI warns that upgrade mode may remain active until the server recovers.
+
+## TLS/SSL certificates
+
+### Automatic certificates (ACME)
+
+For public hostnames in your routes, Tako automatically issues and renews TLS certificates using Let's Encrypt:
+
+- Certificates are issued during deploy for domains in app routes
+- HTTP-01 challenge is used (requires port 80)
+- Automatic renewal runs 30 days before expiry with zero downtime
+- Certificates are stored at `/opt/tako/certs/{domain}/` (`fullchain.pem` and `privkey.pem`)
+
+### Self-signed certificates for local domains
+
+For private/local route hostnames (`localhost`, `*.localhost`, single-label hosts, and reserved suffixes like `*.local`, `*.test`), Tako skips ACME and generates a self-signed certificate during deploy.
+
+If no certificate exists yet for an incoming SNI hostname, Tako serves a fallback self-signed default certificate so TLS handshakes complete and unmatched routes return `404`.
+
+### Wildcard certificates
+
+Routing supports wildcard hosts (e.g., `*.example.com`). For TLS:
+
+- Wildcard certificates are used when present in cert storage
+- Automated ACME issuance uses HTTP-01, so wildcard certs must currently be provisioned manually
+- DNS-01 challenge support for automatic wildcard cert issuance is not yet available
+
+### SNI-based selection
+
+Tako uses Server Name Indication to pick the right certificate during TLS handshake:
+
+1. Look up exact match for the SNI hostname
+2. Try wildcard fallback (e.g., `api.example.com` matches `*.example.com`)
+3. Serve the fallback default certificate if nothing matches
+
+### HTTPS behavior
+
+- HTTP requests are redirected to HTTPS by default (`307` with `Cache-Control: no-store`)
+- Exception: `/.well-known/acme-challenge/*` stays on HTTP for ACME validation
+- Forwarded requests for private/local hostnames are treated as already HTTPS when proxy protocol metadata is missing, preventing redirect loops behind local proxies
+
+## Monitoring and metrics
+
+### Prometheus endpoint
+
+`tako-server` exposes Prometheus-compatible metrics at `http://127.0.0.1:9898/` (localhost only, not publicly accessible).
+
+Configure with `--metrics-port` (set to `0` to disable).
+
+### Available metrics
+
+| Metric | Type | Description |
+|---|---|---|
+| `tako_http_requests_total` | Counter | Total proxied requests by status class |
+| `tako_http_request_duration_seconds` | Histogram | Request latency distribution |
+| `tako_http_active_connections` | Gauge | Currently active connections |
+| `tako_cold_starts_total` | Counter | Cold starts triggered |
+| `tako_cold_start_duration_seconds` | Histogram | Cold start duration distribution |
+| `tako_instance_health` | Gauge | Instance health (1=healthy, 0=unhealthy) |
+| `tako_instances_running` | Gauge | Running instance count |
+
+All metrics carry `server` and `app` labels. `tako_instance_health` also includes an `instance` label. Only proxied requests are measured -- ACME challenges, static asset responses, and unmatched-host 404s are excluded.
+
+### Connecting to monitoring platforms
+
+- **Self-hosted Prometheus/Grafana:** Add `127.0.0.1:9898` as a scrape target
+- **Hosted platforms (Grafana Cloud, Datadog, etc.):** Install the platform agent on your server and configure it to scrape `http://127.0.0.1:9898/metrics`
+- **Private network access:** Expose port 9898 over Tailscale or WireGuard for remote scraping
+
+## Post-deploy verification
+
+After a deploy completes:
+
+1. Run `tako servers status` to confirm routes and instances are healthy
+2. Open your public routes and check response headers/body
+3. Stream logs with `tako logs --env production` to watch for startup errors
+4. If some servers failed, fix the issue and re-run deploy
+
+## Edge cases and error handling
+
+| Scenario | Behavior |
+|---|---|
+| Low disk space on server | Deploy fails before upload with required vs. available sizes |
+| Stale deploy lock | Deploy fails until `.deploy_lock` is manually removed |
+| Deploy fails mid-transfer | Partial release directory is auto-cleaned |
+| Health check fails during rolling update | Automatic rollback to previous version |
+| Network interruption during deploy | Partial failure reported, safe to retry |
+| Process crash after deploy | Auto-restart with health check detection |
+| Missing server target metadata | Deploy fails early with guidance to re-add the server |

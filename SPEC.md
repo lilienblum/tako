@@ -136,7 +136,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Runtime base aliases (`bun`, `node`, `deno`) fall back to embedded runtime defaults when their section is missing from a fetched family manifest.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Source bundle filtering uses `.gitignore`.
-- Deploy always excludes `.git/`, `.tako/`, `.env*`, `node_modules/`, and `target/`.
+- Deploy always force-excludes `.git/`, `.tako/`, and `.env*` from archive payload regardless of config. Additional exclusions (`node_modules/`, `target/`, etc.) come from preset `[build].exclude` and `.gitignore`.
 - Deploy sends merged app vars + runtime vars + decrypted secrets to `tako-server` in the `deploy` command payload; `tako-server` injects them directly into app process environment on spawn.
 - Deploy build mode is controlled by preset `[build].container`:
   - `true`: build each target artifact in Docker.
@@ -318,7 +318,7 @@ Directory selection is command-scoped:
 - `tako deploy [DIR]`
 - `tako delete [DIR]`
 
-### tako init [--force] [--runtime <bun|node|deno>] [DIR]
+### tako init [DIR]
 
 Create `tako.toml` template with helpful comments.
 
@@ -342,7 +342,7 @@ Template behavior:
 - Includes a docs link to `https://tako.sh/docs/tako-toml`.
 - Prompts for required app `name` (default from directory-derived app name).
 - Prompts for required production route (`[envs.production].route`) with default `{name}.example.com`.
-- Detects adapter (`bun`, `node`, `deno`, fallback `unknown`) and prompts for runtime selection unless `--runtime` is provided.
+- Detects adapter (`bun`, `node`, `deno`, fallback `unknown`) and prompts for runtime selection.
 - In interactive mode, init fetches runtime-family preset names from official family manifest files (`presets/<family>.toml`) and shows `Fetching presets...` while loading.
 - For built-in base adapters, init defaults to:
   - Bun: `bun`
@@ -359,7 +359,7 @@ Template behavior:
 If `tako.toml` already exists:
 
 - Interactive terminal: `tako init` asks for overwrite confirmation.
-- Non-interactive terminal: it fails unless `--force` is provided.
+- Non-interactive terminal: silently skips (no overwrite).
 
 ### tako help
 
@@ -378,10 +378,11 @@ CLI upgrade strategy:
 - `--stable`: forces stable channel and persists it as default
 - Without channel flags, `tako upgrade` uses persisted `upgrade_channel` from global config (default: `stable`)
 
-### tako dev [DIR]
+### tako dev [--name {name}] [DIR]
 
 Start (or attach to) a local development session for the current app, backed by a persistent dev daemon.
 
+- `--name` overrides the app name (defaults to resolving from `tako.toml` or directory name).
 - `tako dev` is a **client**: it ensures `tako-dev-server` is running, then registers the current app directory with the daemon.
   - On macOS, `tako dev` also ensures the socket-activated `tako-loopback-proxy` helper is installed and loaded for loopback-only `:80/:443` ingress.
   - When running from a source checkout, `tako dev` prefers the repo-local `target/debug|release/tako-dev-server` binary.
@@ -407,16 +408,6 @@ Start (or attach to) a local development session for the current app, backed by 
   - Attached clients replay the existing file contents, then follow new lines from the same stream.
   - App lifecycle state (`starting`, `running`, `stopped`, app PID, and startup errors) is persisted to the same shared stream, so attached sessions reconstruct the same status/CPU/RAM view as the owning session.
 - The daemon supports **multiple concurrent apps** and maintains hostname-based routing for `*.tako.test`.
-- Utility flags:
-  - `tako doctor`: print a diagnostic report and exit.
-    - Reports dev daemon listen info, macOS loopback proxy status, and local DNS status.
-    - On macOS, includes a preflight section with clear checks for:
-      - loopback proxy install status
-      - loopback boot-helper load status
-      - dedicated loopback alias status
-      - launchd load status
-      - TCP reachability on `{loopback-address}:443` and `{loopback-address}:80`
-    - If the local dev daemon is not running (missing/stale socket), doctor reports `status: not running` with a hint to start `tako dev`, and exits successfully.
 - When running in an interactive terminal, `tako dev` prints a branded header (logo + version + app info) once at startup, then streams logs and status updates directly to stdout.
   - Native terminal features (scrollback, search, copy/paste, clickable links) are preserved — no alternate screen is used.
   - Log levels are `DEBUG`, `INFO`, `WARN`, `ERROR`, and `FATAL`; the level token is colorized using pastel colors (electric blue, green, yellow, red, and purple respectively).
@@ -475,6 +466,33 @@ Start (or attach to) a local development session for the current app, backed by 
 - Loads from `[vars]` + `[vars.development]` in tako.toml
 - `ENV=development`, `BUN_ENV=development`, `NODE_ENV=development`
 
+### tako dev stop [name] [--all]
+
+Stop a running dev app.
+
+- Without arguments: stops the app for the current directory.
+- With `name`: stops the app with that name.
+- `--all`: stops all registered dev apps.
+
+### tako dev ls
+
+List all registered dev apps.
+
+Alias: `tako dev list`.
+
+### tako doctor
+
+Print a local diagnostic report and exit.
+
+- Reports dev daemon listen info, macOS loopback proxy status, and local DNS status.
+- On macOS, includes a preflight section with clear checks for:
+  - loopback proxy install status
+  - loopback boot-helper load status
+  - dedicated loopback alias status
+  - launchd load status
+  - TCP reachability on `{loopback-address}:443` and `{loopback-address}:80`
+- If the local dev daemon is not running (missing/stale socket), doctor reports `status: not running` with a hint to start `tako dev`, and exits successfully.
+
 ### tako servers status
 
 Show global deployment status from configured servers, with one server block per configured host and one app block per running build nested under each server:
@@ -511,14 +529,27 @@ Status flow helpers:
 - If no servers are configured and the terminal is interactive, status offers to run the add-server wizard.
 - If no deployed apps are found, status reports that explicitly.
 
-### tako logs [--env {environment}]
+### tako logs [--env {environment}] [--tail] [--days {N}] [DIR]
 
-Stream logs from all servers in an environment.
+View or stream logs from all servers in an environment.
 
+- Environment defaults to `production`.
 - Environment must exist in `tako.toml`.
-- Streams from all mapped servers in parallel.
-- Prefixes each line with `[server-name]` so multi-server output is readable.
-- Runs until interrupted (`Ctrl+c`).
+- Fetches from all mapped servers in parallel.
+- Prefixes each line with `[server-name]` when multiple servers are present.
+
+**History mode (default):**
+
+- Shows the last `N` days of logs (default: 3).
+- Consecutive identical messages are deduplicated with "... and N more" suffix.
+- All lines across servers are sorted by timestamp.
+- Displays in `$PAGER` (default: `less -R`) if interactive, otherwise stdout.
+
+**Streaming mode (`--tail`):**
+
+- Streams logs continuously until interrupted (`Ctrl+c`).
+- `--tail` conflicts with `--days`.
+- Consecutive identical messages are deduplicated with "... and N more" suffix.
 
 Logs flow helpers:
 
@@ -740,7 +771,7 @@ Deploy flow helpers:
 - Deploy archive source is the app's source bundle root (git root when available; otherwise app directory).
 - Deploy target app path is `DIR` from CLI (`tako deploy [DIR]`) relative to the source bundle root.
 - Source filtering uses `.gitignore`.
-- These paths are always excluded from archive payload: `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/`.
+- These paths are always force-excluded from archive payload: `.git/`, `.tako/`, `.env*`. Additional exclusions (`node_modules/`, `target/`, etc.) come from preset `[build].exclude` and `.gitignore`.
 - Deploy always builds target-specific artifacts locally (Docker when preset build mode resolves to container, local host otherwise); servers receive prebuilt artifacts and do not run app build steps during deploy.
 - For Bun runtime, `tako-server` runs dependency install for the release before starting/rolling instances.
 - Build logic runs in fixed order per target: preset `[build].install`/`[build].build` stage first, then app `[[build.stages]]` from `tako.toml`.
@@ -931,7 +962,7 @@ Apps specify routes at environment level (not per-server). Routes support:
 1. Parse incoming request (Host header, path)
 2. Match against deployed apps' routes
 3. Select most specific match
-4. Route to app's load balancer
+4. Route to app's load balancer (strategy: round-robin by default)
 5. Return 404 if no match
 
 ## Tako Server
@@ -998,6 +1029,8 @@ Reference scripts in this repo:
 - Cache admission follows response headers (`Cache-Control` / `Expires`) with no implicit TTL defaults; responses without explicit cache directives are not stored.
 - Cache key includes request host + URI so different route hosts are isolated.
 - Proxy cache storage is in-memory with bounded LRU eviction (256 MiB total, 8 MiB per cached response body).
+- Per-IP rate limiting: maximum 2048 concurrent connections per client IP; excess requests receive `429`.
+- Maximum request body size: 128 MiB; larger requests receive `413`.
 - No application path namespace is reserved at the edge proxy. Requests are routed strictly by configured routes.
 
 **`/opt/tako/config.json`** — server-level configuration:
@@ -1057,7 +1090,9 @@ Reference scripts in this repo:
 
 **App instance sockets:**
 
-- Path: `/var/run/tako-app-{app-name}-{pid}.sock`
+- Path: `{app_socket_dir}/tako-app-{deployment-id}-{pid}.sock`
+  - `app_socket_dir` is `/var/run/tako-app` when that directory exists (created by the server installer), otherwise derived from the management socket path (defaults to `/var/run`)
+  - `deployment-id` is the URL-encoded deployment identity (e.g. `my-app%2Fproduction`)
 - Created by app on startup
 - Used by: tako-server to proxy HTTP requests
 - Required on Unix deploys: instances must expose health/status and request traffic on this socket.
@@ -1073,7 +1108,7 @@ Reference scripts in this repo:
 | `TAKO_BUILD`      | app             | Deployed build/version identifier             | Included in deploy command payload and injected by `tako-server` at process spawn.        |
 | `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on     | path string on Unix deploys (with `{pid}` token); unset in local dev                      |
 | `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one) | string                                                                                    |
-| `TAKO_INSTANCE`   | app / `tako.sh` | Instance identifier                           | integer string                                                                            |
+| `TAKO_INSTANCE`   | app / `tako.sh` | Instance identifier                           | 8-character nanoid string                                                                 |
 | _user-defined_    | app             | User config vars/secrets                      | From `app.json` in the release dir (env vars) and per-app `secrets.json` (0600, secrets). |
 
 ### Messages (JSON over Unix Socket)
