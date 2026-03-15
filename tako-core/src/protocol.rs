@@ -293,10 +293,12 @@ pub fn compute_secrets_hash(secrets: &HashMap<String, String>) -> String {
     let sorted: BTreeMap<&String, &String> = secrets.iter().collect();
     let mut hasher = Sha256::new();
     for (key, value) in &sorted {
+        // Length-prefix each field to prevent key/value boundary collisions:
+        // e.g. {"A=B":"C"} and {"A":"B=C"} must produce different hashes.
+        hasher.update((key.len() as u64).to_le_bytes());
         hasher.update(key.as_bytes());
-        hasher.update(b"=");
+        hasher.update((value.len() as u64).to_le_bytes());
         hasher.update(value.as_bytes());
-        hasher.update(b"\n");
     }
     format!("{:x}", hasher.finalize())
 }
@@ -574,6 +576,14 @@ mod tests {
         assert!(!hash.is_empty());
         // Empty map should produce a consistent hash
         assert_eq!(hash, compute_secrets_hash(&HashMap::new()));
+    }
+
+    #[test]
+    fn test_compute_secrets_hash_no_boundary_collision() {
+        // {"A=B":"C"} and {"A":"B=C"} must produce different hashes
+        let a = HashMap::from([("A=B".to_string(), "C".to_string())]);
+        let b = HashMap::from([("A".to_string(), "B=C".to_string())]);
+        assert_ne!(compute_secrets_hash(&a), compute_secrets_hash(&b));
     }
 
     #[test]

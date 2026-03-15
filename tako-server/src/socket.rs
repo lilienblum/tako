@@ -74,6 +74,17 @@ impl SocketServer {
         let std_listener = std::os::unix::net::UnixListener::bind(&self.actual_path)?;
         std_listener.set_nonblocking(true)?;
 
+        // Restrict socket to owner-only access (0600) so only the service user
+        // can send management commands (deploy, secrets, etc.).
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(
+                &self.actual_path,
+                std::fs::Permissions::from_mode(0o600),
+            );
+        }
+
         // Atomically swap symlink: write to a temp path then rename over the target.
         // rename(2) is atomic so clients see either the old or new target, never nothing.
         #[cfg(unix)]

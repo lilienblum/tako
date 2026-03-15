@@ -97,6 +97,13 @@ impl SecretsStore {
         fs::write(path.as_ref(), content)
             .map_err(|e| ConfigError::FileWrite(path.as_ref().to_path_buf(), e))?;
 
+        // Restrict secrets file to owner-only access (matching crypto key store pattern)
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(path.as_ref(), fs::Permissions::from_mode(0o600));
+        }
+
         Ok(())
     }
 
