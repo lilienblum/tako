@@ -660,12 +660,19 @@ impl ProxyHttp for TakoProxy {
                 ),
             )
         })?;
-        let peer = HttpPeer::new_uds(socket_path, false, String::new()).map_err(|e| {
+        let mut peer = HttpPeer::new_uds(socket_path, false, String::new()).map_err(|e| {
             Error::explain(
                 ErrorType::ConnectNoRoute,
                 format!("Invalid upstream unix socket '{}': {}", socket_path, e),
             )
         })?;
+
+        // Upstream timeouts prevent hung backends from holding proxy tasks
+        // and Tokio worker threads indefinitely (critical under DDoS / slowloris).
+        peer.options.connection_timeout = Some(Duration::from_secs(5));
+        peer.options.read_timeout = Some(Duration::from_secs(60));
+        peer.options.write_timeout = Some(Duration::from_secs(30));
+
         Ok(Box::new(peer))
     }
 
