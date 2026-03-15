@@ -1583,7 +1583,7 @@ fn derive_build_state(instances: &[InstanceStatus]) -> AppState {
     AppState::Stopped
 }
 
-/// Resolve the tako-app user for running install commands with dropped privileges.
+/// Resolve the tako-app user for running deploy commands with dropped privileges.
 #[cfg(unix)]
 fn resolve_app_user_for_install() -> Option<(u32, u32)> {
     use std::ffi::CString;
@@ -1593,6 +1593,19 @@ fn resolve_app_user_for_install() -> Option<(u32, u32)> {
         return None;
     }
     Some(unsafe { ((*pw).pw_uid, (*pw).pw_gid) })
+}
+
+/// Drop privileges on a command to the tako-app user if running as root.
+/// All deploy-time commands that execute user-controlled code (install scripts,
+/// bun install, mise install) must use this to avoid running as root.
+#[cfg(unix)]
+fn drop_privileges_if_root(cmd: &mut TokioCommand) {
+    if unsafe { libc::geteuid() } == 0 {
+        if let Some((uid, gid)) = resolve_app_user_for_install() {
+            cmd.uid(uid);
+            cmd.gid(gid);
+        }
+    }
 }
 
 fn resolve_release_runtime(release_dir: &Path) -> Result<String, String> {
@@ -1618,15 +1631,8 @@ async fn run_release_install_command(
         // doesn't error out in non-interactive mode (MISE_YES does not help here).
         .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str());
 
-    // Drop privileges to tako-app user for install commands (same as app processes)
-    // so user-controlled install scripts cannot run as root.
     #[cfg(unix)]
-    if unsafe { libc::geteuid() } == 0 {
-        if let Some((uid, gid)) = resolve_app_user_for_install() {
-            cmd.uid(uid);
-            cmd.gid(gid);
-        }
-    }
+    drop_privileges_if_root(&mut cmd);
 
     let output = cmd.output().await.map_err(|e| {
         format!(
@@ -1681,21 +1687,23 @@ async fn ensure_mise_tools_installed(release_dir: &Path) -> Result<(), String> {
     }
 
     tracing::info!(dir = %release_dir.display(), "Pre-installing mise tools");
-    let output = TokioCommand::new("mise")
-        .args(["install"])
+    let mut cmd = TokioCommand::new("mise");
+    cmd.args(["install"])
         .current_dir(release_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str())
-        .output()
-        .await
-        .map_err(|e| {
-            format!(
-                "Failed to run 'mise install' in {}: {}",
-                release_dir.display(),
-                e
-            )
-        })?;
+        .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str());
+
+    #[cfg(unix)]
+    drop_privileges_if_root(&mut cmd);
+
+    let output = cmd.output().await.map_err(|e| {
+        format!(
+            "Failed to run 'mise install' in {}: {}",
+            release_dir.display(),
+            e
+        )
+    })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -1758,6 +1766,9 @@ async fn install_bun_dependencies_for_release(
         // MISE_TRUSTED_CONFIG_PATHS marks all configs under this path as trusted so mise
         // doesn't error out in non-interactive mode (MISE_YES does not help here).
         .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str());
+
+    #[cfg(unix)]
+    drop_privileges_if_root(&mut cmd);
 
     let output = cmd.output().await.map_err(|e| {
         format!(
