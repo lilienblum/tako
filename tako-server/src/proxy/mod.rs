@@ -658,7 +658,7 @@ impl ProxyHttp for TakoProxy {
             }
         };
 
-        ctx.request_timer = Some(RequestTimer::start(&app_name));
+        ctx.request_timer = Some(RequestTimer::start(app_name));
         ctx.backend = Some(backend);
 
         Ok(false)

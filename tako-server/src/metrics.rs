@@ -113,14 +113,11 @@ pub struct RequestTimer {
 }
 
 impl RequestTimer {
-    pub fn start(app: &str) -> Self {
+    pub fn start(app: String) -> Self {
         HTTP_ACTIVE_CONNECTIONS
-            .with_label_values(&[server(), app])
+            .with_label_values(&[server(), &app])
             .inc();
-        Self {
-            app: app.to_string(),
-            start: Instant::now(),
-        }
+        Self { app, start: Instant::now() }
     }
 
     pub fn finish(self, status: u16) {
@@ -213,7 +210,7 @@ mod tests {
     #[test]
     fn test_request_timer_records_metrics() {
         init(Some("test-server"));
-        let timer = RequestTimer::start("test-app");
+        let timer = RequestTimer::start("test-app".to_string());
         timer.finish(200);
 
         let count = HTTP_REQUESTS_TOTAL
