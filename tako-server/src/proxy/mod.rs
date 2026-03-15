@@ -139,6 +139,10 @@ impl ProxyConfig {
 /// Maximum concurrent requests from a single IP address.
 const MAX_REQUESTS_PER_IP: u32 = 2048;
 
+/// Maximum request body size (128 MiB). Requests exceeding this are rejected
+/// with 413 Payload Too Large to prevent memory/disk exhaustion attacks.
+const MAX_REQUEST_BODY_BYTES: u64 = 128 * 1024 * 1024;
+
 /// Per-IP concurrent request tracker for basic DDoS mitigation.
 /// Tracks in-flight requests per client IP with O(1) increment/decrement.
 struct IpRequestTracker {
@@ -373,6 +377,8 @@ pub struct RequestCtx {
     request_timer: Option<RequestTimer>,
     /// Client IP for per-IP rate limit tracking (released in logging phase)
     client_ip: Option<IpAddr>,
+    /// Accumulated request body bytes (for chunked transfer size enforcement)
+    body_bytes_received: u64,
 }
 
 enum BackendResolution {
@@ -443,6 +449,7 @@ impl ProxyHttp for TakoProxy {
             matched_route_path: None,
             request_timer: None,
             client_ip: None,
+            body_bytes_received: 0,
         }
     }
 
@@ -462,6 +469,26 @@ impl ProxyHttp for TakoProxy {
                 return Ok(true);
             }
             ctx.client_ip = Some(ip);
+        }
+
+        // Reject requests with declared Content-Length exceeding the limit.
+        if let Some(cl) = session
+            .req_header()
+            .headers
+            .get("content-length")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.parse::<u64>().ok())
+        {
+            if cl > MAX_REQUEST_BODY_BYTES {
+                let body = "Payload Too Large";
+                let mut header = ResponseHeader::build(413, None)?;
+                insert_body_headers(&mut header, "text/plain", body)?;
+                session
+                    .write_response_header(Box::new(header), false)
+                    .await?;
+                session.write_response_body(Some(body.into()), true).await?;
+                return Ok(true);
+            }
         }
 
         let path = session.req_header().uri.path().to_string();
@@ -635,6 +662,25 @@ impl ProxyHttp for TakoProxy {
         ctx.backend = Some(backend);
 
         Ok(false)
+    }
+
+    async fn request_body_filter(
+        &self,
+        _session: &mut Session,
+        body: &mut Option<bytes::Bytes>,
+        _end_of_stream: bool,
+        ctx: &mut Self::CTX,
+    ) -> Result<()> {
+        if let Some(data) = body {
+            ctx.body_bytes_received += data.len() as u64;
+            if ctx.body_bytes_received > MAX_REQUEST_BODY_BYTES {
+                return Err(Error::explain(
+                    ErrorType::InvalidHTTPHeader,
+                    "Request body exceeds maximum allowed size",
+                ));
+            }
+        }
+        Ok(())
     }
 
     fn request_cache_filter(&self, session: &mut Session, _ctx: &mut Self::CTX) -> Result<()> {
