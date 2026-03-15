@@ -163,11 +163,12 @@ async fn run_canary_upgrade(
         let archive_path = tmp_dir.join("tako.tar.gz");
         download_with_progress(&url, &archive_path).await?;
 
-        // Verify SHA256 if available and save for future quick checks
+        // Verify SHA256 — fail if checksum is unavailable
         let sha_url = format!("{url}.sha256");
-        if let Ok(expected) = fetch_sha256(&sha_url).await {
-            verify_sha256(&archive_path, &expected)?;
-        }
+        let expected = fetch_sha256(&sha_url)
+            .await
+            .map_err(|e| format!("SHA256 checksum unavailable for {sha_url}: {e}"))?;
+        verify_sha256(&archive_path, &expected)?;
 
         let extract_dir = tmp_dir.join("extract");
         std::fs::create_dir_all(&extract_dir)?;
@@ -237,6 +238,11 @@ fn tarball_url_for_tag(tag: &str, os: &str, arch: &str) -> String {
     if let Ok(base) = std::env::var("TAKO_DOWNLOAD_BASE_URL") {
         let base = base.trim().trim_end_matches('/');
         if !base.is_empty() {
+            if !base.starts_with("https://") {
+                crate::output::warning(&format!(
+                    "TAKO_DOWNLOAD_BASE_URL uses non-HTTPS scheme — binary will be downloaded over an insecure connection: {base}"
+                ));
+            }
             return format!("{base}/tako-{os}-{arch}.tar.gz");
         }
     }
@@ -400,11 +406,12 @@ async fn download_and_install_inner(
     // Download with progress bar
     download_with_progress(url, &archive_path).await?;
 
-    // Verify SHA256 if checksum file is available
+    // Verify SHA256 — fail if checksum is unavailable
     let sha_url = format!("{url}.sha256");
-    if let Ok(expected) = fetch_sha256(&sha_url).await {
-        verify_sha256(&archive_path, &expected)?;
-    }
+    let expected = fetch_sha256(&sha_url)
+        .await
+        .map_err(|e| format!("SHA256 checksum unavailable for {sha_url}: {e}"))?;
+    verify_sha256(&archive_path, &expected)?;
 
     // Extract
     tracing::debug!("Extracting archive…");
