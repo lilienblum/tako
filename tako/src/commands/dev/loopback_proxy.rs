@@ -9,7 +9,7 @@ use std::time::Duration;
 
 #[cfg(target_os = "macos")]
 use super::{
-    DEV_HTTP_REDIRECT_PORT, DEV_HTTPS_LISTEN_PORT, DEV_LOOPBACK_ADDR, sudo_run_checked,
+    DEV_LOOPBACK_ADDR, sudo_run_checked,
     tcp_port_open, write_system_file_with_sudo,
 };
 
@@ -185,23 +185,17 @@ fn reload_action_line() -> &'static str {
     "Repair local loopback proxy for 127.77.0.1:80/443"
 }
 
-#[cfg(any(target_os = "macos", test))]
-fn install_progress_line() -> &'static str {
-    "Installing local loopback proxy (sudo)..."
-}
-
-#[cfg(any(target_os = "macos", test))]
-fn repair_progress_line() -> &'static str {
-    "Repairing local loopback proxy (sudo)..."
-}
-
 #[cfg(target_os = "macos")]
 fn locate_proxy_source_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
     let current_exe = std::env::current_exe()?;
     if let Some(root) = crate::paths::repo_root_from_exe(&current_exe) {
         let candidates = [
-            root.join("target").join("debug").join("tako-loopback-proxy"),
-            root.join("target").join("release").join("tako-loopback-proxy"),
+            root.join("target")
+                .join("debug")
+                .join("tako-loopback-proxy"),
+            root.join("target")
+                .join("release")
+                .join("tako-loopback-proxy"),
         ];
         if candidates.iter().all(|candidate| !candidate.exists()) {
             let _ = std::process::Command::new("cargo")
@@ -406,7 +400,6 @@ fn run_bootstrap_helper_with_sudo() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(target_os = "macos")]
 fn install_or_update(desired_binary: &Path) -> Result<(), Box<dyn std::error::Error>> {
     install_binary_with_sudo(desired_binary, &install_binary_path(), "755")?;
-    crate::output::info(install_progress_line());
     ensure_parent_dir_with_sudo(&plist_path())?;
     write_system_file_with_sudo(
         LOOPBACK_PROXY_PLIST_PATH,
@@ -428,7 +421,6 @@ fn install_or_update(desired_binary: &Path) -> Result<(), Box<dyn std::error::Er
 #[cfg(target_os = "macos")]
 fn reload_service() -> Result<(), Box<dyn std::error::Error>> {
     bootout_launchd_service(LOOPBACK_PROXY_LABEL)?;
-    crate::output::info(repair_progress_line());
     run_bootstrap_helper_with_sudo()?;
     Ok(())
 }
@@ -474,34 +466,57 @@ pub(crate) fn ensure_installed() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    match current_plan {
-        LoopbackProxyRepairPlan::InstallOrUpdate => {
-            let desired_binary = locate_proxy_source_binary()?;
-            install_or_update(&desired_binary)?;
-        }
-        LoopbackProxyRepairPlan::ReloadService => {
-            crate::output::muted(
-                "The local loopback proxy looks installed but inactive. Re-loading launchd should restore 127.77.0.1:80/443.",
-            );
-            reload_service()?;
-        }
-        LoopbackProxyRepairPlan::None => {}
-    }
+    let loading = match current_plan {
+        LoopbackProxyRepairPlan::InstallOrUpdate => "Setting up",
+        LoopbackProxyRepairPlan::ReloadService => "Starting",
+        LoopbackProxyRepairPlan::None => unreachable!(),
+    };
+    let success = match current_plan {
+        LoopbackProxyRepairPlan::InstallOrUpdate => "Setup complete",
+        LoopbackProxyRepairPlan::ReloadService => "Ready",
+        LoopbackProxyRepairPlan::None => unreachable!(),
+    };
 
-    let verified = status();
-    if !(verified.installed
-        && verified.bootstrap_loaded
-        && verified.alias_ready
-        && verified.launchd_loaded
-        && verified.https_ready
-        && verified.http_ready)
-    {
-        return Err("local loopback proxy setup verification failed".into());
-    }
+    crate::output::with_spinner(loading, success, || -> Result<(), Box<dyn std::error::Error>> {
+        match current_plan {
+            LoopbackProxyRepairPlan::InstallOrUpdate => {
+                let desired_binary = locate_proxy_source_binary()?;
+                install_or_update(&desired_binary)?;
+            }
+            LoopbackProxyRepairPlan::ReloadService => {
+                reload_service()?;
+            }
+            LoopbackProxyRepairPlan::None => unreachable!(),
+        }
 
-    crate::output::success(&format!(
-        "Local loopback proxy active ({DEV_LOOPBACK_ADDR}:443/80 → 127.0.0.1:{DEV_HTTPS_LISTEN_PORT}/{DEV_HTTP_REDIRECT_PORT})."
-    ));
+        // Check non-network state once (files, launchd, alias won't change by waiting).
+        let verified = status();
+        if !(verified.installed
+            && verified.bootstrap_loaded
+            && verified.alias_ready
+            && verified.launchd_loaded)
+        {
+            return Err("local loopback proxy setup verification failed".into());
+        }
+
+        // The service was just (re)started — give it time to bind its ports.
+        let (mut https_ok, mut http_ok) = (verified.https_ready, verified.http_ready);
+        if !(https_ok && http_ok) {
+            for _ in 0..20 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                https_ok = https_ok || tcp_port_open(DEV_LOOPBACK_ADDR, 443, 150);
+                http_ok = http_ok || tcp_port_open(DEV_LOOPBACK_ADDR, 80, 150);
+                if https_ok && http_ok {
+                    break;
+                }
+            }
+        }
+        if !(https_ok && http_ok) {
+            return Err("local loopback proxy setup verification failed".into());
+        }
+
+        Ok(())
+    })?;
     Ok(())
 }
 
@@ -525,18 +540,12 @@ mod tests {
         );
     }
 
-    #[test]
-    fn progress_lines_match_install_and_repair_actions() {
-        assert_eq!(
-            install_progress_line(),
-            "Installing local loopback proxy (sudo)..."
-        );
-        assert_eq!(repair_progress_line(), "Repairing local loopback proxy (sudo)...");
-    }
 
     #[test]
     fn launchd_plist_configures_socket_activation_on_loopback_ports() {
-        let plist = launchd_plist(Path::new("/Library/Application Support/Tako/bin/tako-loopback-proxy"));
+        let plist = launchd_plist(Path::new(
+            "/Library/Application Support/Tako/bin/tako-loopback-proxy",
+        ));
         assert!(plist.contains(LOOPBACK_PROXY_LABEL));
         assert!(plist.contains("/Library/Application Support/Tako/bin/tako-loopback-proxy"));
         assert!(plist.contains("<key>Sockets</key>"));
@@ -551,8 +560,9 @@ mod tests {
 
     #[test]
     fn bootstrap_launchd_plist_runs_helper_at_boot() {
-        let plist =
-            bootstrap_launchd_plist(Path::new("/Library/Application Support/Tako/bin/tako-loopback-proxy"));
+        let plist = bootstrap_launchd_plist(Path::new(
+            "/Library/Application Support/Tako/bin/tako-loopback-proxy",
+        ));
         assert!(plist.contains(LOOPBACK_PROXY_BOOTSTRAP_LABEL));
         assert!(plist.contains("/Library/Application Support/Tako/bin/tako-loopback-proxy"));
         assert!(plist.contains("<string>bootstrap</string>"));
