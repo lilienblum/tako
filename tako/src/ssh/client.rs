@@ -461,8 +461,11 @@ impl SshClient {
             .await
             .map_err(|_| SshError::FileNotFound(local_path.to_path_buf()))?;
 
-        self.exec_checked_with_stdin(&format!("cat > {remote_path}"), &content)
-            .await?;
+        self.exec_checked_with_stdin(
+            &format!("cat > {}", shell_quote(remote_path)),
+            &content,
+        )
+        .await?;
 
         Ok(())
     }
@@ -492,6 +495,8 @@ impl SshClient {
 
         let mut exit_code = 0u32;
 
+        // Continue reading after Eof — SSH channels can deliver ExitStatus
+        // after Eof. Only break on None (channel closed).
         loop {
             match channel.wait().await {
                 Some(ChannelMsg::Data { data }) => {
@@ -505,7 +510,8 @@ impl SshClient {
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
                     exit_code = exit_status;
                 }
-                Some(ChannelMsg::Eof) | None => break,
+                Some(ChannelMsg::Eof) => {}
+                None => break,
                 _ => {}
             }
         }
@@ -516,7 +522,10 @@ impl SshClient {
     /// Check if a file or directory exists
     pub async fn exists(&self, path: &str) -> SshResult<bool> {
         let output = self
-            .exec(&format!("test -e {} && echo yes || echo no", path))
+            .exec(&format!(
+                "test -e {} && echo yes || echo no",
+                shell_quote(path)
+            ))
             .await?;
         Ok(output.stdout.trim() == "yes")
     }
@@ -547,16 +556,18 @@ impl SshClient {
 
     /// Create a directory (with parents)
     pub async fn mkdir(&self, path: &str) -> SshResult<()> {
-        self.exec_checked(&format!("mkdir -p {}", path)).await?;
+        self.exec_checked(&format!("mkdir -p {}", shell_quote(path)))
+            .await?;
         Ok(())
     }
 
     /// Remove a file or directory
     pub async fn rm(&self, path: &str, recursive: bool) -> SshResult<()> {
+        let quoted = shell_quote(path);
         let cmd = if recursive {
-            format!("rm -rf {}", path)
+            format!("rm -rf {}", quoted)
         } else {
-            format!("rm -f {}", path)
+            format!("rm -f {}", quoted)
         };
         self.exec_checked(&cmd).await?;
         Ok(())
@@ -564,23 +575,32 @@ impl SshClient {
 
     /// Create a symlink
     pub async fn symlink(&self, target: &str, link: &str) -> SshResult<()> {
-        self.exec_checked(&format!("ln -sfn {} {}", target, link))
-            .await?;
+        self.exec_checked(&format!(
+            "ln -sfn {} {}",
+            shell_quote(target),
+            shell_quote(link)
+        ))
+        .await?;
         Ok(())
     }
 
     /// Read a remote file's contents
     pub async fn read_file(&self, path: &str) -> SshResult<String> {
-        let output = self.exec_checked(&format!("cat {}", path)).await?;
+        let output = self
+            .exec_checked(&format!("cat {}", shell_quote(path)))
+            .await?;
         Ok(output.stdout)
     }
 
     /// Write content to a remote file
     pub async fn write_file(&self, path: &str, content: &str) -> SshResult<()> {
-        // Escape content for shell
-        let escaped = content.replace("'", "'\\''");
-        self.exec_checked(&format!("echo '{}' > {}", escaped, path))
-            .await?;
+        let escaped = content.replace('\'', "'\\''");
+        self.exec_checked(&format!(
+            "printf '%s' {} > {}",
+            shell_quote(&escaped),
+            shell_quote(path)
+        ))
+        .await?;
         Ok(())
     }
 
@@ -884,6 +904,11 @@ impl Drop for SshClient {
     fn drop(&mut self) {
         // Connection will be closed when handle is dropped
     }
+}
+
+/// Shell-safe single-quoting for interpolating values into remote commands.
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
 }
 
 fn parse_ok_unit_response(response_str: String) -> SshResult<()> {
