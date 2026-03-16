@@ -16,7 +16,6 @@ permissions: {}
 
 jobs:
   release:
-    if: github.ref == 'refs/heads/master'
     uses: ./.github/workflows/release-cargo.yml
     with:
       crate: tako-server
