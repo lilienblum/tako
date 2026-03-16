@@ -12,6 +12,8 @@ on:
           - minor
           - major
 
+permissions: {}
+
 jobs:
   release:
     uses: ./.github/workflows/cargo-release.yml

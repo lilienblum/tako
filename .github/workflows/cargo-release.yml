@@ -27,6 +27,8 @@ jobs:
   wait-for-ci:
     name: Wait for CI
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
     steps:
       - name: Wait for CI to pass on this commit
         env:
@@ -104,6 +106,7 @@ jobs:
     name: Publish to crates.io
     needs: prepare
     runs-on: ubuntu-latest
+    permissions: {}
     environment: release
     steps:
       - name: Checkout
