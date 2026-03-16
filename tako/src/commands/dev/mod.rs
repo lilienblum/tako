@@ -744,6 +744,16 @@ fn explain_pending_sudo_setup(port: u16) -> Result<(), Box<dyn std::error::Error
     for item in items {
         crate::output::warning_bullet(&item);
     }
+
+    // Pre-authenticate sudo so the password prompt is not overwritten by spinners.
+    let status = std::process::Command::new("sudo")
+        .arg("-v")
+        .status()
+        .map_err(|e| -> Box<dyn std::error::Error> { format!("failed to run sudo: {e}").into() })?;
+    if !status.success() {
+        return Err("sudo authentication failed".into());
+    }
+
     Ok(())
 }
 

@@ -425,18 +425,29 @@ fn reload_service() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(target_os = "macos")]
 pub(crate) fn current_repair_plan() -> Result<LoopbackProxyRepairPlan, Box<dyn std::error::Error>> {
     let desired_binary = locate_proxy_source_binary()?;
-    Ok({
-        let files_current = files_current(&desired_binary);
-        let status = status();
-        repair_plan(
-            files_current,
-            status.bootstrap_loaded,
-            status.alias_ready,
-            status.launchd_loaded,
-            status.https_ready,
-            status.http_ready,
-        )
-    })
+    let status = status();
+
+    // If the service is fully operational, skip the binary hash freshness check.
+    // A new binary will be installed next time repair is actually needed.
+    if status.installed
+        && status.bootstrap_loaded
+        && status.alias_ready
+        && status.launchd_loaded
+        && status.https_ready
+        && status.http_ready
+    {
+        return Ok(LoopbackProxyRepairPlan::None);
+    }
+
+    let files_current = files_current(&desired_binary);
+    Ok(repair_plan(
+        files_current,
+        status.bootstrap_loaded,
+        status.alias_ready,
+        status.launchd_loaded,
+        status.https_ready,
+        status.http_ready,
+    ))
 }
 
 #[cfg(target_os = "macos")]
