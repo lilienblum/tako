@@ -1074,8 +1074,6 @@ pub(crate) fn local_dns_resolver_values() -> Option<(String, u16)> {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(target_os = "macos")]
-    use super::{ensure_local_dns_resolver_configured, local_https_probe_error};
     use super::{
         DevEvent, LogLevel, ScopedLog, StoredLogEvent, app_log_scope, child_log_level_and_message,
         compute_dev_hosts, compute_display_routes, dev_idle_timeout, dev_initial_instance_count,
@@ -1090,6 +1088,8 @@ mod tests {
         route_hostname_matches, should_drop_child_log_line, sudo_setup_action_items, tcp_probe,
         trim_child_log_message,
     };
+    #[cfg(target_os = "macos")]
+    use super::{ensure_local_dns_resolver_configured, local_https_probe_error};
     use crate::build::{BuildAdapter, parse_and_validate_preset};
     use crate::config::TakoToml;
     use crate::dev::LocalCA;
