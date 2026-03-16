@@ -18,7 +18,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: master
           fetch-depth: 0
           fetch-tags: true
 
@@ -64,7 +64,7 @@ jobs:
             done
             git add -A
             git commit -m "chore(${crate}): release v${new_version}"
-            git push
+            git push origin master
           fi
 
           cargo publish -p "$crate"
@@ -108,7 +108,7 @@ jobs:
             done
             git add -A
             git commit -m "chore(${crate}): release v${new_version}"
-            git push
+            git push origin master
           fi
 
           cargo publish -p "$crate"
