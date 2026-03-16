@@ -93,6 +93,6 @@ jobs:
       - name: Run E2E suites
         run: |
           set -euo pipefail
-          for fixture in $(find e2e/js -mindepth 1 -maxdepth 1 -type d | sort); do
+          for fixture in $(find e2e/fixtures/js -mindepth 1 -maxdepth 1 -type d | sort); do
             ./e2e/run.sh "$fixture"
           done
