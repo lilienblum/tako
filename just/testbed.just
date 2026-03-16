@@ -1,6 +1,6 @@
 set working-directory := ".."
 
-# Docker-based deploy testbed (Alpine + sshd VPS simulation).
+# Docker-based deploy testbed (Debian + sshd VPS simulation).
 
 CONTAINER_NAME := "tako-testbed"
 IMAGE_NAME := "tako-testbed:local"

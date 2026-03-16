@@ -1,10 +1,14 @@
 # syntax=docker/dockerfile:1.6
 
-FROM oven/bun:alpine
+FROM debian:bookworm-slim
 
 # Lightweight SSH-accessible debug server image for installer/deploy testing.
-RUN apk add --no-cache \
-    openssh
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssh-server \
+    bash \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 # Keep server dependency installation aligned with the production installer.
 COPY scripts/install-tako-server.sh /tmp/install-tako-server.sh
