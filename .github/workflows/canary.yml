@@ -1,9 +1,10 @@
 name: Canary Release
 
 on:
-  push:
-    branches:
-      - master
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [master]
   workflow_dispatch:
 
 concurrency:
@@ -16,7 +17,7 @@ permissions:
 jobs:
   build-linux-target:
     name: Build Linux (${{ matrix.outarch }}-${{ matrix.libc }})
-    if: github.ref == 'refs/heads/master'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ${{ matrix.runs_on }}
     strategy:
       fail-fast: false
@@ -117,7 +118,7 @@ jobs:
 
   build-darwin-cli:
     name: Build macOS CLI Artifacts
-    if: github.ref == 'refs/heads/master'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: macos-latest
     steps:
       - name: Checkout
@@ -170,7 +171,7 @@ jobs:
 
   publish:
     name: Publish Canary Prerelease
-    if: github.ref == 'refs/heads/master'
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     needs:
       - build-linux-target

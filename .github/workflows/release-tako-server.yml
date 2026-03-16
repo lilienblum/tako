@@ -12,7 +12,9 @@ on:
           - minor
           - major
 
-permissions: {}
+permissions:
+  contents: write
+  actions: read
 
 jobs:
   release:
