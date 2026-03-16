@@ -22,12 +22,14 @@ permissions:
   id-token: write
 
 jobs:
-  wait-for-ci:
-    name: Wait for CI
+  check-ci:
+    name: Check CI passed
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    permissions:
+      actions: read
     steps:
-      - name: Wait for CI to pass
+      - name: Verify CI passed on this commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -35,27 +37,21 @@ jobs:
           repo="${{ github.repository }}"
           sha="${{ github.sha }}"
 
-          run_id=""
-          for i in $(seq 1 30); do
-            run_id=$(gh run list -R "$repo" --workflow=ci.yml --commit="$sha" --json databaseId -q '.[0].databaseId')
-            if [ -n "$run_id" ]; then break; fi
-            echo "Waiting for CI run to appear... (attempt $i/30)"
-            sleep 10
-          done
+          conclusion=$(gh run list -R "$repo" --workflow=ci.yml --commit="$sha" --json conclusion -q '.[0].conclusion')
 
-          if [ -z "$run_id" ]; then
-            echo "::error::No CI run found for commit $sha"
+          if [ "$conclusion" != "success" ]; then
+            echo "::error::CI has not passed on commit $sha (status: ${conclusion:-not found})"
             exit 1
           fi
 
-          gh run watch "$run_id" --exit-status -R "$repo"
+          echo "CI passed on $sha"
 
   publish:
     name: Publish SDK
-    needs: wait-for-ci
+    needs: check-ci
     if: |
       always() &&
-      (github.event_name == 'workflow_dispatch' && needs.wait-for-ci.result == 'success') ||
+      (github.event_name == 'workflow_dispatch' && needs.check-ci.result == 'success') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-latest
     environment: release
