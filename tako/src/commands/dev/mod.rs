@@ -2074,7 +2074,34 @@ pub async fn run(
         .unwrap_or_else(|| domain.clone());
 
     let hosts_state = Arc::new(tokio::sync::Mutex::new(dev_hosts.clone()));
-    let env = compute_dev_env(&cfg);
+    let mut env = compute_dev_env(&cfg);
+
+    // Inject decrypted development secrets if any exist.
+    {
+        let secrets = crate::config::SecretsStore::load_from_dir(&project_dir)
+            .map_err(|e| e.to_string())?;
+        if let Some(encrypted) = secrets.get_env("development") {
+            if !encrypted.is_empty() {
+                let key =
+                    super::secret::load_or_derive_key(&app_name, "development", &secrets)
+                        .map_err(|e| e.to_string())?;
+                for (name, encrypted_value) in encrypted {
+                    match crate::crypto::decrypt(encrypted_value, &key) {
+                        Ok(value) => {
+                            env.insert(name.clone(), value);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to decrypt development secret {}: {}",
+                                name, e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     let env_state = Arc::new(tokio::sync::Mutex::new(env));
 
     // Create channels for communication (child stdout/stderr + file watcher events).
@@ -2526,7 +2553,25 @@ pub async fn run(
                 };
 
                 // Update env and hosts state unconditionally.
-                let new_env = compute_dev_env(&cfg);
+                let mut new_env = compute_dev_env(&cfg);
+
+                // Re-inject decrypted development secrets on config reload.
+                if let Ok(secrets) = crate::config::SecretsStore::load_from_dir(&project_dir) {
+                    if let Some(encrypted) = secrets.get_env("development") {
+                        if !encrypted.is_empty() {
+                            if let Ok(key) =
+                                super::secret::load_or_derive_key(&app_name, "development", &secrets)
+                            {
+                                for (name, encrypted_value) in encrypted {
+                                    if let Ok(value) = crate::crypto::decrypt(encrypted_value, &key) {
+                                        new_env.insert(name.clone(), value);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 *env_state.lock().await = new_env.clone();
 
                 let new_hosts = match compute_dev_hosts(&app_name, &cfg, &domain) {

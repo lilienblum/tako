@@ -52,14 +52,14 @@ pub enum SecretCommands {
 
 #[derive(Subcommand)]
 pub enum SecretKeyCommands {
-    /// Import a base64 key from masked terminal input
-    Import {
-        /// Target environment key (defaults to production when omitted)
+    /// Derive a key from a passphrase (for sharing with teammates)
+    Derive {
+        /// Target environment (defaults to production when omitted)
         #[arg(long)]
         env: Option<String>,
     },
 
-    /// Export a base64 key and copy it to clipboard
+    /// Export the derived key as base64 and copy it to clipboard
     Export {
         /// Target environment key (defaults to production when omitted)
         #[arg(long)]
@@ -102,7 +102,9 @@ async fn run_async(cmd: SecretCommands) -> Result<(), Box<dyn std::error::Error>
         SecretCommands::Rm { name, env, sync } => remove_secret(&name, env.as_deref(), sync).await,
         SecretCommands::Ls => list_secrets().await,
         SecretCommands::Sync { env } => sync_secrets(env.as_deref()).await,
-        SecretCommands::Key(SecretKeyCommands::Import { env }) => import_key(env.as_deref()).await,
+        SecretCommands::Key(SecretKeyCommands::Derive { env }) => {
+            derive_key(env.as_deref()).await
+        }
         SecretCommands::Key(SecretKeyCommands::Export { env }) => export_key(env.as_deref()).await,
     }
 }
@@ -116,12 +118,16 @@ async fn set_secret(
     use crate::crypto::encrypt;
     use std::env::current_dir;
 
-    // Get an environment-scoped key.
-    let key = load_or_create_key_for_env(env)?;
-
-    // Load secrets from project directory
     let project_dir = current_dir()?;
+    let app_name = resolve_app_name(&project_dir)?;
+
+    // Load secrets and ensure environment has a salt
     let mut secrets = SecretsStore::load_from_dir(&project_dir)?;
+    secrets.ensure_env_salt(env)?;
+    secrets.save_to_dir(&project_dir)?;
+
+    // Get the encryption key (prompts for passphrase if no local key)
+    let key = load_or_derive_key(&app_name, env, &secrets)?;
 
     // Check if secret exists
     let exists = secrets.contains(env, name);
@@ -315,13 +321,12 @@ async fn list_secrets() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::app::require_app_name_from_config;
-    use crate::commands::server;
     use crate::config::{SecretsStore, ServersToml, TakoToml};
     use crate::crypto::decrypt;
     use std::env::current_dir;
 
     let project_dir = current_dir()?;
+    let app_name = resolve_app_name(&project_dir)?;
     let secrets = SecretsStore::load_from_dir(&project_dir)?;
     let tako_config = TakoToml::load_from_dir(&project_dir)?;
     let mut servers = ServersToml::load()?;
@@ -332,15 +337,14 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
     }
 
     if servers.is_empty()
-        && server::prompt_to_add_server("No servers configured yet. Add one now to sync secrets.")
-            .await?
-            .is_some()
+        && super::server::prompt_to_add_server(
+            "No servers configured yet. Add one now to sync secrets.",
+        )
+        .await?
+        .is_some()
     {
         servers = ServersToml::load()?;
     }
-
-    let app_name = require_app_name_from_config(&project_dir)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
 
     // Check for discrepancies first
     let discrepancies = secrets.find_discrepancies();
@@ -418,7 +422,7 @@ async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error
         // Get decrypted secrets for this environment
         let env_secrets = match secrets.get_env(env_name) {
             Some(encrypted_secrets) => {
-                let key = load_key_for_env(env_name)?;
+                let key = load_or_derive_key(&app_name, env_name, &secrets)?;
                 let mut decrypted = std::collections::HashMap::new();
                 for (name, encrypted_value) in encrypted_secrets {
                     match decrypt(encrypted_value, &key) {
@@ -498,72 +502,145 @@ fn resolve_secret_sync_server_names(
     Ok(resolved)
 }
 
-async fn import_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::crypto::EncryptionKey;
+async fn derive_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::config::SecretsStore;
+    use std::env::current_dir;
 
+    let project_dir = current_dir()?;
+    let app_name = resolve_app_name(&project_dir)?;
     let env = super::helpers::resolve_env(target_env);
-    let key_store = crate::crypto::KeyStore::for_env(&env)?;
 
-    let prompt = format!("Enter base64 key for environment '{}'", env);
+    // Load secrets and ensure salt exists
+    let mut secrets = SecretsStore::load_from_dir(&project_dir)?;
+    let salt_b64 = secrets.ensure_env_salt(&env)?;
+    secrets.save_to_dir(&project_dir)?;
 
-    let encoded = crate::output::password_field(&prompt)?;
-    let confirm = crate::output::password_field("Confirm key")?;
-    if encoded != confirm {
-        return Err("Keys do not match".into());
-    }
+    // Prompt for passphrase
+    let passphrase = prompt_for_passphrase(&format!("Enter passphrase for '{}' ({})", app_name, env))?;
 
-    let key = EncryptionKey::from_base64(encoded.trim())?;
+    // Derive and store the key
+    let salt = crate::crypto::decode_salt(&salt_b64)?;
+    let key = crate::crypto::EncryptionKey::derive(&passphrase, &salt)?;
+    let key_store = crate::crypto::KeyStore::for_salt(&salt_b64)?;
     key_store.save_key(&key)?;
 
     output::success(&format!(
-        "Imported key for environment {}.",
-        output::strong(&env)
+        "Derived and stored key for {} ({}).",
+        output::strong(&app_name),
+        output::strong(&env),
     ));
 
     Ok(())
 }
 
 async fn export_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let project_dir = std::env::current_dir()?;
+    let app_name = resolve_app_name(&project_dir)?;
     let env = super::helpers::resolve_env(target_env);
-    let key_store = crate::crypto::KeyStore::for_env(&env)?;
+    let secrets = crate::config::SecretsStore::load_from_dir(&project_dir)?;
+    let salt_b64 = secrets.get_salt(&env).ok_or_else(|| {
+        format!("No secrets configured for environment '{}'.", env)
+    })?;
+    let key_store = crate::crypto::KeyStore::for_salt(salt_b64)?;
 
     if !key_store.key_exists() {
-        return Err(format!("No key found for environment '{}'.", env).into());
+        return Err(format!(
+            "No key found for '{}' ({}). Run 'tako secrets key derive --env {}' first.",
+            app_name, env, env
+        )
+        .into());
     }
 
     let key = key_store.load_key()?;
     copy_to_clipboard(&key.to_base64())?;
 
     output::success(&format!(
-        "Copied key for environment {} to clipboard.",
-        output::strong(&env)
+        "Copied key for {} ({}) to clipboard.",
+        output::strong(&app_name),
+        output::strong(&env),
     ));
 
     Ok(())
 }
 
-fn load_or_create_key_for_env(
-    env: &str,
-) -> Result<crate::crypto::EncryptionKey, Box<dyn std::error::Error>> {
-    let env_store = crate::crypto::KeyStore::for_env(env)?;
-    if env_store.key_exists() {
-        return Ok(env_store.load_key()?);
+/// Prompt for a passphrase with confirmation
+fn prompt_for_passphrase(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let passphrase = read_passphrase(prompt)?;
+    let confirm = crate::output::password_field("Confirm passphrase")?;
+    if passphrase != confirm {
+        return Err("Passphrases do not match".into());
     }
-
-    Ok(env_store.get_or_create_key()?)
+    Ok(passphrase)
 }
 
-fn load_key_for_env(env: &str) -> Result<crate::crypto::EncryptionKey, Box<dyn std::error::Error>> {
-    let env_store = crate::crypto::KeyStore::for_env(env)?;
-    if env_store.key_exists() {
-        return Ok(env_store.load_key()?);
+/// Read a passphrase from interactive prompt or TAKO_PASSPHRASE env var.
+fn read_passphrase(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
+    // CI / non-interactive: accept passphrase from environment variable.
+    if let Ok(passphrase) = std::env::var("TAKO_PASSPHRASE") {
+        if passphrase.is_empty() {
+            return Err("TAKO_PASSPHRASE is set but empty".into());
+        }
+        return Ok(passphrase);
     }
 
-    Err(format!(
-        "No key found for environment '{}'. Import one with 'tako secrets key import --env {}'",
-        env, env
-    )
-    .into())
+    let passphrase = crate::output::password_field(prompt)?;
+    if passphrase.is_empty() {
+        return Err("Passphrase cannot be empty".into());
+    }
+    Ok(passphrase)
+}
+
+/// Load a locally cached key, or prompt for passphrase and derive it.
+///
+/// This is the main key resolution function used by set, sync, deploy, and dev.
+/// The cache path is derived from the salt in `secrets.json`, so it's stable
+/// across app renames, `--name` overrides, and git worktrees.
+pub fn load_or_derive_key(
+    app_name: &str,
+    env: &str,
+    secrets: &crate::config::SecretsStore,
+) -> Result<crate::crypto::EncryptionKey, Box<dyn std::error::Error>> {
+    // No local key — need to derive from passphrase
+    let salt_b64 = secrets.get_salt(env).ok_or_else(|| {
+        format!(
+            "No salt found for environment '{}'. This shouldn't happen — file a bug.",
+            env
+        )
+    })?;
+
+    let key_store = crate::crypto::KeyStore::for_salt(salt_b64)?;
+
+    // Return cached key if available
+    if key_store.key_exists() {
+        return Ok(key_store.load_key()?);
+    }
+
+    let salt = crate::crypto::decode_salt(salt_b64)?;
+
+    output::muted(&format!(
+        "No local key for {} ({}). Deriving from passphrase…",
+        output::strong(app_name),
+        output::strong(env),
+    ));
+
+    let passphrase = read_passphrase(&format!(
+        "Enter passphrase for '{}' ({})",
+        app_name, env
+    ))?;
+
+    let key = crate::crypto::EncryptionKey::derive(&passphrase, &salt)?;
+
+    // Cache locally for future use
+    key_store.save_key(&key)?;
+
+    Ok(key)
+}
+
+fn resolve_app_name(
+    project_dir: &std::path::Path,
+) -> Result<String, Box<dyn std::error::Error>> {
+    crate::app::require_app_name_from_config(project_dir)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()).into())
 }
 
 fn copy_to_clipboard(text: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -677,31 +754,6 @@ mod tests {
     use super::*;
     use crate::config::{ServerEntry, ServersToml, TakoToml};
     use std::collections::HashMap;
-    use std::ffi::OsString;
-    use tempfile::TempDir;
-
-    fn with_temp_tako_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
-        let _lock = crate::paths::test_tako_home_env_lock();
-
-        let temp = TempDir::new().expect("temp dir");
-        let previous = std::env::var_os("TAKO_HOME");
-        unsafe {
-            std::env::set_var("TAKO_HOME", temp.path());
-        }
-
-        struct ResetEnv(Option<OsString>);
-        impl Drop for ResetEnv {
-            fn drop(&mut self) {
-                match self.0.take() {
-                    Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
-                    None => unsafe { std::env::remove_var("TAKO_HOME") },
-                }
-            }
-        }
-        let _reset = ResetEnv(previous);
-
-        f(temp.path())
-    }
 
     #[test]
     fn resolve_secret_sync_server_names_uses_explicit_mapping() {
@@ -779,41 +831,5 @@ servers = ["solo"]
         assert!(!tako_response_has_error(json_ok));
         assert!(!tako_response_has_error(old_error_shape));
         assert!(!tako_response_has_error(plain_text));
-    }
-
-    #[test]
-    fn load_or_create_key_for_env_ignores_old_global_key_path() {
-        with_temp_tako_home(|home| {
-            let old_store = crate::crypto::KeyStore::with_path(home.join("key"));
-            let old_key = crate::crypto::EncryptionKey::generate();
-            old_store.save_key(&old_key).expect("save old global key");
-
-            let loaded = load_or_create_key_for_env("production").expect("load env key");
-            let env_store = crate::crypto::KeyStore::for_env("production").expect("env key store");
-            assert!(env_store.key_exists(), "env key should be created");
-
-            let env_key = env_store.load_key().expect("load env key");
-            assert_eq!(loaded.as_bytes(), env_key.as_bytes());
-            assert_ne!(loaded.as_bytes(), old_key.as_bytes());
-        });
-    }
-
-    #[test]
-    fn load_key_for_env_fails_when_only_old_global_key_path_exists() {
-        with_temp_tako_home(|home| {
-            let old_store = crate::crypto::KeyStore::with_path(home.join("key"));
-            old_store
-                .save_key(&crate::crypto::EncryptionKey::generate())
-                .expect("save old global key");
-
-            match load_key_for_env("production") {
-                Ok(_) => panic!("should require env key"),
-                Err(err) => assert!(
-                    err.to_string()
-                        .contains("No key found for environment 'production'"),
-                    "unexpected error: {err}"
-                ),
-            }
-        });
     }
 }

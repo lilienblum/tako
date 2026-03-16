@@ -2,6 +2,7 @@ use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
 };
+use argon2::Argon2;
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +15,9 @@ const KEY_SIZE: usize = 32;
 /// AES-GCM nonce size in bytes
 const NONCE_SIZE: usize = 12;
 
+/// Argon2id salt size in bytes
+const SALT_SIZE: usize = 16;
+
 /// Encryption key for secrets
 #[derive(Clone)]
 pub struct EncryptionKey {
@@ -21,11 +25,18 @@ pub struct EncryptionKey {
 }
 
 impl EncryptionKey {
-    /// Create a new random encryption key
-    pub fn generate() -> Self {
+    /// Derive a key from a passphrase and salt using Argon2id
+    pub fn derive(passphrase: &str, salt: &[u8]) -> Result<Self> {
         let mut key = [0u8; KEY_SIZE];
-        getrandom::fill(&mut key).expect("operating system RNG unavailable");
-        Self { key }
+        // OWASP-recommended Argon2id parameters:
+        // m=64MiB, t=3, p=4
+        let params = argon2::Params::new(64 * 1024, 3, 4, Some(KEY_SIZE))
+            .map_err(|e| ConfigError::Encryption(format!("Invalid Argon2id params: {}", e)))?;
+        let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+        argon2
+            .hash_password_into(passphrase.as_bytes(), salt, &mut key)
+            .map_err(|e| ConfigError::Encryption(format!("Argon2id derivation failed: {}", e)))?;
+        Ok(Self { key })
     }
 
     /// Create from raw bytes
@@ -59,6 +70,25 @@ impl EncryptionKey {
     pub fn as_bytes(&self) -> &[u8; KEY_SIZE] {
         &self.key
     }
+}
+
+/// Generate a random salt for Argon2id
+pub fn generate_salt() -> [u8; SALT_SIZE] {
+    let mut salt = [0u8; SALT_SIZE];
+    getrandom::fill(&mut salt).expect("operating system RNG unavailable");
+    salt
+}
+
+/// Encode salt as base64
+pub fn encode_salt(salt: &[u8]) -> String {
+    BASE64.encode(salt)
+}
+
+/// Decode salt from base64
+pub fn decode_salt(encoded: &str) -> Result<Vec<u8>> {
+    BASE64
+        .decode(encoded)
+        .map_err(|e| ConfigError::Encryption(format!("Invalid base64 salt: {}", e)))
 }
 
 /// Encrypt a plaintext string using AES-256-GCM
@@ -115,24 +145,35 @@ pub fn decrypt(encrypted: &str, key: &EncryptionKey) -> Result<String> {
 
 /// Key storage manager
 ///
-/// Handles storing and retrieving encryption keys.
-/// Currently uses file-based storage; can be extended to use OS keychain.
+/// Caches derived encryption keys locally, keyed by a truncated hash of the
+/// Argon2id salt. Since each app-environment gets a unique random salt (stored
+/// in `secrets.json`), this gives stable, collision-free paths without needing
+/// a separate project ID.
+///
+/// Path: `$TAKO_HOME/keys/{sha256(salt)[:16]}`
 pub struct KeyStore {
     /// Path to the key file
     key_path: PathBuf,
 }
 
 impl KeyStore {
-    /// Create an environment-scoped key store (data_dir/keys/{env})
-    pub fn for_env(env: &str) -> Result<Self> {
-        validate_key_scope(env)?;
+    /// Create a key store keyed by the environment's salt.
+    ///
+    /// The cache path is `$TAKO_HOME/keys/{hex(sha256(salt))[:16]}` — derived
+    /// deterministically from the salt in `secrets.json`, so it's stable across
+    /// app renames, `--name` overrides, and git worktrees.
+    pub fn for_salt(salt_b64: &str) -> Result<Self> {
+        use sha2::{Digest, Sha256};
 
         let data_dir = crate::paths::tako_data_dir().map_err(|e| {
             ConfigError::Validation(format!("Could not determine tako data directory: {}", e))
         })?;
 
+        let hash = Sha256::digest(salt_b64.as_bytes());
+        let dir_name = hex::encode(&hash[..8]); // 16 hex chars
+
         Ok(Self {
-            key_path: data_dir.join("keys").join(env),
+            key_path: data_dir.join("keys").join(dir_name),
         })
     }
 
@@ -144,17 +185,6 @@ impl KeyStore {
     /// Get key file path
     pub fn key_path(&self) -> &Path {
         &self.key_path
-    }
-
-    /// Get or create the encryption key
-    pub fn get_or_create_key(&self) -> Result<EncryptionKey> {
-        if self.key_path.exists() {
-            self.load_key()
-        } else {
-            let key = EncryptionKey::generate();
-            self.save_key(&key)?;
-            Ok(key)
-        }
     }
 
     /// Load the encryption key from storage
@@ -204,7 +234,7 @@ impl KeyStore {
         self.key_path.exists()
     }
 
-    /// Delete the key (use with caution!)
+    /// Delete the key
     pub fn delete_key(&self) -> Result<()> {
         if self.key_path.exists() {
             fs::remove_file(&self.key_path)
@@ -214,24 +244,6 @@ impl KeyStore {
     }
 }
 
-fn validate_key_scope(scope: &str) -> Result<()> {
-    if scope.is_empty() {
-        return Err(ConfigError::Validation(
-            "Environment name cannot be empty".to_string(),
-        ));
-    }
-
-    for c in scope.chars() {
-        if !c.is_ascii_lowercase() && !c.is_ascii_digit() && c != '-' {
-            return Err(ConfigError::Validation(format!(
-                "Environment name can only contain lowercase letters, numbers, and hyphens. Found: '{}'",
-                c
-            )));
-        }
-    }
-
-    Ok(())
-}
 
 #[cfg(test)]
 mod tests {
@@ -262,18 +274,69 @@ mod tests {
         f(temp.path())
     }
 
+    // ==================== Key Derivation Tests ====================
+
     #[test]
-    fn test_generate_key() {
-        let key = EncryptionKey::generate();
+    fn test_derive_produces_correct_length_key() {
+        let salt = generate_salt();
+        let key = EncryptionKey::derive("my-passphrase", &salt).unwrap();
         assert_eq!(key.as_bytes().len(), KEY_SIZE);
     }
 
     #[test]
-    fn test_generate_key_is_random() {
-        let key1 = EncryptionKey::generate();
-        let key2 = EncryptionKey::generate();
+    fn test_derive_is_deterministic() {
+        let salt = generate_salt();
+        let key1 = EncryptionKey::derive("my-passphrase", &salt).unwrap();
+        let key2 = EncryptionKey::derive("my-passphrase", &salt).unwrap();
+        assert_eq!(key1.as_bytes(), key2.as_bytes());
+    }
+
+    #[test]
+    fn test_derive_different_passphrases_produce_different_keys() {
+        let salt = generate_salt();
+        let key1 = EncryptionKey::derive("passphrase-one", &salt).unwrap();
+        let key2 = EncryptionKey::derive("passphrase-two", &salt).unwrap();
         assert_ne!(key1.as_bytes(), key2.as_bytes());
     }
+
+    #[test]
+    fn test_derive_different_salts_produce_different_keys() {
+        let salt1 = generate_salt();
+        let salt2 = generate_salt();
+        let key1 = EncryptionKey::derive("same-passphrase", &salt1).unwrap();
+        let key2 = EncryptionKey::derive("same-passphrase", &salt2).unwrap();
+        assert_ne!(key1.as_bytes(), key2.as_bytes());
+    }
+
+    #[test]
+    fn test_derive_and_encrypt_decrypt_round_trip() {
+        let salt = generate_salt();
+        let key = EncryptionKey::derive("test-passphrase", &salt).unwrap();
+        let plaintext = "Hello, World!";
+
+        let encrypted = encrypt(plaintext, &key).unwrap();
+        let decrypted = decrypt(&encrypted, &key).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    // ==================== Salt Tests ====================
+
+    #[test]
+    fn test_generate_salt_is_random() {
+        let salt1 = generate_salt();
+        let salt2 = generate_salt();
+        assert_ne!(salt1, salt2);
+    }
+
+    #[test]
+    fn test_salt_base64_round_trip() {
+        let salt = generate_salt();
+        let encoded = encode_salt(&salt);
+        let decoded = decode_salt(&encoded).unwrap();
+        assert_eq!(decoded, salt);
+    }
+
+    // ==================== Encryption Tests ====================
 
     #[test]
     fn test_key_from_bytes() {
@@ -284,14 +347,15 @@ mod tests {
 
     #[test]
     fn test_key_from_bytes_wrong_size() {
-        let bytes = [0u8; 16]; // Wrong size
+        let bytes = [0u8; 16];
         let result = EncryptionKey::from_bytes(&bytes);
         assert!(result.is_err());
     }
 
     #[test]
     fn test_key_base64_round_trip() {
-        let key = EncryptionKey::generate();
+        let salt = generate_salt();
+        let key = EncryptionKey::derive("test", &salt).unwrap();
         let encoded = key.to_base64();
         let decoded = EncryptionKey::from_base64(&encoded).unwrap();
         assert_eq!(key.as_bytes(), decoded.as_bytes());
@@ -299,7 +363,8 @@ mod tests {
 
     #[test]
     fn test_encrypt_decrypt_round_trip() {
-        let key = EncryptionKey::generate();
+        let salt = generate_salt();
+        let key = EncryptionKey::derive("test", &salt).unwrap();
         let plaintext = "Hello, World!";
 
         let encrypted = encrypt(plaintext, &key).unwrap();
@@ -310,7 +375,8 @@ mod tests {
 
     #[test]
     fn test_encrypt_produces_different_ciphertext() {
-        let key = EncryptionKey::generate();
+        let salt = generate_salt();
+        let key = EncryptionKey::derive("test", &salt).unwrap();
         let plaintext = "Hello, World!";
 
         let encrypted1 = encrypt(plaintext, &key).unwrap();
@@ -326,8 +392,9 @@ mod tests {
 
     #[test]
     fn test_decrypt_with_wrong_key_fails() {
-        let key1 = EncryptionKey::generate();
-        let key2 = EncryptionKey::generate();
+        let salt = generate_salt();
+        let key1 = EncryptionKey::derive("passphrase-1", &salt).unwrap();
+        let key2 = EncryptionKey::derive("passphrase-2", &salt).unwrap();
         let plaintext = "Hello, World!";
 
         let encrypted = encrypt(plaintext, &key1).unwrap();
@@ -338,7 +405,8 @@ mod tests {
 
     #[test]
     fn test_encrypt_unicode() {
-        let key = EncryptionKey::generate();
+        let salt = generate_salt();
+        let key = EncryptionKey::derive("test", &salt).unwrap();
         let plaintext = "Hello, 世界! 🔐";
 
         let encrypted = encrypt(plaintext, &key).unwrap();
@@ -347,19 +415,97 @@ mod tests {
         assert_eq!(decrypted, plaintext);
     }
 
+    // ==================== KeyStore Tests ====================
+
     #[test]
-    fn test_key_store_for_env_uses_keys_subdir() {
+    fn test_key_store_for_salt_uses_hash_dir() {
         with_temp_tako_home(|temp_home| {
-            let store = KeyStore::for_env("production").unwrap();
-            assert_eq!(store.key_path(), temp_home.join("keys").join("production"));
+            let salt_b64 = encode_salt(&generate_salt());
+            let store = KeyStore::for_salt(&salt_b64).unwrap();
+
+            // Path should be under keys/ with a hex hash directory name
+            let key_path = store.key_path();
+            assert!(key_path.starts_with(temp_home.join("keys")));
+            let dir_name = key_path.file_name().unwrap().to_str().unwrap();
+            assert_eq!(dir_name.len(), 16, "hash dir should be 16 hex chars");
+            assert!(
+                dir_name.chars().all(|c| c.is_ascii_hexdigit()),
+                "dir name should be hex: {}",
+                dir_name
+            );
         });
     }
 
     #[test]
-    fn test_key_store_for_env_rejects_invalid_name() {
+    fn test_key_store_for_salt_is_deterministic() {
         with_temp_tako_home(|_| {
-            let result = KeyStore::for_env("../production");
-            assert!(result.is_err());
+            let salt_b64 = encode_salt(&generate_salt());
+            let store1 = KeyStore::for_salt(&salt_b64).unwrap();
+            let store2 = KeyStore::for_salt(&salt_b64).unwrap();
+            assert_eq!(store1.key_path(), store2.key_path());
+        });
+    }
+
+    #[test]
+    fn test_key_store_different_salts_different_paths() {
+        with_temp_tako_home(|_| {
+            let salt_a = encode_salt(&generate_salt());
+            let salt_b = encode_salt(&generate_salt());
+            let store_a = KeyStore::for_salt(&salt_a).unwrap();
+            let store_b = KeyStore::for_salt(&salt_b).unwrap();
+            assert_ne!(store_a.key_path(), store_b.key_path());
+        });
+    }
+
+    #[test]
+    fn test_key_store_save_and_load() {
+        with_temp_tako_home(|_| {
+            let salt = generate_salt();
+            let salt_b64 = encode_salt(&salt);
+            let store = KeyStore::for_salt(&salt_b64).unwrap();
+            let key = EncryptionKey::derive("test-passphrase", &salt).unwrap();
+
+            store.save_key(&key).unwrap();
+            assert!(store.key_exists());
+
+            let loaded = store.load_key().unwrap();
+            assert_eq!(key.as_bytes(), loaded.as_bytes());
+        });
+    }
+
+    #[test]
+    fn test_key_store_delete() {
+        with_temp_tako_home(|_| {
+            let salt = generate_salt();
+            let salt_b64 = encode_salt(&salt);
+            let store = KeyStore::for_salt(&salt_b64).unwrap();
+            let key = EncryptionKey::derive("test", &salt).unwrap();
+
+            store.save_key(&key).unwrap();
+            assert!(store.key_exists());
+
+            store.delete_key().unwrap();
+            assert!(!store.key_exists());
+        });
+    }
+
+    #[test]
+    fn test_separate_salts_have_separate_keys() {
+        with_temp_tako_home(|_| {
+            let salt_a = generate_salt();
+            let salt_b = generate_salt();
+            let store_a = KeyStore::for_salt(&encode_salt(&salt_a)).unwrap();
+            let store_b = KeyStore::for_salt(&encode_salt(&salt_b)).unwrap();
+
+            let key_a = EncryptionKey::derive("passphrase-a", &salt_a).unwrap();
+            let key_b = EncryptionKey::derive("passphrase-b", &salt_b).unwrap();
+
+            store_a.save_key(&key_a).unwrap();
+            store_b.save_key(&key_b).unwrap();
+
+            let loaded_a = store_a.load_key().unwrap();
+            let loaded_b = store_b.load_key().unwrap();
+            assert_ne!(loaded_a.as_bytes(), loaded_b.as_bytes());
         });
     }
 }

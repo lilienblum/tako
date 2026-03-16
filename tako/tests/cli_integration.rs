@@ -54,6 +54,7 @@ fn run_tako_with_stdin(args: &[&str], cwd: &Path, input: &str) -> std::process::
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tako"));
     cmd.args(args)
         .current_dir(cwd)
+        .env("TAKO_PASSPHRASE", "test-passphrase")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -80,6 +81,7 @@ fn run_tako_with_env(
         .current_dir(cwd)
         .env("HOME", home)
         .env("TAKO_HOME", tako_home)
+        .env("TAKO_PASSPHRASE", "test-passphrase")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -99,6 +101,7 @@ fn run_tako_with_stdin_and_env(
         .current_dir(cwd)
         .env("HOME", home)
         .env("TAKO_HOME", tako_home)
+        .env("TAKO_PASSPHRASE", "test-passphrase")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -905,11 +908,16 @@ main = "index.ts"
 
         let raw = fs::read_to_string(&secrets_path).expect("read secrets file");
         let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse secrets json");
-        let stored = parsed["production"]["API_KEY"]
+        let stored = parsed["production"]["secrets"]["API_KEY"]
             .as_str()
             .expect("stored API_KEY value");
         assert!(!stored.is_empty(), "stored value should not be empty");
         assert_ne!(stored, "secret123", "stored value should be encrypted");
+        // Salt should be present
+        assert!(
+            parsed["production"]["salt"].as_str().is_some(),
+            "salt should be present"
+        );
     }
 
     #[test]

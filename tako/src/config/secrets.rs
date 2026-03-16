@@ -7,28 +7,41 @@ use super::error::{ConfigError, Result};
 
 const SECRETS_FILE_NAME: &str = "secrets.json";
 
+/// Per-environment secrets with an Argon2id salt for key derivation.
+///
+/// The salt is generated once per app-environment and stored here so that
+/// teammates can derive the same key from the same passphrase.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EnvironmentSecrets {
+    /// Base64-encoded Argon2id salt for key derivation
+    pub salt: String,
+    /// Map of secret name to encrypted value
+    pub secrets: HashMap<String, String>,
+}
+
 /// Secrets storage from .tako/secrets.json
 ///
 /// Format:
 /// ```json
 /// {
 ///   "production": {
-///     "DATABASE_URL": "encrypted_base64_value",
-///     "API_KEY": "encrypted_base64_value"
-///   },
-///   "staging": {
-///     "DATABASE_URL": "encrypted_base64_value"
+///     "salt": "base64_salt",
+///     "secrets": {
+///       "DATABASE_URL": "encrypted_base64_value",
+///       "API_KEY": "encrypted_base64_value"
+///     }
 ///   }
 /// }
 /// ```
 ///
 /// Secret names are plaintext (allows listing without decryption).
 /// Secret values are encrypted with AES-256-GCM.
+/// Keys are derived from a passphrase using Argon2id with the per-env salt.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct SecretsStore {
-    /// Map of environment name to secrets map
+    /// Map of environment name to environment secrets
     #[serde(flatten)]
-    pub environments: HashMap<String, HashMap<String, String>>,
+    pub environments: HashMap<String, EnvironmentSecrets>,
 }
 
 impl SecretsStore {
@@ -60,21 +73,19 @@ impl SecretsStore {
             return Ok(Self::default());
         }
 
-        let environments: HashMap<String, HashMap<String, String>> = serde_json::from_str(content)?;
-
-        let store = Self { environments };
+        let store: Self = serde_json::from_str(content)?;
         store.validate()?;
         Ok(store)
     }
 
     /// Validate secrets
     pub fn validate(&self) -> Result<()> {
-        for (env_name, secrets) in &self.environments {
+        for (env_name, env_secrets) in &self.environments {
             // Validate environment name
             validate_environment_name(env_name)?;
 
             // Validate secret names
-            for secret_name in secrets.keys() {
+            for secret_name in env_secrets.secrets.keys() {
                 validate_secret_name(secret_name)?;
             }
         }
@@ -106,35 +117,69 @@ impl SecretsStore {
     pub fn get(&self, env: &str, name: &str) -> Option<&String> {
         self.environments
             .get(env)
-            .and_then(|secrets| secrets.get(name))
+            .and_then(|env_secrets| env_secrets.secrets.get(name))
     }
 
-    /// Set a secret value for an environment
+    /// Get the salt for an environment
+    pub fn get_salt(&self, env: &str) -> Option<&str> {
+        self.environments
+            .get(env)
+            .map(|env_secrets| env_secrets.salt.as_str())
+    }
+
+    /// Set a secret value for an environment (salt must already exist)
     pub fn set(&mut self, env: &str, name: &str, value: String) -> Result<()> {
         validate_environment_name(env)?;
         validate_secret_name(name)?;
 
-        self.environments
-            .entry(env.to_string())
-            .or_default()
-            .insert(name.to_string(), value);
+        let env_secrets = self
+            .environments
+            .get_mut(env)
+            .ok_or_else(|| {
+                ConfigError::Validation(format!(
+                    "Environment '{}' not initialized. Call ensure_env_salt first.",
+                    env
+                ))
+            })?;
 
+        env_secrets.secrets.insert(name.to_string(), value);
         Ok(())
+    }
+
+    /// Ensure an environment exists with a salt, generating one if needed.
+    /// Returns the salt (base64-encoded).
+    pub fn ensure_env_salt(&mut self, env: &str) -> Result<String> {
+        validate_environment_name(env)?;
+
+        let env_secrets = self
+            .environments
+            .entry(env.to_string())
+            .or_insert_with(|| {
+                let salt = crate::crypto::generate_salt();
+                EnvironmentSecrets {
+                    salt: crate::crypto::encode_salt(&salt),
+                    secrets: HashMap::new(),
+                }
+            });
+
+        Ok(env_secrets.salt.clone())
     }
 
     /// Remove a secret from an environment
     pub fn remove(&mut self, env: &str, name: &str) -> Result<()> {
-        let secrets = self
+        let env_secrets = self
             .environments
             .get_mut(env)
             .ok_or_else(|| ConfigError::EnvironmentNotFound(env.to_string()))?;
 
-        if secrets.remove(name).is_none() {
+        if env_secrets.secrets.remove(name).is_none() {
             return Err(ConfigError::SecretNotFound(name.to_string()));
         }
 
-        // Remove environment if empty
-        if secrets.is_empty() {
+        // Remove environment if no secrets remain (but keep salt entries
+        // that might be needed for re-derivation — actually, no secrets
+        // means the env is unused, so remove it entirely)
+        if env_secrets.secrets.is_empty() {
             self.environments.remove(env);
         }
 
@@ -145,14 +190,15 @@ impl SecretsStore {
     pub fn remove_all(&mut self, name: &str) -> Result<Vec<String>> {
         let mut removed_from = Vec::new();
 
-        for (env_name, secrets) in &mut self.environments {
-            if secrets.remove(name).is_some() {
+        for (env_name, env_secrets) in &mut self.environments {
+            if env_secrets.secrets.remove(name).is_some() {
                 removed_from.push(env_name.clone());
             }
         }
 
         // Remove empty environments
-        self.environments.retain(|_, secrets| !secrets.is_empty());
+        self.environments
+            .retain(|_, env_secrets| !env_secrets.secrets.is_empty());
 
         if removed_from.is_empty() {
             return Err(ConfigError::SecretNotFound(name.to_string()));
@@ -165,7 +211,7 @@ impl SecretsStore {
     pub fn contains(&self, env: &str, name: &str) -> bool {
         self.environments
             .get(env)
-            .map(|secrets| secrets.contains_key(name))
+            .map(|env_secrets| env_secrets.secrets.contains_key(name))
             .unwrap_or(false)
     }
 
@@ -174,7 +220,7 @@ impl SecretsStore {
         let mut names: Vec<String> = self
             .environments
             .values()
-            .flat_map(|secrets| secrets.keys().cloned())
+            .flat_map(|env_secrets| env_secrets.secrets.keys().cloned())
             .collect();
         names.sort();
         names.dedup();
@@ -188,9 +234,11 @@ impl SecretsStore {
         names
     }
 
-    /// Get secrets for an environment
+    /// Get secrets map for an environment
     pub fn get_env(&self, env: &str) -> Option<&HashMap<String, String>> {
-        self.environments.get(env)
+        self.environments
+            .get(env)
+            .map(|env_secrets| &env_secrets.secrets)
     }
 
     /// Check for discrepancies (secrets missing in some environments)
@@ -233,7 +281,7 @@ impl SecretsStore {
     pub fn count_by_env(&self) -> HashMap<String, usize> {
         self.environments
             .iter()
-            .map(|(env, secrets)| (env.clone(), secrets.len()))
+            .map(|(env, env_secrets)| (env.clone(), env_secrets.secrets.len()))
             .collect()
     }
 
@@ -244,23 +292,39 @@ impl SecretsStore {
 
     /// Total number of secrets (across all environments)
     pub fn total_count(&self) -> usize {
-        self.environments.values().map(|s| s.len()).sum()
+        self.environments
+            .values()
+            .map(|env_secrets| env_secrets.secrets.len())
+            .sum()
     }
 }
 
+/// Sorted representation for deterministic JSON output
 fn sorted_environments(
-    environments: &HashMap<String, HashMap<String, String>>,
-) -> BTreeMap<&String, BTreeMap<&String, &String>> {
+    environments: &HashMap<String, EnvironmentSecrets>,
+) -> BTreeMap<&String, SortedEnvironmentSecrets<'_>> {
     environments
         .iter()
-        .map(|(env_name, secrets)| {
-            let sorted_secrets = secrets
+        .map(|(env_name, env_secrets)| {
+            let sorted_secrets = env_secrets
+                .secrets
                 .iter()
-                .map(|(secret_name, value)| (secret_name, value))
                 .collect::<BTreeMap<_, _>>();
-            (env_name, sorted_secrets)
+            (
+                env_name,
+                SortedEnvironmentSecrets {
+                    salt: &env_secrets.salt,
+                    secrets: sorted_secrets,
+                },
+            )
         })
         .collect()
+}
+
+#[derive(Serialize)]
+struct SortedEnvironmentSecrets<'a> {
+    salt: &'a str,
+    secrets: BTreeMap<&'a String, &'a String>,
 }
 
 /// Represents a secret that is missing in some environments
@@ -345,11 +409,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_single_environment() {
+    fn test_parse_new_format() {
         let json = r#"{
             "production": {
-                "DATABASE_URL": "encrypted_value_1",
-                "API_KEY": "encrypted_value_2"
+                "salt": "dGVzdHNhbHQ=",
+                "secrets": {
+                    "DATABASE_URL": "encrypted_value_1",
+                    "API_KEY": "encrypted_value_2"
+                }
             }
         }"#;
 
@@ -363,17 +430,24 @@ mod tests {
             store.get("production", "API_KEY"),
             Some(&"encrypted_value_2".to_string())
         );
+        assert_eq!(store.get_salt("production"), Some("dGVzdHNhbHQ="));
     }
 
     #[test]
     fn test_parse_multiple_environments() {
         let json = r#"{
             "production": {
-                "DATABASE_URL": "prod_db"
+                "salt": "c2FsdDE=",
+                "secrets": {
+                    "DATABASE_URL": "prod_db"
+                }
             },
             "staging": {
-                "DATABASE_URL": "staging_db",
-                "DEBUG": "true"
+                "salt": "c2FsdDI=",
+                "secrets": {
+                    "DATABASE_URL": "staging_db",
+                    "DEBUG": "true"
+                }
             }
         }"#;
 
@@ -444,6 +518,7 @@ mod tests {
     fn test_set_secret() {
         let mut store = SecretsStore::default();
 
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "secret123".to_string())
             .unwrap();
@@ -455,23 +530,41 @@ mod tests {
     }
 
     #[test]
-    fn test_set_secret_creates_environment() {
+    fn test_set_secret_requires_initialized_env() {
         let mut store = SecretsStore::default();
 
-        store
-            .set("production", "API_KEY", "secret123".to_string())
-            .unwrap();
-        store
-            .set("staging", "API_KEY", "secret456".to_string())
-            .unwrap();
+        let result = store.set("production", "API_KEY", "secret123".to_string());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_ensure_env_salt_creates_environment() {
+        let mut store = SecretsStore::default();
+
+        let salt1 = store.ensure_env_salt("production").unwrap();
+        let salt2 = store.ensure_env_salt("staging").unwrap();
 
         assert_eq!(store.environment_names().len(), 2);
+        // Different environments get different salts
+        assert_ne!(salt1, salt2);
+    }
+
+    #[test]
+    fn test_ensure_env_salt_is_idempotent() {
+        let mut store = SecretsStore::default();
+
+        let salt1 = store.ensure_env_salt("production").unwrap();
+        let salt2 = store.ensure_env_salt("production").unwrap();
+
+        // Same salt returned on repeated calls
+        assert_eq!(salt1, salt2);
     }
 
     #[test]
     fn test_set_overwrites_existing() {
         let mut store = SecretsStore::default();
 
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "old_value".to_string())
             .unwrap();
@@ -489,6 +582,7 @@ mod tests {
     fn test_remove_secret() {
         let mut store = SecretsStore::default();
 
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "secret".to_string())
             .unwrap();
@@ -506,6 +600,7 @@ mod tests {
     fn test_remove_last_secret_removes_environment() {
         let mut store = SecretsStore::default();
 
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "secret".to_string())
             .unwrap();
@@ -517,6 +612,7 @@ mod tests {
     #[test]
     fn test_remove_nonexistent_fails() {
         let mut store = SecretsStore::default();
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "secret".to_string())
             .unwrap();
@@ -537,9 +633,11 @@ mod tests {
     fn test_remove_all() {
         let mut store = SecretsStore::default();
 
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "prod".to_string())
             .unwrap();
+        store.ensure_env_salt("staging").unwrap();
         store
             .set("staging", "API_KEY", "staging".to_string())
             .unwrap();
@@ -564,12 +662,14 @@ mod tests {
     fn test_find_discrepancies_none() {
         let mut store = SecretsStore::default();
 
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "prod".to_string())
             .unwrap();
         store
             .set("production", "DATABASE_URL", "prod_db".to_string())
             .unwrap();
+        store.ensure_env_salt("staging").unwrap();
         store
             .set("staging", "API_KEY", "staging".to_string())
             .unwrap();
@@ -585,12 +685,14 @@ mod tests {
     fn test_find_discrepancies_some() {
         let mut store = SecretsStore::default();
 
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "prod".to_string())
             .unwrap();
         store
             .set("production", "DATABASE_URL", "prod_db".to_string())
             .unwrap();
+        store.ensure_env_salt("staging").unwrap();
         store
             .set("staging", "API_KEY", "staging".to_string())
             .unwrap();
@@ -606,10 +708,12 @@ mod tests {
     fn test_all_secret_names() {
         let mut store = SecretsStore::default();
 
+        store.ensure_env_salt("production").unwrap();
         store.set("production", "API_KEY", "1".to_string()).unwrap();
         store
             .set("production", "DATABASE_URL", "2".to_string())
             .unwrap();
+        store.ensure_env_salt("staging").unwrap();
         store.set("staging", "API_KEY", "3".to_string()).unwrap();
         store.set("staging", "REDIS_URL", "4".to_string()).unwrap();
 
@@ -624,9 +728,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
 
         let mut store = SecretsStore::default();
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "secret123".to_string())
             .unwrap();
+        store.ensure_env_salt("staging").unwrap();
         store
             .set("staging", "API_KEY", "secret456".to_string())
             .unwrap();
@@ -642,6 +748,11 @@ mod tests {
         assert_eq!(
             loaded.get("staging", "API_KEY"),
             Some(&"secret456".to_string())
+        );
+        // Salts are preserved
+        assert_eq!(
+            loaded.get_salt("production"),
+            store.get_salt("production")
         );
     }
 
@@ -665,6 +776,7 @@ mod tests {
     fn test_save_to_dir_writes_new_secrets_json_path() {
         let temp_dir = TempDir::new().unwrap();
         let mut store = SecretsStore::default();
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "secret123".to_string())
             .unwrap();
@@ -680,7 +792,9 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let path = temp_dir.path().join(".tako").join("secrets.json");
         let mut store = SecretsStore::default();
+        store.ensure_env_salt("staging").unwrap();
         store.set("staging", "Z_KEY", "z".to_string()).unwrap();
+        store.ensure_env_salt("production").unwrap();
         store.set("production", "B_KEY", "b".to_string()).unwrap();
         store.set("production", "A_KEY", "a".to_string()).unwrap();
 
@@ -709,6 +823,7 @@ mod tests {
             .join("secrets.json");
 
         let mut store = SecretsStore::default();
+        store.ensure_env_salt("production").unwrap();
         store
             .set("production", "API_KEY", "secret".to_string())
             .unwrap();
@@ -723,10 +838,12 @@ mod tests {
     fn test_count_by_env() {
         let mut store = SecretsStore::default();
 
+        store.ensure_env_salt("production").unwrap();
         store.set("production", "API_KEY", "1".to_string()).unwrap();
         store
             .set("production", "DATABASE_URL", "2".to_string())
             .unwrap();
+        store.ensure_env_salt("staging").unwrap();
         store.set("staging", "API_KEY", "3".to_string()).unwrap();
 
         let counts = store.count_by_env();
@@ -738,10 +855,12 @@ mod tests {
     fn test_total_count() {
         let mut store = SecretsStore::default();
 
+        store.ensure_env_salt("production").unwrap();
         store.set("production", "API_KEY", "1".to_string()).unwrap();
         store
             .set("production", "DATABASE_URL", "2".to_string())
             .unwrap();
+        store.ensure_env_salt("staging").unwrap();
         store.set("staging", "API_KEY", "3".to_string()).unwrap();
 
         assert_eq!(store.total_count(), 3);

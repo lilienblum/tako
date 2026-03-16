@@ -333,12 +333,18 @@ host = "5.6.7.8"
         let secrets_path = temp_dir.path().join("secrets.json");
         let secrets_json = r#"{
             "production": {
-                "API_KEY": "prod-key",
-                "DB_URL": "postgres://prod"
+                "salt": "dGVzdHNhbHQ=",
+                "secrets": {
+                    "API_KEY": "prod-key",
+                    "DB_URL": "postgres://prod"
+                }
             },
             "staging": {
-                "API_KEY": "staging-key",
-                "DB_URL": "postgres://staging"
+                "salt": "dGVzdHNhbHQy",
+                "secrets": {
+                    "API_KEY": "staging-key",
+                    "DB_URL": "postgres://staging"
+                }
             }
         }"#;
         fs::write(&secrets_path, secrets_json).unwrap();
@@ -486,11 +492,17 @@ host = "5.6.7.8"
         let secrets_path = temp_dir.path().join("secrets.json");
         let secrets_json = r#"{
             "production": {
-                "API_KEY": "prod-key",
-                "DB_URL": "postgres://prod"
+                "salt": "dGVzdHNhbHQ=",
+                "secrets": {
+                    "API_KEY": "prod-key",
+                    "DB_URL": "postgres://prod"
+                }
             },
             "staging": {
-                "API_KEY": "staging-key"
+                "salt": "dGVzdHNhbHQy",
+                "secrets": {
+                    "API_KEY": "staging-key"
+                }
             }
         }"#;
         fs::write(&secrets_path, secrets_json).unwrap();

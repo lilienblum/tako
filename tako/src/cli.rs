@@ -105,27 +105,27 @@ mod tests {
     }
 
     #[test]
-    fn secrets_key_import_parses() {
-        let cli = Cli::try_parse_from(["tako", "secrets", "key", "import"]).unwrap();
+    fn secrets_key_derive_parses() {
+        let cli = Cli::try_parse_from(["tako", "secrets", "key", "derive"]).unwrap();
 
-        let Some(Commands::Secrets(secret::SecretCommands::Key(SecretKeyCommands::Import { env }))) =
+        let Some(Commands::Secrets(secret::SecretCommands::Key(SecretKeyCommands::Derive { env }))) =
             cli.command
         else {
-            panic!("expected Secrets::Key::Import");
+            panic!("expected Secrets::Key::Derive");
         };
 
         assert_eq!(env, None);
     }
 
     #[test]
-    fn secrets_key_import_parses_with_env() {
+    fn secrets_key_derive_parses_with_env() {
         let cli =
-            Cli::try_parse_from(["tako", "secrets", "key", "import", "--env", "staging"]).unwrap();
+            Cli::try_parse_from(["tako", "secrets", "key", "derive", "--env", "staging"]).unwrap();
 
-        let Some(Commands::Secrets(secret::SecretCommands::Key(SecretKeyCommands::Import { env }))) =
+        let Some(Commands::Secrets(secret::SecretCommands::Key(SecretKeyCommands::Derive { env }))) =
             cli.command
         else {
-            panic!("expected Secrets::Key::Import");
+            panic!("expected Secrets::Key::Derive");
         };
 
         assert_eq!(env.as_deref(), Some("staging"));

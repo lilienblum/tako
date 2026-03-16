@@ -559,7 +559,7 @@ async fn run_async(
         HashMap::new(),
         secrets.get_env(&env),
     );
-    let deploy_secrets = build_deploy_secrets(secrets.get_env(&env));
+    let deploy_secrets = decrypt_deploy_secrets(&app_name, &env, &secrets)?;
 
     // Create source archive used as input for target-specific builds.
     // The source archive is ephemeral (placed in .tako/tmp/) and also
@@ -1511,8 +1511,25 @@ fn build_deploy_archive_manifest(
     }
 }
 
-fn build_deploy_secrets(env_secrets: Option<&HashMap<String, String>>) -> HashMap<String, String> {
-    env_secrets.cloned().unwrap_or_default()
+fn decrypt_deploy_secrets(
+    app_name: &str,
+    env: &str,
+    secrets: &SecretsStore,
+) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+    let encrypted = match secrets.get_env(env) {
+        Some(s) if !s.is_empty() => s,
+        _ => return Ok(HashMap::new()),
+    };
+
+    let key = super::secret::load_or_derive_key(app_name, env, secrets)?;
+    let mut decrypted = HashMap::new();
+    for (name, encrypted_value) in encrypted {
+        let value = crate::crypto::decrypt(encrypted_value, &key).map_err(|e| {
+            format!("Failed to decrypt secret '{}': {}", name, e)
+        })?;
+        decrypted.insert(name.clone(), value);
+    }
+    Ok(decrypted)
 }
 
 fn build_manifest_env_vars(
@@ -4205,17 +4222,10 @@ route = "app.example.com"
     }
 
     #[test]
-    fn build_deploy_secrets_returns_only_secrets() {
-        let mut secrets = HashMap::new();
-        secrets.insert("API_KEY".to_string(), r#"ab\"cd"#.to_string());
-        secrets.insert("PATH_HINT".to_string(), r#"C:\tmp\bin"#.to_string());
-
-        let result = build_deploy_secrets(Some(&secrets));
-        assert_eq!(result.get("API_KEY"), Some(&r#"ab\"cd"#.to_string()));
-        assert_eq!(result.get("PATH_HINT"), Some(&r#"C:\tmp\bin"#.to_string()));
-        // Non-secret env vars (TAKO_BUILD, TAKO_ENV) are NOT in the result
-        assert_eq!(result.get("TAKO_BUILD"), None);
-        assert_eq!(result.get("TAKO_ENV"), None);
+    fn decrypt_deploy_secrets_returns_empty_for_no_secrets() {
+        let secrets = SecretsStore::default();
+        let result = decrypt_deploy_secrets("my-app", "production", &secrets).unwrap();
+        assert!(result.is_empty());
     }
 
     #[test]
