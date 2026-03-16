@@ -1202,7 +1202,10 @@ impl TransferProgress {
         }
     }
 
-    /// Finish with success — shows `✓ <success_msg> (time)` and full bar.
+    /// Finish with success — shows `✓ <success_msg> (<size>, <time>)`.
+    ///
+    /// In pretty mode the progress bar is cleared so only the single summary
+    /// line remains in scrollback.
     pub fn finish(&self) {
         if self.finished.swap(true, std::sync::atomic::Ordering::SeqCst) {
             return;
@@ -1211,22 +1214,22 @@ impl TransferProgress {
             pb.finish_and_clear();
             show_cursor();
             let check = brand_success("✓");
-            let time = muted_elapsed(self.start.elapsed());
-            let bar = render_gradient_bar(1.0);
-            let total_text = if self.total > 0 {
-                format!(" {}", brand_muted(&format_size(self.total)))
+            let elapsed = self.start.elapsed();
+            let mut details = Vec::new();
+            if self.total > 0 {
+                details.push(format_size(self.total));
+            }
+            let time = format_elapsed_inline(elapsed);
+            if !time.is_empty() {
+                details.push(time);
+            }
+            if details.is_empty() {
+                eprintln!("{check} {}", brand_fg(&self.success_msg));
             } else {
-                String::new()
-            };
-            if time.is_empty() {
                 eprintln!(
-                    "{check} {}\n{INDENT}{bar}{total_text}",
-                    brand_fg(&self.success_msg)
-                );
-            } else {
-                eprintln!(
-                    "{check} {} {time}\n{INDENT}{bar}{total_text}",
-                    brand_fg(&self.success_msg)
+                    "{check} {} {}",
+                    brand_fg(&self.success_msg),
+                    brand_muted(&format!("({})", details.join(", ")))
                 );
             }
         } else {
