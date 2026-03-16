@@ -1,4 +1,4 @@
-name: Release internal packages
+name: Release internal packages (cargo)
 
 on:
   workflow_run:

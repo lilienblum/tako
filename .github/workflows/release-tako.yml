@@ -1,4 +1,4 @@
-name: Release Tako Server
+name: Release tako
 
 on:
   workflow_dispatch:
@@ -16,11 +16,11 @@ permissions: {}
 
 jobs:
   release:
-    uses: ./.github/workflows/cargo-release.yml
+    uses: ./.github/workflows/release-cargo.yml
     with:
-      crate: tako-server
-      directory: tako-server
+      crate: tako
+      directory: tako
       bump: ${{ inputs.bump }}
-      title: Tako Server
+      title: Tako CLI
     secrets:
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
