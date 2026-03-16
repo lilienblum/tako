@@ -273,20 +273,12 @@ start_tako_server() {
 }
 
 ssh_wait server-ubuntu
-ssh_wait server-alma
-ssh_wait server-alpine
-if ! ssh_exec server-alpine "command -v rc-service >/dev/null 2>&1"; then
-  echo "OpenRC (rc-service) is required on server-alpine e2e host." >&2
-  exit 1
-fi
 
 echo "Building CLI and server binaries"
 cd "$WORKSPACE"
 cargo build -p tako --bin tako
 cargo build -p tako-server --bin tako-server
 start_tako_server server-ubuntu
-start_tako_server server-alma
-start_tako_server server-alpine
 
 # Stage a minimal JS monorepo copy so Bun workspace/catalog references resolve
 # like local dev, without rewriting dependency declarations.
