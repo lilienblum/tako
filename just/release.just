@@ -1,6 +1,5 @@
 set working-directory := ".."
 
-BUILDER_IMAGE_REGISTRY := "ghcr.io/lilienblum"
 TAKO_TAG_PREFIX := "tako-v"
 TAKO_SERVER_TAG_PREFIX := "tako-server-v"
 TAKO_CORE_TAG_PREFIX := "tako-core-v"
@@ -566,17 +565,3 @@ npm-canary:
     cleanup() { (cd sdk/js && npm pkg set version="$original"); }; \
     trap cleanup EXIT; \
     (cd sdk/js && bun install && bun run build && npm publish --tag canary)
-
-# Publish multi-arch builder images to container registry.
-# Usage: just release builder-images <version> [registry]
-builder-images version registry=BUILDER_IMAGE_REGISTRY:
-    docker buildx build -f docker/tako-builder-musl.Dockerfile \
-        --platform linux/amd64,linux/arm64 \
-        -t {{ registry }}/tako-builder-musl:{{ version }} \
-        -t {{ registry }}/tako-builder-musl:latest \
-        --push .
-    docker buildx build -f docker/tako-builder-glibc.Dockerfile \
-        --platform linux/amd64,linux/arm64 \
-        -t {{ registry }}/tako-builder-glibc:{{ version }} \
-        -t {{ registry }}/tako-builder-glibc:latest \
-        --push .
