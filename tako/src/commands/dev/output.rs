@@ -434,8 +434,7 @@ fn format_panel_wide(
         format!("{DIM}cpu  {RESET}—")
     };
     let r1 = if let Some(m) = mem_bytes {
-        let bar = progress_bar(m as f32 / (512.0 * 1024.0 * 1024.0), BAR_W);
-        format!("{DIM}ram  {RESET}{bar} {}", fmt_bytes(m))
+        format!("{DIM}ram  {RESET}{}", fmt_bytes(m))
     } else {
         format!("{DIM}ram  {RESET}—")
     };
