@@ -4289,9 +4289,25 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
             "export default {};",
         )
         .unwrap();
+        // Include PATH in the manifest env_vars so that the spawned instance
+        // can find the fake bun binary.  Also set runtime_bin to the absolute
+        // path so resolve_runtime_binary picks it up directly.
+        let path_with_fake = format!(
+            "{}:{}",
+            fake_bin_dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
         std::fs::write(
             release_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"install":"true"}"#,
+            serde_json::json!({
+                "runtime": "bun",
+                "main": "index.ts",
+                "idle_timeout": 300,
+                "install": "true",
+                "runtime_bin": fake_bun.to_string_lossy().to_string(),
+                "env_vars": { "PATH": &path_with_fake }
+            })
+            .to_string(),
         )
         .unwrap();
 
@@ -4310,20 +4326,13 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
         });
         state.load_balancer.register_app(app);
 
-        let mut env = HashMap::new();
-        let path = std::env::var("PATH").unwrap_or_default();
-        env.insert(
-            "PATH".to_string(),
-            format!("{}:{}", fake_bin_dir.display(), path),
-        );
-
         let response = state
             .handle_command(Command::Deploy {
                 app: "warm-app".to_string(),
                 version: "v1".to_string(),
                 path: release_dir.to_string_lossy().to_string(),
                 routes: vec!["warm.localhost".to_string()],
-                secrets: Some(env),
+                secrets: Some(HashMap::new()),
             })
             .await;
         assert!(
