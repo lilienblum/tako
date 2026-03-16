@@ -55,7 +55,6 @@ TAKO_PROTO_VERSION="${TAKO_PROTO_VERSION:-}"
 TAKO_RESTART_SERVICE="${TAKO_RESTART_SERVICE:-1}"
 TAKO_SERVER_INSTALL_REFRESH_HELPER="/usr/local/bin/tako-server-install-refresh"
 TAKO_SERVER_SERVICE_HELPER="/usr/local/bin/tako-server-service"
-PATH="/root/.local/bin:$PATH"
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
@@ -431,6 +430,20 @@ install_sqlite_runtime() {
   fi
 }
 
+tako_home_dir() {
+  _home=""
+  if need_cmd getent; then
+    _home="$(getent passwd "$TAKO_USER" 2>/dev/null | awk -F: '{print $6}' || true)"
+  fi
+  if [ -z "$_home" ]; then
+    _home="$(awk -F: -v u="$TAKO_USER" '$1==u {print $6}' /etc/passwd 2>/dev/null || true)"
+  fi
+  if [ -z "$_home" ]; then
+    _home="/home/$TAKO_USER"
+  fi
+  printf '%s' "$_home"
+}
+
 install_proto_via_script() {
   installer_url="https://moonrepo.dev/install/proto.sh"
   installer="$(mktemp)"
@@ -442,17 +455,23 @@ install_proto_via_script() {
   fi
 
   chmod +x "$installer"
+
+  # Install as the tako service user so proto lands in /home/tako/.proto
+  _tako_home="$(tako_home_dir)"
+  _proto_args="--yes"
   if [ -n "$TAKO_PROTO_VERSION" ]; then
-    bash "$installer" "$TAKO_PROTO_VERSION" --yes
-  else
-    bash "$installer" --yes
+    _proto_args="$TAKO_PROTO_VERSION $_proto_args"
   fi
+  su -s /bin/sh "$TAKO_USER" -c "HOME='$_tako_home' bash '$installer' $_proto_args"
   rm -f "$installer"
 
-  # Ensure proto is on PATH for the rest of the install
-  if [ -x "$HOME/.proto/bin/proto" ] && ! need_cmd proto; then
-    ln -sf "$HOME/.proto/bin/proto" /usr/local/bin/proto
+  # Symlink so proto is on system PATH
+  if [ -x "$_tako_home/.proto/bin/proto" ] && ! need_cmd proto; then
+    ln -sf "$_tako_home/.proto/bin/proto" /usr/local/bin/proto
   fi
+
+  # Allow tako-app (in tako group) to read installed runtimes
+  chmod -R g+rX "$_tako_home/.proto" 2>/dev/null || true
 }
 
 ensure_proto() {
@@ -580,7 +599,6 @@ fi
 if ! need_cmd zstd; then
   install_pkgs zstd
 fi
-ensure_proto
 ensure_nc
 install_sqlite_runtime
 
@@ -705,23 +723,18 @@ mkdir -p /var/run/tako-app
 chown "$TAKO_USER":"$TAKO_USER" /var/run/tako-app
 chmod 0770 /var/run/tako-app
 
+# Install proto as the tako user (not root). Must happen after user creation.
+ensure_proto
+
+# Clean up proto from root if a prior install put it there.
+if [ -d /root/.proto ]; then
+  rm -rf /root/.proto
+  echo "OK removed stale proto from /root/.proto"
+fi
+
 maybe_prompt_ssh_pubkey
 
 # Install authorized_keys for SSH (optional).
-tako_home_dir() {
-  _home=""
-  if need_cmd getent; then
-    _home="$(getent passwd "$TAKO_USER" 2>/dev/null | awk -F: '{print $6}' || true)"
-  fi
-  if [ -z "$_home" ]; then
-    _home="$(awk -F: -v u="$TAKO_USER" '$1==u {print $6}' /etc/passwd 2>/dev/null || true)"
-  fi
-  if [ -z "$_home" ]; then
-    _home="/home/$TAKO_USER"
-  fi
-  printf '%s' "$_home"
-}
-
 home_dir="$(tako_home_dir)"
 auth_keys="$home_dir/.ssh/authorized_keys"
 

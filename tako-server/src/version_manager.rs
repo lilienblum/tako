@@ -21,13 +21,44 @@ pub(crate) trait VersionManager: Send + Sync {
 /// Proto-backed version manager. Shells out to the `proto` CLI.
 pub(crate) struct Proto;
 
+/// Drop privileges on a proto command to the `tako` service user if running as
+/// root. Proto stores its toolchain cache in `~/.proto/`; when tako-server runs
+/// as root (outside the usual systemd unit), this ensures proto operates on the
+/// service user's store rather than `/root/.proto`.
+#[cfg(unix)]
+fn drop_to_service_user(cmd: &mut TokioCommand) {
+    if unsafe { libc::geteuid() } != 0 {
+        return;
+    }
+    use std::ffi::CString;
+    let Ok(name) = CString::new("tako") else {
+        return;
+    };
+    // SAFETY: getpwnam is safe when not modifying the passwd db concurrently.
+    let pw = unsafe { libc::getpwnam(name.as_ptr()) };
+    if pw.is_null() {
+        return;
+    }
+    unsafe {
+        cmd.uid((*pw).pw_uid);
+        cmd.gid((*pw).pw_gid);
+        let home = std::ffi::CStr::from_ptr((*pw).pw_dir);
+        cmd.env("HOME", home.to_string_lossy().as_ref());
+    }
+}
+
 #[async_trait::async_trait]
 impl VersionManager for Proto {
     async fn install(&self, tool: &str, version: &str) -> Result<(), String> {
-        let output = TokioCommand::new("proto")
-            .args(["install", tool, version])
+        let mut cmd = TokioCommand::new("proto");
+        cmd.args(["install", tool, version])
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        #[cfg(unix)]
+        drop_to_service_user(&mut cmd);
+
+        let output = cmd
             .output()
             .await
             .map_err(|e| format!("Failed to run 'proto install {} {}': {}", tool, version, e))?;
@@ -47,10 +78,15 @@ impl VersionManager for Proto {
     }
 
     async fn bin(&self, tool: &str, version: &str) -> Result<String, String> {
-        let output = TokioCommand::new("proto")
-            .args(["bin", tool, version])
+        let mut cmd = TokioCommand::new("proto");
+        cmd.args(["bin", tool, version])
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+
+        #[cfg(unix)]
+        drop_to_service_user(&mut cmd);
+
+        let output = cmd
             .output()
             .await
             .map_err(|e| format!("Failed to run 'proto bin {} {}': {}", tool, version, e))?;
