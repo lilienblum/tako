@@ -3,23 +3,13 @@ services:
     build:
       context: ../..
       dockerfile: e2e/docker/server/ubuntu.Dockerfile
-    privileged: true
-    tmpfs:
-      - /run
-      - /run/lock
     volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
       - e2e_ssh_keys:/opt/e2e/keys:ro
   server-alma:
     build:
       context: ../..
       dockerfile: e2e/docker/server/alma.Dockerfile
-    privileged: true
-    tmpfs:
-      - /run
-      - /run/lock
     volumes:
-      - /sys/fs/cgroup:/sys/fs/cgroup:rw
       - e2e_ssh_keys:/opt/e2e/keys:ro
   server-alpine:
     build:

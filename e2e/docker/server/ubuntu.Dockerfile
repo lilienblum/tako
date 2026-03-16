@@ -4,8 +4,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-    systemd \
-    systemd-sysv \
     openssh-server \
     bash \
     ca-certificates \
@@ -13,16 +11,13 @@ RUN apt-get update \
     sudo \
     xz-utils \
     zstd \
-  && rm -rf /var/lib/apt/lists/* \
-  && rm -f /lib/systemd/system/multi-user.target.wants/* \
-  && rm -f /etc/systemd/system/*.wants/* \
-  && rm -f /lib/systemd/system/local-fs.target.wants/* \
-  && rm -f /lib/systemd/system/sockets.target.wants/*udev* \
-  && rm -f /lib/systemd/system/sockets.target.wants/*initctl* \
-  && rm -f /lib/systemd/system/basic.target.wants/* \
-  && rm -f /lib/systemd/system/anaconda.target.wants/*
+  && rm -rf /var/lib/apt/lists/*
 
-# Pre-install tako-server (with dummy binary, installer creates user/service)
+# Fake systemctl so the install script's systemd path works without real systemd
+COPY e2e/docker/server/fake-systemctl.sh /usr/local/bin/systemctl
+RUN chmod +x /usr/local/bin/systemctl && mkdir -p /run/systemd/system
+
+# Pre-install tako-server (with dummy binary, installer creates user/service artifacts)
 COPY scripts/install-tako-server.sh /tmp/install-tako-server.sh
 RUN chmod +x /tmp/install-tako-server.sh \
     && printf '#!/bin/sh\nexit 0\n' > /tmp/tako-server \
@@ -39,16 +34,12 @@ USER root
 RUN ln -sf /home/tako/.proto/bin/proto /usr/local/bin/proto \
     && chmod -R g+rX /home/tako/.proto 2>/dev/null || true
 
-# Setup SSH and e2e keys
-COPY e2e/docker/server/setup.sh /usr/local/bin/tako-e2e-setup.sh
-RUN chmod +x /usr/local/bin/tako-e2e-setup.sh
+# Generate SSH host keys
+RUN ssh-keygen -A
 
-# Create a oneshot service that runs setup before sshd
-RUN printf '[Unit]\nBefore=sshd.service\n[Service]\nType=oneshot\nExecStart=/usr/local/bin/tako-e2e-setup.sh\n[Install]\nWantedBy=multi-user.target\n' > /etc/systemd/system/tako-e2e-setup.service \
-    && systemctl enable tako-e2e-setup.service \
-    && systemctl enable ssh
+COPY e2e/docker/server/entrypoint.sh /usr/local/bin/tako-e2e-entrypoint.sh
+RUN chmod +x /usr/local/bin/tako-e2e-entrypoint.sh
 
 EXPOSE 22
 
-STOPSIGNAL SIGRTMIN+3
-CMD ["/sbin/init"]
+CMD ["/usr/local/bin/tako-e2e-entrypoint.sh"]
