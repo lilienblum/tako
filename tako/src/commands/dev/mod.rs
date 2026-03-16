@@ -268,6 +268,71 @@ fn compute_dev_env(cfg: &TakoToml) -> std::collections::HashMap<String, String> 
     env
 }
 
+/// Decrypt development secrets and write them to a temp file for the SDK.
+///
+/// Sets `TAKO_SECRETS_FILE` in `env` so the SDK knows where to read.
+/// Returns the temp file path (for cleanup tracking).
+fn write_dev_secrets_file(
+    project_dir: &Path,
+    app_name: &str,
+    env: &mut std::collections::HashMap<String, String>,
+) -> Result<Option<std::path::PathBuf>, Box<dyn std::error::Error>> {
+    let secrets = crate::config::SecretsStore::load_from_dir(project_dir)?;
+
+    let encrypted = match secrets.get_env("development") {
+        Some(map) if !map.is_empty() => map,
+        _ => return Ok(None),
+    };
+
+    let key = super::secret::load_or_derive_key(app_name, "development", &secrets)?;
+    let mut decrypted = std::collections::HashMap::new();
+    for (name, encrypted_value) in encrypted {
+        match crate::crypto::decrypt(encrypted_value, &key) {
+            Ok(value) => {
+                decrypted.insert(name.clone(), value);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to decrypt development secret {}: {}", name, e);
+            }
+        }
+    }
+
+    if decrypted.is_empty() {
+        return Ok(None);
+    }
+
+    // Write to .tako/tmp/secrets.json (project-local, gitignored)
+    let secrets_dir = project_dir.join(".tako").join("tmp");
+    std::fs::create_dir_all(&secrets_dir)?;
+    let secrets_path = secrets_dir.join("dev-secrets.json");
+
+    let json = serde_json::to_string(&decrypted)?;
+
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&secrets_path)?;
+        f.write_all(json.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&secrets_path, &json)?;
+    }
+
+    env.insert(
+        "TAKO_SECRETS_FILE".to_string(),
+        secrets_path.to_string_lossy().to_string(),
+    );
+
+    Ok(Some(secrets_path))
+}
+
 fn resolve_dev_build_adapter(project_dir: &Path, cfg: &TakoToml) -> Result<BuildAdapter, String> {
     if let Some(adapter_override) = cfg
         .runtime
@@ -2076,33 +2141,18 @@ pub async fn run(
     let hosts_state = Arc::new(tokio::sync::Mutex::new(dev_hosts.clone()));
     let mut env = compute_dev_env(&cfg);
 
-    // Inject decrypted development secrets if any exist.
-    {
-        let secrets = crate::config::SecretsStore::load_from_dir(&project_dir)
-            .map_err(|e| e.to_string())?;
-        if let Some(encrypted) = secrets.get_env("development") {
-            if !encrypted.is_empty() {
-                let key =
-                    super::secret::load_or_derive_key(&app_name, "development", &secrets)
-                        .map_err(|e| e.to_string())?;
-                for (name, encrypted_value) in encrypted {
-                    match crate::crypto::decrypt(encrypted_value, &key) {
-                        Ok(value) => {
-                            env.insert(name.clone(), value);
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                "Failed to decrypt development secret {}: {}",
-                                name, e
-                            );
-                        }
-                    }
-                }
-            }
-        }
+    // Write decrypted development secrets to a temp file for the SDK to read.
+    // Secrets are never injected as env vars — the SDK loads them from this file.
+    let secrets_file = write_dev_secrets_file(&project_dir, &app_name, &mut env)
+        .map_err(|e| e.to_string())?;
+
+    // Regenerate tako.d.ts with secret types
+    if runtime_adapter.preset_group() == PresetGroup::Js {
+        let _ = crate::build::js::write_types(&project_dir);
     }
 
     let env_state = Arc::new(tokio::sync::Mutex::new(env));
+    let secrets_file_state = Arc::new(tokio::sync::Mutex::new(secrets_file));
 
     // Create channels for communication (child stdout/stderr + file watcher events).
     let (log_tx, log_rx) = mpsc::channel::<ScopedLog>(1000);
@@ -2534,6 +2584,7 @@ pub async fn run(
         let app_name = app_name.clone();
         let domain = domain.clone();
         let env_state = env_state.clone();
+        let secrets_file_state = secrets_file_state.clone();
         let hosts_state = hosts_state.clone();
         let cmd = cmd.clone();
         let log_store_path = log_store_path.clone();
@@ -2555,22 +2606,22 @@ pub async fn run(
                 // Update env and hosts state unconditionally.
                 let mut new_env = compute_dev_env(&cfg);
 
-                // Re-inject decrypted development secrets on config reload.
-                if let Ok(secrets) = crate::config::SecretsStore::load_from_dir(&project_dir) {
-                    if let Some(encrypted) = secrets.get_env("development") {
-                        if !encrypted.is_empty() {
-                            if let Ok(key) =
-                                super::secret::load_or_derive_key(&app_name, "development", &secrets)
-                            {
-                                for (name, encrypted_value) in encrypted {
-                                    if let Ok(value) = crate::crypto::decrypt(encrypted_value, &key) {
-                                        new_env.insert(name.clone(), value);
-                                    }
-                                }
-                            }
-                        }
+                // Rewrite the secrets temp file for the SDK.
+                let secrets_result = write_dev_secrets_file(&project_dir, &app_name, &mut new_env)
+                    .map_err(|e| e.to_string());
+                match secrets_result {
+                    Ok(new_path) => {
+                        *secrets_file_state.lock().await = new_path;
+                    }
+                    Err(msg) => {
+                        let _ = log_tx
+                            .send(ScopedLog::warn("tako", format!("Failed to reload secrets: {}", msg)))
+                            .await;
                     }
                 }
+
+                // Regenerate tako.d.ts with updated secret types.
+                let _ = crate::build::js::write_types(&project_dir);
 
                 *env_state.lock().await = new_env.clone();
 

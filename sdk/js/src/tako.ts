@@ -5,6 +5,7 @@
  */
 
 import type { TakoOptions } from "./types";
+import { loadSecrets } from "./secrets";
 
 /**
  * Tako SDK class for optional app features
@@ -21,6 +22,15 @@ import type { TakoOptions } from "./types";
 export class Tako {
   private static instance: Tako | null = null;
   private options: TakoOptions;
+
+  /**
+   * Secrets loaded from the Tako runtime. Access individual secrets
+   * as properties: `Tako.secrets.DATABASE_URL`
+   *
+   * The secrets object resists serialization — `JSON.stringify(Tako.secrets)`
+   * and `console.log(Tako.secrets)` return "[REDACTED]".
+   */
+  static readonly secrets: Record<string, string> = loadSecrets();
 
   constructor(options: TakoOptions = {}) {
     this.options = options;

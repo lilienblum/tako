@@ -216,9 +216,7 @@ impl Spawner {
 }
 
 fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String, String> {
-    // Merge non-secret vars with secrets (secrets take precedence).
     let mut env = config.env_vars.clone();
-    env.extend(config.secrets.iter().map(|(k, v)| (k.clone(), v.clone())));
 
     env.insert("TAKO_INSTANCE".to_string(), instance.id.clone());
 
@@ -233,7 +231,46 @@ fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String
     env.entry("NODE_ENV".to_string())
         .or_insert_with(|| "production".to_string());
 
+    // Write secrets to a temp file for the SDK to read.
+    // Secrets are never injected as env vars.
+    if !config.secrets.is_empty() {
+        if let Ok(path) = write_instance_secrets_file(config, instance) {
+            env.insert("TAKO_SECRETS_FILE".to_string(), path);
+        }
+    }
+
     env
+}
+
+/// Write secrets to a per-instance temp file with restrictive permissions.
+fn write_instance_secrets_file(
+    config: &AppConfig,
+    instance: &Instance,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let secrets_dir = config.path.join(".tako-secrets");
+    std::fs::create_dir_all(&secrets_dir)?;
+    let secrets_path = secrets_dir.join(format!("{}.json", instance.id));
+
+    let json = serde_json::to_string(&config.secrets)?;
+
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&secrets_path)?;
+        f.write_all(json.as_bytes())?;
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(&secrets_path, &json)?;
+    }
+
+    Ok(secrets_path.to_string_lossy().to_string())
 }
 
 fn build_child_command(
