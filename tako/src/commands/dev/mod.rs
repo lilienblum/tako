@@ -3200,9 +3200,7 @@ pub async fn run(
                                 DevEvent::AppStopped => {
                                     println!("○ App stopped (idle)");
                                 }
-                                DevEvent::AppPid(_) => {
-                                    // No-op in non-TUI mode.
-                                }
+                                DevEvent::AppPid(_) => {}
                                 DevEvent::AppError(e) => {
                                     eprintln!("App error: {}", e);
                                 }

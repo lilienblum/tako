@@ -175,7 +175,7 @@ jobs:
     needs:
       - build-linux-target
       - build-darwin-cli
-    environment: release-canary
+    environment: release
     permissions:
       contents: write
     steps:
