@@ -176,12 +176,12 @@ run = "bun run generate:types"
 
 **Stage fields:**
 
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | No | Display label shown in deploy output |
-| `working_dir` | No | App-relative directory for stage commands. Absolute paths and `..` are rejected. |
-| `install` | No | Command run before `run` |
-| `run` | Yes | The build command to execute |
+| Field         | Required | Description                                                                      |
+| ------------- | -------- | -------------------------------------------------------------------------------- |
+| `name`        | No       | Display label shown in deploy output                                             |
+| `working_dir` | No       | App-relative directory for stage commands. Absolute paths and `..` are rejected. |
+| `install`     | No       | Command run before `run`                                                         |
+| `run`         | Yes      | The build command to execute                                                     |
 
 **Execution order per target:**
 

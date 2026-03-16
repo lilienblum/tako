@@ -148,11 +148,11 @@ For each server, the CLI:
 
 Deploy versions are derived from your git state:
 
-| Git state | Version format | Example |
-|---|---|---|
-| Clean tree | `{commit_hash}` | `abc1234` |
-| Dirty tree | `{commit}_{content_hash}` | `abc1234_9f8e7d6c` |
-| No git repo | `nogit_{content_hash}` | `nogit_9f8e7d6c` |
+| Git state   | Version format            | Example            |
+| ----------- | ------------------------- | ------------------ |
+| Clean tree  | `{commit_hash}`           | `abc1234`          |
+| Dirty tree  | `{commit}_{content_hash}` | `abc1234_9f8e7d6c` |
+| No git repo | `nogit_{content_hash}`    | `nogit_9f8e7d6c`   |
 
 Each hash uses the first 8 characters.
 
@@ -418,15 +418,15 @@ Configure with `--metrics-port` (set to `0` to disable).
 
 ### Available metrics
 
-| Metric | Type | Description |
-|---|---|---|
-| `tako_http_requests_total` | Counter | Total proxied requests by status class |
-| `tako_http_request_duration_seconds` | Histogram | Request latency distribution |
-| `tako_http_active_connections` | Gauge | Currently active connections |
-| `tako_cold_starts_total` | Counter | Cold starts triggered |
-| `tako_cold_start_duration_seconds` | Histogram | Cold start duration distribution |
-| `tako_instance_health` | Gauge | Instance health (1=healthy, 0=unhealthy) |
-| `tako_instances_running` | Gauge | Running instance count |
+| Metric                               | Type      | Description                              |
+| ------------------------------------ | --------- | ---------------------------------------- |
+| `tako_http_requests_total`           | Counter   | Total proxied requests by status class   |
+| `tako_http_request_duration_seconds` | Histogram | Request latency distribution             |
+| `tako_http_active_connections`       | Gauge     | Currently active connections             |
+| `tako_cold_starts_total`             | Counter   | Cold starts triggered                    |
+| `tako_cold_start_duration_seconds`   | Histogram | Cold start duration distribution         |
+| `tako_instance_health`               | Gauge     | Instance health (1=healthy, 0=unhealthy) |
+| `tako_instances_running`             | Gauge     | Running instance count                   |
 
 All metrics carry `server` and `app` labels. `tako_instance_health` also includes an `instance` label. Only proxied requests are measured -- ACME challenges, static asset responses, and unmatched-host 404s are excluded.
 
@@ -447,12 +447,12 @@ After a deploy completes:
 
 ## Edge cases and error handling
 
-| Scenario | Behavior |
-|---|---|
-| Low disk space on server | Deploy fails before upload with required vs. available sizes |
-| Stale deploy lock | Deploy fails until `.deploy_lock` is manually removed |
-| Deploy fails mid-transfer | Partial release directory is auto-cleaned |
-| Health check fails during rolling update | Automatic rollback to previous version |
-| Network interruption during deploy | Partial failure reported, safe to retry |
-| Process crash after deploy | Auto-restart with health check detection |
-| Missing server target metadata | Deploy fails early with guidance to re-add the server |
+| Scenario                                 | Behavior                                                     |
+| ---------------------------------------- | ------------------------------------------------------------ |
+| Low disk space on server                 | Deploy fails before upload with required vs. available sizes |
+| Stale deploy lock                        | Deploy fails until `.deploy_lock` is manually removed        |
+| Deploy fails mid-transfer                | Partial release directory is auto-cleaned                    |
+| Health check fails during rolling update | Automatic rollback to previous version                       |
+| Network interruption during deploy       | Partial failure reported, safe to retry                      |
+| Process crash after deploy               | Auto-restart with health check detection                     |
+| Missing server target metadata           | Deploy fails early with guidance to re-add the server        |

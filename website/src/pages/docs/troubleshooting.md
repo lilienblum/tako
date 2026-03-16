@@ -295,13 +295,13 @@ Deploy fails if the target environment is missing secret keys that are used by o
 
 Tako is designed to recover gracefully from deleted files:
 
-| What was deleted | What happens |
-|---|---|
-| Config/data directory | Auto-recreated on next command |
-| `.tako/` directory | Auto-recreated on next deploy |
-| `tako.toml` | Commands that need it fail with guidance to run `tako init` |
-| `.tako/secrets.json` | Warning shown; restore secrets before deploying |
-| `config.toml` corrupted | Parse error with line number context |
+| What was deleted        | What happens                                                |
+| ----------------------- | ----------------------------------------------------------- |
+| Config/data directory   | Auto-recreated on next command                              |
+| `.tako/` directory      | Auto-recreated on next deploy                               |
+| `tako.toml`             | Commands that need it fail with guidance to run `tako init` |
+| `.tako/secrets.json`    | Warning shown; restore secrets before deploying             |
+| `config.toml` corrupted | Parse error with line number context                        |
 
 ## Key Paths to Inspect
 

@@ -26,6 +26,7 @@ For every open alert, read the flagged code and its surrounding context. Classif
 The alert identifies a real security or correctness problem in production code.
 
 **Action:**
+
 1. Fix the code.
 2. Add a brief code comment near the fix if the reason isn't self-evident, so future scans or reviewers understand the intent.
 
@@ -34,6 +35,7 @@ The alert identifies a real security or correctness problem in production code.
 The alert is wrong, applies only to test code, or the flagged pattern is intentional and safe.
 
 **Action:**
+
 1. Dismiss the alert via the API with an appropriate reason (`false positive`, `won't fix`, or `used in tests`) and a short comment explaining why.
 2. Add a code comment near the flagged line (e.g. `// CodeQL: <reason this is safe>`) so the next scan or human reviewer doesn't re-flag it.
 
@@ -51,6 +53,7 @@ Valid `dismissed_reason` values: `false positive`, `won't fix`, `used in tests`.
 The fix involves a design tradeoff or ambiguity that the agent can't resolve alone.
 
 **Action:**
+
 1. Present the issue with concrete options:
    - **A (recommended):** ... — why this is preferred
    - **B:** ... — tradeoff

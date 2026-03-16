@@ -17,12 +17,12 @@ Tako ships with three built-in runtime base presets: `bun`, `node`, and `deno`. 
 
 Each base preset defines sensible defaults for its runtime:
 
-| Field | Bun | Node | Deno |
-|---|---|---|---|
-| `main` | `src/index.ts` | `index.js` | `main.ts` |
-| `dev` | `bun --hot {main}` | `node {main}` | `deno run --watch --allow-net --allow-env --allow-read {main}` |
-| `build.exclude` | `node_modules/` | `node_modules/` | -- |
-| `build.container` | `false` | `false` | `false` |
+| Field             | Bun                | Node            | Deno                                                           |
+| ----------------- | ------------------ | --------------- | -------------------------------------------------------------- |
+| `main`            | `src/index.ts`     | `index.js`      | `main.ts`                                                      |
+| `dev`             | `bun --hot {main}` | `node {main}`   | `deno run --watch --allow-net --allow-env --allow-read {main}` |
+| `build.exclude`   | `node_modules/`    | `node_modules/` | --                                                             |
+| `build.container` | `false`            | `false`         | `false`                                                        |
 
 All three JS base presets target four Linux architectures by default:
 

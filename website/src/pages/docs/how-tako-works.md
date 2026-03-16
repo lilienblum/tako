@@ -92,11 +92,11 @@ For each target server (in parallel):
 
 Deploy versions are derived from your git state:
 
-| Git state | Version format | Example |
-|-----------|---------------|---------|
-| Clean tree | `{commit}` | `abc1234` |
+| Git state  | Version format    | Example            |
+| ---------- | ----------------- | ------------------ |
+| Clean tree | `{commit}`        | `abc1234`          |
 | Dirty tree | `{commit}_{hash}` | `abc1234_def56789` |
-| No git | `nogit_{hash}` | `nogit_def56789` |
+| No git     | `nogit_{hash}`    | `nogit_def56789`   |
 
 ## Traffic Routing
 
@@ -201,14 +201,14 @@ The proxy includes a built-in response cache for `GET` and `HEAD` requests:
 
 The CLI and `tako-server` communicate over a Unix socket at `/var/run/tako/tako.sock` using JSON messages. Key commands include:
 
-| Command | Purpose |
-|---------|---------|
-| `hello` | Protocol negotiation and capability discovery |
-| `deploy` | Deploy a new version with routes and optional secrets |
-| `scale` | Change desired instance count |
-| `delete` | Remove an app's runtime state and routes |
-| `rollback` | Roll back to a previous release |
-| `routes` | List current route mappings |
+| Command    | Purpose                                               |
+| ---------- | ----------------------------------------------------- |
+| `hello`    | Protocol negotiation and capability discovery         |
+| `deploy`   | Deploy a new version with routes and optional secrets |
+| `scale`    | Change desired instance count                         |
+| `delete`   | Remove an app's runtime state and routes              |
+| `rollback` | Roll back to a previous release                       |
+| `routes`   | List current route mappings                           |
 
 App instances do not connect to this management socket. Instead, `tako-server` manages their lifecycle directly (spawn, health check, stop) and proxies HTTP traffic to per-instance Unix sockets.
 

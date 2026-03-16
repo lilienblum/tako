@@ -87,8 +87,8 @@ Start or attach to a local development session.
 tako dev [--name <NAME>] [DIR]
 ```
 
-| Flag | Description |
-|------|-------------|
+| Flag            | Description                                                            |
+| --------------- | ---------------------------------------------------------------------- |
 | `--name <NAME>` | Override the app name (defaults to `tako.toml` name or directory name) |
 
 `tako dev` is a client that connects to the `tako-dev-server` daemon. It registers your app, starts it, and streams logs directly to your terminal.
@@ -99,11 +99,11 @@ When `[envs.development]` defines custom routes in `tako.toml`, those routes are
 
 **Interactive keyboard shortcuts:**
 
-| Key | Action |
-|-----|--------|
-| `r` | Restart the app process |
-| `b` | Background the app (hand off to daemon, CLI exits) |
-| `Ctrl+c` | Stop the app and quit |
+| Key      | Action                                             |
+| -------- | -------------------------------------------------- |
+| `r`      | Restart the app process                            |
+| `b`      | Background the app (hand off to daemon, CLI exits) |
+| `Ctrl+c` | Stop the app and quit                              |
 
 When stdout is not a terminal (piped or redirected), output falls back to plain text with no color or raw mode.
 
@@ -117,10 +117,10 @@ Stop a running or idle dev app.
 tako dev stop [NAME] [--all]
 ```
 
-| Argument/Flag | Description |
-|---------------|-------------|
-| `NAME` | App name to stop (defaults to current directory's app) |
-| `--all` | Stop all registered dev apps |
+| Argument/Flag | Description                                            |
+| ------------- | ------------------------------------------------------ |
+| `NAME`        | App name to stop (defaults to current directory's app) |
+| `--all`       | Stop all registered dev apps                           |
 
 ### `tako dev ls`
 
@@ -162,10 +162,10 @@ Build and deploy your application to remote servers.
 tako deploy [--env <ENV>] [-y|--yes] [DIR]
 ```
 
-| Flag | Description |
-|------|-------------|
+| Flag          | Description                                   |
+| ------------- | --------------------------------------------- |
 | `--env <ENV>` | Target environment (defaults to `production`) |
-| `-y`, `--yes` | Skip confirmation prompts |
+| `-y`, `--yes` | Skip confirmation prompts                     |
 
 The target environment must be declared in `tako.toml` (`[envs.<name>]`) and must define a `route` or `routes`. The `development` environment is reserved for `tako dev` and cannot be deployed.
 
@@ -199,11 +199,11 @@ tako delete [--env <ENV>] [--server <SERVER>] [-y|--yes] [DIR]
 
 Aliases: `tako rm`, `tako remove`, `tako undeploy`, `tako destroy`
 
-| Flag | Description |
-|------|-------------|
-| `--env <ENV>` | Environment to delete from |
+| Flag                | Description                    |
+| ------------------- | ------------------------------ |
+| `--env <ENV>`       | Environment to delete from     |
 | `--server <SERVER>` | Specific server to delete from |
-| `-y`, `--yes` | Skip confirmation prompts |
+| `-y`, `--yes`       | Skip confirmation prompts      |
 
 Delete removes exactly one deployment target, not every server in an environment. In interactive mode, when additional information is needed, Tako shows deployed targets and lets you pick. In non-interactive mode, `--yes`, `--env`, and `--server` are all required.
 
@@ -227,12 +227,12 @@ Change the desired instance count for a deployed app.
 tako scale <N> [--env <ENV>] [--server <SERVER>] [--app <APP>]
 ```
 
-| Argument/Flag | Description |
-|---------------|-------------|
-| `<N>` | Desired instance count per targeted server |
-| `--env <ENV>` | Environment to scale (required when `--server` is omitted) |
-| `--server <SERVER>` | Scale only this specific server |
-| `--app <APP>` | App name (required outside a project directory) |
+| Argument/Flag       | Description                                                |
+| ------------------- | ---------------------------------------------------------- |
+| `<N>`               | Desired instance count per targeted server                 |
+| `--env <ENV>`       | Environment to scale (required when `--server` is omitted) |
+| `--server <SERVER>` | Scale only this specific server                            |
+| `--app <APP>`       | App name (required outside a project directory)            |
 
 Inside a project directory, Tako resolves the app name automatically. Outside a project, use `--app <name>` with `--env <env>`, or pass the full deployment id as `--app <name>/<env>`.
 
@@ -263,11 +263,11 @@ View or stream logs from remote servers.
 tako logs [--env <ENV>] [--tail] [--days <N>] [DIR]
 ```
 
-| Flag | Description |
-|------|-------------|
+| Flag          | Description                                              |
+| ------------- | -------------------------------------------------------- |
 | `--env <ENV>` | Environment to view logs from (defaults to `production`) |
-| `--tail` | Stream logs continuously (conflicts with `--days`) |
-| `--days <N>` | Number of days of history to show (default: `3`) |
+| `--tail`      | Stream logs continuously (conflicts with `--days`)       |
+| `--days <N>`  | Number of days of history to show (default: `3`)         |
 
 **History mode** (default) fetches logs from all mapped servers, sorts them by timestamp, deduplicates consecutive identical messages, and displays them in your pager (`$PAGER`, defaulting to `less -R`).
 
@@ -300,8 +300,8 @@ List release history for the current app.
 tako releases ls [--env <ENV>]
 ```
 
-| Flag | Description |
-|------|-------------|
+| Flag          | Description                                     |
+| ------------- | ----------------------------------------------- |
 | `--env <ENV>` | Environment to query (defaults to `production`) |
 
 Output is sorted newest-first. Each release shows:
@@ -325,11 +325,11 @@ Roll back to a previously deployed release.
 tako releases rollback <RELEASE_ID> [--env <ENV>] [-y|--yes]
 ```
 
-| Argument/Flag | Description |
-|---------------|-------------|
-| `<RELEASE_ID>` | Target release/build id to roll back to |
-| `--env <ENV>` | Environment to roll back (defaults to `production`) |
-| `-y`, `--yes` | Skip confirmation prompt |
+| Argument/Flag  | Description                                         |
+| -------------- | --------------------------------------------------- |
+| `<RELEASE_ID>` | Target release/build id to roll back to             |
+| `--env <ENV>`  | Environment to roll back (defaults to `production`) |
+| `-y`, `--yes`  | Skip confirmation prompt                            |
 
 Rollback reuses current routes, env vars, secrets, and scaling config. It switches the runtime to the target release and performs a standard rolling update. In interactive terminals, rolling back `production` requires confirmation unless `--yes` is provided.
 
@@ -351,13 +351,13 @@ Add a server to your global configuration.
 tako servers add [HOST] [--name <NAME>] [--description <TEXT>] [--port <PORT>] [--no-test]
 ```
 
-| Argument/Flag | Description |
-|---------------|-------------|
-| `HOST` | Server IP or hostname (omit for interactive wizard) |
-| `--name <NAME>` | Server name (required when `HOST` is provided) |
-| `--description <TEXT>` | Optional description shown in `servers ls` |
-| `--port <PORT>` | SSH port (default: `22`) |
-| `--no-test` | Skip SSH connection test and target detection |
+| Argument/Flag          | Description                                         |
+| ---------------------- | --------------------------------------------------- |
+| `HOST`                 | Server IP or hostname (omit for interactive wizard) |
+| `--name <NAME>`        | Server name (required when `HOST` is provided)      |
+| `--description <TEXT>` | Optional description shown in `servers ls`          |
+| `--port <PORT>`        | SSH port (default: `22`)                            |
+| `--no-test`            | Skip SSH connection test and target detection       |
 
 Without arguments, Tako launches an interactive setup wizard that guides you through host, name, description, and port configuration.
 
@@ -386,9 +386,9 @@ tako servers rm [NAME]
 
 Aliases: `tako servers remove`, `tako servers delete`
 
-| Argument | Description |
-|----------|-------------|
-| `NAME` | Server name (omit for interactive selector in a terminal) |
+| Argument | Description                                               |
+| -------- | --------------------------------------------------------- |
+| `NAME`   | Server name (omit for interactive selector in a terminal) |
 
 Confirms before removal and warns that projects referencing this server will fail. In non-interactive mode, `NAME` is required.
 
@@ -413,7 +413,7 @@ tako servers restart <NAME>
 ```
 
 | Argument | Description |
-|----------|-------------|
+| -------- | ----------- |
 | `<NAME>` | Server name |
 
 Restarts the entire `tako-server` process, which causes brief downtime for all apps on that server. Use for binary updates, major configuration changes, or system recovery.
@@ -426,11 +426,11 @@ Upgrade `tako-server` on a remote host with zero-downtime reload.
 tako servers upgrade <NAME> [--canary|--stable]
 ```
 
-| Argument/Flag | Description |
-|---------------|-------------|
-| `<NAME>` | Server name |
-| `--canary` | Install canary prerelease build |
-| `--stable` | Install stable build and set default channel to stable |
+| Argument/Flag | Description                                            |
+| ------------- | ------------------------------------------------------ |
+| `<NAME>`      | Server name                                            |
+| `--canary`    | Install canary prerelease build                        |
+| `--stable`    | Install stable build and set default channel to stable |
 
 Without channel flags, uses the persisted `upgrade_channel` from global config (default: `stable`). The `--canary` and `--stable` flags are mutually exclusive.
 
@@ -471,11 +471,11 @@ Set or update a secret.
 tako secrets set <NAME> [--env <ENV>] [--sync]
 ```
 
-| Argument/Flag | Description |
-|---------------|-------------|
-| `<NAME>` | Secret name |
+| Argument/Flag | Description                                   |
+| ------------- | --------------------------------------------- |
+| `<NAME>`      | Secret name                                   |
 | `--env <ENV>` | Target environment (defaults to `production`) |
-| `--sync` | Immediately sync to servers after setting |
+| `--sync`      | Immediately sync to servers after setting     |
 
 Alias: `tako secrets add`
 
@@ -496,11 +496,11 @@ tako secrets rm <NAME> [--env <ENV>] [--sync]
 
 Aliases: `tako secrets remove`, `tako secrets delete`, `tako secrets del`
 
-| Argument/Flag | Description |
-|---------------|-------------|
-| `<NAME>` | Secret name |
+| Argument/Flag | Description                                                                        |
+| ------------- | ---------------------------------------------------------------------------------- |
+| `<NAME>`      | Secret name                                                                        |
 | `--env <ENV>` | Remove from this environment only (without `--env`, removes from all environments) |
-| `--sync` | Sync to servers after removing |
+| `--sync`      | Sync to servers after removing                                                     |
 
 When `--sync` is provided without `--env`, secrets are synced to all environments.
 
@@ -524,8 +524,8 @@ Push local secrets to remote servers.
 tako secrets sync [--env <ENV>]
 ```
 
-| Flag | Description |
-|------|-------------|
+| Flag          | Description                                                                         |
+| ------------- | ----------------------------------------------------------------------------------- |
 | `--env <ENV>` | Sync only this environment (without `--env`, syncs all environments in `tako.toml`) |
 
 Decrypts secrets locally and sends them to `tako-server` on each mapped server. App instances restart automatically when secrets change.
@@ -548,8 +548,8 @@ Import an encryption key from masked terminal input.
 tako secrets key import [--env <ENV>]
 ```
 
-| Flag | Description |
-|------|-------------|
+| Flag          | Description                                   |
+| ------------- | --------------------------------------------- |
 | `--env <ENV>` | Target environment (defaults to `production`) |
 
 Writes the key to `keys/{env}`. Use this to share encryption keys with teammates.
@@ -562,8 +562,8 @@ Export an encryption key to clipboard.
 tako secrets key export [--env <ENV>]
 ```
 
-| Flag | Description |
-|------|-------------|
+| Flag          | Description                                   |
+| ------------- | --------------------------------------------- |
 | `--env <ENV>` | Target environment (defaults to `production`) |
 
 Reads from `keys/{env}` and copies the base64-encoded key to your clipboard.
@@ -578,9 +578,9 @@ Upgrade the local `tako` CLI to the latest release.
 tako upgrade [--canary|--stable]
 ```
 
-| Flag | Description |
-|------|-------------|
-| `--canary` | Install latest canary build |
+| Flag       | Description                                                   |
+| ---------- | ------------------------------------------------------------- |
+| `--canary` | Install latest canary build                                   |
 | `--stable` | Install latest stable build and set default channel to stable |
 
 The `--canary` and `--stable` flags are mutually exclusive. Without either flag, upgrade uses the persisted `upgrade_channel` from global config (default: `stable`).
@@ -623,30 +623,30 @@ Running `tako` with no arguments also prints help.
 
 ## Quick Reference
 
-| Command | What it does |
-|---------|-------------|
-| `tako init [DIR]` | Initialize a new project with `tako.toml` |
-| `tako dev [DIR]` | Start local development session |
-| `tako dev stop [NAME] [--all]` | Stop a dev app |
-| `tako dev ls` | List registered dev apps |
-| `tako doctor` | Print local dev diagnostics |
-| `tako deploy [DIR]` | Build and deploy to servers |
-| `tako delete [DIR]` | Remove a deployment |
-| `tako scale <N>` | Change instance count |
-| `tako logs [DIR]` | View or stream remote logs |
-| `tako releases ls` | List release history |
-| `tako releases rollback <ID>` | Roll back to a previous release |
-| `tako servers add` | Add a server |
-| `tako servers rm` | Remove a server |
-| `tako servers ls` | List servers |
-| `tako servers restart <NAME>` | Restart tako-server |
-| `tako servers upgrade <NAME>` | Upgrade tako-server |
-| `tako servers status` | Show deployment status |
-| `tako secrets set <NAME>` | Set a secret |
-| `tako secrets rm <NAME>` | Remove a secret |
-| `tako secrets ls` | List secrets |
-| `tako secrets sync` | Sync secrets to servers |
-| `tako secrets key import` | Import encryption key |
-| `tako secrets key export` | Export encryption key |
-| `tako upgrade` | Upgrade the CLI |
-| `tako help` | Show help |
+| Command                        | What it does                              |
+| ------------------------------ | ----------------------------------------- |
+| `tako init [DIR]`              | Initialize a new project with `tako.toml` |
+| `tako dev [DIR]`               | Start local development session           |
+| `tako dev stop [NAME] [--all]` | Stop a dev app                            |
+| `tako dev ls`                  | List registered dev apps                  |
+| `tako doctor`                  | Print local dev diagnostics               |
+| `tako deploy [DIR]`            | Build and deploy to servers               |
+| `tako delete [DIR]`            | Remove a deployment                       |
+| `tako scale <N>`               | Change instance count                     |
+| `tako logs [DIR]`              | View or stream remote logs                |
+| `tako releases ls`             | List release history                      |
+| `tako releases rollback <ID>`  | Roll back to a previous release           |
+| `tako servers add`             | Add a server                              |
+| `tako servers rm`              | Remove a server                           |
+| `tako servers ls`              | List servers                              |
+| `tako servers restart <NAME>`  | Restart tako-server                       |
+| `tako servers upgrade <NAME>`  | Upgrade tako-server                       |
+| `tako servers status`          | Show deployment status                    |
+| `tako secrets set <NAME>`      | Set a secret                              |
+| `tako secrets rm <NAME>`       | Remove a secret                           |
+| `tako secrets ls`              | List secrets                              |
+| `tako secrets sync`            | Sync secrets to servers                   |
+| `tako secrets key import`      | Import encryption key                     |
+| `tako secrets key export`      | Export encryption key                     |
+| `tako upgrade`                 | Upgrade the CLI                           |
+| `tako help`                    | Show help                                 |

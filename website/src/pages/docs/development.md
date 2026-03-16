@@ -47,11 +47,11 @@ If the daemon binary is missing, `tako dev` reports a build hint (source checkou
 
 Each registered app has one of three statuses:
 
-| Status | Meaning |
-|---------|---------|
+| Status    | Meaning                                                     |
+| --------- | ----------------------------------------------------------- |
 | `running` | Process is active, routes are live, traffic is being served |
-| `idle` | Process stopped, routes retained for wake-on-request |
-| `stopped` | Unregistered, routes removed, process killed |
+| `idle`    | Process stopped, routes retained for wake-on-request        |
+| `stopped` | Unregistered, routes removed, process killed                |
 
 ### Starting and attaching
 
@@ -164,12 +164,12 @@ https://my-app.tako.test:47831/
 
 ### Automatically set
 
-| Variable | Value | Purpose |
-|----------|-------|---------|
-| `PORT` | _(ephemeral)_ | The port your app should listen on |
-| `ENV` | `development` | General environment hint |
-| `NODE_ENV` | `development` | Node.js convention |
-| `BUN_ENV` | `development` | Bun convention |
+| Variable   | Value         | Purpose                            |
+| ---------- | ------------- | ---------------------------------- |
+| `PORT`     | _(ephemeral)_ | The port your app should listen on |
+| `ENV`      | `development` | General environment hint           |
+| `NODE_ENV` | `development` | Node.js convention                 |
+| `BUN_ENV`  | `development` | Bun convention                     |
 
 ### From tako.toml
 
@@ -209,6 +209,7 @@ export default defineConfig({
 ```
 
 The plugin:
+
 - Adds `.tako.test` to Vite's `server.allowedHosts` so local Tako hosts are accepted.
 - When `PORT` is set by `tako dev`, binds Vite to `127.0.0.1:$PORT` with `strictPort: true`.
 
@@ -238,11 +239,11 @@ App lifecycle changes (starting, stopped, errors) appear inline as `-- {status} 
 
 ### Keyboard shortcuts
 
-| Key | Action |
-|-----|--------|
-| `r` | Restart the app process |
-| `b` | Background the app (hand off to daemon, CLI exits) |
-| `Ctrl+c` | Stop the app and quit |
+| Key      | Action                                             |
+| -------- | -------------------------------------------------- |
+| `r`      | Restart the app process                            |
+| `b`      | Background the app (hand off to daemon, CLI exits) |
+| `Ctrl+c` | Stop the app and quit                              |
 
 ### Scrollback and search
 
@@ -327,15 +328,15 @@ If name resolution fails:
 
 Paths follow platform conventions (`~/Library/Application Support/tako/` on macOS, `~/.local/share/tako/` and `~/.config/tako/` on Linux). Source-checkout debug builds use `{repo}/local-dev/.tako/` instead.
 
-| File | Created by | Purpose |
-|------|-----------|---------|
-| `{TAKO_HOME}/ca/ca.crt` | `tako dev` | Local dev root CA certificate (public) |
-| `{TAKO_HOME}/dev-server.sock` | `tako-dev-server` | Unix socket for the control protocol |
-| `{TAKO_HOME}/dev-server.db` | `tako-dev-server` | SQLite database for app registrations |
-| `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl` | `tako-dev-server` | Shared per-app log stream |
-| `{TAKO_HOME}/certs/fullchain.pem` | `tako dev` | Dev daemon TLS certificate |
-| `{TAKO_HOME}/certs/privkey.pem` | `tako dev` | Dev daemon TLS private key |
-| `/etc/resolver/tako.test` | `tako dev` | macOS DNS resolver config |
+| File                                      | Created by        | Purpose                                |
+| ----------------------------------------- | ----------------- | -------------------------------------- |
+| `{TAKO_HOME}/ca/ca.crt`                   | `tako dev`        | Local dev root CA certificate (public) |
+| `{TAKO_HOME}/dev-server.sock`             | `tako-dev-server` | Unix socket for the control protocol   |
+| `{TAKO_HOME}/dev-server.db`               | `tako-dev-server` | SQLite database for app registrations  |
+| `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl` | `tako-dev-server` | Shared per-app log stream              |
+| `{TAKO_HOME}/certs/fullchain.pem`         | `tako dev`        | Dev daemon TLS certificate             |
+| `{TAKO_HOME}/certs/privkey.pem`           | `tako dev`        | Dev daemon TLS private key             |
+| `/etc/resolver/tako.test`                 | `tako dev`        | macOS DNS resolver config              |
 
 Log records use a single `timestamp` field (`hh:mm:ss`). When a new owning session starts, the shared log stream is truncated. Attached clients replay existing contents and then follow new lines.
 
