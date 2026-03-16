@@ -217,6 +217,85 @@ fn compute_display_routes(cfg: &TakoToml, default_host: &str) -> Vec<String> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// App-name disambiguation — prevent two distinct projects from claiming the
+// same `{name}.tako.test` domain.
+// ---------------------------------------------------------------------------
+
+/// Sanitise an arbitrary string for use as a domain-name segment (lowercase
+/// alphanumeric + hyphens, no leading/trailing hyphens).
+fn sanitize_name_segment(s: &str) -> String {
+    let mut out = String::new();
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+        } else if (c == '-' || c == '_' || c == '.') && !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-').to_string();
+    out
+}
+
+/// Deterministic 4-hex-char hash of a path.
+fn short_path_hash(s: &str) -> String {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut hasher);
+    format!("{:04x}", hasher.finish() & 0xFFFF)
+}
+
+/// If `candidate` conflicts with an already-registered app from a different
+/// project directory, append a suffix to make it unique.
+///
+/// Disambiguation order:
+/// 1. Project directory leaf name (handles workspaces + different checkouts).
+/// 2. Deterministic 4-char hash of the full project path (fallback).
+fn disambiguate_app_name(
+    candidate: &str,
+    project_dir: &str,
+    existing: &[(String, String)], // (app_name, project_dir)
+) -> String {
+    let dominated = |name: &str| -> bool {
+        existing
+            .iter()
+            .any(|(n, pd)| n == name && pd != project_dir)
+    };
+
+    if !dominated(candidate) {
+        return candidate.to_string();
+    }
+
+    // Try the project directory's leaf name as a suffix.
+    if let Some(leaf) = Path::new(project_dir)
+        .file_name()
+        .and_then(|n| n.to_str())
+    {
+        let seg = sanitize_name_segment(leaf);
+        if !seg.is_empty() {
+            let with_dir = format!("{candidate}-{seg}");
+            if !dominated(&with_dir) {
+                return with_dir;
+            }
+        }
+    }
+
+    // Fallback: deterministic hash of the full project path.
+    format!("{candidate}-{}", short_path_hash(project_dir))
+}
+
+/// Best-effort fetch of registered apps from a running dev server.
+/// Returns an empty vec if the server is not running.
+async fn try_list_registered_app_names() -> Vec<(String, String)> {
+    match crate::dev_server_client::list_registered_apps().await {
+        Ok(apps) => apps
+            .into_iter()
+            .map(|a| (a.app_name, a.project_dir))
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
 fn compute_dev_hosts(
     app_name: &str,
     cfg: &TakoToml,
@@ -2013,7 +2092,7 @@ pub async fn ls() -> Result<(), Box<dyn std::error::Error>> {
 
 pub async fn run(
     public_port: u16,
-    name_override: Option<String>,
+    variant: Option<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let project_dir = current_dir()?;
     let cfg = load_dev_tako_toml(&project_dir)?;
@@ -2039,12 +2118,22 @@ pub async fn run(
 
     let runtime_name = build_preset.name.clone();
 
-    let app_name = if let Some(name) = name_override {
-        name
+    let base_name = resolve_app_name(&project_dir)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
+    let app_name = if let Some(ref v) = variant {
+        format!("{base_name}-{v}")
     } else {
-        resolve_app_name(&project_dir)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?
+        base_name
     };
+
+    // Disambiguate if another project already owns this name.
+    let canonical_for_disambig =
+        std::fs::canonicalize(&project_dir).unwrap_or_else(|_| project_dir.clone());
+    let canonical_for_disambig_str = canonical_for_disambig.to_string_lossy().to_string();
+    let existing_apps = try_list_registered_app_names().await;
+    let app_name =
+        disambiguate_app_name(&app_name, &canonical_for_disambig_str, &existing_apps);
+
     let domain = LocalCA::app_domain(&app_name);
 
     #[cfg(target_os = "macos")]
@@ -2397,6 +2486,7 @@ pub async fn run(
     let reg_url = crate::dev_server_client::register_app(
         &canonical_project_dir_str,
         &app_name,
+        variant.as_deref(),
         &reg_hosts,
         upstream_port,
         &cmd,
@@ -2592,6 +2682,7 @@ pub async fn run(
         let project_dir = project_dir.clone();
         let project_dir_str = canonical_project_dir_str.clone();
         let app_name = app_name.clone();
+        let variant = variant.clone();
         let domain = domain.clone();
         let env_state = env_state.clone();
         let secrets_file_state = secrets_file_state.clone();
@@ -2659,6 +2750,7 @@ pub async fn run(
                     let reg_result = crate::dev_server_client::register_app(
                         &project_dir_str,
                         &app_name,
+                        variant.as_deref(),
                         &new_hosts,
                         upstream_port,
                         &cmd,
@@ -4009,4 +4101,208 @@ pub enum DevEvent {
     LogsReady,
     /// Another client stopped the app — exit cleanly.
     ExitWithMessage(String),
+}
+
+#[cfg(test)]
+mod disambiguate_tests {
+    use super::*;
+
+    // -----------------------------------------------------------------------
+    // sanitize_name_segment
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sanitize_name_segment_lowercases() {
+        assert_eq!(sanitize_name_segment("MyApp"), "myapp");
+    }
+
+    #[test]
+    fn sanitize_name_segment_replaces_special_chars() {
+        assert_eq!(sanitize_name_segment("foo_bar.baz"), "foo-bar-baz");
+    }
+
+    #[test]
+    fn sanitize_name_segment_collapses_consecutive_separators() {
+        assert_eq!(sanitize_name_segment("a__b--c..d"), "a-b-c-d");
+    }
+
+    #[test]
+    fn sanitize_name_segment_strips_leading_trailing_hyphens() {
+        assert_eq!(sanitize_name_segment("-abc-"), "abc");
+    }
+
+    #[test]
+    fn sanitize_name_segment_drops_non_ascii() {
+        assert_eq!(sanitize_name_segment("café"), "caf");
+    }
+
+    // -----------------------------------------------------------------------
+    // short_path_hash
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn short_path_hash_is_deterministic() {
+        let a = short_path_hash("/home/user/project");
+        let b = short_path_hash("/home/user/project");
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn short_path_hash_differs_for_different_paths() {
+        let a = short_path_hash("/home/user/project-a");
+        let b = short_path_hash("/home/user/project-b");
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn short_path_hash_is_4_hex_chars() {
+        let h = short_path_hash("/some/path");
+        assert_eq!(h.len(), 4);
+        assert!(h.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    // -----------------------------------------------------------------------
+    // disambiguate_app_name — no conflict
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn no_existing_apps_returns_candidate_unchanged() {
+        let result = disambiguate_app_name("my-app", "/proj", &[]);
+        assert_eq!(result, "my-app");
+    }
+
+    #[test]
+    fn same_project_dir_is_not_a_conflict() {
+        let existing = vec![("my-app".into(), "/proj".into())];
+        let result = disambiguate_app_name("my-app", "/proj", &existing);
+        assert_eq!(result, "my-app");
+    }
+
+    #[test]
+    fn different_name_is_not_a_conflict() {
+        let existing = vec![("other-app".into(), "/other".into())];
+        let result = disambiguate_app_name("my-app", "/proj", &existing);
+        assert_eq!(result, "my-app");
+    }
+
+    // -----------------------------------------------------------------------
+    // disambiguate_app_name — conflict resolved by dir name
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn conflict_appends_dir_leaf_name() {
+        let existing = vec![("my-app".into(), "/home/user/proj-a".into())];
+        let result = disambiguate_app_name("my-app", "/home/user/proj-b", &existing);
+        assert_eq!(result, "my-app-proj-b");
+    }
+
+    #[test]
+    fn conflict_from_variant_matching_existing_app_name() {
+        // "app-foo" is registered (no variant). A new project "app" with
+        // --variant foo produces the same composite name "app-foo".
+        let existing = vec![("app-foo".into(), "/proj/app-foo".into())];
+        let result = disambiguate_app_name("app-foo", "/proj/app", &existing);
+        assert_eq!(result, "app-foo-app");
+    }
+
+    #[test]
+    fn conflict_from_non_variant_matching_variant_composite() {
+        // "app" with --variant "foo" is registered as "app-foo". A new
+        // project literally named "app-foo" (no variant) would collide.
+        let existing = vec![("app-foo".into(), "/proj/app".into())];
+        let result = disambiguate_app_name("app-foo", "/proj/app-foo", &existing);
+        assert_eq!(result, "app-foo-app-foo");
+    }
+
+    // -----------------------------------------------------------------------
+    // disambiguate_app_name — dir name also conflicts → hash fallback
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn double_conflict_falls_back_to_hash() {
+        // Both the base name and the dir-suffixed name already taken.
+        let existing = vec![
+            ("my-app".into(), "/workspace/a".into()),
+            ("my-app-b".into(), "/workspace/c".into()),
+        ];
+        let result = disambiguate_app_name("my-app", "/workspace/b", &existing);
+        let hash = short_path_hash("/workspace/b");
+        assert_eq!(result, format!("my-app-{hash}"));
+    }
+
+    // -----------------------------------------------------------------------
+    // disambiguate_app_name — workspace / monorepo scenarios
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn workspace_apps_get_folder_suffix() {
+        // Two packages in a monorepo, both named "api" in tako.toml.
+        let existing = vec![("api".into(), "/repo/packages/billing".into())];
+        let result = disambiguate_app_name("api", "/repo/packages/payments", &existing);
+        assert_eq!(result, "api-payments");
+    }
+
+    #[test]
+    fn two_checkouts_of_same_repo_get_folder_suffix() {
+        let existing = vec![("my-app".into(), "/home/user/my-app-main".into())];
+        let result = disambiguate_app_name("my-app", "/home/user/my-app-feature", &existing);
+        assert_eq!(result, "my-app-my-app-feature");
+    }
+
+    // -----------------------------------------------------------------------
+    // disambiguate_app_name — multiple registered apps
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn no_conflict_among_many_registered_apps() {
+        let existing = vec![
+            ("alpha".into(), "/a".into()),
+            ("beta".into(), "/b".into()),
+            ("gamma".into(), "/c".into()),
+        ];
+        let result = disambiguate_app_name("delta", "/d", &existing);
+        assert_eq!(result, "delta");
+    }
+
+    #[test]
+    fn conflict_detected_among_many_registered_apps() {
+        let existing = vec![
+            ("alpha".into(), "/a".into()),
+            ("beta".into(), "/b".into()),
+            ("gamma".into(), "/c".into()),
+        ];
+        let result = disambiguate_app_name("beta", "/other", &existing);
+        assert_eq!(result, "beta-other");
+    }
+
+    // -----------------------------------------------------------------------
+    // Edge cases
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn root_path_project_uses_hash_fallback() {
+        // "/" has no file_name component.
+        let existing = vec![("app".into(), "/other".into())];
+        let result = disambiguate_app_name("app", "/", &existing);
+        let hash = short_path_hash("/");
+        assert_eq!(result, format!("app-{hash}"));
+    }
+
+    #[test]
+    fn re_registration_after_disambiguation_is_idempotent() {
+        // After disambiguation, the app was registered as "api-payments".
+        // Re-running from the same dir should find itself and not
+        // disambiguate further.
+        let existing = vec![
+            ("api".into(), "/repo/packages/billing".into()),
+            ("api-payments".into(), "/repo/packages/payments".into()),
+        ];
+        // The candidate is still "api" (before disambiguation), and project
+        // dir is the same as the "api-payments" entry won't match "api", so
+        // we'd still disambiguate. But the disambiguated name "api-payments"
+        // matches our own project_dir, so it's not a conflict.
+        let result =
+            disambiguate_app_name("api", "/repo/packages/payments", &existing);
+        assert_eq!(result, "api-payments");
+    }
 }

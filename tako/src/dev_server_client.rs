@@ -82,8 +82,10 @@ impl LineClient {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ListedApp {
     pub app_name: String,
+    pub variant: Option<String>,
     pub hosts: Vec<String>,
     pub upstream_port: u16,
     pub pid: Option<u32>,
@@ -362,6 +364,10 @@ pub async fn list_apps() -> Result<Vec<ListedApp>, Box<dyn std::error::Error>> {
                 .unwrap_or_default();
             Some(ListedApp {
                 app_name: a.get("app_name")?.as_str()?.to_string(),
+                variant: a
+                    .get("variant")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
                 hosts,
                 upstream_port: a.get("upstream_port")?.as_u64()? as u16,
                 pid: a.get("pid").and_then(|p| p.as_u64()).map(|p| p as u32),
@@ -375,6 +381,7 @@ pub async fn list_apps() -> Result<Vec<ListedApp>, Box<dyn std::error::Error>> {
 pub struct RegisteredAppInfo {
     pub project_dir: String,
     pub app_name: String,
+    pub variant: Option<String>,
     pub hosts: Vec<String>,
     pub upstream_port: u16,
     pub status: String,
@@ -385,6 +392,7 @@ pub struct RegisteredAppInfo {
 pub async fn register_app(
     project_dir: &str,
     app_name: &str,
+    variant: Option<&str>,
     hosts: &[String],
     upstream_port: u16,
     command: &[String],
@@ -394,7 +402,7 @@ pub async fn register_app(
     let sock = socket_path()?;
     let stream = UnixStream::connect(&sock).await?;
     let mut c = LineClient::new(stream);
-    let req = serde_json::json!({
+    let mut req = serde_json::json!({
         "type": "RegisterApp",
         "project_dir": project_dir,
         "app_name": app_name,
@@ -405,6 +413,9 @@ pub async fn register_app(
         "log_path": log_path,
         "client_pid": std::process::id(),
     });
+    if let Some(v) = variant {
+        req["variant"] = serde_json::Value::String(v.to_string());
+    }
     c.send_line(&req.to_string()).await?;
     let line = c.read_line().await?;
     let v: serde_json::Value = serde_json::from_str(&line)?;
@@ -526,6 +537,10 @@ pub async fn list_registered_apps() -> Result<Vec<RegisteredAppInfo>, Box<dyn st
             Some(RegisteredAppInfo {
                 project_dir: a.get("project_dir")?.as_str()?.to_string(),
                 app_name: a.get("app_name")?.as_str()?.to_string(),
+                variant: a
+                    .get("variant")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string()),
                 hosts,
                 upstream_port: a.get("upstream_port")?.as_u64()? as u16,
                 status: a

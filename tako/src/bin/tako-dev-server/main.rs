@@ -461,6 +461,7 @@ async fn handle_client(
             Request::RegisterApp {
                 project_dir,
                 app_name,
+                variant,
                 hosts,
                 upstream_port,
                 command,
@@ -479,12 +480,17 @@ async fn handle_client(
                 };
 
                 if let Some(db) = &s.db {
-                    let _ = db.register(&project_dir, &app_name);
+                    let _ = db.register(
+                        &project_dir,
+                        &app_name,
+                        variant.as_deref(),
+                    );
                 }
                 s.apps.insert(
                     project_dir.clone(),
                     state::RuntimeApp {
                         name: app_name.clone(),
+                        variant: variant.clone(),
                         hosts: hosts.clone(),
                         upstream_port,
                         status: state::AppStatus::Running,
@@ -634,6 +640,7 @@ async fn handle_client(
                     .map(|(project_dir, a)| protocol::RegisteredAppInfo {
                         project_dir: project_dir.clone(),
                         app_name: a.name.clone(),
+                        variant: a.variant.clone(),
                         hosts: a.hosts.clone(),
                         upstream_port: a.upstream_port,
                         status: a.status.as_str().to_string(),
@@ -653,6 +660,7 @@ async fn handle_client(
                     })
                     .map(|a| AppInfo {
                         app_name: a.name.clone(),
+                        variant: a.variant.clone(),
                         hosts: a.hosts.clone(),
                         upstream_port: a.upstream_port,
                         pid: a.pid,
@@ -1338,6 +1346,7 @@ mod tests {
             project_dir.to_string(),
             state::RuntimeApp {
                 name: name.to_string(),
+                variant: None,
                 hosts: vec![format!("{name}.tako.test")],
                 upstream_port: 3000,
                 status: state::AppStatus::Running,
@@ -1745,6 +1754,7 @@ mod tests {
                 "/proj".to_string(),
                 state::RuntimeApp {
                     name: "my-app".to_string(),
+                    variant: None,
                     hosts: vec!["my-app.tako.test".to_string()],
                     upstream_port: 3000,
                     status: state::AppStatus::Running,
@@ -1765,5 +1775,187 @@ mod tests {
         // wait() will return once the process has been terminated by SIGTERM.
         let status = child.wait().unwrap();
         assert!(!status.success());
+    }
+
+    // -----------------------------------------------------------------------
+    // Variant support
+    // -----------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn register_app_with_variant_roundtrip() {
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let (state, _tmp) = test_state();
+        let h = tokio::spawn(async move { handle_client(a, state).await });
+
+        let (r, mut w) = b.into_split();
+        let mut lines = BufReader::new(r).lines();
+
+        let req = serde_json::json!({
+            "type": "RegisterApp",
+            "project_dir": "/proj/my-app",
+            "app_name": "my-app-staging",
+            "variant": "staging",
+            "hosts": ["my-app-staging.tako.test"],
+            "upstream_port": 3000,
+            "command": ["bun", "run", "index.ts"],
+            "env": {},
+            "log_path": "/tmp/log.jsonl"
+        });
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        match resp {
+            Response::AppRegistered { app_name, .. } => {
+                assert_eq!(app_name, "my-app-staging");
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        // List and verify variant is present.
+        let req = serde_json::json!({"type": "ListRegisteredApps"});
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        match resp {
+            Response::RegisteredApps { apps } => {
+                assert_eq!(apps.len(), 1);
+                assert_eq!(apps[0].app_name, "my-app-staging");
+                assert_eq!(apps[0].variant, Some("staging".to_string()));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        drop(w);
+        h.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn register_app_without_variant_has_none() {
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let (state, _tmp) = test_state();
+        let h = tokio::spawn(async move { handle_client(a, state).await });
+
+        let (r, mut w) = b.into_split();
+        let mut lines = BufReader::new(r).lines();
+
+        let req = serde_json::json!({
+            "type": "RegisterApp",
+            "project_dir": "/proj/my-app",
+            "app_name": "my-app",
+            "hosts": ["my-app.tako.test"],
+            "upstream_port": 3000,
+            "command": ["bun", "run", "index.ts"],
+            "env": {},
+            "log_path": "/tmp/log.jsonl"
+        });
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        let _line = lines.next_line().await.unwrap().unwrap();
+
+        let req = serde_json::json!({"type": "ListRegisteredApps"});
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        match resp {
+            Response::RegisteredApps { apps } => {
+                assert_eq!(apps.len(), 1);
+                assert_eq!(apps[0].app_name, "my-app");
+                assert!(apps[0].variant.is_none());
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        drop(w);
+        h.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn variant_and_non_variant_coexist_in_list() {
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let (state, _tmp) = test_state();
+        let h = tokio::spawn(async move { handle_client(a, state).await });
+
+        let (r, mut w) = b.into_split();
+        let mut lines = BufReader::new(r).lines();
+
+        // Register "app-foo" without variant from /proj1
+        let req = serde_json::json!({
+            "type": "RegisterApp",
+            "project_dir": "/proj1",
+            "app_name": "app-foo",
+            "hosts": ["app-foo.tako.test"],
+            "upstream_port": 3000,
+            "command": ["bun", "run", "index.ts"],
+            "env": {},
+            "log_path": "/tmp/log1.jsonl"
+        });
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+        let _line = lines.next_line().await.unwrap().unwrap();
+
+        // Register "app-foo" with variant "foo" from /proj2
+        // (in practice the CLI would have disambiguated the name, but
+        //  this tests that both can coexist with different project_dirs)
+        let req = serde_json::json!({
+            "type": "RegisterApp",
+            "project_dir": "/proj2",
+            "app_name": "app-foo-proj2",
+            "variant": "foo",
+            "hosts": ["app-foo-proj2.tako.test"],
+            "upstream_port": 3001,
+            "command": ["bun", "run", "index.ts"],
+            "env": {},
+            "log_path": "/tmp/log2.jsonl"
+        });
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+        let _line = lines.next_line().await.unwrap().unwrap();
+
+        // List all
+        let req = serde_json::json!({"type": "ListRegisteredApps"});
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        match resp {
+            Response::RegisteredApps { apps } => {
+                assert_eq!(apps.len(), 2);
+                let no_variant = apps.iter().find(|a| a.project_dir == "/proj1").unwrap();
+                let with_variant = apps.iter().find(|a| a.project_dir == "/proj2").unwrap();
+                assert_eq!(no_variant.app_name, "app-foo");
+                assert!(no_variant.variant.is_none());
+                assert_eq!(with_variant.app_name, "app-foo-proj2");
+                assert_eq!(with_variant.variant, Some("foo".to_string()));
+            }
+            other => panic!("unexpected: {other:?}"),
+        }
+
+        drop(w);
+        h.await.unwrap().unwrap();
+    }
+
+    #[test]
+    fn variant_persisted_in_sqlite() {
+        let (state, _tmp) = test_state();
+        let s = state.lock().unwrap();
+        let db = s.db.as_ref().unwrap();
+
+        db.register("/proj", "my-app", Some("staging")).unwrap();
+        let app = db.get("/proj").unwrap().unwrap();
+        assert_eq!(app.name, "my-app");
+        assert_eq!(app.variant.as_deref(), Some("staging"));
+
+        // Re-register without variant clears it.
+        db.register("/proj", "my-app", None).unwrap();
+        let app = db.get("/proj").unwrap().unwrap();
+        assert!(app.variant.is_none());
     }
 }

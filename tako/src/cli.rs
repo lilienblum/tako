@@ -566,17 +566,27 @@ mod tests {
         };
         assert!(command.is_none());
         assert!(args.dir.is_none());
-        assert!(args.name.is_none());
+        assert!(args.variant.is_none());
     }
 
     #[test]
-    fn dev_parses_name_flag() {
-        let cli = Cli::try_parse_from(["tako", "dev", "--name", "my-app"]).unwrap();
+    fn dev_parses_variant_flag() {
+        let cli = Cli::try_parse_from(["tako", "dev", "--variant", "foo"]).unwrap();
         let Commands::Dev { command, args } = cli.command.expect("command") else {
             panic!("expected Dev");
         };
         assert!(command.is_none());
-        assert_eq!(args.name.as_deref(), Some("my-app"));
+        assert_eq!(args.variant.as_deref(), Some("foo"));
+    }
+
+    #[test]
+    fn dev_parses_var_alias() {
+        let cli = Cli::try_parse_from(["tako", "dev", "--var", "foo"]).unwrap();
+        let Commands::Dev { command, args } = cli.command.expect("command") else {
+            panic!("expected Dev");
+        };
+        assert!(command.is_none());
+        assert_eq!(args.variant.as_deref(), Some("foo"));
     }
 
     #[test]
@@ -704,9 +714,9 @@ pub struct DevArgs {
     #[arg(value_name = "DIR")]
     pub dir: Option<std::path::PathBuf>,
 
-    /// Override app name (used for domain and display)
-    #[arg(long)]
-    pub name: Option<String>,
+    /// Run a variant of the app (e.g. --variant foo → myapp-foo.tako.test)
+    #[arg(long, visible_alias = "var")]
+    pub variant: Option<String>,
 }
 
 #[derive(Subcommand, Debug)]
@@ -888,7 +898,7 @@ impl Cli {
                 }
 
                 match command {
-                    None => rt.block_on(commands::dev::run(DEV_PUBLIC_PORT, args.name)),
+                    None => rt.block_on(commands::dev::run(DEV_PUBLIC_PORT, args.variant)),
                     Some(DevSubcommands::Stop { name, all }) => {
                         rt.block_on(commands::dev::stop(name, all))
                     }

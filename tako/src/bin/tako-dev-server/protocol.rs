@@ -10,6 +10,8 @@ pub enum Request {
         project_dir: String,
         app_name: String,
         #[serde(default)]
+        variant: Option<String>,
+        #[serde(default)]
         hosts: Vec<String>,
         upstream_port: u16,
         command: Vec<String>,
@@ -110,6 +112,8 @@ pub enum DevEvent {
 pub struct RegisteredAppInfo {
     pub project_dir: String,
     pub app_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
     pub hosts: Vec<String>,
     pub upstream_port: u16,
     pub status: String,
@@ -120,6 +124,8 @@ pub struct RegisteredAppInfo {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppInfo {
     pub app_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
     #[serde(default)]
     pub hosts: Vec<String>,
     pub upstream_port: u16,
@@ -223,6 +229,7 @@ mod tests {
         let req = Request::RegisterApp {
             project_dir: "/home/user/proj".to_string(),
             app_name: "my-app".to_string(),
+            variant: None,
             hosts: vec![
                 "my-app.tako.test".to_string(),
                 "my-app.tako.test/api".to_string(),
@@ -306,6 +313,7 @@ mod tests {
             apps: vec![RegisteredAppInfo {
                 project_dir: "/proj".to_string(),
                 app_name: "app".to_string(),
+                variant: None,
                 hosts: vec!["app.tako.test".to_string()],
                 upstream_port: 3000,
                 status: "running".to_string(),
