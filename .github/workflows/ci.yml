@@ -1,12 +1,13 @@
 name: CI
 
 on:
+  push:
+    branches: [master]
   pull_request:
-    branches:
-      - master
+    branches: [master]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
