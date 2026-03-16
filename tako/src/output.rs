@@ -1207,7 +1207,10 @@ impl TransferProgress {
     /// In pretty mode the progress bar is cleared so only the single summary
     /// line remains in scrollback.
     pub fn finish(&self) {
-        if self.finished.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        if self
+            .finished
+            .swap(true, std::sync::atomic::Ordering::SeqCst)
+        {
             return;
         }
         if let Some(ref pb) = self.pb {

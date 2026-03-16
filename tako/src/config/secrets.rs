@@ -132,15 +132,12 @@ impl SecretsStore {
         validate_environment_name(env)?;
         validate_secret_name(name)?;
 
-        let env_secrets = self
-            .environments
-            .get_mut(env)
-            .ok_or_else(|| {
-                ConfigError::Validation(format!(
-                    "Environment '{}' not initialized. Call ensure_env_salt first.",
-                    env
-                ))
-            })?;
+        let env_secrets = self.environments.get_mut(env).ok_or_else(|| {
+            ConfigError::Validation(format!(
+                "Environment '{}' not initialized. Call ensure_env_salt first.",
+                env
+            ))
+        })?;
 
         env_secrets.secrets.insert(name.to_string(), value);
         Ok(())
@@ -151,16 +148,13 @@ impl SecretsStore {
     pub fn ensure_env_salt(&mut self, env: &str) -> Result<String> {
         validate_environment_name(env)?;
 
-        let env_secrets = self
-            .environments
-            .entry(env.to_string())
-            .or_insert_with(|| {
-                let salt = crate::crypto::generate_salt();
-                EnvironmentSecrets {
-                    salt: crate::crypto::encode_salt(&salt),
-                    secrets: HashMap::new(),
-                }
-            });
+        let env_secrets = self.environments.entry(env.to_string()).or_insert_with(|| {
+            let salt = crate::crypto::generate_salt();
+            EnvironmentSecrets {
+                salt: crate::crypto::encode_salt(&salt),
+                secrets: HashMap::new(),
+            }
+        });
 
         Ok(env_secrets.salt.clone())
     }
@@ -306,10 +300,7 @@ fn sorted_environments(
     environments
         .iter()
         .map(|(env_name, env_secrets)| {
-            let sorted_secrets = env_secrets
-                .secrets
-                .iter()
-                .collect::<BTreeMap<_, _>>();
+            let sorted_secrets = env_secrets.secrets.iter().collect::<BTreeMap<_, _>>();
             (
                 env_name,
                 SortedEnvironmentSecrets {
@@ -750,10 +741,7 @@ mod tests {
             Some(&"secret456".to_string())
         );
         // Salts are preserved
-        assert_eq!(
-            loaded.get_salt("production"),
-            store.get_salt("production")
-        );
+        assert_eq!(loaded.get_salt("production"), store.get_salt("production"));
     }
 
     #[test]

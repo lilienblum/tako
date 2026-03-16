@@ -107,9 +107,7 @@ fn read_secret_names(project_dir: &Path) -> Vec<String> {
 }
 
 fn extract_secret_names(env_value: &serde_json::Value) -> Vec<String> {
-    let secrets = env_value
-        .get("secrets")
-        .and_then(|s| s.as_object());
+    let secrets = env_value.get("secrets").and_then(|s| s.as_object());
     match secrets {
         Some(map) => {
             let mut names: Vec<String> = map.keys().cloned().collect();

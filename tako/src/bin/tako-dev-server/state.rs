@@ -312,9 +312,7 @@ mod tests {
     #[test]
     fn register_and_get() {
         let (_tmp, store) = temp_store();
-        store
-            .register("/home/user/my-app", "my-app", None)
-            .unwrap();
+        store.register("/home/user/my-app", "my-app", None).unwrap();
 
         let app = store.get("/home/user/my-app").unwrap().unwrap();
         assert_eq!(app.name, "my-app");
@@ -386,9 +384,7 @@ mod tests {
         store
             .register(real_proj.to_str().unwrap(), "real", None)
             .unwrap();
-        store
-            .register("/nonexistent/proj", "stale", None)
-            .unwrap();
+        store.register("/nonexistent/proj", "stale", None).unwrap();
 
         let removed = store.cleanup_stale().unwrap();
         assert_eq!(removed, vec!["/nonexistent/proj"]);

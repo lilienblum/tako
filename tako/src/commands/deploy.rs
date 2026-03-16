@@ -1524,9 +1524,8 @@ fn decrypt_deploy_secrets(
     let key = super::secret::load_or_derive_key(app_name, env, secrets)?;
     let mut decrypted = HashMap::new();
     for (name, encrypted_value) in encrypted {
-        let value = crate::crypto::decrypt(encrypted_value, &key).map_err(|e| {
-            format!("Failed to decrypt secret '{}': {}", name, e)
-        })?;
+        let value = crate::crypto::decrypt(encrypted_value, &key)
+            .map_err(|e| format!("Failed to decrypt secret '{}': {}", name, e))?;
         decrypted.insert(name.clone(), value);
     }
     Ok(decrypted)
@@ -2336,11 +2335,7 @@ async fn build_target_artifacts(
                     custom_stages,
                 )?;
             }
-            save_runtime_version_to_manifest(
-                &workspace,
-                app_subdir,
-                &runtime_version,
-            )?;
+            save_runtime_version_to_manifest(&workspace, app_subdir, &runtime_version)?;
             output::bullet(&format_build_completed_message(display_target_label));
 
             let prepare_label = format_prepare_artifact_message(display_target_label);

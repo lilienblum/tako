@@ -480,11 +480,7 @@ async fn handle_client(
                 };
 
                 if let Some(db) = &s.db {
-                    let _ = db.register(
-                        &project_dir,
-                        &app_name,
-                        variant.as_deref(),
-                    );
+                    let _ = db.register(&project_dir, &app_name, variant.as_deref());
                 }
                 s.apps.insert(
                     project_dir.clone(),

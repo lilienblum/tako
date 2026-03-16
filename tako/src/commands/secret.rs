@@ -102,9 +102,7 @@ async fn run_async(cmd: SecretCommands) -> Result<(), Box<dyn std::error::Error>
         SecretCommands::Rm { name, env, sync } => remove_secret(&name, env.as_deref(), sync).await,
         SecretCommands::Ls => list_secrets().await,
         SecretCommands::Sync { env } => sync_secrets(env.as_deref()).await,
-        SecretCommands::Key(SecretKeyCommands::Derive { env }) => {
-            derive_key(env.as_deref()).await
-        }
+        SecretCommands::Key(SecretKeyCommands::Derive { env }) => derive_key(env.as_deref()).await,
         SecretCommands::Key(SecretKeyCommands::Export { env }) => export_key(env.as_deref()).await,
     }
 }
@@ -516,7 +514,8 @@ async fn derive_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::
     secrets.save_to_dir(&project_dir)?;
 
     // Prompt for passphrase
-    let passphrase = prompt_for_passphrase(&format!("Enter passphrase for '{}' ({})", app_name, env))?;
+    let passphrase =
+        prompt_for_passphrase(&format!("Enter passphrase for '{}' ({})", app_name, env))?;
 
     // Derive and store the key
     let salt = crate::crypto::decode_salt(&salt_b64)?;
@@ -538,9 +537,9 @@ async fn export_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::
     let app_name = resolve_app_name(&project_dir)?;
     let env = super::helpers::resolve_env(target_env);
     let secrets = crate::config::SecretsStore::load_from_dir(&project_dir)?;
-    let salt_b64 = secrets.get_salt(&env).ok_or_else(|| {
-        format!("No secrets configured for environment '{}'.", env)
-    })?;
+    let salt_b64 = secrets
+        .get_salt(&env)
+        .ok_or_else(|| format!("No secrets configured for environment '{}'.", env))?;
     let key_store = crate::crypto::KeyStore::for_salt(salt_b64)?;
 
     if !key_store.key_exists() {
@@ -623,10 +622,7 @@ pub fn load_or_derive_key(
         output::strong(env),
     ));
 
-    let passphrase = read_passphrase(&format!(
-        "Enter passphrase for '{}' ({})",
-        app_name, env
-    ))?;
+    let passphrase = read_passphrase(&format!("Enter passphrase for '{}' ({})", app_name, env))?;
 
     let key = crate::crypto::EncryptionKey::derive(&passphrase, &salt)?;
 
@@ -636,9 +632,7 @@ pub fn load_or_derive_key(
     Ok(key)
 }
 
-fn resolve_app_name(
-    project_dir: &std::path::Path,
-) -> Result<String, Box<dyn std::error::Error>> {
+fn resolve_app_name(project_dir: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
     crate::app::require_app_name_from_config(project_dir)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()).into())
 }

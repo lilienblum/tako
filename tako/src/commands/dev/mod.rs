@@ -279,10 +279,7 @@ fn disambiguate_app_name(
     }
 
     // Try the project directory's leaf name as a suffix.
-    if let Some(leaf) = Path::new(project_dir)
-        .file_name()
-        .and_then(|n| n.to_str())
-    {
+    if let Some(leaf) = Path::new(project_dir).file_name().and_then(|n| n.to_str()) {
         let seg = sanitize_name_segment(leaf);
         if !seg.is_empty() {
             let with_dir = format!("{candidate}-{seg}");
@@ -1939,11 +1936,8 @@ dev = ["bun", "run", "dev"]
             "[envs.development]\nroutes = [\"some-app.tako.test/bun\", \"*.example.tako.test\"]\n",
         )
         .unwrap();
-        let routes = compute_display_routes(
-            &cfg,
-            "example-foo.tako.test",
-            Some("example.tako.test"),
-        );
+        let routes =
+            compute_display_routes(&cfg, "example-foo.tako.test", Some("example.tako.test"));
         assert_eq!(
             routes,
             vec![
@@ -1958,15 +1952,10 @@ dev = ["bun", "run", "dev"]
     fn display_routes_variant_deduplicates_rewritten_default() {
         // Config route matches the base domain; after rewriting it becomes
         // the default host and should be deduped.
-        let cfg = TakoToml::parse(
-            "[envs.development]\nroutes = [\"example.tako.test\"]\n",
-        )
-        .unwrap();
-        let routes = compute_display_routes(
-            &cfg,
-            "example-foo.tako.test",
-            Some("example.tako.test"),
-        );
+        let cfg =
+            TakoToml::parse("[envs.development]\nroutes = [\"example.tako.test\"]\n").unwrap();
+        let routes =
+            compute_display_routes(&cfg, "example-foo.tako.test", Some("example.tako.test"));
         assert_eq!(routes, vec!["example-foo.tako.test"]);
     }
 
@@ -2209,8 +2198,7 @@ pub async fn run(
         std::fs::canonicalize(&project_dir).unwrap_or_else(|_| project_dir.clone());
     let canonical_for_disambig_str = canonical_for_disambig.to_string_lossy().to_string();
     let existing_apps = try_list_registered_app_names().await;
-    let app_name =
-        disambiguate_app_name(&app_name, &canonical_for_disambig_str, &existing_apps);
+    let app_name = disambiguate_app_name(&app_name, &canonical_for_disambig_str, &existing_apps);
 
     let domain = LocalCA::app_domain(&app_name);
     // When a variant is active, routes in tako.toml reference the base app
@@ -2328,8 +2316,8 @@ pub async fn run(
 
     // Write decrypted development secrets to a temp file for the SDK to read.
     // Secrets are never injected as env vars — the SDK loads them from this file.
-    let secrets_file = write_dev_secrets_file(&project_dir, &app_name, &mut env)
-        .map_err(|e| e.to_string())?;
+    let secrets_file =
+        write_dev_secrets_file(&project_dir, &app_name, &mut env).map_err(|e| e.to_string())?;
 
     // Regenerate tako.d.ts with secret types
     if runtime_adapter.preset_group() == PresetGroup::Js {
@@ -2492,7 +2480,8 @@ pub async fn run(
                         url,
                         log_path,
                     };
-                    let display_hosts = compute_display_routes(&cfg, &domain, base_domain.as_deref());
+                    let display_hosts =
+                        compute_display_routes(&cfg, &domain, base_domain.as_deref());
                     return run_attached_dev_client(&app_name, interactive, session, display_hosts)
                         .await;
                 }
@@ -2803,7 +2792,10 @@ pub async fn run(
                     }
                     Err(msg) => {
                         let _ = log_tx
-                            .send(ScopedLog::warn("tako", format!("Failed to reload secrets: {}", msg)))
+                            .send(ScopedLog::warn(
+                                "tako",
+                                format!("Failed to reload secrets: {}", msg),
+                            ))
                             .await;
                     }
                 }
@@ -2813,18 +2805,19 @@ pub async fn run(
 
                 *env_state.lock().await = new_env.clone();
 
-                let new_hosts = match compute_dev_hosts(&app_name, &cfg, &domain, base_domain.as_deref()) {
-                    Ok(hosts) => hosts,
-                    Err(msg) => {
-                        let _ = log_tx
-                            .send(ScopedLog::error(
-                                "tako",
-                                format!("tako.toml invalid routes: {}", msg),
-                            ))
-                            .await;
-                        continue;
-                    }
-                };
+                let new_hosts =
+                    match compute_dev_hosts(&app_name, &cfg, &domain, base_domain.as_deref()) {
+                        Ok(hosts) => hosts,
+                        Err(msg) => {
+                            let _ = log_tx
+                                .send(ScopedLog::error(
+                                    "tako",
+                                    format!("tako.toml invalid routes: {}", msg),
+                                ))
+                                .await;
+                            continue;
+                        }
+                    };
                 let hosts_changed = {
                     let mut cur = hosts_state.lock().await;
                     let changed = *cur != new_hosts;
@@ -4388,8 +4381,7 @@ mod disambiguate_tests {
         // dir is the same as the "api-payments" entry won't match "api", so
         // we'd still disambiguate. But the disambiguated name "api-payments"
         // matches our own project_dir, so it's not a conflict.
-        let result =
-            disambiguate_app_name("api", "/repo/packages/payments", &existing);
+        let result = disambiguate_app_name("api", "/repo/packages/payments", &existing);
         assert_eq!(result, "api-payments");
     }
 }
