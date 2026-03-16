@@ -1,0 +1,144 @@
+name: Cargo Release
+
+on:
+  workflow_call:
+    inputs:
+      crate:
+        description: "Crate name (e.g. tako, tako-server)"
+        required: true
+        type: string
+      directory:
+        description: "Crate directory (e.g. tako, tako-server)"
+        required: true
+        type: string
+      bump:
+        description: "Version bump type (patch, minor, major)"
+        required: true
+        type: string
+      title:
+        description: "Release title (e.g. Tako CLI, Tako Server)"
+        required: true
+        type: string
+    secrets:
+      CARGO_REGISTRY_TOKEN:
+        required: true
+
+jobs:
+  wait-for-ci:
+    name: Wait for CI
+    runs-on: ubuntu-latest
+    steps:
+      - name: Wait for CI to pass on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          repo="${{ github.repository }}"
+          sha="${{ github.sha }}"
+
+          # Wait for CI run to appear
+          run_id=""
+          for i in $(seq 1 30); do
+            run_id=$(gh run list -R "$repo" --workflow=ci.yml --commit="$sha" --json databaseId -q '.[0].databaseId')
+            if [ -n "$run_id" ]; then break; fi
+            echo "Waiting for CI run to appear... (attempt $i/30)"
+            sleep 10
+          done
+
+          if [ -z "$run_id" ]; then
+            echo "::error::No CI run found for commit $sha"
+            exit 1
+          fi
+
+          # Wait for it to complete (exits non-zero if failed)
+          gh run watch "$run_id" --exit-status -R "$repo"
+
+  prepare:
+    name: Prepare release
+    needs: wait-for-ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: master
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump version
+        id: bump
+        run: |
+          set -euo pipefail
+          git pull --ff-only
+          current=$(grep '^version = ' "${{ inputs.directory }}/Cargo.toml" | head -1 | sed 's/version = "\(.*\)"/\1/')
+          IFS='.' read -r major minor patch <<< "$current"
+          case "${{ inputs.bump }}" in
+            major) version="$((major+1)).0.0" ;;
+            minor) version="${major}.$((minor+1)).0" ;;
+            patch) version="${major}.${minor}.$((patch+1))" ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Bumping ${{ inputs.crate }} from $current to $version"
+
+          sed -i 's/^version = "'"$current"'"/version = "'"$version"'"/' "${{ inputs.directory }}/Cargo.toml"
+          sed -i '/^name = "${{ inputs.crate }}"$/{n;s/^version = ".*"/version = "'"$version"'"/;}' Cargo.lock
+          git add "${{ inputs.directory }}/Cargo.toml" Cargo.lock
+          git commit -m "chore(${{ inputs.crate }}): release v${version}"
+          git push
+
+      - name: Create tag
+        run: |
+          set -euo pipefail
+          tag="${{ inputs.crate }}-v${{ steps.bump.outputs.version }}"
+          git tag "$tag"
+          git push origin "$tag"
+
+  cargo-publish:
+    name: Publish to crates.io
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.crate }}-v${{ needs.prepare.outputs.version }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish
+        run: cargo publish -p ${{ inputs.crate }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  github-release:
+    name: Create GitHub release
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.crate }}-v${{ needs.prepare.outputs.version }}
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ inputs.crate }}-v${{ needs.prepare.outputs.version }}" \
+            --title "${{ inputs.title }} v${{ needs.prepare.outputs.version }}" \
+            --generate-notes \
+            --latest

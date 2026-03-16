@@ -1,0 +1,24 @@
+name: Release Tako CLI
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Version bump"
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  release:
+    uses: ./.github/workflows/cargo-release.yml
+    with:
+      crate: tako
+      directory: tako
+      bump: ${{ inputs.bump }}
+      title: Tako CLI
+    secrets:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
