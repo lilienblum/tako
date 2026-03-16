@@ -251,3 +251,11 @@ Scope agreement → Code (TDD) → SPEC.md + README.md updates → Cleanup
 3. **SPEC.md** - Document finalized behavior after implementation
 4. **README.md** - Update affected component readmes for basic usage/run instructions
 5. **Cleanup** - Close/update related issue or release task
+
+## Available Commands
+
+Reusable agent commands live in `commands/`. Read the referenced file for full instructions before executing.
+
+- **`commands/sweep.md`** — Security, performance, and code quality audit. Fixes trivial issues, reports the rest.
+- **`commands/spec-sync.md`** — Reconcile SPEC.md with code, then regenerate all SPEC-derived website docs.
+- **`commands/code-scanning-resolve.md`** — Resolve all open GitHub code scanning alerts (fix, dismiss, or ask for input).
