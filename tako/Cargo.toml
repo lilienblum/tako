@@ -22,7 +22,7 @@ name = "tako-loopback-proxy"
 path = "src/bin/tako-loopback-proxy/main.rs"
 
 [dependencies]
-tako-core = { path = "../tako-core", version = "0.0.1" }
+tako-core = { path = "../tako-core", version = "0.0.2" }
 tako-socket = { path = "../tako-socket", version = "0.0.1" }
 clap = { version = "4.5", features = ["derive", "env"] }
 tokio = { version = "1.49", features = ["full"] }
