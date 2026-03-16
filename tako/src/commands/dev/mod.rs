@@ -201,10 +201,22 @@ fn load_dev_tako_toml(project_dir: &Path) -> crate::config::Result<TakoToml> {
 
 /// Routes shown in the terminal panel — always includes the default host, then
 /// all configured routes verbatim (including wildcards and paths).
-fn compute_display_routes(cfg: &TakoToml, default_host: &str) -> Vec<String> {
+///
+/// When `base_domain` is provided (variant mode), routes referencing the base
+/// domain are rewritten to use `default_host` instead.
+fn compute_display_routes(
+    cfg: &TakoToml,
+    default_host: &str,
+    base_domain: Option<&str>,
+) -> Vec<String> {
     let mut out = vec![default_host.to_string()];
     if let Some(routes) = cfg.get_routes("development") {
         for route in routes {
+            let route = if let Some(bd) = base_domain {
+                route.replace(bd, default_host)
+            } else {
+                route
+            };
             // Trim trailing slash so "foo.tako.test/" == "foo.tako.test".
             if route.trim_end_matches('/') != default_host {
                 out.push(route);
@@ -300,6 +312,7 @@ fn compute_dev_hosts(
     app_name: &str,
     cfg: &TakoToml,
     default_host: &str,
+    base_domain: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let routes = match cfg.get_routes("development") {
         Some(routes) if !routes.is_empty() => routes,
@@ -311,6 +324,11 @@ fn compute_dev_hosts(
     let mut out = vec![default_host.to_string()];
     for r in routes {
         validate_dev_route(&r, app_name).map_err(|e| e.to_string())?;
+        let r = if let Some(bd) = base_domain {
+            r.replace(bd, default_host)
+        } else {
+            r
+        };
         if !r.is_empty() {
             out.push(r);
         }
@@ -1891,7 +1909,7 @@ dev = ["bun", "run", "dev"]
     #[test]
     fn display_routes_always_includes_default() {
         let cfg = TakoToml::default();
-        let routes = compute_display_routes(&cfg, "app.tako.test");
+        let routes = compute_display_routes(&cfg, "app.tako.test", None);
         assert_eq!(routes, vec!["app.tako.test"]);
     }
 
@@ -1901,7 +1919,7 @@ dev = ["bun", "run", "dev"]
             "[envs.development]\nroutes = [\"app.tako.test/bun\", \"*.app.tako.test\"]\n",
         )
         .unwrap();
-        let routes = compute_display_routes(&cfg, "app.tako.test");
+        let routes = compute_display_routes(&cfg, "app.tako.test", None);
         assert_eq!(
             routes,
             vec!["app.tako.test", "app.tako.test/bun", "*.app.tako.test"]
@@ -1911,8 +1929,45 @@ dev = ["bun", "run", "dev"]
     #[test]
     fn display_routes_deduplicates_default_when_route_matches() {
         let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.tako.test\"]\n").unwrap();
-        let routes = compute_display_routes(&cfg, "app.tako.test");
+        let routes = compute_display_routes(&cfg, "app.tako.test", None);
         assert_eq!(routes, vec!["app.tako.test"]);
+    }
+
+    #[test]
+    fn display_routes_rewrite_wildcard_for_variant() {
+        let cfg = TakoToml::parse(
+            "[envs.development]\nroutes = [\"some-app.tako.test/bun\", \"*.example.tako.test\"]\n",
+        )
+        .unwrap();
+        let routes = compute_display_routes(
+            &cfg,
+            "example-foo.tako.test",
+            Some("example.tako.test"),
+        );
+        assert_eq!(
+            routes,
+            vec![
+                "example-foo.tako.test",
+                "some-app.tako.test/bun",
+                "*.example-foo.tako.test",
+            ]
+        );
+    }
+
+    #[test]
+    fn display_routes_variant_deduplicates_rewritten_default() {
+        // Config route matches the base domain; after rewriting it becomes
+        // the default host and should be deduped.
+        let cfg = TakoToml::parse(
+            "[envs.development]\nroutes = [\"example.tako.test\"]\n",
+        )
+        .unwrap();
+        let routes = compute_display_routes(
+            &cfg,
+            "example-foo.tako.test",
+            Some("example.tako.test"),
+        );
+        assert_eq!(routes, vec!["example-foo.tako.test"]);
     }
 
     #[test]
@@ -1926,14 +1981,14 @@ dev = ["bun", "run", "dev"]
     #[test]
     fn falls_back_to_default_host_when_development_routes_are_missing() {
         let cfg = TakoToml::default();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
         assert_eq!(hosts, vec!["app.tako.test".to_string()]);
     }
 
     #[test]
     fn falls_back_to_default_host_when_development_routes_are_empty() {
         let cfg = TakoToml::parse("[envs.development]\nroutes = []\n").unwrap();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
         assert_eq!(hosts, vec!["app.tako.test".to_string()]);
     }
 
@@ -1941,22 +1996,45 @@ dev = ["bun", "run", "dev"]
     fn always_includes_default_host_with_explicit_routes() {
         let cfg =
             TakoToml::parse("[envs.development]\nroutes = [\"api.app.tako.test\"]\n").unwrap();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
         assert_eq!(hosts, vec!["app.tako.test", "api.app.tako.test"]);
     }
 
     #[test]
     fn always_includes_default_host_with_wildcard_routes() {
         let cfg = TakoToml::parse("[envs.development]\nroutes = [\"*.app.tako.test\"]\n").unwrap();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
         assert_eq!(hosts, vec!["app.tako.test", "*.app.tako.test"]);
     }
 
     #[test]
     fn default_host_deduped_when_already_in_routes() {
         let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.tako.test\"]\n").unwrap();
-        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        let hosts = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
         assert_eq!(hosts, vec!["app.tako.test"]);
+    }
+
+    #[test]
+    fn dev_hosts_rewrite_wildcard_for_variant() {
+        let cfg = TakoToml::parse(
+            "[envs.development]\nroutes = [\"some-app.tako.test/bun\", \"*.example.tako.test\"]\n",
+        )
+        .unwrap();
+        let hosts = compute_dev_hosts(
+            "example-foo",
+            &cfg,
+            "example-foo.tako.test",
+            Some("example.tako.test"),
+        )
+        .unwrap();
+        assert_eq!(
+            hosts,
+            vec![
+                "example-foo.tako.test",
+                "some-app.tako.test/bun",
+                "*.example-foo.tako.test",
+            ]
+        );
     }
 
     /// Both routing and display include the full route patterns (host + path).
@@ -1966,8 +2044,8 @@ dev = ["bun", "run", "dev"]
             "[envs.development]\nroutes = [\"app.tako.test\", \"app.tako.test/api\", \"*.app.tako.test\"]\n",
         )
         .unwrap();
-        let display = compute_display_routes(&cfg, "app.tako.test");
-        let routing = compute_dev_hosts("app", &cfg, "app.tako.test").unwrap();
+        let display = compute_display_routes(&cfg, "app.tako.test", None);
+        let routing = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
 
         assert_eq!(
             display,
@@ -2123,7 +2201,7 @@ pub async fn run(
     let app_name = if let Some(ref v) = variant {
         format!("{base_name}-{v}")
     } else {
-        base_name
+        base_name.clone()
     };
 
     // Disambiguate if another project already owns this name.
@@ -2135,6 +2213,14 @@ pub async fn run(
         disambiguate_app_name(&app_name, &canonical_for_disambig_str, &existing_apps);
 
     let domain = LocalCA::app_domain(&app_name);
+    // When a variant is active, routes in tako.toml reference the base app
+    // domain (e.g. `*.example.tako.test`).  We rewrite them to use the
+    // variant domain (e.g. `*.example-foo.tako.test`).
+    let base_domain = if variant.is_some() {
+        Some(LocalCA::app_domain(&base_name))
+    } else {
+        None
+    };
 
     #[cfg(target_os = "macos")]
     explain_pending_sudo_setup(LOCAL_DNS_PORT)?;
@@ -2228,7 +2314,7 @@ pub async fn run(
     }
 
     // Compute initial dev config snapshot from tako.toml.
-    let dev_hosts = compute_dev_hosts(&app_name, &cfg, &domain)
+    let dev_hosts = compute_dev_hosts(&app_name, &cfg, &domain, base_domain.as_deref())
         .map_err(|e| format!("invalid development routes: {}", e))?;
     let primary_host = dev_hosts
         .iter()
@@ -2406,7 +2492,7 @@ pub async fn run(
                         url,
                         log_path,
                     };
-                    let display_hosts = compute_display_routes(&cfg, &domain);
+                    let display_hosts = compute_display_routes(&cfg, &domain, base_domain.as_deref());
                     return run_attached_dev_client(&app_name, interactive, session, display_hosts)
                         .await;
                 }
@@ -2517,7 +2603,7 @@ pub async fn run(
         let public_port_for_output = public_url_port;
         // Display all routes (default + configured, including wildcards/paths).
         // `dev_hosts` / `hosts_state` is routing-only (no wildcards); display is separate.
-        let hosts = compute_display_routes(&cfg, &domain);
+        let hosts = compute_display_routes(&cfg, &domain, base_domain.as_deref());
         let app_name_for_output = app_name.clone();
         let adapter_name_for_output = runtime_name.clone();
         let control_tx_for_output = control_tx.clone();
@@ -2684,6 +2770,7 @@ pub async fn run(
         let app_name = app_name.clone();
         let variant = variant.clone();
         let domain = domain.clone();
+        let base_domain = base_domain.clone();
         let env_state = env_state.clone();
         let secrets_file_state = secrets_file_state.clone();
         let hosts_state = hosts_state.clone();
@@ -2726,7 +2813,7 @@ pub async fn run(
 
                 *env_state.lock().await = new_env.clone();
 
-                let new_hosts = match compute_dev_hosts(&app_name, &cfg, &domain) {
+                let new_hosts = match compute_dev_hosts(&app_name, &cfg, &domain, base_domain.as_deref()) {
                     Ok(hosts) => hosts,
                     Err(msg) => {
                         let _ = log_tx
