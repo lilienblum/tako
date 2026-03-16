@@ -116,18 +116,41 @@ fn progress_bar(fraction: f32, fill_width: usize) -> String {
     let f = fraction.clamp(0.0, 1.0);
     let filled = (f * fill_width as f32).round() as usize;
     let empty = fill_width.saturating_sub(filled);
-    let color = if f < 0.6 {
-        "\x1b[38;2;155;217;179m" // green
-    } else if f < 0.85 {
-        "\x1b[38;2;234;211;156m" // amber
+
+    // Lerp green → red through amber
+    let (r, g, b) = if f < 0.5 {
+        // green (155,217,179) → amber (234,211,156)
+        let t = f / 0.5;
+        (
+            (155.0 + t * 79.0) as u8,
+            (217.0 - t * 6.0) as u8,
+            (179.0 - t * 23.0) as u8,
+        )
     } else {
-        "\x1b[38;2;232;163;160m" // red
+        // amber (234,211,156) → red (232,163,160)
+        let t = (f - 0.5) / 0.5;
+        (
+            (234.0 - t * 2.0) as u8,
+            (211.0 - t * 48.0) as u8,
+            (156.0 + t * 4.0) as u8,
+        )
     };
-    format!(
-        "{color}{}{DIM}{}{RESET}",
-        "━".repeat(filled),
-        "─".repeat(empty)
-    )
+
+    let mut buf = String::with_capacity(fill_width * 20);
+    if filled > 0 {
+        buf.push_str(&format!("\x1b[38;2;{r};{g};{b}m"));
+        for _ in 0..filled {
+            buf.push('█');
+        }
+    }
+    if empty > 0 {
+        buf.push_str(DIM);
+        for _ in 0..empty {
+            buf.push('⣿');
+        }
+    }
+    buf.push_str(RESET);
+    buf
 }
 
 /// Colored dot for the current status.
@@ -1398,8 +1421,8 @@ mod tests {
     fn progress_bar_extremes() {
         let full = strip_ansi(&progress_bar(1.0, 8));
         let empty = strip_ansi(&progress_bar(0.0, 8));
-        assert!(full.contains("━━━━━━━━"));
-        assert!(empty.contains("────────"));
+        assert!(full.contains("████████"));
+        assert!(empty.contains("⣿⣿⣿⣿⣿⣿⣿⣿"));
     }
 
     #[test]

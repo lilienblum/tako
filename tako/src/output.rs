@@ -1274,8 +1274,7 @@ fn render_gradient_bar(fraction: f64) -> String {
     // Unfilled: dim braille dot pattern
     if empty > 0 {
         if colorize {
-            let (r, g, b) = ACCENT_DIM;
-            buf.push_str(&format!("\x1b[38;2;{r};{g};{b}m"));
+            buf.push_str("\x1b[2m");
         }
         for _ in 0..empty {
             buf.push('⣿');
