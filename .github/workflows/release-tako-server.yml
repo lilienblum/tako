@@ -23,4 +23,5 @@ jobs:
       bump: ${{ inputs.bump }}
       title: Tako Server
     secrets:
+      GH_PAT: ${{ secrets.GH_PAT }}
       CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
