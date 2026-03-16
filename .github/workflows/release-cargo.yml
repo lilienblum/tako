@@ -95,7 +95,7 @@ jobs:
           sed -i 's/^version = "'"$current"'"/version = "'"$version"'"/' "${{ inputs.directory }}/Cargo.toml"
           sed -i '/^name = "${{ inputs.crate }}"$/{n;s/^version = ".*"/version = "'"$version"'"/;}' Cargo.lock
           git add "${{ inputs.directory }}/Cargo.toml" Cargo.lock
-          git commit -m "chore(${{ inputs.crate }}): release v${version}"
+          git commit -m "chore(${{ inputs.crate }}): release v${version} [skip ci]"
           git push
 
       - name: Create tag

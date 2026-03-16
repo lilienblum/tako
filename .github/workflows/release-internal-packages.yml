@@ -64,7 +64,7 @@ jobs:
               fi
             done
             git add -A
-            git commit -m "chore(${crate}): release v${new_version}"
+            git commit -m "chore(${crate}): release v${new_version} [skip ci]"
             git push origin master
           fi
 
@@ -108,7 +108,7 @@ jobs:
               fi
             done
             git add -A
-            git commit -m "chore(${crate}): release v${new_version}"
+            git commit -m "chore(${crate}): release v${new_version} [skip ci]"
             git push origin master
           fi
 
