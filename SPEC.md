@@ -137,7 +137,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Source bundle filtering uses `.gitignore`.
 - Deploy always force-excludes `.git/`, `.tako/`, and `.env*` from archive payload regardless of config. Additional exclusions (`node_modules/`, `target/`, etc.) come from preset `[build].exclude` and `.gitignore`.
-- Deploy sends merged app vars + runtime vars + decrypted secrets to `tako-server` in the `deploy` command payload; `tako-server` injects them directly into app process environment on spawn.
+- Deploy sends app vars + runtime vars to `tako-server` in the `deploy` command payload (non-secret env vars in `app.json`); secrets are sent separately and stored encrypted in SQLite. `tako-server` pushes secrets to instances via `POST /secrets` on `Host: tako` at spawn time.
 - Deploy build mode is controlled by preset `[build].container`:
   - `true`: build each target artifact in Docker.
   - `false`: run build commands on the local host workspace for each target.
@@ -607,7 +607,7 @@ Service-manager restart/stop behavior:
 - On systemd hosts, installer configures `KillMode=control-group` and `TimeoutStopSec=30min`, allowing all app processes in the service cgroup time to handle graceful shutdown before forced termination.
 - On OpenRC hosts, installer configures `retry="TERM/1800/KILL/5"` in the init script so restart/stop waits up to 30 minutes before forced termination.
 
-`tako-server` persists app runtime registration (app config and routes) in SQLite under the data directory and restores it on startup so app routing/config survives process restarts and crashes. Env vars are stored in `app.json` in the release directory; secrets are stored in a per-app `secrets.json` file (0600 permissions) rather than in SQLite.
+`tako-server` persists app runtime registration (app config and routes) in SQLite under the data directory and restores it on startup so app routing/config survives process restarts and crashes. Env vars are stored in `app.json` in the release directory; secrets are stored encrypted (AES-256-GCM) in the same SQLite database using a per-device key. Secrets are pushed to app instances via `POST /secrets` on `Host: tako` over the instance Unix socket — they never touch disk as plaintext.
 
 During single-host upgrade orchestration, `tako-server` may enter an internal `upgrading` server mode that temporarily rejects mutating management commands (`deploy`, `stop`, `delete`, `update-secrets`) until the upgrade window ends.
 Upgrade mode transitions are guarded by a durable single-owner upgrade lock in SQLite so only one upgrade controller can hold the upgrade window at a time.
@@ -782,7 +782,7 @@ Deploy flow helpers:
 - Artifact cache keys include runtime tool + resolved runtime version + Docker/local mode to avoid cross-target and cross-runtime cache contamination.
 - Deploy artifacts include the canonical `app.json` used by `tako-server` at runtime.
 - Release `app.json` contains resolved runtime metadata (`runtime`, `main`, optional `install`/`start`), non-secret env vars, environment idle timeout, and optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
-- Deploy does not write a release `.env` file; non-secret env vars live in release `app.json`, secrets live in per-app `secrets.json`, and `tako-server` injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`) when spawning instances.
+- Deploy does not write a release `.env` file; non-secret env vars live in release `app.json`, secrets are stored encrypted in SQLite on the server, and `tako-server` injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`) when spawning instances.
 - Deploy queries each server's secrets hash before sending the deploy command. If the hash matches the local secrets, secrets are omitted from the payload and the server keeps its existing secrets. This avoids unnecessary secret transmission and ensures new servers or servers with stale secrets are automatically provisioned.
 - Deploy requires valid `arch` and `libc` metadata in each selected `[[servers]]` entry.
 - Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
@@ -1093,17 +1093,18 @@ Reference scripts in this repo:
 
 ### Environment Variables for Apps
 
-| Name              | Used by         | Meaning                                       | Typical source                                                                            |
-| ----------------- | --------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| `PORT`            | app             | Listen port for HTTP server                   | Set by `tako dev` for the local app process.                                              |
-| `TAKO_ENV`        | app             | Environment name                              | Set during deploy manifest generation (`production`, `staging`, etc.).                    |
-| `NODE_ENV`        | app             | Node.js convention env                        | Set by runtime adapter / server (`development` or `production`).                          |
-| `BUN_ENV`         | app             | Bun convention env                            | Set by runtime adapter (`development` or `production`).                                   |
-| `TAKO_BUILD`      | app             | Deployed build/version identifier             | Included in deploy command payload and injected by `tako-server` at process spawn.        |
-| `TAKO_APP_SOCKET` | app / `tako.sh` | Unix socket path the app should listen on     | path string on Unix deploys (with `{pid}` token); unset in local dev                      |
-| `TAKO_VERSION`    | app / `tako.sh` | App version string (if you choose to set one) | string                                                                                    |
-| `TAKO_INSTANCE`   | app / `tako.sh` | Instance identifier                           | 8-character nanoid string                                                                 |
-| _user-defined_    | app             | User config vars/secrets                      | From `app.json` in the release dir (env vars) and per-app `secrets.json` (0600, secrets). |
+| Name               | Used by         | Meaning                                       | Typical source                                                                             |
+| ------------------ | --------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `PORT`             | app             | Listen port for HTTP server                   | Set by `tako dev` for the local app process.                                               |
+| `TAKO_ENV`         | app             | Environment name                              | Set during deploy manifest generation (`production`, `staging`, etc.).                     |
+| `NODE_ENV`         | app             | Node.js convention env                        | Set by runtime adapter / server (`development` or `production`).                           |
+| `BUN_ENV`          | app             | Bun convention env                            | Set by runtime adapter (`development` or `production`).                                    |
+| `TAKO_BUILD`       | app             | Deployed build/version identifier             | Included in deploy command payload and injected by `tako-server` at process spawn.         |
+| `TAKO_APP_SOCKET`  | app / `tako.sh` | Unix socket path the app should listen on     | path string on Unix deploys (with `{pid}` token); unset in local dev                       |
+| `TAKO_VERSION`     | app / `tako.sh` | App version string (if you choose to set one) | string                                                                                     |
+| `TAKO_INSTANCE`    | app / `tako.sh` | Instance identifier                           | 8-character nanoid string                                                                  |
+| `TAKO_HAS_SECRETS` | app / `tako.sh` | Signals SDK to wait for secrets push          | Set to `1` when app has secrets; SDK waits for `POST /secrets` before health check passes. |
+| _user-defined_     | app             | User config vars                              | From `app.json` in the release dir. Secrets pushed via socket, not env vars.               |
 
 ### Messages (JSON over Unix Socket)
 
@@ -1215,7 +1216,8 @@ Server-side validation on `deploy` and app-scoped commands:
 - App processes do not connect to the management socket.
 - `tako-server` controls lifecycle directly (spawn/stop/rolling update) and determines readiness/health via active HTTP probing only.
 - On Unix deploys, app processes receive `TAKO_APP_SOCKET` and must bind that per-instance Unix socket for request traffic.
-- Secret updates are applied by writing per-app `secrets.json` and rolling restart; there is no app-facing `reload_config` protocol message.
+- Secrets are pushed to instances via `POST /secrets` on `Host: tako` over the instance Unix socket before health checks begin. When `TAKO_HAS_SECRETS=1` is set, the SDK waits for this push before importing user code.
+- Secret updates (`update_secrets` command) store new secrets in SQLite and trigger a rolling restart to push updated secrets to fresh instances.
 
 ### Health Checks
 

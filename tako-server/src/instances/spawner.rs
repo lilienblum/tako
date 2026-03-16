@@ -80,19 +80,25 @@ impl Spawner {
             })
             .await;
 
-        // Wait for ready
+        // Wait for ready (push secrets first if app has any, then health check)
         let health_check_path = config.health_check_path.clone();
         let health_host = config.health_check_host.clone();
+        let secrets = config.secrets.clone();
 
-        match timeout(
-            config.startup_timeout,
+        match timeout(config.startup_timeout, async {
+            // Push secrets to the instance before health checking.
+            // The SDK blocks on receiving secrets before importing the user's app.
+            if !secrets.is_empty() {
+                self.push_secrets_to_instance(&instance, &secrets).await?;
+            }
             self.wait_for_ready(
                 &health_check_path,
                 &health_host,
                 Duration::from_secs(5),
                 instance.clone(),
-            ),
-        )
+            )
+            .await
+        })
         .await
         {
             Ok(Ok(())) => {
@@ -213,6 +219,52 @@ impl Spawner {
             Ok(true)
         )
     }
+
+    /// Push secrets to an instance via `POST /secrets` on `Host: tako`.
+    ///
+    /// Retries until the instance socket is up and accepts the request.
+    /// The SDK blocks app import until secrets arrive, so this must succeed
+    /// before health checks can pass.
+    async fn push_secrets_to_instance(
+        &self,
+        instance: &Arc<Instance>,
+        secrets: &HashMap<String, String>,
+    ) -> Result<(), InstanceError> {
+        let json = serde_json::to_string(secrets).map_err(|e| {
+            InstanceError::HealthCheckFailed(format!("Failed to serialize secrets: {e}"))
+        })?;
+
+        let mut interval = tokio::time::interval(Duration::from_millis(100));
+
+        loop {
+            interval.tick().await;
+
+            if !instance.is_alive().await {
+                let detail = startup_exit_detail(instance.clone()).await;
+                return Err(InstanceError::HealthCheckFailed(detail));
+            }
+
+            let Some(socket_path) = instance.socket_path() else {
+                continue;
+            };
+
+            match post_unix_socket(
+                &socket_path,
+                "/secrets",
+                "tako",
+                &json,
+                Duration::from_secs(5),
+            )
+            .await
+            {
+                Ok(true) => {
+                    tracing::debug!(instance = %instance.id, "Pushed secrets to instance");
+                    return Ok(());
+                }
+                _ => continue,
+            }
+        }
+    }
 }
 
 fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String, String> {
@@ -231,46 +283,13 @@ fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String
     env.entry("NODE_ENV".to_string())
         .or_insert_with(|| "production".to_string());
 
-    // Write secrets to a temp file for the SDK to read.
-    // Secrets are never injected as env vars.
+    // Signal to the SDK that secrets will be pushed via socket.
+    // The SDK should wait for POST /secrets before importing the user's app.
     if !config.secrets.is_empty() {
-        if let Ok(path) = write_instance_secrets_file(config, instance) {
-            env.insert("TAKO_SECRETS_FILE".to_string(), path);
-        }
+        env.insert("TAKO_HAS_SECRETS".to_string(), "1".to_string());
     }
 
     env
-}
-
-/// Write secrets to a per-instance temp file with restrictive permissions.
-fn write_instance_secrets_file(
-    config: &AppConfig,
-    instance: &Instance,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let secrets_dir = config.path.join(".tako-secrets");
-    std::fs::create_dir_all(&secrets_dir)?;
-    let secrets_path = secrets_dir.join(format!("{}.json", instance.id));
-
-    let json = serde_json::to_string(&config.secrets)?;
-
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&secrets_path)?;
-        f.write_all(json.as_bytes())?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&secrets_path, &json)?;
-    }
-
-    Ok(secrets_path.to_string_lossy().to_string())
 }
 
 fn build_child_command(
@@ -348,6 +367,45 @@ async fn probe_unix_socket(
 
     let mut response_buf = [0_u8; 2048];
     let bytes_read = match timeout(probe_timeout, socket.read(&mut response_buf)).await {
+        Ok(result) => result?,
+        Err(_) => return Ok(false),
+    };
+    if bytes_read == 0 {
+        return Ok(false);
+    }
+
+    let response = String::from_utf8_lossy(&response_buf[..bytes_read]);
+    let status_line = response.lines().next().unwrap_or_default();
+    Ok(http_status_is_success(status_line))
+}
+
+/// Send an HTTP POST request over a Unix socket and check for 2xx response.
+#[cfg(unix)]
+async fn post_unix_socket(
+    socket_path: &str,
+    path: &str,
+    host: &str,
+    body: &str,
+    post_timeout: Duration,
+) -> Result<bool, std::io::Error> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut socket = match timeout(post_timeout, tokio::net::UnixStream::connect(socket_path)).await
+    {
+        Ok(result) => result?,
+        Err(_) => return Ok(false),
+    };
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    match timeout(post_timeout, socket.write_all(request.as_bytes())).await {
+        Ok(result) => result?,
+        Err(_) => return Ok(false),
+    }
+
+    let mut response_buf = [0_u8; 2048];
+    let bytes_read = match timeout(post_timeout, socket.read(&mut response_buf)).await {
         Ok(result) => result?,
         Err(_) => return Ok(false),
     };
@@ -513,7 +571,9 @@ mod tests {
 
         let env = build_instance_env(&app.config.read().clone(), &instance);
         assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
-        assert_eq!(env.get("SECRET").map(String::as_str), Some("shh"));
+        // Secrets are NOT injected as env vars — they're pushed via socket.
+        assert!(!env.contains_key("SECRET"));
+        assert_eq!(env.get("TAKO_HAS_SECRETS").map(String::as_str), Some("1"));
         assert_eq!(
             env.get("TAKO_INSTANCE").map(String::as_str),
             Some(instance.id.as_str())

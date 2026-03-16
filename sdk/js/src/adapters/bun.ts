@@ -68,7 +68,7 @@ export function serve(
   // Create fetch wrapper with Tako endpoints
   const wrappedFetch = async (request: Request): Promise<Response> => {
     // Check for Tako internal endpoints first
-    const takoResponse = handleTakoEndpoint(request, getStatus());
+    const takoResponse = await handleTakoEndpoint(request, getStatus());
     if (takoResponse) {
       return takoResponse;
     }

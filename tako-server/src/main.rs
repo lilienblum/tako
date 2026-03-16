@@ -38,7 +38,7 @@ use crate::socket::{
     AppState, AppStatus, BuildStatus, Command, InstanceState, InstanceStatus, Response,
     SocketServer,
 };
-use crate::state_store::{SqliteStateStore, StateStoreError};
+use crate::state_store::{SqliteStateStore, StateStoreError, load_or_create_device_key};
 use crate::tls::{
     AcmeClient, AcmeConfig, CertInfo, CertManager, CertManagerConfig, ChallengeTokens,
 };
@@ -230,50 +230,6 @@ fn app_socket_cleanup_dirs(socket_path: &str) -> Vec<PathBuf> {
     dirs
 }
 
-fn secrets_file_path(data_dir: &Path, app_name: &str) -> PathBuf {
-    data_dir.join("apps").join(app_name).join("secrets.json")
-}
-
-fn read_secrets_file(path: &Path) -> Result<HashMap<String, String>, String> {
-    if !path.exists() {
-        return Ok(HashMap::new());
-    }
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("read secrets {}: {}", path.display(), e))?;
-    serde_json::from_str(&content).map_err(|e| format!("parse secrets {}: {}", path.display(), e))
-}
-
-fn write_secrets_file(path: &Path, secrets: &HashMap<String, String>) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("create dir {}: {}", parent.display(), e))?;
-    }
-    let content =
-        serde_json::to_string_pretty(secrets).map_err(|e| format!("serialize secrets: {}", e))?;
-    // Create with 0600 from the start to avoid a window where secrets are
-    // world-readable (TOCTOU between write and chmod).
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(path)
-            .map_err(|e| format!("write secrets {}: {}", path.display(), e))?;
-        f.write_all(content.as_bytes())
-            .map_err(|e| format!("write secrets {}: {}", path.display(), e))?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(path, content.as_bytes())
-            .map_err(|e| format!("write secrets {}: {}", path.display(), e))?;
-    }
-    Ok(())
-}
-
 fn extract_zstd_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
     std::fs::create_dir_all(dest_dir)
         .map_err(|e| format!("create extraction dir {}: {}", dest_dir.display(), e))?;
@@ -367,8 +323,10 @@ impl ServerState {
     ) -> Result<Self, StateStoreError> {
         let app_manager = Arc::new(AppManager::new());
         let load_balancer = Arc::new(LoadBalancer::new(app_manager.clone()));
+        let device_key = load_or_create_device_key(&data_dir.join("secret.key"))?;
         let state_store = Arc::new(SqliteStateStore::new(
             data_dir.join("runtime-state.sqlite3"),
+            device_key,
         ));
         state_store.init()?;
         // Always start in Normal mode. If the server was previously in
@@ -496,12 +454,10 @@ impl ServerState {
                 tracing::error!(app = %app_name, "Failed to restore app config: {}", error);
                 continue;
             }
-            config.secrets =
-                read_secrets_file(&secrets_file_path(&self.runtime.data_dir, &app_name))
-                    .unwrap_or_else(|e| {
-                        tracing::warn!(app = %app_name, "Failed to read secrets file: {}", e);
-                        HashMap::new()
-                    });
+            config.secrets = self.state_store.get_secrets(&app_name).unwrap_or_else(|e| {
+                tracing::warn!(app = %app_name, "Failed to read secrets: {}", e);
+                HashMap::new()
+            });
 
             let app = self.app_manager.register_app(config.clone());
             self.load_balancer.register_app(app.clone());
@@ -659,8 +615,7 @@ impl ServerState {
                 if let Err(msg) = validate_app_name(&app) {
                     return Response::error(msg);
                 }
-                let path = secrets_file_path(&self.runtime.data_dir, &app);
-                let secrets = read_secrets_file(&path).unwrap_or_default();
+                let secrets = self.state_store.get_secrets(&app).unwrap_or_default();
                 let hash = tako_core::compute_secrets_hash(&secrets);
                 Response::ok(serde_json::json!({ "hash": hash }))
             }
@@ -755,15 +710,14 @@ impl ServerState {
             Err(error) => return Response::error(format!("Invalid app release: {}", error)),
         };
 
-        // Resolve secrets: if provided, write to disk; otherwise keep existing.
-        let secrets_path = secrets_file_path(&self.runtime.data_dir, app_name);
+        // Resolve secrets: if provided, store in SQLite; otherwise keep existing.
         let secrets = if let Some(new_secrets) = secrets {
-            if let Err(e) = write_secrets_file(&secrets_path, &new_secrets) {
-                return Response::error(format!("Failed to write secrets: {}", e));
+            if let Err(e) = self.state_store.set_secrets(app_name, &new_secrets) {
+                return Response::error(format!("Failed to store secrets: {}", e));
             }
             new_secrets
         } else {
-            read_secrets_file(&secrets_path).unwrap_or_default()
+            self.state_store.get_secrets(app_name).unwrap_or_default()
         };
         let mut release_env = env_vars.clone();
         release_env.extend(secrets.clone());
@@ -1300,10 +1254,8 @@ impl ServerState {
     ) -> Response {
         tracing::info!(app = app_name, "Updating secrets");
 
-        // Write secrets to per-app file (0600 permissions)
-        let path = secrets_file_path(&self.runtime.data_dir, app_name);
-        if let Err(e) = write_secrets_file(&path, &new_secrets) {
-            return Response::error(format!("Failed to write secrets: {}", e));
+        if let Err(e) = self.state_store.set_secrets(app_name, &new_secrets) {
+            return Response::error(format!("Failed to store secrets: {}", e));
         }
 
         // Update app config and auto-restart running instances to apply new secrets
@@ -2879,10 +2831,9 @@ mod tests {
     use super::{
         SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, bun_install_args_for_release,
         extract_zstd_archive, handle_idle_event, install_rustls_crypto_provider,
-        prepare_release_runtime, read_secrets_file, read_server_config, resolve_release_runtime,
-        run_extract_archive_mode, secrets_file_path, should_signal_parent_on_ready,
-        should_use_self_signed_route_cert, validate_app_name, validate_deploy_routes,
-        write_secrets_file,
+        prepare_release_runtime, read_server_config, resolve_release_runtime,
+        run_extract_archive_mode, should_signal_parent_on_ready, should_use_self_signed_route_cert,
+        validate_app_name, validate_deploy_routes,
     };
     use crate::instances::AppConfig;
     use crate::socket::{AppState, Command, InstanceState, Response};
@@ -2971,40 +2922,6 @@ mod tests {
         .unwrap();
         let err = run_extract_archive_mode(&args).unwrap_err();
         assert!(err.contains("--extract-dest"));
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn secrets_file_write_sets_mode_0600() {
-        use std::os::unix::fs::PermissionsExt;
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("secrets.json");
-        let mut secrets = HashMap::new();
-        secrets.insert("API_KEY".to_string(), "secret123".to_string());
-        write_secrets_file(&path, &secrets).unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600, "secrets file must be mode 0600");
-    }
-
-    #[test]
-    fn secrets_file_read_write_round_trip() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("secrets.json");
-        let mut secrets = HashMap::new();
-        secrets.insert("API_KEY".to_string(), "secret123".to_string());
-        secrets.insert("DB_URL".to_string(), "postgres://db".to_string());
-        write_secrets_file(&path, &secrets).unwrap();
-        let loaded = read_secrets_file(&path).unwrap();
-        assert_eq!(loaded.get("API_KEY"), Some(&"secret123".to_string()));
-        assert_eq!(loaded.get("DB_URL"), Some(&"postgres://db".to_string()));
-    }
-
-    #[test]
-    fn secrets_file_read_returns_empty_when_missing() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("nonexistent.json");
-        let loaded = read_secrets_file(&path).unwrap();
-        assert!(loaded.is_empty());
     }
 
     #[test]
@@ -3756,11 +3673,11 @@ exit 1
         let empty_hash = data.get("hash").and_then(Value::as_str).unwrap();
         assert_eq!(empty_hash, tako_core::compute_secrets_hash(&HashMap::new()));
 
-        // Write secrets and check hash changes
+        // Store secrets and check hash changes
         let secrets: HashMap<String, String> = [("KEY".to_string(), "val".to_string())]
             .into_iter()
             .collect();
-        write_secrets_file(&secrets_file_path(temp.path(), "my-app"), &secrets).unwrap();
+        state.state_store.set_secrets("my-app", &secrets).unwrap();
 
         let response = state
             .handle_command(Command::GetSecretsHash {
@@ -3790,10 +3707,12 @@ exit 1
         )
         .unwrap();
 
-        // Pre-write secrets for the app
+        // Pre-store secrets for the app
         let secrets: HashMap<String, String> = [("API_KEY".to_string(), "original".to_string())]
             .into_iter()
             .collect();
+        state.state_store.set_secrets("keep-app", &secrets).unwrap();
+
         let release_dir = temp
             .path()
             .join("apps")
@@ -3809,7 +3728,6 @@ exit 1
             Some("true"),
             300,
         );
-        write_secrets_file(&secrets_file_path(temp.path(), "keep-app"), &secrets).unwrap();
 
         // Deploy with secrets: None — should keep existing
         let _response = state
@@ -3822,8 +3740,8 @@ exit 1
             })
             .await;
 
-        // Verify secrets file still has original value
-        let loaded = read_secrets_file(&secrets_file_path(temp.path(), "keep-app")).unwrap();
+        // Verify secrets still have original value
+        let loaded = state.state_store.get_secrets("keep-app").unwrap();
         assert_eq!(loaded.get("API_KEY"), Some(&"original".to_string()));
     }
 
@@ -3864,7 +3782,10 @@ exit 1
             [("DATABASE_URL".to_string(), "postgres://db".to_string())]
                 .into_iter()
                 .collect();
-        write_secrets_file(&secrets_file_path(temp.path(), app_id), &app_secrets).unwrap();
+        state_a
+            .state_store
+            .set_secrets(app_id, &app_secrets)
+            .unwrap();
 
         let app = state_a.app_manager.register_app(AppConfig {
             name: "my-app".to_string(),
