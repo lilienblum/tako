@@ -1,5 +1,7 @@
 #[cfg(any(target_os = "macos", test))]
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(target_os = "macos")]
+use std::path::PathBuf;
 
 #[cfg(target_os = "macos")]
 use sha2::Digest;
@@ -14,13 +16,13 @@ use super::{DEV_LOOPBACK_ADDR, sudo_run_checked, tcp_port_open, write_system_fil
 pub(crate) const LOOPBACK_PROXY_LABEL: &str = "sh.tako.loopback-proxy";
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const LOOPBACK_PROXY_BOOTSTRAP_LABEL: &str = "sh.tako.loopback-bootstrap";
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) const LOOPBACK_PROXY_PLIST_PATH: &str =
     "/Library/Application Support/Tako/launchd/sh.tako.loopback-proxy.plist";
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) const LOOPBACK_PROXY_BOOTSTRAP_PLIST_PATH: &str =
     "/Library/LaunchDaemons/sh.tako.loopback-bootstrap.plist";
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) const LOOPBACK_PROXY_BINARY_PATH: &str =
     "/Library/Application Support/Tako/bin/tako-loopback-proxy";
 #[cfg(any(target_os = "macos", test))]
@@ -157,17 +159,17 @@ pub(crate) fn should_exit_for_idle(
     active_connections == 0 && idle_for >= idle_timeout
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) fn install_binary_path() -> PathBuf {
     PathBuf::from(LOOPBACK_PROXY_BINARY_PATH)
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) fn plist_path() -> PathBuf {
     PathBuf::from(LOOPBACK_PROXY_PLIST_PATH)
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) fn bootstrap_plist_path() -> PathBuf {
     PathBuf::from(LOOPBACK_PROXY_BOOTSTRAP_PLIST_PATH)
 }

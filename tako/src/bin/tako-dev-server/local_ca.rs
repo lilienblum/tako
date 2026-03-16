@@ -1,3 +1,4 @@
+#[cfg(target_os = "macos")]
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
@@ -5,6 +6,7 @@ use rcgen::{
 };
 use std::fs;
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
 use std::process::Command;
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
@@ -171,7 +173,9 @@ impl LocalCA {
 
 pub struct LocalCAStore {
     ca_cert_path: PathBuf,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     keychain_service: String,
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     keychain_account: String,
 }
 

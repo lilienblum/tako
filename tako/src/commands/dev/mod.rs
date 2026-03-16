@@ -175,9 +175,9 @@ const DEV_LOG_TAIL_POLL_MS: u64 = 120;
 const DEV_LOG_CLEAR_MARKER_TYPE: &str = "clear_logs";
 const DEV_LOG_APP_EVENT_MARKER_TYPE: &str = "app_event";
 pub(crate) const LOCAL_DNS_PORT: u16 = 53535;
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 const RESOLVER_DIR: &str = "/etc/resolver";
-#[cfg(any(target_os = "macos", test))]
+#[cfg(target_os = "macos")]
 pub(crate) const TAKO_RESOLVER_FILE: &str = "/etc/resolver/tako.test";
 const DEV_TLS_CERT_FILENAME: &str = "fullchain.pem";
 const DEV_TLS_KEY_FILENAME: &str = "privkey.pem";
@@ -851,6 +851,7 @@ fn explain_pending_sudo_setup(port: u16) -> Result<(), Box<dyn std::error::Error
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn tcp_port_open(ip: &str, port: u16, timeout_ms: u64) -> bool {
     use std::net::{Ipv4Addr, SocketAddr};
     let Ok(ipv4) = ip.parse::<Ipv4Addr>() else {
@@ -1074,20 +1075,20 @@ pub(crate) fn local_dns_resolver_values() -> Option<(String, u16)> {
 #[cfg(test)]
 mod tests {
     #[cfg(target_os = "macos")]
-    use super::local_https_probe_error;
+    use super::{ensure_local_dns_resolver_configured, local_https_probe_error};
     use super::{
         DevEvent, LogLevel, ScopedLog, StoredLogEvent, app_log_scope, child_log_level_and_message,
         compute_dev_hosts, compute_display_routes, dev_idle_timeout, dev_initial_instance_count,
         dev_server_ready_log, dev_server_starting_log, dev_server_tls_names_path_for_home,
         dev_server_tls_paths_for_home, dev_startup_lines, doctor_dev_server_lines,
         doctor_local_forwarding_preflight_lines, ensure_dev_server_tls_material_for_home,
-        ensure_local_dns_resolver_configured, host_and_port_from_url,
-        is_dev_server_unavailable_error_message, local_dns_resolver_contents,
-        local_dns_sudo_action_line, local_https_probe_host, parse_local_dns_resolver,
-        parse_stored_log_line, port_from_listen, preferred_public_url, replay_and_follow_logs,
-        resolve_dev_preset_ref, resolve_dev_run_command, resolve_effective_dev_build_adapter,
-        restart_required_for_requested_listen, route_hostname_matches, should_drop_child_log_line,
-        sudo_setup_action_items, tcp_probe, trim_child_log_message,
+        host_and_port_from_url, is_dev_server_unavailable_error_message,
+        local_dns_resolver_contents, local_dns_sudo_action_line, local_https_probe_host,
+        parse_local_dns_resolver, parse_stored_log_line, port_from_listen, preferred_public_url,
+        replay_and_follow_logs, resolve_dev_preset_ref, resolve_dev_run_command,
+        resolve_effective_dev_build_adapter, restart_required_for_requested_listen,
+        route_hostname_matches, should_drop_child_log_line, sudo_setup_action_items, tcp_probe,
+        trim_child_log_message,
     };
     use crate::build::{BuildAdapter, parse_and_validate_preset};
     use crate::config::TakoToml;

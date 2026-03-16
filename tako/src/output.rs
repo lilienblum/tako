@@ -444,12 +444,14 @@ pub fn warning(message: &str) {
     }
 }
 
+#[allow(dead_code)]
 pub fn warning_full(message: &str) {
     if is_pretty() {
         eprintln!("{}", format_warning_full_line(message));
     }
 }
 
+#[allow(dead_code)]
 pub fn warning_bullet(message: &str) {
     if is_pretty() {
         eprintln!("{}", format_warning_bullet_line(message));

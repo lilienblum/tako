@@ -33,6 +33,7 @@ fn plan_ca_setup(ca_exists: bool, ca_trusted: bool) -> CaSetupPlan {
     }
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn pending_sudo_action() -> Result<Option<&'static str>, Box<dyn std::error::Error>> {
     let store = LocalCAStore::new()?;
     let plan = plan_ca_setup(store.ca_exists(), store.is_ca_trusted());

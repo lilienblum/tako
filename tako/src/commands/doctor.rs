@@ -78,6 +78,7 @@ fn format_bool_status(enabled: bool) -> String {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn format_active_status(ok: bool, ok_label: &str, fail_label: &str) -> String {
     if ok {
         output::brand_success(ok_label)
