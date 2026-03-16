@@ -1333,8 +1333,9 @@ libc = "glibc"
                 || stderr.contains("container")
                 || stderr.contains("Docker")
                 || stderr.contains("docker")
-                || stderr.contains("Failed to fetch preset"),
-            "Should mention missing entry point or container build failure: {}",
+                || stderr.contains("Failed to fetch preset")
+                || stderr.contains("lockfile"),
+            "Should mention missing entry point, lockfile mismatch, or container build failure: {}",
             stderr
         );
     }

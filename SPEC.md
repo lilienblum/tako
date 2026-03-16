@@ -152,14 +152,10 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Per-target build execution order is fixed:
   - stage 1: preset `[build].install` then preset `[build].build` (when present)
   - stage 2+: app `[[build.stages]]` in declaration order (`install` then `run` per stage)
-- Docker build containers are ephemeral; dependency caches are persisted with target-scoped Docker volumes keyed by cache kind + target label + builder image (mise cache: `/var/cache/tako/mise`, Bun cache: `/var/cache/tako/bun/install/cache`).
+- Docker build containers are ephemeral; dependency caches are persisted with target-scoped Docker volumes keyed by cache kind + target label + builder image (Bun cache: `/var/cache/tako/bun/install/cache`).
 - Default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
-- Runtime version resolution is mise-aware:
-  - local builds try `mise exec -- <tool> --version` from app workspace when `mise` is installed.
-  - local build stage commands run through `mise exec -- sh -lc ...` when `mise` is installed.
-  - if local mise probing is unavailable/fails, deploy falls back to reading `mise.toml` (`[tools]` in app then workspace), then `latest`.
-  - Docker target builds bootstrap `mise` in-container and probe with `mise exec -- <tool> --version`.
-  - deploy writes the resolved runtime tool version into release `mise.toml` before packaging.
+- Runtime version resolution runs `<tool> --version` directly (locally or in Docker build containers), falling back to `latest`.
+- Deploy saves the resolved runtime version into `app.json` (`runtime_version` field).
 - Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, target build commands/image, app custom build stages, include/exclude patterns, asset roots, and app subdirectory.
 - Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
 - After each target build (and asset merge), deploy verifies the resolved runtime `main` file exists in the build workspace before artifact packaging; missing files fail deploy with an explicit error.
@@ -744,10 +740,9 @@ Deploy flow helpers:
    - Build on local host workspace when `[build].container = false`.
    - When `container` is unset, default to Docker only when `[build].targets` is non-empty.
    - Run build commands in fixed order: preset stage first (`[build].install`, then `[build].build`), then app `[[build.stages]]` in declaration order.
-   - For local builds, when `mise` is available, run stage commands through `mise exec -- sh -lc ...`.
    - Merge configured assets into app `public/`.
    - Verify resolved runtime `main` exists in the built app directory.
-   - Materialize release `mise.toml` in app dir with resolved runtime tool version for server runtime parity.
+   - Save resolved runtime version into `app.json` (`runtime_version` field) for server-side version pinning.
    - Package filtered artifact tarball for that target using include/exclude rules and store it in local cache.
    - Per-target cache writes are serialized with a local lock to avoid duplicate concurrent builds.
 8. Deploy to all servers in parallel:
@@ -776,10 +771,9 @@ Deploy flow helpers:
 - For Bun runtime, `tako-server` runs dependency install for the release before starting/rolling instances.
 - Build logic runs in fixed order per target: preset `[build].install`/`[build].build` stage first, then app `[[build.stages]]` from `tako.toml`.
 - Runtime prep/start on server comes from preset top-level `install` and `start`.
-- During container builds, deploy reuses target-scoped dependency cache volumes (mise and runtime-specific cache mounts such as Bun), keyed by cache kind, target label, and builder image.
+- During container builds, deploy reuses target-scoped dependency cache volumes (runtime-specific cache mounts such as Bun), keyed by cache kind, target label, and builder image.
 - During container builds, deploy defaults to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
-- During local builds, deploy resolves runtime version by asking `mise` directly (`mise exec -- <tool> --version`) when available, then falls back to `mise.toml` and finally `latest`.
-- During local builds, deploy runs stage commands through `mise exec -- sh -lc ...` when `mise` is available.
+- During local builds, deploy resolves runtime version by running `<tool> --version` directly, falling back to `latest`.
 - Artifact include precedence: `build.include` -> `**/*`.
 - Artifact exclude list: preset `[build].exclude` plus `build.exclude`.
 - Asset roots are preset `[build].assets` plus app `build.assets` (deduplicated), merged into app `public/` after container build with ordered overwrite.
@@ -995,7 +989,7 @@ Installer SSH key behavior:
 - CLI SSH connections require host key verification against `~/.ssh/known_hosts` (or configured SSH keys directory); unknown/changed host keys are rejected.
 - Installer detects host target (`arch` + `libc`) and downloads matching artifact name `tako-server-linux-{arch}-{libc}` (supported: `x86_64`/`aarch64` with `glibc`/`musl`).
 - Installer ensures `nc` (netcat) is available so CLI management commands can talk to `/var/run/tako/tako.sock`.
-- Installer installs `mise` on the server (package-manager first; fallback to upstream installer when distro packages are unavailable).
+- Installer installs `proto` version manager on the server (fallback to upstream installer at `moonrepo.dev` when not already present).
 - Installer creates both `tako` and `tako-app` OS users.
 - Installer installs restricted maintenance helpers and scoped sudoers policy so the `tako` SSH user can perform non-interactive server upgrade/reload operations.
 - Installer supports systemd and OpenRC hosts.

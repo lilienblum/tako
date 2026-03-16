@@ -35,7 +35,7 @@ linux-aarch64-musl
 
 Because JS base presets set `build.container = false`, builds run on your local machine unless a framework preset explicitly enables container builds.
 
-Base presets also define lifecycle commands for dependency installation, build steps, and production start commands. They use [mise](https://mise.jdx.dev/) when available for runtime version management, falling back to the globally installed runtime otherwise.
+Base presets also define lifecycle commands for dependency installation, build steps, and production start commands.
 
 ## Official presets
 

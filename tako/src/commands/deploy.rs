@@ -85,7 +85,6 @@ const ARTIFACT_CACHE_SCHEMA_VERSION: u32 = 4;
 const LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS: usize = 90;
 const LOCAL_BUILD_WORKSPACE_RELATIVE_DIR: &str = ".tako/tmp/workspaces";
 const RUNTIME_VERSION_OUTPUT_FILE: &str = ".tako-runtime-version";
-const MISE_TOML_FILE: &str = "mise.toml";
 const UNIFIED_JS_CACHE_TARGET_LABEL: &str = "shared-local-js";
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -530,8 +529,7 @@ async fn run_async(
         shorten_commit(&resolved_preset.commit)
     );
     output::bullet(&format_runtime_summary(&build_preset.name, None));
-    let runtime_tool = resolve_runtime_tool_for_mise(&build_preset.name, &build_preset)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let runtime_tool = runtime_adapter.id().to_string();
 
     let manifest_main = resolve_deploy_main(
         &project_dir,
@@ -1553,45 +1551,6 @@ fn format_runtime_summary(runtime_name: &str, version: Option<&str>) -> String {
     }
 }
 
-fn resolve_runtime_tool_for_mise(
-    runtime_name: &str,
-    preset: &BuildPreset,
-) -> Result<String, String> {
-    if preset.start.len() >= 4
-        && preset.start[0] == "mise"
-        && preset.start[1] == "exec"
-        && preset.start[2] == "--"
-        && !preset.start[3].trim().is_empty()
-    {
-        return Ok(preset.start[3].trim().to_string());
-    }
-
-    if let Some(tool) = preset
-        .start
-        .first()
-        .map(String::as_str)
-        .map(str::trim)
-        .filter(|value| matches!(*value, "bun" | "node" | "deno"))
-    {
-        return Ok(tool.to_string());
-    }
-
-    if runtime_name == "bun" || runtime_name.starts_with("bun-") {
-        return Ok("bun".to_string());
-    }
-    if runtime_name == "node" || runtime_name.starts_with("node-") {
-        return Ok("node".to_string());
-    }
-    if runtime_name == "deno" || runtime_name.starts_with("deno-") {
-        return Ok("deno".to_string());
-    }
-
-    Err(format!(
-        "Unable to infer runtime tool for preset '{}'. Set preset `start` to begin with [\"mise\", \"exec\", \"--\", \"<tool>\", ...].",
-        runtime_name
-    ))
-}
-
 fn format_entry_point_summary(entry_point: &Path) -> String {
     format!("Entry point: {}", entry_point.display())
 }
@@ -1848,13 +1807,8 @@ fn run_bun_lockfile_preflight(workspace_root: &Path) -> Result<bool, String> {
     }
 
     tracing::debug!("Bun lockfile found, validating frozen lockfile…");
-    let shell_runner = detect_local_shell_runner();
-    let (program, args) = local_shell_command_program_and_args(
-        shell_runner,
-        "bun install --frozen-lockfile --lockfile-only",
-    );
-    let output = std::process::Command::new(program)
-        .args(args)
+    let output = std::process::Command::new("sh")
+        .args(["-lc", "bun install --frozen-lockfile --lockfile-only"])
         .current_dir(workspace_root)
         .stdin(std::process::Stdio::null())
         .output()
@@ -2365,10 +2319,9 @@ async fn build_target_artifacts(
                     custom_stages,
                 )?;
             }
-            materialize_runtime_tool_version(
+            save_runtime_version_to_manifest(
                 &workspace,
                 app_subdir,
-                runtime_tool,
                 &runtime_version,
             )?;
             output::bullet(&format_build_completed_message(display_target_label));
@@ -2459,53 +2412,6 @@ fn run_target_build(
     Ok(())
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum LocalShellRunner {
-    Direct,
-    Mise,
-}
-
-fn detect_local_shell_runner() -> LocalShellRunner {
-    #[cfg(test)]
-    {
-        LocalShellRunner::Direct
-    }
-
-    #[cfg(not(test))]
-    {
-        let status = std::process::Command::new("mise")
-            .arg("--version")
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-        if status.map(|value| value.success()).unwrap_or(false) {
-            LocalShellRunner::Mise
-        } else {
-            LocalShellRunner::Direct
-        }
-    }
-}
-
-fn local_shell_command_program_and_args(
-    runner: LocalShellRunner,
-    command: &str,
-) -> (&'static str, Vec<String>) {
-    match runner {
-        LocalShellRunner::Direct => ("sh", vec!["-lc".to_string(), command.to_string()]),
-        LocalShellRunner::Mise => (
-            "mise",
-            vec![
-                "exec".to_string(),
-                "--".to_string(),
-                "sh".to_string(),
-                "-lc".to_string(),
-                command.to_string(),
-            ],
-        ),
-    }
-}
-
 fn run_local_build(
     workspace: &Path,
     app_subdir: &str,
@@ -2523,7 +2429,6 @@ fn run_local_build(
 
     let app_subdir_value = app_subdir.replace('\\', "/");
     let app_dir_value = app_dir.to_string_lossy().to_string();
-    let shell_runner = detect_local_shell_runner();
 
     let has_preset_stage = target_build
         .install
@@ -2547,9 +2452,8 @@ fn run_local_build(
 
     let run_shell =
         |cwd: &Path, command: &str, phase: &str, stage_label: &str| -> Result<(), String> {
-            let (program, args) = local_shell_command_program_and_args(shell_runner, command);
-            let output = std::process::Command::new(program)
-                .args(args)
+            let output = std::process::Command::new("sh")
+                .args(["-lc", command])
                 .current_dir(cwd)
                 .env("TAKO_APP_SUBDIR", &app_subdir_value)
                 .env("TAKO_APP_DIR", &app_dir_value)
@@ -2687,67 +2591,24 @@ fn resolve_stage_working_dir_for_local_build(
     Ok(stage_dir)
 }
 
-fn materialize_runtime_tool_version(
+/// Save the resolved runtime version into the deploy manifest (`app.json`).
+fn save_runtime_version_to_manifest(
     workspace: &Path,
     app_subdir: &str,
-    runtime_tool: &str,
     runtime_version: &str,
 ) -> Result<(), String> {
     let app_dir = workspace_app_dir(workspace, app_subdir);
-    if !app_dir.is_dir() {
-        return Err(format!(
-            "App directory '{}' does not exist inside build workspace",
-            app_dir.display()
-        ));
-    }
-
-    write_runtime_mise_toml_file(workspace, &app_dir, runtime_tool, runtime_version)?;
+    let manifest_path = app_dir.join("app.json");
+    let content = std::fs::read_to_string(&manifest_path)
+        .map_err(|e| format!("Failed to read {}: {e}", manifest_path.display()))?;
+    let mut value: serde_json::Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse {}: {e}", manifest_path.display()))?;
+    value["runtime_version"] = serde_json::Value::String(runtime_version.to_string());
+    let updated = serde_json::to_string_pretty(&value)
+        .map_err(|e| format!("Failed to serialize {}: {e}", manifest_path.display()))?;
+    std::fs::write(&manifest_path, updated)
+        .map_err(|e| format!("Failed to write {}: {e}", manifest_path.display()))?;
     let _ = std::fs::remove_file(app_dir.join(RUNTIME_VERSION_OUTPUT_FILE));
-    Ok(())
-}
-
-fn write_runtime_mise_toml_file(
-    workspace_root: &Path,
-    app_dir: &Path,
-    runtime_name: &str,
-    version: &str,
-) -> Result<(), String> {
-    let app_mise_path = app_dir.join(MISE_TOML_FILE);
-    let workspace_mise_path = workspace_root.join(MISE_TOML_FILE);
-    let mut table = if app_mise_path.is_file() {
-        match std::fs::read_to_string(&app_mise_path)
-            .map_err(|e| format!("Failed to read {}: {e}", app_mise_path.display()))?
-            .parse::<toml::Table>()
-        {
-            Ok(existing) => existing,
-            Err(_) => toml::Table::new(),
-        }
-    } else if app_dir != workspace_root && workspace_mise_path.is_file() {
-        match std::fs::read_to_string(&workspace_mise_path)
-            .map_err(|e| format!("Failed to read {}: {e}", workspace_mise_path.display()))?
-            .parse::<toml::Table>()
-        {
-            Ok(existing) => existing,
-            Err(_) => toml::Table::new(),
-        }
-    } else {
-        toml::Table::new()
-    };
-
-    let mut tools = table
-        .remove("tools")
-        .and_then(|value| value.as_table().cloned())
-        .unwrap_or_default();
-    tools.insert(
-        runtime_name.to_string(),
-        toml::Value::String(version.to_string()),
-    );
-    table.insert("tools".to_string(), toml::Value::Table(tools));
-
-    let rendered = toml::to_string(&table)
-        .map_err(|e| format!("Failed to render {}: {e}", app_mise_path.display()))?;
-    std::fs::write(&app_mise_path, rendered)
-        .map_err(|e| format!("Failed to write {}: {e}", app_mise_path.display()))?;
     Ok(())
 }
 
@@ -2786,97 +2647,37 @@ fn resolve_runtime_version_from_workspace(
             app_dir.display()
         ));
     }
-    if let Some(version) =
-        resolve_runtime_version_with_local_mise(workspace, &app_dir, runtime_tool)?
-    {
-        return Ok(version);
-    }
 
-    let app_mise = app_dir.join(MISE_TOML_FILE);
-    let workspace_mise = workspace.join(MISE_TOML_FILE);
-
-    let spec = if app_mise.is_file() {
-        read_runtime_version_spec_from_mise_toml(&app_mise, runtime_tool)?
-    } else if workspace_mise.is_file() {
-        read_runtime_version_spec_from_mise_toml(&workspace_mise, runtime_tool)?
-    } else {
-        None
-    };
-
-    Ok(spec.unwrap_or_else(|| "latest".to_string()))
-}
-
-fn local_mise_runtime_probe_command(app_dir: &Path, runtime_tool: &str) -> String {
-    let app_dir_str = app_dir.to_string_lossy().to_string();
-    format!(
-        "cd {} && if ! command -v mise >/dev/null 2>&1; then exit 127; fi; mise exec -- {} --version",
-        shell_single_quote(&app_dir_str),
-        shell_single_quote(runtime_tool)
-    )
-}
-
-fn resolve_runtime_version_with_local_mise(
-    workspace: &Path,
-    app_dir: &Path,
-    runtime_tool: &str,
-) -> Result<Option<String>, String> {
     #[cfg(test)]
     {
-        let _ = workspace;
-        let _ = app_dir;
-        let _ = runtime_tool;
-        Ok(None)
+        let _ = (workspace, &app_dir, runtime_tool);
+        return Ok("latest".to_string());
     }
 
     #[cfg(not(test))]
     {
-        let workspace_str = workspace.to_string_lossy().to_string();
-        let command = local_mise_runtime_probe_command(app_dir, runtime_tool);
+        let command = format!("{} --version", shell_single_quote(runtime_tool));
         let output = std::process::Command::new("sh")
             .args(["-lc", &command])
-            .current_dir(workspace)
-            .env("MISE_YES", "1")
+            .current_dir(&app_dir)
             .stdin(std::process::Stdio::null())
-            .output()
-            .map_err(|e| {
-                format!(
-                    "Failed to run local runtime version probe with mise in '{}': {e}",
-                    workspace_str
-                )
-            })?;
-        if !output.status.success() {
-            return Ok(None);
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if let Some(version) = stdout
+                    .lines()
+                    .map(str::trim)
+                    .find(|line| !line.is_empty())
+                    .map(str::to_string)
+                {
+                    return Ok(version);
+                }
+                Ok("latest".to_string())
+            }
+            _ => Ok("latest".to_string()),
         }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let version = stdout
-            .lines()
-            .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map(str::to_string);
-        Ok(version)
     }
-}
-
-fn read_runtime_version_spec_from_mise_toml(
-    path: &Path,
-    runtime_tool: &str,
-) -> Result<Option<String>, String> {
-    let raw = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
-    let table = match raw.parse::<toml::Table>() {
-        Ok(value) => value,
-        Err(_) => return Ok(None),
-    };
-    let Some(tools) = table.get("tools").and_then(|value| value.as_table()) else {
-        return Ok(None);
-    };
-    Ok(tools
-        .get(runtime_tool)
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_string()))
 }
 
 fn read_runtime_version_output(
@@ -4610,106 +4411,6 @@ route = "app.example.com"
     }
 
     #[test]
-    fn resolve_runtime_tool_for_mise_prefers_mise_exec_start_command() {
-        let preset = BuildPreset {
-            name: "bun".to_string(),
-            main: None,
-            builder_image: None,
-            build: crate::build::BuildPresetBuild::default(),
-            dev: vec![],
-            install: None,
-            start: vec![
-                "mise".to_string(),
-                "exec".to_string(),
-                "--".to_string(),
-                "bun".to_string(),
-                "run".to_string(),
-                "server.ts".to_string(),
-            ],
-            targets: HashMap::new(),
-            target_defaults: crate::build::BuildPresetTargetDefaults::default(),
-            assets: vec![],
-        };
-
-        assert_eq!(
-            resolve_runtime_tool_for_mise("bun", &preset).unwrap(),
-            "bun".to_string()
-        );
-    }
-
-    #[test]
-    fn resolve_runtime_tool_for_mise_falls_back_to_runtime_name() {
-        let preset = BuildPreset {
-            name: "node".to_string(),
-            main: None,
-            builder_image: None,
-            build: crate::build::BuildPresetBuild::default(),
-            dev: vec![],
-            install: None,
-            start: vec!["node".to_string(), "server.js".to_string()],
-            targets: HashMap::new(),
-            target_defaults: crate::build::BuildPresetTargetDefaults::default(),
-            assets: vec![],
-        };
-
-        assert_eq!(
-            resolve_runtime_tool_for_mise("node", &preset).unwrap(),
-            "node".to_string()
-        );
-    }
-
-    #[test]
-    fn resolve_runtime_tool_for_mise_supports_direct_runtime_start_command() {
-        let preset = BuildPreset {
-            name: "custom".to_string(),
-            main: None,
-            builder_image: None,
-            build: crate::build::BuildPresetBuild::default(),
-            dev: vec![],
-            install: None,
-            start: vec![
-                "bun".to_string(),
-                "run".to_string(),
-                "server.ts".to_string(),
-            ],
-            targets: HashMap::new(),
-            target_defaults: crate::build::BuildPresetTargetDefaults::default(),
-            assets: vec![],
-        };
-
-        assert_eq!(
-            resolve_runtime_tool_for_mise("custom", &preset).unwrap(),
-            "bun".to_string()
-        );
-    }
-
-    #[test]
-    fn resolve_runtime_tool_for_mise_rejects_old_proto_start_command() {
-        let preset = BuildPreset {
-            name: "custom".to_string(),
-            main: None,
-            builder_image: None,
-            build: crate::build::BuildPresetBuild::default(),
-            dev: vec![],
-            install: None,
-            start: vec![
-                "proto".to_string(),
-                "run".to_string(),
-                "bun".to_string(),
-                "--".to_string(),
-                "run".to_string(),
-                "server.ts".to_string(),
-            ],
-            targets: HashMap::new(),
-            target_defaults: crate::build::BuildPresetTargetDefaults::default(),
-            assets: vec![],
-        };
-
-        let err = resolve_runtime_tool_for_mise("custom", &preset).unwrap_err();
-        assert!(err.contains("Unable to infer runtime tool"));
-    }
-
-    #[test]
     fn resolve_build_target_uses_preset_build_commands() {
         let preset = BuildPreset {
             name: "bun".to_string(),
@@ -5077,22 +4778,6 @@ route = "app.example.com"
     }
 
     #[test]
-    fn local_shell_command_wrapper_uses_sh_when_mise_is_unavailable() {
-        let (program, args) =
-            local_shell_command_program_and_args(LocalShellRunner::Direct, "printf 'hello'");
-        assert_eq!(program, "sh");
-        assert_eq!(args, vec!["-lc", "printf 'hello'"]);
-    }
-
-    #[test]
-    fn local_shell_command_wrapper_uses_mise_exec_when_available() {
-        let (program, args) =
-            local_shell_command_program_and_args(LocalShellRunner::Mise, "printf 'hello'");
-        assert_eq!(program, "mise");
-        assert_eq!(args, vec!["exec", "--", "sh", "-lc", "printf 'hello'"]);
-    }
-
-    #[test]
     fn build_stage_summary_output_is_hidden_when_empty() {
         let summary: Vec<String> = vec![];
         assert_eq!(format_build_stages_summary_for_output(&summary, None), None);
@@ -5113,13 +4798,6 @@ route = "app.example.com"
             format_source_archive_created_message(),
             "Source archive created"
         );
-    }
-
-    #[test]
-    fn local_mise_runtime_probe_command_skips_hidden_install() {
-        let command = local_mise_runtime_probe_command(Path::new("/tmp/app"), "bun");
-        assert!(command.contains("mise exec -- 'bun' --version"));
-        assert!(!command.contains("mise install"));
     }
 
     #[test]
@@ -5180,83 +4858,41 @@ route = "app.example.com"
     }
 
     #[test]
-    fn materialize_runtime_tool_version_writes_mise_toml_file() {
+    fn save_runtime_version_to_manifest_writes_version_to_app_json() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
         let app_dir = workspace.join("apps/web");
         std::fs::create_dir_all(&app_dir).unwrap();
-        materialize_runtime_tool_version(&workspace, "apps/web", "bun", "1.3.9").unwrap();
+        std::fs::write(
+            app_dir.join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
+        )
+        .unwrap();
 
-        let tools_raw = std::fs::read_to_string(app_dir.join(MISE_TOML_FILE)).unwrap();
-        let tools = tools_raw.parse::<toml::Table>().unwrap();
-        let tools_table = tools
-            .get("tools")
-            .and_then(|value| value.as_table())
-            .unwrap();
-        assert_eq!(
-            tools_table.get("bun").and_then(|value| value.as_str()),
-            Some("1.3.9")
-        );
+        save_runtime_version_to_manifest(&workspace, "apps/web", "1.3.9").unwrap();
+
+        let manifest_raw = std::fs::read_to_string(app_dir.join("app.json")).unwrap();
+        let manifest: serde_json::Value = serde_json::from_str(&manifest_raw).unwrap();
+        assert_eq!(manifest["runtime_version"], "1.3.9");
+        assert_eq!(manifest["runtime"], "bun");
+    }
+
+    #[test]
+    fn save_runtime_version_cleans_up_old_version_file() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(
+            app_dir.join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
+        )
+        .unwrap();
+        std::fs::write(app_dir.join(RUNTIME_VERSION_OUTPUT_FILE), "1.3.9").unwrap();
+
+        save_runtime_version_to_manifest(&workspace, "apps/web", "1.3.9").unwrap();
+
         assert!(!app_dir.join(RUNTIME_VERSION_OUTPUT_FILE).exists());
-    }
-
-    #[test]
-    fn materialize_runtime_tool_version_preserves_existing_mise_toml_entries() {
-        let temp = TempDir::new().unwrap();
-        let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        std::fs::write(
-            app_dir.join(MISE_TOML_FILE),
-            "[tools]\nnode = \"20.11.1\"\n",
-        )
-        .unwrap();
-        materialize_runtime_tool_version(&workspace, "apps/web", "bun", "1.3.9").unwrap();
-
-        let tools_raw = std::fs::read_to_string(app_dir.join(MISE_TOML_FILE)).unwrap();
-        let tools = tools_raw.parse::<toml::Table>().unwrap();
-        let tools_table = tools
-            .get("tools")
-            .and_then(|value| value.as_table())
-            .unwrap();
-        assert_eq!(
-            tools_table.get("bun").and_then(|value| value.as_str()),
-            Some("1.3.9")
-        );
-        assert_eq!(
-            tools_table.get("node").and_then(|value| value.as_str()),
-            Some("20.11.1")
-        );
-    }
-
-    #[test]
-    fn materialize_runtime_tool_version_falls_back_to_workspace_mise_toml_entries() {
-        let temp = TempDir::new().unwrap();
-        let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        std::fs::write(
-            workspace.join(MISE_TOML_FILE),
-            "[tools]\nnode = \"20.11.1\"\n",
-        )
-        .unwrap();
-
-        materialize_runtime_tool_version(&workspace, "apps/web", "bun", "1.3.9").unwrap();
-
-        let tools_raw = std::fs::read_to_string(app_dir.join(MISE_TOML_FILE)).unwrap();
-        let tools = tools_raw.parse::<toml::Table>().unwrap();
-        let tools_table = tools
-            .get("tools")
-            .and_then(|value| value.as_table())
-            .unwrap();
-        assert_eq!(
-            tools_table.get("bun").and_then(|value| value.as_str()),
-            Some("1.3.9")
-        );
-        assert_eq!(
-            tools_table.get("node").and_then(|value| value.as_str()),
-            Some("20.11.1")
-        );
     }
 
     #[test]

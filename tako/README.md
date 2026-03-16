@@ -46,7 +46,7 @@ Operational behavior highlights:
 - Container builds stay ephemeral; dependency downloads are reused via per-target Docker cache volumes keyed by target label and builder image.
 - Containerized deploy builds default to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - `tako deploy` caches target artifacts in `.tako/artifacts` and reuses verified cache hits when build inputs are unchanged; invalid cache entries are rebuilt automatically.
-- Local runtime version resolution is mise-aware: Tako probes `mise exec -- <tool> --version` when `mise` is installed, then falls back to `mise.toml` and `latest`; local build stage commands also run through `mise exec -- sh -lc ...` when `mise` is available.
+- Local runtime version resolution runs `<tool> --version` directly, falling back to `latest`.
 - `tako deploy` merges build assets (preset assets + `build.assets`) into app `public/` after target build, in listed order.
 - `tako deploy` writes `app.json` in the deployed app directory and `tako-server` uses it to resolve the runtime start command.
 - `tako releases ls` shows release/build history for the current app and environment with commit metadata when available.

@@ -19,8 +19,8 @@ Repository scripts used by installers, CI checks, and local development workflow
   - Installs service definitions based on host init system:
     - systemd unit with `Type=notify`, `ExecReload=/bin/kill -HUP $MAINPID`, and capability bounding for `CAP_NET_BIND_SERVICE`.
     - OpenRC init script with `reload` support and `retry="TERM/1800/KILL/5"` graceful-stop semantics.
-  - Installs required runtime dependencies (including Unix-socket-capable `nc` with `-U` support, sqlite runtime libraries, and `mise`) via the host package manager when available.
-  - Falls back to the official `mise` installer if distro package managers do not provide `mise`.
+  - Installs required runtime dependencies (including Unix-socket-capable `nc` with `-U` support, sqlite runtime libraries, and `proto`) via the host package manager when available.
+  - Falls back to the official `proto` installer if not already present.
 - `check_critical_coverage.sh`: coverage gate for selected critical source files.
 - `release-notes.sh`: release notes generator used by SDK notes flow.
 

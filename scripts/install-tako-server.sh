@@ -28,9 +28,8 @@ set -eu
 #   TAKO_SERVER_NAME        server identity for metrics labels (optional)
 #                           if unset, installer prompts in interactive terminals
 #                           defaults to machine hostname if non-interactive
-#   TAKO_INSTALL_MISE       default: 1 (set 0/false to skip mise install)
-#   TAKO_MISE_VERSION       optional mise version for installer (default: latest)
-#   TAKO_MISE_BIN           default: /usr/local/bin/mise
+#   TAKO_INSTALL_PROTO      default: 1 (set 0/false to skip proto install)
+#   TAKO_PROTO_VERSION      optional proto version for installer (default: latest)
 #   TAKO_RESTART_SERVICE    default: 1 (set 0/false for install-only refresh; no service restart)
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -51,9 +50,8 @@ TAKO_REPO_OWNER="${TAKO_REPO_OWNER:-lilienblum}"
 TAKO_REPO_NAME="${TAKO_REPO_NAME:-tako}"
 TAKO_TAG_PREFIX="${TAKO_TAG_PREFIX:-tako-server-v}"
 TAKO_TAGS_API="${TAKO_TAGS_API:-https://api.github.com/repos/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/tags?per_page=100}"
-TAKO_INSTALL_MISE="${TAKO_INSTALL_MISE:-1}"
-TAKO_MISE_VERSION="${TAKO_MISE_VERSION:-}"
-TAKO_MISE_BIN="${TAKO_MISE_BIN:-/usr/local/bin/mise}"
+TAKO_INSTALL_PROTO="${TAKO_INSTALL_PROTO:-1}"
+TAKO_PROTO_VERSION="${TAKO_PROTO_VERSION:-}"
 TAKO_RESTART_SERVICE="${TAKO_RESTART_SERVICE:-1}"
 TAKO_SERVER_INSTALL_REFRESH_HELPER="/usr/local/bin/tako-server-install-refresh"
 TAKO_SERVER_SERVICE_HELPER="/usr/local/bin/tako-server-service"
@@ -433,64 +431,8 @@ install_sqlite_runtime() {
   fi
 }
 
-install_mise_prerequisites() {
-  if need_cmd apt-get; then
-    apt-get update -y
-    apt-get install -y bash git unzip gzip xz-utils
-  elif need_cmd dnf; then
-    dnf install -y bash git unzip gzip xz
-  elif need_cmd yum; then
-    yum install -y bash git unzip gzip xz
-  elif need_cmd pacman; then
-    pacman -Sy --noconfirm bash git unzip gzip xz
-  elif need_cmd apk; then
-    apk add --no-cache bash git unzip gzip xz
-  elif need_cmd zypper; then
-    zypper --non-interactive install bash git unzip gzip xz
-  else
-    echo "warning: unsupported package manager; mise prerequisites may be missing." >&2
-  fi
-}
-
-try_install_mise_package_manager() {
-  if need_cmd mise; then
-    return 0
-  fi
-
-  if need_cmd apt-get; then
-    apt-get update -y
-    if apt-get install -y mise >/dev/null 2>&1; then
-      return 0
-    fi
-  elif need_cmd dnf; then
-    if dnf install -y mise >/dev/null 2>&1; then
-      return 0
-    fi
-  elif need_cmd yum; then
-    if yum install -y mise >/dev/null 2>&1; then
-      return 0
-    fi
-  elif need_cmd pacman; then
-    if pacman -Sy --noconfirm mise >/dev/null 2>&1; then
-      return 0
-    fi
-  elif need_cmd apk; then
-    if apk add --no-cache mise >/dev/null 2>&1; then
-      return 0
-    fi
-  elif need_cmd zypper; then
-    if zypper --non-interactive install mise >/dev/null 2>&1; then
-      return 0
-    fi
-  fi
-
-  need_cmd mise
-}
-
-install_mise_via_script() {
-  install_mise_prerequisites
-
-  installer_url="https://mise.run"
+install_proto_via_script() {
+  installer_url="https://moonrepo.dev/install/proto.sh"
   installer="$(mktemp)"
 
   if need_cmd curl; then
@@ -500,43 +442,36 @@ install_mise_via_script() {
   fi
 
   chmod +x "$installer"
-  if [ -n "$TAKO_MISE_VERSION" ]; then
-    MISE_INSTALL_PATH="$TAKO_MISE_BIN" MISE_VERSION="$TAKO_MISE_VERSION" sh "$installer"
+  if [ -n "$TAKO_PROTO_VERSION" ]; then
+    bash "$installer" "$TAKO_PROTO_VERSION" --yes
   else
-    MISE_INSTALL_PATH="$TAKO_MISE_BIN" sh "$installer"
+    bash "$installer" --yes
   fi
   rm -f "$installer"
 
-  if [ -x "$TAKO_MISE_BIN" ] && [ "$TAKO_MISE_BIN" != "/usr/local/bin/mise" ]; then
-    ln -sf "$TAKO_MISE_BIN" /usr/local/bin/mise
-  elif [ -x "/root/.local/bin/mise" ]; then
-    ln -sf "/root/.local/bin/mise" /usr/local/bin/mise
+  # Ensure proto is on PATH for the rest of the install
+  if [ -x "$HOME/.proto/bin/proto" ] && ! need_cmd proto; then
+    ln -sf "$HOME/.proto/bin/proto" /usr/local/bin/proto
   fi
 }
 
-ensure_mise_toolchain() {
-  if ! is_enabled "$TAKO_INSTALL_MISE"; then
+ensure_proto() {
+  if ! is_enabled "$TAKO_INSTALL_PROTO"; then
     return
   fi
 
-  if need_cmd mise; then
-    echo "OK mise is already installed"
+  if need_cmd proto; then
+    echo "OK proto is already installed"
     return
   fi
 
-  if try_install_mise_package_manager && need_cmd mise; then
-    echo "OK installed mise via package manager"
-    return
-  fi
+  install_proto_via_script
 
-  echo "info: package manager install for mise is unavailable; falling back to upstream installer." >&2
-  install_mise_via_script
-
-  if ! need_cmd mise; then
-    echo "error: failed to install mise. Install it manually (https://mise.jdx.dev/getting-started.html) and re-run installer." >&2
+  if ! need_cmd proto; then
+    echo "error: failed to install proto. Install it manually (https://moonrepo.dev/docs/proto/install) and re-run installer." >&2
     exit 1
   fi
-  echo "OK installed mise at $(command -v mise)"
+  echo "OK installed proto at $(command -v proto)"
 }
 
 detect_libc() {
@@ -645,7 +580,7 @@ fi
 if ! need_cmd zstd; then
   install_pkgs zstd
 fi
-ensure_mise_toolchain
+ensure_proto
 ensure_nc
 install_sqlite_runtime
 

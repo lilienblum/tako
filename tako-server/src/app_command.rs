@@ -11,19 +11,23 @@ pub(crate) fn entrypoint_relative_path(runtime: &str) -> Option<&'static str> {
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
-struct ReleaseManifest {
-    runtime: String,
-    main: String,
-    idle_timeout: u32,
+pub(crate) struct ReleaseManifest {
+    pub runtime: String,
+    pub main: String,
+    pub idle_timeout: u32,
     #[serde(default)]
-    start: Vec<String>,
+    pub start: Vec<String>,
     #[serde(default)]
-    env_vars: HashMap<String, String>,
+    pub env_vars: HashMap<String, String>,
     #[serde(default)]
-    install: Option<String>,
+    pub install: Option<String>,
+    #[serde(default)]
+    pub runtime_version: Option<String>,
+    #[serde(default)]
+    pub runtime_bin: Option<String>,
 }
 
-fn load_release_manifest(release_dir: &Path) -> Result<ReleaseManifest, String> {
+pub(crate) fn load_release_manifest(release_dir: &Path) -> Result<ReleaseManifest, String> {
     let manifest_path = release_dir.join("app.json");
     let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
         format!(
@@ -64,12 +68,57 @@ pub fn install_command_from_release_dir(release_dir: &Path) -> Result<Option<Str
     Ok(load_release_manifest(release_dir)?.install)
 }
 
-/// Determine the command to launch an app from its release directory.
-///
-/// Release launch behavior is derived from deploy manifest (`app.json`) only.
-pub fn command_for_release_dir(release_dir: &Path) -> Result<Vec<String>, String> {
+/// Write `runtime_bin` into an existing `app.json` without losing other fields.
+pub(crate) fn write_runtime_bin(release_dir: &Path, bin_path: &str) -> Result<(), String> {
     let manifest_path = release_dir.join("app.json");
-    let manifest = load_release_manifest(release_dir)?;
+    let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
+        format!(
+            "failed to read deploy manifest {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
+    let mut value: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
+        format!(
+            "failed to parse deploy manifest {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
+    value["runtime_bin"] = serde_json::Value::String(bin_path.to_string());
+    let updated = serde_json::to_string_pretty(&value).map_err(|e| {
+        format!(
+            "failed to serialize deploy manifest {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })?;
+    std::fs::write(&manifest_path, updated).map_err(|e| {
+        format!(
+            "failed to write deploy manifest {}: {}",
+            manifest_path.display(),
+            e
+        )
+    })
+}
+
+/// Resolve the binary to use for a runtime. Uses `runtime_bin` if set and the
+/// file still exists on disk, otherwise falls back to the bare runtime name.
+fn resolve_runtime_binary(manifest: &ReleaseManifest) -> String {
+    if let Some(bin) = &manifest.runtime_bin {
+        if Path::new(bin).is_file() {
+            return bin.clone();
+        }
+    }
+    manifest.runtime.clone()
+}
+
+/// Build the launch command from an already-loaded manifest.
+pub(crate) fn command_from_manifest(
+    manifest: &ReleaseManifest,
+    release_dir: &Path,
+) -> Result<Vec<String>, String> {
+    let manifest_path = release_dir.join("app.json");
     if manifest.main.trim().is_empty() {
         return Err(format!(
             "deploy manifest {} has empty main field",
@@ -80,12 +129,12 @@ pub fn command_for_release_dir(release_dir: &Path) -> Result<Vec<String>, String
     if !manifest.start.is_empty() {
         return Ok(manifest
             .start
-            .into_iter()
+            .iter()
             .map(|arg| {
                 if arg == "{main}" {
                     manifest.main.clone()
                 } else {
-                    arg
+                    arg.clone()
                 }
             })
             .collect());
@@ -100,30 +149,40 @@ pub fn command_for_release_dir(release_dir: &Path) -> Result<Vec<String>, String
     })?;
     let entrypoint = resolve_entrypoint_path(release_dir, rel_path);
 
+    let bin = resolve_runtime_binary(manifest);
+
     match manifest.runtime.as_str() {
         "bun" => Ok(vec![
-            "bun".to_string(),
+            bin,
             "run".to_string(),
             entrypoint,
-            manifest.main,
+            manifest.main.clone(),
         ]),
         "node" => Ok(vec![
-            "node".to_string(),
+            bin,
             "--experimental-strip-types".to_string(),
             entrypoint,
-            manifest.main,
+            manifest.main.clone(),
         ]),
         "deno" => Ok(vec![
-            "deno".to_string(),
+            bin,
             "run".to_string(),
             "--allow-net".to_string(),
             "--allow-env".to_string(),
             "--allow-read".to_string(),
             entrypoint,
-            manifest.main,
+            manifest.main.clone(),
         ]),
         _ => unreachable!(),
     }
+}
+
+/// Determine the command to launch an app from its release directory.
+///
+/// Release launch behavior is derived from deploy manifest (`app.json`) only.
+pub fn command_for_release_dir(release_dir: &Path) -> Result<Vec<String>, String> {
+    let manifest = load_release_manifest(release_dir)?;
+    command_from_manifest(&manifest, release_dir)
 }
 
 fn resolve_entrypoint_path(release_dir: &Path, relative_path: &str) -> String {
@@ -212,8 +271,6 @@ mod tests {
             r#"{"runtime":"bun","main":"server/entry.js","idle_timeout":300}"#,
         )
         .unwrap();
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/index.ts"), "export {};\n").unwrap();
 
         let cmd = command_for_release_dir(dir.path()).unwrap();
         assert_eq!(
@@ -383,5 +440,82 @@ mod tests {
                 .to_string_lossy()
         );
         assert_eq!(cmd[3], "src/app.ts");
+    }
+
+    #[test]
+    fn runtime_version_deserialized_from_manifest() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"runtime_version":"1.2.0"}"#,
+        )
+        .unwrap();
+
+        let manifest = load_release_manifest(dir.path()).unwrap();
+        assert_eq!(manifest.runtime_version.as_deref(), Some("1.2.0"));
+    }
+
+    #[test]
+    fn runtime_version_defaults_to_none() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
+        )
+        .unwrap();
+
+        let manifest = load_release_manifest(dir.path()).unwrap();
+        assert!(manifest.runtime_version.is_none());
+    }
+
+    #[test]
+    fn uses_runtime_bin_when_set_and_file_exists() {
+        let dir = TempDir::new().unwrap();
+        let fake_bin = dir.path().join("fake-bun");
+        std::fs::write(&fake_bin, "#!/bin/sh\n").unwrap();
+
+        std::fs::write(
+            dir.path().join("app.json"),
+            format!(
+                r#"{{"runtime":"bun","main":"index.ts","idle_timeout":300,"runtime_bin":"{}"}}"#,
+                fake_bin.display()
+            ),
+        )
+        .unwrap();
+
+        let cmd = command_for_release_dir(dir.path()).unwrap();
+        assert_eq!(cmd[0], fake_bin.to_string_lossy());
+        assert_eq!(cmd[1], "run");
+    }
+
+    #[test]
+    fn falls_back_to_bare_runtime_when_runtime_bin_missing_on_disk() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"runtime_bin":"/nonexistent/bun"}"#,
+        )
+        .unwrap();
+
+        let cmd = command_for_release_dir(dir.path()).unwrap();
+        assert_eq!(cmd[0], "bun");
+    }
+
+    #[test]
+    fn write_runtime_bin_updates_manifest_preserving_other_fields() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"app_name":"myapp"}"#,
+        )
+        .unwrap();
+
+        write_runtime_bin(dir.path(), "/usr/local/bin/bun").unwrap();
+
+        let content = std::fs::read_to_string(dir.path().join("app.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&content).unwrap();
+        assert_eq!(value["runtime_bin"], "/usr/local/bin/bun");
+        assert_eq!(value["app_name"], "myapp");
+        assert_eq!(value["runtime"], "bun");
     }
 }

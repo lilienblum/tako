@@ -6,7 +6,6 @@ use sha2::{Digest, Sha256};
 use super::BuildPresetTarget;
 
 const BUN_INSTALL_CACHE_PATH: &str = "/var/cache/tako/bun/install/cache";
-const MISE_DATA_DIR_PATH: &str = "/var/cache/tako/mise";
 const CACHE_VOLUME_PREFIX: &str = "tako-build-cache";
 const DEFAULT_BUILDER_IMAGE_GLIBC: &str = "ghcr.io/lilienblum/tako-builder-glibc:v1";
 const DEFAULT_BUILDER_IMAGE_MUSL: &str = "ghcr.io/lilienblum/tako-builder-musl:v1";
@@ -206,34 +205,11 @@ fn build_container_script(
         ),
         format!("export TAKO_APP_DIR={}", shell_single_quote(&app_dir)),
         format!(
-            "export MISE_DATA_DIR={}",
-            shell_single_quote(MISE_DATA_DIR_PATH)
-        ),
-        format!(
-            "export PATH=\"/root/.local/bin:$PATH\""
-        ),
-        format!(
             "export BUN_INSTALL_CACHE_DIR={}",
             shell_single_quote(BUN_INSTALL_CACHE_PATH)
         ),
-        "if command -v apk >/dev/null 2>&1; then apk add --no-cache bash ca-certificates curl git gzip libgcc libstdc++ unzip xz; elif command -v apt-get >/dev/null 2>&1; then export DEBIAN_FRONTEND=noninteractive; apt-get update; apt-get install -y --no-install-recommends bash ca-certificates curl git gzip libgcc-s1 libstdc++6 unzip xz-utils; rm -rf /var/lib/apt/lists/*; else echo \"Unsupported builder image: expected apk or apt-get\" >&2; exit 1; fi".to_string(),
-        "if ! command -v mise >/dev/null 2>&1; then installer=\"$(mktemp)\"; curl -fsSL https://mise.run -o \"$installer\"; chmod +x \"$installer\"; sh \"$installer\"; rm -f \"$installer\"; fi".to_string(),
-        "if ! command -v mise >/dev/null 2>&1; then echo \"Failed to install mise in build container\" >&2; exit 1; fi".to_string(),
         format!(
-            "if [ ! -f /workspace/mise.toml ] && [ -f {} ]; then cp {} /workspace/mise.toml; fi",
-            shell_single_quote(&format!("{app_dir}/mise.toml")),
-            shell_single_quote(&format!("{app_dir}/mise.toml"))
-        ),
-        format!(
-            "if [ ! -f /workspace/mise.toml ]; then printf '[tools]\\n%s = \"latest\"\\n' {} > /workspace/mise.toml; fi",
-            shell_single_quote(runtime_tool)
-        ),
-        "cd /workspace && mise trust /workspace/mise.toml".to_string(),
-        "if [ -f \"$TAKO_APP_DIR/mise.toml\" ]; then mise trust \"$TAKO_APP_DIR/mise.toml\"; fi"
-            .to_string(),
-        "cd /workspace && mise install".to_string(),
-        format!(
-            "cd {} && mise exec -- {} --version > {}",
+            "cd {} && {} --version > {}",
             shell_single_quote(&app_dir),
             shell_single_quote(runtime_tool),
             shell_single_quote(".tako-runtime-version")
@@ -316,10 +292,7 @@ fn dependency_cache_mounts(
     runtime_tool: &str,
     builder_image: &str,
 ) -> Vec<ContainerCacheMount> {
-    let mut mounts = vec![ContainerCacheMount {
-        volume_name: dependency_cache_volume_name("mise", target_label, builder_image),
-        container_path: MISE_DATA_DIR_PATH.to_string(),
-    }];
+    let mut mounts = Vec::new();
     if runtime_tool == "bun" {
         mounts.push(ContainerCacheMount {
             volume_name: dependency_cache_volume_name("bun", target_label, builder_image),
@@ -462,23 +435,17 @@ mod tests {
         .unwrap();
         assert!(script.contains("export TAKO_APP_SUBDIR='apps/web'"));
         assert!(script.contains("export TAKO_APP_DIR='/workspace/apps/web'"));
-        assert!(script.contains("export MISE_DATA_DIR='/var/cache/tako/mise'"));
-        assert!(script.contains("cd /workspace && mise install"));
+        assert!(!script.contains("mise"));
         assert!(script.contains("cd /workspace && bun install --frozen-lockfile"));
         assert!(script.contains("cd '/workspace/apps/web' && bun run build"));
     }
 
     #[test]
-    fn container_script_trusts_workspace_mise_config_before_install() {
+    fn container_script_probes_runtime_version_directly() {
         let script = build_container_script("apps/web", "bun", Some("bun install"), None, &[])
             .expect("container script");
-        let trust_index = script
-            .find("cd /workspace && mise trust /workspace/mise.toml")
-            .expect("trust command");
-        let install_index = script
-            .find("cd /workspace && mise install")
-            .expect("install command");
-        assert!(trust_index < install_index);
+        assert!(script.contains("'bun' --version > '.tako-runtime-version'"));
+        assert!(!script.contains("mise exec"));
     }
 
     #[test]
@@ -496,14 +463,18 @@ mod tests {
     fn bun_target_enables_bun_dependency_cache_mount() {
         let mounts = dependency_cache_mounts("linux-x86_64-glibc", "bun", "debian:bookworm-slim");
 
-        assert_eq!(mounts.len(), 2);
-        assert_eq!(mounts[0].container_path, "/var/cache/tako/mise");
-        assert!(mounts[0].volume_name.starts_with("tako-build-cache-mise-"));
+        assert_eq!(mounts.len(), 1);
         assert_eq!(
-            mounts[1].container_path,
+            mounts[0].container_path,
             "/var/cache/tako/bun/install/cache"
         );
-        assert!(mounts[1].volume_name.starts_with("tako-build-cache-bun-"));
+        assert!(mounts[0].volume_name.starts_with("tako-build-cache-bun-"));
+    }
+
+    #[test]
+    fn non_bun_target_has_no_dependency_cache_mounts() {
+        let mounts = dependency_cache_mounts("linux-x86_64-glibc", "node", "debian:bookworm-slim");
+        assert!(mounts.is_empty());
     }
 
     #[test]
@@ -537,23 +508,12 @@ mod tests {
     }
 
     #[test]
-    fn container_script_bootstraps_latest_runtime_when_no_mise_toml_exists() {
+    fn container_script_has_no_mise_references() {
         let script =
             build_container_script("apps/web", "bun", Some("bun install"), None, &[]).unwrap();
-        assert!(
-            script
-                .contains("if [ ! -f /workspace/mise.toml ]; then printf '[tools]\\n%s = \"latest\"\\n' 'bun' > /workspace/mise.toml; fi")
-        );
-    }
-
-    #[test]
-    fn container_script_installs_runtime_libraries_for_toolchain_binaries() {
-        let script =
-            build_container_script("apps/web", "bun", Some("bun install"), None, &[]).unwrap();
-        assert!(script.contains(
-            "apk add --no-cache bash ca-certificates curl git gzip libgcc libstdc++ unzip xz"
-        ));
-        assert!(script.contains("apt-get install -y --no-install-recommends bash ca-certificates curl git gzip libgcc-s1 libstdc++6 unzip xz-utils"));
+        assert!(!script.contains("mise"));
+        assert!(!script.contains("apk add"));
+        assert!(!script.contains("apt-get"));
     }
 
     #[test]

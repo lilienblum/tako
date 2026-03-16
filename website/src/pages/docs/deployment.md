@@ -33,7 +33,7 @@ The installer handles everything:
 - Sets up a service definition (systemd unit or OpenRC init script)
 - Creates required directories (`/opt/tako` for data, `/var/run/tako` for sockets)
 - Configures privileged port binding (`:80` and `:443`) via service capabilities
-- Installs `mise` for runtime version management
+- Installs `proto` for runtime version management
 - Installs restricted maintenance helpers and sudoers policy for non-interactive upgrades
 - Ensures `nc` (netcat), `tar`, `base64`, and standard shell tools are available
 - Verifies `tako-server` starts successfully after installation

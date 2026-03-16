@@ -21,10 +21,11 @@ mod scaling;
 mod socket;
 mod state_store;
 mod tls;
+mod version_manager;
 
 use crate::app_command::{
-    command_for_release_dir, env_vars_from_release_dir, idle_timeout_secs_from_release_dir,
-    install_command_from_release_dir, runtime_from_release_dir,
+    command_from_manifest, env_vars_from_release_dir, load_release_manifest,
+    runtime_from_release_dir, write_runtime_bin,
 };
 use crate::instances::{
     App, AppConfig, AppManager, HealthChecker, HealthConfig, InstanceEvent, RollingUpdateConfig,
@@ -501,11 +502,6 @@ impl ServerState {
                         tracing::warn!(app = %app_name, "Failed to read secrets file: {}", e);
                         HashMap::new()
                     });
-
-            // Pre-install mise-managed tools so cold starts don't stall on download.
-            if let Err(e) = ensure_mise_tools_installed(&config.path).await {
-                tracing::warn!(app = %app_name, "Failed to pre-install mise tools: {}", e);
-            }
 
             let app = self.app_manager.register_app(config.clone());
             self.load_balancer.register_app(app.clone());
@@ -1520,26 +1516,16 @@ fn app_subdir_from_release_path(
     Ok(relative.to_string_lossy().to_string())
 }
 
-fn insert_mise_trusted_config_path(env_vars: &mut HashMap<String, String>, release_dir: &Path) {
-    if release_dir.join("mise.toml").exists() || release_dir.join(".mise.toml").exists() {
-        env_vars.insert(
-            "MISE_TRUSTED_CONFIG_PATHS".to_string(),
-            release_dir.to_string_lossy().to_string(),
-        );
-    }
-}
-
 fn apply_release_runtime_to_config(
     config: &mut AppConfig,
     release_path: PathBuf,
     app_socket_dir: PathBuf,
 ) -> Result<(), String> {
     config.path = release_path;
-    config.command = command_for_release_dir(&config.path)?;
-    config.env_vars = env_vars_from_release_dir(&config.path)?;
-    insert_mise_trusted_config_path(&mut config.env_vars, &config.path);
-    config.idle_timeout =
-        Duration::from_secs(u64::from(idle_timeout_secs_from_release_dir(&config.path)?));
+    let manifest = load_release_manifest(&config.path)?;
+    config.command = command_from_manifest(&manifest, &config.path)?;
+    config.env_vars = manifest.env_vars;
+    config.idle_timeout = Duration::from_secs(u64::from(manifest.idle_timeout));
     config.app_socket_dir = app_socket_dir;
     Ok(())
 }
@@ -1614,7 +1600,7 @@ fn resolve_app_user_for_install() -> Option<(u32, u32)> {
 
 /// Drop privileges on a command to the tako-app user if running as root.
 /// All deploy-time commands that execute user-controlled code (install scripts,
-/// bun install, mise install) must use this to avoid running as root.
+/// bun install, proto install) must use this to avoid running as root.
 #[cfg(unix)]
 fn drop_privileges_if_root(cmd: &mut TokioCommand) {
     if unsafe { libc::geteuid() } == 0 {
@@ -1642,11 +1628,7 @@ async fn run_release_install_command(
         .envs(
             env.iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
-        // Trust mise configs in the release dir — the deployed content is user-controlled.
-        // MISE_TRUSTED_CONFIG_PATHS marks all configs under this path as trusted so mise
-        // doesn't error out in non-interactive mode (MISE_YES does not help here).
-        .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str());
+        );
 
     #[cfg(unix)]
     drop_privileges_if_root(&mut cmd);
@@ -1679,71 +1661,30 @@ fn bun_install_args_for_release(release_dir: &Path) -> Vec<String> {
     args
 }
 
-/// Pre-install mise-managed tools if a `mise.toml` exists in the release dir.
-///
-/// Without this, the first `mise exec -- <tool>` invocation would download the
-/// tool on-demand, which can take 30+ seconds and cause cold-start timeouts.
-async fn ensure_mise_tools_installed(release_dir: &Path) -> Result<(), String> {
-    let mise_toml = release_dir.join("mise.toml");
-    if !mise_toml.exists() {
-        return Ok(());
-    }
-
-    // Check mise is available
-    if TokioCommand::new("mise")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .map(|s| !s.success())
-        .unwrap_or(true)
-    {
-        tracing::debug!(dir = %release_dir.display(), "mise not available, skipping tool install");
-        return Ok(());
-    }
-
-    tracing::info!(dir = %release_dir.display(), "Pre-installing mise tools");
-    let mut cmd = TokioCommand::new("mise");
-    cmd.args(["install"])
-        .current_dir(release_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str());
-
-    #[cfg(unix)]
-    drop_privileges_if_root(&mut cmd);
-
-    let output = cmd.output().await.map_err(|e| {
-        format!(
-            "Failed to run 'mise install' in {}: {}",
-            release_dir.display(),
-            e
-        )
-    })?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        tracing::warn!(
-            dir = %release_dir.display(),
-            stderr = %stderr,
-            "mise install failed (non-fatal)"
-        );
-    }
-    Ok(())
-}
-
 async fn prepare_release_runtime(
     release_dir: &Path,
     env: &HashMap<String, String>,
 ) -> Result<(), String> {
-    let runtime = runtime_from_release_dir(release_dir)?;
-    let install_command = install_command_from_release_dir(release_dir)?;
+    let manifest = load_release_manifest(release_dir)?;
+    let runtime = &manifest.runtime;
+    if runtime.trim().is_empty() {
+        return Err(format!(
+            "deploy manifest {} has empty runtime field",
+            release_dir.join("app.json").display()
+        ));
+    }
 
-    // Pre-install mise-managed tools before dependency install or app start.
-    ensure_mise_tools_installed(release_dir).await?;
+    // Install the pinned runtime version and cache the absolute binary path.
+    if let Some(bin) =
+        version_manager::install_and_resolve(runtime, manifest.runtime_version.as_deref()).await
+    {
+        if let Err(e) = write_runtime_bin(release_dir, &bin) {
+            tracing::warn!(error = %e, "Failed to write runtime_bin to manifest (non-fatal)");
+        }
+    }
 
-    if let Some(install_cmd) = install_command
+    if let Some(install_cmd) = manifest
+        .install
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
@@ -1753,7 +1694,7 @@ async fn prepare_release_runtime(
         install_bun_dependencies_for_release(release_dir, env).await?;
     }
 
-    if let Some(rel_path) = crate::app_command::entrypoint_relative_path(&runtime) {
+    if let Some(rel_path) = crate::app_command::entrypoint_relative_path(runtime) {
         let entrypoint_path = release_dir.join(rel_path);
         if !entrypoint_path.is_file() {
             return Err(format!(
@@ -1778,11 +1719,7 @@ async fn install_bun_dependencies_for_release(
         .envs(
             env.iter()
                 .map(|(key, value)| (key.as_str(), value.as_str())),
-        )
-        // Trust mise configs in the release dir — the deployed content is user-controlled.
-        // MISE_TRUSTED_CONFIG_PATHS marks all configs under this path as trusted so mise
-        // doesn't error out in non-interactive mode (MISE_YES does not help here).
-        .env("MISE_TRUSTED_CONFIG_PATHS", release_dir.as_os_str());
+        );
 
     #[cfg(unix)]
     drop_privileges_if_root(&mut cmd);
@@ -2941,11 +2878,11 @@ async fn probe_primary_socket(socket_path: &str, our_pid: u32) -> PrimaryStatus 
 mod tests {
     use super::{
         SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, bun_install_args_for_release,
-        ensure_mise_tools_installed, extract_zstd_archive, handle_idle_event,
-        install_rustls_crypto_provider, prepare_release_runtime, read_secrets_file,
-        read_server_config, resolve_release_runtime, run_extract_archive_mode, secrets_file_path,
-        should_signal_parent_on_ready, should_use_self_signed_route_cert, validate_app_name,
-        validate_deploy_routes, write_secrets_file,
+        extract_zstd_archive, handle_idle_event, install_rustls_crypto_provider,
+        prepare_release_runtime, read_secrets_file, read_server_config, resolve_release_runtime,
+        run_extract_archive_mode, secrets_file_path, should_signal_parent_on_ready,
+        should_use_self_signed_route_cert, validate_app_name, validate_deploy_routes,
+        write_secrets_file,
     };
     use crate::instances::AppConfig;
     use crate::socket::{AppState, Command, InstanceState, Response};
@@ -4590,23 +4527,6 @@ socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
             versions.contains(&"v1") && versions.contains(&"v2"),
             "expected status to include both running builds: {data}"
         );
-    }
-
-    #[tokio::test]
-    async fn ensure_mise_tools_installed_skips_when_no_mise_toml() {
-        let dir = TempDir::new().unwrap();
-        // No mise.toml present — should be a no-op.
-        ensure_mise_tools_installed(dir.path()).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn ensure_mise_tools_installed_skips_when_mise_not_available() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("mise.toml"), "[tools]\n").unwrap();
-        // Even if mise.toml exists, if mise is not installed this should not error.
-        // This test passes in any environment because ensure_mise_tools_installed
-        // gracefully handles a missing mise binary.
-        ensure_mise_tools_installed(dir.path()).await.unwrap();
     }
 
     #[test]

@@ -216,11 +216,11 @@ If an app process crashes, Tako detects it through health checks (within a few s
 
 **Fix:** Run on a host with active systemd or OpenRC. For build/image workflows where init is not active, rerun with `TAKO_RESTART_SERVICE=0` to refresh the binary/users without starting the service.
 
-### Failed to install mise
+### Failed to install proto
 
-**Symptom:** `install-server` exits after reporting a mise install failure.
+**Symptom:** `install-server` exits after reporting a proto install failure.
 
-**Fix:** Install `mise` manually on the host ([mise install docs](https://mise.jdx.dev/getting-started.html)), make sure it is on `PATH`, then rerun the installer. Alternatively, set `TAKO_INSTALL_MISE=0` to skip installer-managed mise setup.
+**Fix:** Install `proto` manually on the host ([proto install docs](https://moonrepo.dev/docs/proto/install)), make sure it is on `PATH`, then rerun the installer. Alternatively, set `TAKO_INSTALL_PROTO=0` to skip installer-managed proto setup.
 
 ### SSH host key verification failed
 
