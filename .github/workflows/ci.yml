@@ -302,6 +302,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v5
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-e2e-docker-${{ hashFiles('e2e/docker/**', 'scripts/install-tako-server.sh') }}
+          restore-keys: |
+            ${{ runner.os }}-e2e-docker-
+
       - name: Download CLI + server (glibc)
         uses: actions/download-artifact@v8
         with:
@@ -326,8 +337,16 @@ jobs:
       - name: Run E2E suites
         env:
           E2E_BIN_DIR: ${{ github.workspace }}/.e2e-bin
+          BUILDX_CACHE_FROM: type=local,src=/tmp/.buildx-cache
+          BUILDX_CACHE_TO: type=local,dest=/tmp/.buildx-cache-new,mode=max
         run: |
           set -euo pipefail
           for fixture in $(find e2e/fixtures/js -mindepth 1 -maxdepth 1 -type d | sort); do
             ./e2e/run.sh "$fixture"
           done
+
+      - name: Rotate Docker cache
+        if: always()
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache 2>/dev/null || true

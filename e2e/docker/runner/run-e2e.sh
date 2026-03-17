@@ -294,10 +294,12 @@ start_tako_server() {
 
 # Wait for SSH on all servers
 ssh_wait server-ubuntu
+ssh_wait server-alma
 ssh_wait server-alpine
 
-# Start tako-server on each (glibc for Ubuntu, musl for Alpine)
+# Start tako-server on each (glibc for Ubuntu/Alma, musl for Alpine)
 start_tako_server server-ubuntu "$TAKO_SERVER_GLIBC"
+start_tako_server server-alma "$TAKO_SERVER_GLIBC"
 if [[ -x "$TAKO_SERVER_MUSL" ]]; then
   start_tako_server server-alpine "$TAKO_SERVER_MUSL"
 fi
@@ -335,10 +337,12 @@ fi
 
 # Populate known_hosts for the tako CLI (uses $HOME/.ssh/known_hosts)
 ssh-keyscan -H server-ubuntu >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
+ssh-keyscan -H server-alma >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 ssh-keyscan -H server-alpine >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 
 SERVERS=()
 SERVERS+=("server-ubuntu:gnu")
+SERVERS+=("server-alma:gnu")
 if [[ -x "$TAKO_SERVER_MUSL" ]]; then
   SERVERS+=("server-alpine:musl")
 fi
