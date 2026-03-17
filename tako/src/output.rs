@@ -138,15 +138,16 @@ pub fn format_elapsed_trace(duration: Duration) -> String {
 }
 
 /// Format elapsed for inline spinner display (no parens), e.g. `"1m10s"`.
-fn format_elapsed_inline(duration: Duration) -> String {
+fn format_elapsed_inline(duration: Duration, parens: bool) -> String {
     let secs = duration.as_secs();
-    if secs < 60 {
-        format!("({secs}s)")
+    let inner = if secs < 60 {
+        format!("{secs}s")
     } else {
         let mins = secs / 60;
         let remaining = secs % 60;
-        format!("({mins}m{remaining}s)")
-    }
+        format!("{mins}m{remaining}s")
+    };
+    if parens { format!("({inner})") } else { inner }
 }
 
 /// Format a muted elapsed-time string, e.g. `"(3.2s)"` rendered in muted style.
@@ -966,7 +967,7 @@ impl PhaseSpinner {
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 loop {
                     let elapsed = start.elapsed();
-                    let time = format_elapsed_inline(elapsed);
+                    let time = format_elapsed_inline(elapsed, true);
                     pb.set_message(format!("{base} {}", brand_muted(&time)));
                     tokio::time::sleep(Duration::from_secs(1)).await;
                 }
@@ -1178,7 +1179,7 @@ impl TransferProgress {
                 0.0
             };
             let elapsed = self.start.elapsed();
-            let time = format_elapsed_inline(elapsed);
+            let time = format_elapsed_inline(elapsed, true);
             let size_text = if self.total > 0 {
                 format!("{} / {}", format_size(bytes), format_size(self.total))
             } else {
@@ -1215,7 +1216,7 @@ impl TransferProgress {
             if self.total > 0 {
                 details.push(format_size(self.total));
             }
-            let time = format_elapsed_inline(elapsed);
+            let time = format_elapsed_inline(elapsed, false);
             if !time.is_empty() {
                 details.push(time);
             }
