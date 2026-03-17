@@ -66,6 +66,9 @@ jobs:
     name: Links
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
       - name: Check website changes
         id: changes
         uses: dorny/paths-filter@v3
@@ -73,10 +76,6 @@ jobs:
           filters: |
             website:
               - 'website/**'
-
-      - name: Checkout
-        if: steps.changes.outputs.website == 'true'
-        uses: actions/checkout@v6
 
       - name: Setup Bun
         if: steps.changes.outputs.website == 'true'
