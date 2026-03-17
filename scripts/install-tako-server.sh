@@ -599,6 +599,9 @@ fi
 if ! need_cmd zstd; then
   install_pkgs zstd
 fi
+if ! need_cmd git; then
+  install_pkgs git
+fi
 ensure_nc
 install_sqlite_runtime
 

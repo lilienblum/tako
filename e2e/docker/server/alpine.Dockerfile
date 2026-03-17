@@ -4,6 +4,7 @@ RUN apk add --no-cache \
       bash \
       ca-certificates \
       curl \
+      git \
       netcat-openbsd \
       openssh \
       shadow \
@@ -22,10 +23,9 @@ RUN chmod +x /tmp/install-tako-server.sh \
     && TAKO_SERVER_URL="file:///tmp/tako-server.tar.zst" TAKO_RESTART_SERVICE=0 TAKO_INSTALL_PROTO=0 TAKO_SERVER_NAME=e2e sh /tmp/install-tako-server.sh \
     && rm -f /tmp/install-tako-server.sh /tmp/tako-server /tmp/tako-server.tar.zst /tmp/tako-server.tar.zst.sha256
 
-# Install proto and pre-fetch bun plugin as the tako user
+# Install proto as the tako user
 USER tako
-RUN curl -fsSL https://moonrepo.dev/install/proto.sh | bash -s -- --yes \
-    && /home/tako/.proto/bin/proto install bun latest
+RUN curl -fsSL https://moonrepo.dev/install/proto.sh | bash -s -- --yes
 USER root
 RUN ln -sf /home/tako/.proto/bin/proto /usr/local/bin/proto \
     && chmod -R g+rX /home/tako/.proto 2>/dev/null || true
