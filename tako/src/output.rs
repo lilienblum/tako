@@ -325,7 +325,7 @@ where
 }
 
 /// Custom event format: `HH:MM:SS.mmm LEVEL [scope] message`
-/// In CI mode: no timestamp (CI adds its own), no ANSI colors.
+/// In CI mode: no ANSI colors.
 pub struct ScopeFormat;
 
 impl<S, N> FormatEvent<S, N> for ScopeFormat
@@ -341,12 +341,7 @@ where
     ) -> std::fmt::Result {
         use tracing_subscriber::fmt::time::FormatTime;
 
-        let ci = is_ci();
-
-        // Timestamp (skipped in CI — CI systems add their own)
-        if !ci {
-            LocalTimer.format_time(&mut writer)?;
-        }
+        LocalTimer.format_time(&mut writer)?;
 
         // Level (right-aligned, 5 chars)
         let level = *event.metadata().level();
