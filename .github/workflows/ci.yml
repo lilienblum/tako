@@ -141,25 +141,17 @@ jobs:
             target: aarch64-unknown-linux-musl
             cli: false
     steps:
-      - name: Install build deps
+      - name: Install build deps and Rust
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends curl gcc pkg-config libssl-dev ca-certificates git
+          apt-get install -y --no-install-recommends curl gcc pkg-config libssl-dev ca-certificates git musl-tools
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          echo "/root/.cargo/bin" >> "$GITHUB_PATH"
+          . /root/.cargo/env
+          rustup target add ${{ matrix.target }}
 
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install musl toolchain
-        if: matrix.libc == 'musl'
-        run: apt-get install -y --no-install-recommends musl-tools
 
       - name: Build
         env:
