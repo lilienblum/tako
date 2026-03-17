@@ -333,6 +333,11 @@ if [[ "$ARCH_RAW" == "aarch64" || "$ARCH_RAW" == "arm64" ]]; then
   TARGET_ARCH="aarch64"
 fi
 
+# Populate known_hosts for the tako CLI (uses TAKO_HOME/keys/known_hosts)
+mkdir -p "$TAKO_HOME/keys"
+ssh-keyscan -H server-ubuntu >> "$TAKO_HOME/keys/known_hosts" 2>/dev/null
+ssh-keyscan -H server-alpine >> "$TAKO_HOME/keys/known_hosts" 2>/dev/null
+
 SERVERS=()
 SERVERS+=("server-ubuntu:gnu")
 if [[ -x "$TAKO_SERVER_MUSL" ]]; then
