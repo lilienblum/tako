@@ -1,5 +1,6 @@
 ---
 import NavLinks from "../components/NavLinks.astro";
+import StarIcon from "lucide-astro/Star";
 
 export interface Props {
   title?: string;
@@ -122,6 +123,10 @@ const {
         padding: 14px 0;
       }
 
+      .header > .container {
+        position: relative;
+      }
+
       .header-inner {
         padding: 11px 14px;
         border: 2px solid var(--line);
@@ -184,10 +189,6 @@ const {
         padding: 7px 10px;
       }
 
-      .x-icon {
-        width: 0.85em;
-        height: 0.85em;
-      }
 
       .github-star {
         display: inline-flex;
@@ -230,72 +231,145 @@ const {
 
       .site-footer {
         margin: 0 auto;
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
       }
 
       .footer-inner {
-        border: 2px solid var(--line);
-        border-radius: var(--panel-radius);
-        background: rgba(255, 255, 255, 0.76);
-        backdrop-filter: blur(8px);
-        padding: 12px 14px;
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-      }
-
-      .footer-row {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 12px;
+        justify-content: center;
+        gap: 24px;
+        padding: 20px 14px;
       }
 
-      .footer-brand {
+      .footer-inner a {
+        text-decoration: none;
+        color: var(--muted);
         font-family: "Nunito", sans-serif;
-        font-size: 18px;
+        font-size: 15px;
         font-weight: 600;
-        color: rgba(47, 42, 68, 0.9);
+        transition: color 0.15s;
       }
 
-      .footer-links {
-        justify-content: flex-end;
+      .footer-inner a:hover {
+        color: var(--ink);
       }
+
+      .footer-note {
+        text-align: center;
+        font-family: "Nunito", sans-serif;
+        font-size: 13px;
+        color: var(--muted);
+        opacity: 0.6;
+        padding-bottom: 16px;
+      }
+
+      .mobile-nav-controls {
+        display: none;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .hamburger {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        gap: 4px;
+        width: 36px;
+        height: 36px;
+        padding: 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.8);
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      .hamburger:hover {
+        background: rgba(232, 135, 131, 0.18);
+      }
+
+      .hamburger-line {
+        display: block;
+        width: 16px;
+        height: 2px;
+        background: var(--ink);
+        border-radius: 1px;
+        transition: transform 0.2s, opacity 0.2s;
+      }
+
+      .hamburger.is-open .hamburger-line:nth-child(1) {
+        transform: translateY(6px) rotate(45deg);
+      }
+
+      .hamburger.is-open .hamburger-line:nth-child(2) {
+        opacity: 0;
+      }
+
+      .hamburger.is-open .hamburger-line:nth-child(3) {
+        transform: translateY(-6px) rotate(-45deg);
+      }
+
+      .mobile-menu {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 0 8px;
+        margin-top: 0;
+        border: 2px solid transparent;
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.92);
+        backdrop-filter: blur(8px);
+        overflow: hidden;
+        max-height: 0;
+        opacity: 0;
+        pointer-events: none;
+        transition: max-height 0.25s ease, opacity 0.2s ease, padding 0.25s ease, margin-top 0.25s ease, border-color 0.2s ease;
+      }
+
+      .mobile-menu.is-open {
+        max-height: 200px;
+        opacity: 1;
+        padding: 8px;
+        margin-top: 8px;
+        border-color: var(--line);
+        pointer-events: auto;
+      }
+
+      .mobile-menu a {
+        text-decoration: none;
+        color: var(--ink);
+        font-family: "Nunito", sans-serif;
+        font-size: 16px;
+        font-weight: 600;
+        padding: 10px 14px;
+        border-radius: 14px;
+      }
+
+      .mobile-menu a:hover,
+      .mobile-menu a:active {
+        background: rgba(232, 135, 131, 0.12);
+      }
+
+
+
 
       @media (max-width: 640px) {
         .header-inner {
-          border-radius: var(--panel-radius);
           padding: 10px;
-          align-items: center;
-          flex-direction: row;
         }
 
-        .nav-links {
-          flex-wrap: nowrap;
+        .desktop-nav {
+          display: none;
         }
 
-        .nav {
-          width: auto;
+        .mobile-nav-controls {
+          display: flex;
         }
-
-        .nav-links a {
-          min-width: 0;
-          text-align: center;
-        }
-
-        .footer-inner {
-          align-items: stretch;
-        }
-
-        .footer-row {
-          align-items: center;
-          flex-direction: row;
-          flex-wrap: nowrap;
-        }
-
-        .footer-links { justify-content: flex-end; }
       }
     </style>
     <slot name="head" />
@@ -312,10 +386,25 @@ const {
               <img src="/assets/logo.svg" alt="Tako logo" />
               tako
             </a>
-            <nav class="nav nav-links">
+            <nav class="nav nav-links desktop-nav">
               <NavLinks />
             </nav>
+            <div class="mobile-nav-controls nav-links">
+              <a href="/docs">docs</a>
+              <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer" class="github-star">
+                <StarIcon class="star-icon" aria-hidden="true" focusable="false" />
+                <span>github</span>
+              </a>
+              <button class="hamburger" aria-label="Toggle menu" aria-expanded="false">
+                <span class="hamburger-line"></span>
+                <span class="hamburger-line"></span>
+                <span class="hamburger-line"></span>
+              </button>
+            </div>
           </div>
+          <nav class="mobile-menu" id="mobile-menu">
+            <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer">follow progress on 𝕏</a>
+          </nav>
         </div>
       </header>
 
@@ -325,16 +414,36 @@ const {
         <footer class="site-footer">
           <div class="container">
             <div class="footer-inner">
-              <div class="footer-row">
-                <p class="footer-brand">tako's homepage</p>
-                <div class="footer-links nav-links">
-                  <NavLinks />
-                </div>
-              </div>
+              <a href="/docs">docs</a>
+              <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer">𝕏</a>
+              <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer">github</a>
             </div>
+            <p class="footer-note">made in Japan</p>
           </div>
         </footer>
+
       </div>
+
     </div>
+    <script is:inline>
+      (function() {
+        var hamburger = document.querySelector('.hamburger');
+        var mobileMenu = document.getElementById('mobile-menu');
+        if (!hamburger || !mobileMenu) return;
+        hamburger.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var isOpen = mobileMenu.classList.toggle('is-open');
+          hamburger.classList.toggle('is-open');
+          hamburger.setAttribute('aria-expanded', String(isOpen));
+        });
+        document.addEventListener('click', function(e) {
+          if (!mobileMenu.contains(e.target) && !hamburger.contains(e.target)) {
+            mobileMenu.classList.remove('is-open');
+            hamburger.classList.remove('is-open');
+            hamburger.setAttribute('aria-expanded', 'false');
+          }
+        });
+      })();
+    </script>
   </body>
 </html>
