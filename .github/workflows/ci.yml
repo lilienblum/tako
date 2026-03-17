@@ -62,20 +62,51 @@ jobs:
       - name: SDK build
         run: bun run --cwd sdk/js build
 
-  # x86_64 builds — always run (PR + master), needed for E2E
-  build-x86_64:
-    name: Build x86_64 (${{ matrix.libc }})
-    # Pinned to 22.04 for glibc 2.35 compat (supports Debian 12+, Ubuntu 22.04+, RHEL 9+)
-    runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        include:
-          - libc: glibc
-            target: x86_64-unknown-linux-gnu
-            cli: true
-          - libc: musl
-            target: x86_64-unknown-linux-musl
-            cli: false
+  # x86_64 glibc — always run (PR + master), needed for E2E
+  build-x86_64-glibc:
+    name: Build x86_64 (glibc)
+    runs-on: ubuntu-latest
+    # Build inside Debian 11 container for glibc 2.31 compat (supports Debian 11+, Ubuntu 22.04+, RHEL 9+, Amazon Linux 2023)
+    container: rust:1.89-bullseye
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build deps
+        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build
+        env:
+          TAKO_CANARY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cargo build -p tako-server --release
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release
+
+      - name: Upload server binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-tako-server-linux-x86_64-glibc
+          path: target/release/tako-server
+          if-no-files-found: error
+
+      - name: Upload CLI binaries
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-tako-linux-x86_64
+          path: |
+            target/release/tako
+            target/release/tako-dev-server
+            target/release/tako-loopback-proxy
+          if-no-files-found: error
+
+  # x86_64 musl — always run (PR + master), needed for E2E (Alpine)
+  build-x86_64-musl:
+    name: Build x86_64 (musl)
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -83,100 +114,100 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: x86_64-unknown-linux-musl
 
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
       - name: Install musl toolchain
-        if: matrix.libc == 'musl'
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
 
       - name: Build
         env:
           TAKO_CANARY_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          cargo build -p tako-server --release --target ${{ matrix.target }}
-          if [ "${{ matrix.cli }}" = "true" ]; then
-            cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target ${{ matrix.target }}
-          fi
+        run: cargo build -p tako-server --release --target x86_64-unknown-linux-musl
 
       - name: Upload server binary
         uses: actions/upload-artifact@v7
         with:
-          name: bin-tako-server-linux-x86_64-${{ matrix.libc }}
-          path: target/${{ matrix.target }}/release/tako-server
+          name: bin-tako-server-linux-x86_64-musl
+          path: target/x86_64-unknown-linux-musl/release/tako-server
           if-no-files-found: error
 
-      - name: Upload CLI binaries
-        if: matrix.cli
-        uses: actions/upload-artifact@v7
-        with:
-          name: bin-tako-linux-x86_64
-          path: |
-            target/${{ matrix.target }}/release/tako
-            target/${{ matrix.target }}/release/tako-dev-server
-            target/${{ matrix.target }}/release/tako-loopback-proxy
-          if-no-files-found: error
-
-  # aarch64 builds — master only (for canary)
-  build-aarch64:
-    name: Build aarch64 (${{ matrix.libc }})
+  # aarch64 glibc — master only (for canary)
+  build-aarch64-glibc:
+    name: Build aarch64 (glibc)
     if: github.event_name == 'push'
     # 24.04-arm is the only GitHub-hosted ARM runner available
     runs-on: ubuntu-24.04-arm
-    # Build inside Debian 12 container for glibc 2.36 compat (supports Debian 12+, Ubuntu 22.04+, RHEL 9+)
-    container: rust:1.89-bookworm
+    # Build inside Debian 11 container for glibc 2.31 compat (same as x86_64)
+    container: rust:1.89-bullseye
     defaults:
       run:
         shell: bash
-    strategy:
-      matrix:
-        include:
-          - libc: glibc
-            target: aarch64-unknown-linux-gnu
-            cli: true
-          - libc: musl
-            target: aarch64-unknown-linux-musl
-            cli: false
     steps:
+      - name: Install build deps
+        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+
       - name: Checkout
         uses: actions/checkout@v6
-
-      - name: Install musl toolchain
-        if: matrix.libc == 'musl'
-        run: apt-get update && apt-get install -y --no-install-recommends musl-tools
-
-      - name: Setup targets
-        run: rustup target add ${{ matrix.target }}
 
       - name: Build
         env:
           TAKO_CANARY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          cargo build -p tako-server --release --target ${{ matrix.target }}
-          if [ "${{ matrix.cli }}" = "true" ]; then
-            cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target ${{ matrix.target }}
-          fi
+          cargo build -p tako-server --release
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release
 
       - name: Upload server binary
         uses: actions/upload-artifact@v7
         with:
-          name: bin-tako-server-linux-aarch64-${{ matrix.libc }}
-          path: target/${{ matrix.target }}/release/tako-server
+          name: bin-tako-server-linux-aarch64-glibc
+          path: target/release/tako-server
           if-no-files-found: error
 
       - name: Upload CLI binaries
-        if: matrix.cli
         uses: actions/upload-artifact@v7
         with:
           name: bin-tako-linux-aarch64
           path: |
-            target/${{ matrix.target }}/release/tako
-            target/${{ matrix.target }}/release/tako-dev-server
-            target/${{ matrix.target }}/release/tako-loopback-proxy
+            target/release/tako
+            target/release/tako-dev-server
+            target/release/tako-loopback-proxy
+          if-no-files-found: error
+
+  # aarch64 musl — master only (for canary)
+  build-aarch64-musl:
+    name: Build aarch64 (musl)
+    if: github.event_name == 'push'
+    # 24.04-arm is the only GitHub-hosted ARM runner available
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build
+        env:
+          TAKO_CANARY_SHA: ${{ github.sha }}
+        run: cargo build -p tako-server --release --target aarch64-unknown-linux-musl
+
+      - name: Upload server binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-tako-server-linux-aarch64-musl
+          path: target/aarch64-unknown-linux-musl/release/tako-server
           if-no-files-found: error
 
   # macOS builds — master only (for canary)
@@ -226,7 +257,7 @@ jobs:
 
   e2e:
     name: E2E
-    needs: [build-x86_64]
+    needs: [build-x86_64-glibc, build-x86_64-musl]
     runs-on: ubuntu-latest
     env:
       DOCKER_BUILDKIT: "1"
