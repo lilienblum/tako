@@ -9,3 +9,4 @@ dist/
 .tako/
 !.tako/secrets.json
 .e2e-cache/
+.e2e-bin/

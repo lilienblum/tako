@@ -4,7 +4,6 @@ RUN apk add --no-cache \
       bash \
       ca-certificates \
       curl \
-      openrc \
       openssh \
       shadow \
       sudo \
