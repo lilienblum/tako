@@ -155,6 +155,12 @@ const {
         line-height: 1;
       }
 
+      #logo-text {
+        display: inline-block;
+        width: 52px;
+        font-size: 19px;
+      }
+
       .logo img {
         width: 30px;
         height: 30px;
@@ -400,7 +406,7 @@ const {
           <div class="header-inner">
             <a href="/" class="logo">
               <img src="/assets/logo.svg" alt="Tako logo" />
-              tako
+              <span id="logo-text" aria-label="tako">たこ</span>
             </a>
             <nav class="nav nav-links desktop-nav">
               <NavLinks />
@@ -462,6 +468,47 @@ const {
             hamburger.setAttribute('aria-expanded', 'false');
           }
         });
+      })();
+    </script>
+    <script is:inline>
+      (function() {
+        var el = document.getElementById('logo-text');
+        if (!el) return;
+        var mono = '"IBM Plex Mono", monospace';
+        var sans = '"Nunito", sans-serif';
+        function rbit() { return Math.random() > 0.5 ? '1' : '0'; }
+
+        // Phase 1: たこ already showing (700ms)
+        setTimeout(function() {
+          // Phase 2: clean swap to binary
+          el.style.fontFamily = mono;
+          var b = '';
+          for (var j = 0; j < 4; j++) b += rbit();
+          el.textContent = b;
+          // Brief scramble
+          var s = 0;
+          var scramble = setInterval(function() {
+            var b = '';
+            for (var j = 0; j < 4; j++) b += rbit();
+            el.textContent = b;
+            s++;
+            if (s >= 6) {
+              clearInterval(scramble);
+              // Phase 3: binary → tako, letter by letter
+              var cur = el.textContent;
+              var k = 0;
+              var toTako = setInterval(function() {
+                cur = 'tako'.slice(0, k + 1) + cur.slice(k + 1);
+                el.textContent = cur;
+                if (k === 0) {
+                  el.style.fontFamily = sans;
+                }
+                k++;
+                if (k >= 4) clearInterval(toTako);
+              }, 150);
+            }
+          }, 70);
+        }, 700);
       })();
     </script>
   </body>
