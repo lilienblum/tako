@@ -134,9 +134,9 @@ async fn is_proto_available() -> bool {
 }
 
 /// Install a runtime and return the absolute binary path. Returns `None` if no
-/// version manager is available or no version is specified.
+/// version manager is available. Uses "latest" if no version is specified.
 pub(crate) async fn install_and_resolve(tool: &str, version: Option<&str>) -> Option<String> {
-    let version = version?;
+    let version = version.unwrap_or("latest");
     let vm = detect().await?;
 
     if let Err(e) = vm.install(tool, version).await {

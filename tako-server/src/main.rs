@@ -1625,13 +1625,15 @@ async fn prepare_release_runtime(
     }
 
     // Install the pinned runtime version and cache the absolute binary path.
+    if manifest.runtime_version.is_none() {
+        tracing::warn!(runtime = %runtime, "No runtime_version in tako.toml; using latest. Set runtime_version for reproducible builds.");
+    }
     let runtime_bin =
         version_manager::install_and_resolve(runtime, manifest.runtime_version.as_deref()).await;
-    if let Some(ref bin) = runtime_bin {
-        if let Err(e) = write_runtime_bin(release_dir, bin) {
+    if let Some(ref bin) = runtime_bin
+        && let Err(e) = write_runtime_bin(release_dir, bin) {
             tracing::warn!(error = %e, "Failed to write runtime_bin to manifest (non-fatal)");
         }
-    }
 
     // Use the resolved absolute path if available, otherwise fall back to the bare runtime name.
     let runtime_cmd = runtime_bin.as_deref().unwrap_or(runtime.as_str());
