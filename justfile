@@ -1,4 +1,5 @@
 mod build 'just/build.just'
+mod check 'just/check.just'
 mod testbed 'just/testbed.just'
 mod release 'just/release.just'
 mod test 'just/test.just'
@@ -20,10 +21,6 @@ lint:
 
 ci: fmt lint test::all
 
-# Build website and check for broken internal links
-links:
-    cd website && npx astro build --silent
-    lychee --root-dir website/dist 'website/dist/**/*.html'
 
 e2e fixture="e2e/fixtures/js/tanstack-start": (test::e2e fixture)
 

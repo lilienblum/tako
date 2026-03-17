@@ -11,7 +11,7 @@ just lint
 # Check for broken links if website files changed
 if git diff --cached --name-only | grep -q '^website/'; then
     if command -v lychee >/dev/null 2>&1; then
-        just links
+        just check::website
     else
         echo "warning: lychee not installed, skipping link check (brew install lychee)" >&2
     fi
