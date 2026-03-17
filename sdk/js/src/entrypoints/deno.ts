@@ -9,7 +9,7 @@ import { createEntrypoint } from "../create-entrypoint";
 
 const { run, appSocketPath, port, setDraining } = createEntrypoint();
 
-run((handleRequest) => {
+void run((handleRequest) => {
   if (appSocketPath) {
     // @ts-ignore - Deno.serve accepts path for unix sockets
     Deno.serve({ path: appSocketPath }, handleRequest);

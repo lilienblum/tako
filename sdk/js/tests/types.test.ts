@@ -4,14 +4,14 @@ import type { FetchHandler, TakoOptions, TakoStatus } from "../src/types";
 describe("Types", () => {
   describe("FetchHandler", () => {
     test("accepts default fetch function handler", () => {
-      const handler: FetchHandler = (request: Request, env: Record<string, string>) => {
+      const handler: FetchHandler = (_request: Request, _env: Record<string, string>) => {
         return new Response("Hello");
       };
       expect(typeof handler).toBe("function");
     });
 
     test("handler is callable", () => {
-      const handler: FetchHandler = (request: Request, env: Record<string, string>) =>
+      const handler: FetchHandler = (_request: Request, _env: Record<string, string>) =>
         new Response("Hello");
       expect(typeof handler).toBe("function");
     });

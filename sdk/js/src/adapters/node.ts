@@ -137,7 +137,7 @@ export function createMiddleware(): (
  * - Set status to healthy
  * - Setup graceful shutdown handlers
  */
-export function init(options?: TakoOptions): void {
+export function init(_options?: TakoOptions): void {
   status = "healthy";
 
   // Handle graceful shutdown

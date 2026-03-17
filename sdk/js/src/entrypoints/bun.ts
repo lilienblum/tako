@@ -10,7 +10,7 @@ import { createEntrypoint } from "../create-entrypoint";
 const { run, appSocketPath, port, setDraining } = createEntrypoint();
 
 if (import.meta.main) {
-  run((handleRequest) => {
+  void run((handleRequest) => {
     if (appSocketPath) {
       Bun.serve({ unix: appSocketPath, fetch: handleRequest });
       console.log(`Application listening on ${appSocketPath}`);

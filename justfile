@@ -15,6 +15,7 @@ fmt:
 
 lint:
     cargo clippy --workspace --all-targets
+    bun run lint
     bun run --filter '*' typecheck
 
 ci: fmt lint test::all

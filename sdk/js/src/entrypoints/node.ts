@@ -66,7 +66,7 @@ async function writeResponse(webResponse: Response, res: ServerResponse): Promis
   });
 }
 
-run((handleRequest) => {
+void run((handleRequest) => {
   const server = createServer(async (req, res) => {
     try {
       const request = incomingMessageToRequest(req);

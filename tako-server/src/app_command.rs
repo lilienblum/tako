@@ -105,10 +105,10 @@ pub(crate) fn write_runtime_bin(release_dir: &Path, bin_path: &str) -> Result<()
 /// Resolve the binary to use for a runtime. Uses `runtime_bin` if set and the
 /// file still exists on disk, otherwise falls back to the bare runtime name.
 fn resolve_runtime_binary(manifest: &ReleaseManifest) -> String {
-    if let Some(bin) = &manifest.runtime_bin {
-        if Path::new(bin).is_file() {
-            return bin.clone();
-        }
+    if let Some(bin) = &manifest.runtime_bin
+        && Path::new(bin).is_file()
+    {
+        return bin.clone();
     }
     manifest.runtime.clone()
 }

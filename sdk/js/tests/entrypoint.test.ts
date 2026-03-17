@@ -1,3 +1,4 @@
+import { test, expect } from "bun:test";
 import { resolveUserAppImportUrl } from "../src/create-entrypoint";
 
 test("resolveUserAppImportUrl resolves relative paths against cwd", () => {

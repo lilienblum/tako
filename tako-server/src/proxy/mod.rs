@@ -498,17 +498,16 @@ impl ProxyHttp for TakoProxy {
             .get("content-length")
             .and_then(|v| v.to_str().ok())
             .and_then(|s| s.parse::<u64>().ok())
+            && cl > MAX_REQUEST_BODY_BYTES
         {
-            if cl > MAX_REQUEST_BODY_BYTES {
-                let body = "Payload Too Large";
-                let mut header = ResponseHeader::build(413, None)?;
-                insert_body_headers(&mut header, "text/plain", body)?;
-                session
-                    .write_response_header(Box::new(header), false)
-                    .await?;
-                session.write_response_body(Some(body.into()), true).await?;
-                return Ok(true);
-            }
+            let body = "Payload Too Large";
+            let mut header = ResponseHeader::build(413, None)?;
+            insert_body_headers(&mut header, "text/plain", body)?;
+            session
+                .write_response_header(Box::new(header), false)
+                .await?;
+            session.write_response_body(Some(body.into()), true).await?;
+            return Ok(true);
         }
 
         let path = session.req_header().uri.path().to_string();
@@ -1059,7 +1058,7 @@ fn client_ip_from_session(session: &Session) -> Option<IpAddr> {
 
 /// Pingora exposes via `uri.authority()`.  For HTTP/1.1, it lives in the
 /// `Host` header.  We try both so routing works regardless of protocol.
-fn request_host<'a>(req: &'a pingora_http::RequestHeader) -> &'a str {
+fn request_host(req: &pingora_http::RequestHeader) -> &str {
     req.uri
         .authority()
         .map(|a| a.as_str())

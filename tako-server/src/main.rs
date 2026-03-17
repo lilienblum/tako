@@ -1555,11 +1555,11 @@ fn resolve_app_user_for_install() -> Option<(u32, u32)> {
 /// bun install, proto install) must use this to avoid running as root.
 #[cfg(unix)]
 fn drop_privileges_if_root(cmd: &mut TokioCommand) {
-    if unsafe { libc::geteuid() } == 0 {
-        if let Some((uid, gid)) = resolve_app_user_for_install() {
-            cmd.uid(uid);
-            cmd.gid(gid);
-        }
+    if unsafe { libc::geteuid() } == 0
+        && let Some((uid, gid)) = resolve_app_user_for_install()
+    {
+        cmd.uid(uid);
+        cmd.gid(gid);
     }
 }
 
@@ -1629,10 +1629,9 @@ async fn prepare_release_runtime(
     // Install the pinned runtime version and cache the absolute binary path.
     if let Some(bin) =
         version_manager::install_and_resolve(runtime, manifest.runtime_version.as_deref()).await
+        && let Err(e) = write_runtime_bin(release_dir, &bin)
     {
-        if let Err(e) = write_runtime_bin(release_dir, &bin) {
-            tracing::warn!(error = %e, "Failed to write runtime_bin to manifest (non-fatal)");
-        }
+        tracing::warn!(error = %e, "Failed to write runtime_bin to manifest (non-fatal)");
     }
 
     if let Some(install_cmd) = manifest
@@ -1929,10 +1928,10 @@ struct ServerConfigDns {
 /// Read server configuration from `{data_dir}/config.json`.
 fn read_server_config(data_dir: &Path) -> ServerConfigFile {
     let config_path = data_dir.join("config.json");
-    if let Ok(contents) = std::fs::read_to_string(&config_path) {
-        if let Ok(config) = serde_json::from_str::<ServerConfigFile>(&contents) {
-            return config;
-        }
+    if let Ok(contents) = std::fs::read_to_string(&config_path)
+        && let Ok(config) = serde_json::from_str::<ServerConfigFile>(&contents)
+    {
+        return config;
     }
     ServerConfigFile::default()
 }
@@ -2811,16 +2810,14 @@ async fn probe_primary_socket(socket_path: &str, our_pid: u32) -> PrimaryStatus 
     }
 
     // Parse PID from response to distinguish primary from ourselves
-    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
-        if let Some(pid) = parsed
+    if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response)
+        && let Some(pid) = parsed
             .get("data")
             .and_then(|d| d.get("pid"))
             .and_then(|p| p.as_u64())
-        {
-            if pid as u32 == our_pid {
-                return PrimaryStatus::IsUs;
-            }
-        }
+        && pid as u32 == our_pid
+    {
+        return PrimaryStatus::IsUs;
     }
 
     PrimaryStatus::Alive
