@@ -288,7 +288,7 @@ start_tako_server() {
   ssh_exec "$host" "chmod +x /home/tako/tako-server"
   ssh_exec "$host" "pkill -x tako-server >/dev/null 2>&1 || true"
   ssh_exec "$host" "rm -f /var/run/tako/tako.sock"
-  ssh_exec "$host" "nohup /usr/local/bin/tako-server --no-acme --port 8080 --tls-port 8443 --data-dir /opt/tako >/tmp/tako-server.log 2>&1 &"
+  ssh_exec "$host" "nohup env PATH=/home/tako/.proto/shims:/home/tako/.proto/bin:\$PATH /usr/local/bin/tako-server --no-acme --port 8080 --tls-port 8443 --data-dir /opt/tako >/tmp/tako-server.log 2>&1 &"
   wait_tako_socket "$host"
 }
 
