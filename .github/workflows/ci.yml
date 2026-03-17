@@ -128,7 +128,10 @@ jobs:
     # 24.04-arm is the only GitHub-hosted ARM runner available
     runs-on: ubuntu-24.04-arm
     # Build inside 22.04 container for glibc 2.35 compat (same as x86_64)
-    container: ubuntu:22.04
+    container:
+      image: ubuntu:22.04
+      env:
+        HOME: /root
     strategy:
       fail-fast: false
       matrix:
