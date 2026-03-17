@@ -49,10 +49,11 @@ jobs:
   publish:
     name: Publish SDK
     needs: check-ci
-    if: |
-      always() &&
-      (github.event_name == 'workflow_dispatch' && needs.check-ci.result == 'success') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    if: >-
+      always() && (
+        (github.event_name == 'workflow_dispatch' && needs.check-ci.result == 'success') ||
+        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+      )
     runs-on: ubuntu-latest
     environment: release
     steps:

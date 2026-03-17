@@ -1,6 +1,7 @@
 FROM almalinux:9
 
 RUN dnf install -y \
+      nmap-ncat \
       openssh-server \
       openssh-clients \
       sudo \

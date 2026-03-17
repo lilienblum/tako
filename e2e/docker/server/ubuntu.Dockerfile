@@ -8,6 +8,7 @@ RUN apt-get update \
     bash \
     ca-certificates \
     curl \
+    netcat-openbsd \
     sudo \
     xz-utils \
     zstd \
