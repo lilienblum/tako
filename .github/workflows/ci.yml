@@ -126,11 +126,8 @@ jobs:
     if: github.event_name == 'push'
     # 24.04-arm is the only GitHub-hosted ARM runner available
     runs-on: ubuntu-24.04-arm
-    # Build inside 22.04 container for glibc 2.35 compat (same as x86_64)
-    container:
-      image: ubuntu:22.04
-      env:
-        HOME: /root
+    # Build inside Debian 12 container for glibc 2.36 compat (supports Debian 12+, Ubuntu 22.04+, RHEL 9+)
+    container: rust:1.89-bookworm
     strategy:
       matrix:
         include:
@@ -141,17 +138,15 @@ jobs:
             target: aarch64-unknown-linux-musl
             cli: false
     steps:
-      - name: Install build deps and Rust
-        run: |
-          apt-get update
-          apt-get install -y --no-install-recommends curl gcc pkg-config libssl-dev ca-certificates git musl-tools
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
-          echo "/root/.cargo/bin" >> "$GITHUB_PATH"
-          . /root/.cargo/env
-          rustup target add ${{ matrix.target }}
-
       - name: Checkout
         uses: actions/checkout@v6
+
+      - name: Install musl toolchain
+        if: matrix.libc == 'musl'
+        run: apt-get update && apt-get install -y --no-install-recommends musl-tools
+
+      - name: Setup targets
+        run: rustup target add ${{ matrix.target }}
 
       - name: Build
         env:
