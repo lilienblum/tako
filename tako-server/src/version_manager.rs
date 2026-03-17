@@ -137,7 +137,16 @@ async fn is_proto_available() -> bool {
 /// version manager is available. Uses "latest" if no version is specified.
 pub(crate) async fn install_and_resolve(tool: &str, version: Option<&str>) -> Option<String> {
     let version = version.unwrap_or("latest");
-    let vm = detect().await?;
+    let vm = match detect().await {
+        Some(vm) => vm,
+        None => {
+            tracing::warn!(
+                tool,
+                "No version manager (proto) found; runtime must be on PATH"
+            );
+            return None;
+        }
+    };
 
     if let Err(e) = vm.install(tool, version).await {
         tracing::warn!(tool, version, error = %e, "Version manager install failed");

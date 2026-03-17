@@ -371,8 +371,10 @@ CFG
   FIRST_DEPLOY_LOG="$TMP_ROOT/deploy-first-${server}.log"
   SECOND_DEPLOY_LOG="$TMP_ROOT/deploy-second-${server}.log"
 
-  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes "$PROJECT_DIR" >"$FIRST_DEPLOY_LOG" 2>&1; then
+  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes --verbose "$PROJECT_DIR" >"$FIRST_DEPLOY_LOG" 2>&1; then
     cat "$FIRST_DEPLOY_LOG" >&2 || true
+    echo "--- tako-server log from $server ---" >&2
+    ssh_exec "$server" "cat /tmp/tako-server.log 2>/dev/null | tail -50" >&2 || true
     exit 1
   fi
   cat "$FIRST_DEPLOY_LOG"
@@ -381,7 +383,7 @@ CFG
     exit 1
   fi
 
-  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes "$PROJECT_DIR" >"$SECOND_DEPLOY_LOG" 2>&1; then
+  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes --verbose "$PROJECT_DIR" >"$SECOND_DEPLOY_LOG" 2>&1; then
     cat "$SECOND_DEPLOY_LOG" >&2 || true
     exit 1
   fi
