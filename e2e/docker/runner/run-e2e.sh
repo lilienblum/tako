@@ -381,11 +381,16 @@ CFG
   fi
   cat "$DEPLOY_LOG"
 
+  echo "--- Debug: directory listing on $server ---" >&2
+  ssh_exec "$server" "find /opt/tako/apps -maxdepth 3 -type l -o -type d 2>/dev/null" >&2 || true
+
   CURRENT_LINK=$(resolve_current_release_link "$server" || true)
   APP_RELEASE_DIR="$CURRENT_LINK/$FIXTURE_REL"
 
   if [[ -z "$CURRENT_LINK" ]]; then
     echo "Failed to resolve deployed release symlink on $server" >&2
+    echo "--- resolve_current_release_link returned empty ---" >&2
+    ssh_exec "$server" "ls -la /opt/tako/apps/*/current 2>&1" >&2 || true
     exit 1
   fi
 
