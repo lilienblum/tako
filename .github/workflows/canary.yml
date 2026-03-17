@@ -13,172 +13,14 @@ concurrency:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
-  build-linux-target:
-    name: Build Linux (${{ matrix.outarch }}-${{ matrix.libc }})
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ${{ matrix.runs_on }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - outarch: x86_64
-            target: x86_64-unknown-linux-gnu
-            libc: glibc
-            runs_on: ubuntu-latest
-          - outarch: aarch64
-            target: aarch64-unknown-linux-gnu
-            libc: glibc
-            runs_on: ubuntu-24.04-arm
-          - outarch: x86_64
-            target: x86_64-unknown-linux-musl
-            libc: musl
-            runs_on: ubuntu-latest
-          - outarch: aarch64
-            target: aarch64-unknown-linux-musl
-            libc: musl
-            runs_on: ubuntu-24.04-arm
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install musl toolchain
-        if: matrix.libc == 'musl'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
-
-      - name: Build artifacts
-        env:
-          TAKO_CANARY_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-
-          if [ "${{ matrix.libc }}" = "musl" ]; then
-            cargo build -p tako-server --release --target ${{ matrix.target }}
-          else
-            cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release
-            cargo build -p tako-server --release
-          fi
-
-      - name: Package server artifact
-        run: |
-          set -euo pipefail
-          if [ "${{ matrix.libc }}" = "musl" ]; then
-            server_bin="target/${{ matrix.target }}/release/tako-server"
-          else
-            server_bin="target/release/tako-server"
-          fi
-
-          tmpdir="$(mktemp -d)"
-          cp "$server_bin" "$tmpdir/tako-server"
-          tar -cf - -C "$tmpdir" tako-server | zstd -19 -o "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.zst"
-          sha256sum "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.zst" > "dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.zst.sha256"
-          rm -rf "$tmpdir"
-
-      - name: Package CLI artifact
-        if: matrix.libc == 'glibc'
-        run: |
-          set -euo pipefail
-          tmpdir="$(mktemp -d)"
-          cp target/release/tako "$tmpdir/tako"
-          cp target/release/tako-dev-server "$tmpdir/tako-dev-server"
-          cp target/release/tako-loopback-proxy "$tmpdir/tako-loopback-proxy"
-          tar -czf "dist/tako-linux-${{ matrix.outarch }}.tar.gz" -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
-          sha256sum "dist/tako-linux-${{ matrix.outarch }}.tar.gz" > "dist/tako-linux-${{ matrix.outarch }}.tar.gz.sha256"
-          rm -rf "$tmpdir"
-
-      - name: Upload Linux server artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: canary-linux-${{ matrix.outarch }}-${{ matrix.libc }}
-          path: |
-            dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.zst
-            dist/tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}.tar.zst.sha256
-          if-no-files-found: error
-
-      - name: Upload Linux CLI artifact
-        if: matrix.libc == 'glibc'
-        uses: actions/upload-artifact@v7
-        with:
-          name: canary-linux-cli-${{ matrix.outarch }}
-          path: |
-            dist/tako-linux-${{ matrix.outarch }}.tar.gz
-            dist/tako-linux-${{ matrix.outarch }}.tar.gz.sha256
-          if-no-files-found: error
-
-  build-darwin-cli:
-    name: Build macOS CLI Artifacts
-    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    runs-on: macos-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
-
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
-
-      - name: Build and package macOS CLI artifacts
-        run: |
-          set -euo pipefail
-          mkdir -p dist
-          export TAKO_CANARY_SHA="$GITHUB_SHA"
-
-          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target aarch64-apple-darwin
-          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target x86_64-apple-darwin
-
-          tmpdir="$(mktemp -d)"
-          cp target/aarch64-apple-darwin/release/tako "$tmpdir/tako"
-          cp target/aarch64-apple-darwin/release/tako-dev-server "$tmpdir/tako-dev-server"
-          cp target/aarch64-apple-darwin/release/tako-loopback-proxy "$tmpdir/tako-loopback-proxy"
-          tar -czf dist/tako-darwin-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
-          rm -rf "$tmpdir"
-
-          tmpdir="$(mktemp -d)"
-          cp target/x86_64-apple-darwin/release/tako "$tmpdir/tako"
-          cp target/x86_64-apple-darwin/release/tako-dev-server "$tmpdir/tako-dev-server"
-          cp target/x86_64-apple-darwin/release/tako-loopback-proxy "$tmpdir/tako-loopback-proxy"
-          tar -czf dist/tako-darwin-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
-          rm -rf "$tmpdir"
-
-          shasum -a 256 dist/tako-darwin-aarch64.tar.gz > dist/tako-darwin-aarch64.tar.gz.sha256
-          shasum -a 256 dist/tako-darwin-x86_64.tar.gz > dist/tako-darwin-x86_64.tar.gz.sha256
-
-          ls -1 dist/tako-darwin-*.tar.gz dist/tako-darwin-*.tar.gz.sha256
-
-      - name: Upload macOS artifacts
-        uses: actions/upload-artifact@v7
-        with:
-          name: canary-darwin
-          path: |
-            dist/tako-darwin-*.tar.gz
-            dist/tako-darwin-*.tar.gz.sha256
-          if-no-files-found: error
-
   publish:
     name: Publish Canary Prerelease
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
-    needs:
-      - build-linux-target
-      - build-darwin-cli
     environment: release
-    permissions:
-      contents: write
     steps:
       - name: Checkout (for tag update)
         uses: actions/checkout@v6
@@ -186,18 +28,78 @@ jobs:
           fetch-depth: 1
           token: ${{ secrets.GH_PAT }}
 
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v8
-        with:
-          pattern: canary-linux-*
-          merge-multiple: true
-          path: dist
+      - name: Find CI run
+        id: ci-run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "${{ github.event.workflow_run.id }}" ]; then
+            echo "run_id=${{ github.event.workflow_run.id }}" >> "$GITHUB_OUTPUT"
+          else
+            run_id=$(gh run list --workflow=ci.yml --commit="$GITHUB_SHA" --status=success --json databaseId -q '.[0].databaseId')
+            if [ -z "$run_id" ]; then
+              echo "::error::No successful CI run found for commit $GITHUB_SHA"
+              exit 1
+            fi
+            echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          fi
 
-      - name: Download macOS artifacts
+      - name: Download all artifacts from CI
         uses: actions/download-artifact@v8
         with:
-          name: canary-darwin
-          path: dist
+          run-id: ${{ steps.ci-run.outputs.run_id }}
+          github-token: ${{ github.token }}
+          pattern: bin-*
+          path: raw
+
+      - name: Package release assets
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+
+          package_server() {
+            local arch=$1 libc=$2
+            local src="raw/bin-tako-server-linux-${arch}-${libc}/tako-server"
+            local out="dist/tako-server-linux-${arch}-${libc}.tar.zst"
+            tmpdir="$(mktemp -d)"
+            cp "$src" "$tmpdir/tako-server"
+            tar -cf - -C "$tmpdir" tako-server | zstd -19 -o "$out"
+            sha256sum "$out" > "${out}.sha256"
+            rm -rf "$tmpdir"
+          }
+
+          package_cli_linux() {
+            local arch=$1
+            local src="raw/bin-tako-linux-${arch}"
+            local out="dist/tako-linux-${arch}.tar.gz"
+            tmpdir="$(mktemp -d)"
+            cp "$src/tako" "$src/tako-dev-server" "$src/tako-loopback-proxy" "$tmpdir/"
+            tar -czf "$out" -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
+            sha256sum "$out" > "${out}.sha256"
+            rm -rf "$tmpdir"
+          }
+
+          package_cli_darwin() {
+            local arch=$1
+            local src="raw/bin-tako-darwin-${arch}"
+            local out="dist/tako-darwin-${arch}.tar.gz"
+            tmpdir="$(mktemp -d)"
+            cp "$src/tako" "$src/tako-dev-server" "$src/tako-loopback-proxy" "$tmpdir/"
+            tar -czf "$out" -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
+            sha256sum "$out" > "${out}.sha256"
+            rm -rf "$tmpdir"
+          }
+
+          package_server x86_64 glibc
+          package_server x86_64 musl
+          package_server aarch64 glibc
+          package_server aarch64 musl
+          package_cli_linux x86_64
+          package_cli_linux aarch64
+          package_cli_darwin aarch64
+          package_cli_darwin x86_64
+
+          ls -la dist/
 
       - name: Move canary-latest tag to current commit
         run: |
@@ -211,24 +113,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          assets=(
-            dist/tako-darwin-aarch64.tar.gz
-            dist/tako-darwin-aarch64.tar.gz.sha256
-            dist/tako-darwin-x86_64.tar.gz
-            dist/tako-darwin-x86_64.tar.gz.sha256
-            dist/tako-linux-x86_64.tar.gz
-            dist/tako-linux-x86_64.tar.gz.sha256
-            dist/tako-linux-aarch64.tar.gz
-            dist/tako-linux-aarch64.tar.gz.sha256
-            dist/tako-server-linux-x86_64-glibc.tar.zst
-            dist/tako-server-linux-x86_64-glibc.tar.zst.sha256
-            dist/tako-server-linux-aarch64-glibc.tar.zst
-            dist/tako-server-linux-aarch64-glibc.tar.zst.sha256
-            dist/tako-server-linux-x86_64-musl.tar.zst
-            dist/tako-server-linux-x86_64-musl.tar.zst.sha256
-            dist/tako-server-linux-aarch64-musl.tar.zst
-            dist/tako-server-linux-aarch64-musl.tar.zst.sha256
-          )
+          assets=(dist/*)
 
           for f in "${assets[@]}"; do test -f "$f"; done
 

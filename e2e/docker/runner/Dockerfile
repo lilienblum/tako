@@ -1,16 +1,12 @@
-FROM rust:1.89-bookworm
+FROM debian:bookworm-slim
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     openssh-client \
     curl \
-    unzip \
     jq \
-    cmake \
-    pkg-config \
     ca-certificates \
     git \
-    docker.io \
   && rm -rf /var/lib/apt/lists/*
 
 ENV BUN_INSTALL=/root/.bun

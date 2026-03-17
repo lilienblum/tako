@@ -10,6 +10,21 @@ if [[ ! -d "$FIXTURE_DIR" ]]; then
   exit 1
 fi
 
+# Pre-built binaries (mounted from host or CI artifacts)
+BIN_DIR="${E2E_BIN_DIR:-/opt/e2e/bin}"
+TAKO_BIN="$BIN_DIR/glibc/tako"
+TAKO_SERVER_GLIBC="$BIN_DIR/glibc/tako-server"
+TAKO_SERVER_MUSL="${BIN_DIR}/musl/tako-server"
+
+if [[ ! -x "$TAKO_BIN" ]]; then
+  echo "tako CLI not found at $TAKO_BIN" >&2
+  exit 1
+fi
+if [[ ! -x "$TAKO_SERVER_GLIBC" ]]; then
+  echo "tako-server (glibc) not found at $TAKO_SERVER_GLIBC" >&2
+  exit 1
+fi
+
 TMP_ROOT=$(mktemp -d)
 cleanup() {
   rm -rf "$TMP_ROOT"
@@ -118,10 +133,11 @@ detect_route_host() {
 }
 
 fetch_route_path() {
-  local route_host=$1
-  local route_path=$2
-  local headers_file=$3
-  local body_file=$4
+  local server_host=$1
+  local route_host=$2
+  local route_path=$3
+  local headers_file=$4
+  local body_file=$5
 
   curl -sS \
     -k \
@@ -133,19 +149,20 @@ fetch_route_path() {
     -D "$headers_file" \
     -o "$body_file" \
     -w "%{http_code}" \
-    "https://server-ubuntu:8443${route_path}"
+    "https://${server_host}:8443${route_path}"
 }
 
 require_http_ok() {
-  local route_host=$1
-  local route_path=$2
-  local description=$3
-  local require_non_empty=${4:-1}
+  local server_host=$1
+  local route_host=$2
+  local route_path=$3
+  local description=$4
+  local require_non_empty=${5:-1}
   local headers_file="$TMP_ROOT/http_headers.tmp"
   local body_file="$TMP_ROOT/http_body.tmp"
   local status
 
-  status=$(fetch_route_path "$route_host" "$route_path" "$headers_file" "$body_file" || true)
+  status=$(fetch_route_path "$server_host" "$route_host" "$route_path" "$headers_file" "$body_file" || true)
 
   if [[ ! "$status" =~ ^[0-9]+$ ]] || (( status < 200 || status >= 400 )); then
     echo "$description check failed for path '$route_path' (status=$status)" >&2
@@ -161,14 +178,15 @@ require_http_ok() {
 }
 
 check_http_ok_optional() {
-  local route_host=$1
-  local route_path=$2
-  local description=$3
+  local server_host=$1
+  local route_host=$2
+  local route_path=$3
+  local description=$4
   local headers_file="$TMP_ROOT/http_headers_optional.tmp"
   local body_file="$TMP_ROOT/http_body_optional.tmp"
   local status
 
-  status=$(fetch_route_path "$route_host" "$route_path" "$headers_file" "$body_file" || true)
+  status=$(fetch_route_path "$server_host" "$route_host" "$route_path" "$headers_file" "$body_file" || true)
 
   if [[ ! "$status" =~ ^[0-9]+$ ]] || (( status < 200 || status >= 400 )); then
     echo "$description check skipped for path '$route_path' (status=$status)" >&2
@@ -178,8 +196,9 @@ check_http_ok_optional() {
 }
 
 run_universal_http_checks() {
-  local route_host=$1
-  local release_app_dir=$2
+  local server_host=$1
+  local route_host=$2
+  local release_app_dir=$3
   local root_headers="$TMP_ROOT/root_headers.tmp"
   local root_body="$TMP_ROOT/root_body.tmp"
   local root_status
@@ -191,10 +210,10 @@ run_universal_http_checks() {
   local compiled_release_path=""
   local compiled_checked=0
 
-  echo "Running universal HTTP checks for route: $route_host"
+  echo "Running universal HTTP checks for route: $route_host on $server_host"
 
   for _ in $(seq 1 80); do
-    root_status=$(fetch_route_path "$route_host" "/" "$root_headers" "$root_body" || true)
+    root_status=$(fetch_route_path "$server_host" "$route_host" "/" "$root_headers" "$root_body" || true)
     if [[ "$root_status" =~ ^[0-9]+$ ]] && (( root_status >= 200 && root_status < 400 )) && [[ -s "$root_body" ]]; then
       root_ready=1
       break
@@ -226,33 +245,33 @@ run_universal_http_checks() {
 
   echo "Root response kind: $response_kind"
 
-  static_path=$(ssh_exec server-ubuntu "cd '$release_app_dir' && find static -type f 2>/dev/null | head -n 1 | sed 's#^#/#'" || true)
+  static_path=$(ssh_exec "$server_host" "cd '$release_app_dir' && find static -type f 2>/dev/null | head -n 1 | sed 's#^#/#'" || true)
   static_path=$(echo "$static_path" | tr -d '\r' | head -n 1)
   if [[ -n "$static_path" ]]; then
-    check_http_ok_optional "$route_host" "$static_path" "Static file"
+    check_http_ok_optional "$server_host" "$route_host" "$static_path" "Static file"
   fi
 
-  public_path=$(ssh_exec server-ubuntu "cd '$release_app_dir' && find public -type f 2>/dev/null | head -n 1 | sed 's#^public/#/#'" || true)
+  public_path=$(ssh_exec "$server_host" "cd '$release_app_dir' && find public -type f 2>/dev/null | head -n 1 | sed 's#^public/#/#'" || true)
   public_path=$(echo "$public_path" | tr -d '\r' | head -n 1)
   if [[ -n "$public_path" ]]; then
-    check_http_ok_optional "$route_host" "$public_path" "Public file"
+    check_http_ok_optional "$server_host" "$route_host" "$public_path" "Public file"
   fi
 
   if [[ "$response_kind" == "html" ]]; then
     mapfile -t html_asset_paths < <(grep -Eo "/[^\"'[:space:]>]+\\.(js|mjs|css)(\\?[^\"'[:space:]>]+)?" "$root_body" | sort -u)
     if (( ${#html_asset_paths[@]} > 0 )); then
       for asset_path in "${html_asset_paths[@]}"; do
-        check_http_ok_optional "$route_host" "$asset_path" "Compiled asset"
+        check_http_ok_optional "$server_host" "$route_host" "$asset_path" "Compiled asset"
         compiled_checked=1
       done
     fi
   fi
 
   if (( compiled_checked == 0 )); then
-    compiled_release_path=$(ssh_exec server-ubuntu "cd '$release_app_dir' && { find static -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.css' \\) 2>/dev/null; find assets -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.css' \\) 2>/dev/null; } | head -n 1 | sed 's#^#/#'" || true)
+    compiled_release_path=$(ssh_exec "$server_host" "cd '$release_app_dir' && { find static -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.css' \\) 2>/dev/null; find assets -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.css' \\) 2>/dev/null; } | head -n 1 | sed 's#^#/#'" || true)
     compiled_release_path=$(echo "$compiled_release_path" | tr -d '\r' | head -n 1)
     if [[ -n "$compiled_release_path" ]]; then
-      check_http_ok_optional "$route_host" "$compiled_release_path" "Compiled asset"
+      check_http_ok_optional "$server_host" "$route_host" "$compiled_release_path" "Compiled asset"
       compiled_checked=1
     fi
   fi
@@ -264,7 +283,8 @@ run_universal_http_checks() {
 
 start_tako_server() {
   local host=$1
-  scp_to "$WORKSPACE/target/debug/tako-server" "$host" "/home/tako/tako-server"
+  local server_bin=$2
+  scp_to "$server_bin" "$host" "/home/tako/tako-server"
   ssh_exec "$host" "chmod +x /home/tako/tako-server"
   ssh_exec "$host" "pkill -x tako-server >/dev/null 2>&1 || true"
   ssh_exec "$host" "rm -f /var/run/tako/tako.sock"
@@ -272,13 +292,17 @@ start_tako_server() {
   wait_tako_socket "$host"
 }
 
+# Wait for SSH on all servers
 ssh_wait server-ubuntu
+ssh_wait server-alma
+ssh_wait server-alpine
 
-echo "Building CLI and server binaries"
-cd "$WORKSPACE"
-cargo build -p tako --bin tako
-cargo build -p tako-server --bin tako-server
-start_tako_server server-ubuntu
+# Start tako-server on each (glibc for Ubuntu/Alma, musl for Alpine)
+start_tako_server server-ubuntu "$TAKO_SERVER_GLIBC"
+start_tako_server server-alma "$TAKO_SERVER_GLIBC"
+if [[ -x "$TAKO_SERVER_MUSL" ]]; then
+  start_tako_server server-alpine "$TAKO_SERVER_MUSL"
+fi
 
 # Stage a minimal JS monorepo copy so Bun workspace/catalog references resolve
 # like local dev, without rewriting dependency declarations.
@@ -311,6 +335,7 @@ if [[ "$ARCH_RAW" == "aarch64" || "$ARCH_RAW" == "arm64" ]]; then
   TARGET_ARCH="aarch64"
 fi
 
+# Deploy to server-ubuntu (primary target)
 cat > "$TAKO_HOME/config.toml" <<CFG
 [[servers]]
 name = "ssh"
@@ -323,7 +348,7 @@ CFG
 FIRST_DEPLOY_LOG="$TMP_ROOT/deploy-first.log"
 SECOND_DEPLOY_LOG="$TMP_ROOT/deploy-second.log"
 
-if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$WORKSPACE/target/debug/tako" deploy --env production --yes "$PROJECT_DIR" >"$FIRST_DEPLOY_LOG" 2>&1; then
+if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes "$PROJECT_DIR" >"$FIRST_DEPLOY_LOG" 2>&1; then
   cat "$FIRST_DEPLOY_LOG" >&2 || true
   exit 1
 fi
@@ -333,7 +358,7 @@ if ! grep -q "Building artifact for" "$FIRST_DEPLOY_LOG"; then
   exit 1
 fi
 
-if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$WORKSPACE/target/debug/tako" deploy --env production --yes "$PROJECT_DIR" >"$SECOND_DEPLOY_LOG" 2>&1; then
+if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes "$PROJECT_DIR" >"$SECOND_DEPLOY_LOG" 2>&1; then
   cat "$SECOND_DEPLOY_LOG" >&2 || true
   exit 1
 fi
@@ -366,6 +391,6 @@ if ! ssh_exec server-ubuntu "test -f '$APP_RELEASE_DIR/app.json'" >/dev/null 2>&
   exit 1
 fi
 
-run_universal_http_checks "$ROUTE_HOST" "$APP_RELEASE_DIR"
+run_universal_http_checks server-ubuntu "$ROUTE_HOST" "$APP_RELEASE_DIR"
 
 echo "E2E deploy test passed for $FIXTURE_REL"
