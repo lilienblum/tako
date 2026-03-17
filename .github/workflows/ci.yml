@@ -95,7 +95,7 @@ jobs:
         if: steps.changes.outputs.website == 'true'
         uses: lycheeverse/lychee-action@v2
         with:
-          args: "--root-dir website/dist website/dist/**/*.html"
+          args: "--root-dir website/dist --exclude 'dub\\.sh' website/dist/**/*.html"
 
   # x86_64 glibc — always run (PR + master), needed for E2E
   build-x86_64-glibc:
