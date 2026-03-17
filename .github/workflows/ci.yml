@@ -89,7 +89,7 @@ jobs:
 
       - name: Build website
         if: steps.changes.outputs.website == 'true'
-        run: cd website && npx astro build --silent
+        run: bun run --filter website build --silent
 
       - name: Check links
         if: steps.changes.outputs.website == 'true'
