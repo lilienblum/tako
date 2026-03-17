@@ -107,11 +107,11 @@ fn acquire_pid_lock(pid_path: &Path) -> Result<File, Box<dyn std::error::Error>>
     // Another instance holds the lock. Read its PID and send SIGTERM.
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
-    if let Ok(old_pid) = contents.trim().parse::<i32>() {
-        if old_pid > 0 {
-            unsafe {
-                libc::kill(old_pid, libc::SIGTERM);
-            }
+    if let Ok(old_pid) = contents.trim().parse::<i32>()
+        && old_pid > 0
+    {
+        unsafe {
+            libc::kill(old_pid, libc::SIGTERM);
         }
     }
 
@@ -970,12 +970,12 @@ async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: St
 fn kill_all_app_processes(state: &Arc<Mutex<State>>) {
     let s = state.lock().unwrap();
     for (project_dir, app) in &s.apps {
-        if let Some(pid) = app.pid {
-            if pid > 0 {
-                tracing::info!(app = %app.name, pid = pid, "killing app process on shutdown");
-                unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-                state::remove_pid_file(project_dir);
-            }
+        if let Some(pid) = app.pid
+            && pid > 0
+        {
+            tracing::info!(app = %app.name, pid = pid, "killing app process on shutdown");
+            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            state::remove_pid_file(project_dir);
         }
     }
 }
@@ -986,16 +986,16 @@ async fn stale_app_cleanup_loop(state: Arc<Mutex<State>>) {
     loop {
         ticker.tick().await;
         let mut s = state.lock().unwrap();
-        if let Some(db) = &s.db {
-            if let Ok(removed) = db.cleanup_stale() {
-                for dir in &removed {
-                    s.apps.remove(dir);
-                    let route_id = format!("reg:{}", dir);
-                    s.routes.remove_app(&route_id);
-                }
-                if !removed.is_empty() {
-                    tracing::info!(count = removed.len(), "cleaned up stale app registrations");
-                }
+        if let Some(db) = &s.db
+            && let Ok(removed) = db.cleanup_stale()
+        {
+            for dir in &removed {
+                s.apps.remove(dir);
+                let route_id = format!("reg:{}", dir);
+                s.routes.remove_app(&route_id);
+            }
+            if !removed.is_empty() {
+                tracing::info!(count = removed.len(), "cleaned up stale app registrations");
             }
         }
     }

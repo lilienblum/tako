@@ -14,11 +14,16 @@ fmt:
     bun run fmt
 
 lint:
-    cargo clippy --workspace --all-targets
+    cargo clippy --fix --allow-dirty --workspace --all-targets
     bun run lint
     bun run --filter '*' typecheck
 
 ci: fmt lint test::all
+
+# Build website and check for broken internal links
+links:
+    cd website && npx astro build --silent
+    lychee --root-dir website/dist 'website/dist/**/*.html'
 
 e2e fixture="e2e/fixtures/js/tanstack-start": (test::e2e fixture)
 

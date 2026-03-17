@@ -316,10 +316,10 @@ where
     ) {
         let mut visitor = ScopeVisitor(None);
         attrs.record(&mut visitor);
-        if let Some(scope) = visitor.0 {
-            if let Some(span) = ctx.span(id) {
-                span.extensions_mut().insert(SpanScope(scope));
-            }
+        if let Some(scope) = visitor.0
+            && let Some(span) = ctx.span(id)
+        {
+            span.extensions_mut().insert(SpanScope(scope));
         }
     }
 }
@@ -990,10 +990,8 @@ impl PhaseSpinner {
         self.abort_elapsed_task();
         if self.verbose {
             // In verbose mode the start message already persists — no result line needed.
-        } else {
-            if let Some(ref pb) = self.pb {
-                finish_spinner_ok(pb, success_msg, self.start.elapsed());
-            }
+        } else if let Some(ref pb) = self.pb {
+            finish_spinner_ok(pb, success_msg, self.start.elapsed());
         }
         self.finished = true;
     }
@@ -1002,10 +1000,8 @@ impl PhaseSpinner {
         self.abort_elapsed_task();
         if self.verbose {
             tracing::error!("{}: {}", loading, detail);
-        } else {
-            if let Some(ref pb) = self.pb {
-                finish_spinner_err_with_detail(pb, loading, &detail);
-            }
+        } else if let Some(ref pb) = self.pb {
+            finish_spinner_err_with_detail(pb, loading, &detail);
         }
         self.finished = true;
     }
@@ -1053,11 +1049,11 @@ impl PhaseSpinner {
 impl Drop for PhaseSpinner {
     fn drop(&mut self) {
         self.abort_elapsed_task();
-        if !self.finished {
-            if let Some(ref pb) = self.pb {
-                pb.finish_and_clear();
-                show_cursor();
-            }
+        if !self.finished
+            && let Some(ref pb) = self.pb
+        {
+            pb.finish_and_clear();
+            show_cursor();
         }
     }
 }
@@ -1229,7 +1225,7 @@ impl TransferProgress {
                 eprintln!(
                     "{check} {} {}",
                     brand_fg(&self.success_msg),
-                    brand_muted(&format!("({})", details.join(", ")))
+                    brand_muted(format!("({})", details.join(", ")))
                 );
             }
         } else {
@@ -1240,11 +1236,11 @@ impl TransferProgress {
 
 impl Drop for TransferProgress {
     fn drop(&mut self) {
-        if !*self.finished.get_mut() {
-            if let Some(ref pb) = self.pb {
-                pb.finish_and_clear();
-                show_cursor();
-            }
+        if !*self.finished.get_mut()
+            && let Some(ref pb) = self.pb
+        {
+            pb.finish_and_clear();
+            show_cursor();
         }
     }
 }
@@ -1423,7 +1419,7 @@ pub fn confirm_with_description(
     let prompt_visual = format!("{prompt} › ");
     let prompt_width = console::measure_text_width(&prompt_visual);
     let term_width = term.size().1.max(1) as usize;
-    let prompt_rows = (prompt_width + term_width - 1) / term_width;
+    let prompt_rows = prompt_width.div_ceil(term_width);
     let mut total_rows = prompt_rows;
     if description.is_some() {
         total_rows += 1;
@@ -1542,7 +1538,7 @@ impl<'a> TextField<'a> {
                 Some(hint) => format!(
                     "{} {}",
                     brand_accent(self.label),
-                    brand_muted(&format!("({hint})"))
+                    brand_muted(format!("({hint})"))
                 ),
                 None => brand_accent(self.label),
             };
@@ -1562,7 +1558,7 @@ impl<'a> TextField<'a> {
             Some(hint) => format!(
                 "{} {}",
                 brand_accent(self.label),
-                brand_muted(&format!("({hint})"))
+                brand_muted(format!("({hint})"))
             ),
             None => brand_accent(self.label),
         };
@@ -1582,7 +1578,7 @@ impl<'a> TextField<'a> {
         let _ = term.clear_last_lines(1);
         let separator = brand_muted("›");
         let plain_label = match self.hint {
-            Some(hint) => format!("{} {}", self.label, brand_muted(&format!("({hint})"))),
+            Some(hint) => format!("{} {}", self.label, brand_muted(format!("({hint})"))),
             None => self.label.to_string(),
         };
         if self.password {
@@ -1801,9 +1797,7 @@ fn raw_text_input(
                     }
                 }
                 KeyCode::Left => {
-                    if pos > 0 {
-                        pos -= 1;
-                    }
+                    pos = pos.saturating_sub(1);
                 }
                 KeyCode::Right
                     if modifiers.contains(KeyModifiers::SUPER)
@@ -1966,12 +1960,12 @@ fn raw_select(
             if i == sel {
                 let _ = write!(out, "{} {}", brand_accent("❯"), underline(label));
                 if let Some(h) = hint {
-                    let _ = write!(out, " {}", brand_muted(&format!("({h})")));
+                    let _ = write!(out, " {}", brand_muted(format!("({h})")));
                 }
             } else {
                 let _ = write!(out, "  {label}");
                 if let Some(h) = hint {
-                    let _ = write!(out, " {}", brand_muted(&format!("({h})")));
+                    let _ = write!(out, " {}", brand_muted(format!("({h})")));
                 }
             }
             if i < labels.len() - 1 {

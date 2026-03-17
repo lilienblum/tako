@@ -53,7 +53,7 @@ Guidelines:
 - Short intro paragraph, 2-3 sections with h2 headings, brief closing.
 - Every claim about Tako must be verifiable from SPEC.md or source code.
 - Code examples when they clarify. Use real Tako commands/config, not pseudocode.
-- Link to docs pages, GitHub, or external resources where relevant.
+- **Backlinks are mandatory.** Every post must link to at least 2-3 relevant docs pages (e.g., `/docs`, `/docs/tako-toml`, `/docs/deployment`, `/docs/cli`, `/docs/development`). Link inline where concepts are mentioned — don't save all links for the end. Also link to the GitHub repo, other blog posts, or external resources where relevant. Think of each post as an entry point that guides readers deeper into Tako's docs.
 
 ### Step 2b — Image prompt
 

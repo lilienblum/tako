@@ -545,11 +545,10 @@ mod server_info {
                 .get("data")
                 .and_then(|d| d.get("pid"))
                 .and_then(|p| p.as_u64())
+                && pid as u32 != old_pid
             {
-                if pid as u32 != old_pid {
-                    new_pid = Some(pid as u32);
-                    break;
-                }
+                new_pid = Some(pid as u32);
+                break;
             }
         }
 
@@ -701,11 +700,10 @@ mod server_info {
                 .get("data")
                 .and_then(|d| d.get("pid"))
                 .and_then(|p| p.as_u64())
+                && pid as u32 != old_pid
             {
-                if pid as u32 != old_pid {
-                    new_pid = Some(pid as u32);
-                    break;
-                }
+                new_pid = Some(pid as u32);
+                break;
             }
         }
         let new_pid = new_pid.expect("new server process should have a different PID after SIGHUP");
@@ -777,11 +775,10 @@ mod server_info {
                 .get("data")
                 .and_then(|d| d.get("pid"))
                 .and_then(|p| p.as_u64())
+                && pid as u32 != old_pid
             {
-                if pid as u32 != old_pid {
-                    new_pid = Some(pid as u32);
-                    break;
-                }
+                new_pid = Some(pid as u32);
+                break;
             }
         }
 
@@ -820,11 +817,11 @@ mod server_info {
         while std::time::Instant::now() < deadline {
             thread::sleep(Duration::from_millis(300));
             let resp = server.send_command(&serde_json::json!({ "command": "server_info" }));
-            if let Some(data) = resp.get("data") {
-                if data.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32 != old_pid {
-                    after_data = Some(data.clone());
-                    break;
-                }
+            if let Some(data) = resp.get("data")
+                && data.get("pid").and_then(|p| p.as_u64()).unwrap_or(0) as u32 != old_pid
+            {
+                after_data = Some(data.clone());
+                break;
             }
         }
 
@@ -890,11 +887,10 @@ mod server_info {
                         .get("data")
                         .and_then(|d| d.get("pid"))
                         .and_then(|p| p.as_u64())
+                        && pid as u32 != old_pid
                     {
-                        if pid as u32 != old_pid {
-                            saw_new_pid = true;
-                            break;
-                        }
+                        saw_new_pid = true;
+                        break;
                     }
                 }
                 Err(_) => {
@@ -915,11 +911,10 @@ mod server_info {
             .get("data")
             .and_then(|d| d.get("pid"))
             .and_then(|p| p.as_u64())
+            && pid as u32 != old_pid
         {
-            if pid as u32 != old_pid {
-                unsafe {
-                    libc::kill(pid as i32, libc::SIGTERM);
-                }
+            unsafe {
+                libc::kill(pid as i32, libc::SIGTERM);
             }
         }
     }

@@ -114,10 +114,10 @@ const ALLOWED_LOG_LEVELS: &[&str] = &["debug", "info", "warn", "error"];
 /// - "development" => "debug"
 /// - everything else => "info"
 pub fn resolve_app_log_level<'a>(env_config: Option<&'a EnvConfig>, env_name: &'a str) -> &'a str {
-    if let Some(config) = env_config {
-        if let Some(ref level) = config.log_level {
-            return level;
-        }
+    if let Some(config) = env_config
+        && let Some(ref level) = config.log_level
+    {
+        return level;
     }
     if env_name == "development" {
         "debug"
@@ -322,15 +322,15 @@ impl TakoToml {
             for server_name in &env_config.servers {
                 validate_server_name(server_name)?;
             }
-            if let Some(ref log_level) = env_config.log_level {
-                if !ALLOWED_LOG_LEVELS.contains(&log_level.as_str()) {
-                    return Err(ConfigError::Validation(format!(
-                        "Invalid log_level \"{}\" in [envs.{}]. Allowed values: {}",
-                        log_level,
-                        env_name,
-                        ALLOWED_LOG_LEVELS.join(", ")
-                    )));
-                }
+            if let Some(ref log_level) = env_config.log_level
+                && !ALLOWED_LOG_LEVELS.contains(&log_level.as_str())
+            {
+                return Err(ConfigError::Validation(format!(
+                    "Invalid log_level \"{}\" in [envs.{}]. Allowed values: {}",
+                    log_level,
+                    env_name,
+                    ALLOWED_LOG_LEVELS.join(", ")
+                )));
             }
         }
 

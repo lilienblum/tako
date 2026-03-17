@@ -1366,9 +1366,7 @@ impl ServerState {
         }
 
         let acme_guard = self.acme_client.read().await;
-        let Some(acme) = acme_guard.as_ref() else {
-            return None;
-        };
+        let acme = acme_guard.as_ref()?;
 
         tracing::info!(domain = %domain, app = app_name, "Requesting certificate for route");
         match acme.request_certificate(domain).await {

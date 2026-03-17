@@ -23,18 +23,17 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // Check if tako.toml already exists — prompt to overwrite in interactive mode
-    if existing.is_some() {
-        if !output::is_interactive()
+    if existing.is_some()
+        && (!output::is_interactive()
             || !output::confirm(
                 &format!(
                     "Configuration file {} already exists. Overwrite?",
                     output::strong("tako.toml")
                 ),
                 false,
-            )?
-        {
-            return Ok(());
-        }
+            )?)
+    {
+        return Ok(());
     }
 
     let detected_adapter = detect_build_adapter(&project_dir);

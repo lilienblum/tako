@@ -389,6 +389,7 @@ pub struct RegisteredAppInfo {
     pub client_pid: Option<u32>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn register_app(
     project_dir: &str,
     app_name: &str,

@@ -245,8 +245,8 @@ fn sanitize_name_segment(s: &str) -> String {
             out.push('-');
         }
     }
-    let out = out.trim_matches('-').to_string();
-    out
+
+    out.trim_matches('-').to_string()
 }
 
 /// Deterministic 4-hex-char hash of a path.
@@ -2143,7 +2143,7 @@ pub async fn ls() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Print as a simple table.
-    println!("{:<20} {:<10} {:<30} {}", "NAME", "STATUS", "URL", "DIR");
+    println!("{:<20} {:<10} {:<30} DIR", "NAME", "STATUS", "URL");
     for app in &apps {
         let url = if let Some(host) = app.hosts.first() {
             format!("https://{}/", host)
@@ -2454,42 +2454,34 @@ pub async fn run(
         std::fs::canonicalize(&project_dir).unwrap_or_else(|_| project_dir.clone());
     let canonical_project_dir_str = canonical_project_dir.to_string_lossy().to_string();
 
-    if let Ok(apps) = crate::dev_server_client::list_registered_apps().await {
-        if let Some(existing) = apps
+    if let Ok(apps) = crate::dev_server_client::list_registered_apps().await
+        && let Some(existing) = apps
             .iter()
             .find(|a| a.project_dir == canonical_project_dir_str)
-        {
-            match existing.status.as_str() {
-                "running" => {
-                    // Attach to existing running app.
-                    let log_dir = tako_data.join("dev").join("logs");
-                    std::fs::create_dir_all(&log_dir)?;
-                    let suffix = dev_client_suffix(&project_dir);
-                    let log_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));
-                    let url = if let Some(host) = existing.hosts.first() {
-                        let port = if public_url_port == 443 {
-                            String::new()
-                        } else {
-                            format!(":{}", public_url_port)
-                        };
-                        format!("https://{}{}/", host, port)
-                    } else {
-                        dev_url(&primary_host, public_url_port)
-                    };
-                    let session = AttachedDevClient {
-                        project_dir: canonical_project_dir_str.clone(),
-                        url,
-                        log_path,
-                    };
-                    let display_hosts =
-                        compute_display_routes(&cfg, &domain, base_domain.as_deref());
-                    return run_attached_dev_client(&app_name, interactive, session, display_hosts)
-                        .await;
-                }
-                // idle or stopped — register fresh below
-                _ => {}
-            }
-        }
+        && existing.status.as_str() == "running"
+    {
+        // Attach to existing running app.
+        let log_dir = tako_data.join("dev").join("logs");
+        std::fs::create_dir_all(&log_dir)?;
+        let suffix = dev_client_suffix(&project_dir);
+        let log_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));
+        let url = if let Some(host) = existing.hosts.first() {
+            let port = if public_url_port == 443 {
+                String::new()
+            } else {
+                format!(":{}", public_url_port)
+            };
+            format!("https://{}{}/", host, port)
+        } else {
+            dev_url(&primary_host, public_url_port)
+        };
+        let session = AttachedDevClient {
+            project_dir: canonical_project_dir_str.clone(),
+            url,
+            log_path,
+        };
+        let display_hosts = compute_display_routes(&cfg, &domain, base_domain.as_deref());
+        return run_attached_dev_client(&app_name, interactive, session, display_hosts).await;
     }
 
     // Compute log store path (still use lock dir scheme for log files).
@@ -3590,11 +3582,11 @@ async fn run_attached_dev_client(
                         ref status,
                         ..
                     } = ev
+                        && app_name == &app_name_sub
+                        && status == "stopped"
                     {
-                        if app_name == &app_name_sub && status == "stopped" {
-                            got_stop = true;
-                            break;
-                        }
+                        got_stop = true;
+                        break;
                     }
                 }
             }
@@ -3880,11 +3872,11 @@ mod dev_lock_tests {
                     ref status,
                     ..
                 } = ev
+                    && app_name == &app_name_sub
+                    && status == "stopped"
                 {
-                    if app_name == &app_name_sub && status == "stopped" {
-                        got_stop = true;
-                        break;
-                    }
+                    got_stop = true;
+                    break;
                 }
             }
 
@@ -3935,11 +3927,11 @@ mod dev_lock_tests {
                     ref status,
                     ..
                 } = ev
+                    && app_name == &app_name_sub
+                    && status == "stopped"
                 {
-                    if app_name == &app_name_sub && status == "stopped" {
-                        got_stop = true;
-                        break;
-                    }
+                    got_stop = true;
+                    break;
                 }
             }
 
@@ -3992,11 +3984,11 @@ mod dev_lock_tests {
                     ref status,
                     ..
                 } = ev
+                    && app_name == &app_name_sub
+                    && status == "stopped"
                 {
-                    if app_name == &app_name_sub && status == "stopped" {
-                        got_stop = true;
-                        break;
-                    }
+                    got_stop = true;
+                    break;
                 }
             }
 

@@ -167,10 +167,10 @@ impl Routes {
                 if !hostname_matches(&entry.host, host) {
                     continue;
                 }
-                if let Some(p) = &entry.path {
-                    if !path_matches(p, path) {
-                        continue;
-                    }
+                if let Some(p) = &entry.path
+                    && !path_matches(p, path)
+                {
+                    continue;
                 }
                 found = Some(entry.app_id.clone());
                 break;

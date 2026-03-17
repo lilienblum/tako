@@ -395,7 +395,7 @@ async fn run_add_server_wizard(
                     Some(n)
                 } else if let Some(ref rsn) = remote_server_name {
                     Some(rsn.as_str())
-                } else if let Some(ref n) = name_prompt_suggestions.first() {
+                } else if let Some(n) = name_prompt_suggestions.first() {
                     Some(n.as_str())
                 } else if !host.chars().next().is_some_and(|c| c.is_ascii_digit())
                     && !host.contains(':')
@@ -973,13 +973,13 @@ async fn fetch_canary_server_version() -> Result<String, String> {
 
     // Body format: "Latest canary build from master (SHA) on DATE."
     let body = raw["body"].as_str().unwrap_or("");
-    if let Some(start) = body.find('(') {
-        if let Some(end) = body[start..].find(')') {
-            let sha = &body[start + 1..start + end];
-            if !sha.is_empty() && sha.len() <= 40 {
-                let short = &sha[..sha.len().min(7)];
-                return Ok(format!("canary-{short}"));
-            }
+    if let Some(start) = body.find('(')
+        && let Some(end) = body[start..].find(')')
+    {
+        let sha = &body[start + 1..start + end];
+        if !sha.is_empty() && sha.len() <= 40 {
+            let short = &sha[..sha.len().min(7)];
+            return Ok(format!("canary-{short}"));
         }
     }
 
@@ -1058,10 +1058,10 @@ async fn resolve_latest_server_tag() -> Result<String, String> {
     let raw: Vec<serde_json::Value> =
         serde_json::from_str(&text).map_err(|e| format!("failed to parse tags: {e}"))?;
     for entry in &raw {
-        if let Some(name) = entry.get("name").and_then(|n| n.as_str()) {
-            if name.starts_with(SERVER_TAG_PREFIX) {
-                return Ok(name.to_string());
-            }
+        if let Some(name) = entry.get("name").and_then(|n| n.as_str())
+            && name.starts_with(SERVER_TAG_PREFIX)
+        {
+            return Ok(name.to_string());
         }
     }
     Err(format!(

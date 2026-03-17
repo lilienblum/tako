@@ -182,17 +182,14 @@ pub fn detect_build_adapter(project_dir: &Path) -> BuildAdapter {
 
     if project_dir.join("package.json").is_file() {
         // Check if package.json scripts reference bun
-        if let Ok(contents) = std::fs::read_to_string(project_dir.join("package.json")) {
-            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents) {
-                if let Some(scripts) = json.get("scripts").and_then(|s| s.as_object()) {
-                    if scripts
-                        .values()
-                        .any(|v| v.as_str().is_some_and(|s| s.contains("bun ")))
-                    {
-                        return BuildAdapter::Bun;
-                    }
-                }
-            }
+        if let Ok(contents) = std::fs::read_to_string(project_dir.join("package.json"))
+            && let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents)
+            && let Some(scripts) = json.get("scripts").and_then(|s| s.as_object())
+            && scripts
+                .values()
+                .any(|v| v.as_str().is_some_and(|s| s.contains("bun ")))
+        {
+            return BuildAdapter::Bun;
         }
         return BuildAdapter::Node;
     }

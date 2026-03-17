@@ -682,11 +682,10 @@ Bun.serve({
                 .get("data")
                 .and_then(|d| d.get("pid"))
                 .and_then(|p| p.as_u64())
+                && pid as u32 != old_pid
             {
-                if pid as u32 != old_pid {
-                    new_pid = Some(pid as u32);
-                    break;
-                }
+                new_pid = Some(pid as u32);
+                break;
             }
         }
         let new_pid = new_pid.expect("new server should take over after SIGHUP");

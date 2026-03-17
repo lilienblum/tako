@@ -140,16 +140,14 @@ async fn run_canary_upgrade(
 
     // Quick check: compare remote tarball hash with locally saved hash from last upgrade
     let saved_hash_path = canary_hash_path();
-    if let Ok(remote_hash) = fetch_sha256(&sha_url).await {
-        if let Some(ref path) = saved_hash_path {
-            if let Ok(saved_hash) = std::fs::read_to_string(path) {
-                if saved_hash.trim() == remote_hash {
-                    tracing::info!("Already on the latest canary build");
-                    output::success("Already on the latest canary build");
-                    return Ok(());
-                }
-            }
-        }
+    if let Ok(remote_hash) = fetch_sha256(&sha_url).await
+        && let Some(ref path) = saved_hash_path
+        && let Ok(saved_hash) = std::fs::read_to_string(path)
+        && saved_hash.trim() == remote_hash
+    {
+        tracing::info!("Already on the latest canary build");
+        output::success("Already on the latest canary build");
+        return Ok(());
     }
 
     // Download and extract to temp dir
@@ -558,10 +556,10 @@ fn find_binary(dir: &Path, name: &str) -> Option<PathBuf> {
         if path.is_file() && path.file_name().map(|n| n == name).unwrap_or(false) {
             return Some(path);
         }
-        if path.is_dir() {
-            if let Some(found) = find_binary(&path, name) {
-                return Some(found);
-            }
+        if path.is_dir()
+            && let Some(found) = find_binary(&path, name)
+        {
+            return Some(found);
         }
     }
     None
@@ -608,10 +606,10 @@ fn detect_platform() -> Result<(&'static str, &'static str), String> {
 
 fn resolve_install_dir() -> PathBuf {
     // Install to the same directory as the running binary
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            return dir.to_path_buf();
-        }
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        return dir.to_path_buf();
     }
     // Fallback to default install location
     dirs::home_dir()

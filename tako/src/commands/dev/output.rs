@@ -181,10 +181,10 @@ fn fmt_path(path: &str) -> String {
 fn extract_repo_slug(url: &str) -> String {
     let url = url.trim().trim_end_matches('/').trim_end_matches(".git");
     // SSH format: git@github.com:user/repo  (no "://" scheme prefix)
-    if !url.contains("://") {
-        if let Some(colon_pos) = url.find(':') {
-            return url[colon_pos + 1..].to_string();
-        }
+    if !url.contains("://")
+        && let Some(colon_pos) = url.find(':')
+    {
+        return url[colon_pos + 1..].to_string();
     }
     // HTTPS/HTTP: take last two non-empty path segments
     let parts: Vec<&str> = url.split('/').filter(|s| !s.is_empty()).collect();
@@ -198,6 +198,7 @@ fn extract_repo_slug(url: &str) -> String {
 /// Derive display strings for the panel footer:
 /// - `repo_slug`: `"user/repo (branch)"` from git remote, or `""` if unavailable.
 /// - `repo_path`: path relative to git root (or `fmt_path(dir)` as fallback).
+///
 /// Returns `(repo_slug, repo_path, worktree_name)`.
 fn git_info(dir: &std::path::Path) -> (String, String, Option<String>) {
     let dir_str = dir.to_string_lossy();
@@ -319,6 +320,7 @@ fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
 ///
 /// Wide (≥ `STACKED_THRESHOLD` cols): three-column layout.
 /// Narrow: vertically stacked columns.
+#[allow(clippy::too_many_arguments)]
 pub fn format_panel(
     app_name: &str,
     status: &str,
@@ -404,7 +406,7 @@ fn format_panel_wide(
 
     // ── Borders ───────────────────────────────────────────────────────────────
     let title_text = if adapter_name.trim().is_empty() {
-        format!("{app_name}")
+        app_name.to_string()
     } else {
         format!("{app_name} ({adapter_name})")
     };
@@ -466,7 +468,7 @@ fn format_panel_wide(
         pid.map(|p| p.to_string())
             .unwrap_or_else(|| "—".to_string())
     );
-    let right = vec![r0, r1, r2];
+    let right = [r0, r1, r2];
 
     // ── Assemble ──────────────────────────────────────────────────────────────
     let data_rows = left.len().max(mid.len()).max(right.len());
@@ -500,7 +502,7 @@ fn format_panel_stacked(
     let inner_w = cols.saturating_sub(2);
 
     let title_text = if adapter_name.trim().is_empty() {
-        format!("{app_name}")
+        app_name.to_string()
     } else {
         format!("{app_name} ({adapter_name})")
     };
@@ -722,7 +724,7 @@ impl StickyFooter {
         }
         let (cols, _) = terminal::size().unwrap_or((80, 24));
         let rows_per_line = if self.drawn_cols > 0 && cols > 0 && cols < self.drawn_cols {
-            (self.drawn_cols + cols - 1) / cols
+            self.drawn_cols.div_ceil(cols)
         } else {
             1
         };
@@ -817,14 +819,9 @@ fn rawln(s: &str) {
 
 fn spawn_key_reader(tx: mpsc::Sender<Event>) {
     std::thread::spawn(move || {
-        loop {
-            match crossterm::event::read() {
-                Ok(event) => {
-                    if tx.blocking_send(event).is_err() {
-                        break;
-                    }
-                }
-                Err(_) => break,
+        while let Ok(event) = crossterm::event::read() {
+            if tx.blocking_send(event).is_err() {
+                break;
             }
         }
     });
@@ -981,8 +978,8 @@ pub async fn run_dev_output(
                 tick_count += 1;
 
                 // Refresh metrics every 2 seconds; only redraw if values changed.
-                if tick_count % METRICS_REFRESH_SECS == 0 {
-                    if let Some(pid) = app_pid {
+                if tick_count.is_multiple_of(METRICS_REFRESH_SECS)
+                    && let Some(pid) = app_pid {
                         sys.refresh_processes(ProcessesToUpdate::All, false);
                         if let Some((cpu, mem)) = process_tree_metrics(&sys, pid) {
                             let changed = fs.cpu != Some(cpu) || fs.mem_bytes != Some(mem);
@@ -993,7 +990,6 @@ pub async fn run_dev_output(
                             }
                         }
                     }
-                }
             }
             Some(log) = log_rx.recv() => {
                 if let Some(path) = log_store_path.as_ref() {

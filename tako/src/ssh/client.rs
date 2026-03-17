@@ -525,7 +525,7 @@ impl SshClient {
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
                     exit_code = exit_status;
                 }
-                Some(ChannelMsg::ExtendedData { data, ext }) if ext == 1 => {
+                Some(ChannelMsg::ExtendedData { data, ext: 1 }) => {
                     stderr_buf.extend_from_slice(&data);
                 }
                 Some(ChannelMsg::Eof) => {}

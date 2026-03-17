@@ -199,23 +199,21 @@ fn resolve_scale_server_names(
         if !servers.contains(server_name) {
             return Err(format!("Server '{}' not found in config.toml", server_name).into());
         }
-        if let Some(env_name) = env {
-            if let Some(tako_config) = project_tako {
-                if !tako_config.envs.contains_key(env_name) {
-                    return Err(
-                        format!("Environment '{}' not found in tako.toml.", env_name).into(),
-                    );
-                }
-                if !tako_config
-                    .get_servers_for_env(env_name)
-                    .contains(&server_name)
-                {
-                    return Err(format!(
-                        "Server '{}' is not configured for environment '{}'.",
-                        server_name, env_name
-                    )
-                    .into());
-                }
+        if let Some(env_name) = env
+            && let Some(tako_config) = project_tako
+        {
+            if !tako_config.envs.contains_key(env_name) {
+                return Err(format!("Environment '{}' not found in tako.toml.", env_name).into());
+            }
+            if !tako_config
+                .get_servers_for_env(env_name)
+                .contains(&server_name)
+            {
+                return Err(format!(
+                    "Server '{}' is not configured for environment '{}'.",
+                    server_name, env_name
+                )
+                .into());
             }
         }
         return Ok(vec![server_name.to_string()]);

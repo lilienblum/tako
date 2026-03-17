@@ -846,13 +846,9 @@ async fn run_async(
             eprintln!("  {}  {}", output::brand_muted("Revision"), version);
             for (index, route) in routes.iter().enumerate() {
                 if index == 0 {
-                    eprintln!(
-                        "  {}       {}",
-                        output::brand_muted("URL"),
-                        format!("https://{}", route)
-                    );
+                    eprintln!("  {}       https://{}", output::brand_muted("URL"), route);
                 } else {
-                    eprintln!("            {}", format!("https://{}", route));
+                    eprintln!("            https://{}", route);
                 }
             }
         } else {
@@ -2663,7 +2659,7 @@ fn resolve_runtime_version_from_workspace(
     #[cfg(test)]
     {
         let _ = (workspace, &app_dir, runtime_tool);
-        return Ok("latest".to_string());
+        Ok("latest".to_string())
     }
 
     #[cfg(not(test))]

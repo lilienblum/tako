@@ -243,14 +243,14 @@ fn render_global_status(
         }
 
         // 4. Server uptime (process, skip if upgrading)
-        if global.service_status != "upgrading" {
-            if let Some(ref uptime) = global.process_uptime {
-                entries.push(CardEntry::Field {
-                    label: "Server uptime".into(),
-                    value: uptime.clone(),
-                    color: None,
-                });
-            }
+        if global.service_status != "upgrading"
+            && let Some(ref uptime) = global.process_uptime
+        {
+            entries.push(CardEntry::Field {
+                label: "Server uptime".into(),
+                value: uptime.clone(),
+                color: None,
+            });
         }
 
         // 5. Routes section (group by app name, blank repeated names)
@@ -311,10 +311,10 @@ fn render_global_status(
                 }
 
                 // Deployed At
-                if let Some(unix_secs) = app.status.deployed_at_unix_secs {
-                    if let Some(formatted) = format_deployed_at(unix_secs) {
-                        children.push(("  Deployed at".into(), formatted, None));
-                    }
+                if let Some(unix_secs) = app.status.deployed_at_unix_secs
+                    && let Some(formatted) = format_deployed_at(unix_secs)
+                {
+                    children.push(("  Deployed at".into(), formatted, None));
                 }
             }
             entries.push(CardEntry::Section {
@@ -619,12 +619,12 @@ async fn fetch_version_and_uptimes(
             }
         } else if let Some(val) = line.strip_prefix("UP:") {
             let val = val.trim();
-            if val != "-" && !val.is_empty() {
-                if let Some(since) = parse_uptime_since(val) {
-                    let elapsed = OffsetDateTime::now_utc() - since;
-                    server_uptime =
-                        Some(format_duration_human(elapsed.whole_seconds().max(0) as u64));
-                }
+            if val != "-"
+                && !val.is_empty()
+                && let Some(since) = parse_uptime_since(val)
+            {
+                let elapsed = OffsetDateTime::now_utc() - since;
+                server_uptime = Some(format_duration_human(elapsed.whole_seconds().max(0) as u64));
             }
         } else if let Some(val) = line.strip_prefix("PROC:") {
             let val = val.trim();

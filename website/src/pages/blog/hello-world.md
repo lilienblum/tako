@@ -25,6 +25,18 @@ I wanted something simpler:
 - **Zero downtime** — rolling updates with health checks
 - **Minimal config** — a `tako.toml` and you're set
 
+## Give it a try
+
+Getting started takes a minute. Install Tako, create a `tako.toml`, and deploy:
+
+```bash
+curl -fsSL https://tako.sh/install | sh
+tako init
+tako deploy
+```
+
+The [quick start guide](/docs) walks you through everything step by step.
+
 ## What's next
 
 I'm working on making Tako even easier to get started with. Follow along here or [on 𝕏](https://twitter.com/intent/follow?screen_name=lilienblum) for updates.

@@ -94,10 +94,7 @@ fn read_secret_names(project_dir: &Path) -> Vec<String> {
     let secret_keys: Vec<String> = if let Some(dev) = obj.get("development") {
         extract_secret_names(dev)
     } else {
-        let mut all: Vec<String> = obj
-            .values()
-            .flat_map(|env| extract_secret_names(env))
-            .collect();
+        let mut all: Vec<String> = obj.values().flat_map(extract_secret_names).collect();
         all.sort();
         all.dedup();
         all
