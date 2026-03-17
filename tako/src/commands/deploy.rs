@@ -2681,9 +2681,17 @@ fn resolve_runtime_version_from_workspace(
                 {
                     return Ok(version);
                 }
+                output::warning(&format!(
+                    "Could not detect {runtime_tool} version. To pin a version, set runtime_version in tako.toml"
+                ));
                 Ok("latest".to_string())
             }
-            _ => Ok("latest".to_string()),
+            _ => {
+                output::warning(&format!(
+                    "Could not detect {runtime_tool} version. To pin a version, set runtime_version in tako.toml"
+                ));
+                Ok("latest".to_string())
+            }
         }
     }
 }
