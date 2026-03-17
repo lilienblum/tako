@@ -8,7 +8,7 @@ const sorted = Object.values(modules)
 ---
 <BaseLayout title="Tako Blog" description="Updates, ideas, and progress from the Tako project.">
   <section class="blog-list-sheet">
-    <h1 class="blog-list-title">blog</h1>
+    <h1 class="blog-list-title">Blog</h1>
     {sorted.length === 0 && <p class="blog-empty">No posts yet.</p>}
     <div class="blog-posts">
       {sorted.map((post) => {
