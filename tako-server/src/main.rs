@@ -1625,12 +1625,15 @@ async fn prepare_release_runtime(
     }
 
     // Install the pinned runtime version and cache the absolute binary path.
-    if let Some(bin) =
-        version_manager::install_and_resolve(runtime, manifest.runtime_version.as_deref()).await
-        && let Err(e) = write_runtime_bin(release_dir, &bin)
-    {
-        tracing::warn!(error = %e, "Failed to write runtime_bin to manifest (non-fatal)");
+    let runtime_bin = version_manager::install_and_resolve(runtime, manifest.runtime_version.as_deref()).await;
+    if let Some(ref bin) = runtime_bin {
+        if let Err(e) = write_runtime_bin(release_dir, bin) {
+            tracing::warn!(error = %e, "Failed to write runtime_bin to manifest (non-fatal)");
+        }
     }
+
+    // Use the resolved absolute path if available, otherwise fall back to the bare runtime name.
+    let runtime_cmd = runtime_bin.as_deref().unwrap_or(runtime.as_str());
 
     if let Some(install_cmd) = manifest
         .install
@@ -1640,7 +1643,7 @@ async fn prepare_release_runtime(
     {
         run_release_install_command(release_dir, install_cmd, env).await?;
     } else if runtime == "bun" {
-        install_bun_dependencies_for_release(release_dir, env).await?;
+        install_bun_dependencies_for_release(release_dir, runtime_cmd, env).await?;
     }
 
     if let Some(rel_path) = crate::app_command::entrypoint_relative_path(runtime) {
@@ -1657,10 +1660,11 @@ async fn prepare_release_runtime(
 
 async fn install_bun_dependencies_for_release(
     release_dir: &Path,
+    bun_bin: &str,
     env: &HashMap<String, String>,
 ) -> Result<(), String> {
     let args = bun_install_args_for_release(release_dir);
-    let mut cmd = TokioCommand::new("bun");
+    let mut cmd = TokioCommand::new(bun_bin);
     cmd.args(args.iter().map(String::as_str))
         .current_dir(release_dir)
         .stdout(Stdio::piped())
@@ -1675,7 +1679,8 @@ async fn install_bun_dependencies_for_release(
 
     let output = cmd.output().await.map_err(|e| {
         format!(
-            "Failed to run 'bun {}' in {}: {}",
+            "Failed to run '{} {}' in {}: {}",
+            bun_bin,
             args.join(" "),
             release_dir.display(),
             e
