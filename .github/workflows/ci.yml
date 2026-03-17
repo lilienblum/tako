@@ -128,6 +128,9 @@ jobs:
     runs-on: ubuntu-24.04-arm
     # Build inside Debian 12 container for glibc 2.36 compat (supports Debian 12+, Ubuntu 22.04+, RHEL 9+)
     container: rust:1.89-bookworm
+    defaults:
+      run:
+        shell: bash
     strategy:
       matrix:
         include:
