@@ -294,12 +294,10 @@ start_tako_server() {
 
 # Wait for SSH on all servers
 ssh_wait server-ubuntu
-ssh_wait server-alma
 ssh_wait server-alpine
 
-# Start tako-server on each (glibc for Ubuntu/Alma, musl for Alpine)
+# Start tako-server on each (glibc for Ubuntu, musl for Alpine)
 start_tako_server server-ubuntu "$TAKO_SERVER_GLIBC"
-start_tako_server server-alma "$TAKO_SERVER_GLIBC"
 if [[ -x "$TAKO_SERVER_MUSL" ]]; then
   start_tako_server server-alpine "$TAKO_SERVER_MUSL"
 fi
@@ -335,49 +333,10 @@ if [[ "$ARCH_RAW" == "aarch64" || "$ARCH_RAW" == "arm64" ]]; then
   TARGET_ARCH="aarch64"
 fi
 
-# Deploy to server-ubuntu (primary target)
-cat > "$TAKO_HOME/config.toml" <<CFG
-[[servers]]
-name = "ssh"
-host = "server-ubuntu"
-port = 22
-arch = "$TARGET_ARCH"
-libc = "gnu"
-CFG
-
-FIRST_DEPLOY_LOG="$TMP_ROOT/deploy-first.log"
-SECOND_DEPLOY_LOG="$TMP_ROOT/deploy-second.log"
-
-if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes "$PROJECT_DIR" >"$FIRST_DEPLOY_LOG" 2>&1; then
-  cat "$FIRST_DEPLOY_LOG" >&2 || true
-  exit 1
-fi
-cat "$FIRST_DEPLOY_LOG"
-if ! grep -q "Building artifact for" "$FIRST_DEPLOY_LOG"; then
-  echo "Expected first deploy to build artifacts, but no build step was observed." >&2
-  exit 1
-fi
-
-if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes "$PROJECT_DIR" >"$SECOND_DEPLOY_LOG" 2>&1; then
-  cat "$SECOND_DEPLOY_LOG" >&2 || true
-  exit 1
-fi
-cat "$SECOND_DEPLOY_LOG"
-if ! grep -q "Artifact cache hit for" "$SECOND_DEPLOY_LOG"; then
-  echo "Expected second deploy to reuse cached artifacts, but no cache hit was observed." >&2
-  exit 1
-fi
-
-CURRENT_LINK=$(resolve_current_release_link server-ubuntu || true)
-APP_RELEASE_DIR="$CURRENT_LINK/$FIXTURE_REL"
-
-if [[ -z "$CURRENT_LINK" ]]; then
-  echo "Failed to resolve deployed release symlink under /opt/tako/apps/*/current" >&2
-  exit 1
-fi
-
-if ! ssh_exec server-ubuntu "test -d '$APP_RELEASE_DIR'" >/dev/null 2>&1; then
-  APP_RELEASE_DIR="$CURRENT_LINK"
+SERVERS=()
+SERVERS+=("server-ubuntu:gnu")
+if [[ -x "$TAKO_SERVER_MUSL" ]]; then
+  SERVERS+=("server-alpine:musl")
 fi
 
 ROUTE_HOST=$(detect_route_host "$PROJECT_DIR/tako.toml" "production")
@@ -386,11 +345,64 @@ if [[ -z "$ROUTE_HOST" ]]; then
   exit 1
 fi
 
-if ! ssh_exec server-ubuntu "test -f '$APP_RELEASE_DIR/app.json'" >/dev/null 2>&1; then
-  echo "Missing app.json under deployed app directory: $APP_RELEASE_DIR" >&2
-  exit 1
-fi
+for entry in "${SERVERS[@]}"; do
+  server="${entry%%:*}"
+  libc="${entry##*:}"
 
-run_universal_http_checks server-ubuntu "$ROUTE_HOST" "$APP_RELEASE_DIR"
+  echo "=== Testing deploy on $server ($libc) ==="
 
-echo "E2E deploy test passed for $FIXTURE_REL"
+  cat > "$TAKO_HOME/config.toml" <<CFG
+[[servers]]
+name = "ssh"
+host = "$server"
+port = 22
+arch = "$TARGET_ARCH"
+libc = "$libc"
+CFG
+
+  FIRST_DEPLOY_LOG="$TMP_ROOT/deploy-first-${server}.log"
+  SECOND_DEPLOY_LOG="$TMP_ROOT/deploy-second-${server}.log"
+
+  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes "$PROJECT_DIR" >"$FIRST_DEPLOY_LOG" 2>&1; then
+    cat "$FIRST_DEPLOY_LOG" >&2 || true
+    exit 1
+  fi
+  cat "$FIRST_DEPLOY_LOG"
+  if ! grep -q "Building artifact for" "$FIRST_DEPLOY_LOG"; then
+    echo "Expected first deploy to build artifacts, but no build step was observed." >&2
+    exit 1
+  fi
+
+  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes "$PROJECT_DIR" >"$SECOND_DEPLOY_LOG" 2>&1; then
+    cat "$SECOND_DEPLOY_LOG" >&2 || true
+    exit 1
+  fi
+  cat "$SECOND_DEPLOY_LOG"
+  if ! grep -q "Artifact cache hit for" "$SECOND_DEPLOY_LOG"; then
+    echo "Expected second deploy to reuse cached artifacts, but no cache hit was observed." >&2
+    exit 1
+  fi
+
+  CURRENT_LINK=$(resolve_current_release_link "$server" || true)
+  APP_RELEASE_DIR="$CURRENT_LINK/$FIXTURE_REL"
+
+  if [[ -z "$CURRENT_LINK" ]]; then
+    echo "Failed to resolve deployed release symlink on $server" >&2
+    exit 1
+  fi
+
+  if ! ssh_exec "$server" "test -d '$APP_RELEASE_DIR'" >/dev/null 2>&1; then
+    APP_RELEASE_DIR="$CURRENT_LINK"
+  fi
+
+  if ! ssh_exec "$server" "test -f '$APP_RELEASE_DIR/app.json'" >/dev/null 2>&1; then
+    echo "Missing app.json under $APP_RELEASE_DIR on $server" >&2
+    exit 1
+  fi
+
+  run_universal_http_checks "$server" "$ROUTE_HOST" "$APP_RELEASE_DIR"
+
+  echo "=== $server passed ==="
+done
+
+echo "E2E deploy test passed for $FIXTURE_REL on all servers"
