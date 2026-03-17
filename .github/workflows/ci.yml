@@ -62,41 +62,19 @@ jobs:
       - name: SDK build
         run: bun run --cwd sdk/js build
 
-  build-linux:
-    name: Build Linux (${{ matrix.outarch }}-${{ matrix.libc }})
-    if: >-
-      github.event_name == 'push' ||
-      matrix.pr
-    runs-on: ${{ matrix.runs_on }}
+  # x86_64 builds — always run (PR + master), needed for E2E
+  build-x86_64:
+    name: Build x86_64 (${{ matrix.libc }})
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Always built (PR + master) — needed for E2E
-          - outarch: x86_64
-            libc: glibc
+          - libc: glibc
             target: x86_64-unknown-linux-gnu
-            runs_on: ubuntu-latest
-            pr: true
             cli: true
-          - outarch: x86_64
-            libc: musl
+          - libc: musl
             target: x86_64-unknown-linux-musl
-            runs_on: ubuntu-latest
-            pr: true
-            cli: false
-          # Master only
-          - outarch: aarch64
-            libc: glibc
-            target: aarch64-unknown-linux-gnu
-            runs_on: ubuntu-24.04-arm
-            pr: false
-            cli: true
-          - outarch: aarch64
-            libc: musl
-            target: aarch64-unknown-linux-musl
-            runs_on: ubuntu-24.04-arm
-            pr: false
             cli: false
     steps:
       - name: Checkout
@@ -119,10 +97,7 @@ jobs:
           TAKO_CANARY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          mkdir -p dist
-
           cargo build -p tako-server --release --target ${{ matrix.target }}
-
           if [ "${{ matrix.cli }}" = "true" ]; then
             cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target ${{ matrix.target }}
           fi
@@ -130,7 +105,7 @@ jobs:
       - name: Upload server binary
         uses: actions/upload-artifact@v7
         with:
-          name: bin-tako-server-linux-${{ matrix.outarch }}-${{ matrix.libc }}
+          name: bin-tako-server-linux-x86_64-${{ matrix.libc }}
           path: target/${{ matrix.target }}/release/tako-server
           if-no-files-found: error
 
@@ -138,13 +113,73 @@ jobs:
         if: matrix.cli
         uses: actions/upload-artifact@v7
         with:
-          name: bin-tako-linux-${{ matrix.outarch }}
+          name: bin-tako-linux-x86_64
           path: |
             target/${{ matrix.target }}/release/tako
             target/${{ matrix.target }}/release/tako-dev-server
             target/${{ matrix.target }}/release/tako-loopback-proxy
           if-no-files-found: error
 
+  # aarch64 builds — master only (for canary)
+  build-aarch64:
+    name: Build aarch64 (${{ matrix.libc }})
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - libc: glibc
+            target: aarch64-unknown-linux-gnu
+            cli: true
+          - libc: musl
+            target: aarch64-unknown-linux-musl
+            cli: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install musl toolchain
+        if: matrix.libc == 'musl'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build
+        env:
+          TAKO_CANARY_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          cargo build -p tako-server --release --target ${{ matrix.target }}
+          if [ "${{ matrix.cli }}" = "true" ]; then
+            cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target ${{ matrix.target }}
+          fi
+
+      - name: Upload server binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-tako-server-linux-aarch64-${{ matrix.libc }}
+          path: target/${{ matrix.target }}/release/tako-server
+          if-no-files-found: error
+
+      - name: Upload CLI binaries
+        if: matrix.cli
+        uses: actions/upload-artifact@v7
+        with:
+          name: bin-tako-linux-aarch64
+          path: |
+            target/${{ matrix.target }}/release/tako
+            target/${{ matrix.target }}/release/tako-dev-server
+            target/${{ matrix.target }}/release/tako-loopback-proxy
+          if-no-files-found: error
+
+  # macOS builds — master only (for canary)
   build-darwin:
     name: Build macOS CLI
     if: github.event_name == 'push'
@@ -191,7 +226,7 @@ jobs:
 
   e2e:
     name: E2E
-    needs: [build-linux]
+    needs: [build-x86_64]
     runs-on: ubuntu-latest
     env:
       DOCKER_BUILDKIT: "1"
@@ -206,7 +241,7 @@ jobs:
           name: bin-tako-linux-x86_64
           path: .e2e-bin/glibc
 
-      - name: Download server (glibc) separately
+      - name: Download server (glibc)
         uses: actions/download-artifact@v8
         with:
           name: bin-tako-server-linux-x86_64-glibc
