@@ -1,0 +1,94 @@
+---
+import BaseLayout from "../../layouts/BaseLayout.astro";
+
+const modules = import.meta.glob<{ frontmatter: Record<string, string>; url: string }>("./*.md", { eager: true });
+const sorted = Object.values(modules)
+  .filter((p) => p.frontmatter.title)
+  .sort((a, b) => new Date(b.frontmatter.date).getTime() - new Date(a.frontmatter.date).getTime());
+---
+<BaseLayout title="Tako Blog" description="Updates, ideas, and progress from the Tako project.">
+  <section class="blog-list-sheet">
+    <h1 class="blog-list-title">blog</h1>
+    {sorted.length === 0 && <p class="blog-empty">No posts yet.</p>}
+    <div class="blog-posts">
+      {sorted.map((post) => {
+        const date = post.frontmatter.date
+          ? new Date(post.frontmatter.date + "T00:00:00").toLocaleDateString("en-US", {
+              year: "numeric",
+              month: "short",
+              day: "numeric",
+            })
+          : "";
+        return (
+          <a href={post.url} class="blog-post-card">
+            <span class="blog-post-title">{post.frontmatter.title}</span>
+            {date && <time class="blog-post-date" datetime={post.frontmatter.date}>{date}</time>}
+          </a>
+        );
+      })}
+    </div>
+  </section>
+</BaseLayout>
+
+<style is:global>
+  .blog-list-sheet {
+    border: 2px solid var(--line);
+    border-radius: var(--panel-radius);
+    background: rgba(255, 255, 255, 0.8);
+    box-shadow: 0 18px 45px rgba(47, 42, 68, 0.1);
+    padding: clamp(18px, 4vw, 36px);
+    margin: 0 auto;
+  }
+
+  .blog-list-title {
+    font-family: var(--font-heading);
+    font-size: clamp(28px, 4.2vw, 36px);
+    color: var(--ink);
+    margin-bottom: 24px;
+    border-bottom: 2px solid var(--line);
+    padding-bottom: 8px;
+  }
+
+  .blog-empty {
+    color: var(--muted);
+    font-size: 16px;
+  }
+
+  .blog-posts {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .blog-post-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    text-decoration: none;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: rgba(255, 255, 255, 0.6);
+    transition: border-color 0.15s, background 0.15s;
+  }
+
+  .blog-post-card:hover {
+    border-color: rgba(232, 135, 131, 0.45);
+    background: rgba(232, 135, 131, 0.08);
+  }
+
+  .blog-post-title {
+    font-family: "Nunito", sans-serif;
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--ink);
+  }
+
+  .blog-post-date {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 13px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+</style>

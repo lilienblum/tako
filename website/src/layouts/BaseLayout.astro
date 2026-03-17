@@ -9,7 +9,7 @@ export interface Props {
 
 const {
   title = "Tako - Ship it like FTP",
-  description = "Tako is a minimal deployment tool. Routes, logs, secrets, rolling deploys. Self-hosted on your own infrastructure.",
+  description = "Everything you need to run apps on your own hardware. Routes, logs, secrets, rolling deploys, local dev — one tool.",
 } = Astro.props;
 ---
 <!doctype html>
@@ -102,6 +102,9 @@ const {
       .site {
         position: relative;
         z-index: 3;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
       }
 
       .content-stack {
@@ -109,6 +112,7 @@ const {
         flex-direction: column;
         gap: 24px;
         margin: 10px 0 30px;
+        flex: 1;
       }
 
       .container {
@@ -403,6 +407,7 @@ const {
             </div>
           </div>
           <nav class="mobile-menu" id="mobile-menu">
+            <a href="/blog">blog</a>
             <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer">follow progress on 𝕏</a>
           </nav>
         </div>
@@ -415,6 +420,7 @@ const {
           <div class="container">
             <div class="footer-inner">
               <a href="/docs">docs</a>
+              <a href="/blog">blog</a>
               <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer">𝕏</a>
               <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer">github</a>
             </div>

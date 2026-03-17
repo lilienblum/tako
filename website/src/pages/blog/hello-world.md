@@ -1,0 +1,30 @@
+---
+layout: ../../layouts/BlogPostLayout.astro
+title: Hello, world
+date: "2026-03-17"
+author: dan
+image: 50276c4cfc15
+---
+
+Tako is live. I've been building it for some time and I'm finally ready to share it.
+
+## What is Tako?
+
+Tako is a complete platform for running your apps on your own servers. Deployment, routing, TLS, secrets, logs, rolling updates, local development — all handled by a single tool. You own the server, you own the process. No vendor lock-in, no black boxes.
+
+Think of it as your own self-hosted cloud, minus the cloud.
+
+## Why I built it
+
+Cloud platforms are great until they aren't. Pricing surprises, cold starts, opaque infrastructure, and the feeling that you're renting your own app from someone else.
+
+I wanted something simpler:
+
+- **One command to deploy** — `tako deploy` and you're done
+- **Self-hosted** — runs on any Linux server you control
+- **Zero downtime** — rolling updates with health checks
+- **Minimal config** — a `tako.toml` and you're set
+
+## What's next
+
+I'm working on making Tako even easier to get started with. Follow along here or [on 𝕏](https://twitter.com/intent/follow?screen_name=lilienblum) for updates.

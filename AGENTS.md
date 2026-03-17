@@ -259,3 +259,4 @@ Reusable agent commands live in `commands/`. Read the referenced file for full i
 - **`commands/sweep.md`** — Security, performance, and code quality audit. Fixes trivial issues, reports the rest.
 - **`commands/spec-sync.md`** — Reconcile SPEC.md with code, then regenerate all SPEC-derived website docs.
 - **`commands/code-scanning-resolve.md`** — Resolve all open GitHub code scanning alerts (fix, dismiss, or ask for input).
+- **`commands/blog-post.md`** — Create a new blog post from a topic/idea. Researches context, writes the post, verifies build.

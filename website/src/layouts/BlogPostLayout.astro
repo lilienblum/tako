@@ -1,0 +1,261 @@
+---
+import BaseLayout from "./BaseLayout.astro";
+
+const authors: Record<string, { name: string; link: string }> = {
+  dan: { name: "Dan Lilienblum", link: "https://x.com/lilienblum" },
+};
+
+const defaultAuthor = { name: "Tako-kun", link: "" };
+
+export interface Props {
+  title: string;
+  date: string;
+  author?: string;
+  image?: string;
+  frontmatter?: {
+    title?: string;
+    date?: string;
+    author?: string;
+    image?: string;
+  };
+}
+
+const frontmatter = Astro.props.frontmatter ?? {};
+const title = Astro.props.title ?? frontmatter.title ?? "Tako Blog";
+const date = Astro.props.date ?? frontmatter.date ?? "";
+const authorId = Astro.props.author ?? frontmatter.author ?? "";
+const { name: author, link: authorLink } = authors[authorId] ?? defaultAuthor;
+const rawImage = Astro.props.image ?? frontmatter.image ?? "";
+const image = rawImage ? `/assets/blog/${rawImage}.webp` : "";
+
+const formatted = date
+  ? new Date(date + "T00:00:00").toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    })
+  : "";
+---
+<BaseLayout title={`${title} - Tako Blog`} description={title}>
+  <section class={`blog-sheet ${image ? "has-hero" : ""}`}>
+    {image && (
+      <div class="blog-hero"><img src={image} alt="" /></div>
+    )}
+    <div class="blog-top">
+      <a href="/blog" class="blog-back">&larr; blog</a>
+    </div>
+    <article class="blog-article content">
+      <header class="blog-header">
+        <h1>{title}</h1>
+        <div class="blog-meta">
+          {authorLink
+            ? <a href={authorLink} target="_blank" rel="noopener noreferrer" class="blog-author">{author}</a>
+            : <span class="blog-author">{author}</span>
+          }
+          {formatted && <span class="blog-meta-sep">&middot;</span>}
+          {formatted && <time class="blog-date" datetime={date}>{formatted}</time>}
+        </div>
+      </header>
+      <slot />
+    </article>
+  </section>
+</BaseLayout>
+
+<style is:global>
+  .blog-sheet {
+    border: 2px solid var(--line);
+    border-radius: var(--panel-radius);
+    background: rgba(255, 255, 255, 0.8);
+    box-shadow: 0 18px 45px rgba(47, 42, 68, 0.1);
+    margin: 0 auto;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .blog-hero {
+    width: 100%;
+  }
+
+  .blog-hero img {
+    width: 100%;
+    display: block;
+    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 50px), transparent 100%);
+    mask-image: linear-gradient(to bottom, black calc(100% - 50px), transparent 100%);
+  }
+
+  .has-hero .blog-top {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1;
+  }
+
+  .has-hero .blog-back {
+    background: rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(4px);
+    padding: 5px 12px;
+    border-radius: 999px;
+  }
+
+  .blog-top,
+  .blog-article {
+    padding: 0 clamp(18px, 4vw, 36px);
+  }
+
+  .blog-top {
+    padding-top: clamp(18px, 4vw, 36px);
+  }
+
+  .blog-article {
+    padding-bottom: clamp(18px, 4vw, 36px);
+  }
+
+  .blog-top {
+    margin-bottom: 12px;
+  }
+
+  .blog-back {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 14px;
+    color: var(--muted);
+    text-decoration: none;
+  }
+
+  .blog-back:hover {
+    color: var(--accent);
+  }
+
+  .blog-header {
+    margin-bottom: 24px;
+  }
+
+  .blog-header h1 {
+    margin-top: 0;
+  }
+
+  .blog-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 14px;
+    color: var(--muted);
+  }
+
+  .blog-meta-sep {
+    opacity: 0.5;
+  }
+
+  .blog-author {
+    color: var(--muted);
+    text-decoration: none;
+  }
+
+  .blog-author:hover {
+    color: var(--accent);
+  }
+
+  .blog-article.content {
+    line-height: 1.55;
+    font-size: clamp(16px, 1.5vw, 19px);
+    color: var(--muted);
+  }
+
+  .blog-article.content h1,
+  .blog-article.content h2,
+  .blog-article.content h3,
+  .blog-article.content h4 {
+    font-family: var(--font-heading);
+    color: var(--ink);
+    margin-top: 28px;
+    margin-bottom: 12px;
+    line-height: 1.2;
+  }
+
+  .blog-article.content h1 {
+    font-size: clamp(28px, 4.2vw, 36px);
+    border-bottom: 2px solid var(--line);
+    padding-bottom: 8px;
+  }
+
+  .blog-article.content h2 {
+    font-size: clamp(24px, 3.6vw, 30px);
+  }
+
+  .blog-article.content h3 {
+    font-size: clamp(20px, 3vw, 24px);
+  }
+
+  .blog-article.content p,
+  .blog-article.content ul,
+  .blog-article.content ol,
+  .blog-article.content blockquote,
+  .blog-article.content pre {
+    margin: 14px 0;
+  }
+
+  .blog-article.content ul,
+  .blog-article.content ol {
+    padding-left: 24px;
+  }
+
+  .blog-article.content li {
+    margin: 7px 0;
+  }
+
+  .blog-article.content a {
+    color: var(--accent);
+    text-decoration: none;
+    border-bottom: 2px solid transparent;
+  }
+
+  .blog-article.content a:hover {
+    border-bottom-color: var(--accent);
+  }
+
+  .blog-article.content code {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.85em;
+    padding: 2px 6px;
+    border-radius: 8px;
+    background: rgba(232, 135, 131, 0.12);
+    color: #3f3557;
+  }
+
+  .blog-article.content pre {
+    padding: 18px 20px;
+    border: 2px solid var(--line);
+    border-radius: 16px;
+    background: var(--paper);
+    overflow-x: auto;
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    color: #2b2640;
+  }
+
+  .blog-article.content pre code {
+    padding: 0;
+    background: none;
+  }
+
+  .blog-article.content blockquote {
+    border-left: 4px solid var(--secondary);
+    background: var(--mint-soft);
+    border-radius: 0 12px 12px 0;
+    padding: 12px 14px;
+    color: #2c2b3d;
+  }
+
+  .blog-article.content strong {
+    color: #2f2a44;
+  }
+
+  .blog-article.content hr {
+    border: none;
+    border-top: 2px solid var(--line);
+    margin: 26px 0;
+  }
+</style>
