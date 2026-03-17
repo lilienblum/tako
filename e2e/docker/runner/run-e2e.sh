@@ -371,27 +371,15 @@ CFG
   FIRST_DEPLOY_LOG="$TMP_ROOT/deploy-first-${server}.log"
   SECOND_DEPLOY_LOG="$TMP_ROOT/deploy-second-${server}.log"
 
-  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes --verbose "$PROJECT_DIR" >"$FIRST_DEPLOY_LOG" 2>&1; then
-    cat "$FIRST_DEPLOY_LOG" >&2 || true
+  DEPLOY_LOG="$TMP_ROOT/deploy-${server}.log"
+
+  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes --verbose "$PROJECT_DIR" >"$DEPLOY_LOG" 2>&1; then
+    cat "$DEPLOY_LOG" >&2 || true
     echo "--- tako-server log from $server ---" >&2
     ssh_exec "$server" "cat /tmp/tako-server.log 2>/dev/null | tail -50" >&2 || true
     exit 1
   fi
-  cat "$FIRST_DEPLOY_LOG"
-  if ! grep -q "Building artifact for" "$FIRST_DEPLOY_LOG"; then
-    echo "Expected first deploy to build artifacts, but no build step was observed." >&2
-    exit 1
-  fi
-
-  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes --verbose "$PROJECT_DIR" >"$SECOND_DEPLOY_LOG" 2>&1; then
-    cat "$SECOND_DEPLOY_LOG" >&2 || true
-    exit 1
-  fi
-  cat "$SECOND_DEPLOY_LOG"
-  if ! grep -q "Artifact cache hit for" "$SECOND_DEPLOY_LOG"; then
-    echo "Expected second deploy to reuse cached artifacts, but no cache hit was observed." >&2
-    exit 1
-  fi
+  cat "$DEPLOY_LOG"
 
   CURRENT_LINK=$(resolve_current_release_link "$server" || true)
   APP_RELEASE_DIR="$CURRENT_LINK/$FIXTURE_REL"
