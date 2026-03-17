@@ -68,7 +68,6 @@ jobs:
     # Pinned to 22.04 for glibc 2.35 compat (supports Debian 12+, Ubuntu 22.04+, RHEL 9+)
     runs-on: ubuntu-22.04
     strategy:
-      fail-fast: false
       matrix:
         include:
           - libc: glibc
@@ -133,7 +132,6 @@ jobs:
       env:
         HOME: /root
     strategy:
-      fail-fast: false
       matrix:
         include:
           - libc: glibc
