@@ -1625,7 +1625,8 @@ async fn prepare_release_runtime(
     }
 
     // Install the pinned runtime version and cache the absolute binary path.
-    let runtime_bin = version_manager::install_and_resolve(runtime, manifest.runtime_version.as_deref()).await;
+    let runtime_bin =
+        version_manager::install_and_resolve(runtime, manifest.runtime_version.as_deref()).await;
     if let Some(ref bin) = runtime_bin {
         if let Err(e) = write_runtime_bin(release_dir, bin) {
             tracing::warn!(error = %e, "Failed to write runtime_bin to manifest (non-fatal)");
