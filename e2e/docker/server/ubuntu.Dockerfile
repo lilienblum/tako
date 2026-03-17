@@ -25,8 +25,15 @@ RUN chmod +x /tmp/install-tako-server.sh \
     && chmod +x /tmp/tako-server \
     && tar -cf - -C /tmp tako-server | zstd -o /tmp/tako-server.tar.zst \
     && sha256sum /tmp/tako-server.tar.zst | awk '{print $1}' > /tmp/tako-server.tar.zst.sha256 \
-    && TAKO_SERVER_URL="file:///tmp/tako-server.tar.zst" TAKO_RESTART_SERVICE=0 TAKO_SERVER_NAME=e2e sh /tmp/install-tako-server.sh \
+    && TAKO_SERVER_URL="file:///tmp/tako-server.tar.zst" TAKO_RESTART_SERVICE=0 TAKO_INSTALL_PROTO=0 TAKO_SERVER_NAME=e2e sh /tmp/install-tako-server.sh \
     && rm -f /tmp/install-tako-server.sh /tmp/tako-server /tmp/tako-server.tar.zst /tmp/tako-server.tar.zst.sha256
+
+# Install proto as the tako user (sudo in Docker build has /tmp permission issues)
+USER tako
+RUN curl -fsSL https://moonrepo.dev/install/proto.sh | bash -s -- --yes
+USER root
+RUN ln -sf /home/tako/.proto/bin/proto /usr/local/bin/proto \
+    && chmod -R g+rX /home/tako/.proto 2>/dev/null || true
 
 # Generate SSH host keys
 RUN ssh-keygen -A

@@ -1,3 +1,0 @@
-# Backlog
-
-No open items.
