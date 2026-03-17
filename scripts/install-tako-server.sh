@@ -462,7 +462,7 @@ install_proto_via_script() {
   if [ -n "$TAKO_PROTO_VERSION" ]; then
     _proto_args="$TAKO_PROTO_VERSION $_proto_args"
   fi
-  su -s /bin/sh "$TAKO_USER" -c "HOME='$_tako_home' bash '$installer' $_proto_args"
+  sudo -u "$TAKO_USER" HOME="$_tako_home" bash "$installer" $_proto_args
   rm -f "$installer"
 
   # Symlink so proto is on system PATH

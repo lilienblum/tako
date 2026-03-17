@@ -11,22 +11,15 @@ RUN apk add --no-cache \
       zstd \
     && ssh-keygen -A
 
-# Pre-install tako-server (with dummy binary, installer creates user/service artifacts)
+# Pre-install tako-server (with dummy binary, installer creates user/service + proto)
 COPY scripts/install-tako-server.sh /tmp/install-tako-server.sh
 RUN chmod +x /tmp/install-tako-server.sh \
     && printf '#!/bin/sh\nexit 0\n' > /tmp/tako-server \
     && chmod +x /tmp/tako-server \
     && tar -cf - -C /tmp tako-server | zstd -o /tmp/tako-server.tar.zst \
     && sha256sum /tmp/tako-server.tar.zst | awk '{print $1}' > /tmp/tako-server.tar.zst.sha256 \
-    && TAKO_SERVER_URL="file:///tmp/tako-server.tar.zst" TAKO_RESTART_SERVICE=0 TAKO_INSTALL_PROTO=0 TAKO_SERVER_NAME=e2e sh /tmp/install-tako-server.sh \
+    && TAKO_SERVER_URL="file:///tmp/tako-server.tar.zst" TAKO_RESTART_SERVICE=0 TAKO_SERVER_NAME=e2e sh /tmp/install-tako-server.sh \
     && rm -f /tmp/install-tako-server.sh /tmp/tako-server /tmp/tako-server.tar.zst /tmp/tako-server.tar.zst.sha256
-
-# Install proto as the tako user (separate step because su doesn't work in Docker RUN)
-USER tako
-RUN curl -fsSL https://moonrepo.dev/install/proto.sh | bash -s -- --yes
-USER root
-RUN ln -sf /home/tako/.proto/bin/proto /usr/local/bin/proto \
-    && chmod -R g+rX /home/tako/.proto 2>/dev/null || true
 
 # Setup SSH and e2e keys at container boot.
 COPY e2e/docker/server/entrypoint.sh /usr/local/bin/tako-e2e-entrypoint.sh
