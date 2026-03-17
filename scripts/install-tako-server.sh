@@ -872,6 +872,7 @@ Group=$TAKO_USER
 NoNewPrivileges=true
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+Environment=PATH=$TAKO_HOME/.proto/shims:$TAKO_HOME/.proto/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/local/bin/tako-server --socket $TAKO_SOCKET --data-dir $TAKO_HOME
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
@@ -931,6 +932,7 @@ Group=$TAKO_USER
 NoNewPrivileges=true
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+Environment=PATH=$TAKO_HOME/.proto/shims:$TAKO_HOME/.proto/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/local/bin/tako-server --worker --socket $TAKO_SOCKET --data-dir $TAKO_HOME --instance-port-offset 1000
 Restart=always
 RestartSec=1

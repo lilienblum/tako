@@ -1639,15 +1639,28 @@ async fn prepare_release_runtime(
     // Use the resolved absolute path if available, otherwise fall back to the bare runtime name.
     let runtime_cmd = runtime_bin.as_deref().unwrap_or(runtime.as_str());
 
+    // Prepend the resolved binary's directory to PATH so custom install commands
+    // (e.g. "bun install --production") can find the runtime without proto shims.
+    let mut install_env = env.clone();
+    if let Some(ref bin) = runtime_bin
+        && let Some(bin_dir) = Path::new(bin).parent()
+    {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        install_env.insert(
+            "PATH".to_string(),
+            format!("{}:{}", bin_dir.display(), current_path),
+        );
+    }
+
     if let Some(install_cmd) = manifest
         .install
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        run_release_install_command(release_dir, install_cmd, env).await?;
+        run_release_install_command(release_dir, install_cmd, &install_env).await?;
     } else if runtime == "bun" {
-        install_bun_dependencies_for_release(release_dir, runtime_cmd, env).await?;
+        install_bun_dependencies_for_release(release_dir, runtime_cmd, &install_env).await?;
     }
 
     if let Some(rel_path) = crate::app_command::entrypoint_relative_path(runtime) {
