@@ -1,4 +1,6 @@
-.claude/settings.local.json
+.claude/
+!.claude/skills/
+!.claude/commands/
 node_modules/
 target/
 local-dev/
