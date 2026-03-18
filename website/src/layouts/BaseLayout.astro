@@ -53,6 +53,10 @@ const {
         --font-heading: "Poppins", "Nunito", sans-serif;
       }
 
+      @view-transition {
+        navigation: auto;
+      }
+
       ::selection {
         background: rgba(232, 135, 131, 0.3);
         color: var(--ink);
@@ -474,6 +478,11 @@ const {
       (function() {
         var el = document.getElementById('logo-text');
         if (!el) return;
+        if (sessionStorage.getItem('logo-animated')) {
+          el.textContent = 'tako';
+          el.style.fontFamily = '"Nunito", sans-serif';
+          return;
+        }
         var mono = '"IBM Plex Mono", monospace';
         var sans = '"Nunito", sans-serif';
         function rbit() { return Math.random() > 0.5 ? '1' : '0'; }
@@ -504,7 +513,10 @@ const {
                   el.style.fontFamily = sans;
                 }
                 k++;
-                if (k >= 4) clearInterval(toTako);
+                if (k >= 4) {
+                  clearInterval(toTako);
+                  sessionStorage.setItem('logo-animated', '1');
+                }
               }, 150);
             }
           }, 70);
