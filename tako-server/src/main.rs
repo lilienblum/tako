@@ -722,7 +722,9 @@ impl ServerState {
         let mut release_env = env_vars.clone();
         release_env.extend(secrets.clone());
 
-        if let Err(error) = prepare_release_runtime(&release_path, &release_env).await {
+        if let Err(error) =
+            prepare_release_runtime(&release_path, &release_env, &self.runtime.data_dir).await
+        {
             return Response::error(format!("Invalid app release: {}", error));
         }
 
@@ -1571,7 +1573,7 @@ async fn run_release_install_command(
     env: &HashMap<String, String>,
 ) -> Result<(), String> {
     let mut cmd = TokioCommand::new("sh");
-    cmd.args(["-lc", command])
+    cmd.args(["-c", command])
         .current_dir(release_dir)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1603,17 +1605,10 @@ async fn run_release_install_command(
     ))
 }
 
-fn bun_install_args_for_release(release_dir: &Path) -> Vec<String> {
-    let mut args = vec!["install".to_string(), "--production".to_string()];
-    if release_dir.join("bun.lockb").is_file() || release_dir.join("bun.lock").is_file() {
-        args.push("--frozen-lockfile".to_string());
-    }
-    args
-}
-
 async fn prepare_release_runtime(
     release_dir: &Path,
     env: &HashMap<String, String>,
+    data_dir: &Path,
 ) -> Result<(), String> {
     let manifest = load_release_manifest(release_dir)?;
     let runtime = &manifest.runtime;
@@ -1624,20 +1619,30 @@ async fn prepare_release_runtime(
         ));
     }
 
-    // Install the pinned runtime version and cache the absolute binary path.
-    if manifest.runtime_version.is_none() {
-        tracing::warn!(runtime = %runtime, "Could not detect runtime version; using latest. Pin a version with runtime_version in tako.toml");
-    }
-    let runtime_bin =
-        version_manager::install_and_resolve(runtime, manifest.runtime_version.as_deref()).await;
-    if let Some(ref bin) = runtime_bin
-        && let Err(e) = write_runtime_bin(release_dir, bin)
+    // If runtime_bin is already set and exists, skip download.
+    let runtime_bin = if let Some(ref existing_bin) = manifest.runtime_bin
+        && Path::new(existing_bin).is_file()
     {
-        tracing::warn!(error = %e, "Failed to write runtime_bin to manifest (non-fatal)");
-    }
-
-    // Use the resolved absolute path if available, otherwise fall back to the bare runtime name.
-    let runtime_cmd = runtime_bin.as_deref().unwrap_or(runtime.as_str());
+        tracing::info!(runtime = %runtime, bin = %existing_bin, "Using pre-resolved runtime binary");
+        Some(existing_bin.clone())
+    } else {
+        // Install the pinned runtime version and cache the absolute binary path.
+        if manifest.runtime_version.is_none() {
+            tracing::warn!(runtime = %runtime, "Could not detect runtime version; using latest. Pin a version with runtime_version in tako.toml");
+        }
+        let bin = version_manager::install_and_resolve(
+            runtime,
+            manifest.runtime_version.as_deref(),
+            data_dir,
+        )
+        .await;
+        if let Some(ref bin) = bin
+            && let Err(e) = write_runtime_bin(release_dir, bin)
+        {
+            tracing::warn!(error = %e, "Failed to write runtime_bin to manifest (non-fatal)");
+        }
+        bin
+    };
 
     // Prepend the resolved binary's directory to PATH so custom install commands
     // (e.g. "bun install --production") can find the runtime without proto shims.
@@ -1659,12 +1664,22 @@ async fn prepare_release_runtime(
         .filter(|s| !s.is_empty())
     {
         run_release_install_command(release_dir, install_cmd, &install_env).await?;
-    } else if runtime == "bun" {
-        install_bun_dependencies_for_release(release_dir, runtime_cmd, &install_env).await?;
+    } else {
+        // Try runtime id as PM (bun→bun), fall back to npm
+        let pm = tako_runtime::builtin_package_manager(runtime)
+            .or_else(|| tako_runtime::builtin_package_manager("npm"));
+        if let Some(install_script) = pm
+            .as_ref()
+            .and_then(|p| p.install.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            run_release_install_command(release_dir, install_script, &install_env).await?;
+        }
     }
 
     if let Some(rel_path) = crate::app_command::entrypoint_relative_path(runtime) {
-        let entrypoint_path = release_dir.join(rel_path);
+        let entrypoint_path = release_dir.join(&rel_path);
         if !entrypoint_path.is_file() {
             return Err(format!(
                 "Dependency install completed but '{}' is missing. Ensure package 'tako.sh' is installed.",
@@ -1672,47 +1687,6 @@ async fn prepare_release_runtime(
             ));
         }
     }
-    Ok(())
-}
-
-async fn install_bun_dependencies_for_release(
-    release_dir: &Path,
-    bun_bin: &str,
-    env: &HashMap<String, String>,
-) -> Result<(), String> {
-    let args = bun_install_args_for_release(release_dir);
-    let mut cmd = TokioCommand::new(bun_bin);
-    cmd.args(args.iter().map(String::as_str))
-        .current_dir(release_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .envs(
-            env.iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        );
-
-    #[cfg(unix)]
-    drop_privileges_if_root(&mut cmd);
-
-    let output = cmd.output().await.map_err(|e| {
-        format!(
-            "Failed to run '{} {}' in {}: {}",
-            bun_bin,
-            args.join(" "),
-            release_dir.display(),
-            e
-        )
-    })?;
-
-    if !output.status.success() {
-        return Err(format_process_failure(
-            "Bun dependency install failed",
-            output.status,
-            &output.stdout,
-            &output.stderr,
-        ));
-    }
-
     Ok(())
 }
 
@@ -2846,11 +2820,11 @@ async fn probe_primary_socket(socket_path: &str, our_pid: u32) -> PrimaryStatus 
 #[cfg(test)]
 mod tests {
     use super::{
-        SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, bun_install_args_for_release,
-        extract_zstd_archive, handle_idle_event, install_rustls_crypto_provider,
-        prepare_release_runtime, read_server_config, resolve_release_runtime,
-        run_extract_archive_mode, should_signal_parent_on_ready, should_use_self_signed_route_cert,
-        validate_app_name, validate_deploy_routes,
+        SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, extract_zstd_archive,
+        handle_idle_event, install_rustls_crypto_provider, prepare_release_runtime,
+        read_server_config, resolve_release_runtime, run_extract_archive_mode,
+        should_signal_parent_on_ready, should_use_self_signed_route_cert, validate_app_name,
+        validate_deploy_routes,
     };
     use crate::instances::AppConfig;
     use crate::socket::{AppState, Command, InstanceState, Response};
@@ -3148,26 +3122,32 @@ mod tests {
     }
 
     #[test]
-    fn bun_install_args_use_frozen_lockfile_when_lock_exists() {
-        let temp = TempDir::new().unwrap();
-        std::fs::write(temp.path().join("bun.lock"), "").unwrap();
-        assert_eq!(
-            bun_install_args_for_release(temp.path()),
-            vec![
-                "install".to_string(),
-                "--production".to_string(),
-                "--frozen-lockfile".to_string()
-            ]
-        );
+    fn package_manager_bun_has_install_script() {
+        let pm = tako_runtime::builtin_package_manager("bun").unwrap();
+        let install = pm.install.as_deref().unwrap();
+        assert!(install.contains("bun install --production"));
+        assert!(install.contains("--frozen-lockfile"));
     }
 
     #[test]
-    fn bun_install_args_use_plain_install_without_lockfile() {
-        let temp = TempDir::new().unwrap();
-        assert_eq!(
-            bun_install_args_for_release(temp.path()),
-            vec!["install".to_string(), "--production".to_string()]
-        );
+    fn package_manager_npm_has_install_script() {
+        let pm = tako_runtime::builtin_package_manager("npm").unwrap();
+        let install = pm.install.as_deref().unwrap();
+        assert!(install.contains("npm"));
+    }
+
+    #[test]
+    fn package_manager_pnpm_has_install_script() {
+        let pm = tako_runtime::builtin_package_manager("pnpm").unwrap();
+        let install = pm.install.as_deref().unwrap();
+        assert!(install.contains("pnpm"));
+    }
+
+    #[test]
+    fn deno_is_a_known_package_manager() {
+        let pm = tako_runtime::builtin_package_manager("deno").unwrap();
+        assert_eq!(pm.id, "deno");
+        assert!(pm.lockfiles.contains(&"deno.lock".to_string()));
     }
 
     #[tokio::test]
@@ -3175,49 +3155,17 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let release_dir = temp.path().join("release");
         std::fs::create_dir_all(&release_dir).unwrap();
+        // Use explicit install command in manifest to test the install flow
+        // without triggering the download engine (which would download real bun).
         std::fs::write(
             release_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
-        )
-        .unwrap();
-        std::fs::write(
-            release_dir.join("package.json"),
-            r#"{"name":"test-app","dependencies":{"tako.sh":"0.0.0"}} "#,
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"install":"mkdir -p node_modules/tako.sh/src/entrypoints && printf 'export {};\n' > node_modules/tako.sh/src/entrypoints/bun.ts"}"#,
         )
         .unwrap();
 
-        let fake_bin_dir = temp.path().join("bin");
-        std::fs::create_dir_all(&fake_bin_dir).unwrap();
-        let fake_bun = fake_bin_dir.join("bun");
-        std::fs::write(
-            &fake_bun,
-            r#"#!/bin/sh
-if [ "$1" = "install" ]; then
-  mkdir -p node_modules/tako.sh/src/entrypoints
-  printf "export {};\n" > node_modules/tako.sh/src/entrypoints/bun.ts
-  exit 0
-fi
-echo "unexpected bun args: $*" >&2
-exit 1
-"#,
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = std::fs::metadata(&fake_bun).unwrap().permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&fake_bun, permissions).unwrap();
-        }
-
-        let mut env = HashMap::new();
-        let path = std::env::var("PATH").unwrap_or_default();
-        env.insert(
-            "PATH".to_string(),
-            format!("{}:{}", fake_bin_dir.display(), path),
-        );
-
-        prepare_release_runtime(&release_dir, &env).await.unwrap();
+        prepare_release_runtime(&release_dir, &HashMap::new(), temp.path())
+            .await
+            .unwrap();
         assert!(
             release_dir
                 .join("node_modules/tako.sh/src/entrypoints/bun.ts")
@@ -3230,44 +3178,16 @@ exit 1
         let temp = TempDir::new().unwrap();
         let release_dir = temp.path().join("release");
         std::fs::create_dir_all(&release_dir).unwrap();
+        // Explicit install command: no package.json needed.
         std::fs::write(
             release_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
+            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"install":"mkdir -p node_modules/tako.sh/src/entrypoints && printf 'export {};\n' > node_modules/tako.sh/src/entrypoints/bun.ts"}"#,
         )
         .unwrap();
 
-        let fake_bin_dir = temp.path().join("bin");
-        std::fs::create_dir_all(&fake_bin_dir).unwrap();
-        let fake_bun = fake_bin_dir.join("bun");
-        std::fs::write(
-            &fake_bun,
-            r#"#!/bin/sh
-if [ "$1" = "install" ]; then
-  mkdir -p node_modules/tako.sh/src/entrypoints
-  printf "export {};\n" > node_modules/tako.sh/src/entrypoints/bun.ts
-  exit 0
-fi
-echo "unexpected bun args: $*" >&2
-exit 1
-"#,
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut permissions = std::fs::metadata(&fake_bun).unwrap().permissions();
-            permissions.set_mode(0o755);
-            std::fs::set_permissions(&fake_bun, permissions).unwrap();
-        }
-
-        let mut env = HashMap::new();
-        let path = std::env::var("PATH").unwrap_or_default();
-        env.insert(
-            "PATH".to_string(),
-            format!("{}:{}", fake_bin_dir.display(), path),
-        );
-
-        prepare_release_runtime(&release_dir, &env).await.unwrap();
+        prepare_release_runtime(&release_dir, &HashMap::new(), temp.path())
+            .await
+            .unwrap();
         assert!(
             release_dir
                 .join("node_modules/tako.sh/src/entrypoints/bun.ts")
@@ -3291,7 +3211,7 @@ exit 1
         )
         .unwrap();
 
-        prepare_release_runtime(&release_dir, &HashMap::new())
+        prepare_release_runtime(&release_dir, &HashMap::new(), temp.path())
             .await
             .unwrap();
         assert!(

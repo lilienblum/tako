@@ -15,6 +15,7 @@ path = "src/main.rs"
 
 [dependencies]
 tako-core = { path = "../tako-core", version = "0.0.2" }
+tako-runtime = { path = "../tako-runtime", version = "0.0.1" }
 tako-socket = { path = "../tako-socket", version = "0.0.2" }
 clap = { version = "4.5", features = ["derive", "env"] }
 tokio = { version = "1.49", features = ["full", "signal"] }

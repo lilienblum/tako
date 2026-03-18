@@ -1,13 +1,9 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-pub(crate) fn entrypoint_relative_path(runtime: &str) -> Option<&'static str> {
-    match runtime {
-        "bun" => Some("node_modules/tako.sh/src/entrypoints/bun.ts"),
-        "node" => Some("node_modules/tako.sh/src/entrypoints/node.ts"),
-        "deno" => Some("node_modules/tako.sh/src/entrypoints/deno.ts"),
-        _ => None,
-    }
+pub(crate) fn entrypoint_relative_path(runtime: &str) -> Option<String> {
+    let def = tako_runtime::builtin_runtime(runtime)?;
+    def.server.entrypoint_path.clone()
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -140,41 +136,36 @@ pub(crate) fn command_from_manifest(
             .collect());
     }
 
-    let rel_path = entrypoint_relative_path(&manifest.runtime).ok_or_else(|| {
+    let def = tako_runtime::builtin_runtime(&manifest.runtime).ok_or_else(|| {
         format!(
             "unsupported runtime '{}' in deploy manifest {}",
             manifest.runtime,
             manifest_path.display()
         )
     })?;
-    let entrypoint = resolve_entrypoint_path(release_dir, rel_path);
 
+    let rel_path = def.server.entrypoint_path.as_deref().ok_or_else(|| {
+        format!(
+            "runtime '{}' has no server entrypoint path configured",
+            manifest.runtime
+        )
+    })?;
+    let entrypoint = resolve_entrypoint_path(release_dir, rel_path);
     let bin = resolve_runtime_binary(manifest);
 
-    match manifest.runtime.as_str() {
-        "bun" => Ok(vec![
-            bin,
-            "run".to_string(),
-            entrypoint,
-            manifest.main.clone(),
-        ]),
-        "node" => Ok(vec![
-            bin,
-            "--experimental-strip-types".to_string(),
-            entrypoint,
-            manifest.main.clone(),
-        ]),
-        "deno" => Ok(vec![
-            bin,
-            "run".to_string(),
-            "--allow-net".to_string(),
-            "--allow-env".to_string(),
-            "--allow-read".to_string(),
-            entrypoint,
-            manifest.main.clone(),
-        ]),
-        _ => unreachable!(),
-    }
+    let cmd: Vec<String> = def
+        .server
+        .launch_args
+        .iter()
+        .map(|arg| match arg.as_str() {
+            "{bin}" => bin.clone(),
+            "{entrypoint}" => entrypoint.clone(),
+            "{main}" => manifest.main.clone(),
+            other => other.to_string(),
+        })
+        .collect();
+
+    Ok(cmd)
 }
 
 /// Determine the command to launch an app from its release directory.
