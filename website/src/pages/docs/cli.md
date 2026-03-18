@@ -71,7 +71,9 @@ Init walks you through setting up your project. It prompts for:
 - **Preset** -- fetches available presets for your runtime and lets you pick one, or use the base runtime preset.
 - **Main entrypoint** -- only prompted when neither adapter inference nor the chosen preset provides a default.
 
-The generated `tako.toml` leaves only essential options uncommented (`name`, `runtime`, `route`) with all other options included as commented examples.
+The generated `tako.toml` leaves only essential options uncommented (`name`, `runtime`, `runtime_version`, `route`) with all other options included as commented examples. `runtime_version` is pinned from the locally-installed runtime version.
+
+After generating `tako.toml`, init installs the `tako.sh` SDK package using the detected package manager (e.g. `bun add tako.sh`, `npm install tako.sh`).
 
 Init also updates `.gitignore` so `.tako/*` is ignored while `.tako/secrets.json` remains trackable. When the project lives inside a git repo, the repo-root `.gitignore` is updated; otherwise a local `.gitignore` is used.
 

@@ -29,7 +29,11 @@ Systematically read the source code across all components. Do not skip files —
   - `paths.rs`, `output.rs` — paths, output modes
 - **sdk/js/src/** — SDK (fetch handler, adapters, vite plugin, status endpoint)
 - **scripts/** — install scripts (install-tako-server.sh, install-tako-cli-canary.sh)
-- **presets/** — preset family TOML files
+- **tako-runtime/src/** — runtime registry types, download engine, package manager detection
+- **registry/** — all TOML definitions:
+  - `registry/{language}/runtimes/` — runtime definitions
+  - `registry/{language}/presets/` — preset family definitions
+  - `registry/package_managers/` — package manager definitions
 
 ### What to look for
 
@@ -96,7 +100,19 @@ After SPEC.md is updated, regenerate each of these doc pages **from scratch** ba
 
 ---
 
-## Phase 3: Commit
+## Phase 3: Sync Registry Examples
+
+After updating SPEC.md and docs, verify that all `_example` files in the registry match the current schema:
+
+- `registry/{language}/runtimes/_example` — must include every section and field used in real runtime TOML files (commented out with descriptions)
+- `registry/{language}/presets/_example` — must match the preset TOML structure
+- `registry/package_managers/_example` — must match the package manager TOML structure
+
+Compare each `_example` against a real file in the same directory. If any field/section is missing or outdated, update the example.
+
+---
+
+## Phase 4: Commit
 
 After both phases are complete, create a single commit on the current branch with all changes (SPEC.md + doc pages). Use a conventional commit message like:
 

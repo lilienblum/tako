@@ -5,7 +5,7 @@ Minimal Bun HTTP app for trying `tako` and `tako.sh` together.
 ## Local Runtime Only (No Tako Proxy)
 
 ```bash
-cd examples/js/bun
+cd examples/javascript/bun
 bun install
 bun run dev
 ```
@@ -15,7 +15,7 @@ bun run dev
 From repository root:
 
 ```bash
-just tako examples/js/bun dev
+just tako examples/javascript/bun dev
 ```
 
 This runs the example through `tako dev` (HTTPS local ingress + routing).

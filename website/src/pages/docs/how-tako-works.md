@@ -84,7 +84,7 @@ For each target server (in parallel):
 - Uploads and extracts the target artifact
 - Syncs secrets only if they have changed (compares hashes)
 - Sends the deploy command to `tako-server`
-- Runs runtime prep (for example, `bun install --production` for Bun apps)
+- Runs runtime prep (production dependency install via the runtime's package manager)
 - Performs a rolling update of app instances
 - Releases the lock and cleans up old releases
 
@@ -220,6 +220,7 @@ On each deployment server, Tako organizes files under `/opt/tako/`:
 /opt/tako/
   config.json              # Server-level config
   runtime-state.sqlite3    # Persisted app state
+  runtimes/{tool}/{version}/  # Downloaded runtime binaries
   certs/{domain}/          # TLS certificates
   apps/{app}/{env}/
     current -> releases/{version}   # Active release symlink

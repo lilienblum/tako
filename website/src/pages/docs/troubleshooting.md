@@ -142,7 +142,7 @@ Things to check:
 - **Build order:** Preset build commands run first (`[build].install` then `[build].build`), followed by app `[[build.stages]]` in declaration order.
 - **Container builds:** If your preset sets `[build].container = true`, make sure Docker is available locally and can pull the default builder images (`ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets, `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets).
 - **JS runtime builds:** JS runtime base presets (`bun`, `node`, `deno`) default to local build mode (`container = false`) unless explicitly set otherwise.
-- **Preset fetch:** Unpinned official aliases are fetched from `master` on each resolve. If fetch fails, resolution fails. Runtime base aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from fetched family manifests.
+- **Preset fetch:** Unpinned official aliases are fetched from `master` on each resolve. If fetch fails, resolution fails. Runtime base aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from fetched family manifests. Presets are fetched from `registry/<language>/presets/<language>.toml`.
 - **Stale Docker cache:** Containerized builds cache dependencies in Docker volumes prefixed `tako-build-cache-`. If needed, remove stale volumes and redeploy.
 
 ### Deploy entrypoint missing after build
@@ -169,11 +169,11 @@ Deploy requires valid `arch` and `libc` metadata for each server in `config.toml
 
 **Fix:** Remove the server with `tako servers rm` and re-add it with `tako servers add` (without `--no-test`) to capture target metadata via SSH.
 
-### Bun dependency install failed on server
+### Dependency install failed on server
 
-**Symptom:** Server responds with `Invalid app release: Bun dependency install failed ...`.
+**Symptom:** Server responds with `Invalid app release: ... dependency install failed ...`.
 
-**Fix:** Make sure your release dependencies are resolvable in production and that your Bun lockfile (if present) matches the packaged dependency specs. The server runs `bun install --production` (plus `--frozen-lockfile` when a lockfile is present) on the deployed release.
+**Fix:** Make sure your release dependencies are resolvable in production and that your lockfile (if present) matches the packaged dependency specs. The server runs the runtime's package manager production install command on the deployed release (e.g. `bun install --production --frozen-lockfile` for Bun, `npm ci --omit=dev` for npm).
 
 ## Health Checks and Rolling Updates
 
@@ -215,12 +215,6 @@ If an app process crashes, Tako detects it through health checks (within a few s
 **Symptom:** `install-server` exits saying a supported service manager is required.
 
 **Fix:** Run on a host with active systemd or OpenRC. For build/image workflows where init is not active, rerun with `TAKO_RESTART_SERVICE=0` to refresh the binary/users without starting the service.
-
-### Failed to install proto
-
-**Symptom:** `install-server.sh` exits after reporting a proto install failure.
-
-**Fix:** Install `proto` manually on the host ([proto install docs](https://moonrepo.dev/docs/proto/install)), make sure it is on `PATH`, then rerun the installer. Alternatively, set `TAKO_INSTALL_PROTO=0` to skip installer-managed proto setup.
 
 ### SSH host key verification failed
 

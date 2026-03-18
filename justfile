@@ -22,7 +22,7 @@ lint:
 ci: fmt lint test::all
 
 
-e2e fixture="e2e/fixtures/js/tanstack-start": (test::e2e fixture)
+e2e fixture="e2e/fixtures/javascript/tanstack-start": (test::e2e fixture)
 
 blog-img-gen post:
     ./scripts/blog-img-generate.sh {{ post }}

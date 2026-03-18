@@ -33,9 +33,8 @@ The installer handles everything:
 - Sets up a service definition (systemd unit or OpenRC init script)
 - Creates required directories (`/opt/tako` for data, `/var/run/tako` for sockets)
 - Configures privileged port binding (`:80` and `:443`) via service capabilities
-- Installs `proto` for runtime version management
 - Installs restricted maintenance helpers and sudoers policy for non-interactive upgrades
-- Ensures `nc` (netcat), `tar`, `base64`, and standard shell tools are available
+- Ensures `nc` (netcat), `tar`, `base64`, `which`, and standard shell tools are available
 - Verifies `tako-server` starts successfully after installation
 
 **SSH key setup:** The installer needs an SSH public key for the `tako` user so the CLI can connect later.
@@ -139,7 +138,7 @@ For each server, the CLI:
 7. Uploads and extracts the target artifact into `/opt/tako/apps/<app>/<env>/releases/<version>/`
 8. Links shared directories (e.g., `logs`)
 9. Syncs secrets if needed (compares hashes; only sends when changed)
-10. Runs runtime prep (e.g., `bun install --production` for Bun apps)
+10. Runs runtime prep (production dependency install via the runtime's package manager)
 11. Performs a rolling update
 12. Updates the `current` symlink and cleans up old releases (older than 30 days)
 

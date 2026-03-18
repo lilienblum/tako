@@ -22,6 +22,6 @@ e2e fixture="":
     if [ -n "{{ fixture }}" ]; then
         ./e2e/run.sh "{{ fixture }}"
     else
-        ./e2e/run.sh e2e/fixtures/js/bun
-        ./e2e/run.sh e2e/fixtures/js/tanstack-start
+        ./e2e/run.sh e2e/fixtures/javascript/bun
+        ./e2e/run.sh e2e/fixtures/javascript/tanstack-start
     fi

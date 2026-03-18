@@ -12,13 +12,13 @@ Sample applications for running Tako end-to-end.
 From repository root:
 
 ```bash
-just tako examples/js/bun dev
+just tako examples/javascript/bun dev
 ```
 
 Then open the URL shown by `tako dev`.
 
 ## More Details
 
-- `examples/js/README.md`
-- `examples/js/bun/README.md`
-- `examples/js/tanstack-start/README.md`
+- `examples/javascript/README.md`
+- `examples/javascript/bun/README.md`
+- `examples/javascript/tanstack-start/README.md`

@@ -12,13 +12,13 @@ JavaScript runtime examples for Tako.
 From repository root:
 
 ```bash
-just tako examples/js/bun dev
+just tako examples/javascript/bun dev
 ```
 
 Run TanStack Start directly from the example directory:
 
 ```bash
-cd examples/js/tanstack-start
+cd examples/javascript/tanstack-start
 bun install
 bun run dev
 ```
@@ -26,6 +26,6 @@ bun run dev
 Build TanStack Start output for deploy:
 
 ```bash
-cd examples/js/tanstack-start
+cd examples/javascript/tanstack-start
 bun run build
 ```

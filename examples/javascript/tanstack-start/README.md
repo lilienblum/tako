@@ -5,7 +5,7 @@ TanStack Start example based on `TanStack/router/examples/react/start-basic`, wi
 ## Local TanStack Dev
 
 ```bash
-cd examples/js/tanstack-start
+cd examples/javascript/tanstack-start
 bun install
 bun run dev
 ```
@@ -13,7 +13,7 @@ bun run dev
 ## Build for Deploy
 
 ```bash
-cd examples/js/tanstack-start
+cd examples/javascript/tanstack-start
 bun run build
 ```
 

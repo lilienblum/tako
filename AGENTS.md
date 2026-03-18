@@ -25,15 +25,25 @@ Tako's protocol is v0: do not keep any legacy code, backward compatibility shims
    - `website/src/pages/docs/deployment.md`
    - `website/src/pages/docs/development.md`
 
-8. **Keep preset family files canonical** - Define family presets in `presets/<family>.toml` (for example `presets/js.toml`).
+8. **Keep registry `_example` files in sync** - When changing the schema or fields of any TOML file under `registry/`, update the corresponding `_example` file in the same directory to match. Examples must mirror every section and field that real files use (commented out with descriptions).
+
+9. **Keep registry definitions canonical** - Runtime, package manager, and preset definitions live in `registry/`. The structure is:
+   - `registry/{language}/runtimes/{name}.toml` — runtime definitions
+   - `registry/{language}/presets/{language}.toml` — family preset definitions (sections per preset)
+   - `registry/package_managers/{language}.toml` — package manager definitions (sections per PM)
 
 ## Project Structure
 
 **Rust Crates:**
 
 - `tako-core/` - Shared protocol types (Command, Response enums)
+- `tako-runtime/` - Runtime/PM registry types, download engine, caching
 - `tako-server/` - Remote server runtime (proxy, instances, TLS, sockets)
 - `tako/` - CLI tool (all commands)
+
+**Registry:**
+
+- `registry/` - TOML-driven runtime, package manager, and preset definitions
 
 **SDK (current implementation):**
 
@@ -57,6 +67,7 @@ cargo test
 
 # Test specific crate
 cargo test -p tako
+cargo test -p tako-runtime
 cargo test -p tako-server
 
 # SDK (current JS/TS implementation)
@@ -134,7 +145,7 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
    - `website/src/pages/docs/cli.md`
    - `website/src/pages/docs/deployment.md`
    - `website/src/pages/docs/development.md`
-4. If preset definitions changed, update the relevant `presets/<family>.toml` file and ensure no old per-preset files are introduced.
+4. If preset definitions changed, update the relevant `registry/<language>/presets/<language>.toml` file and ensure no old per-preset files are introduced.
 5. Update affected README.md files if setup/usage/run commands changed
 6. Close or update the related issue/task entry
 7. Keep implementation details OUT of SPEC.md (focus on what users see/do)

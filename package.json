@@ -4,10 +4,20 @@
     "packages": [
       "sdk/js",
       "website",
-      "examples/js/*",
+      "examples/javascript/*",
       "e2e/cli",
-      "e2e/fixtures/js/*"
+      "e2e/fixtures/javascript/*"
     ],
+    "catalog": {
+      "@tanstack/react-router": "^1.167.0",
+      "@tanstack/react-start": "^1.166.11",
+      "@types/react": "^19.0.8",
+      "@types/react-dom": "^19.0.3",
+      "@vitejs/plugin-react": "^6.0.1",
+      "react": "^19.0.0",
+      "react-dom": "^19.0.0",
+      "vite": "^8.0.0"
+    },
     "catalogs": {
       "dev": {
         "@tsconfig/strictest": "^2.0.0",
@@ -16,16 +26,6 @@
         "astro": "^6.0.4",
         "wrangler": "^4.73.0",
         "typescript": "^5"
-      },
-      "web": {
-        "@tanstack/react-router": "^1.167.0",
-        "@tanstack/react-start": "^1.166.11",
-        "@types/react": "^19.0.8",
-        "@types/react-dom": "^19.0.3",
-        "@vitejs/plugin-react": "^6.0.1",
-        "react": "^19.0.0",
-        "react-dom": "^19.0.0",
-        "vite": "^8.0.0"
       }
     }
   },

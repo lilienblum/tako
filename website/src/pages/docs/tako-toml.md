@@ -16,12 +16,13 @@ A working `tako.toml` only needs a route:
 ```toml
 name = "my-app"
 runtime = "bun"
+runtime_version = "1.2.3"
 
 [envs.production]
 route = "my-app.example.com"
 ```
 
-`tako init` prompts you for the app name, production route, and runtime, then writes a starter file with commented examples for every option.
+`tako init` prompts you for the app name, production route, and runtime, then writes a starter file with commented examples for every option. It also pins your locally-installed runtime version as `runtime_version`.
 
 ---
 
@@ -49,15 +50,15 @@ Valid names: `my-app`, `api-server`, `web-frontend`
 
 ### `main`
 
-Optional entrypoint override for your app. Written into the deployed `app.json` and used by both `tako dev` and `tako deploy`.
+Optional entrypoint override for your app. Written into the deployed `app.json` and used by both `tako dev` and `tako deploy`. Accepts file paths and module specifiers (e.g. `@scope/pkg`).
 
 ```toml
 main = "server/index.mjs"
 ```
 
-If omitted, Tako uses the preset's top-level `main` when one is defined. For JS runtimes (`bun`, `node`, `deno`), when the preset `main` is `index.<ext>` or `src/index.<ext>` (where `<ext>` is `ts`, `tsx`, `js`, or `jsx`), Tako resolves the entrypoint by checking for an existing `index.<ext>` first, then `src/index.<ext>`, then falls back to the preset value.
+If omitted, Tako checks the manifest main field (e.g. `package.json` `main`) first, then falls back to the preset's top-level `main`. For JS runtimes (`bun`, `node`, `deno`), when the preset `main` is `index.<ext>` or `src/index.<ext>` (where `<ext>` is `ts`, `tsx`, `js`, or `jsx`), Tako resolves the entrypoint by checking for an existing `index.<ext>` first, then `src/index.<ext>`, then falls back to the preset value.
 
-If neither `tako.toml` nor the preset provides a `main`, deploy and dev will fail with guidance.
+If neither `tako.toml`, manifest main, nor the preset provides a `main`, deploy and dev will fail with guidance.
 
 During deploy, Tako verifies this resolved path exists in the post-build app directory and fails if it is missing.
 
@@ -70,6 +71,16 @@ runtime = "bun"
 ```
 
 Accepted values: `bun`, `node`, `deno`. When omitted, Tako auto-detects the runtime from your project files. If detection returns `unknown`, it defaults to `bun`.
+
+### `runtime_version`
+
+Optional pinned runtime version. When set, `tako deploy` uses this version directly instead of running `<runtime> --version` to auto-detect.
+
+```toml
+runtime_version = "1.2.3"
+```
+
+`tako init` pins the locally-installed version by default. To update, change the value or remove the field to let deploy auto-detect.
 
 ### `preset`
 
@@ -93,8 +104,8 @@ When omitted, Tako uses the base preset for the selected runtime (from `runtime`
 
 **How presets work:**
 
-- Base presets (`bun`, `node`, `deno`) are built into the CLI. They define lifecycle defaults for `dev`, `install`, `start`, and build commands.
-- Family presets (like `tanstack-start`) live in `presets/<family>.toml` in the Tako repo and are fetched from `master` on each resolve. Fetch failures fail the resolve.
+- Base presets (`bun`, `node`, `deno`) are built into the CLI from embedded runtime definitions. They define lifecycle defaults for `dev`, `install`, `start`, and build commands.
+- Family presets (like `tanstack-start` and `vite`) live in `registry/<language>/presets/<language>.toml` in the Tako repo and are fetched from `master` on each resolve. Fetch failures fail the resolve.
 - Base runtime aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from the fetched family manifest.
 - Resolved preset metadata is written to `.tako/build.lock.json` for visibility and cache-key inputs.
 
@@ -356,7 +367,7 @@ This is independent of `--verbose`, which controls only Tako CLI and dev-server 
 
 Tako validates your `tako.toml` and reports clear errors when something is wrong:
 
-- **Top-level keys**: Only `name`, `main`, `runtime`, `preset`, and `[build]` are allowed at the top level. Standalone `build = "..."` or `assets = [...]` are rejected.
+- **Top-level keys**: Only `name`, `main`, `runtime`, `runtime_version`, `preset`, and `[build]` are allowed at the top level. Standalone `build = "..."` or `assets = [...]` are rejected.
 - **Environment sections**: `[envs.<env>]` accepts only `route`/`routes`, `servers`, `idle_timeout`, and `log_level`. Env vars belong in `[vars]` / `[vars.<env>]`.
 - **Route exclusivity**: Each environment can set `route` or `routes`, but not both.
 - **Non-development routes required**: Every non-development environment must have `route` or `routes` defined (empty lists are rejected).
@@ -392,6 +403,9 @@ main = "server/index.mjs"
 
 # Runtime adapter (optional; auto-detected from project files)
 runtime = "bun"
+
+# Pinned runtime version (optional; auto-detected if omitted)
+runtime_version = "1.2.3"
 
 # Build preset (optional; omit to use the base runtime preset)
 # preset = "tanstack-start"

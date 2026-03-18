@@ -39,7 +39,7 @@ Base presets also define lifecycle commands for dependency installation, build s
 
 ## Official presets
 
-Official presets handle framework-specific concerns on top of a base preset. For example, `tanstack-start` knows the right entrypoint and asset directory for TanStack Start apps.
+Official presets handle framework-specific concerns on top of a base preset. For example, `tanstack-start` knows the right entrypoint and asset directory for TanStack Start apps, and `vite` knows the right dev and build commands for Vite-based apps.
 
 Set a preset in `tako.toml`:
 
@@ -98,12 +98,13 @@ Presets do **not** support `[[build.stages]]`. Custom build stages belong in you
 ```toml
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
+dev = ["vite", "dev"]
 
 [tanstack-start.build]
 assets = ["dist/client"]
 ```
 
-This tells Tako that TanStack Start apps use `dist/server/tako-entry.mjs` as their entrypoint and need `dist/client` merged into `public/` for static asset serving.
+This tells Tako that TanStack Start apps use `dist/server/tako-entry.mjs` as their entrypoint, run `vite dev` during development, and need `dist/client` merged into `public/` for static asset serving.
 
 ### Rejected keys
 
@@ -115,22 +116,29 @@ The following keys and sections are not allowed in preset files:
 
 ## Preset family files
 
-Official preset definitions are organized by runtime family in `presets/<family>.toml`. Currently there is one family file:
+Official preset definitions are organized by language in the registry: `registry/<language>/presets/<language>.toml`. Currently there is one family file:
 
 ```
-presets/js.toml
+registry/javascript/presets/javascript.toml
 ```
 
 This file contains all JavaScript/TypeScript framework presets as TOML sections. Each section name is the preset alias:
 
 ```toml
-# presets/js.toml
+# registry/javascript/presets/javascript.toml
 
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
+dev = ["vite", "dev"]
 
 [tanstack-start.build]
 assets = ["dist/client"]
+
+[vite]
+dev = ["vite", "dev"]
+
+[vite.build]
+build = "vite build"
 ```
 
 During `tako init`, Tako fetches the family manifest to show you available presets for your detected runtime. If no family presets are available after fetch, init skips preset selection and uses the base preset.
@@ -164,4 +172,4 @@ During deploy, build commands run in a fixed order for each target:
 
 This means the preset handles foundational setup (dependency installation, framework compilation) and your custom stages run afterward for any additional processing.
 
-At runtime on the server, the preset's top-level `install` command runs for dependency setup (e.g., production `bun install`), and the preset's `start` command launches the app.
+At runtime on the server, the package manager's production install command runs for dependency setup, and the preset's `start` command launches the app.
