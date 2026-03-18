@@ -2,7 +2,7 @@
 set -euo pipefail
 
 WORKSPACE=${WORKSPACE:-/workspace}
-FIXTURE_REL=${1:-${E2E_FIXTURE:-e2e/fixtures/js/tanstack-start}}
+FIXTURE_REL=${1:-${E2E_FIXTURE:-e2e/fixtures/javascript/tanstack-start}}
 FIXTURE_DIR="$WORKSPACE/$FIXTURE_REL"
 
 if [[ ! -d "$FIXTURE_DIR" ]]; then
@@ -292,7 +292,7 @@ start_tako_server() {
   ssh_exec "$host" "chmod +x /home/tako/tako-server"
   ssh_exec "$host" "pkill -x tako-server >/dev/null 2>&1 || true"
   ssh_exec "$host" "rm -f /var/run/tako/tako.sock"
-  ssh_exec "$host" "nohup env PATH=/home/tako/.proto/shims:/home/tako/.proto/bin:\$PATH /usr/local/bin/tako-server --no-acme --port 8080 --tls-port 8443 --data-dir /opt/tako >/tmp/tako-server.log 2>&1 &"
+  ssh_exec "$host" "nohup /usr/local/bin/tako-server --no-acme --port 8080 --tls-port 8443 --data-dir /opt/tako >/tmp/tako-server.log 2>&1 &"
   wait_tako_socket "$host"
 }
 
@@ -345,11 +345,10 @@ ssh-keyscan -H server-alma >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 ssh-keyscan -H server-alpine >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 
 # Deploy test targets
-# Alpine excluded: proto's bun plugin doesn't detect musl (moonrepo/plugins issue),
-# and bun installed directly has path resolution issues in the release context.
 SERVERS=()
 SERVERS+=("server-ubuntu:gnu")
 SERVERS+=("server-alma:gnu")
+SERVERS+=("server-alpine:musl")
 
 ROUTE_HOST=$(detect_route_host "$PROJECT_DIR/tako.toml" "production")
 if [[ -z "$ROUTE_HOST" ]]; then

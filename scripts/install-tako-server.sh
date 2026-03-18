@@ -28,8 +28,6 @@ set -eu
 #   TAKO_SERVER_NAME        server identity for metrics labels (optional)
 #                           if unset, installer prompts in interactive terminals
 #                           defaults to machine hostname if non-interactive
-#   TAKO_INSTALL_PROTO      default: 1 (set 0/false to skip proto install)
-#   TAKO_PROTO_VERSION      optional proto version for installer (default: latest)
 #   TAKO_RESTART_SERVICE    default: 1 (set 0/false for install-only refresh; no service restart)
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -50,8 +48,6 @@ TAKO_REPO_OWNER="${TAKO_REPO_OWNER:-lilienblum}"
 TAKO_REPO_NAME="${TAKO_REPO_NAME:-tako}"
 TAKO_TAG_PREFIX="${TAKO_TAG_PREFIX:-tako-server-v}"
 TAKO_TAGS_API="${TAKO_TAGS_API:-https://api.github.com/repos/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/tags?per_page=100}"
-TAKO_INSTALL_PROTO="${TAKO_INSTALL_PROTO:-1}"
-TAKO_PROTO_VERSION="${TAKO_PROTO_VERSION:-}"
 TAKO_RESTART_SERVICE="${TAKO_RESTART_SERVICE:-1}"
 TAKO_SERVER_INSTALL_REFRESH_HELPER="/usr/local/bin/tako-server-install-refresh"
 TAKO_SERVER_SERVICE_HELPER="/usr/local/bin/tako-server-service"
@@ -444,55 +440,6 @@ tako_home_dir() {
   printf '%s' "$_home"
 }
 
-install_proto_via_script() {
-  installer_url="https://moonrepo.dev/install/proto.sh"
-  installer="$(mktemp)"
-
-  if need_cmd curl; then
-    curl -fsSL "$installer_url" -o "$installer"
-  else
-    wget -qO "$installer" "$installer_url"
-  fi
-
-  chmod +x "$installer"
-
-  # Install as the tako service user so proto lands in /home/tako/.proto
-  _tako_home="$(tako_home_dir)"
-  _proto_args="--yes"
-  if [ -n "$TAKO_PROTO_VERSION" ]; then
-    _proto_args="$TAKO_PROTO_VERSION $_proto_args"
-  fi
-  sudo -u "$TAKO_USER" HOME="$_tako_home" bash "$installer" $_proto_args
-  rm -f "$installer"
-
-  # Symlink so proto is on system PATH
-  if [ -x "$_tako_home/.proto/bin/proto" ] && ! need_cmd proto; then
-    ln -sf "$_tako_home/.proto/bin/proto" /usr/local/bin/proto
-  fi
-
-  # Allow tako-app (in tako group) to read installed runtimes
-  chmod -R g+rX "$_tako_home/.proto" 2>/dev/null || true
-}
-
-ensure_proto() {
-  if ! is_enabled "$TAKO_INSTALL_PROTO"; then
-    return
-  fi
-
-  if need_cmd proto; then
-    echo "OK proto is already installed"
-    return
-  fi
-
-  install_proto_via_script
-
-  if ! need_cmd proto; then
-    echo "error: failed to install proto. Install it manually (https://moonrepo.dev/docs/proto/install) and re-run installer." >&2
-    exit 1
-  fi
-  echo "OK installed proto at $(command -v proto)"
-}
-
 detect_libc() {
   if need_cmd ldd; then
     ldd_out="$(ldd --version 2>&1 || true)"
@@ -729,15 +676,6 @@ mkdir -p /var/run/tako-app
 chown "$TAKO_USER":"$TAKO_USER" /var/run/tako-app
 chmod 0770 /var/run/tako-app
 
-# Install proto as the tako user (not root). Must happen after user creation.
-ensure_proto
-
-# Clean up proto from root if a prior install put it there.
-if [ -d /root/.proto ]; then
-  rm -rf /root/.proto
-  echo "OK removed stale proto from /root/.proto"
-fi
-
 maybe_prompt_ssh_pubkey
 
 # Install authorized_keys for SSH (optional).
@@ -878,7 +816,7 @@ Group=$TAKO_USER
 NoNewPrivileges=true
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-Environment=PATH=$TAKO_HOME/.proto/shims:$TAKO_HOME/.proto/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/local/bin/tako-server --socket $TAKO_SOCKET --data-dir $TAKO_HOME
 ExecReload=/bin/kill -HUP \$MAINPID
 Restart=always
@@ -938,7 +876,7 @@ Group=$TAKO_USER
 NoNewPrivileges=true
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
-Environment=PATH=$TAKO_HOME/.proto/shims:$TAKO_HOME/.proto/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/local/bin/tako-server --worker --socket $TAKO_SOCKET --data-dir $TAKO_HOME --instance-port-offset 1000
 Restart=always
 RestartSec=1

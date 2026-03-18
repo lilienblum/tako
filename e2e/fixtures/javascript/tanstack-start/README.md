@@ -7,7 +7,7 @@ TanStack Start-style fixture app used by Docker deploy e2e tests.
 From repo root:
 
 ```bash
-just e2e e2e/fixtures/js/tanstack-start
+just e2e e2e/fixtures/javascript/tanstack-start
 ```
 
 That runs the global Docker harness (`e2e/run.sh`) against this fixture path.

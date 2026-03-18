@@ -1,0 +1,5 @@
+name = "node-e2e"
+runtime = "node"
+
+[envs.production]
+route = "node-e2e.example.com"

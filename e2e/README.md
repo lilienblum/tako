@@ -15,8 +15,8 @@ Requires the `tako` binary to be built first (`cargo build -p tako`).
 From repo root:
 
 ```bash
-just e2e e2e/fixtures/js/bun
-just e2e e2e/fixtures/js/tanstack-start
+just e2e e2e/fixtures/javascript/bun
+just e2e e2e/fixtures/javascript/tanstack-start
 ```
 
 This runs the global e2e harness in `e2e/run.sh` against the fixture path.
@@ -29,7 +29,7 @@ Rust build caches are stored outside the repo at `${XDG_CACHE_HOME:-~/.cache}/ta
 Override cache locations with:
 
 ```bash
-E2E_CARGO_HOME_DIR=/path/to/cargo-home E2E_CARGO_TARGET_DIR=/path/to/target ./e2e/run.sh e2e/fixtures/js/tanstack-start
+E2E_CARGO_HOME_DIR=/path/to/cargo-home E2E_CARGO_TARGET_DIR=/path/to/target ./e2e/run.sh e2e/fixtures/javascript/tanstack-start
 ```
 
 After deploy, it runs universal runtime checks:
