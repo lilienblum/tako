@@ -607,7 +607,7 @@ impl SshClient {
     /// Check if tako-server is installed
     pub async fn is_tako_installed(&self) -> SshResult<bool> {
         let output = self
-            .exec("which tako-server 2>/dev/null || echo not_found")
+            .exec("command -v tako-server 2>/dev/null || echo not_found")
             .await?;
         Ok(!output.stdout.contains("not_found"))
     }
