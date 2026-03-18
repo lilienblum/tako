@@ -145,7 +145,6 @@ fetch_route_path() {
   local body_file=$5
 
   curl -sS \
-    -k \
     --http1.1 \
     --connect-timeout 3 \
     --max-time 10 \
@@ -154,7 +153,7 @@ fetch_route_path() {
     -D "$headers_file" \
     -o "$body_file" \
     -w "%{http_code}" \
-    "https://${server_host}:8443${route_path}"
+    "http://${server_host}:8080${route_path}"
 }
 
 require_http_ok() {
