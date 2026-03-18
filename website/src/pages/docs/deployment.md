@@ -111,6 +111,12 @@ tako deploy --env staging
 
 In interactive terminals, deploying to `production` requires confirmation unless you pass `--yes` or `-y`.
 
+Use `--dry-run` to preview the deploy without performing any side effects -- validation runs normally, but SSH connections, builds, and uploads are skipped:
+
+```bash
+tako deploy --dry-run
+```
+
 ### What happens during deploy
 
 1. **Pre-validation** -- Checks that secrets are present, server target metadata exists for all selected servers, and routes are valid.
