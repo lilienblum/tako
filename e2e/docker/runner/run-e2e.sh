@@ -344,12 +344,10 @@ ssh-keyscan -H server-ubuntu >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 ssh-keyscan -H server-alma >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 ssh-keyscan -H server-alpine >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 
+# Deploy test targets (Alpine excluded — bun doesn't support musl)
 SERVERS=()
 SERVERS+=("server-ubuntu:gnu")
 SERVERS+=("server-alma:gnu")
-if [[ -x "$TAKO_SERVER_MUSL" ]]; then
-  SERVERS+=("server-alpine:musl")
-fi
 
 ROUTE_HOST=$(detect_route_host "$PROJECT_DIR/tako.toml" "production")
 if [[ -z "$ROUTE_HOST" ]]; then
