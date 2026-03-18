@@ -62,8 +62,8 @@ jobs:
       - name: SDK build
         run: bun run --cwd sdk/js build
 
-  cli-output:
-    name: CLI Output
+  cli:
+    name: CLI Tests
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -86,7 +86,7 @@ jobs:
       - name: Install test dependencies
         run: cd e2e/cli && bun install --frozen-lockfile
 
-      - name: Run CLI output tests
+      - name: Run CLI tests
         run: cd e2e/cli && bun test
 
   links:
