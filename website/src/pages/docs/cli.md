@@ -12,7 +12,7 @@ Everything you can do with the `tako` command line tool.
 ## Usage
 
 ```bash
-tako [--version] [-v|--verbose] [--ci] <command> [args]
+tako [--version] [-v|--verbose] [--ci] [--dry-run] <command> [args]
 ```
 
 ## Global Options
@@ -24,6 +24,8 @@ These flags work with any command.
 `-v`, `--verbose` switches to verbose output -- an append-only execution transcript with timestamps, log levels, and technical detail like file paths and per-host transport context.
 
 `--ci` produces deterministic, non-interactive output. Colors, spinners, and interactive prompts are all disabled. If a required prompt value is missing, the command fails with an actionable error suggesting CLI flags or config. Combine with `--verbose` for detailed transcript output in CI/CD pipelines.
+
+`--dry-run` shows what a command would do without performing any side effects. SSH connections, file uploads, config writes, and remote commands are all skipped. Each skipped action is printed as `⏭ ... (dry run)`. Supported by: `deploy`, `servers add`, `servers rm`, `delete`.
 
 ## Output Modes
 

@@ -297,6 +297,7 @@ Upgrade channel state:
 - `--version`: Print version and exit (`<semver>` on stable builds, `<semver>-canary-<sha7>` on canary builds).
 - `-v, --verbose`: Show verbose output as an append-only execution transcript with timestamps and log levels.
 - `--ci`: Deterministic non-interactive output (no colors, no spinners, no prompts). Can be combined with `--verbose`.
+- `--dry-run`: Show what would happen without performing any side effects. Skips SSH connections, file uploads, config writes, and remote commands. Prints `⏭ ... (dry run)` for each skipped action. Production deploy confirmation is auto-skipped. Supported by: `deploy`, `servers add`, `servers rm`, `delete`.
 
 CLI output modes:
 
