@@ -8,12 +8,13 @@ workspace:
     cargo test --workspace
 
 sdk:
-    cd sdk/js && bun run build
-    cd sdk/js && bun run typecheck
-    cd sdk/js && bun test
+    bun run --filter 'tako.sh' build
+    bun run --filter 'tako.sh' typecheck
+    bun test --cwd sdk/js
 
 cli:
-    cd e2e/cli && bun test
+    cargo build -p tako --bin tako
+    bun test --cwd e2e/cli
 
 e2e fixture="":
     #!/usr/bin/env bash
