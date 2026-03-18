@@ -29,13 +29,15 @@ function renderWrappedEntrySource(compiledMain: string): string {
 const fetchHandler =
   typeof entryModule === "function"
     ? entryModule
-    : typeof entryNamespace.fetch === "function"
-      ? entryNamespace.fetch
-      : null;
+    : entryModule && typeof entryModule.fetch === "function"
+      ? entryModule.fetch.bind(entryModule)
+      : typeof entryNamespace.fetch === "function"
+        ? entryNamespace.fetch
+        : null;
 
 if (!fetchHandler) {
   throw new Error(
-    "Invalid server entry: export a default fetch function or a named fetch export.",
+    "Invalid server entry: export a default fetch function, a default object with fetch, or a named fetch export.",
   );
 }
 
