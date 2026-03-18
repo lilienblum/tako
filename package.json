@@ -5,10 +5,12 @@
       "sdk/js",
       "website",
       "examples/js/*",
+      "e2e/cli",
       "e2e/fixtures/js/*"
     ],
     "catalogs": {
       "dev": {
+        "@tsconfig/strictest": "^2.0.0",
         "@types/bun": "^1.3.10",
         "@types/node": "^25.5.0",
         "astro": "^6.0.4",

@@ -20,14 +20,14 @@ import { readFileSync } from "node:fs";
 let secretStore: Record<string, string> = {};
 
 // Dev-mode fallback: if TAKO_SECRETS_FILE is set (by tako dev), load from file.
-if (process.env.TAKO_SECRETS_FILE) {
+if (process.env["TAKO_SECRETS_FILE"]) {
   try {
-    const content = readFileSync(process.env.TAKO_SECRETS_FILE, "utf-8");
+    const content = readFileSync(process.env["TAKO_SECRETS_FILE"], "utf-8");
     secretStore = JSON.parse(content);
   } catch {
     // Ignore — secrets will be empty
   }
-  delete process.env.TAKO_SECRETS_FILE;
+  delete process.env["TAKO_SECRETS_FILE"];
 }
 
 /**

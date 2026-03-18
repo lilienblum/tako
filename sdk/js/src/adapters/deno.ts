@@ -13,7 +13,6 @@
  * ```
  */
 
-import { Tako } from "../tako";
 import type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 import { handleTakoEndpoint } from "../endpoints";
 

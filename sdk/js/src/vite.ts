@@ -53,7 +53,7 @@ function pickCompiledMain(entries: string[]): string {
   }
 
   if (entries.length === 1) {
-    return entries[0];
+    return entries[0]!;
   }
 
   const serverEntries = entries.filter((entry) =>
@@ -64,7 +64,7 @@ function pickCompiledMain(entries: string[]): string {
   );
 
   if (serverEntries.length === 1) {
-    return serverEntries[0];
+    return serverEntries[0]!;
   }
 
   throw new Error(
@@ -125,7 +125,7 @@ export function tako(): Plugin {
         const serverConfig: NonNullable<UserConfig["server"]> = {
           allowedHosts: mergeServeAllowedHosts(userConfig.server?.allowedHosts),
         };
-        const parsedPort = parsePortFromEnv(process.env.PORT);
+        const parsedPort = parsePortFromEnv(process.env["PORT"]);
         if (parsedPort !== null) {
           serverConfig.host = "127.0.0.1";
           serverConfig.port = parsedPort;

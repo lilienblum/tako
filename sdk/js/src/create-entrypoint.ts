@@ -18,10 +18,10 @@ export function resolveUserAppImportUrl(userAppPath: string): string {
 }
 
 export function createEntrypoint() {
-  const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";
-  const TAKO_INSTANCE = process.env.TAKO_INSTANCE || "unknown";
-  const appSocketPath = resolveAppSocketPath(process.env.TAKO_APP_SOCKET);
-  const port = parseInt(process.env.PORT || "3000", 10);
+  const TAKO_VERSION = process.env["TAKO_VERSION"] || "unknown";
+  const TAKO_INSTANCE = process.env["TAKO_INSTANCE"] || "unknown";
+  const appSocketPath = resolveAppSocketPath(process.env["TAKO_APP_SOCKET"]);
+  const port = parseInt(process.env["PORT"] || "3000", 10);
 
   const startedAt = Date.now();
   let currentStatus: TakoStatus["status"] = "starting";

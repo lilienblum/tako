@@ -16,7 +16,6 @@
  * ```
  */
 
-import { Tako } from "../tako";
 import type { TakoOptions, TakoStatus } from "../types";
 import {
   TAKO_INTERNAL_HOST,
@@ -30,8 +29,8 @@ export { Tako } from "../tako";
 export type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 
 // Environment variables set by tako
-const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";
-const TAKO_INSTANCE = process.env.TAKO_INSTANCE || "unknown";
+const TAKO_VERSION = process.env["TAKO_VERSION"] || "unknown";
+const TAKO_INSTANCE = process.env["TAKO_INSTANCE"] || "unknown";
 
 const startedAt = Date.now();
 let status: TakoStatus["status"] = "starting";
@@ -77,7 +76,7 @@ export function createMiddleware(): (
 ) => void {
   const normalizeHost = (value: string | string[] | undefined): string => {
     const candidate = Array.isArray(value) ? value[0] : value;
-    return (candidate || "").trim().toLowerCase().split(":")[0];
+    return (candidate ?? "").trim().toLowerCase().split(":")[0] ?? "";
   };
 
   const requestPathname = (value: string): string => {

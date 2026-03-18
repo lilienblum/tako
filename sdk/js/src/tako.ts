@@ -61,8 +61,8 @@ export class Tako {
     instanceId: string;
   } {
     return {
-      version: process.env.TAKO_VERSION || "unknown",
-      instanceId: process.env.TAKO_INSTANCE || "unknown",
+      version: process.env["TAKO_VERSION"] || "unknown",
+      instanceId: process.env["TAKO_INSTANCE"] || "unknown",
     };
   }
 
@@ -71,6 +71,6 @@ export class Tako {
    */
   static isRunningInTako(): boolean {
     // If Tako injected any of its runtime metadata, treat it as "running under Tako".
-    return !!(process.env.TAKO_APP_SOCKET || process.env.TAKO_BUILD || process.env.TAKO_VERSION);
+    return !!(process.env["TAKO_APP_SOCKET"] || process.env["TAKO_BUILD"] || process.env["TAKO_VERSION"]);
   }
 }

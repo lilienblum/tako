@@ -13,7 +13,6 @@
  * ```
  */
 
-import { Tako } from "../tako";
 import type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 import { handleTakoEndpoint } from "../endpoints";
 import { resolveAppSocketPath } from "../socket-path";
@@ -36,13 +35,13 @@ export function serve(
     tako?: TakoOptions;
   },
 ): void {
-  const port = options?.port ?? parseInt(process.env.PORT || "3000", 10);
+  const port = options?.port ?? parseInt(process.env["PORT"] || "3000", 10);
   const userFetch = handler;
 
   // Environment variables set by tako
-  const TAKO_VERSION = process.env.TAKO_VERSION || "unknown";
-  const TAKO_INSTANCE = process.env.TAKO_INSTANCE || "unknown";
-  const TAKO_APP_SOCKET = process.env.TAKO_APP_SOCKET;
+  const TAKO_VERSION = process.env["TAKO_VERSION"] || "unknown";
+  const TAKO_INSTANCE = process.env["TAKO_INSTANCE"] || "unknown";
+  const TAKO_APP_SOCKET = process.env["TAKO_APP_SOCKET"];
   const appSocketPath = resolveAppSocketPath(TAKO_APP_SOCKET);
 
   const startedAt = Date.now();

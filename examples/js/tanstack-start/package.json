@@ -17,6 +17,7 @@
     "tako.sh": "workspace:*"
   },
   "devDependencies": {
+    "@tsconfig/strictest": "catalog:dev",
     "@types/node": "catalog:dev",
     "@types/react": "catalog:web",
     "@types/react-dom": "catalog:web",

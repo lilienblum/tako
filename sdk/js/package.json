@@ -59,6 +59,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@tsconfig/strictest": "catalog:dev",
     "@types/bun": "catalog:dev",
     "@types/node": "catalog:dev",
     "typescript": "catalog:dev",

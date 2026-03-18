@@ -22,7 +22,7 @@ function normalizeHost(value: string | null): string | null {
   if (normalized.length === 0) {
     return null;
   }
-  return normalized.split(":")[0];
+  return normalized.split(":")[0] ?? null;
 }
 
 function requestHost(request: Request, url: URL): string | null {

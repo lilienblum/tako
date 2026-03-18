@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "devDependencies": {
-    "@xterm/headless": "^5.5.0",
-    "@types/bun": "latest"
+    "@tsconfig/strictest": "catalog:dev",
+    "@types/bun": "catalog:dev",
+    "@xterm/headless": "^5.5.0"
   }
 }
