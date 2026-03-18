@@ -101,14 +101,19 @@ wait_tako_socket() {
 
 resolve_current_release_link() {
   local host=$1
-  ssh_exec "$host" '
-for link in /opt/tako/apps/*/current; do
+  for _ in $(seq 1 20); do
+    local result
+    result=$(ssh_exec "$host" '
+for link in /opt/tako/apps/*/*/current; do
   [ -L "$link" ] || continue
   readlink -f "$link"
   exit 0
 done
 exit 1
-'
+' 2>/dev/null) && [ -n "$result" ] && echo "$result" && return 0
+    sleep 0.5
+  done
+  return 1
 }
 
 detect_route_host() {
