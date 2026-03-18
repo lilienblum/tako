@@ -1,0 +1,9 @@
+{
+  "name": "tako-cli-tests",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@xterm/headless": "^5.5.0",
+    "@types/bun": "latest"
+  }
+}
