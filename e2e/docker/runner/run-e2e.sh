@@ -344,7 +344,9 @@ ssh-keyscan -H server-ubuntu >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 ssh-keyscan -H server-alma >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 ssh-keyscan -H server-alpine >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 
-# Deploy test targets (Alpine excluded — bun doesn't support musl)
+# Deploy test targets
+# Alpine excluded: proto's bun plugin doesn't detect musl (moonrepo/plugins issue),
+# and bun installed directly has path resolution issues in the release context.
 SERVERS=()
 SERVERS+=("server-ubuntu:gnu")
 SERVERS+=("server-alma:gnu")
