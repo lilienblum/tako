@@ -602,6 +602,9 @@ fi
 if ! need_cmd git; then
   install_pkgs git
 fi
+if ! need_cmd which; then
+  install_pkgs which
+fi
 ensure_nc
 install_sqlite_runtime
 
