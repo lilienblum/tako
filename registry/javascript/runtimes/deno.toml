@@ -1,0 +1,62 @@
+language = "javascript"
+
+[entrypoint]
+candidates = [
+  "main.ts",
+  "mod.ts",
+  "index.ts",
+  "src/main.ts",
+  "src/mod.ts",
+  "src/index.ts",
+]
+
+[preset]
+main = "main.ts"
+dev = [
+  "deno",
+  "run",
+  "--watch",
+  "--allow-net",
+  "--allow-env",
+  "--allow-read",
+  "{main}",
+]
+start = [
+  "deno",
+  "run",
+  "--allow-net",
+  "--allow-env",
+  "--allow-read",
+  "node_modules/tako.sh/src/entrypoints/deno.ts",
+  "{main}",
+]
+build = "true"
+
+[server]
+entrypoint_path = "node_modules/tako.sh/src/entrypoints/deno.ts"
+launch_args = ["{bin}", "run", "--allow-net", "--allow-env", "--allow-read", "{entrypoint}", "{main}"]
+
+[envs.production]
+DENO_ENV = "production"
+
+[envs.development]
+DENO_ENV = "development"
+
+[download]
+version_source = { type = "github_releases", repo = "denoland/deno", tag_prefix = "v" }
+url = "https://github.com/denoland/deno/releases/download/v{version}/deno-{arch}-{os}.zip"
+format = "zip"
+checksum_url = "https://github.com/denoland/deno/releases/download/v{version}/deno-{arch}-{os}.zip.sha256sum"
+checksum_format = "sha256"
+
+[download.os_map]
+macos = "apple-darwin"
+linux = "unknown-linux-gnu"
+
+[download.arch_map]
+x64 = "x86_64"
+arm64 = "aarch64"
+
+[download.extract]
+binary = "deno"
+strip_components = 0

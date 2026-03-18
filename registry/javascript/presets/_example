@@ -1,0 +1,12 @@
+# Preset family definitions.
+# Each section defines a named preset for this language.
+# Presets override runtime defaults for specific frameworks.
+# Use in tako.toml as: preset = "my-preset" (with runtime set).
+# See javascript.toml for a complete working example.
+
+# [my-preset]
+# main = "dist/server/tako-entry.mjs"     # Override default main entrypoint for this framework.
+# dev = ["bun", "run", "dev"]             # Override dev command (e.g. use framework's dev server).
+# start = ["bun", "run", "dist/entry.mjs"] # Override production start command.
+# build = "vite build"                     # Override build command.
+# assets = ["dist/client"]                 # Static asset dirs merged into deploy artifact.

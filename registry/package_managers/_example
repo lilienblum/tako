@@ -1,0 +1,26 @@
+# Package manager family definitions.
+# Each section defines a package manager. Section name = binary name (e.g. [bun], [npm]).
+# Detection: first PM whose lockfile exists in the project wins.
+# Fallback: first PM whose binary is found on PATH.
+# See javascript.toml for a complete working example.
+
+# [my-pm]
+# Optional display name.
+# name = "My Package Manager"
+# Files that identify this PM in a project.
+# lockfiles = ["my-pm.lock"]
+# Command to add a dependency. {package} is replaced.
+# add = "my-pm add {package}"
+#
+# Production dependency install (base / default).
+# Used by tako-server when deploying to install only production dependencies.
+# install = '''
+# my-pm install --production --frozen
+# '''
+#
+# Development/build-time override. Includes devDependencies.
+# Used during `tako deploy` build phase.
+# [my-pm.development]
+# install = '''
+# my-pm install
+# '''

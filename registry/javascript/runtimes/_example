@@ -1,0 +1,89 @@
+# Runtime definition template.
+# Filename is the runtime identifier (e.g. bun.toml → runtime "bun").
+# See bun.toml for a complete working example.
+
+# Required: language this runtime belongs to.
+# language = "javascript"
+
+# Entrypoint discovery. Tako checks these paths in order to find the app's
+# main file when the user doesn't set `main` in tako.toml.
+# [entrypoint]
+# candidates = [
+#   "index.ts",
+#   "index.tsx",
+#   "index.js",
+#   "index.jsx",
+#   "src/index.ts",
+#   "src/index.tsx",
+#   "src/index.js",
+#   "src/index.jsx",
+# ]
+
+# Optional: read main entrypoint from a manifest file before checking candidates.
+# `file` is the manifest filename, `field` is a dot-separated path to the value.
+# [entrypoint.manifest]
+# file = "package.json"
+# field = "main"
+
+# Preset defaults used when the user doesn't select a framework preset.
+# Framework presets (like tanstack-start) can override any of these fields.
+# [preset]
+# main = "src/index.ts"                    # Default entrypoint if nothing else matches.
+# dev = ["my-runtime", "--hot", "{main}"]  # Command for `tako dev`. {main} is replaced.
+# watch = ["**/*.ts", "**/*.js"]           # File patterns to watch and restart on change.
+#                                           # For runtimes without built-in watch mode.
+#                                           # Leave empty if the dev command handles watching.
+# start = ["my-runtime", "run", "node_modules/tako.sh/src/entrypoints/my-runtime.ts", "{main}"]
+#                                           # Production start command written to deploy manifest.
+# build = '''                              # Shell script run during `tako deploy` build phase.
+# cd "$TAKO_APP_DIR"
+# my-runtime run --if-present build
+# '''
+
+# Server-side launch configuration. Used by tako-server to start the app.
+# [server]
+# entrypoint_path = "node_modules/tako.sh/src/entrypoints/my-runtime.ts"
+#                                           # Path to the tako.sh SDK entrypoint (relative to release dir).
+# launch_args = ["{bin}", "run", "{entrypoint}", "{main}"]
+#                                           # Command template. {bin} = resolved runtime binary,
+#                                           # {entrypoint} = SDK entrypoint, {main} = app main file.
+
+# Default environment variables per Tako environment.
+# Merged under the user's tako.toml [vars] and [vars.<env>] (user wins on conflict).
+# [envs.production]
+# NODE_ENV = "production"
+#
+# [envs.development]
+# NODE_ENV = "development"
+
+# Direct binary download spec. Used by tako-server to install the runtime
+# without external tools (replaces proto).
+# [download]
+# version_source = { type = "github_releases", repo = "org/repo", tag_prefix = "v" }
+#                                           # Where to resolve "latest" version from.
+# url = "https://example.com/v{version}/bin-{os}-{arch}.tar.gz"
+#                                           # Download URL template. {version}, {os}, {arch} are replaced.
+# format = "tar.gz"                         # Archive format: "tar.gz" or "zip".
+# checksum_url = "https://example.com/v{version}/SHASUMS256.txt"
+# checksum_format = "shasums"               # "shasums" (multi-file SHA256SUMS) or "sha256" (single hash).
+#
+# # Maps from generic OS/arch names to download URL values.
+# [download.os_map]
+# macos = "darwin"
+# linux = "linux"
+#
+# [download.arch_map]
+# x64 = "x64"
+# arm64 = "aarch64"
+#
+# # Musl variants override arch_map on musl-based systems (e.g. Alpine).
+# [download.arch_variants]
+# "x64-musl" = "x64-musl"
+# "arm64-musl" = "aarch64-musl"
+#
+# # How to extract the binary from the downloaded archive.
+# [download.extract]
+# binary = "bin-{os}-{arch}/my-runtime"     # Path to the binary inside the archive.
+# strip_components = 0
+# symlinks = [{ name = "my-runtimex", target = "./my-runtime" }]
+#                                           # Symlinks created next to the binary after extraction.
