@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::Path;
 
+use tako_runtime::RuntimeDef;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresetGroup {
     Js,
@@ -10,100 +12,9 @@ pub enum PresetGroup {
 impl PresetGroup {
     pub fn id(self) -> &'static str {
         match self {
-            PresetGroup::Js => "js",
+            PresetGroup::Js => "javascript",
             PresetGroup::Unknown => "unknown",
         }
-    }
-}
-
-const BUILTIN_BUN_PRESET_CONTENT: &str = r#"main = "src/index.ts"
-dev = ["bun", "--hot", "{main}"]
-install = '''
-if [ -f bun.lockb ] || [ -f bun.lock ]; then
-  bun install --production --frozen-lockfile
-else
-  bun install --production
-fi
-'''
-start = ["bun", "run", "node_modules/tako.sh/src/entrypoints/bun.ts", "{main}"]
-
-[build]
-exclude = ["node_modules/"]
-install = '''
-if [ -f bun.lockb ] || [ -f bun.lock ]; then
-  bun install --frozen-lockfile
-else
-  bun install
-fi
-'''
-build = '''
-cd "$TAKO_APP_DIR"
-bun run --if-present build
-'''
-targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
-container = false
-"#;
-
-const BUILTIN_NODE_PRESET_CONTENT: &str = r#"main = "index.js"
-dev = ["node", "{main}"]
-install = '''
-if [ -f package-lock.json ]; then
-  npm ci --omit=dev
-else
-  npm install --omit=dev
-fi
-'''
-start = ["node", "--experimental-strip-types", "node_modules/tako.sh/src/entrypoints/node.ts", "{main}"]
-
-[build]
-exclude = ["node_modules/"]
-install = '''
-if [ -f package-lock.json ]; then
-  npm ci
-else
-  npm install
-fi
-'''
-build = '''
-cd "$TAKO_APP_DIR"
-npm run --if-present build
-'''
-targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
-container = false
-"#;
-
-const BUILTIN_DENO_PRESET_CONTENT: &str = r#"main = "main.ts"
-dev = [
-  "deno",
-  "run",
-  "--watch",
-  "--allow-net",
-  "--allow-env",
-  "--allow-read",
-  "{main}",
-]
-start = [
-  "deno",
-  "run",
-  "--allow-net",
-  "--allow-env",
-  "--allow-read",
-  "node_modules/tako.sh/src/entrypoints/deno.ts",
-  "{main}",
-]
-
-[build]
-build = "true"
-targets = ["linux-x86_64-glibc", "linux-aarch64-glibc", "linux-x86_64-musl", "linux-aarch64-musl"]
-container = false
-"#;
-
-pub fn builtin_base_preset_content_for_alias(alias: &str) -> Option<&'static str> {
-    match alias {
-        "bun" => Some(BUILTIN_BUN_PRESET_CONTENT),
-        "node" => Some(BUILTIN_NODE_PRESET_CONTENT),
-        "deno" => Some(BUILTIN_DENO_PRESET_CONTENT),
-        _ => None,
     }
 }
 
@@ -150,22 +61,104 @@ impl BuildAdapter {
         }
     }
 
+    pub fn runtime_def(self) -> Option<RuntimeDef> {
+        tako_runtime::builtin_runtime(self.id())
+    }
+
     pub fn infer_main_entrypoint(self, project_dir: &Path) -> Option<String> {
-        match self {
-            BuildAdapter::Bun | BuildAdapter::Node => infer_javascript_main_entrypoint(project_dir),
-            BuildAdapter::Deno => infer_deno_main_entrypoint(project_dir),
-            BuildAdapter::Unknown => None,
-        }
+        let def = self.runtime_def()?;
+        infer_main_entrypoint_from_def(&def, project_dir)
     }
 
     pub fn embedded_preset_default_main(self) -> Option<String> {
-        match self {
-            BuildAdapter::Bun => parse_embedded_preset_default_main(BUILTIN_BUN_PRESET_CONTENT),
-            BuildAdapter::Node => parse_embedded_preset_default_main(BUILTIN_NODE_PRESET_CONTENT),
-            BuildAdapter::Deno => parse_embedded_preset_default_main(BUILTIN_DENO_PRESET_CONTENT),
-            BuildAdapter::Unknown => None,
+        let def = self.runtime_def()?;
+        def.preset.main.clone()
+    }
+}
+
+/// Infer the main entrypoint for a project using the runtime definition.
+pub fn infer_main_entrypoint_from_def(def: &RuntimeDef, project_dir: &Path) -> Option<String> {
+    if let Some(ref manifest) = def.entrypoint.manifest {
+        if let Some(main) = infer_manifest_main(project_dir, &manifest.file, &manifest.field) {
+            return Some(main);
         }
     }
+
+    for candidate in &def.entrypoint.candidates {
+        if project_dir.join(candidate).is_file() {
+            return Some(candidate.clone());
+        }
+    }
+
+    None
+}
+
+/// Generate the builtin base preset TOML content for a runtime alias.
+///
+/// This reconstructs the preset TOML from the RuntimeDef so that existing
+/// preset parsing code (which expects TOML content) continues to work.
+pub fn builtin_base_preset_content_for_alias(alias: &str) -> Option<String> {
+    let def = tako_runtime::builtin_runtime(alias)?;
+    Some(runtime_def_to_preset_toml(&def))
+}
+
+/// Convert a RuntimeDef's preset section to a TOML string compatible with
+/// the existing BuildPreset parser.
+fn runtime_def_to_preset_toml(def: &RuntimeDef) -> String {
+    let mut out = String::new();
+
+    if let Some(ref main) = def.preset.main {
+        out.push_str(&format!("main = {}\n", toml_quote(main)));
+    }
+    if !def.preset.dev.is_empty() {
+        out.push_str(&format!("dev = {}\n", toml_string_array(&def.preset.dev)));
+    }
+    // Production install comes from the package manager.
+    // Try runtime id as PM id (bun→bun), then fall back to npm for JS family.
+    let pm = tako_runtime::builtin_package_manager(&def.id)
+        .or_else(|| tako_runtime::builtin_package_manager("npm"));
+    if let Some(ref pm) = pm {
+        if let Some(ref install) = pm.install {
+            out.push_str(&format!("install = '''\n{}'''\n", install));
+        }
+    }
+    if !def.preset.start.is_empty() {
+        out.push_str(&format!(
+            "start = {}\n",
+            toml_string_array(&def.preset.start)
+        ));
+    }
+
+    // Emit [build] section with build command and PM dev install.
+    let build_cmd = def.preset.build.as_deref();
+    let dev_install = pm
+        .as_ref()
+        .and_then(|p| p.development.as_ref())
+        .and_then(|d| d.install.as_deref());
+    if build_cmd.is_some() || dev_install.is_some() {
+        out.push_str("\n[build]\n");
+        if let Some(install) = dev_install {
+            out.push_str(&format!("install = '''\n{}'''\n", install));
+        }
+        if let Some(cmd) = build_cmd {
+            if cmd.contains('\n') {
+                out.push_str(&format!("build = '''\n{}'''\n", cmd));
+            } else {
+                out.push_str(&format!("build = {}\n", toml_quote(cmd)));
+            }
+        }
+    }
+
+    out
+}
+
+fn toml_quote(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+fn toml_string_array(items: &[String]) -> String {
+    let quoted: Vec<String> = items.iter().map(|s| toml_quote(s)).collect();
+    format!("[{}]", quoted.join(", "))
 }
 
 pub fn detect_build_adapter(project_dir: &Path) -> BuildAdapter {
@@ -181,7 +174,6 @@ pub fn detect_build_adapter(project_dir: &Path) -> BuildAdapter {
     }
 
     if project_dir.join("package.json").is_file() {
-        // Check if package.json scripts reference bun
         if let Ok(contents) = std::fs::read_to_string(project_dir.join("package.json"))
             && let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents)
             && let Some(scripts) = json.get("scripts").and_then(|s| s.as_object())
@@ -232,81 +224,29 @@ fn has_ancestor_file(dir: &Path, filename: &str) -> bool {
     false
 }
 
-fn infer_javascript_main_entrypoint(project_dir: &Path) -> Option<String> {
-    if let Some(main) = infer_package_json_main(project_dir) {
-        return Some(main);
-    }
-
-    const CANDIDATES: &[&str] = &[
-        "index.ts",
-        "index.tsx",
-        "index.js",
-        "index.jsx",
-        "src/index.ts",
-        "src/index.tsx",
-        "src/index.js",
-        "src/index.jsx",
-    ];
-
-    for candidate in CANDIDATES {
-        if project_dir.join(candidate).is_file() {
-            return Some((*candidate).to_string());
-        }
-    }
-
-    None
-}
-
-fn infer_deno_main_entrypoint(project_dir: &Path) -> Option<String> {
-    const CANDIDATES: &[&str] = &[
-        "main.ts",
-        "mod.ts",
-        "index.ts",
-        "src/main.ts",
-        "src/mod.ts",
-        "src/index.ts",
-    ];
-    for candidate in CANDIDATES {
-        if project_dir.join(candidate).is_file() {
-            return Some((*candidate).to_string());
-        }
-    }
-    None
-}
-
-fn infer_package_json_main(project_dir: &Path) -> Option<String> {
-    let package_json_path = project_dir.join("package.json");
-    if !package_json_path.is_file() {
+/// Read a main entrypoint from an arbitrary manifest file and field.
+/// Supports JSON manifests (e.g. package.json with field "main").
+/// Accepts any non-empty value — file paths, module specifiers, scoped packages.
+/// Validation happens at deploy/dev time when the entrypoint actually resolves.
+fn infer_manifest_main(project_dir: &Path, file: &str, field: &str) -> Option<String> {
+    let manifest_path = project_dir.join(file);
+    if !manifest_path.is_file() {
         return None;
     }
 
-    let raw = fs::read_to_string(package_json_path).ok()?;
+    let raw = fs::read_to_string(manifest_path).ok()?;
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let main = parsed.get("main")?.as_str()?.trim();
+
+    let mut value = &parsed;
+    for segment in field.split('.') {
+        value = value.get(segment)?;
+    }
+    let main = value.as_str()?.trim();
     if main.is_empty() {
         return None;
     }
 
-    let normalized = main.replace('\\', "/");
-    let normalized = normalized.trim_start_matches("./").to_string();
-    if normalized.is_empty() || normalized.starts_with('/') || normalized.contains("..") {
-        return None;
-    }
-    if project_dir.join(&normalized).is_file() {
-        Some(normalized)
-    } else {
-        None
-    }
-}
-
-fn parse_embedded_preset_default_main(content: &str) -> Option<String> {
-    let parsed: toml::Value = toml::from_str(content).ok()?;
-    let main = parsed.get("main")?.as_str()?.trim();
-    if main.is_empty() {
-        None
-    } else {
-        Some(main.to_string())
-    }
+    Some(main.to_string())
 }
 
 #[cfg(test)]
@@ -341,7 +281,6 @@ mod tests {
     #[test]
     fn detect_build_adapter_finds_bun_lock_in_ancestor() {
         let temp = TempDir::new().unwrap();
-        // Simulate monorepo: lockfile at root, package at nested dir
         std::fs::write(temp.path().join("bun.lock"), "").unwrap();
         let nested = temp.path().join("packages").join("my-app");
         std::fs::create_dir_all(&nested).unwrap();
@@ -399,6 +338,45 @@ mod tests {
     }
 
     #[test]
+    fn manifest_main_accepts_module_specifier() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"demo","main":"@example/server"}"#,
+        )
+        .unwrap();
+
+        let inferred = BuildAdapter::Node.infer_main_entrypoint(temp.path());
+        assert_eq!(inferred.as_deref(), Some("@example/server"));
+    }
+
+    #[test]
+    fn manifest_main_accepts_bare_package_name() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"demo","main":"my-lib"}"#,
+        )
+        .unwrap();
+
+        let inferred = BuildAdapter::Node.infer_main_entrypoint(temp.path());
+        assert_eq!(inferred.as_deref(), Some("my-lib"));
+    }
+
+    #[test]
+    fn manifest_main_accepts_nonexistent_file_path() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(
+            temp.path().join("package.json"),
+            r#"{"name":"demo","main":"dist/server.js"}"#,
+        )
+        .unwrap();
+
+        let inferred = BuildAdapter::Node.infer_main_entrypoint(temp.path());
+        assert_eq!(inferred.as_deref(), Some("dist/server.js"));
+    }
+
+    #[test]
     fn bun_adapter_embedded_preset_has_default_main() {
         assert_eq!(
             BuildAdapter::Bun.embedded_preset_default_main(),
@@ -431,6 +409,17 @@ mod tests {
         assert_eq!(BuildAdapter::Node.preset_group(), PresetGroup::Js);
         assert_eq!(BuildAdapter::Deno.preset_group(), PresetGroup::Js);
         assert_eq!(BuildAdapter::Unknown.preset_group(), PresetGroup::Unknown);
-        assert_eq!(PresetGroup::Js.id(), "js");
+        assert_eq!(PresetGroup::Js.id(), "javascript");
+    }
+
+    #[test]
+    fn builtin_base_preset_content_parses_as_valid_preset() {
+        for alias in &["bun", "node", "deno"] {
+            let content = builtin_base_preset_content_for_alias(alias).unwrap();
+            let parsed: toml::Value = toml::from_str(&content).unwrap_or_else(|e| {
+                panic!("failed to parse generated preset for {alias}: {e}\n---\n{content}")
+            });
+            assert!(parsed.get("main").is_some(), "{alias} missing main");
+        }
     }
 }

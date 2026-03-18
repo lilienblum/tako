@@ -411,12 +411,16 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .filter(|preset| *preset != adapter.default_preset())
         .map(str::to_string);
 
+    // Detect local runtime version for pinning.
+    let runtime_version = detect_local_runtime_version(adapter.id());
+
     // Generate tako.toml
     let template = generate_template(
         app_name.trim(),
         main_entry.as_deref().map(str::trim),
         &sanitize_route(&production_route),
         Some(adapter.id()),
+        runtime_version.as_deref(),
         selected_preset_for_toml.as_deref(),
         &assets,
         &excludes,
@@ -430,6 +434,8 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         output::success("Created tako.toml");
     }
+
+    install_tako_sdk(&project_dir);
 
     output::heading("Next steps");
     output::info(&format!(
@@ -450,6 +456,33 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     Ok(())
+}
+
+/// Install the tako.sh SDK package using the detected package manager.
+fn install_tako_sdk(project_dir: &Path) {
+    let Some(pm) = tako_runtime::detect_package_manager(project_dir) else {
+        return;
+    };
+    let Some(ref add_cmd) = pm.add else {
+        return;
+    };
+    let cmd = add_cmd.replace("{package}", "tako.sh");
+    output::info(&format!("Installing tako.sh SDK: {}", output::strong(&cmd)));
+    let result = std::process::Command::new("sh")
+        .args(["-c", &cmd])
+        .current_dir(project_dir)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status();
+    match result {
+        Ok(status) if status.success() => {}
+        _ => {
+            output::info(&format!(
+                "Could not install tako.sh automatically. Run {} manually.",
+                output::strong(&cmd)
+            ));
+        }
+    }
 }
 
 fn resolve_adapter(detected_adapter: BuildAdapter, existing: Option<&TakoToml>) -> BuildAdapter {
@@ -498,11 +531,14 @@ fn run_non_interactive(
         .and_then(|c| c.envs.get("production").and_then(|e| e.route.clone()))
         .unwrap_or_else(|| format!("{}.example.com", app_name.trim()));
 
+    let runtime_version = detect_local_runtime_version(adapter.id());
+
     let template = generate_template(
         app_name.trim(),
         main.as_deref().map(str::trim),
         &sanitize_route(&production_route),
         Some(adapter.id()),
+        runtime_version.as_deref(),
         None,
         &[],
         &[],
@@ -516,6 +552,8 @@ fn run_non_interactive(
     } else {
         output::success("Created tako.toml");
     }
+
+    install_tako_sdk(project_dir);
 
     Ok(())
 }
@@ -803,11 +841,36 @@ fn prompt_excludes(
     }
 }
 
+/// Detect the locally-installed version of a runtime by running `<tool> --version`.
+fn detect_local_runtime_version(runtime: &str) -> Option<String> {
+    let output = std::process::Command::new(runtime)
+        .arg("--version")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout);
+    let version = raw
+        .lines()
+        .find(|l| !l.trim().is_empty())?
+        .trim()
+        .trim_start_matches(|c: char| !c.is_ascii_digit())
+        .trim();
+    if version.is_empty() {
+        return None;
+    }
+    Some(version.to_string())
+}
+
 fn generate_template(
     app_name: &str,
     main: Option<&str>,
     production_route: &str,
     runtime: Option<&str>,
+    runtime_version: Option<&str>,
     preset_ref: Option<&str>,
     assets: &[String],
     excludes: &[String],
@@ -825,6 +888,11 @@ fn generate_template(
         format!("runtime = \"{}\"", runtime)
     } else {
         "# runtime = \"bun\"".to_string()
+    };
+    let runtime_version_line = if let Some(version) = runtime_version {
+        format!("runtime_version = \"{}\"", version)
+    } else {
+        "# runtime_version = \"1.0.0\"".to_string()
     };
     let preset_example = match runtime {
         Some("bun") => "tanstack-start",
@@ -861,6 +929,7 @@ name = "{app_name}"
 
 # Build runtime and preset selection for runtime/build lifecycle defaults.
 {runtime_line}
+{runtime_version_line}
 {preset_line}
 
 # Artifact packaging options.
@@ -916,6 +985,7 @@ route = "{production_route}"
         app_name = app_name,
         main_line = main_line,
         runtime_line = runtime_line,
+        runtime_version_line = runtime_version_line,
         preset_line = preset_line,
         production_route = production_route
     )
@@ -938,6 +1008,7 @@ mod tests {
             Some("server/index.mjs"),
             "demo-app.example.com",
             Some("bun"),
+            None,
             None,
             &[],
             &[],
@@ -980,7 +1051,11 @@ mod tests {
         );
 
         assert!(
-            rendered.contains("runtime = \"bun\"\n# preset = \"tanstack-start\""),
+            rendered.contains("runtime = \"bun\""),
+            "expected runtime to be uncommented"
+        );
+        assert!(
+            rendered.contains("# preset = \"tanstack-start\""),
             "expected base runtime preset to be omitted/commented"
         );
         assert!(
@@ -1016,6 +1091,7 @@ mod tests {
             Some("server/index.mjs"),
             "demo-app.example.com",
             Some("bun"),
+            None,
             None,
             &[],
             &[],
@@ -1107,7 +1183,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_default_main_entrypoint_ignores_package_json_main_when_file_is_missing() {
+    fn infer_default_main_entrypoint_uses_package_json_main_even_if_file_missing() {
         let temp = TempDir::new().unwrap();
         std::fs::create_dir_all(temp.path().join("server")).unwrap();
         std::fs::write(temp.path().join("server/index.ts"), "export {};").unwrap();
@@ -1117,9 +1193,10 @@ mod tests {
         )
         .unwrap();
 
+        // Manifest main is accepted as-is; validation happens at deploy/dev time.
         assert_eq!(
             infer_default_main_entrypoint(temp.path(), BuildAdapter::Node),
-            "server/index.ts"
+            "dist/index.js"
         );
     }
 
@@ -1130,6 +1207,7 @@ mod tests {
             None,
             "demo-app.example.com",
             Some("bun"),
+            None,
             None,
             &[],
             &[],
@@ -1146,6 +1224,7 @@ mod tests {
             "api.demo-app.com",
             Some("bun"),
             None,
+            None,
             &[],
             &[],
         );
@@ -1161,10 +1240,12 @@ mod tests {
             "demo-app.example.com",
             Some("node"),
             None,
+            None,
             &[],
             &[],
         );
-        assert!(rendered.contains("runtime = \"node\"\n# preset = \"my-node-preset\""));
+        assert!(rendered.contains("runtime = \"node\""));
+        assert!(rendered.contains("# preset = \"my-node-preset\""));
     }
 
     #[test]
@@ -1174,6 +1255,7 @@ mod tests {
             None,
             "demo-app.example.com",
             Some("bun"),
+            None,
             None,
             &[],
             &[],
@@ -1188,12 +1270,50 @@ mod tests {
             None,
             "demo-app.example.com",
             Some("bun"),
+            None,
             Some("tanstack-start"),
             &[],
             &[],
         );
         assert!(rendered.contains("preset = \"tanstack-start\""));
         assert!(!rendered.contains("preset = \"js/tanstack-start\""));
+    }
+
+    #[test]
+    fn init_template_pins_runtime_version_when_provided() {
+        let rendered = generate_template(
+            "demo-app",
+            None,
+            "demo-app.example.com",
+            Some("bun"),
+            Some("1.2.3"),
+            None,
+            &[],
+            &[],
+        );
+        assert!(rendered.contains("runtime_version = \"1.2.3\""));
+        assert!(!rendered.contains("# runtime_version"));
+    }
+
+    #[test]
+    fn init_template_comments_runtime_version_when_absent() {
+        let rendered = generate_template(
+            "demo-app",
+            None,
+            "demo-app.example.com",
+            Some("bun"),
+            None,
+            None,
+            &[],
+            &[],
+        );
+        assert!(rendered.contains("# runtime_version = \"1.0.0\""));
+        assert!(!rendered.contains("\nruntime_version = \""));
+    }
+
+    #[test]
+    fn detect_local_runtime_version_returns_none_for_unknown_binary() {
+        assert!(super::detect_local_runtime_version("nonexistent-runtime-xyz-123").is_none());
     }
 
     #[test]

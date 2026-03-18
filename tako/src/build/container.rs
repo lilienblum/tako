@@ -5,8 +5,8 @@ use sha2::{Digest, Sha256};
 
 use super::BuildPresetTarget;
 
-const BUN_INSTALL_CACHE_PATH: &str = "/var/cache/tako/bun/install/cache";
 const CACHE_VOLUME_PREFIX: &str = "tako-build-cache";
+const BUILD_CACHE_PATH: &str = "/var/cache/tako/build";
 const DEFAULT_BUILDER_IMAGE_GLIBC: &str = "ghcr.io/lilienblum/tako-builder-glibc:v1";
 const DEFAULT_BUILDER_IMAGE_MUSL: &str = "ghcr.io/lilienblum/tako-builder-musl:v1";
 
@@ -204,17 +204,18 @@ fn build_container_script(
             shell_single_quote(&app_subdir_value)
         ),
         format!("export TAKO_APP_DIR={}", shell_single_quote(&app_dir)),
-        format!(
-            "export BUN_INSTALL_CACHE_DIR={}",
-            shell_single_quote(BUN_INSTALL_CACHE_PATH)
-        ),
-        format!(
-            "cd {} && {} --version > {}",
-            shell_single_quote(&app_dir),
-            shell_single_quote(runtime_tool),
-            shell_single_quote(".tako-runtime-version")
-        ),
     ];
+    // Default build cache directory for all container builds.
+    lines.push(format!(
+        "export TAKO_BUILD_CACHE_DIR={}",
+        shell_single_quote(BUILD_CACHE_PATH)
+    ));
+    lines.push(format!(
+        "cd {} && {} --version > {}",
+        shell_single_quote(&app_dir),
+        shell_single_quote(runtime_tool),
+        shell_single_quote(".tako-runtime-version")
+    ));
 
     if let Some(install) = install_command.map(str::trim).filter(|s| !s.is_empty()) {
         lines.push(format!("cd /workspace && {}", install));
@@ -292,14 +293,11 @@ fn dependency_cache_mounts(
     runtime_tool: &str,
     builder_image: &str,
 ) -> Vec<ContainerCacheMount> {
-    let mut mounts = Vec::new();
-    if runtime_tool == "bun" {
-        mounts.push(ContainerCacheMount {
-            volume_name: dependency_cache_volume_name("bun", target_label, builder_image),
-            container_path: BUN_INSTALL_CACHE_PATH.to_string(),
-        });
-    }
-    mounts
+    // Single default cache mount for all container builds.
+    vec![ContainerCacheMount {
+        volume_name: dependency_cache_volume_name("deps", target_label, builder_image),
+        container_path: BUILD_CACHE_PATH.to_string(),
+    }]
 }
 
 fn dependency_cache_volume_name(kind: &str, target_label: &str, builder_image: &str) -> String {
@@ -460,21 +458,14 @@ mod tests {
     }
 
     #[test]
-    fn bun_target_enables_bun_dependency_cache_mount() {
-        let mounts = dependency_cache_mounts("linux-x86_64-glibc", "bun", "debian:bookworm-slim");
-
-        assert_eq!(mounts.len(), 1);
-        assert_eq!(
-            mounts[0].container_path,
-            "/var/cache/tako/bun/install/cache"
-        );
-        assert!(mounts[0].volume_name.starts_with("tako-build-cache-bun-"));
-    }
-
-    #[test]
-    fn non_bun_target_has_no_dependency_cache_mounts() {
-        let mounts = dependency_cache_mounts("linux-x86_64-glibc", "node", "debian:bookworm-slim");
-        assert!(mounts.is_empty());
+    fn all_runtimes_get_default_cache_mount() {
+        for runtime in &["bun", "node", "deno"] {
+            let mounts =
+                dependency_cache_mounts("linux-x86_64-glibc", runtime, "debian:bookworm-slim");
+            assert_eq!(mounts.len(), 1);
+            assert_eq!(mounts[0].container_path, BUILD_CACHE_PATH);
+            assert!(mounts[0].volume_name.starts_with("tako-build-cache-deps-"));
+        }
     }
 
     #[test]

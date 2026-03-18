@@ -1121,7 +1121,7 @@ mod tests {
 
         assert_eq!(
             resolve_dev_preset_ref(temp.path(), &cfg).unwrap(),
-            "js/tanstack-start"
+            "javascript/tanstack-start"
         );
     }
 

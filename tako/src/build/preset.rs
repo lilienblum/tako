@@ -10,7 +10,7 @@ pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const FALLBACK_OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const OFFICIAL_PRESET_BRANCH: &str = "master";
-const EMBEDDED_JS_GROUP_PRESETS_PATH: &str = "presets/js.toml";
+const EMBEDDED_JS_GROUP_PRESETS_PATH: &str = "registry/javascript/presets/javascript.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -333,12 +333,13 @@ pub async fn load_build_preset(
 
 fn official_alias_to_path(alias: &str) -> String {
     match alias.split_once('/') {
-        Some((group, _)) => format!("presets/{group}.toml"),
+        Some((group, _)) => format!("registry/{group}/presets/{group}.toml"),
         None => {
             if let Some(adapter) = BuildAdapter::from_id(alias) {
-                format!("presets/{}.toml", adapter.preset_group().id())
+                let group = adapter.preset_group().id();
+                format!("registry/{group}/presets/{group}.toml")
             } else {
-                format!("presets/{alias}.toml")
+                format!("registry/{alias}/presets/{alias}.toml")
             }
         }
     }
@@ -466,7 +467,7 @@ fn parse_embedded_runtime_base_preset(alias: &str) -> Result<BuildPreset, String
             alias
         )
     })?;
-    parse_and_validate_preset(content, alias)
+    parse_and_validate_preset(&content, alias)
 }
 
 fn parse_group_preset_content(
@@ -564,42 +565,39 @@ pub fn apply_adapter_base_runtime_defaults(
         return Ok(());
     }
 
-    let base_content = builtin_base_preset_content_for_alias(adapter.id()).ok_or_else(|| {
+    let def = tako_runtime::builtin_runtime(adapter.id()).ok_or_else(|| {
         format!(
-            "Missing built-in base preset content for runtime '{}'.",
+            "Missing built-in runtime definition for '{}'.",
             adapter.id()
         )
     })?;
-    let base_preset = parse_and_validate_preset(base_content, adapter.id())?;
 
     if preset.main.is_none() {
-        preset.main = base_preset.main;
+        preset.main = def.preset.main;
     }
     if preset.dev.is_empty() {
-        preset.dev = base_preset.dev;
+        preset.dev = def.preset.dev;
     }
+    // Fill install from package manager if available.
+    // Try runtime id as PM id (bun→bun), fall back to npm for JS family.
+    let pm = tako_runtime::builtin_package_manager(adapter.id())
+        .or_else(|| tako_runtime::builtin_package_manager("npm"));
     if preset.install.is_none() {
-        preset.install = base_preset.install;
+        // Production install from PM base
+        preset.install = pm.as_ref().and_then(|p| p.install.clone());
     }
     if preset.start.is_empty() {
-        preset.start = base_preset.start;
+        preset.start = def.preset.start;
     }
-    let base_build = base_preset.build;
-    preset.build.exclude = merge_string_lists_unique(
-        base_build.exclude,
-        std::mem::take(&mut preset.build.exclude),
-    );
     if preset.build.install.is_none() {
-        preset.build.install = base_build.install;
+        // Build-time install from PM development override
+        preset.build.install = pm
+            .as_ref()
+            .and_then(|p| p.development.as_ref())
+            .and_then(|dev| dev.install.clone());
     }
     if preset.build.build.is_none() {
-        preset.build.build = base_build.build;
-    }
-    if !preset.build.targets_explicit && preset.build.targets.is_empty() {
-        preset.build.targets = base_build.targets;
-    }
-    if !preset.build.container_explicit && !preset.build.targets_explicit {
-        preset.build.container = base_build.container;
+        preset.build.build = def.preset.build.clone();
     }
 
     Ok(())
@@ -830,11 +828,11 @@ mod tests {
 
     #[test]
     fn parse_preset_reference_accepts_namespaced_official_alias() {
-        let parsed = parse_preset_reference("js/tanstack-start").unwrap();
+        let parsed = parse_preset_reference("javascript/tanstack-start").unwrap();
         assert_eq!(
             parsed,
             PresetReference::OfficialAlias {
-                name: "js/tanstack-start".to_string(),
+                name: "javascript/tanstack-start".to_string(),
                 commit: None,
             }
         );
@@ -866,20 +864,29 @@ mod tests {
 
     #[test]
     fn official_alias_to_path_maps_group_layout() {
-        assert_eq!(official_alias_to_path("bun"), "presets/js.toml");
         assert_eq!(
-            official_alias_to_path("js/tanstack-start"),
-            "presets/js.toml"
+            official_alias_to_path("bun"),
+            "registry/javascript/presets/javascript.toml"
         );
-        assert_eq!(official_alias_to_path("node"), "presets/js.toml");
-        assert_eq!(official_alias_to_path("deno"), "presets/js.toml");
+        assert_eq!(
+            official_alias_to_path("javascript/tanstack-start"),
+            "registry/javascript/presets/javascript.toml"
+        );
+        assert_eq!(
+            official_alias_to_path("node"),
+            "registry/javascript/presets/javascript.toml"
+        );
+        assert_eq!(
+            official_alias_to_path("deno"),
+            "registry/javascript/presets/javascript.toml"
+        );
     }
 
     #[test]
     fn official_group_manifest_path_supports_known_families() {
         assert_eq!(
             official_group_manifest_path(PresetGroup::Js),
-            Some("presets/js.toml")
+            Some("registry/javascript/presets/javascript.toml")
         );
         assert_eq!(official_group_manifest_path(PresetGroup::Unknown), None);
     }
@@ -887,7 +894,7 @@ mod tests {
     #[test]
     fn parse_group_manifest_preset_names_collects_sorted_sections() {
         let names = parse_group_manifest_preset_names(
-            "presets/js.toml",
+            "registry/javascript/presets/javascript.toml",
             r#"
 [zeta]
 main = "z.ts"
@@ -905,7 +912,7 @@ main = "a.ts"
     #[test]
     fn parse_group_manifest_preset_definitions_reads_optional_main() {
         let definitions = parse_group_manifest_preset_definitions(
-            "presets/js.toml",
+            "registry/javascript/presets/javascript.toml",
             r#"
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
@@ -942,7 +949,7 @@ foo = "bar"
     #[test]
     fn embedded_bun_preset_parses() {
         let content = builtin_base_preset_content_for_alias("bun").expect("embedded bun preset");
-        let preset = parse_and_validate_preset(content, "bun").unwrap();
+        let preset = parse_and_validate_preset(&content, "bun").unwrap();
         assert_eq!(preset.name, "bun");
         assert!(!preset.dev.is_empty());
         assert!(preset.install.is_some());
@@ -958,9 +965,12 @@ main = "dist/server/tako-entry.mjs"
 [tanstack-start.build]
 assets = ["dist/client"]
 "#;
-        let preset =
-            parse_official_alias_preset_content("js/tanstack-start", "presets/js.toml", content)
-                .unwrap();
+        let preset = parse_official_alias_preset_content(
+            "javascript/tanstack-start",
+            "registry/javascript/presets/javascript.toml",
+            content,
+        )
+        .unwrap();
         assert_eq!(preset.name, "tanstack-start");
         assert_eq!(preset.main.as_deref(), Some("dist/server/tako-entry.mjs"));
         assert_eq!(preset.assets, vec!["dist/client"]);
@@ -972,8 +982,12 @@ assets = ["dist/client"]
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
 "#;
-        let preset = parse_official_alias_preset_content("bun", "presets/js.toml", content)
-            .expect("runtime alias should use built-in preset fallback");
+        let preset = parse_official_alias_preset_content(
+            "bun",
+            "registry/javascript/presets/javascript.toml",
+            content,
+        )
+        .expect("runtime alias should use built-in preset fallback");
         assert_eq!(preset.name, "bun");
         assert_eq!(preset.main.as_deref(), Some("src/index.ts"));
         assert!(!preset.dev.is_empty());
@@ -987,8 +1001,12 @@ main = "dist/server/tako-entry.mjs"
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
 "#;
-        let err = parse_official_alias_preset_content("js/missing", "presets/js.toml", content)
-            .expect_err("non-runtime group alias should still require manifest section");
+        let err = parse_official_alias_preset_content(
+            "javascript/missing",
+            "registry/javascript/presets/javascript.toml",
+            content,
+        )
+        .expect_err("non-runtime group alias should still require manifest section");
         assert!(err.contains("Preset 'missing' was not found"));
     }
 
@@ -999,7 +1017,7 @@ main = "dist/server/tako-entry.mjs"
             BuildAdapter::Bun
         );
         assert_eq!(
-            infer_adapter_from_preset_reference("js/tanstack-start"),
+            infer_adapter_from_preset_reference("javascript/tanstack-start"),
             BuildAdapter::Unknown
         );
         assert_eq!(
@@ -1036,18 +1054,11 @@ assets = ["dist/client"]
         assert_eq!(preset.dev, vec!["bun", "--hot", "{main}"]);
         assert!(preset.install.is_some());
         assert!(!preset.start.is_empty());
-        assert_eq!(preset.build.exclude, vec!["node_modules/".to_string()]);
+        assert!(preset.build.exclude.is_empty());
         assert!(preset.build.install.is_some());
         assert!(preset.build.build.is_some());
-        assert_eq!(
-            preset.build.targets,
-            vec![
-                "linux-x86_64-glibc".to_string(),
-                "linux-aarch64-glibc".to_string(),
-                "linux-x86_64-musl".to_string(),
-                "linux-aarch64-musl".to_string(),
-            ]
-        );
+        // Targets come from tako.toml or CLI, not from runtime defaults.
+        assert!(preset.build.targets.is_empty());
         assert!(!preset.build.container);
         assert_eq!(preset.assets, vec!["dist/client".to_string()]);
     }
@@ -1115,27 +1126,24 @@ container = false
         let mut preset = parse_preset(raw).unwrap();
         apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
 
-        assert_eq!(preset.build.exclude, vec!["node_modules/".to_string()]);
+        assert!(preset.build.exclude.is_empty());
         assert!(preset.build.targets.is_empty());
         assert!(!preset.build.container);
     }
 
     #[test]
-    fn apply_adapter_base_runtime_defaults_appends_variant_excludes_to_base() {
+    fn apply_adapter_base_runtime_defaults_keeps_custom_excludes() {
         let raw = r#"
 name = "custom-bun"
 
 [build]
 assets = ["dist/client"]
-exclude = ["dist/**/*.map", "node_modules/"]
+exclude = ["dist/**/*.map"]
 "#;
         let mut preset = parse_preset(raw).unwrap();
         apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
 
-        assert_eq!(
-            preset.build.exclude,
-            vec!["node_modules/".to_string(), "dist/**/*.map".to_string()]
-        );
+        assert_eq!(preset.build.exclude, vec!["dist/**/*.map".to_string()]);
     }
 
     #[test]
@@ -1480,7 +1488,7 @@ install = "bun install"
         let resolved = ResolvedPresetSource {
             preset_ref: "bun".to_string(),
             repo: "tako-sh/presets".to_string(),
-            path: "presets/js.toml".to_string(),
+            path: "registry/javascript/presets/javascript.toml".to_string(),
             commit: "abc123".to_string(),
         };
         write_locked_preset(temp.path(), &resolved).unwrap();
@@ -1495,7 +1503,7 @@ install = "bun install"
         let err = runtime
             .block_on(fetch_preset_content_from_master_branch(
                 "invalid-repo-slug",
-                "presets/js.toml",
+                "registry/javascript/presets/javascript.toml",
             ))
             .unwrap_err();
         assert_eq!(err, "Failed to fetch preset");

@@ -670,6 +670,7 @@ async fn run_async(
         &include_patterns,
         &exclude_patterns,
         &asset_roots,
+        tako_config.runtime_version.as_deref(),
     )
     .await
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -1561,27 +1562,32 @@ fn decrypt_deploy_secrets(
 
 fn build_manifest_env_vars(
     app_env_vars: HashMap<String, String>,
-    mut runtime_env_vars: HashMap<String, String>,
+    runtime_env_vars: HashMap<String, String>,
     environment: &str,
     runtime_name: &str,
 ) -> BTreeMap<String, String> {
-    if runtime_name == "bun" {
-        // For Bun deploys, tie Node/Bun env conventions to the selected Tako env.
-        if runtime_env_vars.contains_key("NODE_ENV") {
-            runtime_env_vars.insert("NODE_ENV".to_string(), environment.to_string());
-        }
-        if runtime_env_vars.contains_key("BUN_ENV") {
-            runtime_env_vars.insert("BUN_ENV".to_string(), environment.to_string());
+    let mut merged = BTreeMap::new();
+
+    // 1. Runtime defaults for this environment (lowest priority)
+    if let Some(def) = tako_runtime::builtin_runtime(runtime_name) {
+        if let Some(env_defaults) = def.envs.environments.get(environment) {
+            for (key, value) in env_defaults {
+                merged.insert(key.clone(), value.clone());
+            }
         }
     }
 
-    let mut merged = BTreeMap::new();
+    // 2. App-level env vars from tako.toml [vars] + [vars.<env>]
     for (key, value) in app_env_vars {
         merged.insert(key, value);
     }
+
+    // 3. Runtime env vars (from runtime detection)
     for (key, value) in runtime_env_vars {
         merged.insert(key, value);
     }
+
+    // 4. TAKO_ENV always set (highest priority)
     merged.insert("TAKO_ENV".to_string(), environment.to_string());
     merged
 }
@@ -2214,6 +2220,7 @@ async fn build_target_artifacts(
     include_patterns: &[String],
     exclude_patterns: &[String],
     asset_roots: &[String],
+    pinned_runtime_version: Option<&str>,
 ) -> Result<HashMap<String, PathBuf>, String> {
     let target_groups = build_artifact_target_groups(server_targets, use_unified_target_process);
     let has_multiple_targets = target_groups.len() > 1;
@@ -2251,7 +2258,10 @@ async fn build_target_artifacts(
 
         let runtime_probe_label = format_runtime_probe_message(display_target_label);
         let runtime_probe_success = format_runtime_probe_success(display_target_label);
-        let runtime_version = if use_local_build_spinners {
+        let runtime_version = if let Some(pinned) = pinned_runtime_version {
+            tracing::debug!("Using pinned runtime version {} from tako.toml", pinned);
+            pinned.to_string()
+        } else if use_local_build_spinners {
             output::with_spinner(&runtime_probe_label, &runtime_probe_success, || {
                 tracing::debug!(
                     "Probing {} version in {}…",
@@ -3471,7 +3481,7 @@ mod tests {
 
         assert_eq!(
             resolve_build_preset_ref(temp.path(), &config).unwrap(),
-            "js/tanstack-start@abc1234"
+            "javascript/tanstack-start@abc1234"
         );
     }
 
@@ -3486,7 +3496,7 @@ mod tests {
 
         assert_eq!(
             resolve_build_preset_ref(temp.path(), &config).unwrap(),
-            "js/tanstack-start"
+            "javascript/tanstack-start"
         );
     }
 
@@ -4237,8 +4247,8 @@ route = "app.example.com"
 
     #[test]
     fn format_path_relative_to_returns_project_relative_path_when_possible() {
-        let project = Path::new("/repo/examples/js/bun");
-        let artifact = Path::new("/repo/examples/js/bun/.tako/artifacts/a.tar.zst");
+        let project = Path::new("/repo/examples/javascript/bun");
+        let artifact = Path::new("/repo/examples/javascript/bun/.tako/artifacts/a.tar.zst");
         assert_eq!(
             format_path_relative_to(project, artifact),
             ".tako/artifacts/a.tar.zst"
@@ -4247,7 +4257,7 @@ route = "app.example.com"
 
     #[test]
     fn format_path_relative_to_falls_back_to_absolute_when_outside_project() {
-        let project = Path::new("/repo/examples/js/bun");
+        let project = Path::new("/repo/examples/javascript/bun");
         let outside = Path::new("/tmp/a.tar.zst");
         assert_eq!(format_path_relative_to(project, outside), "/tmp/a.tar.zst");
     }
@@ -5225,13 +5235,15 @@ route = "app.example.com"
             manifest.env_vars.get("TAKO_ENV"),
             Some(&"staging".to_string())
         );
+        // NODE_ENV keeps the user-provided value; runtime defaults only apply
+        // for explicitly defined environments (production, development).
         assert_eq!(
             manifest.env_vars.get("NODE_ENV"),
-            Some(&"staging".to_string())
+            Some(&"production".to_string())
         );
         assert_eq!(
             manifest.env_vars.get("BUN_ENV"),
-            Some(&"staging".to_string())
+            Some(&"production".to_string())
         );
         assert_eq!(
             manifest.secret_names,

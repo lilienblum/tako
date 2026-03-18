@@ -16,6 +16,9 @@ pub struct TakoToml {
     /// Build runtime override used for default preset selection when `preset` is omitted.
     pub runtime: Option<String>,
 
+    /// Pinned runtime version (for example: "1.2.3"). Used by deploy instead of auto-detecting.
+    pub runtime_version: Option<String>,
+
     /// Build preset reference (for example: "tanstack-start" or "tanstack-start@<commit-hash>").
     pub preset: Option<String>,
 
@@ -162,12 +165,14 @@ impl TakoToml {
         let name = parse_optional_string(&raw, "name")?;
         let main = parse_optional_string(&raw, "main")?;
         let runtime = parse_optional_string(&raw, "runtime")?;
+        let runtime_version = parse_optional_string(&raw, "runtime_version")?;
         let preset = parse_optional_string(&raw, "preset")?;
         let build = parse_build_config(&raw)?;
         let mut config = TakoToml {
             name,
             main,
             runtime,
+            runtime_version,
             preset,
             build,
             ..TakoToml::default()
@@ -513,7 +518,7 @@ fn validate_top_level_keys(raw: &toml::Value) -> Result<()> {
     for key in table.keys() {
         if !matches!(
             key.as_str(),
-            "name" | "runtime" | "preset" | "build" | "main" | "vars" | "envs"
+            "name" | "runtime" | "runtime_version" | "preset" | "build" | "main" | "vars" | "envs"
         ) {
             return Err(ConfigError::Validation(format!("Unknown key '{}'", key)));
         }
@@ -1039,6 +1044,25 @@ runtime = "deno"
 "#;
         let config = TakoToml::parse(toml).unwrap();
         assert_eq!(config.runtime, Some("deno".to_string()));
+    }
+
+    #[test]
+    fn test_parse_runtime_version() {
+        let toml = r#"
+runtime = "bun"
+runtime_version = "1.2.3"
+"#;
+        let config = TakoToml::parse(toml).unwrap();
+        assert_eq!(config.runtime_version, Some("1.2.3".to_string()));
+    }
+
+    #[test]
+    fn test_parse_runtime_version_defaults_to_none() {
+        let toml = r#"
+runtime = "bun"
+"#;
+        let config = TakoToml::parse(toml).unwrap();
+        assert!(config.runtime_version.is_none());
     }
 
     #[test]
