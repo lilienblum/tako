@@ -1,8 +1,16 @@
-# E2E Fixtures
+# E2E Tests
 
-End-to-end fixture apps and assets used by integration tests.
+## CLI Output Tests
 
-## Run Docker E2E Fixtures
+PTY-based tests that verify rendered terminal output (colors, formatting, spinners) by spawning the `tako` binary in a real pseudo-terminal via Bun's native PTY and parsing the screen with `@xterm/headless`.
+
+```bash
+just test::cli
+```
+
+Requires the `tako` binary to be built first (`cargo build -p tako`).
+
+## Docker E2E Fixtures
 
 From repo root:
 
