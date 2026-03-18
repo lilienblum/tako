@@ -4,7 +4,7 @@ set -eu
 # Tako installer (POSIX sh)
 #
 # Usage:
-#   sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"
+#   sudo sh -c "$(curl -fsSL https://tako.sh/install-server.sh)"
 #
 # What it does:
 # - downloads and installs `tako-server`
@@ -185,7 +185,7 @@ case "$channel" in
     ;;
 esac
 
-installer_url="https://tako.sh/install-server"
+installer_url="https://tako.sh/install-server.sh"
 installer="$(mktemp)"
 trap 'rm -f "$installer"' EXIT
 

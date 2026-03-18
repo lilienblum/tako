@@ -13,7 +13,7 @@ Tako gives you the "upload files, refresh, done" feeling with modern guardrails 
 ## Install the CLI
 
 ```bash
-curl -fsSL https://tako.sh/install | sh
+curl -fsSL https://tako.sh/install.sh | sh
 ```
 
 Or with Cargo:
@@ -46,7 +46,7 @@ On first run, Tako sets up local HTTPS with a trusted certificate (asks for `sud
 On each deployment host, install the runtime:
 
 ```bash
-sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"
+sudo sh -c "$(curl -fsSL https://tako.sh/install-server.sh)"
 ```
 
 Then add the server from your local machine:

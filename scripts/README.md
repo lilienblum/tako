@@ -37,8 +37,8 @@ sh scripts/release-notes.sh --component tako --prefix tako-v --output dist/relea
 
 The install scripts are exposed via website redirect endpoints:
 
-- `/install`
-- `/install-canary`
-- `/install-server`
-- `/server-install`
-- `/install-server-canary`
+- `/install.sh`
+- `/install-canary.sh`
+- `/install-server.sh`
+- `/server-install.sh`
+- `/install-server-canary.sh`

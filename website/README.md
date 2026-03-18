@@ -14,10 +14,10 @@ Astro static site deployed with Cloudflare Workers static assets.
 - `/docs/deployment`: deployment guide
 - `/docs/troubleshooting`: troubleshooting runbook
 - `/docs/how-tako-works`: how Tako works overview
-- `/install`: `301` redirect to GitHub-hosted POSIX `sh` installer script for `tako`
-- `/install-canary`: `301` redirect to GitHub-hosted POSIX `sh` installer wrapper for canary `tako` artifacts
-- `/install-server`: `301` redirect to GitHub-hosted POSIX `sh` installer script for `tako-server`
-- `/server-install`: alias for `/install-server` (same redirect target)
+- `/install.sh`: `301` redirect to GitHub-hosted POSIX `sh` installer script for `tako`
+- `/install-canary.sh`: `301` redirect to GitHub-hosted POSIX `sh` installer wrapper for canary `tako` artifacts
+- `/install-server.sh`: `301` redirect to GitHub-hosted POSIX `sh` installer script for `tako-server`
+- `/server-install.sh`: alias for `/install-server.sh` (same redirect target)
 
 Installer redirects are configured in `public/_redirects` (Cloudflare static assets redirects).
 
@@ -31,9 +31,9 @@ bun run --cwd website dev
 ## Test Installer Endpoints Locally
 
 ```bash
-curl -fsSL http://localhost:4321/install | sh
-curl -fsSL http://localhost:4321/install-canary | sh
-curl -fsSL http://localhost:4321/install-server | sudo sh
+curl -fsSL http://localhost:4321/install.sh | sh
+curl -fsSL http://localhost:4321/install-canary.sh | sh
+curl -fsSL http://localhost:4321/install-server.sh | sudo sh
 ```
 
 ## Build and Deploy

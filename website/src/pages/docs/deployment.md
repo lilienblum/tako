@@ -19,10 +19,10 @@ Run the hosted installer as root on your server:
 
 ```bash
 # Stable channel
-sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"
+sudo sh -c "$(curl -fsSL https://tako.sh/install-server.sh)"
 
 # Canary channel (latest from master)
-sudo sh -c "$(curl -fsSL https://tako.sh/install-server-canary)"
+sudo sh -c "$(curl -fsSL https://tako.sh/install-server-canary.sh)"
 ```
 
 The installer handles everything:

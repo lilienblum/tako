@@ -30,7 +30,7 @@ I wanted something simpler:
 Getting started takes a minute. Install Tako, create a `tako.toml`, and deploy:
 
 ```bash
-curl -fsSL https://tako.sh/install | sh
+curl -fsSL https://tako.sh/install.sh | sh
 tako init
 tako deploy
 ```

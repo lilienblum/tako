@@ -591,7 +591,7 @@ Upgrade strategy is install-aware:
 
 - **Homebrew** installs use `brew upgrade tako`
 - **Cargo** installs use `cargo install tako --locked`
-- **Hosted installer** (default/fallback) downloads and runs `https://tako.sh/install`
+- **Hosted installer** (default/fallback) downloads and runs `https://tako.sh/install.sh`
 
 `--canary` always uses the hosted installer path and pulls from the canary release channel.
 
@@ -604,7 +604,7 @@ tako upgrade --stable
 You can also install canary directly:
 
 ```bash
-curl -fsSL https://tako.sh/install-canary | sh
+curl -fsSL https://tako.sh/install-canary.sh | sh
 ```
 
 ---

@@ -1,5 +1,5 @@
-/install https://raw.githubusercontent.com/lilienblum/tako/master/scripts/install-tako-cli.sh 301
-/install-canary https://raw.githubusercontent.com/lilienblum/tako/master/scripts/install-tako-cli-canary.sh 301
-/install-server https://raw.githubusercontent.com/lilienblum/tako/master/scripts/install-tako-server.sh 301
-/install-server-canary https://raw.githubusercontent.com/lilienblum/tako/master/scripts/install-tako-server-canary.sh 301
-/server-install https://raw.githubusercontent.com/lilienblum/tako/master/scripts/install-tako-server.sh 301
+/install.sh https://raw.githubusercontent.com/lilienblum/tako/master/scripts/install-tako-cli.sh 301
+/install-canary.sh https://raw.githubusercontent.com/lilienblum/tako/master/scripts/install-tako-cli-canary.sh 301
+/install-server.sh https://raw.githubusercontent.com/lilienblum/tako/master/scripts/install-tako-server.sh 301
+/install-server-canary.sh https://raw.githubusercontent.com/lilienblum/tako/master/scripts/install-tako-server-canary.sh 301
+/server-install.sh https://raw.githubusercontent.com/lilienblum/tako/master/scripts/install-tako-server.sh 301

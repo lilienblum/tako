@@ -218,7 +218,7 @@ If an app process crashes, Tako detects it through health checks (within a few s
 
 ### Failed to install proto
 
-**Symptom:** `install-server` exits after reporting a proto install failure.
+**Symptom:** `install-server.sh` exits after reporting a proto install failure.
 
 **Fix:** Install `proto` manually on the host ([proto install docs](https://moonrepo.dev/docs/proto/install)), make sure it is on `PATH`, then rerun the installer. Alternatively, set `TAKO_INSTALL_PROTO=0` to skip installer-managed proto setup.
 

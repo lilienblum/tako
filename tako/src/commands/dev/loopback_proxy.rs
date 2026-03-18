@@ -226,7 +226,7 @@ fn locate_proxy_source_binary() -> Result<PathBuf, Box<dyn std::error::Error>> {
     }
 
     Err(
-        "failed to locate 'tako-loopback-proxy'. Reinstall Tako CLI and retry: curl -fsSL https://tako.sh/install | sh"
+        "failed to locate 'tako-loopback-proxy'. Reinstall Tako CLI and retry: curl -fsSL https://tako.sh/install.sh | sh"
             .into(),
     )
 }

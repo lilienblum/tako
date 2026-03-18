@@ -251,7 +251,7 @@ Encryption keys are file-based:
 Install the CLI on your local machine:
 
 ```bash
-curl -fsSL https://tako.sh/install | sh
+curl -fsSL https://tako.sh/install.sh | sh
 ```
 
 The hosted installer installs `tako`, `tako-dev-server`, and `tako-loopback-proxy` from the same channel/archive.
@@ -259,7 +259,7 @@ The hosted installer installs `tako`, `tako-dev-server`, and `tako-loopback-prox
 Install canary CLI artifacts directly:
 
 ```bash
-curl -fsSL https://tako.sh/install-canary | sh
+curl -fsSL https://tako.sh/install-canary.sh | sh
 ```
 
 Install from crates.io:
@@ -369,7 +369,7 @@ CLI upgrade strategy:
 
 - Homebrew install detection: runs `brew upgrade tako`
 - Cargo install detection (`~/.cargo/bin/tako`): runs `cargo install tako --locked`
-- Default/fallback: downloads and runs hosted installer (`https://tako.sh/install`) via `curl`/`wget`
+- Default/fallback: downloads and runs hosted installer (`https://tako.sh/install.sh`) via `curl`/`wget`
 - `--canary`: always uses hosted installer mode and sets `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary`
 - `--stable`: forces stable channel and persists it as default
 - Without channel flags, `tako upgrade` uses persisted `upgrade_channel` from global config (default: `stable`)
@@ -386,7 +386,7 @@ Start (or attach to) a local development session for the current app, backed by 
   - If no local daemon binary exists, `tako dev` falls back to `tako-dev-server` on `PATH`.
   - If that fallback binary is missing:
     - source checkout flow reports a build hint (`cargo build -p tako --bin tako-dev-server`)
-    - installed CLI flow reports a reinstall hint (`curl -fsSL https://tako.sh/install | sh`)
+    - installed CLI flow reports a reinstall hint (`curl -fsSL https://tako.sh/install.sh | sh`)
   - If daemon startup fails, `tako dev` reports the last lines from `{TAKO_HOME}/dev-server.log`.
   - `tako dev` waits up to ~15 seconds for the daemon socket after spawn before reporting startup failure.
   - The daemon performs an upfront bind-availability check for its HTTPS listen address and exits immediately with an explicit error when that address is unavailable.
@@ -977,7 +977,7 @@ Manual for v1. Users run a server setup script (or equivalent manual steps) to:
 Recommended: run the hosted installer script on the server (as root):
 
 ```bash
-sudo sh -c "$(curl -fsSL https://tako.sh/install-server)"
+sudo sh -c "$(curl -fsSL https://tako.sh/install-server.sh)"
 ```
 
 Installer SSH key behavior:
@@ -1004,9 +1004,9 @@ Installer SSH key behavior:
 
 Reference scripts in this repo:
 
-- `scripts/install-tako-server.sh` (source for `/install-server`, alias `/server-install`)
-- `scripts/install-tako-server-canary.sh` (source for `/install-server-canary`)
-- `scripts/install-tako-cli-canary.sh` (source for `/install-canary`)
+- `scripts/install-tako-server.sh` (source for `/install-server.sh`, alias `/server-install.sh`)
+- `scripts/install-tako-server-canary.sh` (source for `/install-server-canary.sh`)
+- `scripts/install-tako-cli-canary.sh` (source for `/install-canary.sh`)
 
 **Default behavior (no configuration file needed):**
 

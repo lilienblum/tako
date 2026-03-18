@@ -4,7 +4,7 @@ set -eu
 # Tako CLI installer (POSIX sh)
 #
 # Usage:
-#   curl -fsSL https://tako.sh/install | sh
+#   curl -fsSL https://tako.sh/install.sh | sh
 #
 # What it does:
 # - downloads and installs `tako`, `tako-dev-server`, and `tako-loopback-proxy` for your OS/architecture

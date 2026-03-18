@@ -4,14 +4,14 @@ set -eu
 # Tako server canary installer (POSIX sh)
 #
 # Usage:
-#   sudo sh -c "$(curl -fsSL https://tako.sh/install-server-canary)"
+#   sudo sh -c "$(curl -fsSL https://tako.sh/install-server-canary.sh)"
 #
 # What it does:
 # - downloads the hosted server installer
 # - forces canary artifact source
 # - runs installer as-is
 
-INSTALLER_URL="https://tako.sh/install-server"
+INSTALLER_URL="https://tako.sh/install-server.sh"
 CANARY_DOWNLOAD_BASE_URL="https://github.com/lilienblum/tako/releases/download/canary-latest"
 
 installer="$(mktemp)"

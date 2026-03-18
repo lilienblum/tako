@@ -198,7 +198,7 @@ fn format_missing_dev_server_spawn_error(
     }
 
     format!(
-        "failed to spawn 'tako-dev-server' ({spawn_error}). Reinstall Tako CLI and retry: curl -fsSL https://tako.sh/install | sh"
+        "failed to spawn 'tako-dev-server' ({spawn_error}). Reinstall Tako CLI and retry: curl -fsSL https://tako.sh/install.sh | sh"
     )
 }
 
@@ -674,7 +674,7 @@ mod tests {
         let err = std::io::Error::from(std::io::ErrorKind::NotFound);
         let msg = format_missing_dev_server_spawn_error(false, &err);
         assert!(msg.contains("Reinstall Tako CLI and retry"));
-        assert!(msg.contains("curl -fsSL https://tako.sh/install | sh"));
+        assert!(msg.contains("curl -fsSL https://tako.sh/install.sh | sh"));
         assert!(!msg.contains("build it with: cargo build -p tako --bin tako-dev-server"));
     }
 

@@ -4,14 +4,14 @@ set -eu
 # Tako CLI canary installer (POSIX sh)
 #
 # Usage:
-#   curl -fsSL https://tako.sh/install-canary | sh
+#   curl -fsSL https://tako.sh/install-canary.sh | sh
 #
 # What it does:
 # - downloads the hosted CLI installer
 # - forces canary artifact source
 # - runs installer as-is
 
-INSTALLER_URL="https://tako.sh/install"
+INSTALLER_URL="https://tako.sh/install.sh"
 CANARY_DOWNLOAD_BASE_URL="https://github.com/lilienblum/tako/releases/download/canary-latest"
 
 installer="$(mktemp)"
