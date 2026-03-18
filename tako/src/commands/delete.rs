@@ -111,6 +111,17 @@ async fn run_async(
         .ok_or_else(|| format_server_not_found_error(&target.server_name))?;
 
     output::section("Delete");
+
+    if output::is_dry_run() {
+        output::dry_run_skip(&format!(
+            "Delete {} from {} on {}",
+            output::strong(&target.app),
+            output::strong(&target.env),
+            output::strong(&target.server_name)
+        ));
+        return Ok(());
+    }
+
     output::info(&format!(
         "Deleting {} from {} on {}",
         target.app, target.env, target.server_name

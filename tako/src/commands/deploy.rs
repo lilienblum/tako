@@ -236,7 +236,7 @@ async fn run_async(
     // Skip confirmation if the user explicitly passed --env production (they
     // already know which environment they're targeting).
     let env_was_explicit = requested_env.is_some();
-    confirm_production_deploy(&env, assume_yes || env_was_explicit)
+    confirm_production_deploy(&env, assume_yes || env_was_explicit || output::is_dry_run())
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     for warning in &warnings {
@@ -249,6 +249,38 @@ async fn run_async(
         })?;
     let routes = required_env_routes(&tako_config, &env)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+    if output::is_dry_run() {
+        let server_names = resolve_deploy_server_names(&tako_config, &servers, &env)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        output::dry_run_skip("Server preflight checks");
+        output::dry_run_skip("Build");
+        for name in &server_names {
+            output::dry_run_skip(&format!("Deploy to {}", output::strong(name)));
+        }
+        if output::is_pretty() {
+            eprintln!();
+            eprintln!(
+                "  {}  {}",
+                output::brand_muted("App"),
+                output::strong(&app_name)
+            );
+            for (index, route) in routes.iter().enumerate() {
+                if index == 0 {
+                    eprintln!("  {}  https://{}", output::brand_muted("URL"), route);
+                } else {
+                    eprintln!("            https://{}", route);
+                }
+            }
+        } else {
+            tracing::info!("App: {app_name}");
+            for route in &routes {
+                tracing::info!("URL: https://{route}");
+            }
+        }
+        return Ok(());
+    }
+
     let server_names =
         resolve_deploy_server_names_with_setup(&tako_config, &mut servers, &env, &project_dir)
             .await

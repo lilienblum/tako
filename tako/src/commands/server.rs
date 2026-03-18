@@ -561,6 +561,16 @@ pub async fn add_server(
         installed: bool,
     }
 
+    if output::is_dry_run() {
+        output::dry_run_skip(&format!(
+            "Add server {} (tako@{}:{})",
+            output::strong(&server_name),
+            host,
+            port
+        ));
+        return Ok(Some(server_name));
+    }
+
     let mut detected_target: Option<ServerTarget> = pre_detected_target;
     // Test SSH connection unless skipped or already tested
     if !no_test && detected_target.is_none() {
@@ -743,6 +753,11 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
     if let Some(name) = name {
         if !servers.contains(name) {
             return Err(format!("Server '{}' not found.", name).into());
+        }
+
+        if output::is_dry_run() {
+            output::dry_run_skip(&format!("Remove server {}", output::strong(name)));
+            return Ok(());
         }
 
         let confirm = output::confirm(&format!("Remove {}?", output::strong(name)), false)?;

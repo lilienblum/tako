@@ -26,6 +26,7 @@ fn main() {
 
     crate::output::set_verbose(cli.verbose);
     crate::output::set_ci(cli.ci);
+    crate::output::set_dry_run(cli.dry_run);
 
     // Tracing subscriber: only installed in verbose/CI mode.
     // In normal mode, tracing calls are no-ops (no subscriber).

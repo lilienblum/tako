@@ -41,6 +41,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub ci: bool,
 
+    /// Show what would happen without performing any side effects
+    #[arg(long, global = true)]
+    pub dry_run: bool,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -705,6 +709,26 @@ mod tests {
     fn ci_flag_after_subcommand_parses() {
         let cli = Cli::try_parse_from(["tako", "deploy", "--ci"]).unwrap();
         assert!(cli.ci);
+    }
+
+    #[test]
+    fn dry_run_flag_parses_globally() {
+        let cli = Cli::try_parse_from(["tako", "--dry-run", "deploy"]).unwrap();
+        assert!(cli.dry_run);
+    }
+
+    #[test]
+    fn dry_run_flag_after_subcommand() {
+        let cli = Cli::try_parse_from(["tako", "deploy", "--dry-run"]).unwrap();
+        assert!(cli.dry_run);
+    }
+
+    #[test]
+    fn dry_run_combines_with_ci_and_verbose() {
+        let cli = Cli::try_parse_from(["tako", "--dry-run", "--ci", "-v", "deploy"]).unwrap();
+        assert!(cli.dry_run);
+        assert!(cli.ci);
+        assert!(cli.verbose);
     }
 }
 

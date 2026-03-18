@@ -13,6 +13,7 @@ use tracing_subscriber::registry::LookupSpan;
 
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 static CI: AtomicBool = AtomicBool::new(false);
+static DRY_RUN: AtomicBool = AtomicBool::new(false);
 
 // Brand palette
 #[allow(dead_code)]
@@ -187,6 +188,14 @@ pub fn set_verbose(verbose: bool) {
 
 pub fn set_ci(ci: bool) {
     CI.store(ci, Ordering::Relaxed);
+}
+
+pub fn set_dry_run(dry_run: bool) {
+    DRY_RUN.store(dry_run, Ordering::Relaxed);
+}
+
+pub fn is_dry_run() -> bool {
+    DRY_RUN.load(Ordering::Relaxed)
 }
 
 pub fn is_interactive() -> bool {
@@ -463,6 +472,20 @@ pub fn error(message: &str) {
 /// Always prints — used for fatal errors in main.rs.
 pub fn error_stderr(message: &str) {
     eprintln!("{} {}", bold(&brand_error("✗")), brand_fg(message));
+}
+
+/// Print a dry-run skip notice: "⏭ {message} (dry run)"
+pub fn dry_run_skip(message: &str) {
+    if is_pretty() {
+        eprintln!(
+            "{} {} {}",
+            brand_muted("⏭"),
+            brand_fg(message),
+            brand_muted("(dry run)")
+        );
+    } else {
+        tracing::info!("dry-run skip: {}", message);
+    }
 }
 
 pub fn muted(message: &str) {
