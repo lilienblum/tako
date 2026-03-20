@@ -9,7 +9,7 @@ use super::error::{ConfigError, Result};
 
 /// Root configuration from tako.toml
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct TakoToml {
+pub struct Config {
     /// Application name (required; stable identity for deploy paths and hostnames)
     pub name: Option<String>,
 
@@ -19,15 +19,27 @@ pub struct TakoToml {
     /// Pinned runtime version (for example: "1.2.3"). Used by deploy instead of auto-detecting.
     pub runtime_version: Option<String>,
 
-    /// Build preset reference (for example: "tanstack-start" or "tanstack-start@<commit-hash>").
+    /// Package manager override (e.g. "npm", "pnpm", "yarn", "bun").
+    /// Auto-detected from package.json `packageManager` field or lockfiles if omitted.
+    pub package_manager: Option<String>,
+
+    /// App preset reference (e.g. "tanstack-start"). Provides `main` and `assets` defaults.
     pub preset: Option<String>,
+
+    /// Runtime entrypoint override relative to project root
+    pub main: Option<String>,
+
+    /// Asset directories to include in the deploy artifact (e.g. ["dist/client"]).
+    #[serde(default)]
+    pub assets: Vec<String>,
 
     /// Build settings for deploy artifact generation.
     #[serde(default)]
     pub build: BuildConfig,
 
-    /// Runtime entrypoint override relative to project root
-    pub main: Option<String>,
+    /// Multi-stage build (mutually exclusive with `build.run`).
+    #[serde(default)]
+    pub build_stages: Vec<BuildStage>,
 
     /// [vars] section - global environment variables
     #[serde(default)]
@@ -42,9 +54,21 @@ pub struct TakoToml {
     pub envs: HashMap<String, EnvConfig>,
 }
 
+/// Backward-compatible alias.
+pub type TakoToml = Config;
+
 /// Build configuration from [build].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct BuildConfig {
+    /// Build command (e.g. "vinxi build", "bun run build").
+    pub run: Option<String>,
+
+    /// Optional pre-build install command (e.g. "bun install").
+    pub install: Option<String>,
+
+    /// Working directory for build commands, relative to the project root.
+    pub cwd: Option<String>,
+
     /// Additional file globs to include in the deploy artifact.
     #[serde(default)]
     pub include: Vec<String>,
@@ -52,26 +76,19 @@ pub struct BuildConfig {
     /// File globs to exclude from the deploy artifact.
     #[serde(default)]
     pub exclude: Vec<String>,
-
-    /// Additional asset directories merged into app public/ after container build.
-    #[serde(default)]
-    pub assets: Vec<String>,
-
-    /// Optional post-preset custom build stages.
-    #[serde(default)]
-    pub stages: Vec<BuildStage>,
 }
 
-/// Custom app-level build stage from [[build.stages]].
+/// Custom build stage from [[build_stages]].
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct BuildStage {
     /// Optional display label.
     #[serde(default)]
     pub name: Option<String>,
 
-    /// Optional working directory relative to app directory.
+    /// Optional working directory relative to tako.toml location.
+    /// Allows ".." for monorepo traversal (guarded against escaping workspace root).
     #[serde(default)]
-    pub working_dir: Option<String>,
+    pub cwd: Option<String>,
 
     /// Optional preparatory command run before `run`.
     #[serde(default)]
@@ -129,7 +146,7 @@ pub fn resolve_app_log_level<'a>(env_config: Option<&'a EnvConfig>, env_name: &'
     }
 }
 
-impl TakoToml {
+impl Config {
     /// Load tako.toml from a directory
     pub fn load_from_dir<P: AsRef<Path>>(dir: P) -> Result<Self> {
         let path = dir.as_ref().join("tako.toml");
@@ -166,16 +183,22 @@ impl TakoToml {
         let main = parse_optional_string(&raw, "main")?;
         let runtime = parse_optional_string(&raw, "runtime")?;
         let runtime_version = parse_optional_string(&raw, "runtime_version")?;
+        let package_manager = parse_optional_string(&raw, "package_manager")?;
         let preset = parse_optional_string(&raw, "preset")?;
+        let assets = parse_string_array(&raw, "assets")?.unwrap_or_default();
         let build = parse_build_config(&raw)?;
-        let mut config = TakoToml {
+        let build_stages = parse_build_stages(&raw)?;
+        let mut config = Config {
             name,
             main,
             runtime,
             runtime_version,
+            package_manager,
             preset,
+            assets,
             build,
-            ..TakoToml::default()
+            build_stages,
+            ..Config::default()
         };
 
         // Parse [vars] section (global) and [vars.*] sections (per-environment)
@@ -266,17 +289,27 @@ impl TakoToml {
                 ));
             }
         }
-
+        for asset_path in &self.assets {
+            validate_asset_path(asset_path)?;
+        }
+        if let Some(cwd) = &self.build.cwd {
+            validate_relative_dir(cwd, "build.cwd")?;
+        }
         for include in &self.build.include {
             validate_build_glob(include, "build.include")?;
         }
         for exclude in &self.build.exclude {
             validate_build_glob(exclude, "build.exclude")?;
         }
-        for asset_path in &self.build.assets {
-            validate_asset_path(asset_path)?;
+        // Mutual exclusion: build.run (non-empty) and build_stages cannot both be set
+        let has_build_run = self.build.run.as_deref().is_some_and(|r| !r.trim().is_empty());
+        if has_build_run && !self.build_stages.is_empty() {
+            return Err(ConfigError::Validation(
+                "Cannot use both [build] with 'run' and [[build_stages]]; they are mutually exclusive."
+                    .to_string(),
+            ));
         }
-        for (index, stage) in self.build.stages.iter().enumerate() {
+        for (index, stage) in self.build_stages.iter().enumerate() {
             validate_build_stage(stage, index)?;
         }
 
@@ -372,6 +405,11 @@ impl TakoToml {
         dir.as_ref().join("tako.toml").exists()
     }
 
+    /// Check if a config file exists at an explicit path.
+    pub fn exists_in_file<P: AsRef<Path>>(path: P) -> bool {
+        path.as_ref().is_file()
+    }
+
     /// Get routes for an environment
     pub fn get_routes(&self, env_name: &str) -> Option<Vec<String>> {
         self.envs.get(env_name).and_then(|env| {
@@ -398,7 +436,7 @@ impl TakoToml {
         Self::upsert_server_env_in_file(path, server_name, env)
     }
 
-    fn upsert_server_env_in_file<P: AsRef<Path>>(
+    pub fn upsert_server_env_in_file<P: AsRef<Path>>(
         path: P,
         server_name: &str,
         env: &str,
@@ -518,7 +556,17 @@ fn validate_top_level_keys(raw: &toml::Value) -> Result<()> {
     for key in table.keys() {
         if !matches!(
             key.as_str(),
-            "name" | "runtime" | "runtime_version" | "preset" | "build" | "main" | "vars" | "envs"
+            "name"
+                | "runtime"
+                | "runtime_version"
+                | "package_manager"
+                | "preset"
+                | "main"
+                | "assets"
+                | "build"
+                | "build_stages"
+                | "vars"
+                | "envs"
         ) {
             return Err(ConfigError::Validation(format!("Unknown key '{}'", key)));
         }
@@ -538,22 +586,27 @@ fn parse_build_config(raw: &toml::Value) -> Result<BuildConfig> {
     validate_build_keys(table)?;
     let table_value = toml::Value::Table(table.clone());
 
+    let run = parse_optional_string(&table_value, "run")?;
+    let install = parse_optional_string(&table_value, "install")?;
+    let cwd = parse_optional_string(&table_value, "cwd")?;
     let include = parse_string_array(&table_value, "include")?.unwrap_or_default();
     let exclude = parse_string_array(&table_value, "exclude")?.unwrap_or_default();
-    let assets = parse_string_array(&table_value, "assets")?.unwrap_or_default();
-    let stages = parse_build_stages(table)?;
 
     Ok(BuildConfig {
+        run,
+        install,
+        cwd,
         include,
         exclude,
-        assets,
-        stages,
     })
 }
 
 fn validate_build_keys(table: &toml::value::Table) -> Result<()> {
     for key in table.keys() {
-        if !matches!(key.as_str(), "include" | "exclude" | "assets" | "stages") {
+        if !matches!(
+            key.as_str(),
+            "run" | "install" | "cwd" | "include" | "exclude"
+        ) {
             return Err(ConfigError::Validation(format!(
                 "Unknown key 'build.{key}'"
             )));
@@ -563,13 +616,13 @@ fn validate_build_keys(table: &toml::value::Table) -> Result<()> {
     Ok(())
 }
 
-fn parse_build_stages(table: &toml::value::Table) -> Result<Vec<BuildStage>> {
-    let Some(value) = table.get("stages") else {
+fn parse_build_stages(raw: &toml::Value) -> Result<Vec<BuildStage>> {
+    let Some(value) = raw.get("build_stages") else {
         return Ok(Vec::new());
     };
     let Some(stages) = value.as_array() else {
         return Err(ConfigError::Validation(
-            "'build.stages' must be an array of tables ([[build.stages]])".to_string(),
+            "'build_stages' must be an array of tables ([[build_stages]])".to_string(),
         ));
     };
 
@@ -577,26 +630,26 @@ fn parse_build_stages(table: &toml::value::Table) -> Result<Vec<BuildStage>> {
     for (index, stage_value) in stages.iter().enumerate() {
         let Some(stage_table) = stage_value.as_table() else {
             return Err(ConfigError::Validation(format!(
-                "'build.stages[{index}]' must be a table"
+                "'build_stages[{index}]' must be a table"
             )));
         };
 
         for key in stage_table.keys() {
-            if !matches!(key.as_str(), "name" | "working_dir" | "install" | "run") {
+            if !matches!(key.as_str(), "name" | "cwd" | "install" | "run") {
                 return Err(ConfigError::Validation(format!(
-                    "Unknown key 'build.stages[{index}].{key}'"
+                    "Unknown key 'build_stages[{index}].{key}'"
                 )));
             }
         }
 
         let name = parse_build_stage_optional_string(stage_table, index, "name")?;
-        let working_dir = parse_build_stage_optional_string(stage_table, index, "working_dir")?;
+        let cwd = parse_build_stage_optional_string(stage_table, index, "cwd")?;
         let install = parse_build_stage_optional_string(stage_table, index, "install")?;
         let run = parse_build_stage_required_string(stage_table, index, "run")?;
 
         parsed.push(BuildStage {
             name,
-            working_dir,
+            cwd,
             install,
             run,
         });
@@ -615,13 +668,13 @@ fn parse_build_stage_optional_string(
     };
     let Some(value) = value.as_str() else {
         return Err(ConfigError::Validation(format!(
-            "'build.stages[{index}].{key}' must be a string"
+            "'build_stages[{index}].{key}' must be a string"
         )));
     };
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(ConfigError::Validation(format!(
-            "'build.stages[{index}].{key}' cannot be empty"
+            "'build_stages[{index}].{key}' cannot be empty"
         )));
     }
     Ok(Some(trimmed.to_string()))
@@ -634,18 +687,18 @@ fn parse_build_stage_required_string(
 ) -> Result<String> {
     let Some(value) = stage_table.get(key) else {
         return Err(ConfigError::Validation(format!(
-            "'build.stages[{index}].{key}' is required"
+            "'build_stages[{index}].{key}' is required"
         )));
     };
     let Some(value) = value.as_str() else {
         return Err(ConfigError::Validation(format!(
-            "'build.stages[{index}].{key}' must be a string"
+            "'build_stages[{index}].{key}' must be a string"
         )));
     };
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return Err(ConfigError::Validation(format!(
-            "'build.stages[{index}].{key}' cannot be empty"
+            "'build_stages[{index}].{key}' cannot be empty"
         )));
     }
     Ok(trimmed.to_string())
@@ -669,6 +722,30 @@ fn parse_string_array(raw: &toml::Value, key: &str) -> Result<Option<Vec<String>
         out.push(s.to_string());
     }
     Ok(Some(out))
+}
+
+fn validate_relative_dir(value: &str, field: &str) -> Result<()> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "'{field}' cannot be empty"
+        )));
+    }
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        return Err(ConfigError::Validation(format!(
+            "'{field}' must be a relative path"
+        )));
+    }
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err(ConfigError::Validation(format!(
+            "'{field}' must not contain '..'"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_build_glob(pattern: &str, field: &str) -> Result<()> {
@@ -703,14 +780,14 @@ fn validate_asset_path(asset_path: &str) -> Result<()> {
     let trimmed = asset_path.trim();
     if trimmed.is_empty() {
         return Err(ConfigError::Validation(
-            "build.assets entry cannot be empty".to_string(),
+            "assets entry cannot be empty".to_string(),
         ));
     }
 
     let path = Path::new(trimmed);
     if path.is_absolute() {
         return Err(ConfigError::Validation(format!(
-            "build.assets entry '{}' must be relative to project root",
+            "assets entry '{}' must be relative to project root",
             asset_path
         )));
     }
@@ -720,7 +797,7 @@ fn validate_asset_path(asset_path: &str) -> Result<()> {
         .any(|component| matches!(component, Component::ParentDir))
     {
         return Err(ConfigError::Validation(format!(
-            "build.assets entry '{}' must not contain '..'",
+            "assets entry '{}' must not contain '..'",
             asset_path
         )));
     }
@@ -729,37 +806,44 @@ fn validate_asset_path(asset_path: &str) -> Result<()> {
 }
 
 fn validate_build_stage(stage: &BuildStage, index: usize) -> Result<()> {
-    if let Some(working_dir) = &stage.working_dir {
-        validate_build_stage_working_dir(working_dir, index)?;
+    if let Some(cwd) = &stage.cwd {
+        validate_build_stage_cwd(cwd, index)?;
     }
     if stage.run.trim().is_empty() {
         return Err(ConfigError::Validation(format!(
-            "'build.stages[{index}].run' cannot be empty"
+            "'build_stages[{index}].run' cannot be empty"
         )));
     }
     Ok(())
 }
 
-fn validate_build_stage_working_dir(working_dir: &str, index: usize) -> Result<()> {
-    let trimmed = working_dir.trim();
+fn validate_build_stage_cwd(cwd: &str, index: usize) -> Result<()> {
+    let trimmed = cwd.trim();
     if trimmed.is_empty() {
         return Err(ConfigError::Validation(format!(
-            "'build.stages[{index}].working_dir' cannot be empty"
+            "'build_stages[{index}].cwd' cannot be empty"
         )));
     }
     let path = Path::new(trimmed);
     if path.is_absolute() {
         return Err(ConfigError::Validation(format!(
-            "'build.stages[{index}].working_dir' must be relative to app root"
+            "'build_stages[{index}].cwd' must be relative"
         )));
     }
-    if path
-        .components()
-        .any(|component| matches!(component, Component::ParentDir))
-    {
-        return Err(ConfigError::Validation(format!(
-            "'build.stages[{index}].working_dir' must not contain '..'"
-        )));
+    // Allow ".." for monorepo traversal, but guard against escaping the workspace root.
+    // After normalizing, the resolved path must not start with ".." (i.e., escape the root).
+    let mut depth: i32 = 0;
+    for component in path.components() {
+        match component {
+            Component::ParentDir => depth -= 1,
+            Component::Normal(_) => depth += 1,
+            _ => {}
+        }
+        if depth < 0 {
+            return Err(ConfigError::Validation(format!(
+                "'build_stages[{index}].cwd' must not escape the project root"
+            )));
+        }
     }
     Ok(())
 }
@@ -913,8 +997,8 @@ mod tests {
 
     #[test]
     fn test_parse_empty_file() {
-        let config = TakoToml::parse("").unwrap();
-        assert_eq!(config, TakoToml::default());
+        let config = Config::parse("").unwrap();
+        assert_eq!(config, Config::default());
     }
 
     #[test]
@@ -924,7 +1008,7 @@ name = "my-app"
 main = "server/index.mjs"
 preset = "bun"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         assert_eq!(config.name, Some("my-app".to_string()));
         assert_eq!(config.main, Some("server/index.mjs".to_string()));
         assert_eq!(config.preset, Some("bun".to_string()));
@@ -933,48 +1017,48 @@ preset = "bun"
     #[test]
     fn test_parse_build_arrays() {
         let toml = r#"
+assets = ["public-assets", "shared/images"]
+
 [build]
 include = [".output/**", "dist/**"]
 exclude = ["**/*.map"]
-assets = ["public-assets", "shared/images"]
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         assert_eq!(
             config.build.include,
             vec![".output/**".to_string(), "dist/**".to_string()]
         );
         assert_eq!(config.build.exclude, vec!["**/*.map".to_string()]);
         assert_eq!(
-            config.build.assets,
+            config.assets,
             vec!["public-assets".to_string(), "shared/images".to_string()]
         );
-        assert!(config.build.stages.is_empty());
+        assert!(config.build_stages.is_empty());
     }
 
     #[test]
     fn test_parse_build_stages() {
         let toml = r#"
-[build]
-[[build.stages]]
+[[build_stages]]
 run = "bun run build"
 
-[[build.stages]]
+[[build_stages]]
 name = "frontend-assets"
-working_dir = "frontend"
+cwd = "frontend"
 install = "bun install"
 run = "bun run build"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
-        assert_eq!(config.build.stages.len(), 2);
-        assert_eq!(config.build.stages[0].name, None);
-        assert_eq!(config.build.stages[0].working_dir, None);
-        assert_eq!(config.build.stages[0].install, None);
-        assert_eq!(config.build.stages[0].run, "bun run build");
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(config.build_stages.len(), 2);
+        assert_eq!(config.build_stages[0].name, None);
+        assert_eq!(config.build_stages[0].cwd, None);
+        assert_eq!(config.build_stages[0].install, None);
+        assert_eq!(config.build_stages[0].run, "bun run build");
         assert_eq!(
-            config.build.stages[1],
+            config.build_stages[1],
             BuildStage {
                 name: Some("frontend-assets".to_string()),
-                working_dir: Some("frontend".to_string()),
+                cwd: Some("frontend".to_string()),
                 install: Some("bun install".to_string()),
                 run: "bun run build".to_string(),
             }
@@ -984,57 +1068,66 @@ run = "bun run build"
     #[test]
     fn test_parse_build_stages_requires_run() {
         let toml = r#"
-[build]
-[[build.stages]]
+[[build_stages]]
 name = "frontend-assets"
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("'build.stages[0].run' is required")
+                .contains("'build_stages[0].run' is required")
         );
     }
 
     #[test]
     fn test_parse_build_stages_rejects_empty_run() {
         let toml = r#"
-[build]
-[[build.stages]]
+[[build_stages]]
 run = "   "
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("'build.stages[0].run' cannot be empty")
+                .contains("'build_stages[0].run' cannot be empty")
         );
     }
 
     #[test]
     fn test_parse_build_stages_rejects_non_table_entries() {
         let toml = r#"
-[build]
-stages = ["bun run build"]
+build_stages = ["bun run build"]
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("'build.stages[0]' must be a table")
+                .contains("'build_stages[0]' must be a table")
         );
     }
 
     #[test]
     fn test_parse_build_stages_rejects_unknown_keys() {
         let toml = r#"
-[build]
-[[build.stages]]
+[[build_stages]]
 command = "bun run build"
 run = "bun run build"
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("Unknown key 'build.stages[0].command'")
+                .contains("Unknown key 'build_stages[0].command'")
         );
+    }
+
+    #[test]
+    fn test_build_stages_mutually_exclusive_with_build_run() {
+        let toml = r#"
+[build]
+run = "bun run build"
+
+[[build_stages]]
+run = "bun run other"
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("mutually exclusive"));
     }
 
     #[test]
@@ -1042,7 +1135,7 @@ run = "bun run build"
         let toml = r#"
 runtime = "deno"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         assert_eq!(config.runtime, Some("deno".to_string()));
     }
 
@@ -1052,7 +1145,7 @@ runtime = "deno"
 runtime = "bun"
 runtime_version = "1.2.3"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         assert_eq!(config.runtime_version, Some("1.2.3".to_string()));
     }
 
@@ -1061,7 +1154,7 @@ runtime_version = "1.2.3"
         let toml = r#"
 runtime = "bun"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         assert!(config.runtime_version.is_none());
     }
 
@@ -1070,27 +1163,39 @@ runtime = "bun"
         let top_level_adapter = r#"
 adapter = "node"
 "#;
-        let err = TakoToml::parse(top_level_adapter).unwrap_err();
+        let err = Config::parse(top_level_adapter).unwrap_err();
         assert!(err.to_string().contains("Unknown key 'adapter'"));
 
         let top_level_dist = r#"
 dist = ".tako/dist"
 "#;
-        let err = TakoToml::parse(top_level_dist).unwrap_err();
+        let err = Config::parse(top_level_dist).unwrap_err();
         assert!(err.to_string().contains("Unknown key 'dist'"));
-
-        let top_level_assets = r#"
-assets = ["dist/client"]
-"#;
-        let err = TakoToml::parse(top_level_assets).unwrap_err();
-        assert!(err.to_string().contains("Unknown key 'assets'"));
 
         let top_level_servers = r#"
 [servers]
 production = ["prod-1"]
 "#;
-        let err = TakoToml::parse(top_level_servers).unwrap_err();
+        let err = Config::parse(top_level_servers).unwrap_err();
         assert!(err.to_string().contains("Unknown key 'servers'"));
+    }
+
+    #[test]
+    fn test_parse_accepts_top_level_assets() {
+        let toml = r#"
+assets = ["dist/client"]
+"#;
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(config.assets, vec!["dist/client".to_string()]);
+    }
+
+    #[test]
+    fn test_parse_accepts_top_level_preset() {
+        let toml = r#"
+preset = "tanstack-start"
+"#;
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(config.preset, Some("tanstack-start".to_string()));
     }
 
     #[test]
@@ -1099,14 +1204,15 @@ production = ["prod-1"]
 [build]
 adapter = "bun"
 "#;
-        let err = TakoToml::parse(build_adapter).unwrap_err();
+        let err = Config::parse(build_adapter).unwrap_err();
         assert!(err.to_string().contains("Unknown key 'build.adapter'"));
 
+        // preset is now top-level, not under [build]
         let build_preset = r#"
 [build]
-preset = "bun/tanstack-start"
+preset = "bun"
 "#;
-        let err = TakoToml::parse(build_preset).unwrap_err();
+        let err = Config::parse(build_preset).unwrap_err();
         assert!(err.to_string().contains("Unknown key 'build.preset'"));
     }
 
@@ -1117,7 +1223,7 @@ preset = "bun/tanstack-start"
 TAKO_APP_LOG_LEVEL = "info"
 API_URL = "https://api.example.com"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         assert_eq!(
             config.vars.get("TAKO_APP_LOG_LEVEL"),
             Some(&"info".to_string())
@@ -1134,7 +1240,7 @@ API_URL = "https://api.example.com"
 [envs.production]
 route = "api.example.com"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         let env = config.envs.get("production").unwrap();
         assert_eq!(env.route, Some("api.example.com".to_string()));
         assert_eq!(env.routes, None);
@@ -1145,7 +1251,7 @@ route = "api.example.com"
         let toml = r#"
 [envs.production]
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(
             err.to_string()
                 .contains("must define either 'route' or 'routes'")
@@ -1157,7 +1263,7 @@ route = "api.example.com"
         let toml = r#"
 [envs.development]
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         let env = config.envs.get("development").unwrap();
         assert_eq!(env.route, None);
         assert_eq!(env.routes, None);
@@ -1169,7 +1275,7 @@ route = "api.example.com"
 [envs.production]
 routes = []
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(err.to_string().contains("routes"));
     }
 
@@ -1179,7 +1285,7 @@ routes = []
 [envs.development]
 routes = []
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         let env = config.envs.get("development").unwrap();
         assert_eq!(env.route, None);
         assert_eq!(env.routes, Some(Vec::new()));
@@ -1191,7 +1297,7 @@ routes = []
 [envs.production]
 routes = ["api.example.com", "*.api.example.com", "example.com/api/*"]
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         let env = config.envs.get("production").unwrap();
         assert_eq!(env.route, None);
         assert_eq!(
@@ -1211,7 +1317,7 @@ routes = ["api.example.com", "*.api.example.com", "example.com/api/*"]
 route = "api.example.com"
 replicas = 3
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(err.to_string().contains("unknown field"));
     }
 
@@ -1223,7 +1329,7 @@ route = "api.example.com"
 servers = ["la-prod", "nyc-prod"]
 idle_timeout = 600
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         let env = config.envs.get("production").unwrap();
         assert_eq!(
             env.servers,
@@ -1234,7 +1340,7 @@ idle_timeout = 600
 
     #[test]
     fn test_default_env_idle_timeout_is_five_minutes() {
-        let config = TakoToml::default();
+        let config = Config::default();
         assert_eq!(config.get_idle_timeout("production"), 300);
     }
 
@@ -1244,15 +1350,12 @@ idle_timeout = 600
 name = "my-api"
 main = "server/index.mjs"
 preset = "bun"
+assets = ["public", ".output/public"]
 
 [build]
+run = "bun run build"
 include = ["dist/**"]
 exclude = ["**/*.map"]
-assets = ["public", ".output/public"]
-[[build.stages]]
-name = "frontend-assets"
-working_dir = "frontend"
-run = "bun run build"
 
 [vars]
 TAKO_APP_LOG_LEVEL = "info"
@@ -1264,26 +1367,17 @@ servers = ["prod-1"]
 [envs.staging]
 routes = ["staging.example.com", "*.staging.example.com"]
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
 
         assert_eq!(config.name, Some("my-api".to_string()));
         assert_eq!(config.main, Some("server/index.mjs".to_string()));
         assert_eq!(config.preset, Some("bun".to_string()));
+        assert_eq!(config.build.run, Some("bun run build".to_string()));
         assert_eq!(config.build.include, vec!["dist/**".to_string()]);
         assert_eq!(config.build.exclude, vec!["**/*.map".to_string()]);
         assert_eq!(
-            config.build.assets,
+            config.assets,
             vec!["public".to_string(), ".output/public".to_string()]
-        );
-        assert_eq!(config.build.stages.len(), 1);
-        assert_eq!(
-            config.build.stages[0],
-            BuildStage {
-                name: Some("frontend-assets".to_string()),
-                working_dir: Some("frontend".to_string()),
-                install: None,
-                run: "bun run build".to_string(),
-            }
         );
         assert_eq!(
             config.vars.get("TAKO_APP_LOG_LEVEL"),
@@ -1372,7 +1466,7 @@ routes = ["staging.example.com", "*.staging.example.com"]
 route = "api.example.com"
 routes = ["staging.example.com"]
 "#;
-        assert!(TakoToml::parse(toml).is_err());
+        assert!(Config::parse(toml).is_err());
     }
 
     #[test]
@@ -1382,32 +1476,30 @@ routes = ["staging.example.com"]
 route = "api.example.com"
 idle_timeout = 0
 "#;
-        assert!(TakoToml::parse(toml).is_err());
+        assert!(Config::parse(toml).is_err());
     }
 
     #[test]
-    fn test_validate_tako_build_assets_rejects_absolute_path() {
+    fn test_validate_assets_rejects_absolute_path() {
         let toml = r#"
-[build]
 assets = ["/tmp/assets"]
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("build.assets entry '/tmp/assets' must be relative to project root")
+                .contains("assets entry '/tmp/assets' must be relative to project root")
         );
     }
 
     #[test]
-    fn test_validate_tako_build_assets_rejects_parent_directory_reference() {
+    fn test_validate_assets_rejects_parent_directory_reference() {
         let toml = r#"
-[build]
 assets = ["../shared-assets"]
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("build.assets entry '../shared-assets' must not contain '..'")
+                .contains("assets entry '../shared-assets' must not contain '..'")
         );
     }
 
@@ -1417,7 +1509,7 @@ assets = ["../shared-assets"]
 [build]
 include = ["/tmp/out/**"]
 "#;
-        let err = TakoToml::parse(absolute).unwrap_err();
+        let err = Config::parse(absolute).unwrap_err();
         assert!(
             err.to_string()
                 .contains("build.include entry '/tmp/out/**' must be relative to project root")
@@ -1427,7 +1519,7 @@ include = ["/tmp/out/**"]
 [build]
 exclude = ["../secret/**"]
 "#;
-        let err = TakoToml::parse(parent).unwrap_err();
+        let err = Config::parse(parent).unwrap_err();
         assert!(
             err.to_string()
                 .contains("build.exclude entry '../secret/**' must not contain '..'")
@@ -1435,29 +1527,45 @@ exclude = ["../secret/**"]
     }
 
     #[test]
-    fn test_validate_build_stage_working_dir_rejects_invalid_paths() {
+    fn test_validate_build_stage_cwd_rejects_absolute_paths() {
         let absolute = r#"
-[build]
-[[build.stages]]
-working_dir = "/tmp"
+[[build_stages]]
+cwd = "/tmp"
 run = "bun run build"
 "#;
-        let err = TakoToml::parse(absolute).unwrap_err();
+        let err = Config::parse(absolute).unwrap_err();
         assert!(
             err.to_string()
-                .contains("'build.stages[0].working_dir' must be relative to app root")
+                .contains("'build_stages[0].cwd' must be relative")
         );
+    }
 
-        let parent = r#"
-[build]
-[[build.stages]]
-working_dir = "../frontend"
+    #[test]
+    fn test_validate_build_stage_cwd_allows_parent_within_root() {
+        // cwd = "packages/../packages/ui" stays within root
+        let toml = r#"
+[[build_stages]]
+cwd = "packages/../packages/ui"
 run = "bun run build"
 "#;
-        let err = TakoToml::parse(parent).unwrap_err();
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(
+            config.build_stages[0].cwd,
+            Some("packages/../packages/ui".to_string())
+        );
+    }
+
+    #[test]
+    fn test_validate_build_stage_cwd_rejects_escaping_root() {
+        let toml = r#"
+[[build_stages]]
+cwd = "../outside"
+run = "bun run build"
+"#;
+        let err = Config::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("'build.stages[0].working_dir' must not contain '..'")
+                .contains("must not escape the project root")
         );
     }
 
@@ -1466,13 +1574,13 @@ run = "bun run build"
         let empty = r#"
 runtime = ""
 "#;
-        let err = TakoToml::parse(empty).unwrap_err();
+        let err = Config::parse(empty).unwrap_err();
         assert!(err.to_string().contains("runtime cannot be empty"));
 
         let unknown = r#"
 runtime = "python"
 "#;
-        let err = TakoToml::parse(unknown).unwrap_err();
+        let err = Config::parse(unknown).unwrap_err();
         assert!(
             err.to_string()
                 .contains("runtime must be one of: bun, node, deno")
@@ -1484,7 +1592,7 @@ runtime = "python"
         let raw = r#"
 preset = "js/tanstack-start"
 "#;
-        let err = TakoToml::parse(raw).unwrap_err();
+        let err = Config::parse(raw).unwrap_err();
         assert!(
             err.to_string()
                 .contains("preset must not include runtime namespace")
@@ -1496,7 +1604,7 @@ preset = "js/tanstack-start"
         let raw = r#"
 preset = "github:owner/repo/presets/custom.toml"
 "#;
-        let err = TakoToml::parse(raw).unwrap_err();
+        let err = Config::parse(raw).unwrap_err();
         assert!(
             err.to_string()
                 .contains("github preset references are not supported")
@@ -1508,7 +1616,7 @@ preset = "github:owner/repo/presets/custom.toml"
         let raw = r#"
 preset = "custom:tanstack-start"
 "#;
-        let err = TakoToml::parse(raw).unwrap_err();
+        let err = Config::parse(raw).unwrap_err();
         assert!(err.to_string().contains("':' references are not supported"));
     }
 
@@ -1517,7 +1625,7 @@ preset = "custom:tanstack-start"
         let toml = r#"
 build = "bun run build"
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(err.to_string().contains("'build' must be a table"));
     }
 
@@ -1526,7 +1634,7 @@ build = "bun run build"
         let toml = r#"
 main = "   "
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(err.to_string().contains("main cannot be empty"));
     }
 
@@ -1538,7 +1646,7 @@ main = "   "
 [envs.production]
 route = "api.example.com"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         let routes = config.get_routes("production").unwrap();
         assert_eq!(routes, vec!["api.example.com"]);
     }
@@ -1549,21 +1657,21 @@ route = "api.example.com"
 [envs.production]
 routes = ["api.example.com", "www.example.com"]
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         let routes = config.get_routes("production").unwrap();
         assert_eq!(routes, vec!["api.example.com", "www.example.com"]);
     }
 
     #[test]
     fn test_get_routes_nonexistent_env() {
-        let config = TakoToml::default();
+        let config = Config::default();
         assert!(config.get_routes("production").is_none());
     }
 
     #[test]
     fn test_load_from_dir_requires_tako_toml() {
         let temp = tempfile::TempDir::new().unwrap();
-        let err = TakoToml::load_from_dir(temp.path()).unwrap_err();
+        let err = Config::load_from_dir(temp.path()).unwrap_err();
         assert!(err.to_string().contains("tako.toml"));
     }
 
@@ -1579,7 +1687,7 @@ route = "prod.example.com"
         )
         .unwrap();
 
-        let config = TakoToml::load_from_dir(temp.path()).unwrap();
+        let config = Config::load_from_dir(temp.path()).unwrap();
         assert!(config.name.is_none());
         assert_eq!(
             config
@@ -1598,7 +1706,7 @@ route = "prod.example.com"
 [envs.staging]
 route = "staging.example.com"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         let mut names = config.get_environment_names();
         names.sort();
         assert_eq!(names, vec!["production", "staging"]);
@@ -1612,7 +1720,7 @@ route = "staging.example.com"
 [tako
 name = "broken"
 "#;
-        assert!(TakoToml::parse(toml).is_err());
+        assert!(Config::parse(toml).is_err());
     }
 
     #[test]
@@ -1620,7 +1728,7 @@ name = "broken"
         let toml = r#"
 name = 123
 "#;
-        assert!(TakoToml::parse(toml).is_err());
+        assert!(Config::parse(toml).is_err());
     }
 
     // ==================== Per-Environment Vars Tests ====================
@@ -1638,7 +1746,7 @@ DATABASE_URL = "postgres://prod"
 [vars.staging]
 DATABASE_URL = "postgres://staging"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
 
         // Global var
         assert_eq!(
@@ -1675,7 +1783,7 @@ API_URL = "https://api.example.com"
 TAKO_APP_LOG_LEVEL = "warn"
 DATABASE_URL = "postgres://prod"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
 
         let merged = config.get_merged_vars("production");
         assert_eq!(merged.get("TAKO_APP_LOG_LEVEL"), Some(&"warn".to_string())); // overridden
@@ -1695,7 +1803,7 @@ DATABASE_URL = "postgres://prod"
 [vars]
 TAKO_APP_LOG_LEVEL = "info"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
 
         let merged = config.get_merged_vars("nonexistent");
         assert_eq!(merged.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
@@ -1715,7 +1823,7 @@ servers = ["la-prod", "nyc-prod"]
 route = "staging.example.com"
 servers = ["staging-server"]
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
 
         let prod_servers = config.get_servers_for_env("production");
         assert_eq!(prod_servers.len(), 2);
@@ -1741,7 +1849,7 @@ idle_timeout = 300
 route = "staging.example.com"
 idle_timeout = 600
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
 
         assert_eq!(config.get_idle_timeout("production"), 300);
         assert_eq!(config.get_idle_timeout("staging"), 600);
@@ -1759,7 +1867,7 @@ servers = ["shared"]
 route = "staging.example.com"
 servers = ["shared"]
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         assert_eq!(config.get_servers_for_env("production"), vec!["shared"]);
         assert_eq!(config.get_servers_for_env("staging"), vec!["shared"]);
     }
@@ -1774,7 +1882,7 @@ servers = ["shared"]
 [envs.development]
 servers = ["shared"]
 "#;
-        assert!(TakoToml::parse(toml).is_ok());
+        assert!(Config::parse(toml).is_ok());
     }
 
     #[test]
@@ -1784,7 +1892,7 @@ servers = ["shared"]
 route = "api.example.com"
 servers = ["INVALID_NAME"]
 "#;
-        assert!(TakoToml::parse(toml).is_err());
+        assert!(Config::parse(toml).is_err());
     }
 
     // ==================== Server Name Validation Tests ====================
@@ -1832,7 +1940,7 @@ route = "example.com"
 log_level = "{level}"
 "#
             );
-            let config = TakoToml::parse(&toml).unwrap();
+            let config = Config::parse(&toml).unwrap();
             assert_eq!(config.envs["production"].log_level.as_deref(), Some(level));
         }
     }
@@ -1844,7 +1952,7 @@ log_level = "{level}"
 route = "example.com"
 log_level = "verbose"
 "#;
-        let err = TakoToml::parse(toml).unwrap_err();
+        let err = Config::parse(toml).unwrap_err();
         assert!(err.to_string().contains("Invalid log_level"));
         assert!(err.to_string().contains("verbose"));
     }
@@ -1855,7 +1963,7 @@ log_level = "verbose"
 [envs.production]
 route = "example.com"
 "#;
-        let config = TakoToml::parse(toml).unwrap();
+        let config = Config::parse(toml).unwrap();
         assert_eq!(config.envs["production"].log_level, None);
     }
 
@@ -1882,5 +1990,79 @@ route = "example.com"
         assert_eq!(resolve_app_log_level(None, "staging"), "info");
         let config = EnvConfig::default();
         assert_eq!(resolve_app_log_level(Some(&config), "production"), "info");
+    }
+
+    // ==================== build.cwd Tests ====================
+
+    #[test]
+    fn test_parse_build_cwd() {
+        let toml = r#"
+[build]
+cwd = "."
+"#;
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(config.build.cwd, Some(".".to_string()));
+    }
+
+    #[test]
+    fn test_build_cwd_accepts_subdirectory() {
+        let toml = r#"
+[build]
+cwd = "packages/web"
+"#;
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(config.build.cwd, Some("packages/web".to_string()));
+    }
+
+    #[test]
+    fn test_build_cwd_rejects_empty() {
+        let toml = r#"
+[build]
+cwd = ""
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("'build.cwd' cannot be empty"));
+    }
+
+    #[test]
+    fn test_build_cwd_rejects_absolute_path() {
+        let toml = r#"
+[build]
+cwd = "/tmp/build"
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'build.cwd' must be a relative path")
+        );
+    }
+
+    #[test]
+    fn test_build_cwd_rejects_parent_dir() {
+        let toml = r#"
+[build]
+cwd = "../parent"
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("'build.cwd' must not contain '..'")
+        );
+    }
+
+    #[test]
+    fn test_parse_build_with_run_and_install() {
+        let toml = r#"
+[build]
+run = "vinxi build"
+install = "bun install"
+cwd = "."
+include = ["dist/**"]
+"#;
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(config.build.run, Some("vinxi build".to_string()));
+        assert_eq!(config.build.install, Some("bun install".to_string()));
+        assert_eq!(config.build.cwd, Some(".".to_string()));
+        assert_eq!(config.build.include, vec!["dist/**".to_string()]);
     }
 }
