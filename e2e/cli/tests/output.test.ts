@@ -200,13 +200,16 @@ describe("error output", () => {
     );
     await writeFile(
       join(tempDir, "tako.toml"),
-      'name = "test-app"\nruntime = "node"\n\n[envs.production]\nroute = "test.example.com"\n',
+      'name = "test-app"\nruntime = "node"\n\n[envs.production]\nroute = "test.example.com"\nservers = ["nonexistent"]\n',
     );
 
-    const { term, exitCode } = await run(["deploy", "production"], {
-      cwd: tempDir,
-      env: { HOME: tempDir, TAKO_HOME: takoHome },
-    });
+    const { term, exitCode } = await run(
+      ["deploy", "--env", "production", "-y"],
+      {
+        cwd: tempDir,
+        env: { HOME: tempDir, TAKO_HOME: takoHome },
+      },
+    );
 
     expect(exitCode).toBe(1);
 

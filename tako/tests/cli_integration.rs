@@ -336,7 +336,7 @@ mod init {
     }
 
     #[test]
-    fn test_init_accepts_directory_argument() {
+    fn test_init_accepts_config_flag_for_subdirectory() {
         let temp = TempDir::new().unwrap();
         let root_dir = temp.path().to_path_buf();
         let project_dir = root_dir.join("my-app");
@@ -354,12 +354,12 @@ mod init {
         )
         .unwrap();
 
-        // Invoke from root_dir, but tell tako to operate in project_dir
-        let output = run_tako(&["init", "my-app"], &root_dir);
+        // Invoke from root_dir, but tell tako which config file to create.
+        let output = run_tako(&["-c", "my-app/tako.toml", "init"], &root_dir);
 
         assert!(
             output.status.success(),
-            "tako init DIR failed: {}",
+            "tako -c DIR/tako.toml init failed: {}",
             stderr_str(&output)
         );
 
@@ -370,6 +370,40 @@ mod init {
         assert!(
             !root_dir.join("tako.toml").exists(),
             "tako.toml should not be created in invocation directory"
+        );
+    }
+
+    #[test]
+    fn test_init_accepts_config_flag_without_toml_suffix() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().to_path_buf();
+
+        fs::write(
+            project_dir.join("package.json"),
+            r#"{"name": "suffixless-config-app", "version": "1.0.0"}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("index.ts"),
+            r#"export default { fetch() { return new Response("ok"); } };"#,
+        )
+        .unwrap();
+
+        let output = run_tako(&["-c", "preview", "init"], &project_dir);
+
+        assert!(
+            output.status.success(),
+            "tako -c preview init failed: {}",
+            stderr_str(&output)
+        );
+
+        assert!(
+            project_dir.join("preview.toml").exists(),
+            "preview.toml should be created when config suffix is omitted"
+        );
+        assert!(
+            !project_dir.join("preview").exists(),
+            "suffixless config argument should not create a file without .toml"
         );
     }
 
@@ -1252,11 +1286,10 @@ route = "prod.example.com"
 
         let output = run_tako(&["deploy", "--env", "production"], &project_dir);
 
-        // In restricted environments this usually fails at Docker/container build.
         // The key contract is that deploy should not fail due missing main when preset defines one.
         assert!(
             !output.status.success(),
-            "Deploy should fail in this test environment (typically due Docker/build preconditions)"
+            "Deploy should fail in this test environment (typically due build/SSH preconditions)"
         );
 
         let stderr = stderr_str(&output);
@@ -1325,7 +1358,7 @@ libc = "glibc"
         );
 
         // Should fail. In fully provisioned environments this is a missing-entrypoint error.
-        // In restricted CI/sandbox environments it may fail earlier at container build startup.
+        // In restricted CI/sandbox environments it may fail earlier at build or SSH preconditions.
         assert!(
             !output.status.success(),
             "Deploy should fail for invalid entry point or build preconditions"
@@ -1338,12 +1371,9 @@ libc = "glibc"
                 || stderr.contains("nonexistent")
                 || stderr.contains("not found")
                 || stderr.contains("main")
-                || stderr.contains("container")
-                || stderr.contains("Docker")
-                || stderr.contains("docker")
                 || stderr.contains("Failed to fetch preset")
                 || stderr.contains("lockfile"),
-            "Should mention missing entry point, lockfile mismatch, or container build failure: {}",
+            "Should mention missing entry point, lockfile mismatch, or build failure: {}",
             stderr
         );
     }
