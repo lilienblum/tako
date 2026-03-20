@@ -12,6 +12,7 @@ mod container;
 mod executor;
 pub mod js;
 mod preset;
+mod workdir;
 
 pub use adapter::*;
 pub use artifact::*;
@@ -19,3 +20,4 @@ pub use cache::*;
 pub use container::*;
 pub use executor::*;
 pub use preset::*;
+pub use workdir::*;

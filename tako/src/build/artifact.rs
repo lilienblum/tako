@@ -26,10 +26,48 @@ pub fn create_filtered_archive_with_prefix(
     exclude_patterns: &[String],
     archive_prefix: Option<&Path>,
 ) -> Result<u64, BuildError> {
+    create_filtered_archive_impl(
+        source_root,
+        output_path,
+        include_patterns,
+        exclude_patterns,
+        archive_prefix,
+        false,
+    )
+}
+
+/// Create a filtered archive respecting .gitignore.
+/// Used when building in place (no workspace copy).
+/// Force-includes node_modules/ even though gitignored.
+pub fn create_filtered_archive_in_place(
+    source_root: &Path,
+    output_path: &Path,
+    include_patterns: &[String],
+    exclude_patterns: &[String],
+    archive_prefix: Option<&Path>,
+) -> Result<u64, BuildError> {
+    create_filtered_archive_impl(
+        source_root,
+        output_path,
+        include_patterns,
+        exclude_patterns,
+        archive_prefix,
+        true,
+    )
+}
+
+fn create_filtered_archive_impl(
+    source_root: &Path,
+    output_path: &Path,
+    include_patterns: &[String],
+    exclude_patterns: &[String],
+    archive_prefix: Option<&Path>,
+    use_gitignore: bool,
+) -> Result<u64, BuildError> {
     let includes = compile_patterns(source_root, include_patterns, "include")?;
     let excludes = compile_patterns(source_root, exclude_patterns, "exclude")?;
 
-    let mut files = collect_files_for_archive(source_root, &includes, &excludes)?;
+    let mut files = collect_files_for_archive(source_root, &includes, &excludes, use_gitignore)?;
     files.sort_by(|a, b| a.1.cmp(&b.1));
 
     if let Some(parent) = output_path.parent() {
@@ -71,9 +109,80 @@ fn collect_files_for_archive(
     source_root: &Path,
     includes: &Option<Gitignore>,
     excludes: &Option<Gitignore>,
+    use_gitignore: bool,
 ) -> Result<Vec<(PathBuf, PathBuf)>, BuildError> {
     let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
     let mut walker = ignore::WalkBuilder::new(source_root);
+    walker
+        .hidden(false)
+        .git_ignore(use_gitignore)
+        .git_global(use_gitignore)
+        .git_exclude(use_gitignore)
+        .parents(use_gitignore)
+        .require_git(false);
+
+    for entry in walker.build() {
+        let entry = entry.map_err(|e| BuildError::ArchiveError(e.to_string()))?;
+        let file_type = match entry.file_type() {
+            Some(file_type) => file_type,
+            None => continue,
+        };
+        if !file_type.is_file() && !file_type.is_symlink() {
+            continue;
+        }
+
+        let path = entry.path();
+        let relative_path = path.strip_prefix(source_root).map_err(|e| {
+            BuildError::ArchiveError(format!(
+                "Failed to compute relative path for {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        if should_force_exclude(relative_path) {
+            continue;
+        }
+
+        if let Some(include_matcher) = includes
+            && !include_matcher
+                .matched_path_or_any_parents(relative_path, false)
+                .is_ignore()
+        {
+            continue;
+        }
+        if let Some(exclude_matcher) = excludes
+            && exclude_matcher
+                .matched_path_or_any_parents(relative_path, false)
+                .is_ignore()
+        {
+            continue;
+        }
+
+        files.push((path.to_path_buf(), relative_path.to_path_buf()));
+    }
+
+    // When using gitignore, node_modules/ is typically gitignored but needed
+    // for deployment. Walk it separately without gitignore filtering.
+    if use_gitignore {
+        let node_modules = source_root.join("node_modules");
+        if node_modules.is_dir() {
+            collect_node_modules_files(source_root, &node_modules, includes, excludes, &mut files)?;
+        }
+    }
+
+    Ok(files)
+}
+
+/// Walk node_modules/ without gitignore filtering for in-place builds.
+fn collect_node_modules_files(
+    source_root: &Path,
+    node_modules_dir: &Path,
+    includes: &Option<Gitignore>,
+    excludes: &Option<Gitignore>,
+    files: &mut Vec<(PathBuf, PathBuf)>,
+) -> Result<(), BuildError> {
+    let mut walker = ignore::WalkBuilder::new(node_modules_dir);
     walker
         .hidden(false)
         .git_ignore(false)
@@ -122,7 +231,7 @@ fn collect_files_for_archive(
         files.push((path.to_path_buf(), relative_path.to_path_buf()));
     }
 
-    Ok(files)
+    Ok(())
 }
 
 fn compile_patterns(
@@ -157,6 +266,114 @@ fn should_force_exclude(relative_path: &Path) -> bool {
         if let Component::Normal(name) = component {
             match name.to_str() {
                 Some(".git") | Some(".tako") => return true,
+                Some(name) if name.starts_with(".env") => return true,
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+/// Create an archive from a workdir (already filtered — no gitignore needed).
+/// Skips `node_modules/` (symlinks), `.git/`, `.tako/`, `.env*`.
+pub fn create_workdir_archive(
+    workdir: &Path,
+    output_path: &Path,
+    include_patterns: &[String],
+    exclude_patterns: &[String],
+) -> Result<u64, BuildError> {
+    let includes = compile_patterns(workdir, include_patterns, "include")?;
+    let excludes = compile_patterns(workdir, exclude_patterns, "exclude")?;
+
+    let mut files: Vec<(PathBuf, PathBuf)> = Vec::new();
+    // Walk without gitignore — workdir is already filtered
+    let mut walker = ignore::WalkBuilder::new(workdir);
+    walker
+        .hidden(false)
+        .git_ignore(false)
+        .git_global(false)
+        .git_exclude(false)
+        .parents(false)
+        .require_git(false);
+
+    for entry in walker.build() {
+        let entry = entry.map_err(|e| BuildError::ArchiveError(e.to_string()))?;
+        let file_type = match entry.file_type() {
+            Some(ft) => ft,
+            None => continue,
+        };
+        // Skip directories and symlinks (node_modules are symlinks in workdir)
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let path = entry.path();
+        let relative_path = path.strip_prefix(workdir).map_err(|e| {
+            BuildError::ArchiveError(format!(
+                "Failed to compute relative path for {}: {}",
+                path.display(),
+                e
+            ))
+        })?;
+
+        if should_workdir_force_exclude(relative_path) {
+            continue;
+        }
+
+        if let Some(include_matcher) = &includes
+            && !include_matcher
+                .matched_path_or_any_parents(relative_path, false)
+                .is_ignore()
+        {
+            continue;
+        }
+        if let Some(exclude_matcher) = &excludes
+            && exclude_matcher
+                .matched_path_or_any_parents(relative_path, false)
+                .is_ignore()
+        {
+            continue;
+        }
+
+        files.push((path.to_path_buf(), relative_path.to_path_buf()));
+    }
+
+    files.sort_by(|a, b| a.1.cmp(&b.1));
+
+    if let Some(parent) = output_path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let file = std::fs::File::create(output_path)?;
+    let encoder = zstd::stream::write::Encoder::new(file, 3)
+        .map_err(|e| BuildError::ArchiveError(format!("Failed to initialize zstd encoder: {}", e)))?;
+    let mut archive = tar::Builder::new(encoder);
+    archive.follow_symlinks(false);
+
+    for (full_path, relative_path) in files {
+        archive
+            .append_path_with_name(&full_path, &relative_path)
+            .map_err(|e| {
+                BuildError::ArchiveError(format!("Failed to add {}: {}", full_path.display(), e))
+            })?;
+    }
+
+    let encoder = archive
+        .into_inner()
+        .map_err(|e| BuildError::ArchiveError(format!("Failed to finish archive: {}", e)))?;
+    encoder
+        .finish()
+        .map_err(|e| BuildError::ArchiveError(format!("Failed to compress: {}", e)))?;
+
+    let metadata = std::fs::metadata(output_path)?;
+    Ok(metadata.len())
+}
+
+fn should_workdir_force_exclude(relative_path: &Path) -> bool {
+    for component in relative_path.components() {
+        if let Component::Normal(name) = component {
+            match name.to_str() {
+                Some(".git") | Some(".tako") | Some("node_modules") => return true,
                 Some(name) if name.starts_with(".env") => return true,
                 _ => {}
             }
