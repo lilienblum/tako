@@ -41,11 +41,7 @@ function findRowContaining(term: TakoTerminal, text: string): number | null {
   return null;
 }
 
-function findCharInRow(
-  term: TakoTerminal,
-  row: number,
-  char: string,
-): number | null {
+function findCharInRow(term: TakoTerminal, row: number, char: string): number | null {
   for (let x = 0; x < 80; x++) {
     const c = term.cell(row, x);
     if (c && c.char === char) return x;
@@ -71,10 +67,7 @@ function colorsClose(
 describe("servers ls (warning output)", () => {
   test("shows warning with colored ! marker", async () => {
     // Create a minimal tako.toml so the command runs
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "test-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "test-app" }));
     await writeFile(
       join(tempDir, "tako.toml"),
       'name = "test-app"\nruntime = "node"\n\n[envs.production]\nroute = "test.example.com"\n',
@@ -106,10 +99,7 @@ describe("servers ls (warning output)", () => {
   });
 
   test("hint text is rendered in dim", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "test-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "test-app" }));
     await writeFile(
       join(tempDir, "tako.toml"),
       'name = "test-app"\nruntime = "node"\n\n[envs.production]\nroute = "test.example.com"\n',
@@ -138,10 +128,7 @@ describe("servers ls (warning output)", () => {
 
 describe("--ci vs normal mode", () => {
   test("normal mode has ANSI colors, --ci mode does not", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "test-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "test-app" }));
     await writeFile(
       join(tempDir, "tako.toml"),
       'name = "test-app"\nruntime = "node"\n\n[envs.production]\nroute = "test.example.com"\n',
@@ -172,10 +159,7 @@ describe("--ci vs normal mode", () => {
 
 describe("--verbose mode", () => {
   test("verbose output includes timestamps on stderr", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "test-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "test-app" }));
     await writeFile(
       join(tempDir, "tako.toml"),
       'name = "test-app"\nruntime = "node"\n\n[envs.production]\nroute = "test.example.com"\n',
@@ -194,22 +178,16 @@ describe("--verbose mode", () => {
 
 describe("error output", () => {
   test("deploy without servers shows colored error", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "test-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "test-app" }));
     await writeFile(
       join(tempDir, "tako.toml"),
       'name = "test-app"\nruntime = "node"\n\n[envs.production]\nroute = "test.example.com"\nservers = ["nonexistent"]\n',
     );
 
-    const { term, exitCode } = await run(
-      ["deploy", "--env", "production", "-y"],
-      {
-        cwd: tempDir,
-        env: { HOME: tempDir, TAKO_HOME: takoHome },
-      },
-    );
+    const { term, exitCode } = await run(["deploy", "--env", "production", "-y"], {
+      cwd: tempDir,
+      env: { HOME: tempDir, TAKO_HOME: takoHome },
+    });
 
     expect(exitCode).toBe(1);
 
@@ -230,10 +208,7 @@ describe("error output", () => {
 
 describe("terminal width handling", () => {
   test("output respects narrow terminal width", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "test-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "test-app" }));
     await writeFile(
       join(tempDir, "tako.toml"),
       'name = "test-app"\nruntime = "node"\n\n[envs.production]\nroute = "test.example.com"\n',
