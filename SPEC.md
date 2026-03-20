@@ -33,27 +33,32 @@ App names must be URL-friendly (DNS hostname compatible):
 - **Examples:** `my-app`, `api-server`, `web-frontend`
 
 This ensures names work in DNS (`{app-name}.tako.test` by default), URLs, and environment variables.
-`name` is optional in `tako.toml`. If omitted, Tako resolves app name from the project directory name.
+`name` is optional in `tako.toml`. If omitted, Tako resolves app name from the selected config file's parent directory name.
 Using top-level `name` is recommended for stability. Remote server identity is `{name}/{env}`, so the same app name can be deployed to multiple environments on one server. Renaming `name` later creates a new app identity/path; delete the old deployment manually.
 
-### tako.toml (Project Root - Required)
+### tako.toml (Default Project Config)
 
-Application configuration for build, variables, routes, and deployment.
+Default application configuration file for build, variables, routes, and deployment.
+App-scoped commands use `./tako.toml` by default. Passing `-c/--config <file>` selects a
+different config file and treats that file's parent directory as the project directory.
+The config file's parent directory is the app directory (there is no separate `app_dir` field).
 
 ```toml
 name = "my-app"           # Optional but recommended stable identity used by deploy/dev
-main = "server/index.mjs" # Optional override; required only when preset does not define top-level `main`
+main = "server/index.mjs" # Optional override; required only when preset does not define `main`
 runtime = "bun"           # Optional override; defaults to detected adapter
 runtime_version = "1.2.3" # Optional pinned version; auto-detected if omitted
-# preset = "tanstack-start" # Optional runtime-local preset; omit for adapter base preset
+preset = "tanstack-start" # Optional app preset; provides `main` and `assets` defaults
+assets = ["dist/client"]  # Optional asset directories for deploy artifact
 
 [build]
-# include = ["dist/**", ".output/**"]
-# exclude = ["**/*.map"]
-# assets = ["dist/client", "assets/shared"]
-# [[build.stages]]
-# name = "frontend-assets"
-# working_dir = "frontend"
+run = "vinxi build"       # Build command
+install = "bun install"   # Optional pre-build install command
+
+# OR use multi-stage builds (mutually exclusive with [build].run):
+# [[build_stages]]
+# name = "shared-ui"
+# cwd = "packages/ui"
 # install = "bun install"
 # run = "bun run build"
 
@@ -99,80 +104,58 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - `name` in `tako.toml` is optional.
 - App name resolution order for deploy/dev/logs/secrets/delete:
   1. top-level `name` (when set)
-  2. sanitized project directory name fallback
+  2. sanitized selected-config parent directory name fallback
 - Remote deployment identity on servers is `{app}/{env}`. Set `name` explicitly to keep the `{app}` segment stable across deploys.
 - Renaming app identity (`name` or directory fallback) is treated as a different app; remove the previous deployment manually if needed.
 - `main` in `tako.toml` is an optional runtime entrypoint override written to deployed `app.json`. It accepts file paths and module specifiers (e.g. `@scope/pkg`).
-- If `main` is omitted in `tako.toml`, deploy/dev check the manifest main field (e.g. `package.json` `main` via the runtime's `[entrypoint.manifest]` spec), then fall back to preset top-level `main`.
+- If `main` is omitted in `tako.toml`, deploy/dev check the manifest main field (e.g. `package.json` `main`), then fall back to preset `main`.
 - For JS adapters (`bun`, `node`, `deno`), when preset `main` is `index.<ext>` or `src/index.<ext>` (`ext`: `ts`, `tsx`, `js`, `jsx`), deploy/dev resolve in this order: existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`.
 - If neither `tako.toml main`, manifest main, nor preset `main` is set, deploy/dev fail with guidance.
-- Top-level deploy/build keys in `tako.toml` are `main`, `runtime`, `runtime_version`, `preset`, and `[build]`; standalone top-level `dist` and `assets` keys are rejected.
 - Top-level `runtime` is optional; when set to `bun`, `node`, or `deno`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
 - Top-level `runtime_version` is optional; when set (e.g. `"1.2.3"`), deploy uses it directly instead of auto-detecting with `<runtime> --version`. `tako init` pins the locally-installed version by default.
-- Server membership is declared per environment with `[envs.<name>].servers`.
-- The same server name may be assigned to multiple non-development environments in one project. Each environment deploys to its own server-side app identity and filesystem path under `/opt/tako/apps/{app}/{env}`.
-- `development` is for `tako dev`; `servers` declared there are ignored by deploy validation.
-- Top-level `preset` is optional; when omitted, `tako deploy`/`tako dev` use adapter base preset from top-level `runtime` when set, otherwise detected adapter (`unknown` falls back to `bun`).
-  - For `tako dev`, when top-level `preset` is omitted, Tako ignores preset top-level `dev` and runs a runtime-default command using resolved `main`:
-    - Bun: `bun run node_modules/tako.sh/src/entrypoints/bun.ts {main}`
-    - Node: `node --experimental-strip-types node_modules/tako.sh/src/entrypoints/node.ts {main}`
-    - Deno: `deno run --allow-net --allow-env --allow-read node_modules/tako.sh/src/entrypoints/deno.ts {main}`
-  - For `tako dev`, when top-level `preset` is explicitly set, Tako uses preset top-level `dev`.
+- Top-level `preset` is optional. Presets are metadata-only (`name`, `main`, `assets`) providing entrypoint and asset defaults. They do not contain build, install, start, or dev commands.
+- Top-level `assets` is optional; lists asset directories to include in the deploy artifact (e.g. `["dist/client"]`). Preset `assets` are used when the top-level `assets` list is empty.
 - `preset` supports:
   - runtime-local aliases: `tanstack-start` (resolved under selected runtime, e.g. `runtime = "bun"`)
   - pinned runtime-local aliases: `tanstack-start@<commit-hash>`
 - namespaced preset aliases in `tako.toml` (for example `js/tanstack-start`) are rejected; choose runtime via top-level `runtime` and keep `preset` runtime-local.
 - `github:` preset references are not supported in `tako.toml`.
-- Adapter base presets (`bun`, `node`, `deno`) are built into the CLI from embedded runtime definitions (not loaded from workspace preset files).
-- Runtime family preset definitions live in `registry/<language>/presets/<language>.toml` (for example `registry/javascript/presets/javascript.toml`), where each preset is a section (`[tanstack-start]`, `[vite]`, etc.).
-- `tanstack-start` preset defaults `main = "dist/server/tako-entry.mjs"`, `dev = ["vite", "dev"]`, and adds `[build].assets = ["dist/client"]`.
-- `vite` preset defaults `dev = ["vite", "dev"]` and `[build].build = "vite build"`.
-- Runtime base presets (`bun`, `node`, `deno`) define lifecycle defaults (`dev`, `install`, `start`, `[build].install`, `[build].build`).
-- Runtime base presets also provide default build filters/targets (`[build].exclude`, `[build].targets`, `[build].container`) and default `assets`.
-- JS runtime base presets (`bun`, `node`, `deno`) set `[build].container = false`, so JS builds run locally by default unless a preset explicitly sets `container = true`.
-- Runtime definitions live in `registry/<language>/runtimes/<name>.toml` (for example `registry/javascript/runtimes/bun.toml`). Each defines the `language`, entrypoint candidates, preset defaults, server launch args, environment tracking vars, and optional `[download]` spec.
-- Package manager definitions live in `registry/package_managers/<language>.toml` (for example `registry/package_managers/javascript.toml`), with each PM as a TOML section. Each PM defines `lockfiles`, `add`, `install` (production), and `[development].install` (build-time).
-- Package manager detection: lockfile presence (first match wins from bun, npm, pnpm, yarn, deno), then binary-on-PATH fallback.
-- `tako init` installs the `tako.sh` SDK via the detected package manager's `add` command.
-- Preset `[build].exclude` entries are appended to runtime-base excludes (base-first, deduplicated).
-- Preset `[build].targets` and `[build].container` override runtime defaults when set (including explicit empty arrays or explicit `container` values).
-- Preset `[build].assets` override runtime-base `assets` when set.
-- Build preset TOML supports optional top-level `name` (fallback: preset section name), top-level `main` (default app entrypoint), top-level lifecycle overrides (`dev`, `install`, `start`), and `[build]` (`assets`, `exclude`, optional `targets = ["linux-<arch>-<libc>", ...]`, optional `container = true|false`, optional `[build].install`, optional `[build].build`).
+- Preset definitions live in `presets/<language>/<language>.toml` (for example `presets/javascript/javascript.toml`), where each preset is a section (`[tanstack-start]`, etc.). Each section contains only `name` (optional, fallback: section name), `main`, and `assets`.
+- `tanstack-start` preset defaults `main = "@tanstack/react-start/server-entry"` and `assets = ["dist/client"]`.
+- Runtime behavior (install commands, launch args, entrypoint resolution) lives in runtime plugins (`tako-runtime/src/plugins/`), not in presets.
+- `tako init` installs the `tako.sh` SDK via the selected runtime's package-manager `add` command.
+- Server membership is declared per environment with `[envs.<name>].servers`.
+- The same server name may be assigned to multiple non-development environments in one project. Each environment deploys to its own server-side app identity and filesystem path under `/opt/tako/apps/{app}/{env}`.
+- `development` is for `tako dev`; `servers` declared there are ignored by deploy validation.
+- For `tako dev`, when top-level `preset` is omitted, Tako runs a runtime-default dev command:
+  - Bun: `bun run dev`
+  - Node: `npm run dev`
+  - Deno: `deno task dev`
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for visibility and cache-key inputs.
 - Unpinned official preset aliases are fetched from the `master` branch on each resolve; if fetch fails, preset resolution fails.
-- Runtime base aliases (`bun`, `node`, `deno`) fall back to embedded runtime defaults when their section is missing from a fetched family manifest.
-- During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
-- Source bundle filtering uses `.gitignore`.
-- Deploy always force-excludes `.git/`, `.tako/`, and `.env*` from archive payload regardless of config. Additional exclusions (`node_modules/`, `target/`, etc.) come from preset `[build].exclude` and `.gitignore`.
 - Deploy sends app vars + runtime vars to `tako-server` in the `deploy` command payload (non-secret env vars in `app.json`); secrets are sent separately and stored encrypted in SQLite. `tako-server` pushes secrets to instances via `POST /secrets` on `Host: tako` at spawn time.
-- Deploy build mode is controlled by preset `[build].container`:
-  - `true`: build each target artifact in Docker.
-  - `false`: run build commands on the local host workspace for each target.
-  - when unset, default is `true` if `[build].targets` is non-empty, otherwise `false`.
-  - built-in JS base presets set `container = false` explicitly.
-- App-level custom build stages can be declared in `tako.toml` under `[[build.stages]]`:
+- `[build]` section has `run` (build command) and `install` (optional pre-build install command), plus `include`/`exclude` for artifact filtering.
+- `[build]` and `[[build_stages]]` are mutually exclusive: having both `build.run` and `[[build_stages]]` is an error.
+- App-level custom build stages can be declared in `tako.toml` under `[[build_stages]]` (top-level array):
   - `name` (optional display label)
-  - `working_dir` (optional, relative to app root; absolute paths and `..` are rejected)
+  - `cwd` (optional, relative to app root; `..` is allowed for monorepo traversal but guarded against escaping the workspace root)
   - `install` (optional command run before `run`)
   - `run` (required command)
-- Build presets do not support `[[build.stages]]`; custom stages are configured only in app `tako.toml`.
-- Per-target build execution order is fixed:
-  - stage 1: preset `[build].install` then preset `[build].build` (when present)
-  - stage 2+: app `[[build.stages]]` in declaration order (`install` then `run` per stage)
-- Docker build containers are ephemeral; dependency caches are persisted with target-scoped Docker volumes keyed by cache kind + target label + builder image (Bun cache: `/var/cache/tako/bun/install/cache`).
-- Default Docker builder images are target-libc specific: `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
-- When `runtime_version` is set in `tako.toml`, deploy uses it directly. Otherwise, runtime version resolution runs `<tool> --version` directly (locally or in Docker build containers), falling back to `latest`.
+- Build uses a workdir approach: copies the project from source root (respecting `.gitignore`), symlinks `node_modules/` directories from the original tree, runs build commands, then archives the result without `node_modules/`.
+- During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
+- Deploy always force-excludes `.git/`, `.tako/`, `.env*`, and `node_modules/` from the deploy archive. Additional exclusions come from `[build].exclude` and `.gitignore`.
+- After extracting the deploy artifact, `tako-server` runs the runtime plugin's production install command (e.g. `bun install --production`) before starting instances.
+- When `runtime_version` is set in `tako.toml`, deploy uses it directly. Otherwise, runtime version resolution runs `<tool> --version` directly, falling back to `latest`.
 - Deploy saves the resolved runtime version into `app.json` (`runtime_version` field).
-- Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, target build commands/image, app custom build stages, include/exclude patterns, asset roots, and app subdirectory.
+- Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, build commands, include/exclude patterns, asset roots, and app subdirectory.
 - Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
-- After each target build (and asset merge), deploy verifies the resolved runtime `main` file exists in the build workspace before artifact packaging; missing files fail deploy with an explicit error.
+- After build, deploy verifies the resolved runtime `main` file exists in the build workspace before artifact packaging; missing files fail deploy with an explicit error.
 - On every deploy, local artifact cache is pruned automatically (best-effort): keep 30 most recent source archives (`*-source.tar.zst`), keep 90 most recent target artifacts (`artifact-cache-*.tar.zst`), and remove orphan target metadata files.
 - Artifact include patterns are resolved in this order:
   - `build.include` (if set)
   - fallback `**/*`
-- Artifact exclude patterns are preset `[build].exclude` plus app `build.exclude`.
-- JS base presets exclude `node_modules`; `tako-server` installs production dependencies on the server using the runtime's package manager install command (from `registry/package_managers/javascript.toml`).
-- Asset roots are preset `[build].assets` plus app `build.assets` (deduplicated), then merged into app `public/` after container build in listed order (later entries overwrite earlier ones).
+- Artifact exclude patterns: `[build].exclude` entries.
+- Asset roots are preset `assets` plus top-level `assets` (deduplicated), merged into app `public/` after build in listed order (later entries overwrite earlier ones).
 
 **Instance behavior:**
 
@@ -305,24 +288,27 @@ Upgrade channel state:
 - `-v, --verbose`: Show verbose output as an append-only execution transcript with timestamps and log levels.
 - `--ci`: Deterministic non-interactive output (no colors, no spinners, no prompts). Can be combined with `--verbose`.
 - `--dry-run`: Show what would happen without performing any side effects. Skips SSH connections, file uploads, config writes, and remote commands. Prints `⏭ ... (dry run)` for each skipped action. Production deploy confirmation is auto-skipped. Supported by: `deploy`, `servers add`, `servers rm`, `delete`.
+- `-c, --config {config}`: Use an explicit app config file instead of `./tako.toml`. If the provided path does not end with `.toml`, Tako appends it automatically. App-scoped commands treat the selected file's parent directory as the project directory. This allows multiple config files in one folder.
 
 CLI output modes:
 
 - **Normal mode** (default): Concise interactive UX with spinners, line replacement, and rich prompts.
 - **Verbose mode** (`--verbose`): Append-only execution transcript. Each line: `HH:MM:SS LEVEL message`. Spinners degrade to log lines. Prompts render as transcript-style (still interactive). DEBUG-level messages are shown.
 - **CI mode** (`--ci`): No ANSI colors, no spinners, no interactive prompts. If a required prompt value is missing, fails with an actionable error message suggesting CLI flags or config.
-- **CI + Verbose** (`--ci --verbose`): Detailed append-only transcript with no colors.
+- **CI + Verbose** (`--ci --verbose`): Detailed append-only transcript with no colors or timestamps.
 
 All status/progress/log output goes to stderr. Only actual command results (URLs, machine-readable data) go to stdout.
 
-Directory selection is command-scoped:
+Config selection is global for app-scoped commands:
 
-- `tako init [DIR]`
-- `tako dev [DIR]`
-- `tako deploy [DIR]`
-- `tako delete [DIR]`
+- default: `./tako.toml`
+- override: `-c path/to/config` (recommended shorthand; `.toml` suffix is optional)
+- project directory: parent directory of the selected config file
 
-### tako init [DIR]
+App-scoped commands that honor `-c/--config`: `init`, `dev`, `logs`, `deploy`, `releases`,
+`delete`, `secrets`, and `scale` when it is using project context.
+
+### tako init
 
 Create `tako.toml` template with helpful comments.
 
@@ -340,16 +326,17 @@ Template behavior:
   - top-level `preset` only when a non-base preset is selected (for base adapter presets and custom mode, it remains commented/unset)
 - Updates `.gitignore` so the app's `.tako/*` stays ignored while `.tako/secrets.json` remains trackable (repo-root `.gitignore` when inside git, app-local `.gitignore` otherwise)
 - Includes commented examples/explanations for all supported `tako.toml` options:
-  - `name`, `main`, top-level `runtime`/`preset`, and `[build]` (`include`, `exclude`, `assets`, `[[build.stages]]`)
+  - `name`, `main`, top-level `runtime`/`preset`/`assets`, `[build]` (`run`, `install`, `include`, `exclude`), and `[[build_stages]]`
   - `[vars]`
   - `[vars.<env>]`
   - `[envs.<env>]` route declarations (`route`/`routes`), server membership (`servers`), and idle scaling policy (`idle_timeout`)
 - Includes a docs link to `https://tako.sh/docs/tako-toml`.
-- Prompts for required app `name` (default from directory-derived app name).
+- Writes the selected config file (default `./tako.toml`).
+- Prompts for required app `name` (default from selected-config parent directory-derived app name).
 - Prompts for required production route (`[envs.production].route`) with default `{name}.example.com`.
 - Detects adapter (`bun`, `node`, `deno`, fallback `unknown`) and prompts for runtime selection.
-- After generating `tako.toml`, init installs the `tako.sh` SDK package via the detected package manager's `add` command.
-- In interactive mode, init fetches runtime-family preset names from official family manifest files (`registry/<language>/presets/<language>.toml`) and shows `Fetching presets...` while loading.
+- After generating `tako.toml`, init installs the `tako.sh` SDK package via the selected runtime's package-manager `add` command.
+- In interactive mode, init fetches runtime-family preset names from official family manifest files (`presets/<language>/<language>.toml`) and shows `Fetching presets...` while loading.
 - For built-in base adapters, init defaults to:
   - Bun: `bun`
   - Node: `node`
@@ -362,7 +349,7 @@ Template behavior:
   - if inferred `main` matches preset default (or preset default exists and no inference is available), omit top-level `main`;
   - prompt only when neither adapter inference nor preset default `main` is available.
 
-If `tako.toml` already exists:
+If the selected config file already exists:
 
 - Interactive terminal: `tako init` asks for overwrite confirmation.
 - Non-interactive terminal: silently skips (no overwrite).
@@ -384,12 +371,12 @@ CLI upgrade strategy:
 - `--stable`: forces stable channel and persists it as default
 - Without channel flags, `tako upgrade` uses persisted `upgrade_channel` from global config (default: `stable`)
 
-### tako dev [--name {name}] [DIR]
+### tako dev [--name {name}]
 
 Start (or attach to) a local development session for the current app, backed by a persistent dev daemon.
 
-- `--name` overrides the app name (defaults to resolving from `tako.toml` or directory name).
-- `tako dev` is a **client**: it ensures `tako-dev-server` is running, then registers the current app directory with the daemon.
+- `--name` overrides the app name (defaults to resolving from the selected config file or its parent directory name).
+- `tako dev` is a **client**: it ensures `tako-dev-server` is running, then registers the selected config file with the daemon.
   - On macOS, `tako dev` also ensures the socket-activated `tako-loopback-proxy` helper is installed and loaded for loopback-only `:80/:443` ingress.
   - When running from a source checkout, `tako dev` prefers the repo-local `target/debug|release/tako-dev-server` binary.
   - When running from a source checkout on macOS, `tako dev` can also build the repo-local `tako-loopback-proxy` binary when the helper needs installation or repair.
@@ -400,15 +387,15 @@ Start (or attach to) a local development session for the current app, backed by 
   - If daemon startup fails, `tako dev` reports the last lines from `{TAKO_HOME}/dev-server.log`.
   - `tako dev` waits up to ~15 seconds for the daemon socket after spawn before reporting startup failure.
   - The daemon performs an upfront bind-availability check for its HTTPS listen address and exits immediately with an explicit error when that address is unavailable.
-- `tako dev` **registers** the app with the daemon (project directory is the unique key, state is persisted in SQLite at `{TAKO_HOME}/dev-server.db`).
+- `tako dev` **registers** the app with the daemon (selected config path is the unique key, state is persisted in SQLite at `{TAKO_HOME}/dev-server.db`).
 - App statuses: `running` (actively serving), `idle` (process stopped, routes retained for wake-on-request), `stopped` (unregistered, routes removed).
 - The app starts immediately when `tako dev` starts (1 local instance) and transitions to idle after 10 minutes of no attached CLI clients.
   - After an idle transition, the next HTTP request triggers wake-on-request: the daemon spawns the app process and routes the request once the app is healthy.
   - Idle shutdown is suppressed while there are in-flight requests.
   - When `Ctrl+c` is pressed, Tako unregisters the app (sets status to stopped, removes routes, kills the process).
   - Pressing `b` (background) hands the running process off to the daemon and exits the CLI. The daemon monitors the process and keeps routes active.
-  - Running `tako dev` again from the same directory attaches to the existing session if the app is running or idle.
-  - Dev logs are written to a shared per-app/per-project stream at `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl`.
+  - Running `tako dev` again with the same selected config file attaches to the existing session if the app is running or idle.
+  - Dev logs are written to a shared per-app/per-config stream at `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl`.
   - Each persisted log record stores a single `timestamp` token (`hh:mm:ss`) instead of split hour/minute/second fields.
   - When a new owning session starts, Tako truncates that shared stream before writing fresh logs for the new session.
   - Attached clients replay the existing file contents, then follow new lines from the same stream.
@@ -476,7 +463,7 @@ Start (or attach to) a local development session for the current app, backed by 
 
 Stop a running dev app.
 
-- Without arguments: stops the app for the current directory.
+- Without arguments: stops the app for the selected config file (default `./tako.toml`).
 - With `name`: stops the app with that name.
 - `--all`: stops all registered dev apps.
 
@@ -535,12 +522,12 @@ Status flow helpers:
 - If no servers are configured and the terminal is interactive, status offers to run the add-server wizard.
 - If no deployed apps are found, status reports that explicitly.
 
-### tako logs [--env {environment}] [--tail] [--days {N}] [DIR]
+### tako logs [--env {environment}] [--tail] [--days {N}]
 
 View or stream logs from all servers in an environment.
 
 - Environment defaults to `production`.
-- Environment must exist in `tako.toml`.
+- Environment must exist in the selected config file.
 - Fetches from all mapped servers in parallel.
 - Prefixes each line with `[server-name]` when multiple servers are present.
 
@@ -710,7 +697,7 @@ Reads `keys/{env}`.
 
 When `--env` is omitted, `production` is used.
 
-### tako deploy [--env {environment}] [--yes|-y] [DIR]
+### tako deploy [--env {environment}] [--yes|-y]
 
 Build and deploy application to environment's servers.
 
@@ -736,32 +723,27 @@ Deploy flow helpers:
 
 1. Pre-deployment validation (secrets present, server target metadata present/valid for all selected servers)
 2. Resolve source bundle root (git root when available; otherwise app directory)
-3. Resolve app subdirectory relative to source bundle root
-4. Resolve deploy runtime `main` (`main` from `tako.toml`; otherwise preset top-level `main`, with JS index fallback order: `index.<ext>` then `src/index.<ext>` for `ts`/`tsx`/`js`/`jsx` when applicable)
-5. Create source archive (`.tako/artifacts/{version}-source.tar.zst`) with canonical deployed `app.json` at app path inside archive
+3. Resolve app subdirectory from the selected config file's parent directory relative to source bundle root
+4. Resolve deploy runtime `main` (`main` from `tako.toml`; otherwise preset `main`, with JS index fallback order: `index.<ext>` then `src/index.<ext>` for `ts`/`tsx`/`js`/`jsx` when applicable)
+5. Resolve app preset (top-level `preset` in `tako.toml`), fetching unpinned official aliases from `master`, then persist resolved metadata in `.tako/build.lock.json`
+6. Prepare workdir: copy project from source root (respecting `.gitignore`), symlink `node_modules/` directories from original tree
+7. Run build commands in workdir:
+   - If `[build]` is used: run `build.install` (if set), then `build.run`
+   - If `[[build_stages]]` is used: run stages in declaration order (`install` then `run` per stage)
+   - Merge configured assets into app `public/`
+   - Verify resolved runtime `main` exists in the built app directory
+   - Save resolved runtime version into `app.json` (`runtime_version` field) for server-side version pinning
+8. Archive workdir (excluding `node_modules/`) as deploy artifact
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
-   - Best-effort local artifact cache prune runs before target builds (retention: 30 source archives, 90 target artifacts; orphan target metadata is removed).
-6. Resolve build preset (top-level `preset` override or adapter base preset from top-level `runtime`/detection), fetching unpinned official aliases from `master` (fetch failure still fails resolution; runtime base aliases fall back to embedded defaults when missing from fetched family manifests), then persist resolved metadata in `.tako/build.lock.json`
-7. Build target artifacts locally (one artifact per unique server target label):
-   - Resolve deterministic cache key per target.
-   - On cache hit, reuse existing verified target artifact.
-   - On cache miss (or invalid cache entry), extract source archive into a temporary workspace.
-   - Build in Docker when preset `[build].container = true`.
-   - Build on local host workspace when `[build].container = false`.
-   - When `container` is unset, default to Docker only when `[build].targets` is non-empty.
-   - Run build commands in fixed order: preset stage first (`[build].install`, then `[build].build`), then app `[[build.stages]]` in declaration order.
-   - Merge configured assets into app `public/`.
-   - Verify resolved runtime `main` exists in the built app directory.
-   - Save resolved runtime version into `app.json` (`runtime_version` field) for server-side version pinning.
-   - Package filtered artifact tarball for that target using include/exclude rules and store it in local cache.
-   - Per-target cache writes are serialized with a local lock to avoid duplicate concurrent builds.
-8. Deploy to all servers in parallel:
+   - Best-effort local artifact cache prune runs before builds (retention: 30 source archives, 90 target artifacts; orphan target metadata is removed)
+   - Package filtered artifact tarball using include/exclude rules and store in local cache
+9. Deploy to all servers in parallel:
    - Require `tako-server` to be pre-installed and running on each server
    - Acquire deploy lock (prevents concurrent deploys)
    - Upload and extract target-specific artifact
+   - Server runs production dependency install (runtime plugin's install command)
    - Query server for the app's current secrets hash; if it matches the local secrets hash, skip sending secrets (server keeps existing). If hashes differ (or app is new), include decrypted secrets in the deploy command.
    - Send deploy command with routes and optional secrets payload; `tako-server` reads non-secret runtime/app config from release `app.json` and injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`) when spawning instances
-   - Runtime prep runs on server before rolling update (Bun: dependency install in release directory)
    - Perform rolling update
    - Release lock and clean up old releases (>30 days)
 
@@ -773,25 +755,20 @@ Deploy flow helpers:
 
 **Source deploy contract:**
 
-- Deploy archive source is the app's source bundle root (git root when available; otherwise app directory).
-- Deploy target app path is `DIR` from CLI (`tako deploy [DIR]`) relative to the source bundle root.
-- Source filtering uses `.gitignore`.
-- These paths are always force-excluded from archive payload: `.git/`, `.tako/`, `.env*`. Additional exclusions (`node_modules/`, `target/`, etc.) come from preset `[build].exclude` and `.gitignore`.
-- Deploy always builds target-specific artifacts locally (Docker when preset build mode resolves to container, local host otherwise); servers receive prebuilt artifacts and do not run app build steps during deploy.
-- `tako-server` runs the runtime's package manager production install command for the release before starting/rolling instances.
-- Build logic runs in fixed order per target: preset `[build].install`/`[build].build` stage first, then app `[[build.stages]]` from `tako.toml`.
-- Runtime prep/start on server comes from preset top-level `install` and `start`.
-- During container builds, deploy reuses target-scoped dependency cache volumes (runtime-specific cache mounts such as Bun), keyed by cache kind, target label, and builder image.
-- During container builds, deploy defaults to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
-- During local builds, deploy uses `runtime_version` from `tako.toml` when set. Otherwise it resolves runtime version by running `<tool> --version` directly, falling back to `latest`.
+- Deploy archive source is the app's source bundle root (git root when available; otherwise selected-config parent directory).
+- Deploy target app path is the selected config file's parent directory relative to the source bundle root.
+- Build uses a workdir: copies project from source root (respecting `.gitignore`), symlinks `node_modules/` from the original tree (build tools read but don't modify), runs build commands in the workdir, then archives the result excluding `node_modules/`.
+- These paths are always force-excluded from the deploy archive: `.git/`, `.tako/`, `.env*`, `node_modules/`. Additional exclusions come from `[build].exclude` and `.gitignore`.
+- Servers receive prebuilt artifacts and do not run app build steps during deploy. After extracting the artifact, `tako-server` runs the runtime plugin's production install command (e.g. `bun install --production`) before starting instances.
+- Build logic runs in the workdir: `[build].install` then `[build].run` (simple mode), or `[[build_stages]]` in declaration order (multi-stage mode).
+- Deploy uses `runtime_version` from `tako.toml` when set. Otherwise it resolves runtime version by running `<tool> --version` directly, falling back to `latest`.
 - Artifact include precedence: `build.include` -> `**/*`.
-- Artifact exclude list: preset `[build].exclude` plus `build.exclude`.
-- Asset roots are preset `[build].assets` plus app `build.assets` (deduplicated), merged into app `public/` after container build with ordered overwrite.
+- Artifact exclude list: `[build].exclude` entries.
+- Asset roots are preset `assets` plus top-level `assets` (deduplicated), merged into app `public/` after build with ordered overwrite.
 - Target artifacts are cached locally by deterministic key and reused across deploys when build inputs are unchanged.
 - Cached artifacts are validated by checksum/size before reuse; invalid cache entries are rebuilt automatically.
-- Artifact cache keys include runtime tool + resolved runtime version + Docker/local mode to avoid cross-target and cross-runtime cache contamination.
 - Deploy artifacts include the canonical `app.json` used by `tako-server` at runtime.
-- Release `app.json` contains resolved runtime metadata (`runtime`, `main`, optional `install`/`start`), non-secret env vars, environment idle timeout, and optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
+- Release `app.json` contains resolved runtime metadata (`runtime`, `main`, `package_manager`), non-secret env vars, environment idle timeout, and optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
 - Deploy does not write a release `.env` file; non-secret env vars live in release `app.json`, secrets are stored encrypted in SQLite on the server, and `tako-server` injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`) when spawning instances.
 - Deploy queries each server's secrets hash before sending the deploy command. If the hash matches the local secrets, secrets are omitted from the payload and the server keeps its existing secrets. This avoids unnecessary secret transmission and ensures new servers or servers with stale secrets are automatically provisioned.
 - Deploy requires valid `arch` and `libc` metadata in each selected `[[servers]]` entry.
@@ -823,8 +800,7 @@ When the stored desired instance count is `0`, rolling deploy still starts one w
 **App start command (current):**
 
 - Release `app.json` is required for app startup.
-- If release `app.json` includes non-empty `start`, tako-server uses that command (expanding `{main}` placeholders).
-- If `start` is missing/empty, tako-server falls back by runtime, using the `[server].launch_args` template from the runtime definition and resolving the SDK entrypoint (`[server].entrypoint_path`) from app dir or parent dirs:
+- tako-server derives the start command from the runtime plugin, resolving the SDK entrypoint from the app dir or parent dirs:
   - `bun`: `bun run <resolved-entrypoint> <app.json.main>`
   - `node`: `node --experimental-strip-types <resolved-entrypoint> <app.json.main>`
   - `deno`: `deno run --allow-net --allow-env --allow-read <resolved-entrypoint> <app.json.main>`
@@ -878,17 +854,17 @@ Roll back the current app/environment to a previously deployed release/build id.
 Change the desired instance count for a deployed app.
 
 - `instances` is the desired instance count per targeted server.
-- In a project directory, Tako resolves the app name from `tako.toml` (or directory fallback when top-level `name` is unset).
+- In project context, Tako resolves the app name from the selected config file (or selected-config parent directory fallback when top-level `name` is unset).
 - In project context, app-scoped server commands target the remote deployment identity `{app}/{env}`.
-- Outside a project directory, `--app` is required. Use `--app <app> --env <env>` or pass the full deployment id as `--app <app>/<env>`.
+- Outside project context, `--app` is required. Use `--app <app> --env <env>` or pass the full deployment id as `--app <app>/<env>`.
 - When `--server` is omitted, `--env` is required and Tako scales every server listed in `[envs.<env>].servers`.
 - When `--server` is provided, Tako scales only that server.
-- In a project directory, `tako scale --server <server>` defaults to `production`.
+- In project context, `tako scale --server <server>` defaults to `production`.
 - When both `--env` and `--server` are provided, the server must belong to that environment.
 - Scale uses persisted runtime app state on the server, so the desired instance count survives deploys, rollbacks, and server restarts.
 - Scaling to `0` drains and stops excess instances after in-flight requests finish (or drain timeout).
 
-### tako delete [--env {environment}] [--server {server}] [--yes|-y] [DIR]
+### tako delete [--env {environment}] [--server {server}] [--yes|-y]
 
 Delete a deployed app from one specific environment/server deployment target.
 
@@ -896,17 +872,17 @@ Target selection behavior:
 
 - `tako delete` removes exactly one deployment target, not every server in an environment.
 - In an interactive terminal, when Tako needs more information it first loads deployment state with a `Getting deployment information` spinner.
-- In a project (`tako.toml` present), Tako resolves the app name from the project:
+- In project context (selected config file present), Tako resolves the app name from the selected config:
   - with neither `--env` nor `--server`, Tako prompts with deployed targets like `production from hkg`
   - with `--env` only, Tako prompts for a matching server
   - with `--server` only, Tako prompts for a matching environment
   - with both `--env` and `--server`, Tako skips discovery and goes straight to confirmation
-- Outside a project, Tako discovers deployed targets across configured servers and includes app selection when needed because there is no local app context.
-- In non-interactive mode, `--yes`, `--env`, and `--server` are all required. Outside a project, those flags must still identify a single deployed target; otherwise the command fails with guidance to rerun interactively from the app directory.
+- Outside project context, Tako discovers deployed targets across configured servers and includes app selection when needed because there is no local app context.
+- In non-interactive mode, `--yes`, `--env`, and `--server` are all required. Outside project context, those flags must still identify a single deployed target; otherwise the command fails with guidance to rerun interactively from the app directory or with `-c`.
 
 Validation:
 
-- In project mode, `--env` must be declared in `tako.toml` (`[envs.<name>]`).
+- In project mode, `--env` must be declared in the selected config file (`[envs.<name>]`).
 - `--server` must name a configured server from `config.toml` `[[servers]]`.
 - `development` is reserved for `tako dev` and cannot be used with `tako delete`.
 
@@ -1019,11 +995,11 @@ Reference scripts in this repo:
 
 **Runtime binary download engine:**
 
-- `tako-server` downloads runtime binaries directly from upstream releases using the `[download]` spec in runtime TOML definitions (no external version manager dependency).
+- `tako-server` downloads runtime binaries directly from upstream releases using download specs in runtime plugins (no external version manager dependency).
 - Supports zip and tar.gz archive formats with SHA-256 checksum verification.
 - Downloaded binaries are cached at `{data_dir}/runtimes/{tool}/{version}/`.
 - Supports musl detection for Alpine and other musl-based systems.
-- If the runtime has no `[download]` section, the binary must be available on PATH.
+- If the runtime plugin has no download spec, the binary must be available on PATH.
 
 **Default behavior (no configuration file needed):**
 

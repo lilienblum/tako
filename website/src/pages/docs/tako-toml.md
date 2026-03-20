@@ -7,7 +7,9 @@ current: tako-toml
 
 # `tako.toml` Reference
 
-`tako.toml` lives in your project root and tells Tako how to build, configure, and deploy your app. Run `tako init` to generate one with helpful comments and sensible defaults.
+`tako.toml` is Tako's default project config file. It usually lives in your project root and tells Tako how to build, configure, and deploy your app. Run `tako init` to generate one with helpful comments and sensible defaults.
+
+App-scoped commands use `./tako.toml` by default. If you pass `-c` / `--config <CONFIG>`, Tako uses that file instead and treats its parent directory as the project directory. If the path does not end with `.toml`, Tako appends it automatically, and omitting the suffix is the recommended shorthand. That lets you keep multiple config files in one folder when needed.
 
 ## Minimal Config
 
@@ -38,7 +40,7 @@ Optional but recommended. A stable identifier used in deploy paths and local dev
 name = "my-app"
 ```
 
-If omitted, Tako falls back to a sanitized version of the project directory name. The remote server identity for each deployment is `{name}/{env}`, so the same app name can be deployed to multiple environments on one server. Renaming the app later creates a new identity on the server -- remove the old deployment manually if needed.
+If omitted, Tako falls back to a sanitized version of the selected config file's parent directory name. The remote server identity for each deployment is `{name}/{env}`, so the same app name can be deployed to multiple environments on one server. Renaming the app later creates a new identity on the server -- remove the old deployment manually if needed.
 
 **Name rules:**
 
@@ -84,7 +86,7 @@ runtime_version = "1.2.3"
 
 ### `preset`
 
-Optional build preset. Determines build commands, default entrypoint, dev command, and deploy artifact filtering.
+Optional app preset. Provides default `main` entrypoint and `assets` directories for framework-specific apps.
 
 ```toml
 preset = "tanstack-start"
@@ -104,35 +106,80 @@ When omitted, Tako uses the base preset for the selected runtime (from `runtime`
 
 **How presets work:**
 
-- Base presets (`bun`, `node`, `deno`) are built into the CLI from embedded runtime definitions. They define lifecycle defaults for `dev`, `install`, `start`, and build commands.
-- Family presets (like `tanstack-start` and `vite`) live in `registry/<language>/presets/<language>.toml` in the Tako repo and are fetched from `master` on each resolve. Fetch failures fail the resolve.
+- Presets are metadata-only: they define `name`, `main`, and `assets` defaults. They do not contain build, install, start, or dev commands.
+- Base presets (`bun`, `node`, `deno`) are built into the CLI from embedded runtime definitions.
+- Family presets (like `tanstack-start`) live in `presets/<language>/<language>.toml` in the Tako repo and are fetched from `master` on each resolve. Fetch failures fail the resolve.
 - Base runtime aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from the fetched family manifest.
 - Resolved preset metadata is written to `.tako/build.lock.json` for visibility and cache-key inputs.
 
 **Preset effect on `tako dev`:**
 
-- When `preset` is omitted, Tako ignores the preset's `dev` command and runs a runtime-default command with resolved `main`:
-  - Bun: `bun run node_modules/tako.sh/src/entrypoints/bun.ts {main}`
-  - Node: `node --experimental-strip-types node_modules/tako.sh/src/entrypoints/node.ts {main}`
-  - Deno: `deno run --allow-net --allow-env --allow-read node_modules/tako.sh/src/entrypoints/deno.ts {main}`
-- When `preset` is explicitly set, Tako uses the preset's top-level `dev` command.
+- When `preset` is omitted, Tako runs the runtime-default dev script:
+  - Bun: `bun run dev`
+  - Node: `npm run dev`
+  - Deno: `deno task dev`
+- When `preset` is explicitly set, the same runtime-default dev scripts are used (presets do not define dev commands).
 
 See [Presets](/docs/presets) for the full preset schema and available presets.
+
+### `assets`
+
+Optional top-level list of project-relative directories to merge into the deployed app's `public/` directory after build.
+
+```toml
+assets = ["dist/client", "assets/shared"]
+```
+
+Asset directories are merged in listed order. When files conflict, later entries overwrite earlier ones. These are combined with preset-defined assets (deduplicated).
+
+### `package_manager`
+
+Optional package manager override. Controls which package manager Tako uses for dependency installation.
+
+```toml
+package_manager = "pnpm"
+```
+
+When omitted, Tako auto-detects the package manager from your `package.json` `packageManager` field or lockfiles.
 
 ---
 
 ## `[build]`
 
-Deploy artifact build configuration. All fields are optional.
+Deploy artifact build configuration. Defines how your app is built before deployment.
 
 ```toml
 [build]
-include = ["dist/**", ".output/**"]
-exclude = ["**/*.map"]
-assets = ["dist/client", "assets/shared"]
+run = "bun run build"
+install = "bun install"
 ```
 
-Note: standalone top-level `build = "..."` and `assets = [...]` are rejected. Build configuration must go inside the `[build]` section.
+### `run`
+
+The build command to execute during deploy.
+
+```toml
+[build]
+run = "vinxi build"
+```
+
+### `install`
+
+Optional pre-build install command.
+
+```toml
+[build]
+install = "bun install"
+```
+
+### `cwd`
+
+Optional working directory for build commands, relative to the project root. Allows `..` for monorepo traversal (but must not escape the project root).
+
+```toml
+[build]
+cwd = "packages/app"
+```
 
 ### `include`
 
@@ -147,59 +194,43 @@ Defaults to `**/*` when not set. These patterns are applied after the build comp
 
 ### `exclude`
 
-Glob patterns for files to exclude from the deploy artifact. These are appended to the preset's own excludes.
+Glob patterns for files to exclude from the deploy artifact.
 
 ```toml
 [build]
 exclude = ["**/*.map", "tests/**"]
 ```
 
-The full exclude list is: preset `[build].exclude` entries first, then your `build.exclude` entries. Duplicates are removed.
+Some paths are always excluded regardless of config: `.git/`, `.tako/`, and `.env*`. Additional exclusions (like `node_modules/`) come from `.gitignore`.
 
-Some paths are always excluded regardless of config: `.git/`, `.tako/`, and `.env*`. Additional exclusions (like `node_modules/`, `target/`) come from the preset and `.gitignore`.
+---
 
-### `assets`
+## `[[build_stages]]`
 
-Project-relative directories to merge into the deployed app's `public/` directory after build.
-
-```toml
-[build]
-assets = ["dist/client", "assets/shared"]
-```
-
-Asset directories are merged in listed order. When files conflict, later entries overwrite earlier ones. These are combined with preset-defined assets (deduplicated).
-
-### `[[build.stages]]`
-
-Custom build stages that run after preset build commands. Each stage is a TOML array-of-tables entry.
+Custom multi-stage build pipeline. Each stage is a top-level TOML array-of-tables entry. **Mutually exclusive with `[build]` when `[build]` has a `run` field** -- use one or the other.
 
 ```toml
-[[build.stages]]
+[[build_stages]]
 name = "frontend-assets"
-working_dir = "frontend"
+cwd = "frontend"
 install = "bun install"
 run = "bun run build"
 
-[[build.stages]]
+[[build_stages]]
 name = "generate-api-types"
 run = "bun run generate:types"
 ```
 
 **Stage fields:**
 
-| Field         | Required | Description                                                                      |
-| ------------- | -------- | -------------------------------------------------------------------------------- |
-| `name`        | No       | Display label shown in deploy output                                             |
-| `working_dir` | No       | App-relative directory for stage commands. Absolute paths and `..` are rejected. |
-| `install`     | No       | Command run before `run`                                                         |
-| `run`         | Yes      | The build command to execute                                                     |
+| Field     | Required | Description                                                                                      |
+| --------- | -------- | ------------------------------------------------------------------------------------------------ |
+| `name`    | No       | Display label shown in deploy output                                                             |
+| `cwd`     | No       | Working directory relative to tako.toml location. Allows `..` for monorepo traversal.            |
+| `install` | No       | Command run before `run`                                                                         |
+| `run`     | Yes      | The build command to execute                                                                     |
 
-**Execution order per target:**
-
-1. Preset stage: `[build].install` then `[build].build` (when the preset defines them)
-2. App stages: `[[build.stages]]` in declaration order (`install` then `run` per stage)
-
-Custom stages are only supported in `tako.toml`, not in preset definitions.
+Stages run in declaration order. Each stage runs its `install` (if set) then `run`.
 
 ---
 
@@ -367,14 +398,15 @@ This is independent of `--verbose`, which controls only Tako CLI and dev-server 
 
 Tako validates your `tako.toml` and reports clear errors when something is wrong:
 
-- **Top-level keys**: Only `name`, `main`, `runtime`, `runtime_version`, `preset`, and `[build]` are allowed at the top level. Standalone `build = "..."` or `assets = [...]` are rejected.
+- **Top-level keys**: Only `name`, `main`, `runtime`, `runtime_version`, `package_manager`, `preset`, `assets`, `[build]`, `[[build_stages]]`, `[vars]`, and `[envs]` are allowed at the top level.
+- **Mutual exclusion**: `[build]` with a `run` field and `[[build_stages]]` cannot both be present.
 - **Environment sections**: `[envs.<env>]` accepts only `route`/`routes`, `servers`, `idle_timeout`, and `log_level`. Env vars belong in `[vars]` / `[vars.<env>]`.
 - **Route exclusivity**: Each environment can set `route` or `routes`, but not both.
 - **Non-development routes required**: Every non-development environment must have `route` or `routes` defined (empty lists are rejected).
 - **Development route restrictions**: Must be `{app}.tako.test` or a subdomain of it.
 - **Route hostnames required**: Path-only routes (like `"/api/*"`) are invalid.
-- **Build stage paths**: `working_dir` must be relative to the app root. Absolute paths and `..` are rejected.
-- **Build stage run**: Each `[[build.stages]]` entry must have a `run` field.
+- **Build stage paths**: `cwd` allows `..` for monorepo traversal but must not escape the project root. Absolute paths are rejected.
+- **Build stage run**: Each `[[build_stages]]` entry must have a `run` field.
 - **Preset namespacing**: Namespaced aliases like `js/tanstack-start` in `preset` are rejected. Use `runtime` for the runtime and keep `preset` runtime-local.
 - **Preset references**: `github:` preset references are not supported.
 - **App name format**: Must be DNS-compatible: lowercase letters, numbers, hyphens, starting with a letter.
@@ -407,25 +439,32 @@ runtime = "bun"
 # Pinned runtime version (optional; auto-detected if omitted)
 runtime_version = "1.2.3"
 
+# Package manager (optional; auto-detected from package.json or lockfiles)
+# package_manager = "pnpm"
+
 # Build preset (optional; omit to use the base runtime preset)
 # preset = "tanstack-start"
 # preset = "tanstack-start@abc1234def"  # pinned to a commit
 
+# Directories merged into deployed public/ after build (optional)
+# assets = ["dist/client", "assets/shared"]
+
 # ── Build Configuration ──────────────────────────────────────
 [build]
+run = "bun run build"
+install = "bun install"
+# cwd = "packages/app"  # optional working directory
+
 # Artifact include globs (default: all files)
 # include = ["dist/**", ".output/**"]
 
-# Artifact exclude globs (appended to preset excludes)
+# Artifact exclude globs
 # exclude = ["**/*.map"]
 
-# Directories merged into deployed public/ after build
-assets = ["assets/shared"]
-
-# Custom build stages (run after preset build commands)
-# [[build.stages]]
+# ── Or use multi-stage builds (mutually exclusive with [build].run) ──
+# [[build_stages]]
 # name = "frontend-assets"
-# working_dir = "frontend"
+# cwd = "frontend"
 # install = "bun install"
 # run = "bun run build"
 

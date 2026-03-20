@@ -25,29 +25,27 @@ Tako's protocol is v0: do not keep any legacy code, backward compatibility shims
    - `website/src/pages/docs/deployment.md`
    - `website/src/pages/docs/development.md`
 
-8. **Keep registry `_example` files in sync** - When changing the schema or fields of any TOML file under `registry/`, update the corresponding `_example` file in the same directory to match. Examples must mirror every section and field that real files use (commented out with descriptions).
+8. **Keep preset `_example` files in sync** - When changing the schema or fields of any TOML file under `presets/`, update the corresponding `_example` file in the same directory to match.
 
-9. **Keep registry definitions canonical** - Runtime, package manager, and preset definitions live in `registry/`. The structure is:
-   - `registry/{language}/runtimes/{name}.toml` — runtime definitions
-   - `registry/{language}/presets/{language}.toml` — family preset definitions (sections per preset)
-   - `registry/package_managers/{language}.toml` — package manager definitions (sections per PM)
+9. **Runtime behavior lives in plugins** - Runtime definitions (install commands, launch args, entrypoint paths) are in `tako-runtime/src/plugins/`. Preset definitions live in `presets/`.
+   - `presets/{language}/{language}.toml` — family preset definitions (sections per preset)
 
 ## Project Structure
 
 **Rust Crates:**
 
 - `tako-core/` - Shared protocol types (Command, Response enums)
-- `tako-runtime/` - Runtime/PM registry types, download engine, caching
+- `tako-runtime/` - Runtime plugins, download engine, caching
 - `tako-server/` - Remote server runtime (proxy, instances, TLS, sockets)
 - `tako/` - CLI tool (all commands)
 
 **Registry:**
 
-- `registry/` - TOML-driven runtime, package manager, and preset definitions
+- `presets/` - Preset definitions (e.g. tanstack-start)
 
 **SDK (current implementation):**
 
-- `sdk/js/` - `tako.sh` JavaScript/TypeScript SDK package (npm)
+- `sdk/javascript/` - `tako.sh` JavaScript/TypeScript SDK package (npm)
 
 **Website:**
 
@@ -71,7 +69,7 @@ cargo test -p tako-runtime
 cargo test -p tako-server
 
 # SDK (current JS/TS implementation)
-cd sdk/js && bun install
+cd sdk/javascript && bun install
 bun run build && bun run typecheck
 bun test
 ```
@@ -136,8 +134,9 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
 ### After Writing Code
 
 1. Ensure all applicable tests pass (Rust crates and SDK; website has no test requirement)
-2. Update SPEC.md if user-facing behavior changed
-3. If `SPEC.md` changed, regenerate/sync SPEC-derived website docs:
+2. **After major refactors (config schema changes, build/deploy flow rewrites, protocol changes):** run CLI tests (`just test cli`) and E2E tests (`just test e2e`). Update E2E fixtures (`e2e/fixtures/`) and CLI test cases (`e2e/cli/`) when command behavior or config shape changes.
+3. Update SPEC.md if user-facing behavior changed
+4. If `SPEC.md` changed, regenerate/sync SPEC-derived website docs:
    - `website/src/pages/docs/how-tako-works.md`
    - `website/src/pages/docs/tako-toml.md`
    - `website/src/pages/docs/presets.md`
@@ -145,10 +144,10 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
    - `website/src/pages/docs/cli.md`
    - `website/src/pages/docs/deployment.md`
    - `website/src/pages/docs/development.md`
-4. If preset definitions changed, update the relevant `registry/<language>/presets/<language>.toml` file and ensure no old per-preset files are introduced.
-5. Update affected README.md files if setup/usage/run commands changed
-6. Close or update the related issue/task entry
-7. Keep implementation details OUT of SPEC.md (focus on what users see/do)
+5. If preset definitions changed, update the relevant `presets/<language>/<language>.toml` file and ensure no old per-preset files are introduced.
+6. Update affected README.md files if setup/usage/run commands changed
+7. Close or update the related issue/task entry
+8. Keep implementation details OUT of SPEC.md (focus on what users see/do)
 
 ### Example Changes
 

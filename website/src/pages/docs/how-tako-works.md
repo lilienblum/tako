@@ -42,7 +42,7 @@ tako dev
 Here is what happens under the hood:
 
 1. The CLI ensures the dev daemon is running (starts it if needed).
-2. It registers your app directory with the daemon.
+2. It registers the selected config file with the daemon.
 3. One local instance of your app starts immediately.
 4. HTTPS is set up using a local Certificate Authority -- no browser security warnings once the CA is trusted.
 
@@ -64,16 +64,15 @@ This builds your app locally, uploads the artifact to your server(s), and perfor
 
 ### 1. Validate and Prepare
 
-Tako validates your `tako.toml` configuration, resolves your app name, checks that secrets are in order, and verifies server connectivity.
+Tako validates the selected config file, resolves your app name, checks that secrets are in order, and verifies server connectivity.
 
 ### 2. Build Locally
 
-Your app is always built on your machine (or in a local Docker container), never on the server. Tako:
+Your app is always built on your machine, never on the server. Tako:
 
-- Creates a source archive from your project (respecting `.gitignore`)
-- Resolves the build preset for your runtime
-- Runs preset build steps, then any custom `[[build.stages]]` you have defined
-- Packages the result into a target-specific artifact
+- Copies your project into a clean workdir (respecting `.gitignore`), symlinks `node_modules/` from the original tree
+- Runs your build commands (`[build]` or `[[build_stages]]`)
+- Packages the result into a deploy artifact (excluding `node_modules/` -- the server installs its own production dependencies)
 - Caches artifacts locally so unchanged builds are instant on subsequent deploys
 
 ### 3. Upload and Deploy

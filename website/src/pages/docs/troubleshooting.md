@@ -33,7 +33,7 @@ tako dev --verbose
 
 ### `--ci`
 
-The `--ci` flag produces deterministic, non-interactive output with no colors, spinners, or prompts. If a required prompt value is missing, the command fails with an actionable error message suggesting CLI flags or config to set. Combine it with `--verbose` for maximum detail in automated environments:
+The `--ci` flag produces deterministic, non-interactive output with no colors, spinners, or prompts. If a required prompt value is missing, the command fails with an actionable error message suggesting CLI flags or config to set. Combined with `--verbose`, it stays append-only but still omits colors and timestamps:
 
 ```bash
 tako deploy --ci --verbose
@@ -139,11 +139,9 @@ If a deploy fails after creating a new release directory on the server, Tako aut
 Things to check:
 
 - **Preset resolution:** Make sure your `preset` value is a runtime-local alias (like `tanstack-start`), not a namespaced alias (like `js/tanstack-start`, which is rejected). `github:` refs are also not supported.
-- **Build order:** Preset build commands run first (`[build].install` then `[build].build`), followed by app `[[build.stages]]` in declaration order.
-- **Container builds:** If your preset sets `[build].container = true`, make sure Docker is available locally and can pull the default builder images (`ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets, `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets).
-- **JS runtime builds:** JS runtime base presets (`bun`, `node`, `deno`) default to local build mode (`container = false`) unless explicitly set otherwise.
-- **Preset fetch:** Unpinned official aliases are fetched from `master` on each resolve. If fetch fails, resolution fails. Runtime base aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from fetched family manifests. Presets are fetched from `registry/<language>/presets/<language>.toml`.
-- **Stale Docker cache:** Containerized builds cache dependencies in Docker volumes prefixed `tako-build-cache-`. If needed, remove stale volumes and redeploy.
+- **Build commands:** Check your `[build].run` or `[[build_stages]]` entries. These two are mutually exclusive -- you cannot have both.
+- **Working directory:** If using `cwd` in `[build]` or `[[build_stages]]`, make sure the path is relative and does not escape the project root.
+- **Preset fetch:** Unpinned official aliases are fetched from `master` on each resolve. If fetch fails, resolution fails. Runtime base aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from fetched family manifests. Presets are fetched from `presets/<language>/<language>.toml`.
 
 ### Deploy entrypoint missing after build
 

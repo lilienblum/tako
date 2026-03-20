@@ -12,7 +12,7 @@ Everything you can do with the `tako` command line tool.
 ## Usage
 
 ```bash
-tako [--version] [-v|--verbose] [--ci] [--dry-run] <command> [args]
+tako [--version] [-v|--verbose] [--ci] [--dry-run] [-c|--config <CONFIG>] <command> [args]
 ```
 
 ## Global Options
@@ -27,6 +27,8 @@ These flags work with any command.
 
 `--dry-run` shows what a command would do without performing any side effects. SSH connections, file uploads, config writes, and remote commands are all skipped. Each skipped action is printed as `⏭ ... (dry run)`. Supported by: `deploy`, `servers add`, `servers rm`, `delete`.
 
+`-c`, `--config <CONFIG>` selects an explicit app config file instead of `./tako.toml`. If the path does not end with `.toml`, Tako appends it automatically. App-scoped commands treat that file's parent directory as the project directory, and omitting `.toml` is the recommended shorthand.
+
 ## Output Modes
 
 Tako has three output modes you can mix and match:
@@ -35,23 +37,20 @@ Tako has three output modes you can mix and match:
 
 **Verbose** (`--verbose`) -- append-only transcript. Each line is formatted as `HH:MM:SS LEVEL message`. Spinners degrade to log lines, and DEBUG-level messages are shown.
 
-**CI** (`--ci`) -- plain text, no ANSI colors, no spinners, no interactive prompts. Pair with `--verbose` for maximum detail without formatting.
+**CI** (`--ci`) -- plain text, no ANSI colors, no spinners, no interactive prompts. Pair with `--verbose` for maximum detail without formatting or timestamps.
 
 All status, progress, and log output goes to stderr. Only actual command results (URLs, machine-readable data) go to stdout.
 
-## Directory Selection
+## Config Selection
 
-Several commands accept an optional `[DIR]` positional argument that tells Tako to run as if invoked from that directory:
+App-scoped commands default to `./tako.toml`, but you can point Tako at any config file with `-c` / `--config`:
 
 ```bash
-tako init [DIR]
-tako dev [DIR]
-tako deploy [DIR]
-tako delete [DIR]
-tako logs [DIR]
+tako -c apps/web/staging deploy
+tako dev -c configs/preview
 ```
 
-When `DIR` is omitted, the current working directory is used.
+The selected config file's parent directory becomes the project directory for `init`, `dev`, `logs`, `deploy`, `releases`, `delete`, `secrets`, and `scale` when it is using project context. If `-c` is omitted, Tako uses `./tako.toml`.
 
 ---
 
@@ -60,12 +59,12 @@ When `DIR` is omitted, the current working directory is used.
 Create a `tako.toml` configuration file for your project.
 
 ```bash
-tako init [DIR]
+tako init
 ```
 
 Init walks you through setting up your project. It prompts for:
 
-- **App name** -- defaults to the directory name, sanitized for DNS compatibility.
+- **App name** -- defaults to the selected config file's parent directory name, sanitized for DNS compatibility.
 - **Production route** -- the hostname your app will be served at (defaults to `{name}.example.com`).
 - **Runtime** -- detects your runtime automatically (Bun, Node, Deno) and lets you confirm or override.
 - **Preset** -- fetches available presets for your runtime and lets you pick one, or use the base runtime preset.
@@ -73,11 +72,11 @@ Init walks you through setting up your project. It prompts for:
 
 The generated `tako.toml` leaves only essential options uncommented (`name`, `runtime`, `runtime_version`, `route`) with all other options included as commented examples. `runtime_version` is pinned from the locally-installed runtime version.
 
-After generating `tako.toml`, init installs the `tako.sh` SDK package using the detected package manager (e.g. `bun add tako.sh`, `npm install tako.sh`).
+After generating `tako.toml`, init installs the `tako.sh` SDK package using the selected runtime's built-in package-manager command (for example `bun add tako.sh` for Bun, `npm install tako.sh` for Node).
 
 Init also updates `.gitignore` so `.tako/*` is ignored while `.tako/secrets.json` remains trackable. When the project lives inside a git repo, the repo-root `.gitignore` is updated; otherwise a local `.gitignore` is used.
 
-If `tako.toml` already exists in an interactive terminal, init asks for overwrite confirmation. In non-interactive mode, it silently skips.
+If the selected config file already exists in an interactive terminal, init asks for overwrite confirmation. In non-interactive mode, it silently skips.
 
 The full "Detected" diagnostics summary is only shown when `--verbose` is active.
 
@@ -88,14 +87,14 @@ The full "Detected" diagnostics summary is only shown when `--verbose` is active
 Start or attach to a local development session.
 
 ```bash
-tako dev [--name <NAME>] [DIR]
+tako dev [--name <NAME>]
 ```
 
 | Flag            | Description                                                            |
 | --------------- | ---------------------------------------------------------------------- |
-| `--name <NAME>` | Override the app name (defaults to `tako.toml` name or directory name) |
+| `--name <NAME>` | Override the app name (defaults to config `name` or the selected config parent directory name) |
 
-`tako dev` is a client that connects to the `tako-dev-server` daemon. It registers your app, starts it, and streams logs directly to your terminal.
+`tako dev` is a client that connects to the `tako-dev-server` daemon. It registers the selected config file, starts your app, and streams logs directly to your terminal.
 
 On first run, Tako sets up a local Certificate Authority and HTTPS infrastructure so your app is available at `https://{app}.tako.test/`. On macOS, a loopback proxy is installed so your app is served on the default HTTPS port (443) without needing to specify a port.
 
@@ -123,7 +122,7 @@ tako dev stop [NAME] [--all]
 
 | Argument/Flag | Description                                            |
 | ------------- | ------------------------------------------------------ |
-| `NAME`        | App name to stop (defaults to current directory's app) |
+| `NAME`        | App name to stop (defaults to the selected config file's app) |
 | `--all`       | Stop all registered dev apps                           |
 
 ### `tako dev ls`
@@ -163,7 +162,7 @@ If the dev daemon is not running, doctor reports that and hints to start `tako d
 Build and deploy your application to remote servers.
 
 ```bash
-tako deploy [--env <ENV>] [-y|--yes] [DIR]
+tako deploy [--env <ENV>] [-y|--yes]
 ```
 
 | Flag          | Description                                   |
@@ -178,14 +177,14 @@ In interactive terminals, deploying to `production` requires confirmation unless
 **What deploy does:**
 
 1. Validates configuration and secrets
-2. Creates a source archive from your project
-3. Resolves your build preset and runs build stages
-4. Builds target-specific artifacts (locally or in Docker, depending on preset)
-5. Uploads artifacts to all servers in the target environment
-6. Performs a rolling update on each server (start new instance, health check, swap, drain old instance)
+2. Sets up a clean workdir from your project (respecting `.gitignore`)
+3. Resolves preset metadata and runs your build commands
+4. Packages the deploy artifact (excluding `node_modules/`)
+5. Uploads the artifact to all servers in the target environment
+6. Server installs production dependencies and performs a rolling update
 7. Cleans up releases older than 30 days
 
-Deploy resolves app identity from `name` in `tako.toml`, falling back to the sanitized project directory name.
+Deploy resolves app identity from `name` in the selected config file, falling back to the sanitized selected config parent directory name.
 
 **Server auto-selection:** If you're deploying to `production` and `[envs.production].servers` is empty, Tako will auto-select your only server or prompt you to pick one when you have multiple servers configured.
 
@@ -198,7 +197,7 @@ Deploy resolves app identity from `name` in `tako.toml`, falling back to the san
 Remove a deployed app from a specific environment and server.
 
 ```bash
-tako delete [--env <ENV>] [--server <SERVER>] [-y|--yes] [DIR]
+tako delete [--env <ENV>] [--server <SERVER>] [-y|--yes]
 ```
 
 Aliases: `tako rm`, `tako remove`, `tako undeploy`, `tako destroy`
@@ -236,9 +235,9 @@ tako scale <N> [--env <ENV>] [--server <SERVER>] [--app <APP>]
 | `<N>`               | Desired instance count per targeted server                 |
 | `--env <ENV>`       | Environment to scale (required when `--server` is omitted) |
 | `--server <SERVER>` | Scale only this specific server                            |
-| `--app <APP>`       | App name (required outside a project directory)            |
+| `--app <APP>`       | App name (required outside project config context)         |
 
-Inside a project directory, Tako resolves the app name automatically. Outside a project, use `--app <name>` with `--env <env>`, or pass the full deployment id as `--app <name>/<env>`.
+Inside project config context, Tako resolves the app name automatically. Outside that context, use `--app <name>` with `--env <env>`, or pass the full deployment id as `--app <name>/<env>`.
 
 When `--server` is omitted, `--env` is required and Tako scales every server in that environment. When `--server` is provided alone inside a project, the environment defaults to `production`.
 
@@ -251,7 +250,7 @@ tako scale 2 --env production
 # Scale a specific server
 tako scale 3 --server lax --env staging
 
-# Scale from outside a project directory
+# Scale from outside project config context
 tako scale 2 --app my-api --env production
 ```
 
@@ -264,7 +263,7 @@ Setting instances to `0` enables on-demand scale-to-zero with cold starts on the
 View or stream logs from remote servers.
 
 ```bash
-tako logs [--env <ENV>] [--tail] [--days <N>] [DIR]
+tako logs [--env <ENV>] [--tail] [--days <N>]
 ```
 
 | Flag          | Description                                              |
@@ -629,15 +628,15 @@ Running `tako` with no arguments also prints help.
 
 | Command                        | What it does                              |
 | ------------------------------ | ----------------------------------------- |
-| `tako init [DIR]`              | Initialize a new project with `tako.toml` |
-| `tako dev [DIR]`               | Start local development session           |
+| `tako init`                    | Initialize a new project with `tako.toml` |
+| `tako dev`                     | Start local development session           |
 | `tako dev stop [NAME] [--all]` | Stop a dev app                            |
 | `tako dev ls`                  | List registered dev apps                  |
 | `tako doctor`                  | Print local dev diagnostics               |
-| `tako deploy [DIR]`            | Build and deploy to servers               |
-| `tako delete [DIR]`            | Remove a deployment                       |
+| `tako deploy`                  | Build and deploy to servers               |
+| `tako delete`                  | Remove a deployment                       |
 | `tako scale <N>`               | Change instance count                     |
-| `tako logs [DIR]`              | View or stream remote logs                |
+| `tako logs`                    | View or stream remote logs                |
 | `tako releases ls`             | List release history                      |
 | `tako releases rollback <ID>`  | Roll back to a previous release           |
 | `tako servers add`             | Add a server                              |

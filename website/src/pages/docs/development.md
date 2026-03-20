@@ -11,10 +11,10 @@ current: development
 
 ## How it works
 
-`tako dev` is a **client** that talks to a persistent background process called `tako-dev-server`. When you run `tako dev` from your project directory, here is what happens:
+`tako dev` is a **client** that talks to a persistent background process called `tako-dev-server`. When you run `tako dev`, here is what happens:
 
 1. The CLI ensures `tako-dev-server` is running (starts it if needed).
-2. Your app is **registered** with the daemon, using the project directory as a unique key.
+2. Your app is **registered** with the daemon, using the selected config file as a unique key.
 3. The daemon spawns your app process on an ephemeral port and routes HTTPS traffic to it.
 4. Logs stream to your terminal in real time.
 
@@ -22,11 +22,11 @@ current: development
 # Start dev from your project directory
 tako dev
 
-# Or point at another directory
-tako dev path/to/project
+# Or point at another config file
+tako -c path/to/project/preview dev
 ```
 
-The app name is resolved from the top-level `name` in `tako.toml`, or from the sanitized project directory name if `name` is not set. This name determines your local URL: `https://{app}.tako.test/`.
+The app name is resolved from the top-level `name` in the selected config file, or from the sanitized parent directory name if `name` is not set. This name determines your local URL: `https://{app}.tako.test/`.
 
 ## The dev daemon
 
@@ -55,7 +55,7 @@ Each registered app has one of three statuses:
 
 ### Starting and attaching
 
-When you run `tako dev`, the app starts immediately with one local instance. If the app is already running or idle from a previous session, `tako dev` attaches to the existing session instead of starting a new one.
+When you run `tako dev`, the app starts immediately with one local instance. If the app is already running or idle from a previous session for the same selected config file, `tako dev` attaches to the existing session instead of starting a new one.
 
 ### Going idle
 
@@ -71,7 +71,7 @@ Press `Ctrl+c` to fully stop the app. This unregisters it from the daemon, remov
 
 ### Backgrounding
 
-Press `b` to hand the running process off to the daemon and exit the CLI. The daemon keeps the process alive and routes active. Run `tako dev` again from the same directory to re-attach.
+Press `b` to hand the running process off to the daemon and exit the CLI. The daemon keeps the process alive and routes active. Run `tako dev` again with the same selected config file to re-attach.
 
 ## Dev subcommands
 
@@ -80,7 +80,7 @@ Press `b` to hand the running process off to the daemon and exit the CLI. The da
 Stop a running or idle dev app without needing to attach first.
 
 ```bash
-# Stop the app for the current directory
+# Stop the app for the selected config file
 tako dev stop
 
 # Stop a specific app by name
@@ -285,14 +285,13 @@ Dev routes have a few constraints:
 
 ## App startup command
 
-How Tako decides what command to run for your app:
+`tako dev` always runs the runtime-default dev script for your detected or configured runtime:
 
-- When top-level `preset` is **omitted** in `tako.toml`, Tako ignores the preset's `dev` command and runs a runtime-default command with resolved `main`:
-  - Bun: `bun run node_modules/tako.sh/src/entrypoints/bun.ts {main}`
-  - Node: `node --experimental-strip-types node_modules/tako.sh/src/entrypoints/node.ts {main}`
-  - Deno: `deno run --allow-net --allow-env --allow-read node_modules/tako.sh/src/entrypoints/deno.ts {main}`
+- Bun: `bun run dev`
+- Node: `npm run dev`
+- Deno: `deno task dev`
 
-- When top-level `preset` is **explicitly set**, Tako uses the preset's top-level `dev` command.
+Presets do not define dev commands -- the runtime default is always used.
 
 ## Diagnostics with tako doctor
 
@@ -343,7 +342,7 @@ Log records use a single `timestamp` field (`hh:mm:ss`). When a new owning sessi
 ## Quick start checklist
 
 1. Run `tako doctor` to confirm local prerequisites (DNS, loopback proxy, CA).
-2. Run `tako dev` from your project directory.
+2. Run `tako dev` from your project directory, or use `tako -c <FILE> dev` for a non-default config file.
 3. Open `https://{app}.tako.test/` in your browser.
 4. Edit code while `tako dev` stays running -- your runtime handles reload.
 5. Press `b` to background the app, or `Ctrl+c` to stop it.

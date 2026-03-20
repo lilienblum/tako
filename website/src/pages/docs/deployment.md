@@ -102,6 +102,12 @@ From your app directory, run:
 tako deploy
 ```
 
+If you keep multiple config files in one folder, point deploy at the exact file you want:
+
+```bash
+tako -c configs/staging deploy
+```
+
 This targets the `production` environment by default. Use `--env` for other environments:
 
 ```bash
@@ -119,10 +125,10 @@ tako deploy --dry-run
 ### What happens during deploy
 
 1. **Pre-validation** -- Checks that secrets are present, server target metadata exists for all selected servers, and routes are valid.
-2. **Source bundling** -- Packages source files into a versioned archive under `.tako/artifacts/`. The bundle root is the git root when available, otherwise the app directory. Filtering uses `.gitignore`, and `.git/`, `.tako/`, `.env*`, `node_modules/`, `target/` are always excluded.
+2. **Workdir setup** -- Copies project files into a clean workdir (respecting `.gitignore`), symlinks `node_modules/` from the original tree so build tools can resolve dependencies without a full install. `.git/`, `.tako/`, and `.env*` are always excluded.
 3. **Entrypoint resolution** -- Resolves the deploy `main` file from `tako.toml`, then preset defaults, with JS-specific fallback order (`index.<ext>`, then `src/index.<ext>`).
-4. **Preset resolution** -- Resolves the build preset from `tako.toml` `preset` or the adapter base preset. Unpinned official presets are fetched from `master` on each deploy.
-5. **Artifact build** -- Builds one target artifact per unique server architecture. Uses local cache when build inputs are unchanged. Runs preset build commands first, then app `[[build.stages]]`.
+4. **Preset resolution** -- Resolves the app preset from `tako.toml` `preset` or the adapter base preset. Unpinned official presets are fetched from `master` on each deploy.
+5. **Artifact build** -- Runs your build commands (`[build]` or `[[build_stages]]`) in the workdir. Uses local cache when build inputs are unchanged. The resulting artifact excludes `node_modules/` -- the server installs its own production dependencies after extracting the artifact.
 6. **Parallel deploy** -- Deploys to all target servers simultaneously. Each server is handled independently, so partial success is possible.
 
 ### Per-server deploy steps
@@ -142,12 +148,14 @@ For each server, the CLI:
 11. Performs a rolling update
 12. Updates the `current` symlink and cleans up old releases (older than 30 days)
 
+Server-side runtime prep uses the runtime's package manager to install production dependencies from the deployed manifest.
+
 ### CLI output modes
 
 - **Default:** Concise output with spinners for long-running steps
 - **`--verbose`:** Append-only transcript with timestamps and log levels
 - **`--ci`:** No colors, no spinners, no prompts -- deterministic for pipelines
-- **`--ci --verbose`:** Detailed transcript without formatting
+- **`--ci --verbose`:** Detailed transcript without colors or timestamps
 
 ## Version naming
 
@@ -203,7 +211,7 @@ tako scale 3 --server la                 # Scale on one server only
 tako scale 0                             # Switch to on-demand mode
 ```
 
-Outside a project directory, use `--app`:
+Outside the selected config context, use `--app`:
 
 ```bash
 tako scale 2 --app my-app --env production --server la
