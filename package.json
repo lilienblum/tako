@@ -2,11 +2,10 @@
   "private": true,
   "workspaces": {
     "packages": [
-      "sdk/js",
+      "sdk/javascript",
       "website",
       "examples/javascript/*",
-      "e2e/cli",
-      "e2e/fixtures/javascript/*"
+      "e2e/cli"
     ],
     "catalog": {
       "@tanstack/react-router": "^1.167.0",
