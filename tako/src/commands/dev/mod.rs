@@ -12,7 +12,6 @@ mod loopback_proxy;
 mod output;
 mod watcher;
 
-use std::env::current_dir;
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -31,7 +30,7 @@ use tokio::sync::watch;
 #[cfg(test)]
 use tokio::time::timeout;
 
-use crate::app::resolve_app_name;
+use crate::app::resolve_app_name_from_config_path;
 use crate::build::{
     BuildAdapter, BuildPreset, PresetGroup, PresetReference, apply_adapter_base_runtime_defaults,
     infer_adapter_from_preset_reference, js, load_build_preset, parse_preset_reference,
@@ -195,8 +194,8 @@ fn dev_idle_timeout() -> Duration {
     Duration::from_secs(DEV_IDLE_TIMEOUT_SECS)
 }
 
-fn load_dev_tako_toml(project_dir: &Path) -> crate::config::Result<TakoToml> {
-    TakoToml::load_from_dir(project_dir)
+fn load_dev_tako_toml(config_path: &Path) -> crate::config::Result<TakoToml> {
+    TakoToml::load_from_file(config_path)
 }
 
 /// Routes shown in the terminal panel — always includes the default host, then
@@ -258,20 +257,20 @@ fn short_path_hash(s: &str) -> String {
 }
 
 /// If `candidate` conflicts with an already-registered app from a different
-/// project directory, append a suffix to make it unique.
+/// config path, append a suffix to make it unique.
 ///
 /// Disambiguation order:
 /// 1. Project directory leaf name (handles workspaces + different checkouts).
-/// 2. Deterministic 4-char hash of the full project path (fallback).
+/// 2. Deterministic 4-char hash of the full config path (fallback).
 fn disambiguate_app_name(
     candidate: &str,
-    project_dir: &str,
-    existing: &[(String, String)], // (app_name, project_dir)
+    config_path: &str,
+    existing: &[(String, String)], // (app_name, config_path)
 ) -> String {
     let dominated = |name: &str| -> bool {
         existing
             .iter()
-            .any(|(n, pd)| n == name && pd != project_dir)
+            .any(|(n, other_config)| n == name && other_config != config_path)
     };
 
     if !dominated(candidate) {
@@ -279,7 +278,11 @@ fn disambiguate_app_name(
     }
 
     // Try the project directory's leaf name as a suffix.
-    if let Some(leaf) = Path::new(project_dir).file_name().and_then(|n| n.to_str()) {
+    if let Some(leaf) = Path::new(config_path)
+        .parent()
+        .and_then(|dir| dir.file_name())
+        .and_then(|n| n.to_str())
+    {
         let seg = sanitize_name_segment(leaf);
         if !seg.is_empty() {
             let with_dir = format!("{candidate}-{seg}");
@@ -290,7 +293,7 @@ fn disambiguate_app_name(
     }
 
     // Fallback: deterministic hash of the full project path.
-    format!("{candidate}-{}", short_path_hash(project_dir))
+    format!("{candidate}-{}", short_path_hash(config_path))
 }
 
 /// Best-effort fetch of registered apps from a running dev server.
@@ -299,7 +302,7 @@ async fn try_list_registered_app_names() -> Vec<(String, String)> {
     match crate::dev_server_client::list_registered_apps().await {
         Ok(apps) => apps
             .into_iter()
-            .map(|a| (a.app_name, a.project_dir))
+            .map(|a| (a.app_name, a.config_path))
             .collect(),
         Err(_) => Vec::new(),
     }
@@ -362,28 +365,24 @@ fn compute_dev_env(cfg: &TakoToml) -> std::collections::HashMap<String, String> 
     env
 }
 
-/// Decrypt development secrets and write them to a temp file for the SDK.
-///
-/// Sets `TAKO_SECRETS_FILE` in `env` so the SDK knows where to read.
-/// Returns the temp file path (for cleanup tracking).
-fn write_dev_secrets_file(
+/// Decrypt development secrets and inject them as environment variables.
+fn inject_dev_secrets(
     project_dir: &Path,
     app_name: &str,
     env: &mut std::collections::HashMap<String, String>,
-) -> Result<Option<std::path::PathBuf>, Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error>> {
     let secrets = crate::config::SecretsStore::load_from_dir(project_dir)?;
 
     let encrypted = match secrets.get_env("development") {
         Some(map) if !map.is_empty() => map,
-        _ => return Ok(None),
+        _ => return Ok(()),
     };
 
     let key = super::secret::load_or_derive_key(app_name, "development", &secrets)?;
-    let mut decrypted = std::collections::HashMap::new();
     for (name, encrypted_value) in encrypted {
         match crate::crypto::decrypt(encrypted_value, &key) {
             Ok(value) => {
-                decrypted.insert(name.clone(), value);
+                env.insert(name.clone(), value);
             }
             Err(e) => {
                 tracing::warn!("Failed to decrypt development secret {}: {}", name, e);
@@ -391,40 +390,7 @@ fn write_dev_secrets_file(
         }
     }
 
-    if decrypted.is_empty() {
-        return Ok(None);
-    }
-
-    // Write to .tako/tmp/secrets.json (project-local, gitignored)
-    let secrets_dir = project_dir.join(".tako").join("tmp");
-    std::fs::create_dir_all(&secrets_dir)?;
-    let secrets_path = secrets_dir.join("dev-secrets.json");
-
-    let json = serde_json::to_string(&decrypted)?;
-
-    #[cfg(unix)]
-    {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&secrets_path)?;
-        f.write_all(json.as_bytes())?;
-    }
-    #[cfg(not(unix))]
-    {
-        std::fs::write(&secrets_path, &json)?;
-    }
-
-    env.insert(
-        "TAKO_SECRETS_FILE".to_string(),
-        secrets_path.to_string_lossy().to_string(),
-    );
-
-    Ok(Some(secrets_path))
+    Ok(())
 }
 
 fn resolve_dev_build_adapter(project_dir: &Path, cfg: &TakoToml) -> Result<BuildAdapter, String> {
@@ -476,14 +442,25 @@ fn resolve_dev_preset_ref(project_dir: &Path, cfg: &TakoToml) -> Result<String, 
     Ok(runtime.default_preset().to_string())
 }
 
-fn resolve_dev_start_command(preset: &BuildPreset, main: &str) -> Result<Vec<String>, String> {
-    if preset.dev.is_empty() {
+
+fn resolve_runtime_default_dev_command(
+    runtime_adapter: BuildAdapter,
+    main: &str,
+) -> Result<Vec<String>, String> {
+    let Some(runtime_def) = runtime_adapter.runtime_def() else {
+        return Err(
+            "Cannot determine default dev command because runtime is unknown. Set top-level `runtime` or set `preset`."
+                .to_string(),
+        );
+    };
+    if runtime_def.preset.dev.is_empty() {
         return Err(format!(
-            "Preset '{}' does not define top-level `dev` command.",
-            preset.name.as_str()
+            "Runtime '{}' does not define a default `dev` command.",
+            runtime_adapter.id()
         ));
     }
-    Ok(preset
+    Ok(runtime_def
+        .preset
         .dev
         .iter()
         .map(|arg| {
@@ -496,42 +473,6 @@ fn resolve_dev_start_command(preset: &BuildPreset, main: &str) -> Result<Vec<Str
         .collect())
 }
 
-fn resolve_runtime_default_dev_command(
-    runtime_adapter: BuildAdapter,
-    main: &str,
-) -> Result<Vec<String>, String> {
-    let command = match runtime_adapter {
-        BuildAdapter::Bun => vec![
-            "bun".to_string(),
-            "run".to_string(),
-            "node_modules/tako.sh/src/entrypoints/bun.ts".to_string(),
-            main.to_string(),
-        ],
-        BuildAdapter::Node => vec![
-            "node".to_string(),
-            "--experimental-strip-types".to_string(),
-            "node_modules/tako.sh/src/entrypoints/node.ts".to_string(),
-            main.to_string(),
-        ],
-        BuildAdapter::Deno => vec![
-            "deno".to_string(),
-            "run".to_string(),
-            "--allow-net".to_string(),
-            "--allow-env".to_string(),
-            "--allow-read".to_string(),
-            "node_modules/tako.sh/src/entrypoints/deno.ts".to_string(),
-            main.to_string(),
-        ],
-        BuildAdapter::Unknown => {
-            return Err(
-                "Cannot determine default dev command because runtime is unknown. Set top-level `runtime` or set `preset`."
-                    .to_string(),
-            )
-        }
-    };
-    Ok(command)
-}
-
 fn has_explicit_dev_preset(cfg: &TakoToml) -> bool {
     cfg.preset
         .as_deref()
@@ -540,15 +481,14 @@ fn has_explicit_dev_preset(cfg: &TakoToml) -> bool {
 }
 
 fn resolve_dev_run_command(
-    preset: &BuildPreset,
+    _cfg: &TakoToml,
+    _preset: &BuildPreset,
     main: &str,
     runtime_adapter: BuildAdapter,
-    explicit_preset: bool,
+    _explicit_preset: bool,
 ) -> Result<Vec<String>, String> {
-    if !explicit_preset {
-        return resolve_runtime_default_dev_command(runtime_adapter, main);
-    }
-    resolve_dev_start_command(preset, main)
+    // Dev command always comes from the runtime plugin, not the preset.
+    resolve_runtime_default_dev_command(runtime_adapter, main)
 }
 
 fn infer_preset_name_from_ref(preset_ref: &str) -> String {
@@ -1159,45 +1099,53 @@ mod tests {
     }
 
     #[test]
-    fn resolve_dev_run_command_uses_runtime_default_when_preset_is_implicit() {
+    fn resolve_dev_run_command_uses_runtime_default() {
         let preset = parse_and_validate_preset(
             r#"
-dev = ["bun", "run", "dev"]
+main = "src/index.ts"
 "#,
             "bun",
         )
         .unwrap();
 
-        let cmd = resolve_dev_run_command(&preset, "src/index.ts", BuildAdapter::Bun, false)
-            .expect("runtime default dev command");
+        let cmd = resolve_dev_run_command(
+            &TakoToml::default(),
+            &preset,
+            "src/index.ts",
+            BuildAdapter::Bun,
+            false,
+        )
+        .expect("runtime default dev command");
 
+        // Dev command always comes from the runtime plugin.
         assert_eq!(
             cmd,
-            vec![
-                "bun".to_string(),
-                "run".to_string(),
-                "node_modules/tako.sh/src/entrypoints/bun.ts".to_string(),
-                "src/index.ts".to_string(),
-            ]
+            vec!["bun".to_string(), "run".to_string(), "dev".to_string()]
         );
     }
 
     #[test]
-    fn resolve_dev_run_command_uses_preset_dev_when_preset_is_explicit() {
+    fn resolve_dev_run_command_falls_back_to_runtime_default_when_explicit_preset_has_no_dev() {
         let preset = parse_and_validate_preset(
             r#"
-dev = ["bun", "run", "dev"]
+main = "dist/server/tako-entry.mjs"
 "#,
-            "bun",
+            "tanstack-start",
         )
         .unwrap();
 
-        let cmd = resolve_dev_run_command(&preset, "src/index.ts", BuildAdapter::Bun, true)
-            .expect("preset dev command");
+        let cmd = resolve_dev_run_command(
+            &TakoToml::default(),
+            &preset,
+            "src/index.ts",
+            BuildAdapter::Node,
+            true,
+        )
+        .expect("runtime default dev command");
 
         assert_eq!(
             cmd,
-            vec!["bun".to_string(), "run".to_string(), "dev".to_string()]
+            vec!["pnpm".to_string(), "run".to_string(), "dev".to_string()]
         );
     }
 
@@ -2078,7 +2026,11 @@ dev = ["bun", "run", "dev"]
 }
 
 /// Run the dev server
-pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn stop(
+    name: Option<String>,
+    all: bool,
+    config_path: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let apps = crate::dev_server_client::list_registered_apps().await?;
 
     if all {
@@ -2087,7 +2039,7 @@ pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::er
             return Ok(());
         }
         for app in &apps {
-            let _ = crate::dev_server_client::unregister_app(&app.project_dir).await;
+            let _ = crate::dev_server_client::unregister_app(&app.config_path).await;
             crate::output::success(&format!("Stopped {}", crate::output::strong(&app.app_name)));
         }
         return Ok(());
@@ -2096,21 +2048,17 @@ pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::er
     let target_name = match name {
         Some(n) => n,
         None => {
-            let project_dir = current_dir()?;
-            let canonical =
-                std::fs::canonicalize(&project_dir).unwrap_or_else(|_| project_dir.clone());
-            let canonical_str = canonical.to_string_lossy().to_string();
-            // Find by project_dir first.
-            if let Some(app) = apps.iter().find(|a| a.project_dir == canonical_str) {
-                let _ = crate::dev_server_client::unregister_app(&app.project_dir).await;
+            let context = crate::commands::project_context::resolve(config_path)?;
+            let config_key = context.config_key();
+            if let Some(app) = apps.iter().find(|a| a.config_path == config_key) {
+                let _ = crate::dev_server_client::unregister_app(&app.config_path).await;
                 crate::output::success(&format!(
                     "Stopped {}",
                     crate::output::strong(&app.app_name)
                 ));
                 return Ok(());
             }
-            // Fall back to app name resolution.
-            resolve_app_name(&project_dir)
+            resolve_app_name_from_config_path(&context.config_path)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?
         }
     };
@@ -2118,7 +2066,7 @@ pub async fn stop(name: Option<String>, all: bool) -> Result<(), Box<dyn std::er
     let app = apps.iter().find(|a| a.app_name == target_name);
     match app {
         Some(a) => {
-            let _ = crate::dev_server_client::unregister_app(&a.project_dir).await;
+            let _ = crate::dev_server_client::unregister_app(&a.config_path).await;
             crate::output::success(&format!("Stopped {}", crate::output::strong(&a.app_name)));
         }
         None => {
@@ -2143,7 +2091,7 @@ pub async fn ls() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Print as a simple table.
-    println!("{:<20} {:<10} {:<30} DIR", "NAME", "STATUS", "URL");
+    println!("{:<20} {:<10} {:<30} CONFIG", "NAME", "STATUS", "URL");
     for app in &apps {
         let url = if let Some(host) = app.hosts.first() {
             format!("https://{}/", host)
@@ -2152,7 +2100,7 @@ pub async fn ls() -> Result<(), Box<dyn std::error::Error>> {
         };
         println!(
             "{:<20} {:<10} {:<30} {}",
-            app.app_name, app.status, url, app.project_dir
+            app.app_name, app.status, url, app.config_path
         );
     }
     Ok(())
@@ -2161,19 +2109,28 @@ pub async fn ls() -> Result<(), Box<dyn std::error::Error>> {
 pub async fn run(
     public_port: u16,
     variant: Option<String>,
+    config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = current_dir()?;
-    let cfg = load_dev_tako_toml(&project_dir)?;
-    let preset_ref = resolve_dev_preset_ref(&project_dir, &cfg)?;
-    let runtime_adapter = resolve_effective_dev_build_adapter(&project_dir, &cfg, &preset_ref)
+    let context = crate::commands::project_context::resolve_existing(config_path)?;
+    let config_key = context.config_key();
+    let project_dir = context.project_dir.clone();
+    let config_path = context.config_path.clone();
+    let cfg = load_dev_tako_toml(&config_path)?;
+    let eff_app_dir = project_dir.clone();
+    let preset_ref = resolve_dev_preset_ref(&eff_app_dir, &cfg)?;
+    let runtime_adapter = resolve_effective_dev_build_adapter(&eff_app_dir, &cfg, &preset_ref)
         .map_err(|e| format!("Failed to resolve runtime adapter: {}", e))?;
-    let (mut build_preset, _) = load_build_preset(&project_dir, &preset_ref)
+    let (mut build_preset, _) = load_build_preset(&eff_app_dir, &preset_ref)
         .await
         .map_err(|e| format!("Failed to resolve build preset '{}': {}", preset_ref, e))?;
-    apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter)
+    let plugin_ctx = tako_runtime::PluginContext {
+        project_dir: &eff_app_dir,
+        package_manager: cfg.package_manager.as_deref(),
+    };
+    apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter, Some(&plugin_ctx))
         .map_err(|e| format!("Failed to apply runtime defaults to preset: {}", e))?;
     let main = crate::commands::deploy::resolve_deploy_main(
-        &project_dir,
+        &eff_app_dir,
         runtime_adapter,
         &cfg,
         build_preset.main.as_deref(),
@@ -2186,7 +2143,7 @@ pub async fn run(
 
     let runtime_name = build_preset.name.clone();
 
-    let base_name = resolve_app_name(&project_dir)
+    let base_name = resolve_app_name_from_config_path(&config_path)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let app_name = if let Some(ref v) = variant {
         format!("{base_name}-{v}")
@@ -2316,9 +2273,7 @@ pub async fn run(
     let mut env = compute_dev_env(&cfg);
 
     // Write decrypted development secrets to a temp file for the SDK to read.
-    // Secrets are never injected as env vars — the SDK loads them from this file.
-    let secrets_file =
-        write_dev_secrets_file(&project_dir, &app_name, &mut env).map_err(|e| e.to_string())?;
+    inject_dev_secrets(&project_dir, &app_name, &mut env).map_err(|e| e.to_string())?;
 
     // Regenerate tako.d.ts with secret types
     if runtime_adapter.preset_group() == PresetGroup::Js {
@@ -2326,7 +2281,6 @@ pub async fn run(
     }
 
     let env_state = Arc::new(tokio::sync::Mutex::new(env));
-    let secrets_file_state = Arc::new(tokio::sync::Mutex::new(secrets_file));
 
     // Create channels for communication (child stdout/stderr + file watcher events).
     let (log_tx, log_rx) = mpsc::channel::<ScopedLog>(1000);
@@ -2341,6 +2295,7 @@ pub async fn run(
     // Allocate an ephemeral port for the app.
     let (upstream_port, reserve_listener) = reserve_ephemeral_port()?;
     let cmd = resolve_dev_run_command(
+        &cfg,
         &build_preset,
         &main,
         runtime_adapter,
@@ -2449,21 +2404,14 @@ pub async fn run(
 
     let tako_data = crate::paths::tako_data_dir()?;
 
-    // Check daemon for existing registration instead of lock files.
-    let canonical_project_dir =
-        std::fs::canonicalize(&project_dir).unwrap_or_else(|_| project_dir.clone());
-    let canonical_project_dir_str = canonical_project_dir.to_string_lossy().to_string();
-
     if let Ok(apps) = crate::dev_server_client::list_registered_apps().await
-        && let Some(existing) = apps
-            .iter()
-            .find(|a| a.project_dir == canonical_project_dir_str)
+        && let Some(existing) = apps.iter().find(|a| a.config_path == config_key)
         && existing.status.as_str() == "running"
     {
         // Attach to existing running app.
         let log_dir = tako_data.join("dev").join("logs");
         std::fs::create_dir_all(&log_dir)?;
-        let suffix = dev_client_suffix(&project_dir);
+        let suffix = dev_client_suffix(&config_path);
         let log_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));
         let url = if let Some(host) = existing.hosts.first() {
             let port = if public_url_port == 443 {
@@ -2476,7 +2424,9 @@ pub async fn run(
             dev_url(&primary_host, public_url_port)
         };
         let session = AttachedDevClient {
-            project_dir: canonical_project_dir_str.clone(),
+            config_key: config_key.clone(),
+            config_path: config_path.clone(),
+            project_dir: project_dir.clone(),
             url,
             log_path,
         };
@@ -2487,7 +2437,7 @@ pub async fn run(
     // Compute log store path (still use lock dir scheme for log files).
     let log_dir = tako_data.join("dev").join("logs");
     std::fs::create_dir_all(&log_dir)?;
-    let suffix = dev_client_suffix(&project_dir);
+    let suffix = dev_client_suffix(&config_path);
     let log_store_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));
 
     prepare_shared_log_store_for_new_owner(&log_store_path).await;
@@ -2552,7 +2502,8 @@ pub async fn run(
     let reg_hosts = hosts_state.lock().await.clone();
     let env_snapshot = env_state.lock().await.clone();
     let reg_url = crate::dev_server_client::register_app(
-        &canonical_project_dir_str,
+        &config_key,
+        &project_dir.to_string_lossy(),
         &app_name,
         variant.as_deref(),
         &reg_hosts,
@@ -2625,7 +2576,8 @@ pub async fn run(
 
     // Watch tako.toml for config changes (env vars + dev routes).
     let (cfg_tx, cfg_rx) = mpsc::channel::<()>(8);
-    let _cfg_handle = watcher::ConfigWatcher::new(project_dir.clone(), cfg_tx)?.start()?;
+    let _cfg_handle =
+        watcher::ConfigWatcher::new(project_dir.clone(), config_path.clone(), cfg_tx)?.start()?;
 
     if verbose && !interactive {
         println!(
@@ -2640,7 +2592,7 @@ pub async fn run(
     {
         let child_state = child_state.clone();
         let reserve_state = reserve_state.clone();
-        let project_dir_str = canonical_project_dir_str.clone();
+        let config_key = config_key.clone();
         let cmd = cmd.clone();
         let env_state = env_state.clone();
         let project_dir = project_dir.clone();
@@ -2689,7 +2641,7 @@ pub async fn run(
                         match restarted {
                             Ok(child) => {
                                 let _ = crate::dev_server_client::set_app_status(
-                                    &project_dir_str,
+                                    &config_key,
                                     "running",
                                 )
                                 .await;
@@ -2733,8 +2685,7 @@ pub async fn run(
                             let _ = child.kill().await;
                             let _ = child.wait().await;
                         }
-                        let _ = crate::dev_server_client::set_app_status(&project_dir_str, "idle")
-                            .await;
+                        let _ = crate::dev_server_client::set_app_status(&config_key, "idle").await;
                         emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppStopped)
                             .await;
                         let _ = should_exit_tx.send(true);
@@ -2748,13 +2699,13 @@ pub async fn run(
     // Config change loop: reload tako.toml, update state, always restart the app.
     {
         let project_dir = project_dir.clone();
-        let project_dir_str = canonical_project_dir_str.clone();
+        let config_path = config_path.clone();
+        let config_key = config_key.clone();
         let app_name = app_name.clone();
         let variant = variant.clone();
         let domain = domain.clone();
         let base_domain = base_domain.clone();
         let env_state = env_state.clone();
-        let secrets_file_state = secrets_file_state.clone();
         let hosts_state = hosts_state.clone();
         let cmd = cmd.clone();
         let log_store_path = log_store_path.clone();
@@ -2763,7 +2714,7 @@ pub async fn run(
         let control_tx = control_tx.clone();
         tokio::spawn(async move {
             while cfg_rx.recv().await.is_some() {
-                let cfg = match load_dev_tako_toml(&project_dir) {
+                let cfg = match load_dev_tako_toml(&config_path) {
                     Ok(c) => c,
                     Err(e) => {
                         let _ = log_tx
@@ -2776,21 +2727,16 @@ pub async fn run(
                 // Update env and hosts state unconditionally.
                 let mut new_env = compute_dev_env(&cfg);
 
-                // Rewrite the secrets temp file for the SDK.
-                let secrets_result = write_dev_secrets_file(&project_dir, &app_name, &mut new_env)
-                    .map_err(|e| e.to_string());
-                match secrets_result {
-                    Ok(new_path) => {
-                        *secrets_file_state.lock().await = new_path;
-                    }
-                    Err(msg) => {
-                        let _ = log_tx
-                            .send(ScopedLog::warn(
-                                "tako",
-                                format!("Failed to reload secrets: {}", msg),
-                            ))
-                            .await;
-                    }
+                // Inject secrets as env vars for the restarted process.
+                if let Err(msg) = inject_dev_secrets(&project_dir, &app_name, &mut new_env)
+                    .map_err(|e| e.to_string())
+                {
+                    let _ = log_tx
+                        .send(ScopedLog::warn(
+                            "tako",
+                            format!("Failed to reload secrets: {}", msg),
+                        ))
+                        .await;
                 }
 
                 // Regenerate tako.d.ts with updated secret types.
@@ -2821,7 +2767,8 @@ pub async fn run(
                 // Re-register app if routing changed.
                 if hosts_changed {
                     let reg_result = crate::dev_server_client::register_app(
-                        &project_dir_str,
+                        &config_key,
+                        &project_dir.to_string_lossy(),
                         &app_name,
                         variant.as_deref(),
                         &new_hosts,
@@ -2858,7 +2805,7 @@ pub async fn run(
         let last_req2 = last_req.clone();
 
         {
-            let project_dir_str = canonical_project_dir_str.clone();
+            let config_key = config_key.clone();
             let app_hosts = hosts_state.lock().await.clone();
             let child_state = child_state.clone();
             let reserve_state = reserve_state.clone();
@@ -2936,7 +2883,7 @@ pub async fn run(
                                     {
                                         Ok(child) => {
                                             let _ = crate::dev_server_client::set_app_status(
-                                                &project_dir_str,
+                                                &config_key,
                                                 "running",
                                             )
                                             .await;
@@ -2993,11 +2940,11 @@ pub async fn run(
                                     .ok();
                             }
                             crate::dev_server_client::DevServerEvent::AppStatusChanged {
-                                ref project_dir,
+                                ref config_path,
                                 ref status,
                                 ..
                             } => {
-                                if project_dir == &project_dir_str && status == "stopped" {
+                                if config_path == &config_key && status == "stopped" {
                                     // Send ExitWithMessage so the output loop
                                     // can exit cleanly (erase footer + print message).
                                     let _ = event_tx
@@ -3010,9 +2957,12 @@ pub async fn run(
                                 }
                             }
                             crate::dev_server_client::DevServerEvent::RestartRequested {
+                                ref config_path,
                                 ..
                             } => {
-                                let _ = control_tx.send(output::ControlCmd::Restart).await;
+                                if config_path == &config_key {
+                                    let _ = control_tx.send(output::ControlCmd::Restart).await;
+                                }
                             }
                         }
                     }
@@ -3021,7 +2971,7 @@ pub async fn run(
         }
 
         {
-            let project_dir_str = canonical_project_dir_str.clone();
+            let config_key = config_key.clone();
             let child_state = child_state.clone();
             let reserve_state = reserve_state.clone();
             let event_tx = event_tx.clone();
@@ -3053,8 +3003,7 @@ pub async fn run(
                     emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppStopped)
                         .await;
 
-                    let _ =
-                        crate::dev_server_client::set_app_status(&project_dir_str, "idle").await;
+                    let _ = crate::dev_server_client::set_app_status(&config_key, "idle").await;
 
                     // Re-reserve the upstream port.
                     if reserve_state.lock().await.is_none()
@@ -3152,8 +3101,7 @@ pub async fn run(
                     lock.as_ref().and_then(|c| c.id())
                 };
                 if let Some(pid) = child_pid {
-                    let _ = crate::dev_server_client::handoff_app(&canonical_project_dir_str, pid)
-                        .await;
+                    let _ = crate::dev_server_client::handoff_app(&config_key, pid).await;
                     // Detach the child so cleanup doesn't kill it.
                     let _ = child_state.lock().await.take();
                 }
@@ -3227,7 +3175,7 @@ pub async fn run(
             let _ = child.wait().await;
         }
     }
-    let _ = crate::dev_server_client::unregister_app(&canonical_project_dir_str).await;
+    let _ = crate::dev_server_client::unregister_app(&config_key).await;
     let _ = log_watch_stop_tx.send(true);
     if verbose {
         println!("Goodbye!");
@@ -3245,14 +3193,16 @@ fn reserve_ephemeral_port() -> Result<(u16, TcpListener), Box<dyn std::error::Er
 
 #[derive(Debug, Clone)]
 struct AttachedDevClient {
-    project_dir: String,
+    config_key: String,
+    config_path: PathBuf,
+    project_dir: PathBuf,
     url: String,
     log_path: std::path::PathBuf,
 }
 
-fn dev_client_suffix(project_dir: &Path) -> String {
+fn dev_client_suffix(config_path: &Path) -> String {
     let canonical =
-        std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
+        std::fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
     let mut h = sha2::Sha256::new();
     h.update(canonical.to_string_lossy().as_bytes());
     let digest = h.finalize();
@@ -3566,7 +3516,7 @@ async fn run_attached_dev_client(
     {
         let event_tx = event_tx.clone();
         let stop_tx = stop_tx.clone();
-        let app_name_sub = app_name.to_string();
+        let config_key = session.config_key.clone();
         tokio::spawn(async move {
             let mut got_stop = false;
 
@@ -3578,11 +3528,11 @@ async fn run_attached_dev_client(
             if let Some(mut ev_rx) = connected.await {
                 while let Some(ev) = ev_rx.recv().await {
                     if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
-                        ref app_name,
+                        ref config_path,
                         ref status,
                         ..
                     } = ev
-                        && app_name == &app_name_sub
+                        && config_path == &config_key
                         && status == "stopped"
                     {
                         got_stop = true;
@@ -3618,12 +3568,12 @@ async fn run_attached_dev_client(
     {
         let log_tx = log_tx.clone();
         let stop_tx = stop_tx.clone();
-        let project_dir = session.project_dir.clone();
+        let config_key = session.config_key.clone();
         tokio::spawn(async move {
             while let Some(cmd) = control_rx.recv().await {
                 match cmd {
                     output::ControlCmd::Restart => {
-                        let result = crate::dev_server_client::restart_app(&project_dir)
+                        let result = crate::dev_server_client::restart_app(&config_key)
                             .await
                             .map_err(|e| e.to_string());
                         if let Err(msg) = result {
@@ -3633,7 +3583,7 @@ async fn run_attached_dev_client(
                         }
                     }
                     output::ControlCmd::Terminate => {
-                        let _ = crate::dev_server_client::unregister_app(&project_dir)
+                        let _ = crate::dev_server_client::unregister_app(&config_key)
                             .await
                             .map_err(|e| e.to_string());
                         let _ = stop_tx.send(true);
@@ -3645,15 +3595,11 @@ async fn run_attached_dev_client(
     }
 
     if interactive {
-        let adapter_name = if let Ok(project_dir) = std::env::current_dir() {
-            if let Ok(cfg) = load_dev_tako_toml(&project_dir) {
-                if let Ok(preset_ref) = resolve_dev_preset_ref(&project_dir, &cfg) {
-                    match load_build_preset(&project_dir, &preset_ref).await {
-                        Ok((preset, _)) => preset.name,
-                        Err(_) => infer_preset_name_from_ref(&preset_ref),
-                    }
-                } else {
-                    String::new()
+        let adapter_name = if let Ok(cfg) = load_dev_tako_toml(&session.config_path) {
+            if let Ok(preset_ref) = resolve_dev_preset_ref(&session.project_dir, &cfg) {
+                match load_build_preset(&session.project_dir, &preset_ref).await {
+                    Ok((preset, _)) => preset.name,
+                    Err(_) => infer_preset_name_from_ref(&preset_ref),
                 }
             } else {
                 String::new()
@@ -3853,7 +3799,7 @@ mod dev_lock_tests {
 
         let event_tx_clone = event_tx.clone();
         let stop_tx_clone = stop_tx.clone();
-        let app_name_sub = "my-app".to_string();
+        let config_key = "/proj/tako.toml".to_string();
 
         // Simulate the event subscription task receiving a "stopped" event.
         tokio::spawn(async move {
@@ -3861,18 +3807,18 @@ mod dev_lock_tests {
 
             // Simulate receiving an AppStatusChanged event.
             let events = vec![crate::dev_server_client::DevServerEvent::AppStatusChanged {
-                project_dir: "/proj".to_string(),
+                config_path: "/proj/tako.toml".to_string(),
                 app_name: "my-app".to_string(),
                 status: "stopped".to_string(),
             }];
 
             for ev in events {
                 if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
-                    ref app_name,
+                    ref config_path,
                     ref status,
                     ..
                 } = ev
-                    && app_name == &app_name_sub
+                    && config_path == &config_key
                     && status == "stopped"
                 {
                     got_stop = true;
@@ -3910,24 +3856,24 @@ mod dev_lock_tests {
 
         let event_tx_clone = event_tx.clone();
         let stop_tx_clone = stop_tx.clone();
-        let app_name_sub = "my-app".to_string();
+        let config_key = "/proj/tako.toml".to_string();
 
         tokio::spawn(async move {
             let mut got_stop = false;
 
             let events = vec![crate::dev_server_client::DevServerEvent::AppStatusChanged {
-                project_dir: "/proj".to_string(),
+                config_path: "/other/tako.toml".to_string(),
                 app_name: "other-app".to_string(), // Different app
                 status: "stopped".to_string(),
             }];
 
             for ev in events {
                 if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
-                    ref app_name,
+                    ref config_path,
                     ref status,
                     ..
                 } = ev
-                    && app_name == &app_name_sub
+                    && config_path == &config_key
                     && status == "stopped"
                 {
                     got_stop = true;
@@ -3967,24 +3913,24 @@ mod dev_lock_tests {
 
         let event_tx_clone = event_tx.clone();
         let stop_tx_clone = stop_tx.clone();
-        let app_name_sub = "my-app".to_string();
+        let config_key = "/proj/tako.toml".to_string();
 
         tokio::spawn(async move {
             let mut got_stop = false;
 
             let events = vec![crate::dev_server_client::DevServerEvent::AppStatusChanged {
-                project_dir: "/proj".to_string(),
+                config_path: "/proj/tako.toml".to_string(),
                 app_name: "my-app".to_string(),
                 status: "idle".to_string(), // Not "stopped"
             }];
 
             for ev in events {
                 if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
-                    ref app_name,
+                    ref config_path,
                     ref status,
                     ..
                 } = ev
-                    && app_name == &app_name_sub
+                    && config_path == &config_key
                     && status == "stopped"
                 {
                     got_stop = true;
@@ -4244,15 +4190,15 @@ mod disambiguate_tests {
 
     #[test]
     fn same_project_dir_is_not_a_conflict() {
-        let existing = vec![("my-app".into(), "/proj".into())];
-        let result = disambiguate_app_name("my-app", "/proj", &existing);
+        let existing = vec![("my-app".into(), "/proj/tako.toml".into())];
+        let result = disambiguate_app_name("my-app", "/proj/tako.toml", &existing);
         assert_eq!(result, "my-app");
     }
 
     #[test]
     fn different_name_is_not_a_conflict() {
-        let existing = vec![("other-app".into(), "/other".into())];
-        let result = disambiguate_app_name("my-app", "/proj", &existing);
+        let existing = vec![("other-app".into(), "/other/tako.toml".into())];
+        let result = disambiguate_app_name("my-app", "/proj/tako.toml", &existing);
         assert_eq!(result, "my-app");
     }
 
@@ -4262,8 +4208,8 @@ mod disambiguate_tests {
 
     #[test]
     fn conflict_appends_dir_leaf_name() {
-        let existing = vec![("my-app".into(), "/home/user/proj-a".into())];
-        let result = disambiguate_app_name("my-app", "/home/user/proj-b", &existing);
+        let existing = vec![("my-app".into(), "/home/user/proj-a/tako.toml".into())];
+        let result = disambiguate_app_name("my-app", "/home/user/proj-b/tako.toml", &existing);
         assert_eq!(result, "my-app-proj-b");
     }
 
@@ -4271,8 +4217,8 @@ mod disambiguate_tests {
     fn conflict_from_variant_matching_existing_app_name() {
         // "app-foo" is registered (no variant). A new project "app" with
         // --variant foo produces the same composite name "app-foo".
-        let existing = vec![("app-foo".into(), "/proj/app-foo".into())];
-        let result = disambiguate_app_name("app-foo", "/proj/app", &existing);
+        let existing = vec![("app-foo".into(), "/proj/app-foo/tako.toml".into())];
+        let result = disambiguate_app_name("app-foo", "/proj/app/tako.toml", &existing);
         assert_eq!(result, "app-foo-app");
     }
 
@@ -4280,8 +4226,8 @@ mod disambiguate_tests {
     fn conflict_from_non_variant_matching_variant_composite() {
         // "app" with --variant "foo" is registered as "app-foo". A new
         // project literally named "app-foo" (no variant) would collide.
-        let existing = vec![("app-foo".into(), "/proj/app".into())];
-        let result = disambiguate_app_name("app-foo", "/proj/app-foo", &existing);
+        let existing = vec![("app-foo".into(), "/proj/app/tako.toml".into())];
+        let result = disambiguate_app_name("app-foo", "/proj/app-foo/tako.toml", &existing);
         assert_eq!(result, "app-foo-app-foo");
     }
 
@@ -4291,13 +4237,14 @@ mod disambiguate_tests {
 
     #[test]
     fn double_conflict_falls_back_to_hash() {
-        // Both the base name and the dir-suffixed name already taken.
+        // Both the base name and the dir-suffixed name are already taken by
+        // different configs, so the third config falls back to a hash.
         let existing = vec![
-            ("my-app".into(), "/workspace/a".into()),
-            ("my-app-b".into(), "/workspace/c".into()),
+            ("my-app".into(), "/workspace/a/tako.toml".into()),
+            ("my-app-b".into(), "/workspace/b/tako.toml".into()),
         ];
-        let result = disambiguate_app_name("my-app", "/workspace/b", &existing);
-        let hash = short_path_hash("/workspace/b");
+        let result = disambiguate_app_name("my-app", "/workspace/c/b/tako.toml", &existing);
+        let hash = short_path_hash("/workspace/c/b/tako.toml");
         assert_eq!(result, format!("my-app-{hash}"));
     }
 
@@ -4308,15 +4255,16 @@ mod disambiguate_tests {
     #[test]
     fn workspace_apps_get_folder_suffix() {
         // Two packages in a monorepo, both named "api" in tako.toml.
-        let existing = vec![("api".into(), "/repo/packages/billing".into())];
-        let result = disambiguate_app_name("api", "/repo/packages/payments", &existing);
+        let existing = vec![("api".into(), "/repo/packages/billing/tako.toml".into())];
+        let result = disambiguate_app_name("api", "/repo/packages/payments/tako.toml", &existing);
         assert_eq!(result, "api-payments");
     }
 
     #[test]
     fn two_checkouts_of_same_repo_get_folder_suffix() {
-        let existing = vec![("my-app".into(), "/home/user/my-app-main".into())];
-        let result = disambiguate_app_name("my-app", "/home/user/my-app-feature", &existing);
+        let existing = vec![("my-app".into(), "/home/user/my-app-main/tako.toml".into())];
+        let result =
+            disambiguate_app_name("my-app", "/home/user/my-app-feature/tako.toml", &existing);
         assert_eq!(result, "my-app-my-app-feature");
     }
 
@@ -4327,22 +4275,22 @@ mod disambiguate_tests {
     #[test]
     fn no_conflict_among_many_registered_apps() {
         let existing = vec![
-            ("alpha".into(), "/a".into()),
-            ("beta".into(), "/b".into()),
-            ("gamma".into(), "/c".into()),
+            ("alpha".into(), "/a/tako.toml".into()),
+            ("beta".into(), "/b/tako.toml".into()),
+            ("gamma".into(), "/c/tako.toml".into()),
         ];
-        let result = disambiguate_app_name("delta", "/d", &existing);
+        let result = disambiguate_app_name("delta", "/d/tako.toml", &existing);
         assert_eq!(result, "delta");
     }
 
     #[test]
     fn conflict_detected_among_many_registered_apps() {
         let existing = vec![
-            ("alpha".into(), "/a".into()),
-            ("beta".into(), "/b".into()),
-            ("gamma".into(), "/c".into()),
+            ("alpha".into(), "/a/tako.toml".into()),
+            ("beta".into(), "/b/tako.toml".into()),
+            ("gamma".into(), "/c/tako.toml".into()),
         ];
-        let result = disambiguate_app_name("beta", "/other", &existing);
+        let result = disambiguate_app_name("beta", "/other/tako.toml", &existing);
         assert_eq!(result, "beta-other");
     }
 
@@ -4353,9 +4301,9 @@ mod disambiguate_tests {
     #[test]
     fn root_path_project_uses_hash_fallback() {
         // "/" has no file_name component.
-        let existing = vec![("app".into(), "/other".into())];
-        let result = disambiguate_app_name("app", "/", &existing);
-        let hash = short_path_hash("/");
+        let existing = vec![("app".into(), "/other/tako.toml".into())];
+        let result = disambiguate_app_name("app", "/tako.toml", &existing);
+        let hash = short_path_hash("/tako.toml");
         assert_eq!(result, format!("app-{hash}"));
     }
 
@@ -4365,14 +4313,13 @@ mod disambiguate_tests {
         // Re-running from the same dir should find itself and not
         // disambiguate further.
         let existing = vec![
-            ("api".into(), "/repo/packages/billing".into()),
-            ("api-payments".into(), "/repo/packages/payments".into()),
+            ("api".into(), "/repo/packages/billing/tako.toml".into()),
+            (
+                "api-payments".into(),
+                "/repo/packages/payments/tako.toml".into(),
+            ),
         ];
-        // The candidate is still "api" (before disambiguation), and project
-        // dir is the same as the "api-payments" entry won't match "api", so
-        // we'd still disambiguate. But the disambiguated name "api-payments"
-        // matches our own project_dir, so it's not a conflict.
-        let result = disambiguate_app_name("api", "/repo/packages/payments", &existing);
+        let result = disambiguate_app_name("api", "/repo/packages/payments/tako.toml", &existing);
         assert_eq!(result, "api-payments");
     }
 }

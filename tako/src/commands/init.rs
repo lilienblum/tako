@@ -1,4 +1,3 @@
-use std::env::current_dir;
 use std::fs;
 use std::path::Path;
 
@@ -11,9 +10,10 @@ use crate::build::{
 use crate::config::TakoToml;
 use crate::output;
 
-pub fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = current_dir()?;
-    let tako_toml_path = project_dir.join("tako.toml");
+pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
+    let context = crate::commands::project_context::resolve(config_path)?;
+    let project_dir = context.project_dir;
+    let tako_toml_path = context.config_path;
 
     // Load existing config for pre-filling defaults
     let existing = if tako_toml_path.exists() {
@@ -28,7 +28,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             || !output::confirm(
                 &format!(
                     "Configuration file {} already exists. Overwrite?",
-                    output::strong("tako.toml")
+                    output::strong(&tako_toml_path.display().to_string())
                 ),
                 false,
             )?)
@@ -72,11 +72,12 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|c| c.runtime.as_deref())
         .and_then(BuildAdapter::from_id)
         .unwrap_or(detected_adapter);
-    let mut selected_preset: Option<String> = existing.as_ref().and_then(|c| c.preset.clone());
+    let mut selected_preset: Option<String> =
+        existing.as_ref().and_then(|c| c.preset.clone());
     let mut main_entry: Option<String> = existing.as_ref().and_then(|c| c.main.clone());
     let mut assets: Vec<String> = existing
         .as_ref()
-        .map(|c| c.build.assets.clone())
+        .map(|c| c.assets.clone())
         .unwrap_or_default();
     let mut excludes: Vec<String> = existing
         .as_ref()
@@ -307,7 +308,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             4 => {
                 let existing_assets = existing
                     .as_ref()
-                    .map(|c| c.build.assets.clone())
+                    .map(|c| c.assets.clone())
                     .unwrap_or_default();
                 let prev_assets = if !assets.is_empty() {
                     &assets
@@ -414,6 +415,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     // Detect local runtime version for pinning.
     let runtime_version = detect_local_runtime_version(adapter.id());
 
+    // Detect package manager (only write if it differs from runtime default).
+    let detected_pm = tako_runtime::detect_package_manager(&project_dir);
+    let pm_for_toml = detected_pm.map(|pm| pm.id().to_string()).filter(|pm_id| {
+        let default_pm = tako_runtime::plugin_for_id(adapter.id())
+            .map(|p| p.default_runtime_def().package_manager.id)
+            .unwrap_or_default();
+        *pm_id != default_pm
+    });
+
     // Generate tako.toml
     let template = generate_template(
         app_name.trim(),
@@ -421,6 +431,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         &sanitize_route(&production_route),
         Some(adapter.id()),
         runtime_version.as_deref(),
+        pm_for_toml.as_deref(),
         selected_preset_for_toml.as_deref(),
         &assets,
         &excludes,
@@ -435,7 +446,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         output::success("Created tako.toml");
     }
 
-    install_tako_sdk(&project_dir);
+    install_tako_sdk(&project_dir, adapter);
 
     output::heading("Next steps");
     output::info(&format!(
@@ -458,15 +469,15 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Install the tako.sh SDK package using the detected package manager.
-fn install_tako_sdk(project_dir: &Path) {
-    let Some(pm) = tako_runtime::detect_package_manager(project_dir) else {
+/// Install the tako.sh SDK package using the runtime package manager.
+fn install_tako_sdk(project_dir: &Path, runtime: BuildAdapter) {
+    let Some(cmd) = sdk_install_command(runtime, project_dir) else {
         return;
     };
-    let Some(ref add_cmd) = pm.add else {
-        return;
-    };
-    let cmd = add_cmd.replace("{package}", "tako.sh");
+    // Ensure pnpm is available for Node runtime.
+    if runtime == BuildAdapter::Node {
+        ensure_pnpm(project_dir);
+    }
     output::info(&format!("Installing tako.sh SDK: {}", output::strong(&cmd)));
     let result = std::process::Command::new("sh")
         .args(["-c", &cmd])
@@ -483,6 +494,27 @@ fn install_tako_sdk(project_dir: &Path) {
             ));
         }
     }
+}
+
+/// Ensure pnpm is available, installing it via npm if missing.
+fn ensure_pnpm(project_dir: &Path) {
+    let has_pnpm = std::process::Command::new("pnpm")
+        .arg("--version")
+        .current_dir(project_dir)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    if has_pnpm {
+        return;
+    }
+    output::info("Installing pnpm...");
+    let _ = std::process::Command::new("npm")
+        .args(["install", "-g", "pnpm"])
+        .current_dir(project_dir)
+        .stdout(std::process::Stdio::inherit())
+        .stderr(std::process::Stdio::inherit())
+        .status();
 }
 
 fn resolve_adapter(detected_adapter: BuildAdapter, existing: Option<&TakoToml>) -> BuildAdapter {
@@ -533,12 +565,21 @@ fn run_non_interactive(
 
     let runtime_version = detect_local_runtime_version(adapter.id());
 
+    let detected_pm = tako_runtime::detect_package_manager(project_dir);
+    let pm_for_toml = detected_pm.map(|pm| pm.id().to_string()).filter(|pm_id| {
+        let default_pm = tako_runtime::plugin_for_id(adapter.id())
+            .map(|p| p.default_runtime_def().package_manager.id)
+            .unwrap_or_default();
+        *pm_id != default_pm
+    });
+
     let template = generate_template(
         app_name.trim(),
         main.as_deref().map(str::trim),
         &sanitize_route(&production_route),
         Some(adapter.id()),
         runtime_version.as_deref(),
+        pm_for_toml.as_deref(),
         None,
         &[],
         &[],
@@ -553,7 +594,7 @@ fn run_non_interactive(
         output::success("Created tako.toml");
     }
 
-    install_tako_sdk(project_dir);
+    install_tako_sdk(project_dir, adapter);
 
     Ok(())
 }
@@ -662,7 +703,10 @@ fn preset_default_main(
     group_presets: &[PresetDefinition],
 ) -> Option<String> {
     match preset_ref {
-        "bun" | "node" | "deno" => adapter.embedded_preset_default_main(),
+        "bun" | "node" | "deno" => {
+            let def = adapter.runtime_def()?;
+            def.preset.main
+        }
         _ => group_presets
             .iter()
             .find(|preset| preset.name == preset_ref)
@@ -865,12 +909,23 @@ fn detect_local_runtime_version(runtime: &str) -> Option<String> {
     Some(version.to_string())
 }
 
+fn sdk_install_command(runtime: BuildAdapter, project_dir: &Path) -> Option<String> {
+    let ctx = tako_runtime::PluginContext {
+        project_dir,
+        package_manager: None,
+    };
+    let def = tako_runtime::runtime_def_for(runtime.id(), Some(&ctx))?;
+    let add_cmd = def.package_manager.add?;
+    Some(add_cmd.replace("{package}", "tako.sh"))
+}
+
 fn generate_template(
     app_name: &str,
     main: Option<&str>,
     production_route: &str,
     runtime: Option<&str>,
     runtime_version: Option<&str>,
+    package_manager: Option<&str>,
     preset_ref: Option<&str>,
     assets: &[String],
     excludes: &[String],
@@ -893,6 +948,11 @@ fn generate_template(
         format!("runtime_version = \"{}\"", version)
     } else {
         "# runtime_version = \"1.0.0\"".to_string()
+    };
+    let package_manager_line = if let Some(pm) = package_manager {
+        format!("package_manager = \"{}\"", pm)
+    } else {
+        "# package_manager = \"npm\"".to_string()
     };
     let preset_example = match runtime {
         Some("bun") => "tanstack-start",
@@ -930,16 +990,23 @@ name = "{app_name}"
 # Build runtime and preset selection for runtime/build lifecycle defaults.
 {runtime_line}
 {runtime_version_line}
-{preset_line}
+{package_manager_line}
 
-# Artifact packaging options.
-[build]
+# App preset (provides main + assets defaults).
+{preset_line}
+{assets_line}
+
+# Build configuration.
+# [build]
+# run = "bun run build"
+# install = "bun install"
 # include = ["dist/**", ".output/**"]
 {exclude_line}
-{assets_line}
-# [[build.stages]]
+
+# Multi-stage build (mutually exclusive with [build].run).
+# [[build_stages]]
 # name = "frontend-assets"
-# working_dir = "frontend"
+# cwd = "frontend"
 # install = "bun install"
 # run = "bun run build"
 
@@ -996,7 +1063,7 @@ mod tests {
     use super::{
         build_preset_selection_options, ensure_project_gitignore_tracks_secrets, generate_template,
         infer_default_main_entrypoint, normalize_group_preset_definitions, preset_default_main,
-        resolve_adapter,
+        resolve_adapter, sdk_install_command,
     };
     use crate::build::{BuildAdapter, PresetDefinition};
     use tempfile::TempDir;
@@ -1008,6 +1075,7 @@ mod tests {
             Some("server/index.mjs"),
             "demo-app.example.com",
             Some("bun"),
+            None,
             None,
             None,
             &[],
@@ -1091,6 +1159,7 @@ mod tests {
             Some("server/index.mjs"),
             "demo-app.example.com",
             Some("bun"),
+            None,
             None,
             None,
             &[],
@@ -1183,7 +1252,7 @@ mod tests {
     }
 
     #[test]
-    fn infer_default_main_entrypoint_uses_package_json_main_even_if_file_missing() {
+    fn infer_default_main_entrypoint_skips_nonexistent_package_json_main() {
         let temp = TempDir::new().unwrap();
         std::fs::create_dir_all(temp.path().join("server")).unwrap();
         std::fs::write(temp.path().join("server/index.ts"), "export {};").unwrap();
@@ -1193,10 +1262,10 @@ mod tests {
         )
         .unwrap();
 
-        // Manifest main is accepted as-is; validation happens at deploy/dev time.
+        // Non-existent file from package.json main is skipped; falls back to candidate files.
         assert_eq!(
             infer_default_main_entrypoint(temp.path(), BuildAdapter::Node),
-            "dist/index.js"
+            "server/index.ts"
         );
     }
 
@@ -1207,6 +1276,7 @@ mod tests {
             None,
             "demo-app.example.com",
             Some("bun"),
+            None,
             None,
             None,
             &[],
@@ -1225,6 +1295,7 @@ mod tests {
             Some("bun"),
             None,
             None,
+            None,
             &[],
             &[],
         );
@@ -1239,6 +1310,7 @@ mod tests {
             None,
             "demo-app.example.com",
             Some("node"),
+            None,
             None,
             None,
             &[],
@@ -1257,6 +1329,7 @@ mod tests {
             Some("bun"),
             None,
             None,
+            None,
             &[],
             &[],
         );
@@ -1270,6 +1343,7 @@ mod tests {
             None,
             "demo-app.example.com",
             Some("bun"),
+            None,
             None,
             Some("tanstack-start"),
             &[],
@@ -1288,6 +1362,7 @@ mod tests {
             Some("bun"),
             Some("1.2.3"),
             None,
+            None,
             &[],
             &[],
         );
@@ -1304,11 +1379,25 @@ mod tests {
             Some("bun"),
             None,
             None,
+            None,
             &[],
             &[],
         );
         assert!(rendered.contains("# runtime_version = \"1.0.0\""));
         assert!(!rendered.contains("\nruntime_version = \""));
+    }
+
+    #[test]
+    fn sdk_install_command_uses_runtime_package_manager() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        assert_eq!(
+            sdk_install_command(BuildAdapter::Node, tmp.path()),
+            Some("pnpm add tako.sh".to_string())
+        );
+        assert_eq!(
+            sdk_install_command(BuildAdapter::Bun, tmp.path()),
+            Some("bun add tako.sh".to_string())
+        );
     }
 
     #[test]

@@ -21,8 +21,12 @@ pub type Result<T> = std::result::Result<T, AppNameError>;
 /// Use this for deploy and other server-facing commands where the name
 /// must be explicitly set in config (not inferred from package.json or directory).
 pub fn require_app_name_from_config<P: AsRef<Path>>(dir: P) -> Result<String> {
-    let dir = dir.as_ref();
-    match get_name_from_tako_toml(dir) {
+    require_app_name_from_config_path(dir.as_ref().join("tako.toml"))
+}
+
+/// Require app name from an explicit config file path.
+pub fn require_app_name_from_config_path<P: AsRef<Path>>(config_path: P) -> Result<String> {
+    match get_name_from_tako_toml_file(config_path.as_ref()) {
         Some(name) => validate_and_sanitize_app_name(&name),
         None => Err(AppNameError::Resolution(
             "tako.toml must have a `name` field. Run `tako init` to set it.".to_string(),
@@ -37,20 +41,33 @@ pub fn require_app_name_from_config<P: AsRef<Path>>(dir: P) -> Result<String> {
 /// 2. package.json `name` field
 /// 3. Directory name as fallback
 pub fn resolve_app_name<P: AsRef<Path>>(dir: P) -> Result<String> {
-    let dir = dir.as_ref();
+    resolve_app_name_from_config_path(dir.as_ref().join("tako.toml"))
+}
 
-    // 1. Check tako.toml
-    if let Some(name) = get_name_from_tako_toml(dir) {
+/// Resolve app name using an explicit config file path.
+///
+/// Resolution order:
+/// 1. Config file top-level `name` field
+/// 2. `package.json` in the config parent directory
+/// 3. Config parent directory name as fallback
+pub fn resolve_app_name_from_config_path<P: AsRef<Path>>(config_path: P) -> Result<String> {
+    let config_path = config_path.as_ref();
+    let project_dir = config_path.parent().ok_or_else(|| {
+        AppNameError::Resolution("Could not determine app name from config path".to_string())
+    })?;
+
+    // 1. Check explicit config file.
+    if let Some(name) = get_name_from_tako_toml_file(config_path) {
         return validate_and_sanitize_app_name(&name);
     }
 
     // 2. Check package.json
-    if let Some(name) = get_name_from_package_json(dir) {
+    if let Some(name) = get_name_from_package_json(project_dir) {
         return validate_and_sanitize_app_name(&name);
     }
 
     // 3. Fallback to directory name
-    let dir_name = dir
+    let dir_name = project_dir
         .file_name()
         .and_then(|n| n.to_str())
         .map(|s| s.to_string())
@@ -61,9 +78,7 @@ pub fn resolve_app_name<P: AsRef<Path>>(dir: P) -> Result<String> {
     validate_and_sanitize_app_name(&dir_name)
 }
 
-/// Get top-level name from tako.toml
-fn get_name_from_tako_toml<P: AsRef<Path>>(dir: P) -> Option<String> {
-    let path = dir.as_ref().join("tako.toml");
+fn get_name_from_tako_toml_file<P: AsRef<Path>>(path: P) -> Option<String> {
     let content = fs::read_to_string(&path).ok()?;
 
     let toml: toml::Value = toml::from_str(&content).ok()?;
@@ -208,6 +223,32 @@ name = "my-app"
 
         let name = resolve_app_name(temp_dir.path()).unwrap();
         assert_eq!(name, "my-app");
+    }
+
+    #[test]
+    fn test_resolve_from_explicit_config_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join("configs");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("preview.toml");
+
+        fs::write(&config_path, "name = \"preview-app\"\n").unwrap();
+
+        let name = resolve_app_name_from_config_path(&config_path).unwrap();
+        assert_eq!(name, "preview-app");
+    }
+
+    #[test]
+    fn test_require_app_name_from_config_path_uses_selected_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().join("configs");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let config_path = config_dir.join("preview.toml");
+
+        fs::write(&config_path, "name = \"preview-app\"\n").unwrap();
+
+        let name = require_app_name_from_config_path(&config_path).unwrap();
+        assert_eq!(name, "preview-app");
     }
 
     #[test]

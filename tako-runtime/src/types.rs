@@ -21,14 +21,16 @@ pub struct RuntimeDef {
     pub envs: EnvsDef,
 
     #[serde(default)]
+    pub package_manager: PackageManagerDef,
+
+    #[serde(default)]
     pub download: Option<DownloadDef>,
 }
 
-/// Package manager definition loaded from a separate TOML file.
-/// The `id` is derived from the filename, not stored in the TOML.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Package manager definition embedded in a runtime definition.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PackageManagerDef {
-    /// Set from the section name (e.g. "bun", "npm"). Also the binary name.
+    /// Binary/runtime package manager id (for example: "bun", "npm", "deno").
     #[serde(default)]
     pub id: String,
 
@@ -36,7 +38,7 @@ pub struct PackageManagerDef {
     #[serde(default)]
     pub name: Option<String>,
 
-    /// Lockfile names used to detect this PM (e.g. ["bun.lockb", "bun.lock"]).
+    /// Lockfile names associated with this runtime lane (e.g. ["bun.lockb", "bun.lock"]).
     #[serde(default)]
     pub lockfiles: Vec<String>,
 
@@ -119,12 +121,14 @@ pub struct EnvsDef {
     pub environments: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DockerCacheDef {
     #[serde(default)]
     pub volumes: Vec<DockerCacheVolume>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DockerCacheVolume {
     pub path: String,
@@ -181,6 +185,12 @@ pub struct ExtractDef {
 
     #[serde(default)]
     pub strip_components: Option<u32>,
+
+    /// When true, extract all files from the archive (not just the binary).
+    /// Used for runtimes like Node.js where npm/npx/corepack must also be
+    /// extracted from the distribution tarball.
+    #[serde(default)]
+    pub all: bool,
 
     #[serde(default)]
     pub symlinks: Vec<SymlinkDef>,
