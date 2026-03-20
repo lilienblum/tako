@@ -1,0 +1,8 @@
+# JavaScript preset definitions.
+# Use from tako.toml as runtime-local aliases, e.g.:
+# runtime = "bun"
+# preset = "tanstack-start"
+
+[tanstack-start]
+main = "@tanstack/react-start/server-entry"
+assets = ["dist/client"]

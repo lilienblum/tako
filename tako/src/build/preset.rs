@@ -10,7 +10,7 @@ pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const FALLBACK_OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const OFFICIAL_PRESET_BRANCH: &str = "master";
-const EMBEDDED_JS_GROUP_PRESETS_PATH: &str = "registry/javascript/presets/javascript.toml";
+const EMBEDDED_JS_GROUP_PRESETS_PATH: &str = "presets/javascript/javascript.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -20,105 +20,37 @@ pub enum PresetReference {
     },
 }
 
+/// Lightweight preset metadata: just name, main, and assets.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PresetDefinition {
     pub name: String,
     pub main: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BuildPreset {
+/// App preset providing entrypoint and asset defaults.
+/// Loaded from `presets/<group>/<group>.toml` or embedded.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AppPreset {
     pub name: String,
     #[serde(default)]
     pub main: Option<String>,
     #[serde(default)]
-    pub builder_image: Option<String>,
-    #[serde(default)]
-    pub build: BuildPresetBuild,
-    #[serde(default)]
-    pub dev: Vec<String>,
-    #[serde(default)]
-    pub install: Option<String>,
-    #[serde(default)]
-    pub start: Vec<String>,
-    #[serde(default)]
-    pub targets: std::collections::HashMap<String, BuildPresetTarget>,
-    #[serde(default)]
-    pub target_defaults: BuildPresetTargetDefaults,
-    #[serde(default)]
     pub assets: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BuildPresetBuild {
-    #[serde(default)]
-    pub exclude: Vec<String>,
-    #[serde(default)]
-    pub install: Option<String>,
-    #[serde(default)]
-    pub build: Option<String>,
-    #[serde(default)]
-    pub targets: Vec<String>,
-    #[serde(default)]
-    pub container: bool,
-    #[serde(skip)]
-    pub targets_explicit: bool,
-    #[serde(skip)]
-    pub container_explicit: bool,
-}
+/// Backward-compatible alias.
+pub type BuildPreset = AppPreset;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BuildPresetTarget {
-    #[serde(default)]
-    pub builder_image: Option<String>,
-    #[serde(default)]
-    pub install: Option<String>,
-    #[serde(default)]
-    pub build: Option<String>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct BuildPresetTargetDefaults {
-    #[serde(default)]
-    pub builder_image: Option<String>,
-    #[serde(default)]
-    pub install: Option<String>,
-    #[serde(default)]
-    pub build: Option<String>,
-}
+const KNOWN_PRESET_FIELDS: &[&str] = &["name", "main", "assets"];
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BuildPresetRaw {
+struct AppPresetRaw {
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
     main: Option<String>,
     #[serde(default)]
-    build: BuildPresetRawBuild,
-    #[serde(default)]
-    dev: Vec<String>,
-    #[serde(default)]
-    install: Option<String>,
-    #[serde(default)]
-    start: Vec<String>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct BuildPresetRawBuild {
-    #[serde(default)]
-    exclude: Vec<String>,
-    #[serde(default)]
     assets: Vec<String>,
-    #[serde(default)]
-    install: Option<String>,
-    #[serde(default)]
-    build: Option<String>,
-    #[serde(default)]
-    targets: Option<toml::Value>,
-    #[serde(default)]
-    container: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -311,35 +243,66 @@ pub async fn load_build_preset(
     };
     let path = official_alias_to_path(alias);
     let official_repo = official_preset_repo();
-    let (repo, commit, content) = if let Some(commit) = commit_override {
-        let content = fetch_preset_content_by_commit(&official_repo, &path, &commit).await?;
-        (official_repo.clone(), commit, content)
+    let fetch_result = if let Some(commit) = commit_override {
+        fetch_preset_content_by_commit(&official_repo, &path, &commit)
+            .await
+            .map(|content| (official_repo.clone(), commit, content))
     } else {
-        let (resolved_commit, content) =
-            fetch_preset_content_from_master_branch(&official_repo, &path).await?;
-        (official_repo.clone(), resolved_commit, content)
+        fetch_preset_content_from_master_branch(&official_repo, &path)
+            .await
+            .map(|(resolved_commit, content)| (official_repo.clone(), resolved_commit, content))
     };
 
-    let preset = parse_resolved_preset_from_content(&parsed_ref, &path, &content)?;
+    let (repo, commit, preset) = match fetch_result {
+        Ok((repo, commit, content)) => {
+            let preset = parse_resolved_preset_from_content(&parsed_ref, &path, &content)?;
+            (repo, commit, preset)
+        }
+        Err(fetch_error) => {
+            // Fall back to embedded content for known runtime aliases and group presets.
+            if BuildAdapter::from_id(alias).is_some() {
+                tracing::debug!(
+                    "Preset fetch failed, using embedded preset: {}",
+                    fetch_error
+                );
+                let preset = parse_embedded_runtime_base_preset(alias)?;
+                (official_repo.clone(), "embedded".to_string(), preset)
+            } else if let Some(embedded_path) = official_group_manifest_path(PresetGroup::Js) {
+                tracing::debug!(
+                    "Preset fetch failed, trying embedded group manifest: {}",
+                    fetch_error
+                );
+                let embedded_content = embedded_group_manifest_content(embedded_path);
+                match parse_resolved_preset_from_content(&parsed_ref, &path, &embedded_content) {
+                    Ok(preset) => (official_repo.clone(), "embedded".to_string(), preset),
+                    Err(_) => return Err(fetch_error),
+                }
+            } else {
+                return Err(fetch_error);
+            }
+        }
+    };
     let resolved = ResolvedPresetSource {
         preset_ref: preset_ref.to_string(),
         repo,
         path,
-        commit,
+        commit: commit.clone(),
     };
-    write_locked_preset(project_dir, &resolved)?;
+    if commit != "embedded" {
+        write_locked_preset(project_dir, &resolved)?;
+    }
     Ok((preset, resolved))
 }
 
 fn official_alias_to_path(alias: &str) -> String {
     match alias.split_once('/') {
-        Some((group, _)) => format!("registry/{group}/presets/{group}.toml"),
+        Some((group, _)) => format!("presets/{group}/{group}.toml"),
         None => {
             if let Some(adapter) = BuildAdapter::from_id(alias) {
                 let group = adapter.preset_group().id();
-                format!("registry/{group}/presets/{group}.toml")
+                format!("presets/{group}/{group}.toml")
             } else {
-                format!("registry/{alias}/presets/{alias}.toml")
+                format!("presets/{alias}/{alias}.toml")
             }
         }
     }
@@ -349,6 +312,15 @@ fn official_group_manifest_path(group: PresetGroup) -> Option<&'static str> {
     match group {
         PresetGroup::Js => Some(EMBEDDED_JS_GROUP_PRESETS_PATH),
         PresetGroup::Unknown => None,
+    }
+}
+
+fn embedded_group_manifest_content(path: &str) -> String {
+    match path {
+        "presets/javascript/javascript.toml" => {
+            include_str!("../../presets/javascript/javascript.toml").to_string()
+        }
+        _ => String::new(),
     }
 }
 
@@ -504,19 +476,20 @@ fn parse_group_preset_content(
 pub fn parse_and_validate_preset(
     content: &str,
     inferred_name: &str,
-) -> Result<BuildPreset, String> {
-    let value: toml::Value =
-        toml::from_str(content).map_err(|e| format!("Failed to parse build preset TOML: {e}"))?;
+) -> Result<AppPreset, String> {
+    // Warn on unknown fields (legacy preset fields like dev, build, install, start).
+    if let Ok(value) = toml::from_str::<toml::Value>(content) {
+        if let Some(table) = value.as_table() {
+            for key in table.keys() {
+                if !KNOWN_PRESET_FIELDS.contains(&key.as_str()) {
+                    tracing::warn!("Preset has unknown field '{}' — only name, main, assets are supported", key);
+                }
+            }
+        }
+    }
 
-    let build_table = value.get("build").and_then(toml::Value::as_table);
-    let targets_explicit = build_table.and_then(|table| table.get("targets")).is_some();
-    let container_explicit = build_table
-        .and_then(|table| table.get("container"))
-        .is_some();
-
-    let raw: BuildPresetRaw = value
-        .try_into()
-        .map_err(|e| format!("Failed to parse build preset TOML: {e}"))?;
+    let raw: AppPresetRaw = toml::from_str(content)
+        .map_err(|e| format!("Failed to parse preset TOML: {e}"))?;
 
     let name = raw
         .name
@@ -525,47 +498,28 @@ pub fn parse_and_validate_preset(
         .unwrap_or_else(|| inferred_name.to_string());
     if name.is_empty() {
         return Err(
-            "Build preset name is empty. Set top-level `name` or use a .toml file name with a non-empty stem."
+            "Preset name is empty. Set top-level `name` or use a .toml file name with a non-empty stem."
                 .to_string(),
         );
     }
 
-    let target_labels = parse_build_target_labels(raw.build.targets.clone())?;
-    let use_container_build = resolve_container_build_toggle(raw.build.container, &target_labels)?;
-
-    let preset = BuildPreset {
+    Ok(AppPreset {
         name,
         main: raw.main,
-        builder_image: None,
-        build: BuildPresetBuild {
-            exclude: raw.build.exclude,
-            install: raw.build.install.clone(),
-            build: raw.build.build.clone(),
-            targets: target_labels,
-            container: use_container_build,
-            targets_explicit,
-            container_explicit,
-        },
-        dev: raw.dev,
-        install: raw.install,
-        start: raw.start,
-        targets: std::collections::HashMap::new(),
-        target_defaults: BuildPresetTargetDefaults::default(),
-        assets: raw.build.assets,
-    };
-
-    Ok(preset)
+        assets: raw.assets,
+    })
 }
 
 pub fn apply_adapter_base_runtime_defaults(
-    preset: &mut BuildPreset,
+    preset: &mut AppPreset,
     adapter: BuildAdapter,
+    plugin_ctx: Option<&tako_runtime::PluginContext>,
 ) -> Result<(), String> {
     if adapter == BuildAdapter::Unknown {
         return Ok(());
     }
 
-    let def = tako_runtime::builtin_runtime(adapter.id()).ok_or_else(|| {
+    let def = tako_runtime::runtime_def_for(adapter.id(), plugin_ctx).ok_or_else(|| {
         format!(
             "Missing built-in runtime definition for '{}'.",
             adapter.id()
@@ -575,42 +529,8 @@ pub fn apply_adapter_base_runtime_defaults(
     if preset.main.is_none() {
         preset.main = def.preset.main;
     }
-    if preset.dev.is_empty() {
-        preset.dev = def.preset.dev;
-    }
-    // Fill install from package manager if available.
-    // Try runtime id as PM id (bun→bun), fall back to npm for JS family.
-    let pm = tako_runtime::builtin_package_manager(adapter.id())
-        .or_else(|| tako_runtime::builtin_package_manager("npm"));
-    if preset.install.is_none() {
-        // Production install from PM base
-        preset.install = pm.as_ref().and_then(|p| p.install.clone());
-    }
-    if preset.start.is_empty() {
-        preset.start = def.preset.start;
-    }
-    if preset.build.install.is_none() {
-        // Build-time install from PM development override
-        preset.build.install = pm
-            .as_ref()
-            .and_then(|p| p.development.as_ref())
-            .and_then(|dev| dev.install.clone());
-    }
-    if preset.build.build.is_none() {
-        preset.build.build = def.preset.build.clone();
-    }
 
     Ok(())
-}
-
-fn merge_string_lists_unique(base: Vec<String>, extra: Vec<String>) -> Vec<String> {
-    let mut merged = base;
-    for item in extra {
-        if !merged.contains(&item) {
-            merged.push(item);
-        }
-    }
-    merged
 }
 
 pub fn infer_adapter_from_preset_reference(preset_ref: &str) -> BuildAdapter {
@@ -627,39 +547,6 @@ pub fn infer_adapter_from_preset_reference(preset_ref: &str) -> BuildAdapter {
 fn infer_adapter_from_official_alias_name(alias: &str) -> BuildAdapter {
     let group_or_name = alias.split('/').next().unwrap_or(alias);
     BuildAdapter::from_id(group_or_name).unwrap_or(BuildAdapter::Unknown)
-}
-
-fn parse_build_target_labels(raw_targets: Option<toml::Value>) -> Result<Vec<String>, String> {
-    let Some(raw_targets) = raw_targets else {
-        return Ok(Vec::new());
-    };
-    let array = raw_targets.as_array().ok_or_else(|| {
-        "Build preset [build].targets must be an array of target labels (for example [\"linux-x86_64-glibc\"]).".to_string()
-    })?;
-    let mut labels = Vec::new();
-    for value in array {
-        let Some(label) = value.as_str() else {
-            return Err(
-                "Build preset [build].targets entries must be strings (target labels).".to_string(),
-            );
-        };
-        let trimmed = label.trim();
-        if trimmed.is_empty() {
-            return Err("Build preset [build].targets cannot contain empty values.".to_string());
-        }
-        labels.push(trimmed.to_string());
-    }
-    Ok(labels)
-}
-
-fn resolve_container_build_toggle(
-    container: Option<bool>,
-    target_labels: &[String],
-) -> Result<bool, String> {
-    if let Some(value) = container {
-        return Ok(value);
-    }
-    Ok(!target_labels.is_empty())
 }
 
 #[cfg(test)]
@@ -766,7 +653,7 @@ mod tests {
     use super::*;
     use crate::build::adapter::builtin_base_preset_content_for_alias;
 
-    fn parse_preset(raw: &str) -> Result<BuildPreset, String> {
+    fn parse_preset(raw: &str) -> Result<AppPreset, String> {
         parse_and_validate_preset(raw, "bun")
     }
 
@@ -866,19 +753,19 @@ mod tests {
     fn official_alias_to_path_maps_group_layout() {
         assert_eq!(
             official_alias_to_path("bun"),
-            "registry/javascript/presets/javascript.toml"
+            "presets/javascript/javascript.toml"
         );
         assert_eq!(
             official_alias_to_path("javascript/tanstack-start"),
-            "registry/javascript/presets/javascript.toml"
+            "presets/javascript/javascript.toml"
         );
         assert_eq!(
             official_alias_to_path("node"),
-            "registry/javascript/presets/javascript.toml"
+            "presets/javascript/javascript.toml"
         );
         assert_eq!(
             official_alias_to_path("deno"),
-            "registry/javascript/presets/javascript.toml"
+            "presets/javascript/javascript.toml"
         );
     }
 
@@ -886,7 +773,7 @@ mod tests {
     fn official_group_manifest_path_supports_known_families() {
         assert_eq!(
             official_group_manifest_path(PresetGroup::Js),
-            Some("registry/javascript/presets/javascript.toml")
+            Some("presets/javascript/javascript.toml")
         );
         assert_eq!(official_group_manifest_path(PresetGroup::Unknown), None);
     }
@@ -894,7 +781,7 @@ mod tests {
     #[test]
     fn parse_group_manifest_preset_names_collects_sorted_sections() {
         let names = parse_group_manifest_preset_names(
-            "registry/javascript/presets/javascript.toml",
+            "presets/javascript/javascript.toml",
             r#"
 [zeta]
 main = "z.ts"
@@ -912,7 +799,7 @@ main = "a.ts"
     #[test]
     fn parse_group_manifest_preset_definitions_reads_optional_main() {
         let definitions = parse_group_manifest_preset_definitions(
-            "registry/javascript/presets/javascript.toml",
+            "presets/javascript/javascript.toml",
             r#"
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
@@ -951,9 +838,8 @@ foo = "bar"
         let content = builtin_base_preset_content_for_alias("bun").expect("embedded bun preset");
         let preset = parse_and_validate_preset(&content, "bun").unwrap();
         assert_eq!(preset.name, "bun");
-        assert!(!preset.dev.is_empty());
-        assert!(preset.install.is_some());
-        assert!(!preset.start.is_empty());
+        // The embedded bun preset only provides main (and possibly assets).
+        assert!(preset.main.is_some());
     }
 
     #[test]
@@ -961,13 +847,11 @@ foo = "bar"
         let content = r#"
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
-
-[tanstack-start.build]
 assets = ["dist/client"]
 "#;
         let preset = parse_official_alias_preset_content(
             "javascript/tanstack-start",
-            "registry/javascript/presets/javascript.toml",
+            "presets/javascript/javascript.toml",
             content,
         )
         .unwrap();
@@ -984,15 +868,13 @@ main = "dist/server/tako-entry.mjs"
 "#;
         let preset = parse_official_alias_preset_content(
             "bun",
-            "registry/javascript/presets/javascript.toml",
+            "presets/javascript/javascript.toml",
             content,
         )
         .expect("runtime alias should use built-in preset fallback");
         assert_eq!(preset.name, "bun");
-        assert_eq!(preset.main.as_deref(), Some("src/index.ts"));
-        assert!(!preset.dev.is_empty());
-        assert!(preset.install.is_some());
-        assert!(!preset.start.is_empty());
+        // Embedded base preset provides a default main for the bun runtime.
+        assert!(preset.main.is_some());
     }
 
     #[test]
@@ -1003,7 +885,7 @@ main = "dist/server/tako-entry.mjs"
 "#;
         let err = parse_official_alias_preset_content(
             "javascript/missing",
-            "registry/javascript/presets/javascript.toml",
+            "presets/javascript/javascript.toml",
             content,
         )
         .expect_err("non-runtime group alias should still require manifest section");
@@ -1039,447 +921,100 @@ main = "dist/server/tako-entry.mjs"
     }
 
     #[test]
-    fn apply_adapter_base_runtime_defaults_fills_missing_fields_from_base_preset() {
+    fn apply_adapter_base_runtime_defaults_fills_missing_main_from_runtime() {
         let raw = r#"
 name = "tanstack-start"
-main = "dist/server/tako-entry.mjs"
-
-[build]
 assets = ["dist/client"]
 "#;
         let mut preset = parse_preset(raw).unwrap();
-        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
+        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun, None).unwrap();
 
-        assert_eq!(preset.main.as_deref(), Some("dist/server/tako-entry.mjs"));
-        assert_eq!(preset.dev, vec!["bun", "--hot", "{main}"]);
-        assert!(preset.install.is_some());
-        assert!(!preset.start.is_empty());
-        assert!(preset.build.exclude.is_empty());
-        assert!(preset.build.install.is_some());
-        assert!(preset.build.build.is_some());
-        // Targets come from tako.toml or CLI, not from runtime defaults.
-        assert!(preset.build.targets.is_empty());
-        assert!(!preset.build.container);
+        // main was not set, so it gets filled from the bun runtime default.
+        assert!(preset.main.is_some());
+        // assets are untouched by the runtime defaults.
         assert_eq!(preset.assets, vec!["dist/client".to_string()]);
     }
 
     #[test]
-    fn apply_adapter_base_runtime_defaults_keeps_explicit_variant_overrides() {
+    fn apply_adapter_base_runtime_defaults_keeps_explicit_main() {
         let raw = r#"
 name = "custom-bun"
 main = "custom-main.ts"
-dev = ["bun", "run", "custom-dev"]
-install = "custom-install"
-start = ["bun", "run", "custom-start", "{main}"]
-
-[build]
-install = "custom-build-install"
-build = "custom-build"
 "#;
         let mut preset = parse_preset(raw).unwrap();
-        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
+        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun, None).unwrap();
 
         assert_eq!(preset.main.as_deref(), Some("custom-main.ts"));
-        assert_eq!(preset.dev, vec!["bun", "run", "custom-dev"]);
-        assert_eq!(preset.install.as_deref(), Some("custom-install"));
-        assert_eq!(preset.start, vec!["bun", "run", "custom-start", "{main}"]);
-        assert_eq!(
-            preset.build.install.as_deref(),
-            Some("custom-build-install")
-        );
-        assert_eq!(preset.build.build.as_deref(), Some("custom-build"));
     }
 
     #[test]
-    fn apply_adapter_base_runtime_defaults_uses_local_builds_for_node() {
+    fn apply_adapter_base_runtime_defaults_skips_unknown_adapter() {
         let raw = r#"
-name = "custom-node"
+name = "custom"
 "#;
         let mut preset = parse_preset(raw).unwrap();
-        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Node).unwrap();
+        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Unknown, None).unwrap();
 
-        assert!(!preset.build.container);
+        // Unknown adapter does nothing — main stays None.
+        assert!(preset.main.is_none());
     }
 
     #[test]
-    fn apply_adapter_base_runtime_defaults_uses_local_builds_for_deno() {
-        let raw = r#"
-name = "custom-deno"
-"#;
-        let mut preset = parse_preset(raw).unwrap();
-        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Deno).unwrap();
-
-        assert!(!preset.build.container);
-    }
-
-    #[test]
-    fn apply_adapter_base_runtime_defaults_keeps_explicit_target_and_container_overrides() {
-        let raw = r#"
-name = "custom-bun"
-
-[build]
-assets = ["dist/client"]
-exclude = []
-targets = []
-container = false
-"#;
-        let mut preset = parse_preset(raw).unwrap();
-        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
-
-        assert!(preset.build.exclude.is_empty());
-        assert!(preset.build.targets.is_empty());
-        assert!(!preset.build.container);
-    }
-
-    #[test]
-    fn apply_adapter_base_runtime_defaults_keeps_custom_excludes() {
-        let raw = r#"
-name = "custom-bun"
-
-[build]
-assets = ["dist/client"]
-exclude = ["dist/**/*.map"]
-"#;
-        let mut preset = parse_preset(raw).unwrap();
-        apply_adapter_base_runtime_defaults(&mut preset, BuildAdapter::Bun).unwrap();
-
-        assert_eq!(preset.build.exclude, vec!["dist/**/*.map".to_string()]);
-    }
-
-    #[test]
-    fn parse_and_validate_preset_accepts_toml() {
+    fn parse_and_validate_preset_accepts_name_main_assets() {
         let raw = r#"
 name = "bun"
 main = "index.ts"
-
-dev = ["bun", "--hot", "{main}"]
-install = "bun install --production --frozen-lockfile"
-start = ["bun", "run", "node_modules/tako.sh/src/entrypoints/bun.ts", "{main}"]
-
-[build]
-exclude = ["**/*.map"]
-install = "bun install"
-build = "bun run build"
-targets = ["linux-x86_64-glibc", "linux-aarch64-musl"]
+assets = ["dist/client", "public"]
 "#;
         let preset = parse_preset(raw).unwrap();
         assert_eq!(preset.name, "bun");
         assert_eq!(preset.main.as_deref(), Some("index.ts"));
-        assert_eq!(preset.builder_image.as_deref(), None);
-        assert_eq!(preset.build.exclude, vec!["**/*.map".to_string()]);
         assert_eq!(
-            preset.build.targets,
-            vec![
-                "linux-x86_64-glibc".to_string(),
-                "linux-aarch64-musl".to_string()
-            ]
+            preset.assets,
+            vec!["dist/client".to_string(), "public".to_string()]
         );
-        assert_eq!(preset.dev, vec!["bun", "--hot", "{main}"]);
-        assert_eq!(
-            preset.start,
-            vec![
-                "bun",
-                "run",
-                "node_modules/tako.sh/src/entrypoints/bun.ts",
-                "{main}"
-            ]
-        );
-        assert!(preset.targets.is_empty());
     }
 
     #[test]
     fn parse_and_validate_preset_uses_inferred_name_when_missing() {
         let raw = r#"
-[build]
-install = "bun install"
+main = "index.ts"
 "#;
         let preset = parse_preset(raw).unwrap();
         assert_eq!(preset.name, "bun");
     }
 
     #[test]
-    fn parse_and_validate_preset_rejects_top_level_targets() {
+    fn parse_and_validate_preset_defaults_to_empty_assets() {
         let raw = r#"
 name = "bun"
-
-        [targets]
-        builder_image = "oven/bun:1.2"
-        "#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("targets"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_top_level_exclude() {
-        let raw = r#"
-name = "bun"
-exclude = ["**/*.map"]
-
-[build]
-install = "bun install"
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("exclude"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_top_level_assets() {
-        let raw = r#"
-name = "bun"
-assets = ["dist/client"]
-
-[build]
-install = "bun install"
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("assets"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_top_level_builder_image() {
-        let raw = r#"
-name = "bun"
-builder_image = "oven/bun:1.2"
-
-[build]
-install = "bun install"
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("builder_image"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_top_level_runtime() {
-        let raw = r#"
-runtime = "bun"
-
-[build]
-install = "bun install"
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("runtime"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_top_level_id() {
-        let raw = r#"
-id = "bun"
-
-[build]
-install = "bun install"
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("id"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_unknown_dev_cmd_key() {
-        let raw = r#"
-name = "bun"
-
-dev_cmd = ["bun", "run", "dev"]
-
-[build]
-install = "bun install"
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("dev_cmd"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_non_array_dev_value() {
-        let raw = r#"
-name = "bun"
-
-[build]
-install = "bun install"
-
-[dev]
-start = ["bun", "run", "dev"]
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("expected a sequence"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_unknown_deploy_key() {
-        let raw = r#"
-name = "bun"
-
-[build]
-install = "bun install"
-
-[deploy]
-install = "bun install --production --frozen-lockfile"
-start = ["bun", "run", "index.ts"]
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("deploy"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_accepts_build_targets_array() {
-        let raw = r#"
-name = "bun"
-
-[build]
-install = "bun install --frozen-lockfile"
-build = "bun run --if-present build"
-targets = ["linux-x86_64-glibc", "linux-aarch64-musl"]
+main = "index.ts"
 "#;
         let preset = parse_preset(raw).unwrap();
-        assert_eq!(
-            preset.build.targets,
-            vec![
-                "linux-x86_64-glibc".to_string(),
-                "linux-aarch64-musl".to_string()
-            ]
-        );
+        assert!(preset.assets.is_empty());
     }
 
     #[test]
-    fn parse_and_validate_preset_accepts_build_assets() {
+    fn parse_and_validate_preset_accepts_unknown_fields_with_warning() {
+        // Unknown fields are accepted (parsed successfully) but logged as warnings.
         let raw = r#"
-name = "tanstack-start"
+name = "bun"
+main = "index.ts"
+extra_field = "ignored"
+"#;
+        let preset = parse_preset(raw).unwrap();
+        assert_eq!(preset.name, "bun");
+        assert_eq!(preset.main.as_deref(), Some("index.ts"));
+    }
 
-[build]
+    #[test]
+    fn parse_and_validate_preset_accepts_top_level_assets() {
+        let raw = r#"
+name = "bun"
 assets = ["dist/client"]
 "#;
         let preset = parse_preset(raw).unwrap();
         assert_eq!(preset.assets, vec!["dist/client".to_string()]);
-    }
-
-    #[test]
-    fn parse_and_validate_preset_accepts_build_container_toggle() {
-        let raw = r#"
-name = "bun"
-
-[build]
-container = true
-install = "bun install --frozen-lockfile"
-build = "bun run --if-present build"
-targets = ["linux-x86_64-glibc"]
-"#;
-        let preset = parse_preset(raw).unwrap();
-        assert!(preset.build.container);
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_unknown_build_docker_key() {
-        let raw = r#"
-name = "bun"
-
-[build]
-docker = true
-install = "bun install --frozen-lockfile"
-build = "bun run --if-present build"
-targets = ["linux-x86_64-glibc"]
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("docker"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_old_build_targets_table() {
-        let raw = r#"
-name = "bun"
-
-[build]
-install = "bun install"
-build = "bun run build"
-
-[build.targets]
-builder_image = "oven/bun:1.2"
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("[build].targets must be an array"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_build_stages() {
-        let raw = r#"
-name = "bun"
-
-[build]
-install = "bun install"
-build = "bun run build"
-
-[[build.stages]]
-run = "bun run build"
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("stages"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_supports_local_build_without_builder_image() {
-        let raw = r#"
-name = "bun"
-[build]
-install = "bun install --frozen-lockfile"
-build = "bun run --if-present build"
-"#;
-        let preset = parse_preset(raw).unwrap();
-        assert!(preset.targets.is_empty());
-        assert_eq!(preset.build.targets, Vec::<String>::new());
-        assert_eq!(
-            preset.build.install.as_deref(),
-            Some("bun install --frozen-lockfile")
-        );
-        assert_eq!(
-            preset.build.build.as_deref(),
-            Some("bun run --if-present build")
-        );
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_unknown_artifact_key() {
-        let raw = r#"
-[artifact]
-include = ["**/*"]
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("artifact"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_build_targets_default_table() {
-        let raw = r#"
-name = "bun"
-
-[build]
-install = "bun install"
-
-[build.targets.default]
-builder_image = "oven/bun:1.2"
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("[build].targets must be an array"));
-    }
-
-    #[test]
-    fn parse_and_validate_preset_rejects_top_level_include() {
-        let raw = r#"
-name = "bun"
-include = ["dist/**"]
-
-[build]
-install = "bun install"
-"#;
-        let err = parse_preset(raw).unwrap_err();
-        assert!(err.contains("unknown field"));
-        assert!(err.contains("include"));
     }
 
     #[test]
@@ -1488,7 +1023,7 @@ install = "bun install"
         let resolved = ResolvedPresetSource {
             preset_ref: "bun".to_string(),
             repo: "tako-sh/presets".to_string(),
-            path: "registry/javascript/presets/javascript.toml".to_string(),
+            path: "presets/javascript/javascript.toml".to_string(),
             commit: "abc123".to_string(),
         };
         write_locked_preset(temp.path(), &resolved).unwrap();
@@ -1503,7 +1038,7 @@ install = "bun install"
         let err = runtime
             .block_on(fetch_preset_content_from_master_branch(
                 "invalid-repo-slug",
-                "registry/javascript/presets/javascript.toml",
+                "presets/javascript/javascript.toml",
             ))
             .unwrap_err();
         assert_eq!(err, "Failed to fetch preset");

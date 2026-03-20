@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use tako_runtime::RuntimeDef;
+use tako_runtime::{PluginContext, RuntimeDef};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresetGroup {
@@ -46,12 +46,7 @@ impl BuildAdapter {
     }
 
     pub fn default_preset(self) -> &'static str {
-        match self {
-            BuildAdapter::Bun => "bun",
-            BuildAdapter::Node => "node",
-            BuildAdapter::Deno => "deno",
-            BuildAdapter::Unknown => "bun",
-        }
+        self.id()
     }
 
     pub fn preset_group(self) -> PresetGroup {
@@ -62,7 +57,12 @@ impl BuildAdapter {
     }
 
     pub fn runtime_def(self) -> Option<RuntimeDef> {
-        tako_runtime::builtin_runtime(self.id())
+        tako_runtime::runtime_def_for(self.id(), None)
+    }
+
+    /// Produce a RuntimeDef using the plugin system with project context.
+    pub fn runtime_def_with_context(self, ctx: &PluginContext) -> Option<RuntimeDef> {
+        tako_runtime::runtime_def_for(self.id(), Some(ctx))
     }
 
     pub fn infer_main_entrypoint(self, project_dir: &Path) -> Option<String> {
@@ -70,17 +70,16 @@ impl BuildAdapter {
         infer_main_entrypoint_from_def(&def, project_dir)
     }
 
-    pub fn embedded_preset_default_main(self) -> Option<String> {
-        let def = self.runtime_def()?;
-        def.preset.main.clone()
-    }
 }
 
 /// Infer the main entrypoint for a project using the runtime definition.
 pub fn infer_main_entrypoint_from_def(def: &RuntimeDef, project_dir: &Path) -> Option<String> {
     if let Some(ref manifest) = def.entrypoint.manifest {
         if let Some(main) = infer_manifest_main(project_dir, &manifest.file, &manifest.field) {
-            return Some(main);
+            // Only use manifest main if it looks like a file path (not a module specifier)
+            if project_dir.join(&main).is_file() || main.starts_with('.') {
+                return Some(main);
+            }
         }
     }
 
@@ -94,71 +93,17 @@ pub fn infer_main_entrypoint_from_def(def: &RuntimeDef, project_dir: &Path) -> O
 }
 
 /// Generate the builtin base preset TOML content for a runtime alias.
-///
-/// This reconstructs the preset TOML from the RuntimeDef so that existing
-/// preset parsing code (which expects TOML content) continues to work.
+/// Returns a minimal preset with just `main` from the runtime definition.
 pub fn builtin_base_preset_content_for_alias(alias: &str) -> Option<String> {
-    let def = tako_runtime::builtin_runtime(alias)?;
-    Some(runtime_def_to_preset_toml(&def))
-}
-
-/// Convert a RuntimeDef's preset section to a TOML string compatible with
-/// the existing BuildPreset parser.
-fn runtime_def_to_preset_toml(def: &RuntimeDef) -> String {
+    let def = tako_runtime::runtime_def_for(alias, None)?;
     let mut out = String::new();
-
     if let Some(ref main) = def.preset.main {
-        out.push_str(&format!("main = {}\n", toml_quote(main)));
-    }
-    if !def.preset.dev.is_empty() {
-        out.push_str(&format!("dev = {}\n", toml_string_array(&def.preset.dev)));
-    }
-    // Production install comes from the package manager.
-    // Try runtime id as PM id (bun→bun), then fall back to npm for JS family.
-    let pm = tako_runtime::builtin_package_manager(&def.id)
-        .or_else(|| tako_runtime::builtin_package_manager("npm"));
-    if let Some(ref pm) = pm {
-        if let Some(ref install) = pm.install {
-            out.push_str(&format!("install = '''\n{}'''\n", install));
-        }
-    }
-    if !def.preset.start.is_empty() {
         out.push_str(&format!(
-            "start = {}\n",
-            toml_string_array(&def.preset.start)
+            "main = \"{}\"\n",
+            main.replace('\\', "\\\\").replace('"', "\\\"")
         ));
     }
-
-    // Emit [build] section with build command and PM dev install.
-    let build_cmd = def.preset.build.as_deref();
-    let dev_install = pm
-        .as_ref()
-        .and_then(|p| p.development.as_ref())
-        .and_then(|d| d.install.as_deref());
-    if build_cmd.is_some() || dev_install.is_some() {
-        out.push_str("\n[build]\n");
-        if let Some(install) = dev_install {
-            out.push_str(&format!("install = '''\n{}'''\n", install));
-        }
-        if let Some(cmd) = build_cmd {
-            if cmd.contains('\n') {
-                out.push_str(&format!("build = '''\n{}'''\n", cmd));
-            } else {
-                out.push_str(&format!("build = {}\n", toml_quote(cmd)));
-            }
-        }
-    }
-
-    out
-}
-
-fn toml_quote(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn toml_string_array(items: &[String]) -> String {
-    let quoted: Vec<String> = items.iter().map(|s| toml_quote(s)).collect();
-    format!("[{}]", quoted.join(", "))
+    Some(out)
 }
 
 pub fn detect_build_adapter(project_dir: &Path) -> BuildAdapter {
@@ -177,9 +122,12 @@ pub fn detect_build_adapter(project_dir: &Path) -> BuildAdapter {
         if let Ok(contents) = std::fs::read_to_string(project_dir.join("package.json"))
             && let Ok(json) = serde_json::from_str::<serde_json::Value>(&contents)
             && let Some(scripts) = json.get("scripts").and_then(|s| s.as_object())
-            && scripts
-                .values()
-                .any(|v| v.as_str().is_some_and(|s| s.contains("bun ")))
+            && scripts.values().any(|v| {
+                v.as_str().is_some_and(|s| {
+                    s.split(&[';', '&', '|', '\n'][..])
+                        .any(|segment| segment.trim().starts_with("bun "))
+                })
+            })
         {
             return BuildAdapter::Bun;
         }
@@ -338,7 +286,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_main_accepts_module_specifier() {
+    fn infer_skips_module_specifiers_from_package_json() {
         let temp = TempDir::new().unwrap();
         std::fs::write(
             temp.path().join("package.json"),
@@ -346,12 +294,14 @@ mod tests {
         )
         .unwrap();
 
+        // Module specifiers are not file paths — inference returns None.
+        // Preset main handles them instead.
         let inferred = BuildAdapter::Node.infer_main_entrypoint(temp.path());
-        assert_eq!(inferred.as_deref(), Some("@example/server"));
+        assert_eq!(inferred, None);
     }
 
     #[test]
-    fn manifest_main_accepts_bare_package_name() {
+    fn infer_skips_bare_package_names_from_package_json() {
         let temp = TempDir::new().unwrap();
         std::fs::write(
             temp.path().join("package.json"),
@@ -360,11 +310,11 @@ mod tests {
         .unwrap();
 
         let inferred = BuildAdapter::Node.infer_main_entrypoint(temp.path());
-        assert_eq!(inferred.as_deref(), Some("my-lib"));
+        assert_eq!(inferred, None);
     }
 
     #[test]
-    fn manifest_main_accepts_nonexistent_file_path() {
+    fn infer_skips_nonexistent_file_paths_from_package_json() {
         let temp = TempDir::new().unwrap();
         std::fs::write(
             temp.path().join("package.json"),
@@ -373,15 +323,7 @@ mod tests {
         .unwrap();
 
         let inferred = BuildAdapter::Node.infer_main_entrypoint(temp.path());
-        assert_eq!(inferred.as_deref(), Some("dist/server.js"));
-    }
-
-    #[test]
-    fn bun_adapter_embedded_preset_has_default_main() {
-        assert_eq!(
-            BuildAdapter::Bun.embedded_preset_default_main(),
-            Some("src/index.ts".to_string())
-        );
+        assert_eq!(inferred, None);
     }
 
     #[test]
