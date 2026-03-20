@@ -1642,15 +1642,30 @@ async fn prepare_release_runtime(
     // Prepend the resolved binary's directory to PATH so install commands
     // (e.g. "bun install --production") can find the runtime.
     let mut install_env = env.clone();
+    let mut path_dirs: Vec<String> = Vec::new();
     if let Some(ref bin) = runtime_bin
         && let Some(bin_dir) = Path::new(bin).parent()
     {
+        path_dirs.push(bin_dir.display().to_string());
+    }
+
+    // If the package manager differs from the runtime, download it too.
+    if let Some(ref pm) = manifest.package_manager {
+        if pm != runtime {
+            let pm_bin = version_manager::install_and_resolve(pm, None, data_dir).await;
+            if let Some(ref bin) = pm_bin
+                && let Some(bin_dir) = Path::new(bin).parent()
+            {
+                path_dirs.push(bin_dir.display().to_string());
+            }
+        }
+    }
+
+    if !path_dirs.is_empty() {
         let current_path =
             std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".to_string());
-        install_env.insert(
-            "PATH".to_string(),
-            format!("{}:{}", bin_dir.display(), current_path),
-        );
+        path_dirs.push(current_path);
+        install_env.insert("PATH".to_string(), path_dirs.join(":"));
     }
 
     // Run production dependency install using the runtime plugin.
