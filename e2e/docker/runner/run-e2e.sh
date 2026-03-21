@@ -331,15 +331,19 @@ if [[ -f "$PROJECT_DIR/package.json" ]]; then
   (cd "$JS_WORKSPACE_DIR" && bun install)
   (cd "$JS_WORKSPACE_DIR/sdk/javascript" && bun run build)
 
-  # Pack the SDK as a tarball so fixtures can use file: instead of workspace:*
-  # This ensures the SDK is available in the deploy artifact without workspace context.
-  SDK_TARBALL=$(cd "$JS_WORKSPACE_DIR/sdk/javascript" && npm pack --pack-destination "$PROJECT_DIR" 2>/dev/null | tail -1)
-  if [[ -f "$PROJECT_DIR/$SDK_TARBALL" ]]; then
-    # Replace workspace:* with file: reference to the tarball
-    jq --arg tarball "$SDK_TARBALL" '.dependencies["tako.sh"] = ("file:./" + $tarball)' "$PROJECT_DIR/package.json" > "$PROJECT_DIR/package.json.tmp"
+  # Pack the built SDK as a tarball so bun copies (not symlinks) it into
+  # node_modules/tako.sh/. This ensures the SDK entrypoint resolves sibling
+  # deps from the project's node_modules/, not from the SDK source dir.
+  SDK_SRC="$JS_WORKSPACE_DIR/sdk/javascript"
+  if [[ -d "$SDK_SRC/dist" ]]; then
+    # npm/bun tarballs expect a `package/` prefix inside the archive
+    (cd "$SDK_SRC" && tar czf "$PROJECT_DIR/tako-sdk.tgz" --transform='s,^,package/,' package.json dist/)
+    jq '.dependencies["tako.sh"] = "file:tako-sdk.tgz"' "$PROJECT_DIR/package.json" > "$PROJECT_DIR/package.json.tmp"
     mv "$PROJECT_DIR/package.json.tmp" "$PROJECT_DIR/package.json"
   fi
 
+  # Install deps in the fixture dir. This creates a bun.lock that matches
+  # the rewritten package.json (tarball instead of workspace:*).
   (cd "$PROJECT_DIR" && bun install)
 fi
 
