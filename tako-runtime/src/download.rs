@@ -467,14 +467,14 @@ fn extract_tar_gz(
         // Preserve symlinks from the archive (e.g. node's bin/npm -> ../lib/...)
         if entry.header().entry_type() == tar::EntryType::Symlink {
             #[cfg(unix)]
-            if let Ok(target) = entry.link_name() {
-                if let Some(target) = target {
-                    let link_path = dest.join(&rel);
-                    if let Some(parent) = link_path.parent() {
-                        let _ = std::fs::create_dir_all(parent);
-                    }
-                    let _ = std::os::unix::fs::symlink(target.as_ref(), &link_path);
+            if let Ok(target) = entry.link_name()
+                && let Some(target) = target
+            {
+                let link_path = dest.join(&rel);
+                if let Some(parent) = link_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
                 }
+                let _ = std::os::unix::fs::symlink(target.as_ref(), &link_path);
             }
             continue;
         }
@@ -492,12 +492,11 @@ fn extract_tar_gz(
 
         // Preserve executable permissions
         #[cfg(unix)]
-        if let Ok(mode) = entry.header().mode() {
-            if mode & 0o111 != 0 {
-                use std::os::unix::fs::PermissionsExt;
-                let _ =
-                    std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(mode));
-            }
+        if let Ok(mode) = entry.header().mode()
+            && mode & 0o111 != 0
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(mode));
         }
     }
 

@@ -92,7 +92,11 @@ export function createEntrypoint() {
       const defaultExport = module.default;
       if (typeof defaultExport === "function") {
         userFetch = defaultExport as FetchFunction;
-      } else if (defaultExport && typeof defaultExport === "object" && typeof defaultExport.fetch === "function") {
+      } else if (
+        defaultExport &&
+        typeof defaultExport === "object" &&
+        typeof defaultExport.fetch === "function"
+      ) {
         userFetch = defaultExport.fetch as FetchFunction;
       } else {
         throw new Error("App must export a default fetch function or { fetch } object.");

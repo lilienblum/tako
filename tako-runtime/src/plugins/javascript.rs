@@ -552,7 +552,7 @@ impl RuntimePlugin for DenoPlugin {
 mod tests {
     use super::*;
 
-    fn default_ctx(dir: &Path) -> PluginContext {
+    fn default_ctx(dir: &Path) -> PluginContext<'_> {
         PluginContext {
             project_dir: dir,
             package_manager: None,

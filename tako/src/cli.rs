@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn init_parses_without_runtime_flag() {
         let cli = Cli::try_parse_from(["tako", "init"]).unwrap();
-        assert!(matches!(cli.command, Some(Commands::Init { .. })));
+        assert!(matches!(cli.command, Some(Commands::Init)));
     }
 
     #[test]

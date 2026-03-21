@@ -370,12 +370,10 @@ where
             } else {
                 write!(writer, " {color}{level:>5}\x1b[0m ")?;
             }
+        } else if is_ci() {
+            write!(writer, "{level:>5} ")?;
         } else {
-            if is_ci() {
-                write!(writer, "{level:>5} ")?;
-            } else {
-                write!(writer, " {level:>5} ")?;
-            }
+            write!(writer, " {level:>5} ")?;
         }
 
         // Scope from innermost span (leaf → root, take first match)

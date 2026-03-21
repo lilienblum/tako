@@ -26,7 +26,7 @@ fn resolve_from_cwd(
     config: Option<&Path>,
 ) -> Result<ProjectContext, Box<dyn std::error::Error>> {
     let requested_path = config
-        .map(|path| normalize_requested_path(&cwd, path))
+        .map(|path| normalize_requested_path(cwd, path))
         .unwrap_or_else(|| cwd.join("tako.toml"));
 
     if requested_path.exists() && requested_path.is_dir() {

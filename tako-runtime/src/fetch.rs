@@ -29,15 +29,15 @@ fn parse_github_repo_slug(url: &str) -> Option<String> {
     }
 
     // Handle SSH: git@github.com:owner/repo.git
-    if let Some((_prefix, path)) = trimmed.split_once(':') {
-        if !path.contains("//") {
-            let (owner, rest) = path.split_once('/')?;
-            let repo = rest.strip_suffix(".git").unwrap_or(rest).trim();
-            if repo.is_empty() {
-                return None;
-            }
-            return Some(format!("{owner}/{repo}"));
+    if let Some((_prefix, path)) = trimmed.split_once(':')
+        && !path.contains("//")
+    {
+        let (owner, rest) = path.split_once('/')?;
+        let repo = rest.strip_suffix(".git").unwrap_or(rest).trim();
+        if repo.is_empty() {
+            return None;
         }
+        return Some(format!("{owner}/{repo}"));
     }
 
     // Handle HTTPS: https://github.com/owner/repo[.git]

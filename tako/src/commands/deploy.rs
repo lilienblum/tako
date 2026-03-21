@@ -1580,11 +1580,11 @@ fn build_manifest_env_vars(
     let mut merged = BTreeMap::new();
 
     // 1. Runtime defaults for this environment (lowest priority)
-    if let Some(def) = tako_runtime::runtime_def_for(runtime_name, None) {
-        if let Some(env_defaults) = def.envs.environments.get(environment) {
-            for (key, value) in env_defaults {
-                merged.insert(key.clone(), value.clone());
-            }
+    if let Some(def) = tako_runtime::runtime_def_for(runtime_name, None)
+        && let Some(env_defaults) = def.envs.environments.get(environment)
+    {
+        for (key, value) in env_defaults {
+            merged.insert(key.clone(), value.clone());
         }
     }
 

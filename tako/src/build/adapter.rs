@@ -73,12 +73,12 @@ impl BuildAdapter {
 
 /// Infer the main entrypoint for a project using the runtime definition.
 pub fn infer_main_entrypoint_from_def(def: &RuntimeDef, project_dir: &Path) -> Option<String> {
-    if let Some(ref manifest) = def.entrypoint.manifest {
-        if let Some(main) = infer_manifest_main(project_dir, &manifest.file, &manifest.field) {
-            // Only use manifest main if it looks like a file path (not a module specifier)
-            if project_dir.join(&main).is_file() || main.starts_with('.') {
-                return Some(main);
-            }
+    if let Some(ref manifest) = def.entrypoint.manifest
+        && let Some(main) = infer_manifest_main(project_dir, &manifest.file, &manifest.field)
+    {
+        // Only use manifest main if it looks like a file path (not a module specifier)
+        if project_dir.join(&main).is_file() || main.starts_with('.') {
+            return Some(main);
         }
     }
 

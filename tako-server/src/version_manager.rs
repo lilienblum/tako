@@ -37,11 +37,11 @@ pub(crate) async fn install_and_resolve(
     version: Option<&str>,
     data_dir: &Path,
 ) -> Option<String> {
-    if let Some(v) = version {
-        if !is_safe_version(v) {
-            tracing::warn!(tool, version = v, "Rejected unsafe runtime version string");
-            return None;
-        }
+    if let Some(v) = version
+        && !is_safe_version(v)
+    {
+        tracing::warn!(tool, version = v, "Rejected unsafe runtime version string");
+        return None;
     }
 
     let def = match tako_runtime::runtime_def_for(tool, None) {

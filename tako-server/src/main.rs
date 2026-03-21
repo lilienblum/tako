@@ -1650,14 +1650,14 @@ async fn prepare_release_runtime(
     }
 
     // If the package manager differs from the runtime, download it too.
-    if let Some(ref pm) = manifest.package_manager {
-        if pm != runtime {
-            let pm_bin = version_manager::install_and_resolve(pm, None, data_dir).await;
-            if let Some(ref bin) = pm_bin
-                && let Some(bin_dir) = Path::new(bin).parent()
-            {
-                path_dirs.push(bin_dir.display().to_string());
-            }
+    if let Some(ref pm) = manifest.package_manager
+        && pm != runtime
+    {
+        let pm_bin = version_manager::install_and_resolve(pm, None, data_dir).await;
+        if let Some(ref bin) = pm_bin
+            && let Some(bin_dir) = Path::new(bin).parent()
+        {
+            path_dirs.push(bin_dir.display().to_string());
         }
     }
 
@@ -1673,25 +1673,25 @@ async fn prepare_release_runtime(
         project_dir: release_dir,
         package_manager: manifest.package_manager.as_deref(),
     };
-    if let Some(def) = tako_runtime::runtime_def_for(runtime, Some(&ctx)) {
-        if let Some(install_cmd) = &def.package_manager.install {
-            tracing::info!(runtime = %runtime, "Running production install: {}", install_cmd);
-            let install_path = install_env.get("PATH").cloned().unwrap_or_default();
-            let prefixed_cmd = format!("export PATH=\"{install_path}\"; {install_cmd}");
-            let output = std::process::Command::new("sh")
-                .args(["-c", &prefixed_cmd])
-                .current_dir(release_dir)
-                .envs(&install_env)
-                .output()
-                .map_err(|e| format!("Failed to run production install: {e}"))?;
-            if !output.status.success() {
-                return Err(format_process_failure(
-                    "production install",
-                    output.status,
-                    &output.stdout,
-                    &output.stderr,
-                ));
-            }
+    if let Some(def) = tako_runtime::runtime_def_for(runtime, Some(&ctx))
+        && let Some(install_cmd) = &def.package_manager.install
+    {
+        tracing::info!(runtime = %runtime, "Running production install: {}", install_cmd);
+        let install_path = install_env.get("PATH").cloned().unwrap_or_default();
+        let prefixed_cmd = format!("export PATH=\"{install_path}\"; {install_cmd}");
+        let output = std::process::Command::new("sh")
+            .args(["-c", &prefixed_cmd])
+            .current_dir(release_dir)
+            .envs(&install_env)
+            .output()
+            .map_err(|e| format!("Failed to run production install: {e}"))?;
+        if !output.status.success() {
+            return Err(format_process_failure(
+                "production install",
+                output.status,
+                &output.stdout,
+                &output.stderr,
+            ));
         }
     }
 
@@ -2830,10 +2830,9 @@ async fn probe_primary_socket(socket_path: &str, our_pid: u32) -> PrimaryStatus 
 mod tests {
     use super::{
         SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, extract_zstd_archive,
-        handle_idle_event, install_rustls_crypto_provider, prepare_release_runtime,
-        read_server_config, resolve_release_runtime, run_extract_archive_mode,
-        should_signal_parent_on_ready, should_use_self_signed_route_cert, validate_app_name,
-        validate_deploy_routes,
+        handle_idle_event, install_rustls_crypto_provider, read_server_config,
+        resolve_release_runtime, run_extract_archive_mode, should_signal_parent_on_ready,
+        should_use_self_signed_route_cert, validate_app_name, validate_deploy_routes,
     };
     use crate::instances::AppConfig;
     use crate::socket::{AppState, Command, InstanceState, Response};

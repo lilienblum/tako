@@ -637,8 +637,6 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn build_instance_args_has_socket_and_instance() {
-        use std::collections::HashMap;
-
         let (instance_tx, _instance_rx) = mpsc::channel(4);
         let app = App::new(
             AppConfig {
