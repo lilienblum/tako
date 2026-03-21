@@ -57,7 +57,7 @@ jobs:
         run: bun run --filter 'tako.sh' typecheck
 
       - name: Test
-        run: bun test --cwd sdk/js
+        run: bun test --cwd sdk/javascript
 
       - name: SDK build
         run: bun run --filter 'tako.sh' build

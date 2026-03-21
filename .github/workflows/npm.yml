@@ -1,74 +1,31 @@
-name: Publish SDK to npm
+name: Publish SDK canary
 
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [master]
-  workflow_dispatch:
-    inputs:
-      bump:
-        description: "Version bump"
-        required: true
-        type: choice
-        options:
-          - canary
-          - patch
-          - minor
-          - major
 
 permissions:
-  contents: write
-  id-token: write
+  contents: read
 
 jobs:
-  check-ci:
-    name: Check CI passed
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: ubuntu-latest
-    permissions:
-      actions: read
-    steps:
-      - name: Verify CI passed on this commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          repo="${{ github.repository }}"
-          sha="${{ github.sha }}"
-
-          conclusion=$(gh run list -R "$repo" --workflow=ci.yml --commit="$sha" --json conclusion -q '.[0].conclusion')
-
-          if [ "$conclusion" != "success" ]; then
-            echo "::error::CI has not passed on commit $sha (status: ${conclusion:-not found})"
-            exit 1
-          fi
-
-          echo "CI passed on $sha"
-
-  publish:
-    name: Publish SDK
-    needs: check-ci
-    if: >-
-      always() && (
-        (github.event_name == 'workflow_dispatch' && needs.check-ci.result == 'success') ||
-        (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
-      )
+  canary:
+    name: Publish canary
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment: release
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
-          token: ${{ secrets.GH_PAT }}
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 2
 
       - name: Check for SDK changes
-        if: github.event_name == 'workflow_run'
         id: changes
         run: |
-          if ! git diff --name-only HEAD~1 -- sdk/js/ | grep -q .; then
+          if ! git diff --name-only HEAD~1 -- sdk/javascript/ | grep -q .; then
             echo "No SDK changes, skipping"
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
@@ -83,49 +40,15 @@ jobs:
         if: steps.changes.outputs.skip != 'true'
         uses: oven-sh/setup-bun@v2
 
-      - name: Determine version and tag
-        if: steps.changes.outputs.skip != 'true'
-        id: version
-        run: |
-          bump="${{ inputs.bump }}"
-          if [ "${{ github.event_name }}" = "workflow_run" ] || [ "$bump" = "canary" ]; then
-            sha="${{ github.event.workflow_run.head_sha || github.sha }}"
-            short_sha="$(printf '%s' "$sha" | cut -c1-7)"
-            echo "version=0.0.0-canary.${short_sha}" >> "$GITHUB_OUTPUT"
-            echo "tag=canary" >> "$GITHUB_OUTPUT"
-          else
-            current=$(node -p "require('./sdk/js/package.json').version")
-            IFS='.' read -r major minor patch <<< "$current"
-            case "$bump" in
-              major) version="$((major+1)).0.0" ;;
-              minor) version="${major}.$((minor+1)).0" ;;
-              patch) version="${major}.${minor}.$((patch+1))" ;;
-            esac
-            echo "version=$version" >> "$GITHUB_OUTPUT"
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Publish to npm
+      - name: Publish canary
         if: steps.changes.outputs.skip != 'true'
         run: |
-          set -euo pipefail
-          echo "Publishing sdk: ${{ steps.version.outputs.version }} (tag: ${{ steps.version.outputs.tag }})"
-
-          cd sdk/js
-          npm pkg set version="${{ steps.version.outputs.version }}"
+          sha="${{ github.event.workflow_run.head_sha }}"
+          short_sha="$(printf '%s' "$sha" | cut -c1-7)"
+          version="0.0.0-canary.${short_sha}"
+          echo "Publishing sdk canary: $version"
+          cd sdk/javascript
+          npm pkg set version="$version"
           bun install
           bun run build
-          npm publish --tag "${{ steps.version.outputs.tag }}"
-
-      - name: Commit version and tag
-        if: steps.changes.outputs.skip != 'true' && steps.version.outputs.tag == 'latest'
-        run: |
-          set -euo pipefail
-          version="${{ steps.version.outputs.version }}"
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add sdk/js/package.json
-          git commit -m "chore(sdk): release v${version} [skip ci]"
-          git tag "npm-v${version}"
-          git push
-          git push origin "npm-v${version}"
+          npm publish --tag canary

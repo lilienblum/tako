@@ -1,0 +1,451 @@
+name: Publish
+
+on:
+  release:
+    types: [created]
+
+concurrency:
+  group: publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  # Publish internal crates in dependency order when their versions changed.
+  # cargo publish is a no-op if the version already exists on crates.io.
+  publish-deps:
+    name: Publish internal crates
+    if: >-
+      startsWith(github.event.release.tag_name, 'tako-v') ||
+      startsWith(github.event.release.tag_name, 'tako-server-v')
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish internal crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          publish_if_needed() {
+            local crate=$1
+            if cargo publish -p "$crate" 2>&1 | tee /tmp/publish.log; then
+              echo "$crate: published"
+            elif grep -q "already uploaded" /tmp/publish.log; then
+              echo "$crate: already published, skipping"
+            else
+              echo "::error::$crate: publish failed"
+              cat /tmp/publish.log
+              return 1
+            fi
+          }
+          publish_if_needed tako-core
+          publish_if_needed tako-socket
+          publish_if_needed tako-runtime
+
+  # Build tako CLI for all targets, publish to crates.io, upload assets.
+  publish-tako:
+    name: Publish tako
+    needs: publish-deps
+    if: startsWith(github.event.release.tag_name, 'tako-v')
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish to crates.io
+        run: cargo publish -p tako
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  build-tako-linux-x86_64:
+    name: Build tako (linux x86_64)
+    if: startsWith(github.event.release.tag_name, 'tako-v')
+    runs-on: ubuntu-latest
+    container: rust:1.89-bullseye
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build deps
+        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Build
+        run: cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release
+
+      - name: Package
+        run: |
+          tmpdir="$(mktemp -d)"
+          cp target/release/tako target/release/tako-dev-server target/release/tako-loopback-proxy "$tmpdir/"
+          tar -czf tako-linux-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
+          sha256sum tako-linux-x86_64.tar.gz > tako-linux-x86_64.tar.gz.sha256
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tako-linux-x86_64
+          path: |
+            tako-linux-x86_64.tar.gz
+            tako-linux-x86_64.tar.gz.sha256
+
+  build-tako-linux-aarch64:
+    name: Build tako (linux aarch64)
+    if: startsWith(github.event.release.tag_name, 'tako-v')
+    runs-on: ubuntu-24.04-arm
+    container: rust:1.89-bullseye
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build deps
+        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Build
+        run: cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release
+
+      - name: Package
+        run: |
+          tmpdir="$(mktemp -d)"
+          cp target/release/tako target/release/tako-dev-server target/release/tako-loopback-proxy "$tmpdir/"
+          tar -czf tako-linux-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
+          sha256sum tako-linux-aarch64.tar.gz > tako-linux-aarch64.tar.gz.sha256
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tako-linux-aarch64
+          path: |
+            tako-linux-aarch64.tar.gz
+            tako-linux-aarch64.tar.gz.sha256
+
+  build-tako-darwin:
+    name: Build tako (macOS)
+    if: startsWith(github.event.release.tag_name, 'tako-v')
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: |
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target aarch64-apple-darwin
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target x86_64-apple-darwin
+
+      - name: Package
+        run: |
+          for arch in aarch64 x86_64; do
+            tmpdir="$(mktemp -d)"
+            cp target/${arch}-apple-darwin/release/tako target/${arch}-apple-darwin/release/tako-dev-server target/${arch}-apple-darwin/release/tako-loopback-proxy "$tmpdir/"
+            tar -czf "tako-darwin-${arch}.tar.gz" -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
+            shasum -a 256 "tako-darwin-${arch}.tar.gz" > "tako-darwin-${arch}.tar.gz.sha256"
+            rm -rf "$tmpdir"
+          done
+
+      - name: Upload aarch64
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tako-darwin-aarch64
+          path: |
+            tako-darwin-aarch64.tar.gz
+            tako-darwin-aarch64.tar.gz.sha256
+
+      - name: Upload x86_64
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tako-darwin-x86_64
+          path: |
+            tako-darwin-x86_64.tar.gz
+            tako-darwin-x86_64.tar.gz.sha256
+
+  upload-tako:
+    name: Upload tako assets
+    needs: [publish-tako, build-tako-linux-x86_64, build-tako-linux-aarch64, build-tako-darwin]
+    if: startsWith(github.event.release.tag_name, 'tako-v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-tako-*
+          path: dist
+          merge-multiple: true
+
+      - name: Upload assets and publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          gh release upload "$tag" dist/* --clobber
+          gh release edit "$tag" --draft=false
+
+  # Build tako-server for all Linux targets, publish to crates.io, upload assets.
+  publish-tako-server:
+    name: Publish tako-server
+    needs: publish-deps
+    if: startsWith(github.event.release.tag_name, 'tako-server-v')
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Publish to crates.io
+        run: cargo publish -p tako-server
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  build-tako-server-x86_64-glibc:
+    name: Build tako-server (x86_64 glibc)
+    if: startsWith(github.event.release.tag_name, 'tako-server-v')
+    runs-on: ubuntu-latest
+    container: rust:1.89-bullseye
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build deps
+        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Build
+        run: cargo build -p tako-server --release
+
+      - name: Package
+        run: |
+          tmpdir="$(mktemp -d)"
+          cp target/release/tako-server "$tmpdir/"
+          tar -czf tako-server-linux-x86_64-glibc.tar.gz -C "$tmpdir" tako-server
+          sha256sum tako-server-linux-x86_64-glibc.tar.gz > tako-server-linux-x86_64-glibc.tar.gz.sha256
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tako-server-linux-x86_64-glibc
+          path: |
+            tako-server-linux-x86_64-glibc.tar.gz
+            tako-server-linux-x86_64-glibc.tar.gz.sha256
+
+  build-tako-server-x86_64-musl:
+    name: Build tako-server (x86_64 musl)
+    if: startsWith(github.event.release.tag_name, 'tako-server-v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build
+        run: cargo build -p tako-server --release --target x86_64-unknown-linux-musl
+
+      - name: Package
+        run: |
+          tmpdir="$(mktemp -d)"
+          cp target/x86_64-unknown-linux-musl/release/tako-server "$tmpdir/"
+          tar -czf tako-server-linux-x86_64-musl.tar.gz -C "$tmpdir" tako-server
+          sha256sum tako-server-linux-x86_64-musl.tar.gz > tako-server-linux-x86_64-musl.tar.gz.sha256
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tako-server-linux-x86_64-musl
+          path: |
+            tako-server-linux-x86_64-musl.tar.gz
+            tako-server-linux-x86_64-musl.tar.gz.sha256
+
+  build-tako-server-aarch64-glibc:
+    name: Build tako-server (aarch64 glibc)
+    if: startsWith(github.event.release.tag_name, 'tako-server-v')
+    runs-on: ubuntu-24.04-arm
+    container: rust:1.89-bullseye
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build deps
+        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Build
+        run: cargo build -p tako-server --release
+
+      - name: Package
+        run: |
+          tmpdir="$(mktemp -d)"
+          cp target/release/tako-server "$tmpdir/"
+          tar -czf tako-server-linux-aarch64-glibc.tar.gz -C "$tmpdir" tako-server
+          sha256sum tako-server-linux-aarch64-glibc.tar.gz > tako-server-linux-aarch64-glibc.tar.gz.sha256
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tako-server-linux-aarch64-glibc
+          path: |
+            tako-server-linux-aarch64-glibc.tar.gz
+            tako-server-linux-aarch64-glibc.tar.gz.sha256
+
+  build-tako-server-aarch64-musl:
+    name: Build tako-server (aarch64 musl)
+    if: startsWith(github.event.release.tag_name, 'tako-server-v')
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-musl
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build
+        run: cargo build -p tako-server --release --target aarch64-unknown-linux-musl
+
+      - name: Package
+        run: |
+          tmpdir="$(mktemp -d)"
+          cp target/aarch64-unknown-linux-musl/release/tako-server "$tmpdir/"
+          tar -czf tako-server-linux-aarch64-musl.tar.gz -C "$tmpdir" tako-server
+          sha256sum tako-server-linux-aarch64-musl.tar.gz > tako-server-linux-aarch64-musl.tar.gz.sha256
+
+      - name: Upload
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-tako-server-linux-aarch64-musl
+          path: |
+            tako-server-linux-aarch64-musl.tar.gz
+            tako-server-linux-aarch64-musl.tar.gz.sha256
+
+  upload-tako-server:
+    name: Upload tako-server assets
+    needs:
+      - publish-tako-server
+      - build-tako-server-x86_64-glibc
+      - build-tako-server-x86_64-musl
+      - build-tako-server-aarch64-glibc
+      - build-tako-server-aarch64-musl
+    if: startsWith(github.event.release.tag_name, 'tako-server-v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-tako-server-*
+          path: dist
+          merge-multiple: true
+
+      - name: Upload assets and publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          gh release upload "$tag" dist/* --clobber
+          gh release edit "$tag" --draft=false
+
+  # Build and publish SDK to npm.
+  publish-sdk:
+    name: Publish SDK
+    if: startsWith(github.event.release.tag_name, 'sdk-js-v')
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build and publish
+        run: |
+          cd sdk/javascript
+          bun install
+          bun run build
+          npm publish
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${{ github.event.release.tag_name }}" --draft=false
