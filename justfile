@@ -17,7 +17,7 @@ fmt:
 lint:
     cargo clippy --fix --allow-dirty --workspace --all-targets
     bun run lint
-    bun run --filter 'tako.sh' typecheck
+    bun run --filter '*' typecheck
 
 ci: fmt lint test::all
 

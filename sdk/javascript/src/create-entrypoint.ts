@@ -32,17 +32,17 @@ function parseArgs(argv: string[]): ParsedArgs {
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case "--socket":
-        socket = args[++i];
+        socket = args[++i] ?? "";
         break;
       case "--instance":
-        instance = args[++i];
+        instance = args[++i] ?? "unknown";
         break;
       case "--version":
-        version = args[++i];
+        version = args[++i] ?? "unknown";
         break;
       default:
-        if (!main && !args[i].startsWith("--")) {
-          main = args[i];
+        if (!main && !args[i]?.startsWith("--")) {
+          main = args[i] ?? "";
         }
         break;
     }
