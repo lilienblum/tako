@@ -30,10 +30,7 @@ async function setupProject(
     env?: string;
   } = {},
 ) {
-  await writeFile(
-    join(tempDir, "package.json"),
-    JSON.stringify({ name: "dry-run-app" }),
-  );
+  await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "dry-run-app" }));
 
   const envName = opts.env ?? "production";
   const serverEntries = opts.servers ?? {};
@@ -74,13 +71,10 @@ describe("deploy --dry-run", () => {
     await setupProject({ servers: { prod: { host: "10.0.0.1" } } });
 
     // Without --env, the CLI auto-resolves to production and shows ContextBlock
-    const { term, screen, exitCode } = await run(
-      ["--dry-run", "deploy"],
-      {
-        cwd: tempDir,
-        env: { HOME: tempDir, TAKO_HOME: takoHome },
-      },
-    );
+    const { term, screen, exitCode } = await run(["--dry-run", "deploy"], {
+      cwd: tempDir,
+      env: { HOME: tempDir, TAKO_HOME: takoHome },
+    });
 
     expect(exitCode).toBe(0);
     // ContextBlock shows "Using production environment" with ┃ border
@@ -91,13 +85,10 @@ describe("deploy --dry-run", () => {
   test("shows skip markers with ⏭ icon", async () => {
     await setupProject({ servers: { prod: { host: "10.0.0.1" } } });
 
-    const { screen, exitCode } = await run(
-      ["--dry-run", "deploy", "--env", "production"],
-      {
-        cwd: tempDir,
-        env: { HOME: tempDir, TAKO_HOME: takoHome },
-      },
-    );
+    const { screen, exitCode } = await run(["--dry-run", "deploy", "--env", "production"], {
+      cwd: tempDir,
+      env: { HOME: tempDir, TAKO_HOME: takoHome },
+    });
 
     expect(exitCode).toBe(0);
     expect(screen).toContain("⏭");
@@ -155,13 +146,10 @@ describe("deploy --dry-run", () => {
   test("shows validation errors even in dry-run", async () => {
     await setupProject(); // no servers configured
 
-    const { screen, exitCode } = await run(
-      ["--dry-run", "deploy", "--env", "production"],
-      {
-        cwd: tempDir,
-        env: { HOME: tempDir, TAKO_HOME: takoHome },
-      },
-    );
+    const { screen, exitCode } = await run(["--dry-run", "deploy", "--env", "production"], {
+      cwd: tempDir,
+      env: { HOME: tempDir, TAKO_HOME: takoHome },
+    });
 
     // Should still fail validation — no servers
     expect(exitCode).toBe(1);
@@ -172,13 +160,10 @@ describe("deploy --dry-run", () => {
     await setupProject({ servers: { prod: { host: "10.0.0.1" } } });
 
     // Without --env to trigger ContextBlock
-    const { term, screen } = await run(
-      ["--dry-run", "deploy"],
-      {
-        cwd: tempDir,
-        env: { HOME: tempDir, TAKO_HOME: takoHome },
-      },
-    );
+    const { term, screen } = await run(["--dry-run", "deploy"], {
+      cwd: tempDir,
+      env: { HOME: tempDir, TAKO_HOME: takoHome },
+    });
 
     expect(screen).toContain("┃");
 
@@ -217,15 +202,7 @@ describe("deploy --dry-run", () => {
 describe("servers add --dry-run", () => {
   test("shows skip message without writing config", async () => {
     const { screen, exitCode } = await run(
-      [
-        "--dry-run",
-        "servers",
-        "add",
-        "fake.server.com",
-        "--name",
-        "test-srv",
-        "--no-test",
-      ],
+      ["--dry-run", "servers", "add", "fake.server.com", "--name", "test-srv", "--no-test"],
       {
         cwd: tempDir,
         env: { HOME: tempDir, TAKO_HOME: takoHome },
@@ -243,16 +220,7 @@ describe("servers add --dry-run", () => {
 describe("--dry-run --ci", () => {
   test("produces plain dry-run output without colors", async () => {
     const { term, exitCode } = await run(
-      [
-        "--dry-run",
-        "--ci",
-        "servers",
-        "add",
-        "fake.server.com",
-        "--name",
-        "test-srv",
-        "--no-test",
-      ],
+      ["--dry-run", "--ci", "servers", "add", "fake.server.com", "--name", "test-srv", "--no-test"],
       {
         cwd: tempDir,
         env: { HOME: tempDir, TAKO_HOME: takoHome },
@@ -277,11 +245,7 @@ function findRowContaining(term: TakoTerminal, text: string): number | null {
   return null;
 }
 
-function findCharInRow(
-  term: TakoTerminal,
-  row: number,
-  char: string,
-): number | null {
+function findCharInRow(term: TakoTerminal, row: number, char: string): number | null {
   for (let x = 0; x < 80; x++) {
     const c = term.cell(row, x);
     if (c && c.char === char) return x;

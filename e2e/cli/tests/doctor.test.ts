@@ -163,11 +163,7 @@ function findRowContaining(term: TakoTerminal, text: string): number | null {
   return null;
 }
 
-function findCharInRow(
-  term: TakoTerminal,
-  row: number,
-  char: string,
-): number | null {
+function findCharInRow(term: TakoTerminal, row: number, char: string): number | null {
   for (let x = 0; x < 80; x++) {
     const c = term.cell(row, x);
     if (c && c.char === char) return x;
@@ -183,11 +179,7 @@ function findNonSpaceCol(term: TakoTerminal, row: number): number | null {
   return null;
 }
 
-function findSubstringCol(
-  term: TakoTerminal,
-  row: number,
-  text: string,
-): number | null {
+function findSubstringCol(term: TakoTerminal, row: number, text: string): number | null {
   const rowText = term.row(row, false);
   const idx = rowText.indexOf(text);
   return idx >= 0 ? idx : null;

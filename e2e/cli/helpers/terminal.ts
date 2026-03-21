@@ -17,8 +17,7 @@ const DEFAULT_ROWS = 24;
 const DEFAULT_TIMEOUT_MS = 10_000;
 
 const TAKO_BIN =
-  process.env.TAKO_BIN ??
-  resolve(import.meta.dirname, "..", "..", "..", "target", "debug", "tako");
+  process.env.TAKO_BIN ?? resolve(import.meta.dirname, "..", "..", "..", "target", "debug", "tako");
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -54,10 +53,7 @@ export class TakoTerminal {
   private rawChunks: Buffer[] = [];
   private _exitCode: number | null = null;
 
-  private constructor(
-    terminal: Terminal,
-    proc: ReturnType<typeof Bun.spawn>,
-  ) {
+  private constructor(terminal: Terminal, proc: ReturnType<typeof Bun.spawn>) {
     this.terminal = terminal;
     this.proc = proc;
   }
@@ -127,10 +123,7 @@ export class TakoTerminal {
   }
 
   /** Wait until the given text appears anywhere on screen. */
-  async waitForText(
-    text: string,
-    opts: { timeout?: number } = {},
-  ): Promise<void> {
+  async waitForText(text: string, opts: { timeout?: number } = {}): Promise<void> {
     return this.waitFor((s) => s.includes(text), {
       ...opts,
       label: `waitForText(${JSON.stringify(text)})`,

@@ -31,10 +31,7 @@ function spawnInit(extraEnv: Record<string, string> = {}) {
 
 describe("init wizard interaction", () => {
   test("shows Application name prompt with detected default", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "my-cool-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "my-cool-app" }));
 
     const term = spawnInit();
     await term.waitForText("Application name", { timeout: 5000 });
@@ -46,10 +43,7 @@ describe("init wizard interaction", () => {
   });
 
   test("accepts defaults with Enter and advances to runtime selector", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "test-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "test-app" }));
 
     const term = spawnInit();
     await term.waitForText("Application name", { timeout: 5000 });
@@ -66,10 +60,7 @@ describe("init wizard interaction", () => {
   });
 
   test("wizard prompts have colored labels", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "test-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "test-app" }));
 
     const term = spawnInit();
     await term.waitForText("Application name", { timeout: 5000 });
@@ -93,10 +84,7 @@ describe("init wizard interaction", () => {
   });
 
   test("can navigate through full wizard and create tako.toml", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "wizard-test" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "wizard-test" }));
 
     const term = spawnInit();
 
@@ -133,10 +121,7 @@ describe("init wizard interaction", () => {
   });
 
   test("success checkmark is green after wizard completes", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "color-test" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "color-test" }));
 
     const term = spawnInit();
 
@@ -175,10 +160,7 @@ describe("init wizard interaction", () => {
   });
 
   test("Ctrl+C exits the wizard", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "ctrl-c-test" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "ctrl-c-test" }));
 
     const term = spawnInit();
     await term.waitForText("Application name", { timeout: 5000 });
@@ -202,11 +184,7 @@ function findRowContaining(term: TakoTerminal, text: string): number | null {
   return null;
 }
 
-function findCharInRow(
-  term: TakoTerminal,
-  row: number,
-  char: string,
-): number | null {
+function findCharInRow(term: TakoTerminal, row: number, char: string): number | null {
   for (let x = 0; x < 80; x++) {
     const c = term.cell(row, x);
     if (c && c.char === char) return x;

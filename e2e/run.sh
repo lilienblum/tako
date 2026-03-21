@@ -20,14 +20,39 @@ export E2E_BIN_DIR
 
 cd "$REPO_ROOT"
 
-# If no pre-built binaries, build locally (dev mode)
+# If no pre-built binaries, cross-compile Linux binaries with cargo-zigbuild
 if [[ ! -f "$E2E_BIN_DIR/glibc/tako" ]]; then
-  echo "No pre-built binaries at $E2E_BIN_DIR, building locally..."
-  mkdir -p "$E2E_BIN_DIR/glibc"
-  cargo build -p tako --bin tako
-  cargo build -p tako-server --bin tako-server
-  cp target/debug/tako target/debug/tako-dev-server target/debug/tako-loopback-proxy "$E2E_BIN_DIR/glibc/"
-  cp target/debug/tako-server "$E2E_BIN_DIR/glibc/"
+  echo "No pre-built binaries at $E2E_BIN_DIR, building with cargo-zigbuild..."
+  mkdir -p "$E2E_BIN_DIR/glibc" "$E2E_BIN_DIR/musl"
+
+  # Detect host arch → pick matching Linux target
+  ARCH_RAW=$(uname -m)
+  if [[ "$ARCH_RAW" == "arm64" || "$ARCH_RAW" == "aarch64" ]]; then
+    GLIBC_TARGET="aarch64-unknown-linux-gnu"
+    MUSL_TARGET="aarch64-unknown-linux-musl"
+  else
+    GLIBC_TARGET="x86_64-unknown-linux-gnu"
+    MUSL_TARGET="x86_64-unknown-linux-musl"
+  fi
+
+  cargo zigbuild -p tako-server -p tako \
+    --bin tako --bin tako-dev-server --bin tako-loopback-proxy --bin tako-server \
+    --release --target "$GLIBC_TARGET"
+  cp target/"$GLIBC_TARGET"/release/tako \
+     target/"$GLIBC_TARGET"/release/tako-dev-server \
+     target/"$GLIBC_TARGET"/release/tako-loopback-proxy \
+     target/"$GLIBC_TARGET"/release/tako-server \
+     "$E2E_BIN_DIR/glibc/"
+
+  # musl build (used for Alpine)
+  if cargo zigbuild -p tako-server --release --target "$MUSL_TARGET" 2>"$E2E_BIN_DIR/musl-build.log"; then
+    cp target/"$MUSL_TARGET"/release/tako-server "$E2E_BIN_DIR/musl/"
+    rm -f "$E2E_BIN_DIR/musl-build.log"
+  else
+    echo "musl build skipped (see .e2e-bin/musl-build.log for details)"
+  fi
+
+  chmod +x "$E2E_BIN_DIR/glibc/"* "$E2E_BIN_DIR/musl/"* 2>/dev/null || true
 fi
 
 docker compose -p "$PROJECT_NAME" -f "$COMPOSE_FILE" down --volumes --remove-orphans >/dev/null 2>&1 || true

@@ -4,8 +4,8 @@ Repository scripts used by installers, CI checks, and local development workflow
 
 ## Scripts
 
-- `install-tako-cli.sh`: POSIX installer for local `tako`, `tako-dev-server`, and `tako-loopback-proxy`.
-- `install-tako-cli-canary.sh`: lightweight wrapper that runs hosted CLI installer with canary artifact base URL.
+- `install-tako.sh`: POSIX installer for local `tako`, `tako-dev-server`, and `tako-loopback-proxy`.
+- `install-tako-canary.sh`: lightweight wrapper that runs hosted CLI installer with canary artifact base URL.
 - `install-tako-server.sh`: POSIX installer for `tako-server` on Linux hosts.
 - `install-tako-server-canary.sh`: lightweight wrapper that runs hosted server installer with canary artifact base URL.
   - Both installers resolve component-specific latest tags (`tako-v*`, `tako-server-v*`) via GitHub tags API by default, then download release assets for that tag.
@@ -22,17 +22,15 @@ Repository scripts used by installers, CI checks, and local development workflow
   - Installs required runtime dependencies (including Unix-socket-capable `nc` with `-U` support, sqlite runtime libraries, and `proto`) via the host package manager when available.
   - Falls back to the official `proto` installer if not already present.
 - `check_critical_coverage.sh`: coverage gate for selected critical source files.
-- `release-notes.sh`: release notes generator used by SDK notes flow.
 
 ## Typical Usage
 
 Run from repository root:
 
 ```bash
-sh scripts/install-tako-cli.sh
+sh scripts/install-tako.sh
 sh scripts/install-tako-server.sh
 bash scripts/check_critical_coverage.sh
-sh scripts/release-notes.sh --component tako --prefix tako-v --output dist/release-notes/tako.md
 ```
 
 The install scripts are exposed via website redirect endpoints:

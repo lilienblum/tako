@@ -16,10 +16,7 @@ afterEach(async () => {
 
 describe("tako init --ci", () => {
   test("creates tako.toml in non-interactive mode", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "test-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "test-app" }));
 
     const takoHome = join(tempDir, ".tako");
     const { exitCode } = await run(["--ci", "init"], {
@@ -33,10 +30,7 @@ describe("tako init --ci", () => {
   });
 
   test("detects bun runtime from bun.lock", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "bun-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "bun-app" }));
     await writeFile(join(tempDir, "bun.lock"), "");
 
     const takoHome = join(tempDir, ".tako");
@@ -51,10 +45,7 @@ describe("tako init --ci", () => {
   });
 
   test("--ci produces no ANSI color codes in output", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "test-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "test-app" }));
 
     const takoHome = join(tempDir, ".tako");
     const { term, exitCode } = await run(["--ci", "init"], {
@@ -71,10 +62,7 @@ describe("tako init --ci", () => {
 
 describe("tako init (interactive wizard)", () => {
   test("shows wizard prompts in PTY", async () => {
-    await writeFile(
-      join(tempDir, "package.json"),
-      JSON.stringify({ name: "wizard-app" }),
-    );
+    await writeFile(join(tempDir, "package.json"), JSON.stringify({ name: "wizard-app" }));
 
     const takoHome = join(tempDir, ".tako");
     const term = TakoTerminal.spawn({
