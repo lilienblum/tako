@@ -13,7 +13,7 @@ use crate::output;
 pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
     let context = crate::commands::project_context::resolve(config_path)?;
     let project_dir = context.project_dir;
-    let tako_toml_path = context.config_path;
+    let mut tako_toml_path = context.config_path;
 
     // Load existing config for pre-filling defaults
     let existing = if tako_toml_path.exists() {
@@ -22,18 +22,26 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
         None
     };
 
-    // Check if tako.toml already exists — prompt to overwrite in interactive mode
-    if existing.is_some()
-        && (!output::is_interactive()
-            || !output::confirm(
-                &format!(
-                    "Configuration file {} already exists. Overwrite?",
-                    output::strong(&tako_toml_path.display().to_string())
-                ),
-                false,
-            )?)
-    {
-        return Ok(());
+    // Check if config already exists — prompt to overwrite or use a different name
+    if existing.is_some() {
+        if !output::is_interactive() {
+            return Ok(());
+        }
+        if !output::confirm(
+            &format!(
+                "Configuration file {} already exists. Overwrite?",
+                output::strong(&tako_toml_path.display().to_string())
+            ),
+            false,
+        )? {
+            let name = output::TextField::new("New config name").prompt()?;
+            let name = if name.ends_with(".toml") {
+                name
+            } else {
+                format!("{name}.toml")
+            };
+            tako_toml_path = project_dir.join(&name);
+        }
     }
 
     let detected_adapter = detect_build_adapter(&project_dir);
@@ -439,10 +447,14 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
     fs::write(&tako_toml_path, template)?;
     ensure_project_gitignore_tracks_secrets(&project_dir)?;
 
+    let config_name = tako_toml_path
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy();
     if js::write_types(&project_dir)? {
-        output::success("Created tako.toml and tako.d.ts");
+        output::success(&format!("Created {config_name} and tako.d.ts"));
     } else {
-        output::success("Created tako.toml");
+        output::success(&format!("Created {config_name}"));
     }
 
     install_tako_sdk(&project_dir, adapter);
@@ -450,7 +462,7 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
     output::heading("Next steps");
     output::info(&format!(
         "1. Edit {} to set environment variables and more",
-        output::strong("tako.toml")
+        output::strong(&config_name)
     ));
     output::info(&format!(
         "2. Run {} to add deployment servers",
