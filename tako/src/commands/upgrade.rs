@@ -128,29 +128,25 @@ async fn run_installer_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn st
     Ok(())
 }
 
-/// Canary upgrade: fetch the remote tarball checksum first to skip download
-/// when already current, otherwise download, verify, and install.
+/// Canary upgrade: resolve the canary-latest tag to its commit SHA, compare
+/// with the currently running version, and only download when they differ.
 async fn run_canary_upgrade(
     os: &str,
     arch: &str,
     install_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let url = tarball_url_for_tag("canary-latest", os, arch);
-    let sha_url = format!("{url}.sha256");
+    // Resolve canary-latest tag → commit SHA → version string
+    let remote_version = fetch_canary_version().await?;
+    let local_version = current_version();
 
-    // Quick check: compare remote tarball hash with locally saved hash from last upgrade
-    let saved_hash_path = canary_hash_path();
-    if let Ok(remote_hash) = fetch_sha256(&sha_url).await
-        && let Some(ref path) = saved_hash_path
-        && let Ok(saved_hash) = std::fs::read_to_string(path)
-        && saved_hash.trim() == remote_hash
-    {
+    if remote_version == local_version {
         tracing::info!("Already on the latest canary build");
         output::success("Already on the latest canary build");
         return Ok(());
     }
 
     // Download and extract to temp dir
+    let url = tarball_url_for_tag("canary-latest", os, arch);
     let tmp_base = std::env::temp_dir();
     let tmp_dir = tmp_base.join(format!("tako-upgrade-{}", std::process::id()));
     std::fs::create_dir_all(&tmp_dir)?;
@@ -170,27 +166,9 @@ async fn run_canary_upgrade(
         std::fs::create_dir_all(&extract_dir)?;
         extract_tarball(&archive_path, &extract_dir)?;
 
+        // Install
         let new_tako =
             find_binary(&extract_dir, "tako").ok_or("archive did not contain a tako binary")?;
-
-        // Compare hashes of current and downloaded binary
-        let current_exe = install_dir.join("tako");
-        if current_exe.exists() {
-            let current_hash = hash_file(&current_exe)?;
-            let new_hash = hash_file(&new_tako)?;
-            if current_hash == new_hash {
-                // Save tarball hash so next time we can skip the download
-                save_canary_hash(saved_hash_path.as_deref(), &archive_path);
-                tracing::info!("Already on the latest canary build");
-                output::success("Already on the latest canary build");
-                return Ok(());
-            }
-        }
-
-        // Get version from the new binary before installing
-        let version = get_binary_version(&new_tako).unwrap_or_else(|| "canary".to_string());
-
-        // Install
         let new_dev_server = find_binary(&extract_dir, "tako-dev-server")
             .ok_or("archive did not contain a tako-dev-server binary")?;
         let new_loopback_proxy = find_binary(&extract_dir, "tako-loopback-proxy")
@@ -200,11 +178,8 @@ async fn run_canary_upgrade(
         install_binary(&new_dev_server, install_dir, "tako-dev-server")?;
         install_binary(&new_loopback_proxy, install_dir, "tako-loopback-proxy")?;
 
-        // Save tarball hash so next time we can skip the download
-        save_canary_hash(saved_hash_path.as_deref(), &archive_path);
-
-        tracing::info!("Upgraded to {version}");
-        output::success(&format!("Upgraded to {}", output::strong(&version)));
+        tracing::info!("Upgraded to {remote_version}");
+        output::success(&format!("Upgraded to {}", output::strong(&remote_version)));
         Ok(())
     }
     .await;
@@ -213,20 +188,24 @@ async fn run_canary_upgrade(
     result
 }
 
-fn canary_hash_path() -> Option<PathBuf> {
-    crate::paths::tako_data_dir()
-        .ok()
-        .map(|d| d.join("canary-tarball-sha256"))
-}
-
-fn save_canary_hash(path: Option<&Path>, archive: &Path) {
-    let Some(path) = path else { return };
-    if let Ok(hash) = hash_file(archive) {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(path, hash);
-    }
+/// Fetch the commit SHA that the canary-latest tag points to and format as a version string.
+async fn fetch_canary_version() -> Result<String, Box<dyn std::error::Error>> {
+    let url =
+        format!("https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/git/ref/tags/canary-latest");
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(&url)
+        .header("User-Agent", "tako-cli")
+        .send()
+        .await?
+        .error_for_status()
+        .map_err(|e| format!("failed to resolve canary-latest tag: {e}"))?;
+    let body: serde_json::Value = resp.json().await?;
+    let sha = body["object"]["sha"]
+        .as_str()
+        .ok_or("canary-latest tag response missing object.sha")?;
+    let short = &sha[..sha.len().min(7)];
+    Ok(format!("canary-{short}"))
 }
 
 fn tarball_url_for_tag(tag: &str, os: &str, arch: &str) -> String {
@@ -492,26 +471,6 @@ async fn fetch_sha256(url: &str) -> Result<String, String> {
     let text = resp.text().await.map_err(|e| format!("{e}"))?;
     // SHA file format: "hash  filename" or just "hash"
     Ok(text.split_whitespace().next().unwrap_or("").to_string())
-}
-
-fn hash_file(path: &Path) -> Result<String, String> {
-    let data =
-        std::fs::read(path).map_err(|e| format!("failed to read {}: {e}", path.display()))?;
-    Ok(hex::encode(Sha256::digest(&data)))
-}
-
-fn get_binary_version(path: &Path) -> Option<String> {
-    let output = Command::new(path)
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
 fn verify_sha256(path: &Path, expected: &str) -> Result<(), String> {
