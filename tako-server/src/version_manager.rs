@@ -22,11 +22,28 @@ pub(crate) fn runtimes_dir(data_dir: &Path) -> PathBuf {
 /// 3. Download, verify checksum, extract, return binary path
 ///
 /// Returns `None` if the runtime has no download spec or download fails.
+fn is_safe_version(version: &str) -> bool {
+    !version.is_empty()
+        && !version.contains('/')
+        && !version.contains('\\')
+        && !version.contains("..")
+        && version
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-' || c == '_' || c == '+')
+}
+
 pub(crate) async fn install_and_resolve(
     tool: &str,
     version: Option<&str>,
     data_dir: &Path,
 ) -> Option<String> {
+    if let Some(v) = version {
+        if !is_safe_version(v) {
+            tracing::warn!(tool, version = v, "Rejected unsafe runtime version string");
+            return None;
+        }
+    }
+
     let def = match tako_runtime::runtime_def_for(tool, None) {
         Some(def) => def,
         None => {
