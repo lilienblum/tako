@@ -38,7 +38,6 @@ struct DeployConfig {
     env_vars: HashMap<String, String>,
     /// SHA-256 hash of the decrypted secrets for this deploy.
     secrets_hash: String,
-    app_subdir: String,
     main: String,
     use_unified_target_process: bool,
 }
@@ -49,7 +48,6 @@ struct ServerDeployTarget {
     server: ServerEntry,
     target_label: String,
     archive_path: PathBuf,
-    artifact_sha256: String,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -126,14 +124,6 @@ impl LocalArtifactCacheCleanupSummary {
 impl DeployConfig {
     fn release_dir(&self) -> String {
         format!("{}/releases/{}", self.remote_base, self.version)
-    }
-
-    fn release_app_dir(&self) -> String {
-        if self.app_subdir.is_empty() {
-            self.release_dir()
-        } else {
-            format!("{}/{}", self.release_dir(), self.app_subdir)
-        }
     }
 
     fn current_link(&self) -> String {
@@ -332,7 +322,7 @@ async fn run_async(
                         // Reset the state via SQLite directly (the upgrade lock's
                         // owner may be unknown, and ExitUpgrading requires it).
                         let reset_cmd = SshClient::run_with_root_or_sudo(
-                            "sqlite3 /opt/tako/runtime-state.sqlite3 \
+                            "sqlite3 /opt/tako/tako.db \
                          \"UPDATE server_state SET server_mode = 'normal' WHERE id = 1; \
                           DELETE FROM upgrade_lock WHERE id = 1;\"",
                         );
@@ -527,9 +517,6 @@ async fn run_async(
         Err(error) => output::warning(&format!("Local build workspace cleanup skipped: {}", error)),
     }
 
-    // Workdir copies from project_dir, so app_subdir is always empty (project dir = archive root).
-    let app_subdir = String::new();
-
     // Generate version string
     let (version, _source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)?;
     let git_commit_message = resolve_git_commit_message(&source_root);
@@ -623,7 +610,7 @@ async fn run_async(
     let source_archive_path = source_archive_dir.join("source.tar.zst");
     let app_json_bytes = serde_json::to_vec_pretty(&manifest)
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
-    let app_manifest_archive_path = archive_app_manifest_path(&app_subdir);
+    let app_manifest_archive_path = DEPLOY_ARCHIVE_MANIFEST_FILE.to_string();
     let source_archive_size =
         output::with_spinner("Creating source archive", "Source archive created", || {
             tracing::debug!("Archiving source from {}…", source_root.display());
@@ -680,7 +667,6 @@ async fn run_async(
         &source_archive_path,
         &app_json_bytes,
         &version,
-        &app_subdir,
         &runtime_tool,
         use_unified_js_target_process,
         &manifest_main,
@@ -711,7 +697,6 @@ async fn run_async(
         routes: routes.clone(),
         env_vars: deploy_secrets,
         secrets_hash,
-        app_subdir,
         main: manifest_main,
         use_unified_target_process: use_unified_js_target_process,
     });
@@ -734,13 +719,11 @@ async fn run_async(
                 target_label, server_name
             )
         })?;
-        let artifact_sha256 = read_artifact_sha256(archive_path)?;
         targets.push(ServerDeployTarget {
             name: server_name.clone(),
             server,
             target_label,
             archive_path: archive_path.clone(),
-            artifact_sha256,
         });
     }
     if targets.len() > 1 {
@@ -824,7 +807,6 @@ async fn run_async(
         let server_name = target.name.clone();
         let target_label = target.target_label.clone();
         let archive_path = target.archive_path.clone();
-        let artifact_sha256 = target.artifact_sha256.clone();
         let deploy_config = deploy_config.clone();
         let use_spinner = use_per_server_spinners;
         let span = output::scope(&server_name);
@@ -834,7 +816,6 @@ async fn run_async(
                     &deploy_config,
                     &server,
                     &archive_path,
-                    &artifact_sha256,
                     &target_label,
                     use_spinner,
                 )
@@ -1399,14 +1380,6 @@ fn resolve_git_commit_message(source_root: &Path) -> Option<String> {
         None
     } else {
         Some(message)
-    }
-}
-
-fn archive_app_manifest_path(app_subdir: &str) -> String {
-    if app_subdir.is_empty() {
-        DEPLOY_ARCHIVE_MANIFEST_FILE.to_string()
-    } else {
-        format!("{}/{}", app_subdir, DEPLOY_ARCHIVE_MANIFEST_FILE)
     }
 }
 
@@ -2029,29 +2002,6 @@ fn artifact_cache_metadata_path_for_archive(archive_path: &Path) -> Option<PathB
     Some(archive_path.with_file_name(format!("{stem}.json")))
 }
 
-fn read_artifact_sha256(archive_path: &Path) -> Result<String, String> {
-    let metadata_path =
-        artifact_cache_metadata_path_for_archive(archive_path).ok_or_else(|| {
-            format!(
-                "Cannot derive metadata path from {}",
-                archive_path.display()
-            )
-        })?;
-    let bytes = std::fs::read(&metadata_path).map_err(|e| {
-        format!(
-            "Failed to read artifact metadata {}: {e}",
-            metadata_path.display()
-        )
-    })?;
-    let metadata: ArtifactCacheMetadata = serde_json::from_slice(&bytes).map_err(|e| {
-        format!(
-            "Failed to parse artifact metadata {}: {e}",
-            metadata_path.display()
-        )
-    })?;
-    Ok(metadata.artifact_sha256)
-}
-
 fn artifact_cache_archive_path_for_metadata(metadata_path: &Path) -> Option<PathBuf> {
     let file_name = metadata_path.file_name()?.to_str()?;
     let stem = file_name.strip_suffix(".json")?;
@@ -2181,10 +2131,9 @@ async fn build_target_artifacts(
     _source_archive_path: &Path,
     app_manifest_bytes: &[u8],
     version: &str,
-    app_subdir: &str,
     runtime_tool: &str,
     use_unified_target_process: bool,
-    main: &str,
+    _main: &str,
     server_targets: &[(String, ServerTarget)],
     _preset: &BuildPreset,
     custom_stages: &[BuildStage],
@@ -2240,8 +2189,7 @@ async fn build_target_artifacts(
                     workspace.display()
                 );
                 let _t = output::timed("Runtime probe");
-                let version =
-                    resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool);
+                let version = resolve_runtime_version_from_workspace(&workspace, runtime_tool);
                 if let Ok(v) = &version {
                     tracing::debug!("Detected {} {}", runtime_tool, v);
                 }
@@ -2250,8 +2198,7 @@ async fn build_target_artifacts(
         } else {
             tracing::debug!("{}", runtime_probe_label);
             let _t = output::timed("Runtime probe");
-            let version =
-                resolve_runtime_version_from_workspace(&workspace, app_subdir, runtime_tool)?;
+            let version = resolve_runtime_version_from_workspace(&workspace, runtime_tool)?;
             drop(_t);
             tracing::debug!("Detected {} {}", runtime_tool, version);
             version
@@ -2298,14 +2245,14 @@ async fn build_target_artifacts(
                 output::with_spinner(&build_label, &build_success, || {
                     tracing::debug!("Building target {}…", build_target_label);
                     let _t = output::timed("Target build");
-                    run_local_build(&workspace, app_subdir, &tako_config.build, custom_stages)
+                    run_local_build(&workspace, &tako_config.build, custom_stages)
                 })?;
             } else {
                 output::bullet(&build_label);
                 let _t = output::timed("Target build");
-                run_local_build(&workspace, app_subdir, &tako_config.build, custom_stages)?;
+                run_local_build(&workspace, &tako_config.build, custom_stages)?;
             }
-            save_runtime_version_to_manifest(&workspace, app_subdir, &runtime_version)?;
+            save_runtime_version_to_manifest(&workspace, &runtime_version)?;
             output::bullet(&format_build_completed_message(display_target_label));
 
             let prepare_label = format_prepare_artifact_message(display_target_label);
@@ -2316,12 +2263,10 @@ async fn build_target_artifacts(
                     let _t = output::timed("Artifact packaging");
                     package_target_artifact(
                         &workspace,
-                        app_subdir,
                         asset_roots,
                         include_patterns,
                         exclude_patterns,
                         &cache_paths,
-                        main,
                         &build_target_label,
                     )
                 })
@@ -2331,12 +2276,10 @@ async fn build_target_artifacts(
                 let _t = output::timed("Artifact packaging");
                 package_target_artifact(
                     &workspace,
-                    app_subdir,
                     asset_roots,
                     include_patterns,
                     exclude_patterns,
                     &cache_paths,
-                    main,
                     &build_target_label,
                 )
             }
@@ -2367,15 +2310,13 @@ async fn build_target_artifacts(
 
 fn run_local_build(
     workspace: &Path,
-    app_subdir: &str,
     build_config: &crate::config::BuildConfig,
     custom_stages: &[BuildStage],
 ) -> Result<(), String> {
-    let app_dir = workspace_app_dir(workspace, app_subdir);
-    if !app_dir.is_dir() {
+    if !workspace.is_dir() {
         return Err(format!(
             "App directory '{}' does not exist inside build workspace",
-            app_dir.display()
+            workspace.display()
         ));
     }
     // Resolve the working directory for build commands.
@@ -2393,7 +2334,7 @@ fn run_local_build(
             dir
         }
         Some(_) => workspace.to_path_buf(), // "." means workspace root
-        None => app_dir.clone(),            // default: app directory
+        None => workspace.to_path_buf(),    // default: app directory
     };
 
     let has_build_run = build_config
@@ -2406,15 +2347,13 @@ fn run_local_build(
         return Ok(());
     }
 
-    let app_subdir_value = app_subdir.replace('\\', "/");
-    let app_dir_value = app_dir.to_string_lossy().to_string();
+    let app_dir_value = workspace.to_string_lossy().to_string();
 
     let run_shell =
         |cwd: &Path, command: &str, phase: &str, stage_label: &str| -> Result<(), String> {
             let output = std::process::Command::new("sh")
                 .args(["-lc", command])
                 .current_dir(cwd)
-                .env("TAKO_APP_SUBDIR", &app_subdir_value)
                 .env("TAKO_APP_DIR", &app_dir_value)
                 .stdin(std::process::Stdio::null())
                 .output()
@@ -2453,7 +2392,7 @@ fn run_local_build(
     for stage in custom_stages {
         let stage_label = format_stage_label(stage_number, stage.name.as_deref());
         let stage_cwd = resolve_stage_working_dir_for_local_build(
-            &app_dir,
+            workspace,
             stage.cwd.as_deref(),
             &stage_label,
         )?;
@@ -2518,13 +2457,8 @@ fn resolve_stage_working_dir_for_local_build(
 }
 
 /// Save the resolved runtime version into the deploy manifest (`app.json`).
-fn save_runtime_version_to_manifest(
-    workspace: &Path,
-    app_subdir: &str,
-    runtime_version: &str,
-) -> Result<(), String> {
-    let app_dir = workspace_app_dir(workspace, app_subdir);
-    let manifest_path = app_dir.join("app.json");
+fn save_runtime_version_to_manifest(workspace: &Path, runtime_version: &str) -> Result<(), String> {
+    let manifest_path = workspace.join("app.json");
     let content = std::fs::read_to_string(&manifest_path)
         .map_err(|e| format!("Failed to read {}: {e}", manifest_path.display()))?;
     let mut value: serde_json::Value = serde_json::from_str(&content)
@@ -2534,7 +2468,7 @@ fn save_runtime_version_to_manifest(
         .map_err(|e| format!("Failed to serialize {}: {e}", manifest_path.display()))?;
     std::fs::write(&manifest_path, updated)
         .map_err(|e| format!("Failed to write {}: {e}", manifest_path.display()))?;
-    let _ = std::fs::remove_file(app_dir.join(RUNTIME_VERSION_OUTPUT_FILE));
+    let _ = std::fs::remove_file(workspace.join(RUNTIME_VERSION_OUTPUT_FILE));
     Ok(())
 }
 
@@ -2559,20 +2493,18 @@ fn extract_semver_from_version_output(output: &str) -> Option<String> {
 
 fn resolve_runtime_version_from_workspace(
     workspace: &Path,
-    app_subdir: &str,
     runtime_tool: &str,
 ) -> Result<String, String> {
-    let app_dir = workspace_app_dir(workspace, app_subdir);
-    if !app_dir.is_dir() {
+    if !workspace.is_dir() {
         return Err(format!(
             "App directory '{}' does not exist inside build workspace",
-            app_dir.display()
+            workspace.display()
         ));
     }
 
     #[cfg(test)]
     {
-        let _ = (workspace, &app_dir, runtime_tool);
+        let _ = (workspace, runtime_tool);
         Ok("latest".to_string())
     }
 
@@ -2581,7 +2513,7 @@ fn resolve_runtime_version_from_workspace(
         let command = format!("{} --version", shell_single_quote(runtime_tool));
         let output = std::process::Command::new("sh")
             .args(["-lc", &command])
-            .current_dir(&app_dir)
+            .current_dir(workspace)
             .stdin(std::process::Stdio::null())
             .output();
         match output {
@@ -2605,24 +2537,19 @@ fn resolve_runtime_version_from_workspace(
     }
 }
 
-fn merge_assets_locally(
-    workspace_root: &Path,
-    app_subdir: &str,
-    asset_roots: &[String],
-) -> Result<(), String> {
+fn merge_assets_locally(workspace_root: &Path, asset_roots: &[String]) -> Result<(), String> {
     if asset_roots.is_empty() {
         return Ok(());
     }
 
-    let app_dir = workspace_app_dir(workspace_root, app_subdir);
-    if !app_dir.is_dir() {
+    if !workspace_root.is_dir() {
         return Err(format!(
             "App directory '{}' does not exist inside build workspace",
-            app_dir.display()
+            workspace_root.display()
         ));
     }
 
-    let public_dir = app_dir.join("public");
+    let public_dir = workspace_root.join("public");
     std::fs::create_dir_all(&public_dir)
         .map_err(|e| format!("Failed to create {}: {e}", public_dir.display()))?;
 
@@ -2630,7 +2557,7 @@ fn merge_assets_locally(
         if asset_root == "public" {
             continue;
         }
-        let src = app_dir.join(asset_root);
+        let src = workspace_root.join(asset_root);
         if !src.is_dir() {
             return Err(format!(
                 "Configured asset directory '{}' not found after build.",
@@ -2643,44 +2570,15 @@ fn merge_assets_locally(
     Ok(())
 }
 
-fn workspace_app_dir(workspace_root: &Path, app_subdir: &str) -> PathBuf {
-    if app_subdir.is_empty() {
-        workspace_root.to_path_buf()
-    } else {
-        workspace_root.join(app_subdir)
-    }
-}
-
-fn validate_main_exists_after_build(
-    _workspace_root: &Path,
-    _app_subdir: &str,
-    _main: &str,
-) -> Result<(), String> {
-    // Entrypoint validation is deferred to the runtime at startup.
-    // The main value can be a file path or a module specifier.
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
 fn package_target_artifact(
     workspace: &Path,
-    app_subdir: &str,
     asset_roots: &[String],
     include_patterns: &[String],
     exclude_patterns: &[String],
     cache_paths: &ArtifactCachePaths,
-    main: &str,
     target_label: &str,
 ) -> Result<u64, String> {
-    merge_assets_locally(workspace, app_subdir, asset_roots)?;
-    let app_dir = workspace_app_dir(workspace, app_subdir);
-    if !app_dir.is_dir() {
-        return Err(format!(
-            "App directory '{}' does not exist inside build workspace",
-            app_dir.display()
-        ));
-    }
-    validate_main_exists_after_build(workspace, app_subdir, main)?;
+    merge_assets_locally(workspace, asset_roots)?;
 
     let artifact_temp_path = artifact_cache_temp_path(&cache_paths.artifact_path)?;
     let artifact_size = crate::build::create_workdir_archive(
@@ -2953,7 +2851,6 @@ async fn deploy_to_server(
     config: &DeployConfig,
     server: &ServerEntry,
     archive_path: &Path,
-    artifact_sha256: &str,
     target_label: &str,
     use_spinner: bool,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -2974,7 +2871,6 @@ async fn deploy_to_server(
     .await?;
 
     let release_dir = config.release_dir();
-    let release_app_dir = config.release_app_dir();
     let release_dir_preexisted = remote_directory_exists(&ssh, &release_dir).await?;
 
     let result = async {
@@ -3011,42 +2907,17 @@ async fn deploy_to_server(
         // Create directories.
         run_deploy_step("Creating directories", "Directories created", use_spinner, async {
             ssh.exec_checked(&format!(
-                "mkdir -p {} {} {}",
-                release_dir, release_app_dir, config.shared_dir()
+                "mkdir -p {} {}",
+                release_dir, config.shared_dir()
             )).await?;
             Ok::<(), SshError>(())
         })
         .await?;
 
-        // Upload target-specific archive artifact (skip if server already has it).
+        // Upload artifact (skip if release dir already has it from a previous deploy).
         let remote_archive = remote_release_archive_path(&release_dir);
-        let artifact_cache_dir = "/opt/tako/artifact-cache";
-        let cached_artifact_path = format!("{}/{}.tar.zst", artifact_cache_dir, artifact_sha256);
-        let has_cached = ssh
-            .exec(&format!(
-                "test -f {} && echo hit || echo miss",
-                cached_artifact_path
-            ))
-            .await
-            .map(|r| r.stdout.trim() == "hit")
-            .unwrap_or(false);
-
-        if has_cached {
-            tracing::debug!("Remote artifact cache hit, skipping upload");
-            run_deploy_step(
-                "Linking cached artifact",
-                "Artifact cached (skip upload)",
-                use_spinner,
-                async {
-                    ssh.exec_checked(&format!(
-                        "cp {} {}",
-                        cached_artifact_path, remote_archive
-                    ))
-                    .await?;
-                    Ok::<(), SshError>(())
-                },
-            )
-            .await?;
+        if release_dir_preexisted {
+            tracing::debug!("Release dir already exists, skipping upload");
         } else {
             tracing::debug!("Uploading artifact ({})…", format_size(archive_size_bytes));
             let upload_timer = output::timed("Artifact upload");
@@ -3071,32 +2942,27 @@ async fn deploy_to_server(
                     .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
             }
             drop(upload_timer);
-            // Cache the artifact for future deploys (best-effort).
-            let _ = ssh
-                .exec(&format!(
-                    "mkdir -p {} && cp {} {}",
-                    artifact_cache_dir, remote_archive, cached_artifact_path
-                ))
-                .await;
         }
 
-        // Extract archive, symlink shared dirs, and write runtime manifest in one exec.
-        tracing::debug!("Extracting and configuring release…");
-        let extract_timer = output::timed("Release extraction");
-        run_deploy_step("Extracting and configuring release", "Release configured", use_spinner, async {
-            let extract_cmd = build_remote_extract_archive_command(&release_dir, &remote_archive);
-            let shared_link_cmd = format!(
-                "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
-                config.shared_dir(),
-                config.shared_dir(),
-                release_dir
-            );
-            let combined_cmd = format!("{} && {}", extract_cmd, shared_link_cmd);
-            ssh.exec_checked(&combined_cmd).await?;
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        })
-        .await?;
-        drop(extract_timer);
+        // Extract archive and symlink shared dirs.
+        if !release_dir_preexisted {
+            tracing::debug!("Extracting and configuring release…");
+            let extract_timer = output::timed("Release extraction");
+            run_deploy_step("Extracting and configuring release", "Release configured", use_spinner, async {
+                let extract_cmd = build_remote_extract_archive_command(&release_dir, &remote_archive);
+                let shared_link_cmd = format!(
+                    "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
+                    config.shared_dir(),
+                    config.shared_dir(),
+                    release_dir
+                );
+                let combined_cmd = format!("{} && {}", extract_cmd, shared_link_cmd);
+                ssh.exec_checked(&combined_cmd).await?;
+                Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+            })
+            .await?;
+            drop(extract_timer);
+        }
         tracing::debug!("{}", format_deploy_main_message(
             &config.main,
             target_label,
@@ -3114,7 +2980,7 @@ async fn deploy_to_server(
         let cmd = Command::Deploy {
             app: config.app_name.clone(),
             version: config.version.clone(),
-            path: release_app_dir.clone(),
+            path: release_dir.clone(),
             routes: config.routes.clone(),
             secrets: deploy_secrets,
         };
@@ -3733,15 +3599,10 @@ route = "app.example.com"
             routes: vec![],
             env_vars: HashMap::new(),
             secrets_hash: String::new(),
-            app_subdir: "examples/bun".to_string(),
             main: "index.ts".to_string(),
             use_unified_target_process: false,
         };
         assert_eq!(cfg.release_dir(), "/opt/tako/apps/my-app/releases/v1");
-        assert_eq!(
-            cfg.release_app_dir(),
-            "/opt/tako/apps/my-app/releases/v1/examples/bun"
-        );
         assert_eq!(cfg.current_link(), "/opt/tako/apps/my-app/current");
         assert_eq!(cfg.shared_dir(), "/opt/tako/apps/my-app/shared");
     }
@@ -4233,12 +4094,6 @@ route = "app.example.com"
     }
 
     #[test]
-    fn archive_app_manifest_path_places_manifest_under_app_subdir() {
-        assert_eq!(archive_app_manifest_path(""), "app.json");
-        assert_eq!(archive_app_manifest_path("apps/web"), "apps/web/app.json");
-    }
-
-    #[test]
     fn source_bundle_root_falls_back_to_project_dir_without_git() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("app");
@@ -4465,8 +4320,7 @@ route = "app.example.com"
     fn run_local_build_executes_custom_stages_in_order() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(app_dir.join("frontend")).unwrap();
+        std::fs::create_dir_all(workspace.join("frontend")).unwrap();
         let stages = vec![
             crate::config::BuildStage {
                 name: None,
@@ -4484,8 +4338,8 @@ route = "app.example.com"
             },
         ];
 
-        run_local_build(&workspace, "apps/web", &Default::default(), &stages).unwrap();
-        let order = std::fs::read_to_string(app_dir.join("order.log")).unwrap();
+        run_local_build(&workspace, &Default::default(), &stages).unwrap();
+        let order = std::fs::read_to_string(workspace.join("order.log")).unwrap();
         assert_eq!(order, "stage-1-run\nstage-2-install\nstage-2-run\n");
     }
 
@@ -4516,8 +4370,7 @@ route = "app.example.com"
     fn run_local_build_errors_when_stage_working_dir_is_missing() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
         let stages = vec![crate::config::BuildStage {
             name: None,
             cwd: Some("frontend".to_string()),
@@ -4525,8 +4378,7 @@ route = "app.example.com"
             run: "true".to_string(),
         }];
 
-        let err =
-            run_local_build(&workspace, "apps/web", &Default::default(), &stages).unwrap_err();
+        let err = run_local_build(&workspace, &Default::default(), &stages).unwrap_err();
         assert!(err.contains("stage 1"));
         assert!(err.contains("working directory"));
     }
@@ -4535,20 +4387,18 @@ route = "app.example.com"
     fn merge_assets_locally_merges_into_public_and_overwrites_last_write() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(app_dir.join("dist/client")).unwrap();
-        std::fs::create_dir_all(app_dir.join("assets/shared")).unwrap();
-        std::fs::write(app_dir.join("dist/client/logo.txt"), "dist").unwrap();
-        std::fs::write(app_dir.join("assets/shared/logo.txt"), "shared").unwrap();
+        std::fs::create_dir_all(workspace.join("dist/client")).unwrap();
+        std::fs::create_dir_all(workspace.join("assets/shared")).unwrap();
+        std::fs::write(workspace.join("dist/client/logo.txt"), "dist").unwrap();
+        std::fs::write(workspace.join("assets/shared/logo.txt"), "shared").unwrap();
 
         merge_assets_locally(
             &workspace,
-            "apps/web",
             &["dist/client".to_string(), "assets/shared".to_string()],
         )
         .unwrap();
 
-        let merged = std::fs::read_to_string(app_dir.join("public/logo.txt")).unwrap();
+        let merged = std::fs::read_to_string(workspace.join("public/logo.txt")).unwrap();
         assert_eq!(merged, "shared");
     }
 
@@ -4556,11 +4406,9 @@ route = "app.example.com"
     fn merge_assets_locally_fails_when_asset_root_is_missing() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
 
-        let err =
-            merge_assets_locally(&workspace, "apps/web", &["missing".to_string()]).unwrap_err();
+        let err = merge_assets_locally(&workspace, &["missing".to_string()]).unwrap_err();
         assert!(err.contains("not found after build"));
     }
 
@@ -4568,17 +4416,16 @@ route = "app.example.com"
     fn save_runtime_version_to_manifest_writes_version_to_app_json() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(
-            app_dir.join("app.json"),
+            workspace.join("app.json"),
             r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
         )
         .unwrap();
 
-        save_runtime_version_to_manifest(&workspace, "apps/web", "1.3.9").unwrap();
+        save_runtime_version_to_manifest(&workspace, "1.3.9").unwrap();
 
-        let manifest_raw = std::fs::read_to_string(app_dir.join("app.json")).unwrap();
+        let manifest_raw = std::fs::read_to_string(workspace.join("app.json")).unwrap();
         let manifest: serde_json::Value = serde_json::from_str(&manifest_raw).unwrap();
         assert_eq!(manifest["runtime_version"], "1.3.9");
         assert_eq!(manifest["runtime"], "bun");
@@ -4588,30 +4435,28 @@ route = "app.example.com"
     fn save_runtime_version_cleans_up_old_version_file() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(
-            app_dir.join("app.json"),
+            workspace.join("app.json"),
             r#"{"runtime":"bun","main":"index.ts","idle_timeout":300}"#,
         )
         .unwrap();
-        std::fs::write(app_dir.join(RUNTIME_VERSION_OUTPUT_FILE), "1.3.9").unwrap();
+        std::fs::write(workspace.join(RUNTIME_VERSION_OUTPUT_FILE), "1.3.9").unwrap();
 
-        save_runtime_version_to_manifest(&workspace, "apps/web", "1.3.9").unwrap();
+        save_runtime_version_to_manifest(&workspace, "1.3.9").unwrap();
 
-        assert!(!app_dir.join(RUNTIME_VERSION_OUTPUT_FILE).exists());
+        assert!(!workspace.join(RUNTIME_VERSION_OUTPUT_FILE).exists());
     }
 
     #[test]
     fn resolve_runtime_version_from_workspace_ignores_old_runtime_version_file() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
         let old_tools_file = format!(".{}{}", "proto", "tools");
-        std::fs::write(app_dir.join(old_tools_file), "bun = \"1.3.9\"\n").unwrap();
+        std::fs::write(workspace.join(old_tools_file), "bun = \"1.3.9\"\n").unwrap();
 
-        let resolved = resolve_runtime_version_from_workspace(&workspace, "apps/web", "bun")
+        let resolved = resolve_runtime_version_from_workspace(&workspace, "bun")
             .expect("resolve runtime version");
 
         assert_eq!(resolved, "latest");
@@ -4621,23 +4466,19 @@ route = "app.example.com"
     fn package_target_artifact_packages_workspace_root_contents() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        std::fs::write(workspace.join("README.md"), "repo root").unwrap();
-        std::fs::write(app_dir.join("index.ts"), "console.log('ok');").unwrap();
-        std::fs::write(app_dir.join("app.json"), r#"{"main":"index.ts"}"#).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("index.ts"), "console.log('ok');").unwrap();
+        std::fs::write(workspace.join("app.json"), r#"{"main":"index.ts"}"#).unwrap();
 
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
         let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
             &workspace,
-            "apps/web",
             &[],
             &["**/*".to_string()],
             &[],
             &cache_paths,
-            "index.ts",
             "linux-aarch64-musl",
         )
         .unwrap();
@@ -4646,32 +4487,27 @@ route = "app.example.com"
         let unpacked = temp.path().join("unpacked");
         BuildExecutor::extract_archive(&cache_paths.artifact_path, &unpacked).unwrap();
 
-        assert!(unpacked.join("README.md").exists());
-        assert!(unpacked.join("apps/web/index.ts").exists());
-        assert!(unpacked.join("apps/web/app.json").exists());
-        assert!(!unpacked.join("index.ts").exists());
+        assert!(unpacked.join("index.ts").exists());
+        assert!(unpacked.join("app.json").exists());
     }
 
     #[test]
     fn package_target_artifact_for_bun_does_not_require_entrypoint_sources() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        std::fs::write(app_dir.join("index.ts"), "console.log('ok');").unwrap();
-        std::fs::write(app_dir.join("app.json"), r#"{"main":"index.ts"}"#).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::write(workspace.join("index.ts"), "console.log('ok');").unwrap();
+        std::fs::write(workspace.join("app.json"), r#"{"main":"index.ts"}"#).unwrap();
 
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
         let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
             &workspace,
-            "apps/web",
             &[],
             &["**/*".to_string()],
             &[],
             &cache_paths,
-            "index.ts",
             "linux-aarch64-musl",
         )
         .unwrap();
@@ -4682,27 +4518,23 @@ route = "app.example.com"
     fn package_target_artifact_preserves_workspace_protocol_dependencies() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(app_dir.join("src")).unwrap();
-        std::fs::write(workspace.join("package.json"), r#"{"private":true}"#).unwrap();
+        std::fs::create_dir_all(workspace.join("src")).unwrap();
         std::fs::write(
-            app_dir.join("package.json"),
+            workspace.join("package.json"),
             r#"{"name":"web","dependencies":{"tako.sh":"workspace:*"}}"#,
         )
         .unwrap();
-        std::fs::write(app_dir.join("src/app.ts"), "export default {};\n").unwrap();
+        std::fs::write(workspace.join("src/app.ts"), "export default {};\n").unwrap();
 
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
         let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
             &workspace,
-            "apps/web",
             &[],
             &["**/*".to_string()],
             &["**/node_modules/**".to_string()],
             &cache_paths,
-            "src/app.ts",
             "linux-aarch64-musl",
         )
         .unwrap();
@@ -4710,7 +4542,7 @@ route = "app.example.com"
 
         let unpacked = temp.path().join("unpacked");
         BuildExecutor::extract_archive(&cache_paths.artifact_path, &unpacked).unwrap();
-        let package_json = std::fs::read_to_string(unpacked.join("apps/web/package.json")).unwrap();
+        let package_json = std::fs::read_to_string(unpacked.join("package.json")).unwrap();
         let package_json: serde_json::Value = serde_json::from_str(&package_json).unwrap();
         assert_eq!(
             package_json
@@ -4719,33 +4551,29 @@ route = "app.example.com"
                 .and_then(|value| value.as_str()),
             Some("workspace:*")
         );
-        assert!(!unpacked.join("apps/web/tako_vendor").exists());
     }
 
     #[test]
     fn package_target_artifact_does_not_validate_workspace_protocol_dependencies() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");
-        let app_dir = workspace.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
         std::fs::write(
-            app_dir.join("package.json"),
+            workspace.join("package.json"),
             r#"{"name":"web","dependencies":{"missing-pkg":"workspace:*"}}"#,
         )
         .unwrap();
-        std::fs::write(app_dir.join("src.ts"), "export default {};\n").unwrap();
+        std::fs::write(workspace.join("src.ts"), "export default {};\n").unwrap();
 
         let cache_dir = temp.path().join("cache");
         std::fs::create_dir_all(&cache_dir).unwrap();
         let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
             &workspace,
-            "apps/web",
             &[],
             &["**/*".to_string()],
             &[],
             &cache_paths,
-            "src.ts",
             "linux-aarch64-musl",
         )
         .unwrap();

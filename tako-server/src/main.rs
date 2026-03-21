@@ -324,10 +324,7 @@ impl ServerState {
         let app_manager = Arc::new(AppManager::new());
         let load_balancer = Arc::new(LoadBalancer::new(app_manager.clone()));
         let device_key = load_or_create_device_key(&data_dir.join("secret.key"))?;
-        let state_store = Arc::new(SqliteStateStore::new(
-            data_dir.join("runtime-state.sqlite3"),
-            device_key,
-        ));
+        let state_store = Arc::new(SqliteStateStore::new(data_dir.join("tako.db"), device_key));
         state_store.init()?;
         // Always start in Normal mode. If the server was previously in
         // Upgrading mode (e.g. Ctrl+C during upgrade), that upgrade is dead
@@ -741,23 +738,12 @@ impl ServerState {
             let _ = std::fs::set_permissions(&release_path, std::fs::Permissions::from_mode(0o750));
         }
 
-        let app_subdir = match app_subdir_from_release_path(
-            &self.runtime.data_dir,
-            app_name,
-            version,
-            &release_path,
-        ) {
-            Ok(value) => value,
-            Err(error) => return Response::error(error),
-        };
-
         // Get or create app
         let (app, deploy_config, is_new_app) =
             if let Some(existing) = self.app_manager.get_app(app_name) {
                 // Update existing app config. We'll perform a rolling update if instances are running.
                 let mut config = existing.config.read().clone();
                 config.version = version.to_string();
-                config.app_subdir = app_subdir.clone();
                 config.secrets = secrets;
                 if let Err(error) = apply_release_runtime_to_config(
                     &mut config,
@@ -776,7 +762,6 @@ impl ServerState {
                     name,
                     environment,
                     version: version.to_string(),
-                    app_subdir,
                     secrets,
                     min_instances: 0,
                     max_instances: 4,
@@ -1144,11 +1129,10 @@ impl ServerState {
     }
 
     async fn list_releases(&self, app_name: &str) -> Response {
-        let app = match self.app_manager.get_app(app_name) {
+        let _app = match self.app_manager.get_app(app_name) {
             Some(app) => app,
             None => return Response::error(format!("App not found: {}", app_name)),
         };
-        let config = app.config.read().clone();
 
         let app_root = self.runtime.data_dir.join("apps").join(app_name);
         let releases_root = app_root.join("releases");
@@ -1182,7 +1166,7 @@ impl ServerState {
                 continue;
             };
 
-            let manifest_path = release_manifest_path(&release_root, &config.app_subdir);
+            let manifest_path = release_root.join("app.json");
             let (commit_message, git_dirty) = read_release_manifest_metadata(&manifest_path);
             releases.push(ReleaseInfo {
                 current: current_version.as_deref() == Some(version.as_str()),
@@ -1220,14 +1204,13 @@ impl ServerState {
     }
 
     async fn rollback_app(&self, app_name: &str, version: &str) -> Response {
-        let app = match self.app_manager.get_app(app_name) {
+        let _app = match self.app_manager.get_app(app_name) {
             Some(app) => app,
             None => return Response::error(format!("App not found: {}", app_name)),
         };
-        let config = app.config.read().clone();
 
         let app_root = self.runtime.data_dir.join("apps").join(app_name);
-        let target_path = rollback_release_path(&app_root, version, &config.app_subdir);
+        let target_path = app_root.join("releases").join(version);
 
         if !target_path.is_dir() {
             return Response::error(format!(
@@ -1451,29 +1434,11 @@ fn app_release_root(data_dir: &Path, app_name: &str, version: &str) -> PathBuf {
 }
 
 fn release_app_path(data_dir: &Path, config: &AppConfig) -> PathBuf {
-    rollback_release_path(
-        &data_dir.join("apps").join(config.deployment_id()),
-        &config.version,
-        &config.app_subdir,
-    )
-}
-
-fn app_subdir_from_release_path(
-    data_dir: &Path,
-    app_name: &str,
-    version: &str,
-    release_path: &Path,
-) -> Result<String, String> {
-    let release_root = app_release_root(data_dir, app_name, version);
-    let release_root = std::fs::canonicalize(&release_root).unwrap_or(release_root);
-    let relative = release_path.strip_prefix(&release_root).map_err(|_| {
-        format!(
-            "Invalid release path: '{}' must stay under '{}'",
-            release_path.display(),
-            release_root.display()
-        )
-    })?;
-    Ok(relative.to_string_lossy().to_string())
+    data_dir
+        .join("apps")
+        .join(config.deployment_id())
+        .join("releases")
+        .join(&config.version)
 }
 
 fn apply_release_runtime_to_config(
@@ -1489,24 +1454,6 @@ fn apply_release_runtime_to_config(
     config.idle_timeout = Duration::from_secs(u64::from(manifest.idle_timeout));
     config.app_socket_dir = app_socket_dir;
     Ok(())
-}
-
-fn rollback_release_path(app_root: &Path, version: &str, app_subdir: &str) -> PathBuf {
-    let release_root = app_root.join("releases").join(version);
-    if app_subdir.is_empty() {
-        release_root
-    } else {
-        release_root.join(app_subdir)
-    }
-}
-
-fn release_manifest_path(release_root: &Path, app_subdir: &str) -> PathBuf {
-    let app_dir = if app_subdir.is_empty() {
-        release_root.to_path_buf()
-    } else {
-        release_root.join(app_subdir)
-    };
-    app_dir.join("app.json")
 }
 
 fn read_release_manifest_metadata(path: &Path) -> (Option<String>, Option<bool>) {
@@ -3871,89 +3818,6 @@ mod tests {
 
         assert!(matches!(response, Response::Error { .. }));
         assert_eq!(app.config.read().min_instances, 2);
-    }
-
-    #[tokio::test]
-    async fn restore_uses_persisted_app_subdir() {
-        let temp = TempDir::new().unwrap();
-        let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
-            cert_dir: temp.path().join("certs"),
-            ..Default::default()
-        }));
-        let state_a = ServerState::new(
-            temp.path().to_path_buf(),
-            cert_manager.clone(),
-            None,
-            empty_challenge_tokens(),
-        )
-        .unwrap();
-        let release_dir = temp
-            .path()
-            .join("apps")
-            .join("my-app")
-            .join("releases")
-            .join("v1");
-        let app_dir = release_dir.join("apps/web");
-        std::fs::create_dir_all(&app_dir).unwrap();
-        write_release_manifest(
-            &app_dir,
-            "node",
-            "index.js",
-            &["/bin/sh", "-lc", "sleep 600"],
-            Some("true"),
-            300,
-        );
-
-        let app = state_a.app_manager.register_app(AppConfig {
-            name: "my-app".to_string(),
-            version: "v1".to_string(),
-            app_subdir: "apps/web".to_string(),
-            path: app_dir.clone(),
-            command: vec![
-                "/bin/sh".to_string(),
-                "-lc".to_string(),
-                "sleep 600".to_string(),
-            ],
-            min_instances: 0,
-            max_instances: 4,
-            idle_timeout: Duration::from_secs(300),
-            ..Default::default()
-        });
-        state_a.load_balancer.register_app(app);
-        {
-            let mut route_table = state_a.routes.write().await;
-            route_table.set_app_routes("my-app".to_string(), vec!["api.example.com".to_string()]);
-        }
-        state_a.persist_app_state("my-app").await;
-        drop(state_a);
-
-        let runtime = ServerRuntimeConfig {
-            pid: std::process::id(),
-            socket: "/var/run/tako/tako.sock".to_string(),
-            data_dir: temp.path().to_path_buf(),
-            http_port: 80,
-            https_port: 443,
-            no_acme: true,
-            acme_staging: false,
-            acme_email: None,
-            renewal_interval_hours: 12,
-            dns_provider: None,
-            worker: false,
-            metrics_port: Some(9898),
-            server_name: None,
-        };
-        let state_b = ServerState::new_with_runtime(
-            temp.path().to_path_buf(),
-            cert_manager,
-            None,
-            empty_challenge_tokens(),
-            runtime,
-        )
-        .unwrap();
-        state_b.restore_from_state_store().await.unwrap();
-        let restored = state_b.app_manager.get_app("my-app").expect("app restored");
-        assert_eq!(restored.config.read().app_subdir, "apps/web");
-        assert_eq!(restored.config.read().path, app_dir);
     }
 
     #[tokio::test]

@@ -903,7 +903,7 @@ Delete confirmation:
 3. Remove `/opt/tako/apps/{app-name}/{env-name}` from disk.
 
 - Interactive single-target deletes show a spinner while the selected server is being cleaned up.
-- Delete is idempotent for absent app runtime state (safe to re-run for cleanup).
+- Delete is idempotent for absent app state (safe to re-run for cleanup).
 
 ## Routing and Multi-App Support
 
@@ -1050,7 +1050,7 @@ Reference scripts in this repo:
 ```
 /opt/tako/
 ├── config.json
-├── runtime-state.sqlite3
+├── tako.db
 ├── runtimes/
 │   └── {tool}/{version}/      # Downloaded runtime binaries
 ├── acme/
@@ -1065,8 +1065,7 @@ Reference scripts in this repo:
             ├── current -> releases/{version}
             ├── .deploy_lock/
             ├── releases/{version}/
-            │   ├── build files...
-            │   └── logs -> /opt/tako/apps/{app-name}/{env-name}/shared/logs
+            │   └── build files...
             └── shared/
                 └── logs/
 ```
@@ -1204,7 +1203,7 @@ Server-side validation on `deploy` and app-scoped commands:
 { "command": "rollback", "app": "my-app", "version": "abc1234" }
 ```
 
-- `delete` (remove runtime state/routes for an app):
+- `delete` (remove app state/routes):
 
 ```json
 { "command": "delete", "app": "my-app" }

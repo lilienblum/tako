@@ -352,7 +352,6 @@ If a deploy fails after creating a release directory on a server, Tako automatic
     <version>/
       ...app files...
       app.json
-      logs -> /opt/tako/apps/<app>/<env>/shared/logs
   shared/
     logs/
 ```

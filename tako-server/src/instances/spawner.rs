@@ -274,29 +274,6 @@ fn build_instance_env(config: &AppConfig, _instance: &Instance) -> HashMap<Strin
     env.entry("NODE_ENV".to_string())
         .or_insert_with(|| "production".to_string());
 
-    // For monorepo apps, add the release root's node_modules to NODE_PATH
-    // so bare module specifiers resolve from the workspace root.
-    if !config.app_subdir.is_empty() {
-        let release_root = config
-            .path
-            .to_string_lossy()
-            .strip_suffix(&config.app_subdir)
-            .map(|s| s.trim_end_matches('/').to_string())
-            .unwrap_or_default();
-        if !release_root.is_empty() {
-            let root_node_modules = format!("{}/node_modules", release_root);
-            if std::path::Path::new(&root_node_modules).is_dir() {
-                let existing = env.get("NODE_PATH").cloned().unwrap_or_default();
-                let node_path = if existing.is_empty() {
-                    root_node_modules
-                } else {
-                    format!("{}:{}", root_node_modules, existing)
-                };
-                env.insert("NODE_PATH".to_string(), node_path);
-            }
-        }
-    }
-
     env
 }
 

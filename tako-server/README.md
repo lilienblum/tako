@@ -31,7 +31,7 @@ Routing policy notes:
 
 - Socket: `/var/run/tako/tako.sock`
 - Data root: `/opt/tako`
-- Runtime state DB: `/opt/tako/runtime-state.sqlite3`
+- State DB: `/opt/tako/tako.db`
 - App releases: `/opt/tako/apps/<app>/<env>/releases/<version>/`
 
 ## Run and Test

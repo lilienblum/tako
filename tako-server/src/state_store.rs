@@ -106,7 +106,7 @@ impl SqliteStateStore {
         let mut stmt = conn
             .prepare(
                 "SELECT
-                    name, environment, version, app_subdir, min_instances, max_instances
+                    name, environment, version, min_instances, max_instances
                  FROM apps
                  ORDER BY name, environment;",
             )
@@ -119,9 +119,8 @@ impl SqliteStateStore {
             let name: String = row.get(0).map_err(StateStoreError::from)?;
             let environment: String = row.get(1).map_err(StateStoreError::from)?;
             let version: String = row.get(2).map_err(StateStoreError::from)?;
-            let app_subdir: String = row.get(3).map_err(StateStoreError::from)?;
-            let min_instances: i64 = row.get(4).map_err(StateStoreError::from)?;
-            let max_instances: i64 = row.get(5).map_err(StateStoreError::from)?;
+            let min_instances: i64 = row.get(3).map_err(StateStoreError::from)?;
+            let max_instances: i64 = row.get(4).map_err(StateStoreError::from)?;
 
             let mut routes_stmt = conn
                 .prepare(
@@ -140,7 +139,6 @@ impl SqliteStateStore {
                 name,
                 environment,
                 version,
-                app_subdir,
                 min_instances: to_u32(min_instances, "min_instances")?,
                 max_instances: to_u32(max_instances, "max_instances")?,
                 ..Default::default()
@@ -378,7 +376,6 @@ impl SqliteStateStore {
                 name TEXT NOT NULL,
                 environment TEXT NOT NULL,
                 version TEXT NOT NULL,
-                app_subdir TEXT NOT NULL,
                 min_instances INTEGER NOT NULL,
                 max_instances INTEGER NOT NULL,
                 PRIMARY KEY (name, environment)
@@ -512,18 +509,16 @@ fn upsert_app_on(
 ) -> Result<(), StateStoreError> {
     conn.execute(
         "INSERT INTO apps (
-            name, environment, version, app_subdir, min_instances, max_instances
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            name, environment, version, min_instances, max_instances
+         ) VALUES (?1, ?2, ?3, ?4, ?5)
          ON CONFLICT(name, environment) DO UPDATE SET
             version = excluded.version,
-            app_subdir = excluded.app_subdir,
             min_instances = excluded.min_instances,
             max_instances = excluded.max_instances;",
         rusqlite::params![
             &config.name,
             &config.environment,
             &config.version,
-            &config.app_subdir,
             config.min_instances as i64,
             config.max_instances as i64,
         ],
@@ -580,7 +575,7 @@ mod tests {
 
     fn temp_store() -> (TempDir, SqliteStateStore) {
         let temp = TempDir::new().unwrap();
-        let store = SqliteStateStore::new(temp.path().join("runtime-state.sqlite3"), TEST_KEY);
+        let store = SqliteStateStore::new(temp.path().join("tako.db"), TEST_KEY);
         (temp, store)
     }
 
@@ -589,7 +584,6 @@ mod tests {
             name: "my-app".to_string(),
             environment: "production".to_string(),
             version: "v1".to_string(),
-            app_subdir: "examples/bun".to_string(),
             min_instances: 2,
             max_instances: 4,
             ..Default::default()
@@ -620,7 +614,6 @@ mod tests {
                 "name".to_string(),
                 "environment".to_string(),
                 "version".to_string(),
-                "app_subdir".to_string(),
                 "min_instances".to_string(),
                 "max_instances".to_string(),
             ]
@@ -660,7 +653,6 @@ mod tests {
         assert_eq!(app.config.name, "my-app");
         assert_eq!(app.config.environment, "production");
         assert_eq!(app.config.version, "v1");
-        assert_eq!(app.config.app_subdir, "examples/bun");
         // env_vars and secrets are loaded from files by the caller after restore
         assert!(app.config.env_vars.is_empty());
         assert!(app.config.secrets.is_empty());
@@ -893,7 +885,6 @@ mod tests {
                     name TEXT NOT NULL,
                     environment TEXT NOT NULL,
                     version TEXT NOT NULL,
-                    app_subdir TEXT NOT NULL,
                     min_instances INTEGER NOT NULL,
                     max_instances INTEGER NOT NULL,
                     PRIMARY KEY (name, environment)

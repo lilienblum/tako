@@ -205,7 +205,7 @@ The CLI and `tako-server` communicate over a Unix socket at `/var/run/tako/tako.
 | `hello`    | Protocol negotiation and capability discovery         |
 | `deploy`   | Deploy a new version with routes and optional secrets |
 | `scale`    | Change desired instance count                         |
-| `delete`   | Remove an app's runtime state and routes              |
+| `delete`   | Remove an app's state and routes                      |
 | `rollback` | Roll back to a previous release                       |
 | `routes`   | List current route mappings                           |
 
@@ -218,7 +218,7 @@ On each deployment server, Tako organizes files under `/opt/tako/`:
 ```
 /opt/tako/
   config.json              # Server-level config
-  runtime-state.sqlite3    # Persisted app state
+  tako.db                  # Persisted app state
   runtimes/{tool}/{version}/  # Downloaded runtime binaries
   certs/{domain}/          # TLS certificates
   apps/{app}/{env}/

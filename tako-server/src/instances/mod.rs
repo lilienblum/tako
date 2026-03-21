@@ -58,8 +58,6 @@ pub struct AppConfig {
     pub environment: String,
     /// Current version
     pub version: String,
-    /// App subdirectory within the release root
-    pub app_subdir: String,
     /// Derived path to the active app directory
     pub path: PathBuf,
     /// Runtime command derived from app.json
@@ -101,7 +99,6 @@ impl Default for AppConfig {
             name: String::new(),
             environment: String::new(),
             version: String::new(),
-            app_subdir: String::new(),
             path: PathBuf::new(),
             command: vec![],
             env_vars: HashMap::new(),
