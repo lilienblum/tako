@@ -434,7 +434,9 @@ tako servers upgrade <NAME> [--canary|--stable]
 
 Without channel flags, uses the persisted `upgrade_channel` from global config (default: `stable`). The `--canary` and `--stable` flags are mutually exclusive.
 
-Upgrade installs the new binary, acquires an upgrade lock, signals a service-manager reload (`systemctl reload` on systemd, `rc-service reload` on OpenRC), waits for the management socket to report ready, then releases the lock. Requires a supported service manager and root privileges (root login or sudo-capable user).
+Upgrade verifies the signed `tako-server-sha256s.txt` release manifest, enforces the matching SHA-256 on the downloaded archive, installs the new binary, acquires an upgrade lock, signals a service-manager reload (`systemctl reload` on systemd, `rc-service reload` on OpenRC), waits for the management socket to report ready, then releases the lock. Requires a supported service manager and root privileges (root login or sudo-capable user).
+
+Custom `TAKO_DOWNLOAD_BASE_URL` overrides must use `https://`. For local testbeds, an explicit `TAKO_ALLOW_INSECURE_DOWNLOAD_BASE=1` override is required before a non-HTTPS base is accepted.
 
 ```bash
 tako servers upgrade production

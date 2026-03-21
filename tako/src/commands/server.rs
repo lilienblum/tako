@@ -961,6 +961,26 @@ const REPO_OWNER: &str = "lilienblum";
 const REPO_NAME: &str = "tako";
 const SERVER_TAG_PREFIX: &str = "tako-server-v";
 const SERVER_TAGS_API: &str = "https://api.github.com/repos/lilienblum/tako/tags?per_page=100";
+const SERVER_CHECKSUM_MANIFEST_ASSET: &str = "tako-server-sha256s.txt";
+const SERVER_CHECKSUM_SIGNATURE_ASSET: &str = "tako-server-sha256s.txt.sig";
+const ALLOW_INSECURE_DOWNLOAD_BASE_ENV: &str = "TAKO_ALLOW_INSECURE_DOWNLOAD_BASE";
+const SERVER_RELEASE_SIGNING_PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\n\
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAudDa2LxdNH1ApSWLi+eW\n\
+7CY0wmUM4PIcGUW6qArzP7NRxQNJjlbFxhx/tQPQ6O2RBq4Nl9fJ/CCRRJFAdi/L\n\
+Y7kD6MtTVdaTV5fVQ73nWqF9qoJfn64Son6RCVhTMu00DjM78ZkwKDigqnYcWB0N\n\
+qQ3N7rr9Qykis8k9tfjE8qGF/p+PtfIv5EjN9MQZnVIUZeNn11ub3x+Pb/gWPyCJ\n\
+Ok0YZHjwlbMciVKZmKGvpYtbs3wWIlxt+5JK4ybu97Vg7hgbXm2UTZ4QvgA+I796\n\
+31XizMYY7kbudGI0qFWbDNeR87/v5gLVMgi0lRTyik78c5DI5fsFQCT4gc6MIuvB\n\
+t7MNd4hRVTq/XDivla/L7vcZMhHtWE7K2efPAjQKjTM7/7qksHsqb+I+XsxWULOj\n\
+1PS1Veak7zLM45CiFBopFZGcqkLhrpXiCPy+YUQhHO5EfmeNi3Vh8SOGb6ehM7s2\n\
+XnU5wADjT1jAIp3xWAglPRPm0FS/pHCxipilpnJ4/fqVAgMBAAE=\n\
+-----END PUBLIC KEY-----\n";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct VerifiedReleaseAsset {
+    download_url: String,
+    expected_sha256: String,
+}
 
 /// Fetch the latest canary server version from the GitHub release body.
 /// The release body contains "master (SHA)" — we extract the SHA and construct
@@ -1001,30 +1021,76 @@ async fn fetch_canary_server_version() -> Result<String, String> {
     Err("Could not parse canary version from release".to_string())
 }
 
-fn server_binary_download_url(
+fn server_binary_archive_name(target: &crate::config::ServerTarget) -> String {
+    format!("tako-server-linux-{}-{}.tar.zst", target.arch, target.libc)
+}
+
+fn parse_boolish_env(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
+fn allow_insecure_download_base() -> bool {
+    std::env::var(ALLOW_INSECURE_DOWNLOAD_BASE_ENV)
+        .map(|value| parse_boolish_env(&value))
+        .unwrap_or(false)
+}
+
+fn validate_download_base(base: &str, allow_insecure: bool) -> Result<(), String> {
+    if base.starts_with("https://") {
+        return Ok(());
+    }
+    if allow_insecure {
+        output::warning(&format!(
+            "Using insecure download base '{}'; this is intended only for local testing.",
+            base
+        ));
+        return Ok(());
+    }
+    Err(format!(
+        "TAKO_DOWNLOAD_BASE_URL must use https://. Set {ALLOW_INSECURE_DOWNLOAD_BASE_ENV}=1 to allow an insecure override for local testing."
+    ))
+}
+
+fn server_download_base(
     channel: UpgradeChannel,
     tag: Option<&str>,
-    target: &crate::config::ServerTarget,
-) -> String {
-    let base = if let Ok(env_base) = std::env::var("TAKO_DOWNLOAD_BASE_URL") {
-        let trimmed = env_base.trim().trim_end_matches('/').to_string();
-        if !trimmed.is_empty() {
-            if !trimmed.starts_with("https://") {
-                crate::output::warning(&format!(
-                    "TAKO_DOWNLOAD_BASE_URL uses non-HTTPS scheme — binary will be downloaded over an insecure connection: {trimmed}"
-                ));
-            }
-            trimmed
-        } else {
+    custom_base: Option<&str>,
+    allow_insecure: bool,
+) -> Result<String, String> {
+    let base = if let Some(raw) = custom_base {
+        let trimmed = raw.trim().trim_end_matches('/');
+        if trimmed.is_empty() {
             default_download_base(channel, tag)
+        } else {
+            validate_download_base(trimmed, allow_insecure)?;
+            trimmed.to_string()
+        }
+    } else if let Ok(env_base) = std::env::var("TAKO_DOWNLOAD_BASE_URL") {
+        let trimmed = env_base.trim().trim_end_matches('/');
+        if trimmed.is_empty() {
+            default_download_base(channel, tag)
+        } else {
+            validate_download_base(trimmed, allow_insecure)?;
+            trimmed.to_string()
         }
     } else {
         default_download_base(channel, tag)
     };
-    format!(
-        "{}/tako-server-linux-{}-{}.tar.zst",
-        base, target.arch, target.libc
-    )
+    Ok(base)
+}
+
+fn server_binary_download_url(
+    channel: UpgradeChannel,
+    tag: Option<&str>,
+    target: &crate::config::ServerTarget,
+    custom_base: Option<&str>,
+    allow_insecure: bool,
+) -> Result<String, String> {
+    let base = server_download_base(channel, tag, custom_base, allow_insecure)?;
+    Ok(format!("{}/{}", base, server_binary_archive_name(target)))
 }
 
 fn default_download_base(channel: UpgradeChannel, tag: Option<&str>) -> String {
@@ -1036,16 +1102,135 @@ fn default_download_base(channel: UpgradeChannel, tag: Option<&str>) -> String {
     format!("https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/download/{release_tag}")
 }
 
+fn parse_sha256_manifest_value(manifest: &str, filename: &str) -> Result<String, String> {
+    for line in manifest
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        let mut parts = line.split_whitespace();
+        let Some(hash) = parts.next() else {
+            continue;
+        };
+        let Some(name) = parts.next() else {
+            continue;
+        };
+        let normalized_name = name.trim_start_matches('*').trim_start_matches("./");
+        if normalized_name == filename {
+            if hash.len() == 64 && hash.chars().all(|ch| ch.is_ascii_hexdigit()) {
+                return Ok(hash.to_ascii_lowercase());
+            }
+            return Err(format!(
+                "checksum manifest entry for '{filename}' contains an invalid SHA-256 value"
+            ));
+        }
+    }
+    Err(format!("checksum manifest missing entry for '{filename}'"))
+}
+
+fn verify_signed_server_checksum_manifest(manifest: &[u8], signature: &[u8]) -> Result<(), String> {
+    let key =
+        openssl::pkey::PKey::public_key_from_pem(SERVER_RELEASE_SIGNING_PUBLIC_KEY_PEM.as_bytes())
+            .map_err(|e| format!("failed to load embedded server release public key: {e}"))?;
+    let mut verifier =
+        openssl::sign::Verifier::new(openssl::hash::MessageDigest::sha256(), &key)
+            .map_err(|e| format!("failed to initialize server release signature verifier: {e}"))?;
+    verifier
+        .update(manifest)
+        .map_err(|e| format!("failed to hash server release checksum manifest: {e}"))?;
+    let verified = verifier
+        .verify(signature)
+        .map_err(|e| format!("failed to verify server checksum signature: {e}"))?;
+    if verified {
+        Ok(())
+    } else {
+        Err("server checksum signature verification failed".to_string())
+    }
+}
+
+async fn fetch_release_bytes(url: &str) -> Result<Vec<u8>, String> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get(url)
+        .header("User-Agent", "tako-cli")
+        .send()
+        .await
+        .map_err(|e| format!("request failed for {url}: {e}"))?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "download failed for {url}: HTTP {}",
+            response.status()
+        ));
+    }
+    response
+        .bytes()
+        .await
+        .map(|bytes| bytes.to_vec())
+        .map_err(|e| format!("failed to read response body from {url}: {e}"))
+}
+
+async fn fetch_release_text(url: &str) -> Result<String, String> {
+    let bytes = fetch_release_bytes(url).await?;
+    String::from_utf8(bytes).map_err(|e| format!("response from {url} was not valid UTF-8: {e}"))
+}
+
+async fn resolve_verified_server_release_asset(
+    channel: UpgradeChannel,
+    tag: Option<&str>,
+    target: &crate::config::ServerTarget,
+) -> Result<VerifiedReleaseAsset, String> {
+    let allow_insecure = allow_insecure_download_base();
+    let base = server_download_base(channel, tag, None, allow_insecure)?;
+    let archive_name = server_binary_archive_name(target);
+    let download_url = server_binary_download_url(channel, tag, target, None, allow_insecure)?;
+    let manifest_url = format!("{base}/{SERVER_CHECKSUM_MANIFEST_ASSET}");
+    let signature_url = format!("{base}/{SERVER_CHECKSUM_SIGNATURE_ASSET}");
+    let manifest = fetch_release_bytes(&manifest_url).await?;
+    let signature = fetch_release_bytes(&signature_url).await?;
+    verify_signed_server_checksum_manifest(&manifest, &signature)?;
+    let manifest_text = std::str::from_utf8(&manifest)
+        .map_err(|e| format!("signed checksum manifest was not valid UTF-8: {e}"))?;
+    let expected_sha256 = parse_sha256_manifest_value(manifest_text, &archive_name)?;
+    Ok(VerifiedReleaseAsset {
+        download_url,
+        expected_sha256,
+    })
+}
+
+fn verify_downloaded_sha256_script(path_expr: &str, expected_sha256: &str) -> String {
+    let expected_sha256 = crate::shell::shell_single_quote(expected_sha256);
+    format!(
+        "expected_sha={expected_sha256}; \
+         actual_sha=''; \
+         if command -v sha256sum >/dev/null 2>&1; then \
+           actual_sha=$(sha256sum {path_expr} | awk '{{print $1}}'); \
+         elif command -v shasum >/dev/null 2>&1; then \
+           actual_sha=$(shasum -a 256 {path_expr} | awk '{{print $1}}'); \
+         elif command -v openssl >/dev/null 2>&1; then \
+           actual_sha=$(openssl dgst -sha256 {path_expr} | awk '{{print $NF}}'); \
+         else \
+           echo 'error: sha256 tool not found' >&2; exit 1; \
+         fi; \
+         if [ \"$actual_sha\" != \"$expected_sha\" ]; then \
+           echo \"error: sha256 mismatch (expected=$expected_sha actual=$actual_sha)\" >&2; exit 1; \
+         fi"
+    )
+}
+
 /// Build a remote command that downloads and replaces the tako-server binary.
-fn remote_binary_replace_command(url: &str) -> String {
+fn remote_binary_replace_command(url: &str, expected_sha256: &str) -> String {
     use crate::shell::shell_single_quote;
     let url_q = shell_single_quote(url);
+    let sha_check = verify_downloaded_sha256_script("\"$archive\"", expected_sha256);
     // Download tar.zst, extract the binary, install it, set capabilities.
     let script = format!(
         "set -eu; \
          tmp=$(mktemp -d); \
+         archive=\"$tmp/tako-server.tar.zst\"; \
          trap 'rm -rf \"$tmp\"' EXIT; \
-         curl -fsSL {url_q} | zstd -d | tar -x -C \"$tmp\"; \
+         curl -fsSL {url_q} -o \"$archive\"; \
+         {sha_check}; \
+         zstd -d \"$archive\" --stdout | tar -x -C \"$tmp\"; \
          bin=$(find \"$tmp\" -type f -name tako-server | head -n 1); \
          if [ -z \"$bin\" ]; then echo 'error: archive did not contain tako-server binary' >&2; exit 1; fi; \
          install -m 0755 \"$bin\" /usr/local/bin/tako-server; \
@@ -1467,13 +1652,19 @@ async fn run_server_upgrade(
         } else {
             None
         };
-        let url = server_binary_download_url(channel, stable_tag.as_deref(), target);
+        let verified_release =
+            resolve_verified_server_release_asset(channel, stable_tag.as_deref(), target)
+                .await
+                .map_err(|e| format!("Failed to verify release metadata: {e}"))?;
 
         // Download and replace binary
         tracing::debug!("Downloading {} binary…", channel.as_str());
         let _t = output::timed("Binary download");
         let install_output = ssh
-            .exec(&remote_binary_replace_command(&url))
+            .exec(&remote_binary_replace_command(
+                &verified_release.download_url,
+                &verified_release.expected_sha256,
+            ))
             .await
             .map_err(|e| format!("Binary download failed: {e}"))?;
         drop(_t);
@@ -1659,29 +1850,56 @@ fn dns_provider_env_vars(provider: &str) -> &'static [(&'static str, &'static st
 }
 
 fn lego_download_url(arch: &str) -> String {
+    let archive_name = lego_archive_name(arch);
+    format!(
+        "https://github.com/go-acme/lego/releases/download/v{version}/{archive_name}",
+        version = LEGO_VERSION,
+    )
+}
+
+fn lego_archive_name(arch: &str) -> String {
     let go_arch = match arch {
         "aarch64" | "arm64" => "arm64",
         _ => "amd64",
     };
     format!(
-        "https://github.com/go-acme/lego/releases/download/v{version}/lego_v{version}_linux_{arch}.tar.gz",
+        "lego_v{version}_linux_{arch}.tar.gz",
         version = LEGO_VERSION,
         arch = go_arch,
     )
 }
 
-fn install_lego_command(arch: &str) -> String {
+fn lego_checksums_url() -> String {
+    format!(
+        "https://github.com/go-acme/lego/releases/download/v{version}/lego_{version}_checksums.txt",
+        version = LEGO_VERSION,
+    )
+}
+
+async fn resolve_verified_lego_release_asset(arch: &str) -> Result<VerifiedReleaseAsset, String> {
+    let archive_name = lego_archive_name(arch);
+    let checksum_text = fetch_release_text(&lego_checksums_url()).await?;
+    let expected_sha256 = parse_sha256_manifest_value(&checksum_text, &archive_name)?;
+    Ok(VerifiedReleaseAsset {
+        download_url: lego_download_url(arch),
+        expected_sha256,
+    })
+}
+
+fn install_lego_command(arch: &str, expected_sha256: &str) -> String {
     let url = lego_download_url(arch);
+    let sha_check = verify_downloaded_sha256_script("\"$archive\"", expected_sha256);
     format!(
         "set -e; \
          if command -v lego >/dev/null 2>&1 && lego --version 2>&1 | grep -q '{version}'; then \
            echo 'lego {version} already installed'; \
          else \
            tmp=$(mktemp -d); \
-           cd \"$tmp\"; \
-           curl -fsSL '{url}' -o lego.tar.gz; \
-           tar -xzf lego.tar.gz lego; \
-           install -m 0755 lego /usr/local/bin/lego; \
+           archive=\"$tmp/lego.tar.gz\"; \
+           curl -fsSL '{url}' -o \"$archive\"; \
+           {sha_check}; \
+           tar -xzf \"$archive\" -C \"$tmp\" lego; \
+           install -m 0755 \"$tmp/lego\" /usr/local/bin/lego; \
            rm -rf \"$tmp\"; \
            echo 'lego {version} installed'; \
          fi",
@@ -1866,7 +2084,10 @@ async fn apply_dns_config_inner(
 
     // Install lego binary
     let _t = output::timed("Lego install");
-    let install_cmd = install_lego_command(arch);
+    let verified_lego = resolve_verified_lego_release_asset(arch)
+        .await
+        .map_err(|e| format!("Failed to verify lego release metadata: {e}"))?;
+    let install_cmd = install_lego_command(arch, &verified_lego.expected_sha256);
     let install_cmd = SshClient::run_with_root_or_sudo(&install_cmd);
     ssh.exec_checked(&install_cmd).await?;
     drop(_t);
@@ -1947,6 +2168,11 @@ async fn apply_dns_config_inner(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::Engine;
+
+    const TEST_SERVER_CHECKSUM_MANIFEST: &str = "1111111111111111111111111111111111111111111111111111111111111111  tako-server-linux-x86_64-glibc.tar.zst\n\
+         2222222222222222222222222222222222222222222222222222222222222222  tako-server-linux-aarch64-musl.tar.zst\n";
+    const TEST_SERVER_CHECKSUM_MANIFEST_SIG_BASE64: &str = "eqpHPWSFBsUlDUNVKIACV/diCci/+7KAAgedPYAWDsk3AC/8LHImyjHJjUSMZGdCcabEjD1z5KZdua9J/cKiBuVNSP25pmNwQiFUyrvjIwk6PjBwkkBBQSEy3PT2ybYIlGGRaf+jlzB/t0Xrbej23DkPkrYZ8gOHop288R3IVA6q3fqmpxSTAyy1obUmK6hUV15RujSPCJ7eevNGuNsYKtokxLhDIH6w27Mo8UYdj8wiEwL8b1HMOoUNRpA5OWigw4NL5/9RouroOujvlAhgpzGePUpsbDWnsLl+kd13MKdmRiUQzRgrH8Br+cYaAQTmnrN5Bo6a5UpkSSVyN0KLq2CJ2u3WkSNM5Q/SLGrjZDYe4Cm/jns3m2+/IPS10NSCrCkDh8zjRo/d+QRwVNl9jq1Ypata98ARujZDnM+dWyOOQ5d6XMmjVEh6GliXRwCbrE4qMfwnZWcs6Cj1k7KAfUwgIHAyOyKbmskiU5yhqcqKyFQUqKyRSz9sT/tSCLXw";
 
     #[test]
     fn build_upgrade_owner_is_shell_safe() {
@@ -2006,10 +2232,25 @@ mod tests {
 
     #[test]
     fn install_lego_command_checks_existing_version() {
-        let cmd = install_lego_command("x86_64");
+        let cmd = install_lego_command(
+            "x86_64",
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        );
         assert!(cmd.contains("lego --version"));
         assert!(cmd.contains(LEGO_VERSION));
         assert!(cmd.contains("/usr/local/bin/lego"));
+        assert!(cmd.contains("sha256 mismatch"));
+    }
+
+    #[test]
+    fn lego_checksums_url_uses_release_checksums_asset() {
+        assert_eq!(
+            lego_checksums_url(),
+            format!(
+                "https://github.com/go-acme/lego/releases/download/v{version}/lego_{version}_checksums.txt",
+                version = LEGO_VERSION
+            )
+        );
     }
 
     #[test]
@@ -2018,7 +2259,8 @@ mod tests {
             arch: "x86_64".to_string(),
             libc: "glibc".to_string(),
         };
-        let url = server_binary_download_url(UpgradeChannel::Canary, None, &target);
+        let url =
+            server_binary_download_url(UpgradeChannel::Canary, None, &target, None, false).unwrap();
         assert_eq!(
             url,
             "https://github.com/lilienblum/tako/releases/download/canary-latest/tako-server-linux-x86_64-glibc.tar.zst"
@@ -2031,8 +2273,14 @@ mod tests {
             arch: "aarch64".to_string(),
             libc: "musl".to_string(),
         };
-        let url =
-            server_binary_download_url(UpgradeChannel::Stable, Some("tako-server-v0.1.0"), &target);
+        let url = server_binary_download_url(
+            UpgradeChannel::Stable,
+            Some("tako-server-v0.1.0"),
+            &target,
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(
             url,
             "https://github.com/lilienblum/tako/releases/download/tako-server-v0.1.0/tako-server-linux-aarch64-musl.tar.zst"
@@ -2040,11 +2288,91 @@ mod tests {
     }
 
     #[test]
-    fn remote_binary_replace_command_uses_root_shell_wrapper() {
-        let cmd = remote_binary_replace_command("https://example.com/tako-server.tar.gz");
+    fn server_binary_download_url_rejects_insecure_custom_base_without_override() {
+        let target = crate::config::ServerTarget {
+            arch: "x86_64".to_string(),
+            libc: "glibc".to_string(),
+        };
+        let err = server_binary_download_url(
+            UpgradeChannel::Stable,
+            Some("tako-server-v0.1.0"),
+            &target,
+            Some("http://example.test/releases"),
+            false,
+        )
+        .unwrap_err();
+        assert!(err.contains("must use https://"));
+    }
+
+    #[test]
+    fn server_binary_download_url_allows_insecure_custom_base_with_explicit_override() {
+        let target = crate::config::ServerTarget {
+            arch: "x86_64".to_string(),
+            libc: "glibc".to_string(),
+        };
+        let url = server_binary_download_url(
+            UpgradeChannel::Stable,
+            Some("tako-server-v0.1.0"),
+            &target,
+            Some("http://example.test/releases"),
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "http://example.test/releases/tako-server-linux-x86_64-glibc.tar.zst"
+        );
+    }
+
+    #[test]
+    fn parse_sha256_manifest_value_finds_named_asset() {
+        let sha = parse_sha256_manifest_value(
+            TEST_SERVER_CHECKSUM_MANIFEST,
+            "tako-server-linux-aarch64-musl.tar.zst",
+        )
+        .unwrap();
+        assert_eq!(
+            sha,
+            "2222222222222222222222222222222222222222222222222222222222222222"
+        );
+    }
+
+    #[test]
+    fn verify_signed_server_checksum_manifest_accepts_valid_signature() {
+        let signature = base64::engine::general_purpose::STANDARD
+            .decode(TEST_SERVER_CHECKSUM_MANIFEST_SIG_BASE64)
+            .unwrap();
+        verify_signed_server_checksum_manifest(
+            TEST_SERVER_CHECKSUM_MANIFEST.as_bytes(),
+            &signature,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn verify_signed_server_checksum_manifest_rejects_tampering() {
+        let signature = base64::engine::general_purpose::STANDARD
+            .decode(TEST_SERVER_CHECKSUM_MANIFEST_SIG_BASE64)
+            .unwrap();
+        let err = verify_signed_server_checksum_manifest(
+            b"1111111111111111111111111111111111111111111111111111111111111111  tako-server-linux-x86_64-glibc.tar.zst\n",
+            &signature,
+        )
+        .unwrap_err();
+        assert!(err.contains("signature verification failed"));
+    }
+
+    #[test]
+    fn remote_binary_replace_command_uses_root_shell_wrapper_and_verifies_sha256() {
+        let cmd = remote_binary_replace_command(
+            "https://example.com/tako-server.tar.zst",
+            "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+        );
         assert!(cmd.contains("then sh -c '"));
         assert!(cmd.contains("sudo sh -c '"));
         assert!(cmd.contains("curl -fsSL"));
+        assert!(cmd.contains("sha256 mismatch"));
+        assert!(cmd.contains("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"));
         assert!(cmd.contains("install -m 0755"));
         assert!(cmd.contains("/usr/local/bin/tako-server"));
     }

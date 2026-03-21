@@ -14,6 +14,9 @@ set -eu
 #   TAKO_INSTALL_DIR        default: $HOME/.local/bin
 #   TAKO_URL                override archive URL (.tar.gz; optional)
 #   TAKO_DOWNLOAD_BASE_URL  override release download base URL (optional)
+#   TAKO_ALLOW_INSECURE_DOWNLOAD_BASE
+#                           default: unset
+#                           set 1/true/yes/on to allow non-HTTPS download overrides for local testing
 #   TAKO_REPO_OWNER         default: lilienblum
 #   TAKO_REPO_NAME          default: tako
 #   TAKO_TAG_PREFIX         default: tako-v
@@ -54,6 +57,32 @@ resolve_latest_tag() {
   printf '%s\n' "$tag"
 }
 
+is_enabled() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+require_secure_download_override() {
+  value="$1"
+  case "$value" in
+    https://*|file://*)
+      return 0
+      ;;
+  esac
+  if is_enabled "${TAKO_ALLOW_INSECURE_DOWNLOAD_BASE:-}"; then
+    echo "warning: using insecure download override '$value' for local testing" >&2
+    return 0
+  fi
+  echo "error: insecure download override '$value' is not allowed; use https:// or set TAKO_ALLOW_INSECURE_DOWNLOAD_BASE=1 for local testing" >&2
+  exit 1
+}
+
 if [ -z "${HOME:-}" ]; then
   echo "error: HOME is not set" >&2
   exit 1
@@ -75,6 +104,7 @@ fi
 
 TAKO_INSTALL_DIR="${TAKO_INSTALL_DIR:-$HOME/.local/bin}"
 TAKO_DOWNLOAD_BASE_URL="${TAKO_DOWNLOAD_BASE_URL:-}"
+TAKO_ALLOW_INSECURE_DOWNLOAD_BASE="${TAKO_ALLOW_INSECURE_DOWNLOAD_BASE:-}"
 TAKO_REPO_OWNER="${TAKO_REPO_OWNER:-lilienblum}"
 TAKO_REPO_NAME="${TAKO_REPO_NAME:-tako}"
 TAKO_TAG_PREFIX="${TAKO_TAG_PREFIX:-tako-v}"
@@ -110,8 +140,12 @@ if [ -z "$download_url" ]; then
       exit 1
     fi
     download_base="https://github.com/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/releases/download/$tag"
+  else
+    require_secure_download_override "$download_base"
   fi
   download_url="$download_base/tako-$os-$arch.tar.gz"
+else
+  require_secure_download_override "$download_url"
 fi
 case "$download_url" in
   *.tar.gz|file://*.tar.gz) ;;

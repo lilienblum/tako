@@ -372,13 +372,15 @@ tako servers upgrade la --stable      # Use stable release
 The upgrade process:
 
 1. Verifies `tako-server` is active on the host
-2. Downloads and installs the new binary
+2. Verifies the signed server checksum manifest, then downloads and installs the new binary only if the archive SHA-256 matches the signed entry for that target
 3. Acquires an upgrade lock (temporarily rejects mutating commands like deploy)
 4. Signals the service manager to reload (`systemctl reload` or `rc-service reload`)
 5. Waits for the management socket to report ready
 6. Releases the upgrade lock
 
 A supported service manager (systemd or OpenRC) is required. The reload uses `SIGHUP` for graceful in-place restart.
+
+If you override `TAKO_DOWNLOAD_BASE_URL`, it must use `https://` unless you also set `TAKO_ALLOW_INSECURE_DOWNLOAD_BASE=1` for a local test environment.
 
 If the reload was sent but the socket does not become ready in time, the CLI warns that upgrade mode may remain active until the server recovers.
 

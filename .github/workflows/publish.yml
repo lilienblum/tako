@@ -87,7 +87,7 @@ jobs:
         shell: bash
     steps:
       - name: Install build deps
-        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev zstd
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -266,16 +266,16 @@ jobs:
         run: |
           tmpdir="$(mktemp -d)"
           cp target/release/tako-server "$tmpdir/"
-          tar -czf tako-server-linux-x86_64-glibc.tar.gz -C "$tmpdir" tako-server
-          sha256sum tako-server-linux-x86_64-glibc.tar.gz > tako-server-linux-x86_64-glibc.tar.gz.sha256
+          tar -cf - -C "$tmpdir" tako-server | zstd -19 -o tako-server-linux-x86_64-glibc.tar.zst
+          sha256sum tako-server-linux-x86_64-glibc.tar.zst > tako-server-linux-x86_64-glibc.tar.zst.sha256
 
       - name: Upload
         uses: actions/upload-artifact@v7
         with:
           name: release-tako-server-linux-x86_64-glibc
           path: |
-            tako-server-linux-x86_64-glibc.tar.gz
-            tako-server-linux-x86_64-glibc.tar.gz.sha256
+            tako-server-linux-x86_64-glibc.tar.zst
+            tako-server-linux-x86_64-glibc.tar.zst.sha256
 
   build-tako-server-x86_64-musl:
     name: Build tako-server (x86_64 musl)
@@ -296,7 +296,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install musl toolchain
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools zstd
 
       - name: Build
         run: cargo build -p tako-server --release --target x86_64-unknown-linux-musl
@@ -305,16 +305,16 @@ jobs:
         run: |
           tmpdir="$(mktemp -d)"
           cp target/x86_64-unknown-linux-musl/release/tako-server "$tmpdir/"
-          tar -czf tako-server-linux-x86_64-musl.tar.gz -C "$tmpdir" tako-server
-          sha256sum tako-server-linux-x86_64-musl.tar.gz > tako-server-linux-x86_64-musl.tar.gz.sha256
+          tar -cf - -C "$tmpdir" tako-server | zstd -19 -o tako-server-linux-x86_64-musl.tar.zst
+          sha256sum tako-server-linux-x86_64-musl.tar.zst > tako-server-linux-x86_64-musl.tar.zst.sha256
 
       - name: Upload
         uses: actions/upload-artifact@v7
         with:
           name: release-tako-server-linux-x86_64-musl
           path: |
-            tako-server-linux-x86_64-musl.tar.gz
-            tako-server-linux-x86_64-musl.tar.gz.sha256
+            tako-server-linux-x86_64-musl.tar.zst
+            tako-server-linux-x86_64-musl.tar.zst.sha256
 
   build-tako-server-aarch64-glibc:
     name: Build tako-server (aarch64 glibc)
@@ -326,7 +326,7 @@ jobs:
         shell: bash
     steps:
       - name: Install build deps
-        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev
+        run: apt-get update && apt-get install -y --no-install-recommends cmake pkg-config libssl-dev zstd
 
       - name: Checkout
         uses: actions/checkout@v6
@@ -340,16 +340,16 @@ jobs:
         run: |
           tmpdir="$(mktemp -d)"
           cp target/release/tako-server "$tmpdir/"
-          tar -czf tako-server-linux-aarch64-glibc.tar.gz -C "$tmpdir" tako-server
-          sha256sum tako-server-linux-aarch64-glibc.tar.gz > tako-server-linux-aarch64-glibc.tar.gz.sha256
+          tar -cf - -C "$tmpdir" tako-server | zstd -19 -o tako-server-linux-aarch64-glibc.tar.zst
+          sha256sum tako-server-linux-aarch64-glibc.tar.zst > tako-server-linux-aarch64-glibc.tar.zst.sha256
 
       - name: Upload
         uses: actions/upload-artifact@v7
         with:
           name: release-tako-server-linux-aarch64-glibc
           path: |
-            tako-server-linux-aarch64-glibc.tar.gz
-            tako-server-linux-aarch64-glibc.tar.gz.sha256
+            tako-server-linux-aarch64-glibc.tar.zst
+            tako-server-linux-aarch64-glibc.tar.zst.sha256
 
   build-tako-server-aarch64-musl:
     name: Build tako-server (aarch64 musl)
@@ -370,7 +370,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install musl toolchain
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools zstd
 
       - name: Build
         run: cargo build -p tako-server --release --target aarch64-unknown-linux-musl
@@ -379,16 +379,16 @@ jobs:
         run: |
           tmpdir="$(mktemp -d)"
           cp target/aarch64-unknown-linux-musl/release/tako-server "$tmpdir/"
-          tar -czf tako-server-linux-aarch64-musl.tar.gz -C "$tmpdir" tako-server
-          sha256sum tako-server-linux-aarch64-musl.tar.gz > tako-server-linux-aarch64-musl.tar.gz.sha256
+          tar -cf - -C "$tmpdir" tako-server | zstd -19 -o tako-server-linux-aarch64-musl.tar.zst
+          sha256sum tako-server-linux-aarch64-musl.tar.zst > tako-server-linux-aarch64-musl.tar.zst.sha256
 
       - name: Upload
         uses: actions/upload-artifact@v7
         with:
           name: release-tako-server-linux-aarch64-musl
           path: |
-            tako-server-linux-aarch64-musl.tar.gz
-            tako-server-linux-aarch64-musl.tar.gz.sha256
+            tako-server-linux-aarch64-musl.tar.zst
+            tako-server-linux-aarch64-musl.tar.zst.sha256
 
   upload-tako-server:
     name: Upload tako-server assets
@@ -407,6 +407,20 @@ jobs:
           pattern: release-tako-server-*
           path: dist
           merge-multiple: true
+
+      - name: Create signed server checksum manifest
+        env:
+          TAKO_SERVER_RELEASE_SIGNING_KEY_PEM: ${{ secrets.TAKO_SERVER_RELEASE_SIGNING_KEY_PEM }}
+        run: |
+          if [ -z "${TAKO_SERVER_RELEASE_SIGNING_KEY_PEM}" ]; then
+            echo "::error::Missing secret TAKO_SERVER_RELEASE_SIGNING_KEY_PEM"
+            exit 1
+          fi
+          find dist -maxdepth 1 -name 'tako-server-linux-*.tar.zst.sha256' -print | sort | xargs cat > dist/tako-server-sha256s.txt
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "${TAKO_SERVER_RELEASE_SIGNING_KEY_PEM}" > "$key_file"
+          openssl dgst -sha256 -sign "$key_file" -out dist/tako-server-sha256s.txt.sig dist/tako-server-sha256s.txt
 
       - name: Upload assets and publish release
         env:

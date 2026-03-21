@@ -101,6 +101,21 @@ jobs:
 
           ls -la dist/
 
+      - name: Create signed server checksum manifest
+        env:
+          TAKO_SERVER_RELEASE_SIGNING_KEY_PEM: ${{ secrets.TAKO_SERVER_RELEASE_SIGNING_KEY_PEM }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAKO_SERVER_RELEASE_SIGNING_KEY_PEM}" ]; then
+            echo "::error::Missing secret TAKO_SERVER_RELEASE_SIGNING_KEY_PEM"
+            exit 1
+          fi
+          find dist -maxdepth 1 -name 'tako-server-linux-*.tar.zst.sha256' -print | sort | xargs cat > dist/tako-server-sha256s.txt
+          key_file="$(mktemp)"
+          trap 'rm -f "$key_file"' EXIT
+          printf '%s\n' "${TAKO_SERVER_RELEASE_SIGNING_KEY_PEM}" > "$key_file"
+          openssl dgst -sha256 -sign "$key_file" -out dist/tako-server-sha256s.txt.sig dist/tako-server-sha256s.txt
+
       - name: Move canary-latest tag to current commit
         run: |
           git tag -f canary-latest "$GITHUB_SHA"

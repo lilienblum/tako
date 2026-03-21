@@ -618,9 +618,11 @@ Single-host in-place upgrade via service-manager reload:
 1. CLI verifies `tako-server` is active on the host.
 2. CLI installs the new server binary on the host.
    - default: latest stable installer artifact
-   - `--canary`: installer uses canary prerelease assets via `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary`
+   - `--canary`: installer uses canary prerelease assets via `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary-latest`
    - `--stable`: installer uses stable artifacts and persists stable as default channel
    - without channel flags: uses persisted `upgrade_channel` from global config (default: `stable`)
+   - CLI verifies the signed `tako-server-sha256s.txt` release manifest with an embedded public key, selects the expected SHA-256 for the target archive, and the remote host verifies that SHA-256 before extracting the archive into `/usr/local/bin/tako-server`
+   - custom `TAKO_DOWNLOAD_BASE_URL` overrides must use `https://`; non-HTTPS overrides are rejected unless `TAKO_ALLOW_INSECURE_DOWNLOAD_BASE=1` is set explicitly for local testing
 3. CLI acquires the durable upgrade lock (`enter_upgrading`) and sets server mode to `upgrading`.
 4. CLI signals the primary service with:
    - `systemctl reload tako-server` on systemd hosts, or
