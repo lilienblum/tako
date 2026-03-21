@@ -223,12 +223,12 @@ run = "bun run generate:types"
 
 **Stage fields:**
 
-| Field     | Required | Description                                                                                      |
-| --------- | -------- | ------------------------------------------------------------------------------------------------ |
-| `name`    | No       | Display label shown in deploy output                                                             |
-| `cwd`     | No       | Working directory relative to tako.toml location. Allows `..` for monorepo traversal.            |
-| `install` | No       | Command run before `run`                                                                         |
-| `run`     | Yes      | The build command to execute                                                                     |
+| Field     | Required | Description                                                                           |
+| --------- | -------- | ------------------------------------------------------------------------------------- |
+| `name`    | No       | Display label shown in deploy output                                                  |
+| `cwd`     | No       | Working directory relative to tako.toml location. Allows `..` for monorepo traversal. |
+| `install` | No       | Command run before `run`                                                              |
+| `run`     | Yes      | The build command to execute                                                          |
 
 Stages run in declaration order. Each stage runs its `install` (if set) then `run`.
 

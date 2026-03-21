@@ -90,8 +90,8 @@ Start or attach to a local development session.
 tako dev [--name <NAME>]
 ```
 
-| Flag            | Description                                                            |
-| --------------- | ---------------------------------------------------------------------- |
+| Flag            | Description                                                                                    |
+| --------------- | ---------------------------------------------------------------------------------------------- |
 | `--name <NAME>` | Override the app name (defaults to config `name` or the selected config parent directory name) |
 
 `tako dev` is a client that connects to the `tako-dev-server` daemon. It registers the selected config file, starts your app, and streams logs directly to your terminal.
@@ -120,10 +120,10 @@ Stop a running or idle dev app.
 tako dev stop [NAME] [--all]
 ```
 
-| Argument/Flag | Description                                            |
-| ------------- | ------------------------------------------------------ |
+| Argument/Flag | Description                                                   |
+| ------------- | ------------------------------------------------------------- |
 | `NAME`        | App name to stop (defaults to the selected config file's app) |
-| `--all`       | Stop all registered dev apps                           |
+| `--all`       | Stop all registered dev apps                                  |
 
 ### `tako dev ls`
 

@@ -37,6 +37,10 @@ bun add tako.sh   # or: npm install tako.sh
 tako dev
 ```
 
+For JS projects, Tako runs your runtime lane's `dev` and `build` scripts by default. If you use Vite+, Turborepo, or another workspace tool, put it behind those scripts.
+
+App-scoped commands default to `./tako.toml`. Use `-c/--config <CONFIG>` to target another config file; Tako treats that path's parent directory as the project context, and omitting the `.toml` suffix is supported and recommended for brevity.
+
 On first run, Tako sets up local HTTPS with a trusted certificate (asks for `sudo` once). Open the URL shown in the terminal — by default `{app}.tako`.
 
 ## Deploy
@@ -114,7 +118,7 @@ just ci     # full local CI flow (format, lint, tests)
 - `tako-server/` — remote runtime/proxy
 - `tako-core/` — shared protocol types
 - `tako-socket/` — shared Unix socket transport
-- `sdk/js/` — `tako.sh` SDK package
+- `sdk/javascript/` — `tako.sh` SDK package
 - `examples/` — runnable examples
 - `e2e/` — Docker-based deploy e2e fixtures
 - `website/` — docs site + installer endpoints

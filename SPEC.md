@@ -991,7 +991,7 @@ Reference scripts in this repo:
 
 - `scripts/install-tako-server.sh` (source for `/install-server.sh`, alias `/server-install.sh`)
 - `scripts/install-tako-server-canary.sh` (source for `/install-server-canary.sh`)
-- `scripts/install-tako-cli-canary.sh` (source for `/install-canary.sh`)
+- `scripts/install-tako-canary.sh` (source for `/install-canary.sh`)
 
 **Runtime binary download engine:**
 

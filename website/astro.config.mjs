@@ -10,6 +10,7 @@ export default defineConfig({
   markdown: {
     shikiConfig: {
       theme: SNIPPET_THEME,
+      excludeLangs: ["mermaid"],
     },
   },
   vite: {

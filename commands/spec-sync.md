@@ -27,13 +27,12 @@ Systematically read the source code across all components. Do not skip files —
   - `validation/` — config validation rules
   - `ssh/` — remote communication
   - `paths.rs`, `output.rs` — paths, output modes
-- **sdk/js/src/** — SDK (fetch handler, adapters, vite plugin, status endpoint)
-- **scripts/** — install scripts (install-tako-server.sh, install-tako-cli-canary.sh)
-- **tako-runtime/src/** — runtime registry types, download engine, package manager detection
+- **sdk/javascript/src/** — SDK (fetch handler, adapters, vite plugin, status endpoint)
+- **scripts/** — install scripts (install-tako-server.sh, install-tako-canary.sh)
+- **tako-runtime/src/** — runtime registry types, download engine, embedded package-manager metadata
 - **registry/** — all TOML definitions:
   - `registry/{language}/runtimes/` — runtime definitions
   - `registry/{language}/presets/` — preset family definitions
-  - `registry/package_managers/` — package manager definitions
 
 ### What to look for
 
@@ -106,9 +105,7 @@ After updating SPEC.md and docs, verify that all `_example` files in the registr
 
 - `registry/{language}/runtimes/_example` — must include every section and field used in real runtime TOML files (commented out with descriptions)
 - `registry/{language}/presets/_example` — must match the preset TOML structure
-- `registry/package_managers/_example` — must match the package manager TOML structure
-
-Compare each `_example` against a real file in the same directory. If any field/section is missing or outdated, update the example.
+  Compare each `_example` against a real file in the same directory. If any field/section is missing or outdated, update the example.
 
 ---
 

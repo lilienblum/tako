@@ -19,6 +19,7 @@ The user provides a topic or idea. Examples:
 3. Check memory for competitor landscape data (reference_competitor_landscape.md) for context on similar tools.
 4. If the topic involves a specific feature, read the relevant source code to get details right.
 5. If the topic involves competitors or external tools, do web research to get current facts (stars, versions, status).
+6. **Fact-check rigorously.** Every factual claim (star counts, release dates, feature support, version numbers) must be verified against at least two independent sources. Cross-reference docs, GitHub, and web search results. If two sources disagree, dig until you find the truth. Do not publish a number you only saw once.
 
 ### Step 2 — Write
 
@@ -33,7 +34,7 @@ image: 9q15scNA
 ---
 ```
 
-Hero images go in `website/public/assets/blog/` as `.webp` files. The `image` field is just the ID (no extension). Use `just blog-img` to convert and import from Downloads. Widescreen landscape format. `just blog-img` handles resizing and conversion.. The `image` field is optional — omit it if no image is available.
+Hero images go in `website/public/assets/blog/` as `.webp` files. The `image` field is just the ID (no extension). Use `just blog::img` to convert and import from Downloads. Widescreen landscape format. `just blog::img` handles resizing and conversion.. The `image` field is optional — omit it if no image is available.
 
 Guidelines:
 
@@ -54,10 +55,12 @@ Guidelines:
 - Every claim about Tako must be verifiable from SPEC.md or source code.
 - Code examples when they clarify. Use real Tako commands/config, not pseudocode.
 - **Backlinks are mandatory.** Every post must link to at least 2-3 relevant docs pages (e.g., `/docs`, `/docs/tako-toml`, `/docs/deployment`, `/docs/cli`, `/docs/development`). Link inline where concepts are mentioned — don't save all links for the end. Also link to the GitHub repo, other blog posts, or external resources where relevant. Think of each post as an entry point that guides readers deeper into Tako's docs.
+- **Use tables for structured data.** When comparing tools, listing features, or presenting any data with multiple dimensions, use Markdown tables instead of prose or bullet lists. Tables are easier to scan and make comparisons obvious.
+- **Use Mermaid diagrams for architecture and flows.** When explaining how components connect, data flows, or multi-step processes, use ` ```mermaid ` code blocks. Keep diagrams simple — they should clarify, not overwhelm. Good uses: deploy pipelines, request routing, component relationships. Bad uses: anything that's clearer as a sentence.
 
 ### Step 2b — Image prompt
 
-Add an HTML comment right after the frontmatter with a ChatGPT image generation prompt. The user will paste it into ChatGPT, download the result, then run `just blog-img` to crop, convert to webp, and import it.
+Add an HTML comment right after the frontmatter with a ChatGPT image generation prompt. The user will paste it into ChatGPT, download the result, then run `just blog::img` to crop, convert to webp, and import it.
 
 Format:
 
@@ -92,7 +95,7 @@ Output: a single image in widescreen landscape format.
 
 The prompt should be specific to the post's topic — not generic. Describe an actual scene or metaphor that fits the content. When describing mood or feeling, phrase it as a style direction, NOT as quoted text that ChatGPT might render literally.
 
-After the user downloads the image, they run `just blog-img` which crops to 5:2 from center, converts to webp, and outputs the hash ID to put in the `image:` frontmatter field.
+After the user downloads the image, they run `just blog::img` which crops to 5:2 from center, converts to webp, and outputs the hash ID to put in the `image:` frontmatter field.
 
 ### Step 3 — Verify
 

@@ -30,6 +30,8 @@ Tako's protocol is v0: do not keep any legacy code, backward compatibility shims
 9. **Runtime behavior lives in plugins** - Runtime definitions (install commands, launch args, entrypoint paths) are in `tako-runtime/src/plugins/`. Preset definitions live in `presets/`.
    - `presets/{language}/{language}.toml` — family preset definitions (sections per preset)
 
+10. **Never commit with known failures** - Do not commit when tests or pre-commit hooks are known to be failing. Fix the issues first. If fixing is impractical, get explicit user confirmation before committing.
+
 ## Project Structure
 
 **Rust Crates:**

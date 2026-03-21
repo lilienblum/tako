@@ -61,6 +61,44 @@ const formatted = date
   </section>
 </BaseLayout>
 
+<script>
+  const codes = document.querySelectorAll("code.language-mermaid");
+  if (codes.length > 0) {
+    for (const code of codes) {
+      const pre = code.parentElement!;
+      pre.classList.add("mermaid");
+      pre.textContent = code.textContent;
+    }
+    const { default: mermaid } = await import("mermaid");
+    mermaid.initialize({
+      startOnLoad: false,
+      theme: "base",
+      themeVariables: {
+        primaryColor: "rgba(232, 135, 131, 0.2)",
+        primaryBorderColor: "#E88783",
+        primaryTextColor: "#2f2a44",
+        secondaryColor: "rgba(155, 196, 182, 0.3)",
+        secondaryBorderColor: "#9BC4B6",
+        secondaryTextColor: "#2f2a44",
+        tertiaryColor: "#fffefc",
+        tertiaryBorderColor: "rgba(47, 42, 68, 0.16)",
+        tertiaryTextColor: "#2f2a44",
+        lineColor: "#2f2a44",
+        textColor: "#2f2a44",
+        fontFamily: '"Nunito", "Segoe UI", sans-serif',
+        fontSize: "14px",
+        mainBkg: "rgba(232, 135, 131, 0.2)",
+        nodeBorder: "#E88783",
+        clusterBkg: "rgba(155, 196, 182, 0.3)",
+        clusterBorder: "#9BC4B6",
+        edgeLabelBackground: "#fffefc",
+        nodeTextColor: "#2f2a44",
+      },
+    });
+    await mermaid.run();
+  }
+</script>
+
 <style is:global>
   .blog-sheet {
     border: 2px solid var(--line);
@@ -257,5 +295,17 @@ const formatted = date
     border: none;
     border-top: 2px solid var(--line);
     margin: 26px 0;
+  }
+
+  .blog-article.content pre.mermaid {
+    background: none;
+    border: none;
+    padding: 0;
+    text-align: center;
+  }
+
+  .blog-article.content pre.mermaid svg {
+    max-width: 100%;
+    height: auto;
   }
 </style>
