@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 pub enum Request {
     Ping,
     Info,
-    /// Register a persistent app by project directory.
+    /// Register a persistent app by config path.
     RegisterApp {
+        config_path: String,
         project_dir: String,
         app_name: String,
         #[serde(default)]
@@ -20,23 +21,23 @@ pub enum Request {
         #[serde(default)]
         client_pid: Option<u32>,
     },
-    /// Unregister (stop) an app by project directory.
+    /// Unregister (stop) an app by config path.
     UnregisterApp {
-        project_dir: String,
+        config_path: String,
     },
     /// Update an app's status (running/idle/stopped).
     SetAppStatus {
-        project_dir: String,
+        config_path: String,
         status: String,
     },
     /// Hand off a running process PID to the daemon.
     HandoffApp {
-        project_dir: String,
+        config_path: String,
         pid: u32,
     },
     /// Request an app restart (relayed to the owning client via events).
     RestartApp {
-        project_dir: String,
+        config_path: String,
     },
     /// List all registered apps.
     ListRegisteredApps,
@@ -57,21 +58,22 @@ pub enum Response {
     },
     AppRegistered {
         app_name: String,
+        config_path: String,
         project_dir: String,
         url: String,
     },
     AppUnregistered {
-        project_dir: String,
+        config_path: String,
     },
     AppStatusUpdated {
-        project_dir: String,
+        config_path: String,
         status: String,
     },
     AppRestarting {
-        project_dir: String,
+        config_path: String,
     },
     AppHandedOff {
-        project_dir: String,
+        config_path: String,
     },
     RegisteredApps {
         apps: Vec<RegisteredAppInfo>,
@@ -98,18 +100,19 @@ pub enum DevEvent {
         path: String,
     },
     AppStatusChanged {
-        project_dir: String,
+        config_path: String,
         app_name: String,
         status: String,
     },
     RestartRequested {
-        project_dir: String,
+        config_path: String,
         app_name: String,
     },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RegisteredAppInfo {
+    pub config_path: String,
     pub project_dir: String,
     pub app_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -227,6 +230,7 @@ mod tests {
     #[test]
     fn serde_roundtrip_register_app() {
         let req = Request::RegisterApp {
+            config_path: "/home/user/proj/tako.toml".to_string(),
             project_dir: "/home/user/proj".to_string(),
             app_name: "my-app".to_string(),
             variant: None,
@@ -248,6 +252,7 @@ mod tests {
 
         let resp = Response::AppRegistered {
             app_name: "my-app".to_string(),
+            config_path: "/home/user/proj/tako.toml".to_string(),
             project_dir: "/home/user/proj".to_string(),
             url: "https://my-app.tako.test/".to_string(),
         };
@@ -258,13 +263,13 @@ mod tests {
     #[test]
     fn serde_roundtrip_unregister_app() {
         let req = Request::UnregisterApp {
-            project_dir: "/proj".to_string(),
+            config_path: "/proj/tako.toml".to_string(),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
 
         let resp = Response::AppUnregistered {
-            project_dir: "/proj".to_string(),
+            config_path: "/proj/tako.toml".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
@@ -273,14 +278,14 @@ mod tests {
     #[test]
     fn serde_roundtrip_set_app_status() {
         let req = Request::SetAppStatus {
-            project_dir: "/proj".to_string(),
+            config_path: "/proj/tako.toml".to_string(),
             status: "idle".to_string(),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
 
         let resp = Response::AppStatusUpdated {
-            project_dir: "/proj".to_string(),
+            config_path: "/proj/tako.toml".to_string(),
             status: "idle".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -290,14 +295,14 @@ mod tests {
     #[test]
     fn serde_roundtrip_handoff_app() {
         let req = Request::HandoffApp {
-            project_dir: "/proj".to_string(),
+            config_path: "/proj/tako.toml".to_string(),
             pid: 12345,
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
 
         let resp = Response::AppHandedOff {
-            project_dir: "/proj".to_string(),
+            config_path: "/proj/tako.toml".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
@@ -311,6 +316,7 @@ mod tests {
 
         let resp = Response::RegisteredApps {
             apps: vec![RegisteredAppInfo {
+                config_path: "/proj/tako.toml".to_string(),
                 project_dir: "/proj".to_string(),
                 app_name: "app".to_string(),
                 variant: None,
@@ -329,7 +335,7 @@ mod tests {
     fn serde_roundtrip_app_status_changed_event() {
         let resp = Response::Event {
             event: DevEvent::AppStatusChanged {
-                project_dir: "/proj".to_string(),
+                config_path: "/proj/tako.toml".to_string(),
                 app_name: "app".to_string(),
                 status: "idle".to_string(),
             },
@@ -341,13 +347,13 @@ mod tests {
     #[test]
     fn serde_roundtrip_restart_app() {
         let req = Request::RestartApp {
-            project_dir: "/proj".to_string(),
+            config_path: "/proj/tako.toml".to_string(),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
 
         let resp = Response::AppRestarting {
-            project_dir: "/proj".to_string(),
+            config_path: "/proj/tako.toml".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
@@ -357,7 +363,7 @@ mod tests {
     fn serde_roundtrip_restart_requested_event() {
         let resp = Response::Event {
             event: DevEvent::RestartRequested {
-                project_dir: "/proj".to_string(),
+                config_path: "/proj/tako.toml".to_string(),
                 app_name: "app".to_string(),
             },
         };

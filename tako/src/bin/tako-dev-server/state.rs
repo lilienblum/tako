@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -6,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, params};
 
-const PID_FILE: &str = ".tako/dev.pid";
+const PID_FILE_DIR: &str = ".tako/dev-pids";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppStatus {
@@ -38,6 +39,7 @@ impl AppStatus {
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone)]
 pub struct RegisteredApp {
+    pub config_path: String,
     pub project_dir: String,
     pub name: String,
     pub variant: Option<String>,
@@ -49,6 +51,7 @@ pub struct RegisteredApp {
 /// Runtime app state (in-memory only, lost on server restart).
 #[derive(Debug, Clone)]
 pub struct RuntimeApp {
+    pub project_dir: String,
     pub name: String,
     pub variant: Option<String>,
     pub hosts: Vec<String>,
@@ -62,12 +65,24 @@ pub struct RuntimeApp {
 }
 
 // ---------------------------------------------------------------------------
-// PID file management — {project_dir}/.tako/dev.pid
+// PID file management — {project_dir}/.tako/dev-pids/<config-hash>.pid
 // ---------------------------------------------------------------------------
 
-/// Write the app's PID to `{project_dir}/.tako/dev.pid`.
-pub fn write_pid_file(project_dir: &str, pid: u32) {
-    let path = Path::new(project_dir).join(PID_FILE);
+fn pid_file_key(config_path: &str) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    config_path.hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn pid_file_path(project_dir: &str, config_path: &str) -> PathBuf {
+    Path::new(project_dir)
+        .join(PID_FILE_DIR)
+        .join(format!("{}.pid", pid_file_key(config_path)))
+}
+
+/// Write the app's PID to a config-scoped pid file.
+pub fn write_pid_file(project_dir: &str, config_path: &str, pid: u32) {
+    let path = pid_file_path(project_dir, config_path);
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
@@ -75,13 +90,13 @@ pub fn write_pid_file(project_dir: &str, pid: u32) {
 }
 
 /// Remove the PID file for an app.
-pub fn remove_pid_file(project_dir: &str) {
-    let _ = std::fs::remove_file(Path::new(project_dir).join(PID_FILE));
+pub fn remove_pid_file(project_dir: &str, config_path: &str) {
+    let _ = std::fs::remove_file(pid_file_path(project_dir, config_path));
 }
 
-/// Read the PID from `{project_dir}/.tako/dev.pid`, if it exists.
-pub fn read_pid_file(project_dir: &str) -> Option<u32> {
-    std::fs::read_to_string(Path::new(project_dir).join(PID_FILE))
+/// Read the PID for an app's config-scoped pid file, if it exists.
+pub fn read_pid_file(project_dir: &str, config_path: &str) -> Option<u32> {
+    std::fs::read_to_string(pid_file_path(project_dir, config_path))
         .ok()?
         .trim()
         .parse()
@@ -90,12 +105,12 @@ pub fn read_pid_file(project_dir: &str) -> Option<u32> {
 
 /// Kill any orphaned app process from a previous server run and clean up
 /// the PID file. Called on startup for each registered project.
-pub fn kill_orphaned_process(project_dir: &str) {
-    let Some(pid) = read_pid_file(project_dir) else {
+pub fn kill_orphaned_process(project_dir: &str, config_path: &str) {
+    let Some(pid) = read_pid_file(project_dir, config_path) else {
         return;
     };
     if pid == 0 {
-        remove_pid_file(project_dir);
+        remove_pid_file(project_dir, config_path);
         return;
     }
     // Check if the process is still alive.
@@ -103,12 +118,13 @@ pub fn kill_orphaned_process(project_dir: &str) {
     if alive {
         tracing::info!(
             project_dir = %project_dir,
+            config_path = %config_path,
             pid = pid,
             "killing orphaned app process from previous run"
         );
         unsafe { libc::kill(pid as i32, libc::SIGTERM) };
     }
-    remove_pid_file(project_dir);
+    remove_pid_file(project_dir, config_path);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,6 +165,7 @@ impl DevStateStore {
 
     pub fn register(
         &self,
+        config_path: &str,
         project_dir: &str,
         name: &str,
         variant: Option<&str>,
@@ -156,36 +173,37 @@ impl DevStateStore {
         let now = unix_now() as i64;
         self.conn
             .execute(
-                "INSERT INTO apps (project_dir, name, variant, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?4)
-                 ON CONFLICT(project_dir) DO UPDATE SET
+                "INSERT INTO apps (config_path, project_dir, name, variant, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)
+                 ON CONFLICT(config_path) DO UPDATE SET
+                    project_dir = excluded.project_dir,
                     name = excluded.name,
                     variant = excluded.variant,
                     updated_at = excluded.updated_at;",
-                params![project_dir, name, variant, now],
+                params![config_path, project_dir, name, variant, now],
             )
             .map_err(|e| format!("register: {e}"))?;
         Ok(())
     }
 
-    pub fn unregister(&self, project_dir: &str) -> Result<bool, String> {
+    pub fn unregister(&self, config_path: &str) -> Result<bool, String> {
         let rows = self
             .conn
             .execute(
-                "DELETE FROM apps WHERE project_dir = ?1;",
-                params![project_dir],
+                "DELETE FROM apps WHERE config_path = ?1;",
+                params![config_path],
             )
             .map_err(|e| format!("unregister: {e}"))?;
         Ok(rows > 0)
     }
 
     #[cfg(test)]
-    pub fn get(&self, project_dir: &str) -> Result<Option<RegisteredApp>, String> {
+    pub fn get(&self, config_path: &str) -> Result<Option<RegisteredApp>, String> {
         self.conn
             .query_row(
-                "SELECT project_dir, name, variant, is_enabled, created_at, updated_at
-                 FROM apps WHERE project_dir = ?1;",
-                params![project_dir],
+                "SELECT config_path, project_dir, name, variant, is_enabled, created_at, updated_at
+                 FROM apps WHERE config_path = ?1;",
+                params![config_path],
                 row_to_registered_app,
             )
             .optional()
@@ -196,8 +214,8 @@ impl DevStateStore {
         let mut stmt = self
             .conn
             .prepare(
-                "SELECT project_dir, name, variant, is_enabled, created_at, updated_at
-                 FROM apps ORDER BY name, project_dir;",
+                "SELECT config_path, project_dir, name, variant, is_enabled, created_at, updated_at
+                 FROM apps ORDER BY name, config_path;",
             )
             .map_err(|e| format!("prepare list: {e}"))?;
         stmt.query_map([], row_to_registered_app)
@@ -207,13 +225,13 @@ impl DevStateStore {
     }
 
     #[cfg(test)]
-    pub fn set_enabled(&self, project_dir: &str, enabled: bool) -> Result<bool, String> {
+    pub fn set_enabled(&self, config_path: &str, enabled: bool) -> Result<bool, String> {
         let now = unix_now() as i64;
         let rows = self
             .conn
             .execute(
-                "UPDATE apps SET is_enabled = ?1, updated_at = ?2 WHERE project_dir = ?3;",
-                params![enabled, now, project_dir],
+                "UPDATE apps SET is_enabled = ?1, updated_at = ?2 WHERE config_path = ?3;",
+                params![enabled, now, config_path],
             )
             .map_err(|e| format!("set_enabled: {e}"))?;
         Ok(rows > 0)
@@ -223,10 +241,9 @@ impl DevStateStore {
         let apps = self.list()?;
         let mut removed = Vec::new();
         for app in apps {
-            let toml_path = Path::new(&app.project_dir).join("tako.toml");
-            if !toml_path.exists() {
-                self.unregister(&app.project_dir)?;
-                removed.push(app.project_dir);
+            if !Path::new(&app.config_path).exists() {
+                self.unregister(&app.config_path)?;
+                removed.push(app.config_path);
             }
         }
         Ok(removed)
@@ -235,19 +252,46 @@ impl DevStateStore {
 
 fn row_to_registered_app(row: &rusqlite::Row) -> rusqlite::Result<RegisteredApp> {
     Ok(RegisteredApp {
-        project_dir: row.get(0)?,
-        name: row.get(1)?,
-        variant: row.get(2)?,
-        is_enabled: row.get(3)?,
-        created_at: row.get::<_, i64>(4)? as u64,
-        updated_at: row.get::<_, i64>(5)? as u64,
+        config_path: row.get(0)?,
+        project_dir: row.get(1)?,
+        name: row.get(2)?,
+        variant: row.get(3)?,
+        is_enabled: row.get(4)?,
+        created_at: row.get::<_, i64>(5)? as u64,
+        updated_at: row.get::<_, i64>(6)? as u64,
     })
 }
 
 fn ensure_schema(conn: &Connection) -> Result<(), String> {
+    let columns = table_columns(conn, "apps")?;
+    if columns.is_empty() {
+        return create_apps_table(conn);
+    }
+
+    // v0: no migrations — drop and recreate if schema doesn't match.
+    let expected = [
+        "config_path",
+        "project_dir",
+        "name",
+        "variant",
+        "is_enabled",
+        "created_at",
+        "updated_at",
+    ];
+    if !expected.iter().all(|col| columns.iter().any(|c| c == col)) {
+        conn.execute_batch("DROP TABLE apps;")
+            .map_err(|e| format!("drop outdated apps table: {e}"))?;
+        return create_apps_table(conn);
+    }
+
+    Ok(())
+}
+
+fn create_apps_table(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS apps (
-            project_dir TEXT PRIMARY KEY,
+            config_path TEXT PRIMARY KEY,
+            project_dir TEXT NOT NULL,
             name TEXT NOT NULL,
             variant TEXT,
             is_enabled INTEGER NOT NULL DEFAULT 1,
@@ -255,22 +299,16 @@ fn ensure_schema(conn: &Connection) -> Result<(), String> {
             updated_at INTEGER NOT NULL DEFAULT 0
         );",
     )
-    .map_err(|e| format!("create apps schema: {e}"))?;
+    .map_err(|e| format!("create apps schema: {e}"))
+}
 
-    // Migration: add variant column to existing databases.
-    let has_variant = conn
-        .prepare("PRAGMA table_info(apps);")
-        .and_then(|mut stmt| {
-            stmt.query_map([], |row| row.get::<_, String>(1))
-                .map(|rows| rows.filter_map(|r| r.ok()).any(|col| col == "variant"))
-        })
-        .unwrap_or(false);
-    if !has_variant {
-        conn.execute_batch("ALTER TABLE apps ADD COLUMN variant TEXT;")
-            .map_err(|e| format!("migrate variant column: {e}"))?;
-    }
-
-    Ok(())
+fn table_columns(conn: &Connection, table: &str) -> Result<Vec<String>, String> {
+    conn.prepare(&format!("PRAGMA table_info({table});"))
+        .map_err(|e| format!("prepare table info: {e}"))?
+        .query_map([], |row| row.get::<_, String>(1))
+        .map_err(|e| format!("query table info: {e}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("collect table info: {e}"))
 }
 
 #[cfg(test)]
@@ -299,6 +337,7 @@ mod tests {
         assert_eq!(
             columns,
             vec![
+                "config_path".to_string(),
                 "project_dir".to_string(),
                 "name".to_string(),
                 "variant".to_string(),
@@ -312,9 +351,18 @@ mod tests {
     #[test]
     fn register_and_get() {
         let (_tmp, store) = temp_store();
-        store.register("/home/user/my-app", "my-app", None).unwrap();
+        store
+            .register(
+                "/home/user/my-app/tako.toml",
+                "/home/user/my-app",
+                "my-app",
+                None,
+            )
+            .unwrap();
 
-        let app = store.get("/home/user/my-app").unwrap().unwrap();
+        let app = store.get("/home/user/my-app/tako.toml").unwrap().unwrap();
+        assert_eq!(app.config_path, "/home/user/my-app/tako.toml");
+        assert_eq!(app.project_dir, "/home/user/my-app");
         assert_eq!(app.name, "my-app");
         assert!(app.variant.is_none());
         assert!(app.is_enabled);
@@ -326,10 +374,15 @@ mod tests {
     fn register_with_variant() {
         let (_tmp, store) = temp_store();
         store
-            .register("/home/user/my-app", "my-app", Some("staging"))
+            .register(
+                "/home/user/my-app/tako.toml",
+                "/home/user/my-app",
+                "my-app",
+                Some("staging"),
+            )
             .unwrap();
 
-        let app = store.get("/home/user/my-app").unwrap().unwrap();
+        let app = store.get("/home/user/my-app/tako.toml").unwrap().unwrap();
         assert_eq!(app.name, "my-app");
         assert_eq!(app.variant.as_deref(), Some("staging"));
     }
@@ -337,11 +390,15 @@ mod tests {
     #[test]
     fn register_upserts_name_and_updates_timestamp() {
         let (_tmp, store) = temp_store();
-        store.register("/proj", "old-name", None).unwrap();
-        let first = store.get("/proj").unwrap().unwrap();
+        store
+            .register("/proj/tako.toml", "/proj", "old-name", None)
+            .unwrap();
+        let first = store.get("/proj/tako.toml").unwrap().unwrap();
 
-        store.register("/proj", "new-name", None).unwrap();
-        let second = store.get("/proj").unwrap().unwrap();
+        store
+            .register("/proj/tako.toml", "/proj", "new-name", None)
+            .unwrap();
+        let second = store.get("/proj/tako.toml").unwrap().unwrap();
 
         assert_eq!(second.name, "new-name");
         assert_eq!(second.created_at, first.created_at);
@@ -351,25 +408,29 @@ mod tests {
     #[test]
     fn set_enabled_toggle() {
         let (_tmp, store) = temp_store();
-        store.register("/proj", "app", None).unwrap();
+        store
+            .register("/proj/tako.toml", "/proj", "app", None)
+            .unwrap();
 
-        assert!(store.set_enabled("/proj", false).unwrap());
-        assert!(!store.get("/proj").unwrap().unwrap().is_enabled);
+        assert!(store.set_enabled("/proj/tako.toml", false).unwrap());
+        assert!(!store.get("/proj/tako.toml").unwrap().unwrap().is_enabled);
 
-        assert!(store.set_enabled("/proj", true).unwrap());
-        assert!(store.get("/proj").unwrap().unwrap().is_enabled);
+        assert!(store.set_enabled("/proj/tako.toml", true).unwrap());
+        assert!(store.get("/proj/tako.toml").unwrap().unwrap().is_enabled);
 
-        assert!(!store.set_enabled("/nonexistent", false).unwrap());
+        assert!(!store.set_enabled("/nonexistent/tako.toml", false).unwrap());
     }
 
     #[test]
     fn unregister_app() {
         let (_tmp, store) = temp_store();
-        store.register("/proj", "app", None).unwrap();
+        store
+            .register("/proj/tako.toml", "/proj", "app", None)
+            .unwrap();
 
-        assert!(store.unregister("/proj").unwrap());
-        assert!(store.get("/proj").unwrap().is_none());
-        assert!(!store.unregister("/proj").unwrap());
+        assert!(store.unregister("/proj/tako.toml").unwrap());
+        assert!(store.get("/proj/tako.toml").unwrap().is_none());
+        assert!(!store.unregister("/proj/tako.toml").unwrap());
     }
 
     #[test]
@@ -379,15 +440,28 @@ mod tests {
 
         let real_proj = tmp.path().join("real-proj");
         std::fs::create_dir_all(&real_proj).unwrap();
-        std::fs::write(real_proj.join("tako.toml"), "name = \"real\"").unwrap();
+        let real_config = real_proj.join("preview.toml");
+        std::fs::write(&real_config, "name = \"real\"").unwrap();
 
         store
-            .register(real_proj.to_str().unwrap(), "real", None)
+            .register(
+                real_config.to_str().unwrap(),
+                real_proj.to_str().unwrap(),
+                "real",
+                None,
+            )
             .unwrap();
-        store.register("/nonexistent/proj", "stale", None).unwrap();
+        store
+            .register(
+                "/nonexistent/proj/preview.toml",
+                "/nonexistent/proj",
+                "stale",
+                None,
+            )
+            .unwrap();
 
         let removed = store.cleanup_stale().unwrap();
-        assert_eq!(removed, vec!["/nonexistent/proj"]);
+        assert_eq!(removed, vec!["/nonexistent/proj/preview.toml"]);
 
         let apps = store.list().unwrap();
         assert_eq!(apps.len(), 1);
@@ -398,43 +472,64 @@ mod tests {
     fn pid_file_write_read_remove() {
         let tmp = tempfile::TempDir::new().unwrap();
         let project_dir = tmp.path().to_str().unwrap();
+        let config_path = "/tmp/example/tako.toml";
 
-        assert!(read_pid_file(project_dir).is_none());
+        assert!(read_pid_file(project_dir, config_path).is_none());
 
-        write_pid_file(project_dir, 12345);
-        assert_eq!(read_pid_file(project_dir), Some(12345));
+        write_pid_file(project_dir, config_path, 12345);
+        assert_eq!(read_pid_file(project_dir, config_path), Some(12345));
 
-        remove_pid_file(project_dir);
-        assert!(read_pid_file(project_dir).is_none());
+        remove_pid_file(project_dir, config_path);
+        assert!(read_pid_file(project_dir, config_path).is_none());
     }
 
     #[test]
     fn kill_orphaned_process_cleans_up_stale_pid_file() {
         let tmp = tempfile::TempDir::new().unwrap();
         let project_dir = tmp.path().to_str().unwrap();
+        let config_path = "/tmp/example/tako.toml";
 
         // Write a PID file with a definitely-dead PID.
-        write_pid_file(project_dir, 999_999_999);
-        kill_orphaned_process(project_dir);
-        assert!(read_pid_file(project_dir).is_none());
+        write_pid_file(project_dir, config_path, 999_999_999);
+        kill_orphaned_process(project_dir, config_path);
+        assert!(read_pid_file(project_dir, config_path).is_none());
     }
 
     #[test]
     fn kill_orphaned_process_kills_live_process() {
         let tmp = tempfile::TempDir::new().unwrap();
         let project_dir = tmp.path().to_str().unwrap();
+        let config_path = "/tmp/example/tako.toml";
 
         let mut child = std::process::Command::new("sleep")
             .arg("60")
             .spawn()
             .unwrap();
         let pid = child.id();
-        write_pid_file(project_dir, pid);
+        write_pid_file(project_dir, config_path, pid);
 
-        kill_orphaned_process(project_dir);
+        kill_orphaned_process(project_dir, config_path);
 
         let status = child.wait().unwrap();
         assert!(!status.success());
-        assert!(read_pid_file(project_dir).is_none());
+        assert!(read_pid_file(project_dir, config_path).is_none());
+    }
+
+    #[test]
+    fn pid_files_are_scoped_by_config_path() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let project_dir = tmp.path().to_str().unwrap();
+
+        write_pid_file(project_dir, "/tmp/example/one.toml", 111);
+        write_pid_file(project_dir, "/tmp/example/two.toml", 222);
+
+        assert_eq!(
+            read_pid_file(project_dir, "/tmp/example/one.toml"),
+            Some(111)
+        );
+        assert_eq!(
+            read_pid_file(project_dir, "/tmp/example/two.toml"),
+            Some(222)
+        );
     }
 }
