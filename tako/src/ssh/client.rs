@@ -421,7 +421,11 @@ impl SshClient {
                 _ => {}
             }
         }
-        let _ = got_exit_status;
+        // If the channel closed without sending ExitStatus, the remote process
+        // was likely killed or the connection dropped. Report as failure.
+        if !got_exit_status {
+            exit_code = 255;
+        }
 
         let output = CommandOutput {
             exit_code,
