@@ -1676,8 +1676,10 @@ async fn prepare_release_runtime(
     if let Some(def) = tako_runtime::runtime_def_for(runtime, Some(&ctx)) {
         if let Some(install_cmd) = &def.package_manager.install {
             tracing::info!(runtime = %runtime, "Running production install: {}", install_cmd);
+            let install_path = install_env.get("PATH").cloned().unwrap_or_default();
+            let prefixed_cmd = format!("export PATH=\"{install_path}\"; {install_cmd}");
             let output = std::process::Command::new("sh")
-                .args(["-lc", install_cmd])
+                .args(["-c", &prefixed_cmd])
                 .current_dir(release_dir)
                 .envs(&install_env)
                 .output()

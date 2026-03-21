@@ -1,6 +1,5 @@
 name = "node-e2e"
 runtime = "node"
-package_manager = "bun"
 
 [envs.production]
 route = "node-e2e.example.com"

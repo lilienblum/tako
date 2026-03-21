@@ -7,9 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::app::require_app_name_from_config_path;
 use crate::build::{
     BuildAdapter, BuildCache, BuildError, BuildExecutor, BuildPreset, PresetGroup,
-    apply_adapter_base_runtime_defaults, compute_file_hash,
-    infer_adapter_from_preset_reference, js, load_build_preset,
-    qualify_runtime_local_preset_ref,
+    apply_adapter_base_runtime_defaults, compute_file_hash, infer_adapter_from_preset_reference,
+    js, load_build_preset, qualify_runtime_local_preset_ref,
 };
 use crate::commands::project_context;
 use crate::commands::server;
@@ -528,12 +527,8 @@ async fn run_async(
         Err(error) => output::warning(&format!("Local build workspace cleanup skipped: {}", error)),
     }
 
-    let app_subdir = resolve_app_subdir(&source_root, &project_dir, None)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    tracing::debug!("Source root: {}", source_root.display());
-    if !app_subdir.is_empty() {
-        tracing::debug!("App directory: {}", app_subdir);
-    }
+    // Workdir copies from project_dir, so app_subdir is always empty (project dir = archive root).
+    let app_subdir = String::new();
 
     // Generate version string
     let (version, _source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)?;
@@ -669,8 +664,7 @@ async fn run_async(
     let server_targets = resolve_deploy_server_targets(&servers, &server_names)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     output::bullet(&format_servers_summary(&server_names));
-    let use_unified_js_target_process =
-        should_use_unified_js_target_process(&runtime_tool);
+    let use_unified_js_target_process = should_use_unified_js_target_process(&runtime_tool);
     if let Some(server_targets_summary) =
         format_server_targets_summary(&server_targets, use_unified_js_target_process)
     {
@@ -1380,35 +1374,6 @@ fn source_bundle_root(project_dir: &Path) -> PathBuf {
     }
 }
 
-fn resolve_app_subdir(
-    source_root: &Path,
-    project_dir: &Path,
-    app_dir: Option<&str>,
-) -> Result<String, String> {
-    let rel = project_dir.strip_prefix(source_root).map_err(|_| {
-        format!(
-            "Project directory {} must be within source root {}",
-            project_dir.display(),
-            source_root.display()
-        )
-    })?;
-    let base = if rel.as_os_str().is_empty() {
-        String::new()
-    } else {
-        rel.to_string_lossy().replace('\\', "/")
-    };
-    match app_dir {
-        Some(dir) if !dir.is_empty() => {
-            if base.is_empty() {
-                Ok(dir.to_string())
-            } else {
-                Ok(format!("{}/{}", base, dir))
-            }
-        }
-        _ => Ok(base),
-    }
-}
-
 /// Compute the effective app directory on the local filesystem,
 /// incorporating `app_dir` from config if set.
 fn resolve_deploy_version_and_source_hash(
@@ -1753,7 +1718,6 @@ fn build_asset_roots(preset: &BuildPreset, config: &TakoToml) -> Result<Vec<Stri
     }
     Ok(merged)
 }
-
 
 fn should_run_bun_lockfile_preflight(runtime_adapter: BuildAdapter) -> bool {
     runtime_adapter == BuildAdapter::Bun
@@ -2210,7 +2174,7 @@ fn persist_cached_artifact(
 #[allow(clippy::too_many_arguments)]
 async fn build_target_artifacts(
     project_dir: &Path,
-    source_root: &Path,
+    _source_root: &Path,
     tako_config: &TakoToml,
     cache_dir: &Path,
     _build_workspace_root: &Path,
@@ -2245,23 +2209,21 @@ async fn build_target_artifacts(
         {
             tracing::debug!("{}", stage_summary_message);
         }
-        // Create workdir: copy project (respecting .gitignore), symlink node_modules.
+        // Create workdir: copy project dir (respecting .gitignore), symlink node_modules.
+        // The workdir is rooted at the project dir (where tako.toml lives), not the git root.
         let workdir = project_dir.join(".tako/workdir");
         {
             let _t = output::timed("Workdir setup");
-            crate::build::create_workdir(source_root, &workdir)
+            crate::build::create_workdir(project_dir, &workdir)
                 .map_err(|e| format!("Failed to create workdir: {e}"))?;
-            crate::build::symlink_node_modules(source_root, &workdir)
+            crate::build::symlink_node_modules(project_dir, &workdir)
                 .map_err(|e| format!("Failed to symlink node_modules: {e}"))?;
         }
         let workspace = workdir.clone();
 
-        // Write app.json into the workdir.
+        // Write app.json at the workdir root (project dir = archive root).
         {
-            let app_dir = workspace_app_dir(&workspace, app_subdir);
-            std::fs::create_dir_all(&app_dir)
-                .map_err(|e| format!("Failed to create app dir: {e}"))?;
-            std::fs::write(app_dir.join("app.json"), app_manifest_bytes)
+            std::fs::write(workspace.join("app.json"), app_manifest_bytes)
                 .map_err(|e| format!("Failed to write app.json: {e}"))?;
         }
 
@@ -2336,22 +2298,12 @@ async fn build_target_artifacts(
                 output::with_spinner(&build_label, &build_success, || {
                     tracing::debug!("Building target {}…", build_target_label);
                     let _t = output::timed("Target build");
-                    run_local_build(
-                        &workspace,
-                        app_subdir,
-                        &tako_config.build,
-                        custom_stages,
-                    )
+                    run_local_build(&workspace, app_subdir, &tako_config.build, custom_stages)
                 })?;
             } else {
                 output::bullet(&build_label);
                 let _t = output::timed("Target build");
-                run_local_build(
-                    &workspace,
-                    app_subdir,
-                    &tako_config.build,
-                    custom_stages,
-                )?;
+                run_local_build(&workspace, app_subdir, &tako_config.build, custom_stages)?;
             }
             save_runtime_version_to_manifest(&workspace, app_subdir, &runtime_version)?;
             output::bullet(&format_build_completed_message(display_target_label));
@@ -2585,7 +2537,6 @@ fn save_runtime_version_to_manifest(
     let _ = std::fs::remove_file(app_dir.join(RUNTIME_VERSION_OUTPUT_FILE));
     Ok(())
 }
-
 
 /// Extract a semver version from `--version` output.
 /// Handles formats like "bun 1.3.11", "deno 2.7.6 (stable, ...)", "v22.12.0",
@@ -4288,38 +4239,6 @@ route = "app.example.com"
     }
 
     #[test]
-    fn resolve_app_subdir_uses_source_root_prefix() {
-        let source_root = Path::new("/repo");
-        let project_dir = Path::new("/repo/apps/web");
-        let subdir = resolve_app_subdir(source_root, project_dir, None).unwrap();
-        assert_eq!(subdir, "apps/web");
-    }
-
-    #[test]
-    fn resolve_app_subdir_incorporates_app_dir() {
-        let source_root = Path::new("/repo");
-        let project_dir = Path::new("/repo/apps/web");
-        let subdir = resolve_app_subdir(source_root, project_dir, Some("src")).unwrap();
-        assert_eq!(subdir, "apps/web/src");
-    }
-
-    #[test]
-    fn resolve_app_subdir_app_dir_at_source_root() {
-        let source_root = Path::new("/repo");
-        let project_dir = Path::new("/repo");
-        let subdir = resolve_app_subdir(source_root, project_dir, Some("packages/web")).unwrap();
-        assert_eq!(subdir, "packages/web");
-    }
-
-    #[test]
-    fn resolve_app_subdir_no_app_dir_at_source_root() {
-        let source_root = Path::new("/repo");
-        let project_dir = Path::new("/repo");
-        let subdir = resolve_app_subdir(source_root, project_dir, None).unwrap();
-        assert_eq!(subdir, "");
-    }
-
-    #[test]
     fn source_bundle_root_falls_back_to_project_dir_without_git() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("app");
@@ -4333,7 +4252,6 @@ route = "app.example.com"
         assert!(normalize_asset_root("/tmp/assets").is_err());
         assert!(normalize_asset_root("../assets").is_err());
     }
-
 
     #[test]
     fn should_run_bun_lockfile_preflight_runs_for_bun_runtime() {
@@ -4568,10 +4486,7 @@ route = "app.example.com"
 
         run_local_build(&workspace, "apps/web", &Default::default(), &stages).unwrap();
         let order = std::fs::read_to_string(app_dir.join("order.log")).unwrap();
-        assert_eq!(
-            order,
-            "stage-1-run\nstage-2-install\nstage-2-run\n"
-        );
+        assert_eq!(order, "stage-1-run\nstage-2-install\nstage-2-run\n");
     }
 
     #[test]
@@ -4610,8 +4525,8 @@ route = "app.example.com"
             run: "true".to_string(),
         }];
 
-        let err = run_local_build(&workspace, "apps/web", &Default::default(), &stages)
-            .unwrap_err();
+        let err =
+            run_local_build(&workspace, "apps/web", &Default::default(), &stages).unwrap_err();
         assert!(err.contains("stage 1"));
         assert!(err.contains("working directory"));
     }

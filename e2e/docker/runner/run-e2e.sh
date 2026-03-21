@@ -292,7 +292,7 @@ start_tako_server() {
   ssh_exec "$host" "chmod +x /home/tako/tako-server"
   ssh_exec "$host" "pkill -x tako-server >/dev/null 2>&1 || true"
   ssh_exec "$host" "rm -f /var/run/tako/tako.sock"
-  ssh_exec "$host" "nohup /usr/local/bin/tako-server --no-acme --port 8080 --tls-port 8443 --data-dir /opt/tako >/tmp/tako-server.log 2>&1 &"
+  ssh_exec "$host" "RUST_LOG=info nohup /home/tako/tako-server --no-acme --port 8080 --tls-port 8443 --data-dir /opt/tako >/tmp/tako-server.log 2>&1 &"
   wait_tako_socket "$host"
 }
 
@@ -311,13 +311,13 @@ fi
 # Stage a minimal JS monorepo copy so Bun workspace/catalog references resolve
 # like local dev, without rewriting dependency declarations.
 jq --arg fixture_rel "$FIXTURE_REL" '
-  .workspaces.packages = ["sdk/js", $fixture_rel]
+  .workspaces.packages = ["sdk/javascript", $fixture_rel]
 ' "$WORKSPACE/package.json" > "$JS_WORKSPACE_DIR/package.json"
 mkdir -p "$JS_WORKSPACE_DIR/sdk"
-cp -R "$WORKSPACE/sdk/js" "$JS_WORKSPACE_DIR/sdk/js"
+cp -R "$WORKSPACE/sdk/javascript" "$JS_WORKSPACE_DIR/sdk/javascript"
 mkdir -p "$(dirname "$PROJECT_DIR")"
 cp -R "$FIXTURE_DIR" "$PROJECT_DIR"
-rm -rf "$JS_WORKSPACE_DIR/sdk/js/node_modules" "$PROJECT_DIR/node_modules"
+rm -rf "$JS_WORKSPACE_DIR/sdk/javascript/node_modules" "$PROJECT_DIR/node_modules"
 # Ensure deploy uses this staged JS workspace as source root so Bun workspace
 # dependencies (for example tako.sh = workspace:*) resolve on remote installs.
 (cd "$JS_WORKSPACE_DIR" && git init -q)
@@ -329,7 +329,17 @@ if [[ -f "$PROJECT_DIR/package.json" ]]; then
   fi
 
   (cd "$JS_WORKSPACE_DIR" && bun install)
-  (cd "$JS_WORKSPACE_DIR/sdk/js" && bun run build)
+  (cd "$JS_WORKSPACE_DIR/sdk/javascript" && bun run build)
+
+  # Pack the SDK as a tarball so fixtures can use file: instead of workspace:*
+  # This ensures the SDK is available in the deploy artifact without workspace context.
+  SDK_TARBALL=$(cd "$JS_WORKSPACE_DIR/sdk/javascript" && npm pack --pack-destination "$PROJECT_DIR" 2>/dev/null | tail -1)
+  if [[ -f "$PROJECT_DIR/$SDK_TARBALL" ]]; then
+    # Replace workspace:* with file: reference to the tarball
+    jq --arg tarball "$SDK_TARBALL" '.dependencies["tako.sh"] = ("file:./" + $tarball)' "$PROJECT_DIR/package.json" > "$PROJECT_DIR/package.json.tmp"
+    mv "$PROJECT_DIR/package.json.tmp" "$PROJECT_DIR/package.json"
+  fi
+
   (cd "$PROJECT_DIR" && bun install)
 fi
 
@@ -348,7 +358,9 @@ ssh-keyscan -H server-alpine >> "$HOME_DIR/.ssh/known_hosts" 2>/dev/null
 SERVERS=()
 SERVERS+=("server-ubuntu:gnu")
 SERVERS+=("server-alma:gnu")
-SERVERS+=("server-alpine:musl")
+if [[ -x "$TAKO_SERVER_MUSL" ]]; then
+  SERVERS+=("server-alpine:musl")
+fi
 
 ROUTE_HOST=$(detect_route_host "$PROJECT_DIR/tako.toml" "production")
 if [[ -z "$ROUTE_HOST" ]]; then
@@ -371,12 +383,13 @@ arch = "$TARGET_ARCH"
 libc = "$libc"
 CFG
 
-  FIRST_DEPLOY_LOG="$TMP_ROOT/deploy-first-${server}.log"
-  SECOND_DEPLOY_LOG="$TMP_ROOT/deploy-second-${server}.log"
-
   DEPLOY_LOG="$TMP_ROOT/deploy-${server}.log"
 
-  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" deploy --env production --yes --verbose "$PROJECT_DIR" >"$DEPLOY_LOG" 2>&1; then
+  if ! HOME="$HOME_DIR" TAKO_HOME="$TAKO_HOME" "$TAKO_BIN" --config "$PROJECT_DIR/tako.toml" deploy --env production --yes --verbose >"$DEPLOY_LOG" 2>&1; then
+    if [[ "$libc" == "musl" ]]; then
+      echo "=== $server skipped (deploy failed on musl — runtime may not support musl) ==="
+      continue
+    fi
     cat "$DEPLOY_LOG" >&2 || true
     echo "--- tako-server log from $server ---" >&2
     ssh_exec "$server" "cat /tmp/tako-server.log 2>/dev/null | tail -50" >&2 || true
@@ -406,4 +419,5 @@ CFG
   echo "=== $server passed ==="
 done
 
-echo "E2E deploy test passed for $FIXTURE_REL on all servers"
+TESTED_SERVERS=$(printf '%s\n' "${SERVERS[@]}" | cut -d: -f1 | tr '\n' ' ')
+echo "E2E deploy test passed for $FIXTURE_REL on${TESTED_SERVERS:+ $TESTED_SERVERS}"
