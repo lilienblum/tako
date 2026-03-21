@@ -44,7 +44,20 @@ jobs:
             echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Check if builds ran
+        id: builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          conclusion=$(gh api "repos/${{ github.repository }}/actions/runs/${{ steps.ci-run.outputs.run_id }}/jobs" \
+            --jq '.jobs[] | select(.name == "Build x86_64 (glibc)") | .conclusion')
+          if [ "$conclusion" = "skipped" ] || [ -z "$conclusion" ]; then
+            echo "Build jobs were skipped — skipping canary"
+            echo "skipped=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download all artifacts from CI
+        if: steps.builds.outputs.skipped != 'true'
         uses: actions/download-artifact@v8
         with:
           run-id: ${{ steps.ci-run.outputs.run_id }}
@@ -52,9 +65,15 @@ jobs:
           pattern: bin-*
           path: raw
 
-      - name: Package release assets
+      - name: Package, sign, and publish
+        if: steps.builds.outputs.skipped != 'true'
+        env:
+          TAKO_SERVER_RELEASE_SIGNING_KEY_PEM: ${{ secrets.TAKO_SERVER_RELEASE_SIGNING_KEY_PEM }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
+
           mkdir -p dist
 
           package_server() {
@@ -101,11 +120,7 @@ jobs:
 
           ls -la dist/
 
-      - name: Create signed server checksum manifest
-        env:
-          TAKO_SERVER_RELEASE_SIGNING_KEY_PEM: ${{ secrets.TAKO_SERVER_RELEASE_SIGNING_KEY_PEM }}
-        run: |
-          set -euo pipefail
+          # Sign server checksums
           if [ -z "${TAKO_SERVER_RELEASE_SIGNING_KEY_PEM}" ]; then
             echo "::error::Missing secret TAKO_SERVER_RELEASE_SIGNING_KEY_PEM"
             exit 1
@@ -116,20 +131,11 @@ jobs:
           printf '%s\n' "${TAKO_SERVER_RELEASE_SIGNING_KEY_PEM}" > "$key_file"
           openssl dgst -sha256 -sign "$key_file" -out dist/tako-server-sha256s.txt.sig dist/tako-server-sha256s.txt
 
-      - name: Move canary-latest tag to current commit
-        run: |
+          # Tag and publish
           git tag -f canary-latest "$GITHUB_SHA"
           git push -f origin canary-latest
 
-      - name: Publish canary prerelease
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-
           assets=(dist/*)
-
           for f in "${assets[@]}"; do test -f "$f"; done
 
           timestamp="$(date -u +'%Y-%m-%d %H:%M UTC')"

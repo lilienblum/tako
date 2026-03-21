@@ -14,8 +14,28 @@ permissions:
   contents: read
 
 jobs:
+  detect-changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      website_only: ${{ steps.filter.outputs.code == 'false' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check paths
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!website/**'
+
   rust:
     name: Rust
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.website_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -165,9 +185,11 @@ jobs:
         with:
           args: "--root-dir website/dist --exclude 'dub\\.sh' website/dist/**/*.html"
 
-  # x86_64 glibc — always run (PR + master), needed for E2E
+  # x86_64 glibc — needed for CLI tests + E2E
   build-x86_64-glibc:
     name: Build x86_64 (glibc)
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.website_only != 'true'
     runs-on: ubuntu-latest
     # Build inside Debian 11 container for glibc 2.31 compat (supports Debian 11+, Ubuntu 22.04+, RHEL 9+, Amazon Linux 2023)
     container: rust:1.89-bullseye
@@ -205,9 +227,11 @@ jobs:
             target/release/tako-dev-server
           if-no-files-found: error
 
-  # x86_64 musl — always run (PR + master), needed for E2E (Alpine)
+  # x86_64 musl — needed for E2E (Alpine)
   build-x86_64-musl:
     name: Build x86_64 (musl)
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.website_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -239,7 +263,8 @@ jobs:
   # aarch64 glibc — master only (for canary)
   build-aarch64-glibc:
     name: Build aarch64 (glibc)
-    if: github.event_name == 'push'
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.website_only != 'true' && github.event_name == 'push'
     # 24.04-arm is the only GitHub-hosted ARM runner available
     runs-on: ubuntu-24.04-arm
     # Build inside Debian 11 container for glibc 2.31 compat (same as x86_64)
@@ -281,7 +306,8 @@ jobs:
   # aarch64 musl — master only (for canary)
   build-aarch64-musl:
     name: Build aarch64 (musl)
-    if: github.event_name == 'push'
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.website_only != 'true' && github.event_name == 'push'
     # 24.04-arm is the only GitHub-hosted ARM runner available
     runs-on: ubuntu-24.04-arm
     steps:
@@ -314,7 +340,8 @@ jobs:
   # macOS builds — master only (for canary)
   build-darwin:
     name: Build macOS CLI
-    if: github.event_name == 'push'
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.website_only != 'true' && github.event_name == 'push'
     runs-on: macos-latest
     steps:
       - name: Checkout

@@ -2,16 +2,17 @@
 img file="":
     #!/usr/bin/env bash
     set -euo pipefail
+    root="{{ source_directory() }}/.."
     if [ -z "{{ file }}" ]; then
-        src=$(ls -t "$HOME/Downloads"/ChatGPT\ Image*.png 2>/dev/null | head -1)
+        src=$(ls -t "$HOME/Downloads"/*.png 2>/dev/null | head -1)
         if [ -z "$src" ]; then
-            echo "No ChatGPT Image found in ~/Downloads" >&2
+            echo "No .png found in ~/Downloads" >&2
             exit 1
         fi
     else
         src="$HOME/Downloads/{{ file }}"
     fi
-    mkdir -p website/public/assets/blog
+    mkdir -p "$root/website/public/assets/blog"
     max_w=1400
     tmp_src=$(mktemp /tmp/blog-img-XXXXXX.png)
     cp "$src" "$tmp_src"
@@ -33,6 +34,6 @@ img file="":
     cwebp -q 85 "$tmp_src" -o "$tmp" >/dev/null 2>&1
     rm "$tmp_src"
     id=$(shasum -a 256 "$tmp" | cut -c1-12)
-    out="website/public/assets/blog/${id}.webp"
+    out="$root/website/public/assets/blog/${id}.webp"
     mv "$tmp" "$out"
     echo "$id"

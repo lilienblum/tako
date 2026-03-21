@@ -134,8 +134,8 @@ import CopyButton from "../components/CopyButton.astro";
         <span class="feature-link-desc">Each worktree gets its own URL &mdash; <code>myapp-fix69.tako.test</code></span>
       </a>
       <a href="/docs/how-tako-works" class="feature-link">
-        <span class="feature-link-title">Bun, Node, Deno &mdash; you name it</span>
-        <span class="feature-link-desc">Runtime auto-detected, or pick your own</span>
+        <span class="feature-link-title">Bun, Node, Go &mdash; you name it</span>
+        <span class="feature-link-desc">Auto-detected runtimes, more coming soon</span>
       </a>
     </div>
   </section>
@@ -744,8 +744,14 @@ import CopyButton from "../components/CopyButton.astro";
 
     .workflow-link {
       flex-direction: row;
+      align-items: center;
       text-align: left;
       gap: 12px;
+    }
+
+    .workflow-cmd {
+      min-width: 110px;
+      flex-shrink: 0;
     }
 
     .workflow-visual {

@@ -5,7 +5,7 @@ const authors: Record<string, { name: string; link: string }> = {
   dan: { name: "Dan Lilienblum", link: "https://x.com/lilienblum" },
 };
 
-const defaultAuthor = { name: "Tako-kun", link: "" };
+const defaultAuthor = { name: "Tako-kun", link: "/" };
 
 export interface Props {
   title: string;
@@ -306,6 +306,25 @@ const formatted = date
 
   .blog-article.content strong {
     color: var(--ink);
+  }
+
+  .blog-article.content table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 15px;
+    border: 2px solid var(--line);
+  }
+
+  .blog-article.content th,
+  .blog-article.content td {
+    border: 1px solid var(--line);
+    padding: 8px 10px;
+  }
+
+  .blog-article.content th {
+    font-family: "Nunito", sans-serif;
+    color: var(--ink);
+    background: rgba(155, 196, 182, 0.18);
   }
 
   .blog-article.content hr {
