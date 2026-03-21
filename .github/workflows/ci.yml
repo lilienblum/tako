@@ -62,8 +62,8 @@ jobs:
       - name: Test
         run: bun test --cwd sdk/javascript
 
-  cli:
-    name: CLI Tests
+  cli-linux:
+    name: CLI Tests (Linux)
     needs: [build-x86_64-glibc]
     runs-on: ubuntu-latest
     steps:
@@ -74,6 +74,37 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: bin-tako-linux-x86_64
+          path: .e2e-bin
+
+      - name: Make binary executable
+        run: chmod +x .e2e-bin/tako
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run CLI tests
+        env:
+          TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
+        run: cd e2e/cli && bun test
+
+  cli-macos:
+    name: CLI Tests (macOS)
+    needs: [build-darwin]
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download CLI binary
+        uses: actions/download-artifact@v8
+        with:
+          name: bin-tako-darwin-aarch64
           path: .e2e-bin
 
       - name: Make binary executable
@@ -156,7 +187,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo build -p tako-server --release
-          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release
+          cargo build -p tako --bin tako --bin tako-dev-server --release
 
       - name: Upload server binary
         uses: actions/upload-artifact@v7
@@ -172,7 +203,6 @@ jobs:
           path: |
             target/release/tako
             target/release/tako-dev-server
-            target/release/tako-loopback-proxy
           if-no-files-found: error
 
   # x86_64 musl — always run (PR + master), needed for E2E (Alpine)
@@ -230,7 +260,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo build -p tako-server --release
-          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release
+          cargo build -p tako --bin tako --bin tako-dev-server --release
 
       - name: Upload server binary
         uses: actions/upload-artifact@v7
@@ -246,7 +276,6 @@ jobs:
           path: |
             target/release/tako
             target/release/tako-dev-server
-            target/release/tako-loopback-proxy
           if-no-files-found: error
 
   # aarch64 musl — master only (for canary)

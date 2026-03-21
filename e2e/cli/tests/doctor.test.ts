@@ -141,6 +141,53 @@ describe("tako doctor", () => {
   });
 });
 
+// Platform-specific sections
+const isLinux = process.platform === "linux";
+const isMacOS = process.platform === "darwin";
+
+describe.if(isLinux)("tako doctor (Linux)", () => {
+  test("shows Port Redirect section", async () => {
+    const { screen } = await run(["doctor"], {
+      cwd: tempDir,
+      env: { HOME: tempDir, TAKO_HOME: takoHome },
+    });
+
+    expect(screen).toContain("Port Redirect");
+    expect(screen).toContain("Alias");
+    expect(screen).toContain("Persistence");
+  });
+
+  test("does not show Loopback Proxy section", async () => {
+    const { screen } = await run(["doctor"], {
+      cwd: tempDir,
+      env: { HOME: tempDir, TAKO_HOME: takoHome },
+    });
+
+    expect(screen).not.toContain("Loopback Proxy");
+    expect(screen).not.toContain("Launchd");
+  });
+});
+
+describe.if(isMacOS)("tako doctor (macOS)", () => {
+  test("shows Loopback Proxy section", async () => {
+    const { screen } = await run(["doctor"], {
+      cwd: tempDir,
+      env: { HOME: tempDir, TAKO_HOME: takoHome },
+    });
+
+    expect(screen).toContain("Loopback Proxy");
+  });
+
+  test("does not show Port Redirect section", async () => {
+    const { screen } = await run(["doctor"], {
+      cwd: tempDir,
+      env: { HOME: tempDir, TAKO_HOME: takoHome },
+    });
+
+    expect(screen).not.toContain("Port Redirect");
+  });
+});
+
 describe("tako doctor --ci", () => {
   test("produces no ANSI RGB color codes", async () => {
     const { term, exitCode } = await run(["--ci", "doctor"], {

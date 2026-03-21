@@ -96,7 +96,7 @@ tako dev [--name <NAME>]
 
 `tako dev` is a client that connects to the `tako-dev-server` daemon. It registers the selected config file, starts your app, and streams logs directly to your terminal.
 
-On first run, Tako sets up a local Certificate Authority and HTTPS infrastructure so your app is available at `https://{app}.tako.test/`. On macOS, a loopback proxy is installed so your app is served on the default HTTPS port (443) without needing to specify a port.
+On first run, Tako sets up a local Certificate Authority and HTTPS infrastructure so your app is available at `https://{app}.tako.test/`. On macOS, a loopback proxy is installed so your app is served on the default HTTPS port (443) without needing to specify a port. On Linux, iptables redirect rules achieve the same result without an extra proxy binary.
 
 When `[envs.development]` defines custom routes in `tako.toml`, those routes are used instead of the default. Dev routes must be `{app}.tako.test` or a subdomain of it.
 
@@ -145,13 +145,10 @@ Print local dev environment diagnostics and exit.
 tako doctor
 ```
 
-Reports on the dev daemon, local DNS, and listener status. On macOS, includes a detailed preflight section covering:
+Reports on the dev daemon, local DNS, and listener status. Platform-specific sections:
 
-- Loopback proxy install status
-- Boot-helper load status
-- Dedicated loopback alias status
-- Launchd load status
-- TCP reachability on loopback ports 443 and 80
+- **macOS:** Loopback proxy install status, boot-helper load status, dedicated loopback alias, launchd load status, TCP reachability on `127.77.0.1:443` and `:80`.
+- **Linux:** Port redirect status (loopback alias and iptables rules), TCP reachability on `127.77.0.1:443` and `:80`.
 
 If the dev daemon is not running, doctor reports that and hints to start `tako dev`.
 

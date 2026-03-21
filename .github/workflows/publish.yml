@@ -95,13 +95,13 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
 
       - name: Build
-        run: cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release
+        run: cargo build -p tako --bin tako --bin tako-dev-server --release
 
       - name: Package
         run: |
           tmpdir="$(mktemp -d)"
-          cp target/release/tako target/release/tako-dev-server target/release/tako-loopback-proxy "$tmpdir/"
-          tar -czf tako-linux-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
+          cp target/release/tako target/release/tako-dev-server "$tmpdir/"
+          tar -czf tako-linux-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server
           sha256sum tako-linux-x86_64.tar.gz > tako-linux-x86_64.tar.gz.sha256
 
       - name: Upload
@@ -130,13 +130,13 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
 
       - name: Build
-        run: cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release
+        run: cargo build -p tako --bin tako --bin tako-dev-server --release
 
       - name: Package
         run: |
           tmpdir="$(mktemp -d)"
-          cp target/release/tako target/release/tako-dev-server target/release/tako-loopback-proxy "$tmpdir/"
-          tar -czf tako-linux-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
+          cp target/release/tako target/release/tako-dev-server "$tmpdir/"
+          tar -czf tako-linux-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server
           sha256sum tako-linux-aarch64.tar.gz > tako-linux-aarch64.tar.gz.sha256
 
       - name: Upload

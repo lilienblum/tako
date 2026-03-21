@@ -19,6 +19,8 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(target_os = "macos")]
     let macos_data = gather_macos_data(&dev_info, &apps);
+    #[cfg(target_os = "linux")]
+    let linux_data = gather_linux_data(&dev_info, &apps);
 
     // ── Format output ────────────────────────────────────────────────────
 
@@ -30,11 +32,15 @@ pub async fn run() -> Result<(), Box<dyn std::error::Error>> {
 
     #[cfg(target_os = "macos")]
     format_macos_sections(&mut buf, &dev_info, &apps, &macos_data);
+    #[cfg(target_os = "linux")]
+    format_linux_sections(&mut buf, &linux_data);
 
     format_apps(&mut buf, &apps);
 
     #[cfg(target_os = "macos")]
     format_local_dns(&mut buf, &dev_info, &apps, &macos_data);
+    #[cfg(target_os = "linux")]
+    format_linux_dns(&mut buf, &dev_info, &apps, &linux_data);
 
     for line in &buf {
         eprintln!("{line}");
@@ -78,7 +84,7 @@ fn format_bool_status(enabled: bool) -> String {
     }
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 fn format_active_status(ok: bool, ok_label: &str, fail_label: &str) -> String {
     if ok {
         output::brand_success(ok_label)
@@ -474,6 +480,169 @@ fn format_local_dns(
                         output::brand_muted("→"),
                         ip,
                         output::brand_warning(format!("(expected {})", macos.advertised_ip))
+                    ),
+                    dns_w,
+                    "Current system DNS answer for this app hostname",
+                );
+            }
+            None => {
+                hinted_row(
+                    buf,
+                    host,
+                    &format!(
+                        "{} {}",
+                        output::brand_muted("→"),
+                        output::brand_warning("no answer")
+                    ),
+                    dns_w,
+                    "Current system DNS answer for this app hostname",
+                );
+            }
+        }
+    }
+}
+
+// ─── Linux sections ──────────────────────────────────────────────────────────
+
+#[cfg(target_os = "linux")]
+struct LinuxData {
+    status: super::dev::LinuxSetupStatus,
+    advertised_ip: String,
+    host_dns_results: Vec<(String, Option<String>)>,
+}
+
+#[cfg(target_os = "linux")]
+fn gather_linux_data(
+    _dev_info: &Result<serde_json::Value, Box<dyn std::error::Error>>,
+    apps: &[crate::dev_server_client::ListedApp],
+) -> LinuxData {
+    use super::dev::{DEV_LOOPBACK_ADDR, system_resolver_ipv4};
+
+    let status = super::dev::linux_setup_status();
+    let advertised_ip = DEV_LOOPBACK_ADDR.to_string();
+
+    let host_dns_results: Vec<(String, Option<String>)> = apps
+        .iter()
+        .flat_map(|a| {
+            if a.hosts.is_empty() {
+                vec![crate::dev::get_tako_domain(&a.app_name)]
+            } else {
+                a.hosts.clone()
+            }
+        })
+        .filter(|h| h.ends_with(".tako.test"))
+        .map(|host| {
+            let ip = system_resolver_ipv4(&host);
+            (host, ip)
+        })
+        .collect();
+
+    LinuxData {
+        status,
+        advertised_ip,
+        host_dns_results,
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn format_linux_sections(buf: &mut Vec<String>, linux: &LinuxData) {
+    heading(buf, "Port Redirect");
+    let fwd_width = label_width(&[
+        "Alias",
+        "TCP 443 redirect",
+        "TCP 80 redirect",
+        "UDP 53 redirect",
+        "Persistence",
+    ]);
+
+    hinted_row(
+        buf,
+        "Alias",
+        &format_active_status(linux.status.loopback_alias, "ok", "missing"),
+        fwd_width,
+        "127.77.0.1 is assigned on the lo loopback interface",
+    );
+    hinted_row(
+        buf,
+        "TCP 443 redirect",
+        &format_active_status(linux.status.redirect_443, "ok", "missing"),
+        fwd_width,
+        "iptables redirects 127.77.0.1:443 to the dev server HTTPS port",
+    );
+    hinted_row(
+        buf,
+        "TCP 80 redirect",
+        &format_active_status(linux.status.redirect_80, "ok", "missing"),
+        fwd_width,
+        "iptables redirects 127.77.0.1:80 to the dev server HTTP port",
+    );
+    hinted_row(
+        buf,
+        "UDP 53 redirect",
+        &format_active_status(linux.status.redirect_dns, "ok", "missing"),
+        fwd_width,
+        "iptables redirects 127.77.0.1:53 to the dev server DNS port",
+    );
+    hinted_row(
+        buf,
+        "Persistence",
+        &format_active_status(linux.status.service_installed, "installed", "not installed"),
+        fwd_width,
+        "systemd oneshot service restores redirect rules at boot",
+    );
+}
+
+#[cfg(target_os = "linux")]
+fn format_linux_dns(
+    buf: &mut Vec<String>,
+    _dev_info: &Result<serde_json::Value, Box<dyn std::error::Error>>,
+    _apps: &[crate::dev_server_client::ListedApp],
+    linux: &LinuxData,
+) {
+    heading(buf, "Local DNS");
+
+    let mut dns_labels: Vec<&str> = vec!["Resolved config"];
+    let host_strs: Vec<&str> = linux
+        .host_dns_results
+        .iter()
+        .map(|(h, _)| h.as_str())
+        .collect();
+    dns_labels.extend_from_slice(&host_strs);
+    let dns_w = label_width(&dns_labels);
+
+    let resolved_status = if linux.status.dns_configured {
+        output::brand_success("configured")
+    } else {
+        output::brand_warning("not configured")
+    };
+    hinted_row(
+        buf,
+        "Resolved config",
+        &resolved_status,
+        dns_w,
+        "systemd-resolved drop-in that routes *.tako.test to the local DNS server",
+    );
+
+    for (host, ip) in &linux.host_dns_results {
+        match ip {
+            Some(ip) if ip == &linux.advertised_ip => {
+                hinted_row(
+                    buf,
+                    host,
+                    &format!("{} {}", output::brand_muted("→"), ip),
+                    dns_w,
+                    "Current system DNS answer for this app hostname",
+                );
+            }
+            Some(ip) => {
+                hinted_row(
+                    buf,
+                    host,
+                    &format!(
+                        "{} {} {}",
+                        output::brand_muted("→"),
+                        ip,
+                        output::brand_warning(format!("(expected {})", linux.advertised_ip))
                     ),
                     dns_w,
                     "Current system DNS answer for this app hostname",

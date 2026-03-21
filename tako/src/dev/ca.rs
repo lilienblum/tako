@@ -561,11 +561,19 @@ impl LocalCAStore {
     }
 
     /// Check if CA is trusted - Linux
+    ///
+    /// Checks both Debian/Ubuntu and Fedora/RHEL trust store paths.
     #[cfg(not(target_os = "macos"))]
     pub fn is_ca_trusted(&self) -> bool {
-        // Check if the CA cert exists in the system CA store
-        let system_ca_path = PathBuf::from("/usr/local/share/ca-certificates/tako-ca.crt");
-        system_ca_path.exists()
+        // Debian/Ubuntu path
+        if PathBuf::from("/usr/local/share/ca-certificates/tako-ca.crt").exists() {
+            return true;
+        }
+        // Fedora/RHEL/SUSE path
+        if PathBuf::from("/etc/pki/ca-trust/source/anchors/tako-ca.crt").exists() {
+            return true;
+        }
+        false
     }
 
     /// Install CA in system trust store (requires sudo)
@@ -601,6 +609,10 @@ impl LocalCAStore {
     }
 
     /// Install CA in system trust store - Linux
+    ///
+    /// Detects distro family and uses the appropriate trust store path:
+    /// - Debian/Ubuntu: /usr/local/share/ca-certificates/ + update-ca-certificates
+    /// - Fedora/RHEL/SUSE: /etc/pki/ca-trust/source/anchors/ + update-ca-trust
     #[cfg(not(target_os = "macos"))]
     pub fn install_ca_trust(&self) -> Result<()> {
         let cert_path = self.ca_cert_path.clone();
@@ -610,32 +622,61 @@ impl LocalCAStore {
             ));
         }
 
-        // Copy cert to system CA directory
-        let dest = "/usr/local/share/ca-certificates/tako-ca.crt";
-        let copy_status = Command::new("sudo")
-            .args(["cp", cert_path.to_str().unwrap_or(""), dest])
-            .status()
-            .map_err(|e| CaError::Keychain(format!("Failed to copy CA cert: {}", e)))?;
+        let cert_str = cert_path.to_str().unwrap_or("");
 
-        if !copy_status.success() {
+        // Try Debian/Ubuntu first (most common)
+        let debian_dir = PathBuf::from("/usr/local/share/ca-certificates");
+        let fedora_dir = PathBuf::from("/etc/pki/ca-trust/source/anchors");
+
+        if debian_dir.exists() {
+            let dest = "/usr/local/share/ca-certificates/tako-ca.crt";
+            let copy_status = Command::new("sudo")
+                .args(["cp", cert_str, dest])
+                .status()
+                .map_err(|e| CaError::Keychain(format!("Failed to copy CA cert: {}", e)))?;
+            if !copy_status.success() {
+                return Err(CaError::Keychain(
+                    "Failed to copy CA to system directory".to_string(),
+                ));
+            }
+            let update_status = Command::new("sudo")
+                .args(["update-ca-certificates"])
+                .status()
+                .map_err(|e| {
+                    CaError::Keychain(format!("Failed to run update-ca-certificates: {}", e))
+                })?;
+            if !update_status.success() {
+                return Err(CaError::Keychain(
+                    "Failed to update system CA certificates".to_string(),
+                ));
+            }
+        } else if fedora_dir.exists() {
+            let dest = "/etc/pki/ca-trust/source/anchors/tako-ca.crt";
+            let copy_status = Command::new("sudo")
+                .args(["cp", cert_str, dest])
+                .status()
+                .map_err(|e| CaError::Keychain(format!("Failed to copy CA cert: {}", e)))?;
+            if !copy_status.success() {
+                return Err(CaError::Keychain(
+                    "Failed to copy CA to system directory".to_string(),
+                ));
+            }
+            let update_status = Command::new("sudo")
+                .args(["update-ca-trust"])
+                .status()
+                .map_err(|e| CaError::Keychain(format!("Failed to run update-ca-trust: {}", e)))?;
+            if !update_status.success() {
+                return Err(CaError::Keychain(
+                    "Failed to update system CA trust".to_string(),
+                ));
+            }
+        } else {
             return Err(CaError::Keychain(
-                "Failed to copy CA to system directory".to_string(),
+                "Could not find system CA trust store. Manually trust the CA at: ".to_string()
+                    + cert_str,
             ));
         }
 
-        // Update CA certificates
-        let update_status = Command::new("sudo")
-            .args(["update-ca-certificates"])
-            .status()
-            .map_err(|e| {
-                CaError::Keychain(format!("Failed to run update-ca-certificates: {}", e))
-            })?;
-
-        if !update_status.success() {
-            return Err(CaError::Keychain(
-                "Failed to update system CA certificates".to_string(),
-            ));
-        }
         Ok(())
     }
 

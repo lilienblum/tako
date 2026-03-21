@@ -8,6 +8,7 @@
 //! - Idle timeout (stops app process after inactivity)
 
 mod ca_setup;
+mod linux_setup;
 mod loopback_proxy;
 mod output;
 mod watcher;
@@ -41,6 +42,8 @@ use crate::dev::LocalCA;
 use crate::validation::validate_dev_route;
 
 pub use ca_setup::setup_local_ca;
+#[cfg(target_os = "linux")]
+pub(crate) use linux_setup::{LinuxSetupStatus, status as linux_setup_status};
 #[cfg(target_os = "macos")]
 pub(crate) use loopback_proxy::{
     LOOPBACK_PROXY_LABEL, LoopbackProxyStatus, status as loopback_proxy_status,
@@ -731,6 +734,44 @@ fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::er
 
 #[cfg(not(target_os = "macos"))]
 fn ensure_local_dns_resolver_configured(_port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    // On Linux, DNS is set up as part of linux_setup::ensure_installed().
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn explain_pending_sudo_setup(_port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    if !crate::output::is_interactive() {
+        return Ok(());
+    }
+
+    let ca_action = ca_setup::pending_sudo_action()?;
+    let redirect_action = linux_setup::pending_sudo_action()?;
+
+    let mut items = Vec::new();
+    if let Some(action) = ca_action {
+        items.push(action.to_string());
+    }
+    if let Some(action) = redirect_action {
+        items.push(action.to_string());
+    }
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    crate::output::warning_full("One-time sudo is required for:");
+    for item in &items {
+        crate::output::warning_bullet(item);
+    }
+
+    // Pre-authenticate sudo so the password prompt is not overwritten by spinners.
+    let status = std::process::Command::new("sudo")
+        .arg("-v")
+        .status()
+        .map_err(|e| -> Box<dyn std::error::Error> { format!("failed to run sudo: {e}").into() })?;
+    if !status.success() {
+        return Err("sudo authentication failed".into());
+    }
+
     Ok(())
 }
 
@@ -800,7 +841,6 @@ pub(crate) fn tcp_port_open(ip: &str, port: u16, timeout_ms: u64) -> bool {
     std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(timeout_ms)).is_ok()
 }
 
-#[cfg(target_os = "macos")]
 async fn localhost_https_host_reachable_via_ip(
     host: &str,
     connect_ip: std::net::Ipv4Addr,
@@ -846,16 +886,6 @@ async fn localhost_https_host_reachable_via_ip(
         .await
         .map(|_| ())
         .map_err(|e| e.to_string())
-}
-
-#[cfg(not(target_os = "macos"))]
-async fn localhost_https_host_reachable_via_ip(
-    _host: &str,
-    _connect_ip: std::net::Ipv4Addr,
-    _port: u16,
-    _timeout_ms: u64,
-) -> Result<(), String> {
-    Err("HTTPS probe unsupported on this platform".to_string())
 }
 
 async fn wait_for_https_host_reachable_via_ip(
@@ -991,7 +1021,7 @@ async fn tcp_probe(addr: (&str, u16), timeout_ms: u64) -> bool {
     .is_ok_and(|r| r.is_ok())
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn system_resolver_ipv4(hostname: &str) -> Option<String> {
     use std::net::ToSocketAddrs;
 
@@ -2167,7 +2197,7 @@ pub async fn run(
         None
     };
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     explain_pending_sudo_setup(LOCAL_DNS_PORT)?;
 
     let local_ca = setup_local_ca().await?;
@@ -2176,10 +2206,12 @@ pub async fn run(
 
     #[cfg(target_os = "macos")]
     loopback_proxy::ensure_installed()?;
+    #[cfg(target_os = "linux")]
+    linux_setup::ensure_installed()?;
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
     let public_url_port: u16 = 443;
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
     let mut public_url_port: u16 = public_port;
     let daemon_dns_ip = if public_url_port == 443 {
         DEV_LOOPBACK_ADDR
@@ -2333,7 +2365,8 @@ pub async fn run(
         };
         let probe_host = local_https_probe_host(&primary_host);
         // Probe the dev server's health endpoint via the advertised loopback
-        // address to verify the full macOS local ingress path.
+        // address to verify the local ingress path (launchd proxy on macOS,
+        // iptables redirect on Linux).
         let probe_result = wait_for_https_host_reachable_via_ip(
             probe_host,
             loopback_ip,
@@ -2364,7 +2397,14 @@ pub async fn run(
                 )
                 .into());
             }
-            #[cfg(not(target_os = "macos"))]
+            #[cfg(target_os = "linux")]
+            {
+                return Err(
+                    "HTTPS endpoint unreachable at 127.77.0.1:443. Check iptables redirect rules with `tako doctor`."
+                        .into(),
+                );
+            }
+            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
             {
                 crate::output::warning(
                     "Local 80/443 forwarding is configured but the dev HTTPS endpoint is unreachable.",

@@ -44,12 +44,9 @@ tako deploy --ci --verbose
 `tako doctor` prints a local diagnostic report covering:
 
 - Dev daemon listen info and status
-- macOS loopback proxy install and load status
-- macOS loopback boot-helper status
-- Dedicated loopback alias status
-- launchd load status
-- TCP reachability on the loopback address (ports 443 and 80)
 - Local DNS status
+- On macOS: loopback proxy install and load status, boot-helper status, dedicated loopback alias, launchd load status, TCP reachability on `127.77.0.1:443` and `:80`
+- On Linux: port redirect status (loopback alias and iptables rules), TCP reachability on `127.77.0.1:443` and `:80`
 
 If the dev daemon is not running, doctor reports `status: not running` with a hint to start `tako dev`. It exits successfully either way, so you can always run it safely.
 
@@ -60,7 +57,7 @@ If the dev daemon is not running, doctor reports `status: not running` with a hi
 1. Run `tako doctor` and fix any issues it reports.
 2. Run `tako dev`.
 3. Open your app:
-   - macOS: `https://{app}.tako.test/`
+   - macOS / Linux: `https://{app}.tako.test/`
    - Other platforms: `https://{app}.tako.test:47831/`
 
 ### Local URL does not load
@@ -90,15 +87,32 @@ If `tako dev` reports the loopback proxy looks inactive, run `tako doctor` and c
 
 After applying or repairing the loopback proxy, Tako retries reachability on ports 80 and 443 and fails startup if they remain unreachable. If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.tako.test/` still fails, Tako reports a targeted hint that the loopback proxy is not forwarding correctly.
 
+### Linux port redirect
+
+On Linux, Tako uses iptables redirect rules on a loopback alias (`127.77.0.1`) instead of a loopback proxy binary. If `tako doctor` shows the port redirect as inactive:
+
+- Verify the loopback alias exists: `ip addr show dev lo` should include `127.77.0.1`.
+- Verify iptables rules are in place: `sudo iptables -t nat -L OUTPUT -n` should show DNAT rules for `127.77.0.1` on ports 443, 80, and 53.
+- If rules are missing (e.g. after a reboot without the systemd service), run `tako dev` again to re-apply them.
+- Check that `tako-dev-redirect.service` is enabled: `systemctl is-enabled tako-dev-redirect.service`.
+
+### NixOS
+
+On NixOS, `nixos-rebuild` wipes imperative network changes. Tako detects NixOS and prints a `configuration.nix` snippet instead of running setup commands. If port redirect stops working after a rebuild:
+
+- Verify the Tako networking snippet is in your `configuration.nix`.
+- Run `nixos-rebuild switch` to re-apply it.
+- Restart `tako dev`.
+
 ### DNS issues
 
-Tako uses split DNS for `tako.test` on macOS by writing `/etc/resolver/tako.test` (one-time sudo), pointing to a local DNS listener on `127.0.0.1:53535`. The dev daemon answers `A` queries for active `*.tako.test` hosts.
+Tako uses split DNS so `*.tako.test` hostnames resolve locally. The dev daemon answers `A` queries for active `*.tako.test` hosts on `127.0.0.1:53535`.
 
 If DNS resolution fails for `*.tako.test`:
 
-- Check that `/etc/resolver/tako.test` exists and contains `nameserver 127.0.0.1` and `port 53535`.
+- On macOS, check that `/etc/resolver/tako.test` exists and contains `nameserver 127.0.0.1` and `port 53535`. If the file was removed by an OS update, running `tako dev` again recreates it (may prompt for sudo).
+- On Linux, check that `systemd-resolved` is running (`systemctl status systemd-resolved`) and the `tako.test` forward zone is configured. Run `resolvectl query test.tako.test` to test resolution directly.
 - Make sure `tako dev` is running (the DNS listener runs inside the dev daemon).
-- On macOS, if the file was removed by an OS update, running `tako dev` again recreates it (may prompt for sudo).
 
 ### Dev route configuration
 

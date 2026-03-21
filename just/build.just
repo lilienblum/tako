@@ -15,16 +15,14 @@ _require-zigbuild:
 tako-linux: _require-zigbuild
     mkdir -p {{ ARTIFACTS_DIR }}
     rustup target add x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu 2>/dev/null || true
-    cargo zigbuild -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target x86_64-unknown-linux-gnu
-    cargo zigbuild -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target aarch64-unknown-linux-gnu
+    cargo zigbuild -p tako --bin tako --bin tako-dev-server --release --target x86_64-unknown-linux-gnu
+    cargo zigbuild -p tako --bin tako --bin tako-dev-server --release --target aarch64-unknown-linux-gnu
     cp target/x86_64-unknown-linux-gnu/release/tako {{ ARTIFACTS_DIR }}/tako-linux-x86_64
     cp target/x86_64-unknown-linux-gnu/release/tako-dev-server {{ ARTIFACTS_DIR }}/tako-dev-server-linux-x86_64
-    cp target/x86_64-unknown-linux-gnu/release/tako-loopback-proxy {{ ARTIFACTS_DIR }}/tako-loopback-proxy-linux-x86_64
     cp target/aarch64-unknown-linux-gnu/release/tako {{ ARTIFACTS_DIR }}/tako-linux-aarch64
     cp target/aarch64-unknown-linux-gnu/release/tako-dev-server {{ ARTIFACTS_DIR }}/tako-dev-server-linux-aarch64
-    cp target/aarch64-unknown-linux-gnu/release/tako-loopback-proxy {{ ARTIFACTS_DIR }}/tako-loopback-proxy-linux-aarch64
     @echo "Built binaries:"
-    ls -la {{ ARTIFACTS_DIR }}/tako-linux-* {{ ARTIFACTS_DIR }}/tako-dev-server-linux-* {{ ARTIFACTS_DIR }}/tako-loopback-proxy-linux-*
+    ls -la {{ ARTIFACTS_DIR }}/tako-linux-* {{ ARTIFACTS_DIR }}/tako-dev-server-linux-*
 
 # Build a single tako-server artifact.
 # arch: x86_64 | aarch64

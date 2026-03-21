@@ -36,11 +36,10 @@ if [[ ! -f "$E2E_BIN_DIR/glibc/tako" ]]; then
   fi
 
   cargo zigbuild -p tako-server -p tako \
-    --bin tako --bin tako-dev-server --bin tako-loopback-proxy --bin tako-server \
+    --bin tako --bin tako-dev-server --bin tako-server \
     --release --target "$GLIBC_TARGET"
   cp target/"$GLIBC_TARGET"/release/tako \
      target/"$GLIBC_TARGET"/release/tako-dev-server \
-     target/"$GLIBC_TARGET"/release/tako-loopback-proxy \
      target/"$GLIBC_TARGET"/release/tako-server \
      "$E2E_BIN_DIR/glibc/"
 

@@ -73,8 +73,8 @@ jobs:
             local src="raw/bin-tako-linux-${arch}"
             local out="dist/tako-linux-${arch}.tar.gz"
             tmpdir="$(mktemp -d)"
-            cp "$src/tako" "$src/tako-dev-server" "$src/tako-loopback-proxy" "$tmpdir/"
-            tar -czf "$out" -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
+            cp "$src/tako" "$src/tako-dev-server" "$tmpdir/"
+            tar -czf "$out" -C "$tmpdir" tako tako-dev-server
             sha256sum "$out" > "${out}.sha256"
             rm -rf "$tmpdir"
           }

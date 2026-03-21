@@ -201,7 +201,8 @@ Detected server build target metadata is stored directly in each `[[servers]]` e
 - If no suitable key files are found or usable, `tako` falls back to `ssh-agent` via `SSH_AUTH_SOCK` (when available).
 
 - `tako dev` uses a fixed local HTTPS listen port (`47831`).
-- On macOS, `tako dev` uses a dedicated loopback alias plus a launchd-managed loopback proxy so public URLs stay on default ports (`:443` for HTTPS, `:80` for HTTP redirect).
+- On macOS, `tako dev` uses a dedicated loopback alias (`127.77.0.1`) plus a launchd-managed loopback proxy so public URLs stay on default ports (`:443` for HTTPS, `:80` for HTTP redirect).
+- On Linux, `tako dev` uses the same loopback alias (`127.77.0.1`) with iptables redirect rules (443→47831, 80→47830, 53→53535) to achieve portless URLs without a proxy binary. One-time `sudo` sets up the rules, a systemd oneshot service persists them across reboots. On NixOS, a `configuration.nix` snippet is printed instead of imperative setup.
 
 CLI prompt history is stored separately at `history.toml` (not in `config.toml`).
 
@@ -244,7 +245,7 @@ Install the CLI on your local machine:
 curl -fsSL https://tako.sh/install.sh | sh
 ```
 
-The hosted installer installs `tako`, `tako-dev-server`, and `tako-loopback-proxy` from the same channel/archive.
+The hosted installer installs `tako` and `tako-dev-server` from the same channel/archive. On macOS, the archive also includes `tako-loopback-proxy`.
 
 Install canary CLI artifacts directly:
 
@@ -258,7 +259,7 @@ Install from crates.io:
 cargo install tako
 ```
 
-`cargo install tako` also installs `tako`, `tako-dev-server`, and `tako-loopback-proxy` from the same package/version.
+`cargo install tako` also installs `tako`, `tako-dev-server`, and `tako-loopback-proxy` (macOS only) from the same package/version.
 
 Upgrade local CLI:
 
@@ -378,6 +379,7 @@ Start (or attach to) a local development session for the current app, backed by 
 - `--name` overrides the app name (defaults to resolving from the selected config file or its parent directory name).
 - `tako dev` is a **client**: it ensures `tako-dev-server` is running, then registers the selected config file with the daemon.
   - On macOS, `tako dev` also ensures the socket-activated `tako-loopback-proxy` helper is installed and loaded for loopback-only `:80/:443` ingress.
+  - On Linux, `tako dev` ensures iptables redirect rules and a loopback alias (`127.77.0.1`) are configured for portless HTTPS. On NixOS, it prints a `configuration.nix` snippet instead of imperative setup.
   - When running from a source checkout, `tako dev` prefers the repo-local `target/debug|release/tako-dev-server` binary.
   - When running from a source checkout on macOS, `tako dev` can also build the repo-local `tako-loopback-proxy` binary when the helper needs installation or repair.
   - If no local daemon binary exists, `tako dev` falls back to `tako-dev-server` on `PATH`.

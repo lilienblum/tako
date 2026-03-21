@@ -39,7 +39,7 @@ The daemon:
 - Answers DNS queries for `*.tako.test` hostnames.
 - Manages app processes (spawn, stop, wake-on-request).
 
-Installed CLI distributions include three binaries: `tako`, `tako-dev-server`, and `tako-loopback-proxy`. When running from a source checkout, `tako dev` prefers repo-local debug/release builds of these helpers.
+Installed CLI distributions include `tako` and `tako-dev-server` (on macOS, also `tako-loopback-proxy`). When running from a source checkout, `tako dev` prefers repo-local debug/release builds of these helpers.
 
 If the daemon binary is missing, `tako dev` reports a build hint (source checkout) or reinstall hint (installed CLI).
 
@@ -128,9 +128,14 @@ Tako uses split DNS so `*.tako.test` hostnames resolve locally without touching 
   port 53535
 ```
 
+### Linux resolver
+
+On Linux, `tako dev` configures `systemd-resolved` to forward `tako.test` queries to the local DNS listener. This is part of the one-time setup described in the [Linux port redirect](#linux-port-redirect) section below.
+
 The dev daemon runs a DNS listener on `127.0.0.1:53535` and answers `A` queries for active `*.tako.test` hosts:
 
 - On macOS, app hosts resolve to `127.77.0.1` (the dedicated loopback address used by the loopback proxy).
+- On Linux, app hosts resolve to `127.77.0.1` (the dedicated loopback address used by iptables redirect).
 - On other platforms, app hosts resolve to `127.0.0.1`.
 
 ## macOS loopback proxy
@@ -152,7 +157,22 @@ After setup, your dev URLs look like:
 https://my-app.tako.test/
 ```
 
-On platforms without the loopback proxy, the URL includes the port:
+## Linux port redirect
+
+On Linux, Tako uses kernel-level iptables redirect rules instead of a loopback proxy. No extra binary is needed -- the dev server binds its unprivileged ports and the kernel transparently redirects traffic from standard ports on `127.77.0.1`.
+
+On first run, `tako dev` performs a one-time setup (requires sudo) that configures:
+
+- A loopback alias (`127.77.0.1` on `lo`)
+- iptables DNAT rules: `127.77.0.1:443` to port `47831`, `127.77.0.1:80` to port `47830`, and `127.77.0.1:53` to port `53535`
+- A `systemd-resolved` drop-in to forward `tako.test` DNS queries to the local listener
+- A systemd oneshot service (`tako-dev-redirect.service`) so the alias and iptables rules persist across reboots
+
+### NixOS
+
+On NixOS, imperative network changes are wiped by `nixos-rebuild`. Instead of running the setup itself, Tako prints a `configuration.nix` snippet that you can add to your system configuration. After adding the snippet, run `nixos-rebuild switch` and restart `tako dev`.
+
+On platforms without the loopback proxy or port redirect, the URL includes the port:
 
 ```
 https://my-app.tako.test:47831/
@@ -311,6 +331,9 @@ The report covers:
   - Dedicated loopback alias (`127.77.0.1`) status
   - `launchd` load status
   - TCP reachability on `127.77.0.1:443` and `127.77.0.1:80`
+- On Linux:
+  - Port redirect status (loopback alias and iptables rules)
+  - TCP reachability on `127.77.0.1:443` and `127.77.0.1:80`
 
 If the daemon is not running, doctor reports `status: not running` with a hint to start `tako dev`, and exits successfully.
 
@@ -318,24 +341,27 @@ If the daemon is not running, doctor reports `status: not running` with a hint t
 
 If name resolution fails:
 
-- Verify `/etc/resolver/tako.test` exists and points to `127.0.0.1:53535`.
+- On macOS, verify `/etc/resolver/tako.test` exists and points to `127.0.0.1:53535`.
+- On Linux, verify `systemd-resolved` is running and the `tako.test` DNS forward zone is configured.
 - Ensure `tako dev` is running and your app is listed in `tako dev ls`.
 - On macOS, verify `tako doctor` shows the loopback proxy helper loaded, the `127.77.0.1` alias present, and TCP `127.77.0.1:443` reachable.
+- On Linux, verify `tako doctor` shows the port redirect rules active and TCP `127.77.0.1:443` reachable.
 - Confirm no other process is using UDP `127.0.0.1:53535`.
 
 ## Files created by tako dev
 
 Paths follow platform conventions (`~/Library/Application Support/tako/` on macOS, `~/.local/share/tako/` and `~/.config/tako/` on Linux). Source-checkout debug builds use `{repo}/local-dev/.tako/` instead.
 
-| File                                      | Created by        | Purpose                                |
-| ----------------------------------------- | ----------------- | -------------------------------------- |
-| `{TAKO_HOME}/ca/ca.crt`                   | `tako dev`        | Local dev root CA certificate (public) |
-| `{TAKO_HOME}/dev-server.sock`             | `tako-dev-server` | Unix socket for the control protocol   |
-| `{TAKO_HOME}/dev-server.db`               | `tako-dev-server` | SQLite database for app registrations  |
-| `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl` | `tako-dev-server` | Shared per-app log stream              |
-| `{TAKO_HOME}/certs/fullchain.pem`         | `tako dev`        | Dev daemon TLS certificate             |
-| `{TAKO_HOME}/certs/privkey.pem`           | `tako dev`        | Dev daemon TLS private key             |
-| `/etc/resolver/tako.test`                 | `tako dev`        | macOS DNS resolver config              |
+| File                                            | Created by        | Purpose                                       |
+| ----------------------------------------------- | ----------------- | --------------------------------------------- |
+| `{TAKO_HOME}/ca/ca.crt`                         | `tako dev`        | Local dev root CA certificate (public)        |
+| `{TAKO_HOME}/dev-server.sock`                   | `tako-dev-server` | Unix socket for the control protocol          |
+| `{TAKO_HOME}/dev-server.db`                     | `tako-dev-server` | SQLite database for app registrations         |
+| `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl`       | `tako-dev-server` | Shared per-app log stream                     |
+| `{TAKO_HOME}/certs/fullchain.pem`               | `tako dev`        | Dev daemon TLS certificate                    |
+| `{TAKO_HOME}/certs/privkey.pem`                 | `tako dev`        | Dev daemon TLS private key                    |
+| `/etc/resolver/tako.test`                       | `tako dev`        | macOS DNS resolver config                     |
+| `/etc/systemd/system/tako-dev-redirect.service` | `tako dev`        | Linux loopback alias and iptables persistence |
 
 Log records use a single `timestamp` field (`hh:mm:ss`). When a new owning session starts, the shared log stream is truncated. Attached clients replay existing contents and then follow new lines.
 
