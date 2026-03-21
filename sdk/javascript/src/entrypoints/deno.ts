@@ -1,8 +1,6 @@
+#!/usr/bin/env -S deno run --allow-net --allow-env --allow-read --allow-write --node-modules-dir=auto
 /**
- * Tako Deno Entrypoint
- *
- * Runs user apps under Deno with Tako internal endpoints.
- * Usage: deno run --allow-net --allow-env --allow-read entrypoints/deno.ts <app-path>
+ * Tako Deno Entrypoint — run via `deno run npm:tako-deno <main>`
  */
 
 import { createEntrypoint } from "../create-entrypoint";

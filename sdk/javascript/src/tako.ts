@@ -54,23 +54,16 @@ export class Tako {
   }
 
   /**
-   * Get Tako environment info
+   * Get the Tako build version (set via TAKO_BUILD env var in deploy manifest).
    */
-  static getEnv(): {
-    version: string;
-    instanceId: string;
-  } {
-    return {
-      version: process.env["TAKO_VERSION"] || "unknown",
-      instanceId: process.env["TAKO_INSTANCE"] || "unknown",
-    };
+  static get build(): string {
+    return process.env["TAKO_BUILD"] || "unknown";
   }
 
   /**
-   * Check if running in Tako environment
+   * Check if running in Tako environment.
    */
   static isRunningInTako(): boolean {
-    // If Tako injected any of its runtime metadata, treat it as "running under Tako".
-    return !!(process.env["TAKO_APP_SOCKET"] || process.env["TAKO_BUILD"] || process.env["TAKO_VERSION"]);
+    return !!process.env["TAKO_BUILD"];
   }
 }

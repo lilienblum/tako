@@ -1,9 +1,6 @@
+#!/usr/bin/env node
 /**
- * Tako Node.js Entrypoint
- *
- * Runs user apps under Node.js with Tako internal endpoints.
- * Converts between node:http and Web Request/Response APIs.
- * Usage: node entrypoints/node.ts <app-path>
+ * Tako Node.js Entrypoint — run via `npx tako-node <main>`
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";

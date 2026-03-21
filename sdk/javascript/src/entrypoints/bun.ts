@@ -1,8 +1,6 @@
+#!/usr/bin/env bun
 /**
- * Tako Bun Entrypoint
- *
- * Runs user apps under Bun with Tako internal endpoints.
- * Usage: bun run entrypoints/bun.ts <app-path>
+ * Tako Bun Entrypoint — run via `bunx tako-bun <main>`
  */
 
 import { createEntrypoint } from "../create-entrypoint";

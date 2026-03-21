@@ -89,7 +89,18 @@ async function handleSetSecrets(request: Request): Promise<Response> {
 
   try {
     const secrets = await request.json();
-    injectSecrets(secrets);
+    if (
+      typeof secrets !== "object" ||
+      secrets === null ||
+      Array.isArray(secrets) ||
+      !Object.values(secrets).every((v) => typeof v === "string")
+    ) {
+      return new Response(JSON.stringify({ error: "Expected object with string values" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    injectSecrets(secrets as Record<string, string>);
     return new Response(JSON.stringify({ status: "ok" }), {
       status: 200,
       headers: { "Content-Type": "application/json" },

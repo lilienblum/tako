@@ -62,10 +62,12 @@ For Vite apps, point `tako.toml main` at the generated wrapper, for example:
 main = "dist/server/tako-entry.mjs"
 ```
 
+If your app uses Vite or another JS workspace tool behind package scripts, keep using this plugin. Tako's JS defaults run the runtime lane's `dev` / `build` scripts, so those scripts are the right place to call `vp`, `turbo`, or similar tools.
+
 ## Build and Test
 
 ```bash
-cd sdk/js
+cd sdk/javascript
 bun install
 bun run build
 bun run typecheck

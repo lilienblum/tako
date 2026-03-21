@@ -1,0 +1,65 @@
+{
+  "name": "tako.sh",
+  "version": "0.0.1",
+  "description": "Official SDK for the Tako application platform",
+  "keywords": [
+    "bun",
+    "deno",
+    "deployment",
+    "node",
+    "serverless",
+    "tako",
+    "tako.sh"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lilienblum/tako.git",
+    "directory": "sdk/javascript"
+  },
+  "bin": {
+    "tako-bun": "dist/entrypoints/bun.mjs",
+    "tako-deno": "dist/entrypoints/deno.mjs",
+    "tako-node": "dist/entrypoints/node.mjs"
+  },
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.mts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.mts",
+      "import": "./dist/index.mjs"
+    },
+    "./bun": {
+      "types": "./dist/bun.d.mts",
+      "import": "./dist/bun.mjs"
+    },
+    "./node": {
+      "types": "./dist/node.d.mts",
+      "import": "./dist/node.mjs"
+    },
+    "./deno": {
+      "types": "./dist/deno.d.mts",
+      "import": "./dist/deno.mjs"
+    },
+    "./vite": {
+      "types": "./dist/vite.d.mts",
+      "import": "./dist/vite.mjs"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@tsconfig/strictest": "catalog:dev",
+    "@types/bun": "catalog:dev",
+    "@types/node": "catalog:dev",
+    "tsdown": "^0.21.4",
+    "typescript": "catalog:dev",
+    "vite": "catalog:"
+  }
+}

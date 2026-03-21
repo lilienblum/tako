@@ -8,11 +8,7 @@ describe("Tako", () => {
   });
 
   afterEach(() => {
-    // Clean up environment
-    delete process.env.TAKO_VERSION;
-    delete process.env.TAKO_INSTANCE;
     delete process.env.TAKO_BUILD;
-    delete process.env.TAKO_APP_SOCKET;
   });
 
   test("creates instance with default options", () => {
@@ -33,20 +29,14 @@ describe("Tako", () => {
     expect(Tako.getInstance()).not.toBe(tako1);
   });
 
-  describe("getEnv", () => {
-    test("returns default values when env not set", () => {
-      const env = Tako.getEnv();
-      expect(env.version).toBe("unknown");
-      expect(env.instanceId).toBe("unknown");
+  describe("build", () => {
+    test("returns unknown when TAKO_BUILD not set", () => {
+      expect(Tako.build).toBe("unknown");
     });
 
-    test("returns values from environment", () => {
-      process.env.TAKO_VERSION = "abc123";
-      process.env.TAKO_INSTANCE = "2";
-
-      const env = Tako.getEnv();
-      expect(env.version).toBe("abc123");
-      expect(env.instanceId).toBe("2");
+    test("returns TAKO_BUILD value", () => {
+      process.env.TAKO_BUILD = "v42";
+      expect(Tako.build).toBe("v42");
     });
   });
 
@@ -55,8 +45,8 @@ describe("Tako", () => {
       expect(Tako.isRunningInTako()).toBe(false);
     });
 
-    test("returns true when TAKO_VERSION is set", () => {
-      process.env.TAKO_VERSION = "abc123";
+    test("returns true when TAKO_BUILD is set", () => {
+      process.env.TAKO_BUILD = "v1";
       expect(Tako.isRunningInTako()).toBe(true);
     });
   });

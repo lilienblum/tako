@@ -54,7 +54,9 @@ describe("tako Vite entry plugin", () => {
     expect(wrapper).toContain('import entryModule, * as entryNamespace from "./server/index.mjs";');
     expect(wrapper).toContain("const fetchHandler");
     expect(wrapper).toContain("entryModule.fetch");
-    expect(wrapper).toContain("default fetch function, a default object with fetch, or a named fetch export");
+    expect(wrapper).toContain(
+      "default fetch function, a default object with fetch, or a named fetch export",
+    );
     expect(wrapper).toContain("export default fetchHandler;");
   });
 
