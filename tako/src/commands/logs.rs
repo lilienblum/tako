@@ -1,9 +1,9 @@
-use std::env::current_dir;
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 
-use crate::app::require_app_name_from_config;
+use crate::commands::project_context;
 use crate::commands::server;
 use crate::config::{ServersToml, TakoToml};
 use crate::output;
@@ -17,24 +17,26 @@ pub fn run(
     requested_env: Option<&str>,
     tail: bool,
     days: u32,
+    config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(requested_env, tail, days))
+    rt.block_on(run_async(requested_env, tail, days, config_path))
 }
 
 async fn run_async(
     requested_env: Option<&str>,
     tail: bool,
     days: u32,
+    config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = current_dir()?;
+    let context = project_context::resolve_existing(config_path)?;
 
-    let tako_config = TakoToml::load_from_dir(&project_dir)?;
+    let tako_config = TakoToml::load_from_file(&context.config_path)?;
     let mut servers = ServersToml::load()?;
 
     let env = super::helpers::resolve_env(requested_env);
 
-    let app_name = require_app_name_from_config(&project_dir)
+    let app_name = crate::app::require_app_name_from_config_path(&context.config_path)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
     let remote_app_name = tako_core::deployment_app_id(&app_name, &env);
 

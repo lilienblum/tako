@@ -1,7 +1,8 @@
-use std::env::current_dir;
+use std::path::Path;
 
-use crate::app::require_app_name_from_config;
+use crate::app::require_app_name_from_config_path;
 use crate::commands::helpers::{resolve_servers_for_env, validate_server_names};
+use crate::commands::project_context;
 use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::SshClient;
@@ -20,9 +21,10 @@ pub fn run(
     env: Option<&str>,
     server: Option<&str>,
     app: Option<&str>,
+    config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(instances, env, server, app))
+    rt.block_on(run_async(instances, env, server, app, config_path))
 }
 
 async fn run_async(
@@ -30,15 +32,19 @@ async fn run_async(
     env: Option<&str>,
     server: Option<&str>,
     app: Option<&str>,
+    config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = current_dir()?;
-    let project_tako = if TakoToml::exists_in_dir(&project_dir) {
-        Some(TakoToml::load_from_dir(&project_dir)?)
+    let project_context = project_context::resolve_optional(config_path)?;
+    let project_tako = if let Some(context) = project_context.as_ref() {
+        Some(TakoToml::load_from_file(&context.config_path)?)
     } else {
         None
     };
+    let config_path = project_context
+        .as_ref()
+        .map(|context| context.config_path.as_path());
 
-    let target = resolve_scale_target(project_tako.as_ref(), &project_dir, app, env, server)?;
+    let target = resolve_scale_target(project_tako.as_ref(), config_path, app, env, server)?;
     let servers = ServersToml::load()?;
     let server_names = resolve_scale_server_names(
         project_tako.as_ref(),
@@ -131,13 +137,14 @@ async fn run_async(
 
 fn resolve_scale_target(
     project_tako: Option<&TakoToml>,
-    project_dir: &std::path::Path,
+    config_path: Option<&std::path::Path>,
     explicit_app: Option<&str>,
     env: Option<&str>,
     server: Option<&str>,
 ) -> Result<ScaleTarget, Box<dyn std::error::Error>> {
     if let Some(tako_config) = project_tako {
-        let resolved = require_app_name_from_config(project_dir).map_err(|error| {
+        let config_path = config_path.expect("config path must exist when config is loaded");
+        let resolved = require_app_name_from_config_path(config_path).map_err(|error| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, error.to_string())
         })?;
         if let Some(app_name) = explicit_app

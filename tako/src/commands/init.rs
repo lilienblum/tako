@@ -72,8 +72,7 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
         .and_then(|c| c.runtime.as_deref())
         .and_then(BuildAdapter::from_id)
         .unwrap_or(detected_adapter);
-    let mut selected_preset: Option<String> =
-        existing.as_ref().and_then(|c| c.preset.clone());
+    let mut selected_preset: Option<String> = existing.as_ref().and_then(|c| c.preset.clone());
     let mut main_entry: Option<String> = existing.as_ref().and_then(|c| c.main.clone());
     let mut assets: Vec<String> = existing
         .as_ref()

@@ -473,23 +473,23 @@ fn parse_group_preset_content(
     parse_and_validate_preset(&preset_content, preset_name)
 }
 
-pub fn parse_and_validate_preset(
-    content: &str,
-    inferred_name: &str,
-) -> Result<AppPreset, String> {
+pub fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<AppPreset, String> {
     // Warn on unknown fields (legacy preset fields like dev, build, install, start).
     if let Ok(value) = toml::from_str::<toml::Value>(content) {
         if let Some(table) = value.as_table() {
             for key in table.keys() {
                 if !KNOWN_PRESET_FIELDS.contains(&key.as_str()) {
-                    tracing::warn!("Preset has unknown field '{}' — only name, main, assets are supported", key);
+                    tracing::warn!(
+                        "Preset has unknown field '{}' — only name, main, assets are supported",
+                        key
+                    );
                 }
             }
         }
     }
 
-    let raw: AppPresetRaw = toml::from_str(content)
-        .map_err(|e| format!("Failed to parse preset TOML: {e}"))?;
+    let raw: AppPresetRaw =
+        toml::from_str(content).map_err(|e| format!("Failed to parse preset TOML: {e}"))?;
 
     let name = raw
         .name

@@ -1,12 +1,13 @@
 use std::collections::BTreeMap;
-use std::env::current_dir;
+use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::sync::OnceLock;
 
 use clap::Subcommand;
 use time::{OffsetDateTime, UtcOffset};
 
-use crate::app::require_app_name_from_config;
+use crate::app::require_app_name_from_config_path;
+use crate::commands::project_context;
 use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::SshClient;
@@ -40,16 +41,22 @@ pub enum ReleaseCommands {
     },
 }
 
-pub fn run(cmd: ReleaseCommands) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(
+    cmd: ReleaseCommands,
+    config_path: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(cmd))
+    rt.block_on(run_async(cmd, config_path))
 }
 
-async fn run_async(cmd: ReleaseCommands) -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = current_dir()?;
-    let app_name = require_app_name_from_config(&project_dir)
+async fn run_async(
+    cmd: ReleaseCommands,
+    config_path: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = project_context::resolve_existing(config_path)?;
+    let app_name = require_app_name_from_config_path(&context.config_path)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
-    let tako_config = TakoToml::load_from_dir(&project_dir)?;
+    let tako_config = TakoToml::load_from_file(&context.config_path)?;
     let servers = ServersToml::load()?;
 
     match cmd {

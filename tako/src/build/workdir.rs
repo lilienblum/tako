@@ -232,13 +232,22 @@ mod tests {
 
         symlink_node_modules(&root, &workdir).unwrap();
 
-        assert!(workdir.join("node_modules").symlink_metadata().unwrap().file_type().is_symlink());
-        assert!(workdir
-            .join("packages/web/node_modules")
-            .symlink_metadata()
-            .unwrap()
-            .file_type()
-            .is_symlink());
+        assert!(
+            workdir
+                .join("node_modules")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            workdir
+                .join("packages/web/node_modules")
+                .symlink_metadata()
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
     }
 
     #[test]

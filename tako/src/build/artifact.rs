@@ -345,8 +345,9 @@ pub fn create_workdir_archive(
     }
 
     let file = std::fs::File::create(output_path)?;
-    let encoder = zstd::stream::write::Encoder::new(file, 3)
-        .map_err(|e| BuildError::ArchiveError(format!("Failed to initialize zstd encoder: {}", e)))?;
+    let encoder = zstd::stream::write::Encoder::new(file, 3).map_err(|e| {
+        BuildError::ArchiveError(format!("Failed to initialize zstd encoder: {}", e))
+    })?;
     let mut archive = tar::Builder::new(encoder);
     archive.follow_symlinks(false);
 

@@ -69,7 +69,6 @@ impl BuildAdapter {
         let def = self.runtime_def()?;
         infer_main_entrypoint_from_def(&def, project_dir)
     }
-
 }
 
 /// Infer the main entrypoint for a project using the runtime definition.

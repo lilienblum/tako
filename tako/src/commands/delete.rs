@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
-use std::env::current_dir;
+use std::path::Path;
 
-use crate::app::require_app_name_from_config;
+use crate::app::require_app_name_from_config_path;
+use crate::commands::project_context;
 use crate::config::{ServerEntry, ServersToml, TakoToml};
 use crate::output;
 use crate::ssh::SshClient;
@@ -27,28 +28,35 @@ pub fn run(
     env: Option<&str>,
     server: Option<&str>,
     assume_yes: bool,
+    config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(env, server, assume_yes))
+    rt.block_on(run_async(env, server, assume_yes, config_path))
 }
 
 async fn run_async(
     requested_env: Option<&str>,
     requested_server: Option<&str>,
     assume_yes: bool,
+    config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = current_dir()?;
     let interactive = output::is_interactive();
 
-    let project_tako = load_optional_project_tako_toml(&project_dir)?;
-    let project_app =
-        if project_tako.is_some() {
-            Some(require_app_name_from_config(&project_dir).map_err(|e| {
+    let project_context = project_context::resolve_optional(config_path)?;
+    let project_tako = if let Some(context) = project_context.as_ref() {
+        Some(TakoToml::load_from_file(&context.config_path)?)
+    } else {
+        None
+    };
+    let project_app = if let Some(context) = project_context.as_ref() {
+        Some(
+            require_app_name_from_config_path(&context.config_path).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string())
-            })?)
-        } else {
-            None
-        };
+            })?,
+        )
+    } else {
+        None
+    };
 
     let servers = ServersToml::load()?;
 
@@ -160,16 +168,6 @@ async fn run_async(
         output::strong(&target.server_name)
     ));
     Ok(())
-}
-
-fn load_optional_project_tako_toml(
-    project_dir: &std::path::Path,
-) -> Result<Option<TakoToml>, Box<dyn std::error::Error>> {
-    let path = project_dir.join("tako.toml");
-    if !path.exists() {
-        return Ok(None);
-    }
-    Ok(Some(TakoToml::load_from_dir(project_dir)?))
 }
 
 async fn discover_remote_deployments(

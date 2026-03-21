@@ -351,7 +351,9 @@ where
     ) -> std::fmt::Result {
         use tracing_subscriber::fmt::time::FormatTime;
 
-        LocalTimer.format_time(&mut writer)?;
+        if !is_ci() {
+            LocalTimer.format_time(&mut writer)?;
+        }
 
         // Level (right-aligned, 5 chars)
         let level = *event.metadata().level();
@@ -363,9 +365,17 @@ where
                 tracing::Level::DEBUG => "\x1b[34m",
                 tracing::Level::TRACE => "\x1b[35m",
             };
-            write!(writer, " {color}{level:>5}\x1b[0m ")?;
+            if is_ci() {
+                write!(writer, "{color}{level:>5}\x1b[0m ")?;
+            } else {
+                write!(writer, " {color}{level:>5}\x1b[0m ")?;
+            }
         } else {
-            write!(writer, " {level:>5} ")?;
+            if is_ci() {
+                write!(writer, "{level:>5} ")?;
+            } else {
+                write!(writer, " {level:>5} ")?;
+            }
         }
 
         // Scope from innermost span (leaf → root, take first match)

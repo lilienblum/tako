@@ -442,7 +442,6 @@ fn resolve_dev_preset_ref(project_dir: &Path, cfg: &TakoToml) -> Result<String, 
     Ok(runtime.default_preset().to_string())
 }
 
-
 fn resolve_runtime_default_dev_command(
     runtime_adapter: BuildAdapter,
     main: &str,

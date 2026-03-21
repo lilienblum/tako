@@ -1,6 +1,6 @@
 //! Config watcher for `tako dev`.
 //!
-//! Watches `tako.toml` and `.tako/secrets.json` changes in the project root.
+//! Watches the selected config file and `.tako/secrets.json`.
 
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
@@ -18,16 +18,19 @@ pub struct WatcherHandle {
 /// Watches `tako.toml` and `.tako/secrets.json` for changes in a project directory.
 pub struct ConfigWatcher {
     project_dir: PathBuf,
+    config_path: PathBuf,
     changed_tx: mpsc::Sender<()>,
 }
 
 impl ConfigWatcher {
     pub fn new(
         project_dir: PathBuf,
+        config_path: PathBuf,
         changed_tx: mpsc::Sender<()>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
             project_dir,
+            config_path,
             changed_tx,
         })
     }
@@ -36,10 +39,10 @@ impl ConfigWatcher {
         let (tx, rx) = std_mpsc::channel();
         let mut debouncer = new_debouncer(Duration::from_millis(150), tx)?;
 
-        // Watch the project root (non-recursive) for tako.toml changes.
+        // Watch the selected config file directly.
         debouncer
             .watcher()
-            .watch(&self.project_dir, RecursiveMode::NonRecursive)?;
+            .watch(&self.config_path, RecursiveMode::NonRecursive)?;
 
         // Watch .tako/ directory for secrets.json changes.
         let tako_dir = self.project_dir.join(".tako");
@@ -50,8 +53,7 @@ impl ConfigWatcher {
         }
 
         let changed_tx = self.changed_tx.clone();
-        let project_dir = self.project_dir.clone();
-        let watched_config = self.project_dir.join("tako.toml");
+        let watched_config = self.config_path.clone();
         let watched_secrets = self.project_dir.join(".tako").join("secrets.json");
         let handle = std::thread::spawn(move || {
             for result in rx {
@@ -59,10 +61,6 @@ impl ConfigWatcher {
                     Ok(events) => {
                         for event in events {
                             if event.path == watched_config || event.path == watched_secrets {
-                                let _ = changed_tx.blocking_send(());
-                            } else if event.path == project_dir {
-                                // Some platforms report directory-level events; treat any event in
-                                // the project root as a hint and re-check.
                                 let _ = changed_tx.blocking_send(());
                             }
                         }

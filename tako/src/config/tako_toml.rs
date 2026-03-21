@@ -302,7 +302,11 @@ impl Config {
             validate_build_glob(exclude, "build.exclude")?;
         }
         // Mutual exclusion: build.run (non-empty) and build_stages cannot both be set
-        let has_build_run = self.build.run.as_deref().is_some_and(|r| !r.trim().is_empty());
+        let has_build_run = self
+            .build
+            .run
+            .as_deref()
+            .is_some_and(|r| !r.trim().is_empty());
         if has_build_run && !self.build_stages.is_empty() {
             return Err(ConfigError::Validation(
                 "Cannot use both [build] with 'run' and [[build_stages]]; they are mutually exclusive."
@@ -1563,10 +1567,7 @@ cwd = "../outside"
 run = "bun run build"
 "#;
         let err = Config::parse(toml).unwrap_err();
-        assert!(
-            err.to_string()
-                .contains("must not escape the project root")
-        );
+        assert!(err.to_string().contains("must not escape the project root"));
     }
 
     #[test]

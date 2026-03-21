@@ -45,6 +45,10 @@ pub struct Cli {
     #[arg(long, global = true)]
     pub dry_run: bool,
 
+    /// Use an explicit config name/path instead of ./tako.toml (`.toml` suffix optional)
+    #[arg(short = 'c', long, global = true, value_name = "CONFIG")]
+    pub config: Option<std::path::PathBuf>,
+
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -569,7 +573,6 @@ mod tests {
             panic!("expected Dev");
         };
         assert!(command.is_none());
-        assert!(args.dir.is_none());
         assert!(args.variant.is_none());
     }
 
@@ -699,6 +702,86 @@ mod tests {
     }
 
     #[test]
+    fn config_flag_parses_globally_before_subcommand() {
+        let cli = Cli::try_parse_from(["tako", "--config", "configs/preview", "deploy"]).unwrap();
+        assert_eq!(
+            cli.config.as_deref(),
+            Some(std::path::Path::new("configs/preview"))
+        );
+    }
+
+    #[test]
+    fn config_flag_parses_globally_after_subcommand() {
+        let cli = Cli::try_parse_from(["tako", "deploy", "-c", "configs/preview"]).unwrap();
+        assert_eq!(
+            cli.config.as_deref(),
+            Some(std::path::Path::new("configs/preview"))
+        );
+    }
+
+    #[test]
+    fn deploy_rejects_removed_positional_dir_argument() {
+        let result = Cli::try_parse_from(["tako", "deploy", "apps/web"]);
+        match result {
+            Ok(_) => panic!("expected parse failure"),
+            Err(err) => assert!(
+                err.to_string().contains("unexpected argument 'apps/web'"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+
+    #[test]
+    fn dev_rejects_removed_positional_dir_argument() {
+        let result = Cli::try_parse_from(["tako", "dev", "apps/web"]);
+        match result {
+            Ok(_) => panic!("expected parse failure"),
+            Err(err) => assert!(
+                err.to_string()
+                    .contains("unrecognized subcommand 'apps/web'")
+                    || err.to_string().contains("unexpected argument 'apps/web'"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+
+    #[test]
+    fn init_rejects_removed_positional_dir_argument() {
+        let result = Cli::try_parse_from(["tako", "init", "apps/web"]);
+        match result {
+            Ok(_) => panic!("expected parse failure"),
+            Err(err) => assert!(
+                err.to_string().contains("unexpected argument 'apps/web'"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+
+    #[test]
+    fn logs_rejects_removed_positional_dir_argument() {
+        let result = Cli::try_parse_from(["tako", "logs", "apps/web"]);
+        match result {
+            Ok(_) => panic!("expected parse failure"),
+            Err(err) => assert!(
+                err.to_string().contains("unexpected argument 'apps/web'"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+
+    #[test]
+    fn delete_rejects_removed_positional_dir_argument() {
+        let result = Cli::try_parse_from(["tako", "delete", "apps/web"]);
+        match result {
+            Ok(_) => panic!("expected parse failure"),
+            Err(err) => assert!(
+                err.to_string().contains("unexpected argument 'apps/web'"),
+                "unexpected error: {err}"
+            ),
+        }
+    }
+
+    #[test]
     fn ci_and_verbose_flags_combine() {
         let cli = Cli::try_parse_from(["tako", "--ci", "-v", "deploy"]).unwrap();
         assert!(cli.ci);
@@ -734,10 +817,6 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct DevArgs {
-    /// Run as if invoked from this directory
-    #[arg(value_name = "DIR")]
-    pub dir: Option<std::path::PathBuf>,
-
     /// Run a variant of the app (e.g. --variant foo → myapp-foo.tako.test)
     #[arg(long, visible_alias = "var")]
     pub variant: Option<String>,
@@ -761,11 +840,7 @@ pub enum DevSubcommands {
 #[derive(Subcommand)]
 pub enum Commands {
     /// Initialize a new tako project
-    Init {
-        /// Run in this directory (defaults to current directory)
-        #[arg(value_name = "DIR")]
-        dir: Option<std::path::PathBuf>,
-    },
+    Init,
 
     /// View remote logs
     Logs {
@@ -780,10 +855,6 @@ pub enum Commands {
         /// Number of days of history to show (default: 3)
         #[arg(long, default_value = "3")]
         days: u32,
-
-        /// Run in this directory (defaults to current directory)
-        #[arg(value_name = "DIR")]
-        dir: Option<std::path::PathBuf>,
     },
 
     /// Start development server
@@ -831,10 +902,6 @@ pub enum Commands {
         /// Skip confirmation prompts
         #[arg(short = 'y', long = "yes")]
         yes: bool,
-
-        /// Run in this directory (defaults to current directory)
-        #[arg(value_name = "DIR")]
-        dir: Option<std::path::PathBuf>,
     },
 
     /// Delete a deployed app from a specific environment/server deployment
@@ -851,10 +918,6 @@ pub enum Commands {
         /// Skip confirmation prompts
         #[arg(short = 'y', long = "yes")]
         yes: bool,
-
-        /// Run in this directory (defaults to current directory)
-        #[arg(value_name = "DIR")]
-        dir: Option<std::path::PathBuf>,
     },
 
     /// Show version information
@@ -897,34 +960,21 @@ impl Cli {
                 println!("{}", display_version());
                 Ok(())
             }
-            Commands::Init { dir } => {
-                if let Some(dir) = dir {
-                    std::env::set_current_dir(dir)?;
-                }
-                commands::init::run()
-            }
-            Commands::Logs {
-                env,
-                tail,
-                days,
-                dir,
-            } => {
-                if let Some(dir) = dir {
-                    std::env::set_current_dir(dir)?;
-                }
-                commands::logs::run(env.as_deref(), tail, days)
+            Commands::Init => commands::init::run(self.config.as_deref()),
+            Commands::Logs { env, tail, days } => {
+                commands::logs::run(env.as_deref(), tail, days, self.config.as_deref())
             }
             Commands::Dev { command, args } => {
                 let rt = tokio::runtime::Runtime::new()?;
 
-                if let Some(dir) = args.dir {
-                    std::env::set_current_dir(dir)?;
-                }
-
                 match command {
-                    None => rt.block_on(commands::dev::run(DEV_PUBLIC_PORT, args.variant)),
+                    None => rt.block_on(commands::dev::run(
+                        DEV_PUBLIC_PORT,
+                        args.variant,
+                        self.config.as_deref(),
+                    )),
                     Some(DevSubcommands::Stop { name, all }) => {
-                        rt.block_on(commands::dev::stop(name, all))
+                        rt.block_on(commands::dev::stop(name, all, self.config.as_deref()))
                     }
                     Some(DevSubcommands::Ls) => rt.block_on(commands::dev::ls()),
                 }
@@ -934,32 +984,30 @@ impl Cli {
                 rt.block_on(commands::doctor::run())
             }
             Commands::Servers(cmd) => server::run(cmd),
-            Commands::Secrets(cmd) => secret::run(cmd),
-            Commands::Releases(cmd) => releases::run(cmd),
+            Commands::Secrets(cmd) => secret::run(cmd, self.config.as_deref()),
+            Commands::Releases(cmd) => releases::run(cmd, self.config.as_deref()),
             Commands::Upgrade { canary, stable } => upgrade::run(canary, stable),
-            Commands::Deploy { env, yes, dir } => {
-                if let Some(dir) = dir {
-                    std::env::set_current_dir(dir)?;
-                }
-                commands::deploy::run(env.as_deref(), yes)
+            Commands::Deploy { env, yes } => {
+                commands::deploy::run(env.as_deref(), yes, self.config.as_deref())
             }
-            Commands::Delete {
-                env,
-                server,
+            Commands::Delete { env, server, yes } => delete::run(
+                env.as_deref(),
+                server.as_deref(),
                 yes,
-                dir,
-            } => {
-                if let Some(dir) = dir {
-                    std::env::set_current_dir(dir)?;
-                }
-                delete::run(env.as_deref(), server.as_deref(), yes)
-            }
+                self.config.as_deref(),
+            ),
             Commands::Scale {
                 instances,
                 env,
                 server,
                 app,
-            } => scale::run(instances, env.as_deref(), server.as_deref(), app.as_deref()),
+            } => scale::run(
+                instances,
+                env.as_deref(),
+                server.as_deref(),
+                app.as_deref(),
+                self.config.as_deref(),
+            ),
         }
     }
 }

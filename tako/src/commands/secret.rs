@@ -1,5 +1,6 @@
 use crate::output;
 use clap::Subcommand;
+use std::path::Path;
 use tako_core::Command;
 
 #[derive(Subcommand)]
@@ -67,9 +68,13 @@ pub enum SecretKeyCommands {
     },
 }
 
-pub fn run(cmd: SecretCommands) -> Result<(), Box<dyn std::error::Error>> {
+pub fn run(
+    cmd: SecretCommands,
+    config_path: Option<&Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let context = crate::commands::project_context::resolve_existing(config_path)?;
     let rt = tokio::runtime::Runtime::new()?;
-    rt.block_on(run_async(cmd))
+    rt.block_on(run_async(cmd, context))
 }
 
 fn read_secret_value(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -93,36 +98,43 @@ fn read_secret_value(prompt: &str) -> Result<String, Box<dyn std::error::Error>>
     Ok(value)
 }
 
-async fn run_async(cmd: SecretCommands) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_async(
+    cmd: SecretCommands,
+    context: crate::commands::project_context::ProjectContext,
+) -> Result<(), Box<dyn std::error::Error>> {
     match cmd {
         SecretCommands::Set { name, env, sync } => {
             let env = super::helpers::resolve_env(env.as_deref());
-            set_secret(&name, &env, sync).await
+            set_secret(&context, &name, &env, sync).await
         }
-        SecretCommands::Rm { name, env, sync } => remove_secret(&name, env.as_deref(), sync).await,
-        SecretCommands::Ls => list_secrets().await,
-        SecretCommands::Sync { env } => sync_secrets(env.as_deref()).await,
-        SecretCommands::Key(SecretKeyCommands::Derive { env }) => derive_key(env.as_deref()).await,
-        SecretCommands::Key(SecretKeyCommands::Export { env }) => export_key(env.as_deref()).await,
+        SecretCommands::Rm { name, env, sync } => {
+            remove_secret(&context, &name, env.as_deref(), sync).await
+        }
+        SecretCommands::Ls => list_secrets(&context).await,
+        SecretCommands::Sync { env } => sync_secrets(&context, env.as_deref()).await,
+        SecretCommands::Key(SecretKeyCommands::Derive { env }) => {
+            derive_key(&context, env.as_deref()).await
+        }
+        SecretCommands::Key(SecretKeyCommands::Export { env }) => {
+            export_key(&context, env.as_deref()).await
+        }
     }
 }
 
 async fn set_secret(
+    context: &crate::commands::project_context::ProjectContext,
     name: &str,
     env: &str,
     do_sync: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::SecretsStore;
     use crate::crypto::encrypt;
-    use std::env::current_dir;
-
-    let project_dir = current_dir()?;
-    let app_name = resolve_app_name(&project_dir)?;
+    let app_name = resolve_app_name(&context.config_path)?;
 
     // Load secrets and ensure environment has a salt
-    let mut secrets = SecretsStore::load_from_dir(&project_dir)?;
+    let mut secrets = SecretsStore::load_from_dir(&context.project_dir)?;
     secrets.ensure_env_salt(env)?;
-    secrets.save_to_dir(&project_dir)?;
+    secrets.save_to_dir(&context.project_dir)?;
 
     // Get the encryption key (prompts for passphrase if no local key)
     let key = load_or_derive_key(&app_name, env, &secrets)?;
@@ -142,7 +154,7 @@ async fn set_secret(
     // Encrypt and store
     let encrypted = encrypt(&value, &key)?;
     secrets.set(env, name, encrypted)?;
-    secrets.save_to_dir(&project_dir)?;
+    secrets.save_to_dir(&context.project_dir)?;
 
     if exists {
         output::success(&format!(
@@ -159,22 +171,20 @@ async fn set_secret(
     }
 
     if do_sync {
-        sync_secrets(Some(env)).await?;
+        sync_secrets(context, Some(env)).await?;
     }
 
     Ok(())
 }
 
 async fn remove_secret(
+    context: &crate::commands::project_context::ProjectContext,
     name: &str,
     env: Option<&str>,
     do_sync: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::SecretsStore;
-    use std::env::current_dir;
-
-    let project_dir = current_dir()?;
-    let mut secrets = SecretsStore::load_from_dir(&project_dir)?;
+    let mut secrets = SecretsStore::load_from_dir(&context.project_dir)?;
 
     if let Some(env) = env {
         // Remove from specific environment
@@ -225,22 +235,21 @@ async fn remove_secret(
         ));
     }
 
-    secrets.save_to_dir(&project_dir)?;
+    secrets.save_to_dir(&context.project_dir)?;
 
     if do_sync {
         // Sync to the specific env if provided, otherwise all environments
-        sync_secrets(env).await?;
+        sync_secrets(context, env).await?;
     }
 
     Ok(())
 }
 
-async fn list_secrets() -> Result<(), Box<dyn std::error::Error>> {
+async fn list_secrets(
+    context: &crate::commands::project_context::ProjectContext,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::SecretsStore;
-    use std::env::current_dir;
-
-    let project_dir = current_dir()?;
-    let secrets = SecretsStore::load_from_dir(&project_dir)?;
+    let secrets = SecretsStore::load_from_dir(&context.project_dir)?;
 
     if secrets.is_empty() {
         output::warning("No secrets configured.");
@@ -318,15 +327,15 @@ async fn list_secrets() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn sync_secrets(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+async fn sync_secrets(
+    context: &crate::commands::project_context::ProjectContext,
+    target_env: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::{SecretsStore, ServersToml, TakoToml};
     use crate::crypto::decrypt;
-    use std::env::current_dir;
-
-    let project_dir = current_dir()?;
-    let app_name = resolve_app_name(&project_dir)?;
-    let secrets = SecretsStore::load_from_dir(&project_dir)?;
-    let tako_config = TakoToml::load_from_dir(&project_dir)?;
+    let app_name = resolve_app_name(&context.config_path)?;
+    let secrets = SecretsStore::load_from_dir(&context.project_dir)?;
+    let tako_config = TakoToml::load_from_file(&context.config_path)?;
     let mut servers = ServersToml::load()?;
 
     if secrets.is_empty() {
@@ -500,18 +509,18 @@ fn resolve_secret_sync_server_names(
     Ok(resolved)
 }
 
-async fn derive_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+async fn derive_key(
+    context: &crate::commands::project_context::ProjectContext,
+    target_env: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::SecretsStore;
-    use std::env::current_dir;
-
-    let project_dir = current_dir()?;
-    let app_name = resolve_app_name(&project_dir)?;
+    let app_name = resolve_app_name(&context.config_path)?;
     let env = super::helpers::resolve_env(target_env);
 
     // Load secrets and ensure salt exists
-    let mut secrets = SecretsStore::load_from_dir(&project_dir)?;
+    let mut secrets = SecretsStore::load_from_dir(&context.project_dir)?;
     let salt_b64 = secrets.ensure_env_salt(&env)?;
-    secrets.save_to_dir(&project_dir)?;
+    secrets.save_to_dir(&context.project_dir)?;
 
     // Prompt for passphrase
     let passphrase =
@@ -532,11 +541,13 @@ async fn derive_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::
     Ok(())
 }
 
-async fn export_key(target_env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
-    let project_dir = std::env::current_dir()?;
-    let app_name = resolve_app_name(&project_dir)?;
+async fn export_key(
+    context: &crate::commands::project_context::ProjectContext,
+    target_env: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let app_name = resolve_app_name(&context.config_path)?;
     let env = super::helpers::resolve_env(target_env);
-    let secrets = crate::config::SecretsStore::load_from_dir(&project_dir)?;
+    let secrets = crate::config::SecretsStore::load_from_dir(&context.project_dir)?;
     let salt_b64 = secrets
         .get_salt(&env)
         .ok_or_else(|| format!("No secrets configured for environment '{}'.", env))?;
@@ -632,8 +643,8 @@ pub fn load_or_derive_key(
     Ok(key)
 }
 
-fn resolve_app_name(project_dir: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
-    crate::app::require_app_name_from_config(project_dir)
+fn resolve_app_name(config_path: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
+    crate::app::require_app_name_from_config_path(config_path)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()).into())
 }
 

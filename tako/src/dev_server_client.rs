@@ -260,12 +260,12 @@ pub enum DevServerEvent {
         path: String,
     },
     AppStatusChanged {
-        project_dir: String,
+        config_path: String,
         app_name: String,
         status: String,
     },
     RestartRequested {
-        project_dir: String,
+        config_path: String,
         app_name: String,
     },
 }
@@ -287,12 +287,12 @@ fn parse_event_line(line: &str) -> Option<DevServerEvent> {
             path: event.get("path")?.as_str()?.to_string(),
         }),
         "AppStatusChanged" => Some(DevServerEvent::AppStatusChanged {
-            project_dir: event.get("project_dir")?.as_str()?.to_string(),
+            config_path: event.get("config_path")?.as_str()?.to_string(),
             app_name: event.get("app_name")?.as_str()?.to_string(),
             status: event.get("status")?.as_str()?.to_string(),
         }),
         "RestartRequested" => Some(DevServerEvent::RestartRequested {
-            project_dir: event.get("project_dir")?.as_str()?.to_string(),
+            config_path: event.get("config_path")?.as_str()?.to_string(),
             app_name: event.get("app_name")?.as_str()?.to_string(),
         }),
         _ => None,
@@ -379,6 +379,7 @@ pub async fn list_apps() -> Result<Vec<ListedApp>, Box<dyn std::error::Error>> {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct RegisteredAppInfo {
+    pub config_path: String,
     pub project_dir: String,
     pub app_name: String,
     pub variant: Option<String>,
@@ -391,6 +392,7 @@ pub struct RegisteredAppInfo {
 
 #[allow(clippy::too_many_arguments)]
 pub async fn register_app(
+    config_path: &str,
     project_dir: &str,
     app_name: &str,
     variant: Option<&str>,
@@ -405,6 +407,7 @@ pub async fn register_app(
     let mut c = LineClient::new(stream);
     let mut req = serde_json::json!({
         "type": "RegisterApp",
+        "config_path": config_path,
         "project_dir": project_dir,
         "app_name": app_name,
         "hosts": hosts,
@@ -431,13 +434,13 @@ pub async fn register_app(
     }
 }
 
-pub async fn unregister_app(project_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn unregister_app(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let sock = socket_path()?;
     let stream = UnixStream::connect(&sock).await?;
     let mut c = LineClient::new(stream);
     let req = serde_json::json!({
         "type": "UnregisterApp",
-        "project_dir": project_dir,
+        "config_path": config_path,
     });
     c.send_line(&req.to_string()).await?;
     let line = c.read_line().await?;
@@ -449,13 +452,13 @@ pub async fn unregister_app(project_dir: &str) -> Result<(), Box<dyn std::error:
     }
 }
 
-pub async fn restart_app(project_dir: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn restart_app(config_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let sock = socket_path()?;
     let stream = UnixStream::connect(&sock).await?;
     let mut c = LineClient::new(stream);
     let req = serde_json::json!({
         "type": "RestartApp",
-        "project_dir": project_dir,
+        "config_path": config_path,
     });
     c.send_line(&req.to_string()).await?;
     let line = c.read_line().await?;
@@ -468,7 +471,7 @@ pub async fn restart_app(project_dir: &str) -> Result<(), Box<dyn std::error::Er
 }
 
 pub async fn set_app_status(
-    project_dir: &str,
+    config_path: &str,
     status: &str,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sock = socket_path()?;
@@ -476,7 +479,7 @@ pub async fn set_app_status(
     let mut c = LineClient::new(stream);
     let req = serde_json::json!({
         "type": "SetAppStatus",
-        "project_dir": project_dir,
+        "config_path": config_path,
         "status": status,
     });
     c.send_line(&req.to_string()).await?;
@@ -489,13 +492,13 @@ pub async fn set_app_status(
     }
 }
 
-pub async fn handoff_app(project_dir: &str, pid: u32) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handoff_app(config_path: &str, pid: u32) -> Result<(), Box<dyn std::error::Error>> {
     let sock = socket_path()?;
     let stream = UnixStream::connect(&sock).await?;
     let mut c = LineClient::new(stream);
     let req = serde_json::json!({
         "type": "HandoffApp",
-        "project_dir": project_dir,
+        "config_path": config_path,
         "pid": pid,
     });
     c.send_line(&req.to_string()).await?;
@@ -536,6 +539,7 @@ pub async fn list_registered_apps() -> Result<Vec<RegisteredAppInfo>, Box<dyn st
                 })
                 .unwrap_or_default();
             Some(RegisteredAppInfo {
+                config_path: a.get("config_path")?.as_str()?.to_string(),
                 project_dir: a.get("project_dir")?.as_str()?.to_string(),
                 app_name: a.get("app_name")?.as_str()?.to_string(),
                 variant: a
