@@ -1,5 +1,5 @@
 use std::io::{Cursor, Read};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use sha2::{Digest, Sha256};
 
@@ -402,7 +402,8 @@ fn extract_zip(
         let Some(rel) = output_rel else {
             continue;
         };
-        let output_path = dest.join(&rel);
+        let rel_path = normalize_archive_relative_path(&rel)?;
+        let output_path = archive_output_path(dest, &rel_path, true)?;
         if let Some(parent) = output_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -463,6 +464,7 @@ fn extract_tar_gz(
         let Some(rel) = output_rel else {
             continue;
         };
+        let rel_path = normalize_archive_relative_path(&rel)?;
 
         // Preserve symlinks from the archive (e.g. node's bin/npm -> ../lib/...)
         if entry.header().entry_type() == tar::EntryType::Symlink {
@@ -470,7 +472,8 @@ fn extract_tar_gz(
             if let Ok(target) = entry.link_name()
                 && let Some(target) = target
             {
-                let link_path = dest.join(&rel);
+                validate_archive_symlink_target(&rel_path, target.as_ref())?;
+                let link_path = archive_output_path(dest, &rel_path, true)?;
                 if let Some(parent) = link_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -479,7 +482,7 @@ fn extract_tar_gz(
             continue;
         }
 
-        let output_path = dest.join(&rel);
+        let output_path = archive_output_path(dest, &rel_path, true)?;
         if let Some(parent) = output_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
@@ -514,6 +517,84 @@ fn strip_path_components(path: &str, n: usize) -> Option<String> {
         return None;
     }
     Some(parts[n..].join("/"))
+}
+
+fn normalize_archive_relative_path(raw: &str) -> Result<PathBuf, String> {
+    let path = Path::new(raw);
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(format!("archive path '{raw}' escapes extraction directory"));
+                }
+            }
+            Component::RootDir | Component::Prefix(_) => {
+                return Err(format!("archive path '{raw}' must be relative"));
+            }
+        }
+    }
+
+    if normalized.as_os_str().is_empty() {
+        return Err(format!("archive path '{raw}' is empty"));
+    }
+
+    Ok(normalized)
+}
+
+fn archive_output_path(
+    dest: &Path,
+    rel_path: &Path,
+    include_final_component: bool,
+) -> Result<PathBuf, String> {
+    let components: Vec<_> = rel_path.components().collect();
+    let mut current = dest.to_path_buf();
+
+    for (index, component) in components.iter().enumerate() {
+        let Component::Normal(part) = component else {
+            continue;
+        };
+        current.push(part);
+
+        let is_final = index + 1 == components.len();
+        if !include_final_component && is_final {
+            break;
+        }
+
+        if let Ok(metadata) = std::fs::symlink_metadata(&current)
+            && metadata.file_type().is_symlink()
+        {
+            return Err(format!(
+                "archive entry '{}' resolves through symlink '{}'",
+                rel_path.display(),
+                current.display()
+            ));
+        }
+    }
+
+    Ok(dest.join(rel_path))
+}
+
+fn validate_archive_symlink_target(link_rel_path: &Path, target: &Path) -> Result<(), String> {
+    if target.is_absolute() {
+        return Err(format!(
+            "archive symlink target escapes extraction directory: {}",
+            target.display()
+        ));
+    }
+
+    let link_parent = link_rel_path.parent().unwrap_or_else(|| Path::new(""));
+    normalize_archive_relative_path(&link_parent.join(target).to_string_lossy())
+        .map(|_| ())
+        .map_err(|_| {
+            format!(
+                "archive symlink target escapes extraction directory: {}",
+                target.display()
+            )
+        })
 }
 
 #[cfg(test)]
@@ -669,6 +750,180 @@ mod tests {
         extract_tar_gz(&gz_buf, dir.path(), &download, "22.0.0", "linux", "x64").unwrap();
         let extracted = std::fs::read_to_string(dir.path().join("node")).unwrap();
         assert_eq!(extracted, "fake node binary");
+    }
+
+    #[test]
+    fn zip_extraction_rejects_paths_that_escape_destination() {
+        use std::io::Write;
+
+        let sandbox = TempDir::new().unwrap();
+        let dest = sandbox.path().join("dest");
+        std::fs::create_dir_all(&dest).unwrap();
+
+        let mut buf = Vec::new();
+        {
+            let cursor = Cursor::new(&mut buf);
+            let mut writer = zip::ZipWriter::new(cursor);
+            let options = zip::write::SimpleFileOptions::default();
+            writer.start_file("../escape.txt", options).unwrap();
+            writer.write_all(b"should not write outside").unwrap();
+            writer.finish().unwrap();
+        }
+
+        let download = DownloadDef {
+            version_source: None,
+            url: None,
+            format: Some("zip".to_string()),
+            checksum_url: None,
+            checksum_format: None,
+            os_map: Default::default(),
+            arch_map: Default::default(),
+            arch_variants: Default::default(),
+            extract: Some(crate::types::ExtractDef {
+                binary: None,
+                strip_components: None,
+                all: true,
+                symlinks: vec![],
+            }),
+        };
+
+        let err = extract_zip(&buf, &dest, &download, "1.0.0", "linux", "x64").unwrap_err();
+        assert!(err.contains("escapes extraction directory"));
+        assert!(!sandbox.path().join("escape.txt").exists());
+    }
+
+    #[test]
+    fn tar_gz_extraction_rejects_symlink_escape_targets() {
+        use std::io::Write;
+
+        let sandbox = TempDir::new().unwrap();
+        let dest = sandbox.path().join("dest");
+        std::fs::create_dir_all(&dest).unwrap();
+        let escaped_dir = sandbox.path().join("escaped");
+        std::fs::create_dir_all(&escaped_dir).unwrap();
+
+        let mut tar_buf = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_buf);
+
+            let mut link_header = tar::Header::new_gnu();
+            link_header.set_entry_type(tar::EntryType::Symlink);
+            link_header.set_size(0);
+            link_header.set_mode(0o777);
+            link_header.set_link_name("../escaped").unwrap();
+            link_header.set_cksum();
+            builder
+                .append_data(&mut link_header, "bin", std::io::empty())
+                .unwrap();
+
+            let data = b"should not escape";
+            let mut file_header = tar::Header::new_gnu();
+            file_header.set_size(data.len() as u64);
+            file_header.set_mode(0o644);
+            file_header.set_cksum();
+            builder
+                .append_data(&mut file_header, "bin/pwned.txt", &data[..])
+                .unwrap();
+
+            builder.finish().unwrap();
+        }
+
+        let mut gz_buf = Vec::new();
+        {
+            let mut encoder =
+                flate2::write::GzEncoder::new(&mut gz_buf, flate2::Compression::fast());
+            encoder.write_all(&tar_buf).unwrap();
+            encoder.finish().unwrap();
+        }
+
+        let download = DownloadDef {
+            version_source: None,
+            url: None,
+            format: Some("tar.gz".to_string()),
+            checksum_url: None,
+            checksum_format: None,
+            os_map: Default::default(),
+            arch_map: Default::default(),
+            arch_variants: Default::default(),
+            extract: Some(crate::types::ExtractDef {
+                binary: None,
+                strip_components: None,
+                all: true,
+                symlinks: vec![],
+            }),
+        };
+
+        let err = extract_tar_gz(&gz_buf, &dest, &download, "1.0.0", "linux", "x64").unwrap_err();
+        assert!(err.contains("symlink target escapes extraction directory"));
+        assert!(!escaped_dir.join("pwned.txt").exists());
+    }
+
+    #[test]
+    fn tar_gz_extraction_allows_internal_relative_symlinks() {
+        use std::io::Write;
+
+        let dir = TempDir::new().unwrap();
+
+        let mut tar_buf = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut tar_buf);
+
+            let lib_data = b"npm cli";
+            let mut lib_header = tar::Header::new_gnu();
+            lib_header.set_size(lib_data.len() as u64);
+            lib_header.set_mode(0o644);
+            lib_header.set_cksum();
+            builder
+                .append_data(&mut lib_header, "lib/npm-cli.js", &lib_data[..])
+                .unwrap();
+
+            let mut link_header = tar::Header::new_gnu();
+            link_header.set_entry_type(tar::EntryType::Symlink);
+            link_header.set_size(0);
+            link_header.set_mode(0o777);
+            link_header.set_link_name("../lib/npm-cli.js").unwrap();
+            link_header.set_cksum();
+            builder
+                .append_data(&mut link_header, "bin/npm", std::io::empty())
+                .unwrap();
+
+            builder.finish().unwrap();
+        }
+
+        let mut gz_buf = Vec::new();
+        {
+            let mut encoder =
+                flate2::write::GzEncoder::new(&mut gz_buf, flate2::Compression::fast());
+            encoder.write_all(&tar_buf).unwrap();
+            encoder.finish().unwrap();
+        }
+
+        let download = DownloadDef {
+            version_source: None,
+            url: None,
+            format: Some("tar.gz".to_string()),
+            checksum_url: None,
+            checksum_format: None,
+            os_map: Default::default(),
+            arch_map: Default::default(),
+            arch_variants: Default::default(),
+            extract: Some(crate::types::ExtractDef {
+                binary: None,
+                strip_components: None,
+                all: true,
+                symlinks: vec![],
+            }),
+        };
+
+        extract_tar_gz(&gz_buf, dir.path(), &download, "1.0.0", "linux", "x64").unwrap();
+
+        let link_path = dir.path().join("bin/npm");
+        let target = std::fs::read_link(&link_path).unwrap();
+        assert_eq!(target, PathBuf::from("../lib/npm-cli.js"));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("lib/npm-cli.js")).unwrap(),
+            "npm cli"
+        );
     }
 
     #[test]
