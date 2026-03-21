@@ -1051,7 +1051,7 @@ fn remote_binary_replace_command(url: &str) -> String {
          install -m 0755 \"$bin\" /usr/local/bin/tako-server; \
          if command -v setcap >/dev/null 2>&1; then setcap cap_net_bind_service=+ep /usr/local/bin/tako-server 2>/dev/null || true; fi"
     );
-    SshClient::run_as_root(&script)
+    SshClient::run_with_root_or_sudo(&script)
 }
 
 /// Resolve the latest stable server tag from the GitHub API.
@@ -2040,8 +2040,10 @@ mod tests {
     }
 
     #[test]
-    fn remote_binary_replace_command_uses_sudo() {
+    fn remote_binary_replace_command_uses_root_shell_wrapper() {
         let cmd = remote_binary_replace_command("https://example.com/tako-server.tar.gz");
+        assert!(cmd.contains("then sh -c '"));
+        assert!(cmd.contains("sudo sh -c '"));
         assert!(cmd.contains("curl -fsSL"));
         assert!(cmd.contains("install -m 0755"));
         assert!(cmd.contains("/usr/local/bin/tako-server"));
