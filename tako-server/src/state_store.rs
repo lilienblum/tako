@@ -88,6 +88,10 @@ impl SqliteStateStore {
 
     pub fn delete_app(&self, name: &str, environment: &str) -> Result<(), StateStoreError> {
         let conn = self.open_connection()?;
+        // Delete secrets for this app to prevent leaking to a future app with the same name.
+        let secret_key = format!("{name}/{environment}");
+        conn.execute("DELETE FROM app_secrets WHERE app = ?1;", [&secret_key])
+            .map_err(StateStoreError::from)?;
         conn.execute(
             "DELETE FROM apps WHERE name = ?1 AND environment = ?2;",
             rusqlite::params![name, environment],
