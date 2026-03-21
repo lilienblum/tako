@@ -54,11 +54,14 @@ static NO_SNI_LIMITER: std::sync::LazyLock<LogRateLimiter> =
 static UNKNOWN_HOST_LIMITER: std::sync::LazyLock<LogRateLimiter> =
     std::sync::LazyLock::new(|| LogRateLimiter::new(std::time::Duration::from_secs(10)));
 
-/// Cached parsed certificate and key pair.
+/// Cached parsed certificate and key pair (leaf + intermediates).
 #[derive(Clone)]
 struct CachedCert {
     cert: X509,
+    chain: Vec<X509>,
     key: PKey<openssl::pkey::Private>,
+    /// File mtime when the cert was loaded, used to detect ACME renewals.
+    mtime: std::time::SystemTime,
 }
 
 /// SNI-based certificate resolver that selects certificates based on hostname.
@@ -87,14 +90,28 @@ impl SniCertResolver {
         cert_path: &std::path::Path,
         key_path: &std::path::Path,
     ) -> Result<CachedCert, openssl::error::ErrorStack> {
+        // Check cache, but reload if the cert file has been updated (e.g. ACME renewal).
         if let Some(cached) = self.cache.get(cert_path) {
-            return Ok(cached.clone());
+            let current_mtime = std::fs::metadata(cert_path)
+                .and_then(|m| m.modified())
+                .unwrap_or(cached.mtime);
+            if current_mtime == cached.mtime {
+                return Ok(cached.clone());
+            }
+            // File changed on disk — drop cached entry and reload below.
+            drop(cached);
+            self.cache.remove(cert_path);
         }
 
-        let loaded = Self::load_cert_and_key(cert_path, key_path)?;
+        let mtime = std::fs::metadata(cert_path)
+            .and_then(|m| m.modified())
+            .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+        let (cert, chain, key) = Self::load_cert_and_key(cert_path, key_path)?;
         let cached = CachedCert {
-            cert: loaded.0,
-            key: loaded.1,
+            cert,
+            chain,
+            key,
+            mtime,
         };
         self.cache.insert(cert_path.to_path_buf(), cached.clone());
         Ok(cached)
@@ -110,7 +127,7 @@ impl SniCertResolver {
     fn load_cert_and_key(
         cert_path: &std::path::Path,
         key_path: &std::path::Path,
-    ) -> Result<(X509, PKey<openssl::pkey::Private>), openssl::error::ErrorStack> {
+    ) -> Result<(X509, Vec<X509>, PKey<openssl::pkey::Private>), openssl::error::ErrorStack> {
         let cert_pem = std::fs::read(cert_path).map_err(|e| {
             tracing::error!("Failed to read cert file {:?}: {}", cert_path, e);
             openssl::error::ErrorStack::get()
@@ -120,10 +137,13 @@ impl SniCertResolver {
             openssl::error::ErrorStack::get()
         })?;
 
-        let cert = X509::from_pem(&cert_pem)?;
+        // Load full chain: first cert is the leaf, rest are intermediates.
+        let all_certs = X509::stack_from_pem(&cert_pem)?;
+        let cert = all_certs.first().cloned().ok_or_else(openssl::error::ErrorStack::get)?;
+        let chain = all_certs.into_iter().skip(1).collect();
         let key = PKey::private_key_from_pem(&key_pem)?;
 
-        Ok((cert, key))
+        Ok((cert, chain, key))
     }
 
     fn default_cert_info(&self) -> Option<CertInfo> {
@@ -150,6 +170,11 @@ impl SniCertResolver {
                 Ok(cached) => {
                     if let Err(e) = ssl.set_certificate(&cached.cert) {
                         tracing::error!("Failed to set default certificate ({reason}): {}", e);
+                    }
+                    for intermediate in &cached.chain {
+                        if let Err(e) = ssl.add_chain_cert(intermediate.clone()) {
+                            tracing::error!("Failed to add intermediate cert ({reason}): {}", e);
+                        }
                     }
                     if let Err(e) = ssl.set_private_key(&cached.key) {
                         tracing::error!("Failed to set default private key ({reason}): {}", e);
@@ -208,6 +233,11 @@ impl TlsAccept for SniCertResolver {
                                 hostname = %sni_hostname,
                                 "Failed to set certificate: {}", e
                             );
+                        }
+                        for intermediate in &cached.chain {
+                            if let Err(e) = ssl.add_chain_cert(intermediate.clone()) {
+                                tracing::error!(hostname = %sni_hostname, "Failed to add intermediate cert: {}", e);
+                            }
                         }
                         if let Err(e) = ssl.set_private_key(&cached.key) {
                             tracing::error!(

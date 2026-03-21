@@ -1889,6 +1889,7 @@ async fn certificate_renewal_task(acme_client: Arc<AcmeClient>, interval: Durati
                         expires_in_days = cert.days_until_expiry(),
                         "Certificate renewed successfully"
                     );
+                    // SNI cert cache auto-detects file changes via mtime comparison.
                 }
                 Err(e) => {
                     tracing::error!("Certificate renewal failed: {}", e);
