@@ -230,9 +230,14 @@ fn apply_template(template: &str, version: &str, os: &str, arch: &str) -> String
 fn extract_binary_name(def: &RuntimeDef) -> Option<&str> {
     let extract = def.download.as_ref()?.extract.as_ref()?;
     let binary = extract.binary.as_deref()?;
-    // The binary path may include directories (e.g., "bun-darwin-x64/bun").
-    // After extraction with flattening, we just need the filename.
-    Some(binary.rsplit('/').next().unwrap_or(binary))
+    if extract.all {
+        // With extract_all, directory structure is preserved. Use the full
+        // relative path (e.g. "bin/node" stays as "bin/node").
+        Some(binary)
+    } else {
+        // Without extract_all, only the binary is extracted (flattened).
+        Some(binary.rsplit('/').next().unwrap_or(binary))
+    }
 }
 
 async fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
@@ -341,7 +346,10 @@ fn extract_zip(
     let mut archive =
         zip::ZipArchive::new(cursor).map_err(|e| format!("failed to open zip archive: {e}"))?;
 
-    let binary_template = download.extract.as_ref().and_then(|e| e.binary.as_deref());
+    let extract = download.extract.as_ref();
+    let binary_template = extract.and_then(|e| e.binary.as_deref());
+    let extract_all = extract.is_some_and(|e| e.all);
+    let strip = extract.and_then(|e| e.strip_components).unwrap_or(0) as usize;
 
     for i in 0..archive.len() {
         let mut file = archive
@@ -354,25 +362,32 @@ fn extract_zip(
 
         let entry_name = file.name().to_string();
 
-        // Determine output filename: if this matches the binary template, extract
-        // just the filename portion to the dest root. Otherwise flatten path.
-        let output_name = if let Some(template) = binary_template {
+        let output_rel = if extract_all {
+            strip_path_components(&entry_name, strip)
+        } else if let Some(template) = binary_template {
             let expected = apply_template(template, version, os, arch);
             if entry_name == expected || entry_name.trim_start_matches('/') == expected {
-                // Extract binary to dest with just the filename
-                expected.rsplit('/').next().unwrap_or(&expected).to_string()
+                Some(expected.rsplit('/').next().unwrap_or(&expected).to_string())
             } else {
-                continue; // Skip non-binary entries
+                None
             }
         } else {
-            entry_name
-                .rsplit('/')
-                .next()
-                .unwrap_or(&entry_name)
-                .to_string()
+            Some(
+                entry_name
+                    .rsplit('/')
+                    .next()
+                    .unwrap_or(&entry_name)
+                    .to_string(),
+            )
         };
 
-        let output_path = dest.join(&output_name);
+        let Some(rel) = output_rel else {
+            continue;
+        };
+        let output_path = dest.join(&rel);
+        if let Some(parent) = output_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let mut buf = Vec::new();
         file.read_to_end(&mut buf)
             .map_err(|e| format!("failed to read zip entry '{entry_name}': {e}"))?;
@@ -394,7 +409,10 @@ fn extract_tar_gz(
     let gz = flate2::read::GzDecoder::new(Cursor::new(data));
     let mut archive = tar::Archive::new(gz);
 
-    let binary_template = download.extract.as_ref().and_then(|e| e.binary.as_deref());
+    let extract = download.extract.as_ref();
+    let binary_template = extract.and_then(|e| e.binary.as_deref());
+    let extract_all = extract.is_some_and(|e| e.all);
+    let strip = extract.and_then(|e| e.strip_components).unwrap_or(0) as usize;
 
     for entry in archive
         .entries()
@@ -411,27 +429,74 @@ fn extract_tar_gz(
             continue;
         }
 
-        let output_name = if let Some(template) = binary_template {
+        let output_rel = if extract_all {
+            strip_path_components(&path_str, strip)
+        } else if let Some(template) = binary_template {
             let expected = apply_template(template, version, os, arch);
             if path_str == expected || path_str.trim_start_matches('/') == expected {
-                expected.rsplit('/').next().unwrap_or(&expected).to_string()
+                Some(expected.rsplit('/').next().unwrap_or(&expected).to_string())
             } else {
-                continue;
+                None
             }
         } else {
-            path_str.rsplit('/').next().unwrap_or(&path_str).to_string()
+            Some(path_str.rsplit('/').next().unwrap_or(&path_str).to_string())
         };
 
-        let output_path = dest.join(&output_name);
+        let Some(rel) = output_rel else {
+            continue;
+        };
+
+        // Preserve symlinks from the archive (e.g. node's bin/npm -> ../lib/...)
+        if entry.header().entry_type() == tar::EntryType::Symlink {
+            #[cfg(unix)]
+            if let Ok(target) = entry.link_name() {
+                if let Some(target) = target {
+                    let link_path = dest.join(&rel);
+                    if let Some(parent) = link_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::os::unix::fs::symlink(target.as_ref(), &link_path);
+                }
+            }
+            continue;
+        }
+
+        let output_path = dest.join(&rel);
+        if let Some(parent) = output_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
         let mut buf = Vec::new();
         entry
             .read_to_end(&mut buf)
             .map_err(|e| format!("failed to read tar entry '{path_str}': {e}"))?;
         std::fs::write(&output_path, &buf)
             .map_err(|e| format!("failed to write {}: {e}", output_path.display()))?;
+
+        // Preserve executable permissions
+        #[cfg(unix)]
+        if let Ok(mode) = entry.header().mode() {
+            if mode & 0o111 != 0 {
+                use std::os::unix::fs::PermissionsExt;
+                let _ =
+                    std::fs::set_permissions(&output_path, std::fs::Permissions::from_mode(mode));
+            }
+        }
     }
 
     Ok(())
+}
+
+/// Strip N path components from an archive entry path.
+/// "node-v22/bin/node" with strip=1 → "bin/node"
+fn strip_path_components(path: &str, n: usize) -> Option<String> {
+    if n == 0 {
+        return Some(path.to_string());
+    }
+    let parts: Vec<&str> = path.split('/').collect();
+    if parts.len() <= n {
+        return None;
+    }
+    Some(parts[n..].join("/"))
 }
 
 #[cfg(test)]
@@ -469,14 +534,14 @@ mod tests {
 
     #[test]
     fn extract_binary_name_gets_filename_from_path() {
-        let def = crate::builtin_runtime("bun").unwrap();
+        let def = crate::runtime_def_for("bun", None).unwrap();
         let name = extract_binary_name(&def).unwrap();
         assert_eq!(name, "bun");
     }
 
     #[test]
     fn extract_binary_name_handles_bare_name() {
-        let def = crate::builtin_runtime("deno").unwrap();
+        let def = crate::runtime_def_for("deno", None).unwrap();
         let name = extract_binary_name(&def).unwrap();
         assert_eq!(name, "deno");
     }
@@ -485,7 +550,7 @@ mod tests {
     fn resolve_bin_returns_none_when_not_installed() {
         let dir = TempDir::new().unwrap();
         let mgr = DownloadManager::new(dir.path().to_path_buf());
-        let def = crate::builtin_runtime("bun").unwrap();
+        let def = crate::runtime_def_for("bun", None).unwrap();
         assert!(mgr.resolve_bin("bun", "1.0.0", &def).is_none());
     }
 
@@ -497,7 +562,7 @@ mod tests {
         std::fs::write(version_dir.join("bun"), "fake binary").unwrap();
 
         let mgr = DownloadManager::new(dir.path().to_path_buf());
-        let def = crate::builtin_runtime("bun").unwrap();
+        let def = crate::runtime_def_for("bun", None).unwrap();
         let path = mgr.resolve_bin("bun", "1.0.0", &def).unwrap();
         assert_eq!(path, version_dir.join("bun"));
     }
@@ -529,6 +594,7 @@ mod tests {
             extract: Some(crate::types::ExtractDef {
                 binary: Some("bun-{os}-{arch}/bun".to_string()),
                 strip_components: None,
+                all: false,
                 symlinks: vec![],
             }),
         };
@@ -578,6 +644,7 @@ mod tests {
             extract: Some(crate::types::ExtractDef {
                 binary: Some("node-v{version}-{os}-{arch}/bin/node".to_string()),
                 strip_components: None,
+                all: false,
                 symlinks: vec![],
             }),
         };
@@ -607,7 +674,7 @@ mod tests {
     #[test]
     fn os_map_resolution_for_all_runtimes() {
         for id in &["bun", "node", "deno"] {
-            let def = crate::builtin_runtime(id).unwrap();
+            let def = crate::runtime_def_for(id, None).unwrap();
             let download = def.download.as_ref().unwrap();
             let os = resolve_os();
             assert!(
@@ -620,7 +687,7 @@ mod tests {
     #[test]
     fn arch_map_resolution_for_all_runtimes() {
         for id in &["bun", "node", "deno"] {
-            let def = crate::builtin_runtime(id).unwrap();
+            let def = crate::runtime_def_for(id, None).unwrap();
             let download = def.download.as_ref().unwrap();
             let arch = resolve_arch();
             assert!(

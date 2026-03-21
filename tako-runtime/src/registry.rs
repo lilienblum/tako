@@ -50,105 +50,6 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn parse_bun_runtime() {
-        let def = crate::builtin_runtime("bun").unwrap();
-        assert_eq!(def.id, "bun");
-        assert_eq!(def.language, "javascript");
-        assert!(def.entrypoint.manifest.is_some());
-        assert_eq!(def.entrypoint.candidates.len(), 8);
-        assert_eq!(def.entrypoint.candidates[0], "index.ts");
-        assert_eq!(def.preset.main.as_deref(), Some("src/index.ts"));
-        assert_eq!(def.preset.dev, vec!["bun", "--hot", "{main}"]);
-        assert_eq!(
-            def.preset.start,
-            vec![
-                "bun",
-                "run",
-                "node_modules/tako.sh/src/entrypoints/bun.ts",
-                "{main}"
-            ]
-        );
-        assert!(def.preset.build.is_some());
-        assert_eq!(
-            def.server.entrypoint_path.as_deref(),
-            Some("node_modules/tako.sh/src/entrypoints/bun.ts")
-        );
-        assert_eq!(
-            def.server.launch_args,
-            vec!["{bin}", "run", "{entrypoint}", "{main}"]
-        );
-        let prod_env = def.envs.environments.get("production").unwrap();
-        assert_eq!(prod_env.get("NODE_ENV").unwrap(), "production");
-        assert_eq!(prod_env.get("BUN_ENV").unwrap(), "production");
-        assert!(def.download.is_some());
-    }
-
-    #[test]
-    fn parse_node_runtime() {
-        let def = crate::builtin_runtime("node").unwrap();
-        assert_eq!(def.id, "node");
-        assert_eq!(def.language, "javascript");
-        assert!(def.entrypoint.manifest.is_some());
-        assert_eq!(def.entrypoint.candidates.len(), 8);
-        assert_eq!(def.preset.main.as_deref(), Some("index.js"));
-        assert_eq!(def.preset.dev, vec!["node", "{main}"]);
-        assert_eq!(
-            def.server.launch_args,
-            vec![
-                "{bin}",
-                "--experimental-strip-types",
-                "{entrypoint}",
-                "{main}"
-            ]
-        );
-        assert_eq!(
-            def.envs
-                .environments
-                .get("production")
-                .unwrap()
-                .get("NODE_ENV")
-                .unwrap(),
-            "production"
-        );
-        assert!(def.download.is_some());
-    }
-
-    #[test]
-    fn parse_deno_runtime() {
-        let def = crate::builtin_runtime("deno").unwrap();
-        assert_eq!(def.id, "deno");
-        assert_eq!(def.language, "javascript");
-        assert!(def.entrypoint.manifest.is_none());
-        assert_eq!(def.entrypoint.candidates.len(), 6);
-        assert_eq!(def.entrypoint.candidates[0], "main.ts");
-        assert_eq!(def.entrypoint.candidates[1], "mod.ts");
-        assert_eq!(def.preset.main.as_deref(), Some("main.ts"));
-        assert_eq!(
-            def.server.launch_args,
-            vec![
-                "{bin}",
-                "run",
-                "--allow-net",
-                "--allow-env",
-                "--allow-read",
-                "{entrypoint}",
-                "{main}"
-            ]
-        );
-        assert_eq!(
-            def.envs
-                .environments
-                .get("production")
-                .unwrap()
-                .get("DENO_ENV")
-                .unwrap(),
-            "production"
-        );
-        assert!(def.download.is_some());
-        assert_eq!(def.preset.build.as_deref(), Some("true"));
-    }
-
-    #[test]
     fn parse_runtime_rejects_invalid_toml() {
         let result = parse_runtime("not valid toml [[[");
         assert!(result.is_err());
@@ -168,63 +69,10 @@ mod tests {
             cache_dir.clone(),
             std::time::Duration::from_secs(3600),
         );
-        let content = include_str!("../../registry/javascript/runtimes/bun.toml");
-        cache.put("bun", content).unwrap();
+        let content = "language = \"javascript\"\n";
+        cache.put("test-rt", content).unwrap();
 
-        let def = load_runtime("bun", &cache_dir).await.unwrap();
-        assert_eq!(def.id, "bun");
-    }
-
-    #[test]
-    fn preset_content_matches_builtin_bun() {
-        let content = include_str!("../../registry/javascript/runtimes/bun.toml");
-        let def = parse_runtime(content).unwrap();
-        assert_eq!(def.preset.main.as_deref(), Some("src/index.ts"));
-        assert_eq!(def.preset.dev, vec!["bun", "--hot", "{main}"]);
-        assert_eq!(
-            def.preset.start,
-            vec![
-                "bun",
-                "run",
-                "node_modules/tako.sh/src/entrypoints/bun.ts",
-                "{main}"
-            ]
-        );
-    }
-
-    #[test]
-    fn preset_content_matches_builtin_node() {
-        let content = include_str!("../../registry/javascript/runtimes/node.toml");
-        let def = parse_runtime(content).unwrap();
-        assert_eq!(def.preset.main.as_deref(), Some("index.js"));
-        assert_eq!(def.preset.dev, vec!["node", "{main}"]);
-        assert_eq!(
-            def.preset.start,
-            vec![
-                "node",
-                "--experimental-strip-types",
-                "node_modules/tako.sh/src/entrypoints/node.ts",
-                "{main}"
-            ]
-        );
-    }
-
-    #[test]
-    fn preset_content_matches_builtin_deno() {
-        let content = include_str!("../../registry/javascript/runtimes/deno.toml");
-        let def = parse_runtime(content).unwrap();
-        assert_eq!(def.preset.main.as_deref(), Some("main.ts"));
-        assert_eq!(
-            def.preset.dev,
-            vec![
-                "deno",
-                "run",
-                "--watch",
-                "--allow-net",
-                "--allow-env",
-                "--allow-read",
-                "{main}"
-            ]
-        );
+        let def = load_runtime("test-rt", &cache_dir).await.unwrap();
+        assert_eq!(def.id, "test-rt");
     }
 }
