@@ -32,7 +32,7 @@ const {
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=Nunito:wght@400;500;600;700&family=Poppins:wght@500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;700&family=Nunito:wght@400;600;700&family=Poppins:wght@600;700&display=swap"
       rel="stylesheet"
     />
     <style is:inline>
@@ -41,10 +41,12 @@ const {
         --paper: #fffefc;
         --ink: #2f2a44;
         --primary: #E88783;
+        --primary-text: #c4605c;
         --secondary: #9BC4B6;
+        --gold: #D6A63E;
         --line: rgba(47, 42, 68, 0.16);
         --muted: rgba(47, 42, 68, 0.74);
-        --accent: var(--primary);
+        --accent: var(--primary-text);
         --accent-soft: rgba(232, 135, 131, 0.2);
         --mint-soft: rgba(155, 196, 182, 0.3);
         --site-width: min(1080px, 92vw);
@@ -53,8 +55,10 @@ const {
         --font-heading: "Poppins", "Nunito", sans-serif;
       }
 
-      @view-transition {
-        navigation: auto;
+      @media (prefers-reduced-motion: no-preference) {
+        @view-transition {
+          navigation: auto;
+        }
       }
 
       ::selection {
@@ -88,24 +92,12 @@ const {
 
       body {
         color: var(--ink);
-        background:
-          radial-gradient(circle at 15% 10%, rgba(232, 135, 131, 0.26), transparent 34%),
-          radial-gradient(circle at 88% 8%, rgba(155, 196, 182, 0.25), transparent 36%),
-          radial-gradient(circle at 50% 92%, rgba(158, 201, 255, 0.17), transparent 42%),
-          var(--bg);
+        background: var(--bg);
         overflow-x: hidden;
-      }
-
-      .paint {
-        position: fixed;
-        inset: 0;
-        pointer-events: none;
-        z-index: 1;
       }
 
       .site {
         position: relative;
-        z-index: 3;
         display: flex;
         flex-direction: column;
         min-height: 100vh;
@@ -196,11 +188,18 @@ const {
         background: rgba(232, 135, 131, 0.18);
       }
 
+      .nav-links a:focus-visible,
+      .mobile-menu a:focus-visible,
+      .hamburger:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+      }
+
       .x-link {
         display: inline-flex;
         align-items: center;
         justify-content: center;
-        padding: 7px 10px;
+        padding: 12px 10px;
       }
 
 
@@ -280,6 +279,11 @@ const {
         text-decoration: underline;
       }
 
+      .footer-inner a:focus-visible {
+        outline: 2px solid var(--primary);
+        outline-offset: 2px;
+      }
+
       .footer-note {
         text-align: center;
         font-family: "Nunito", sans-serif;
@@ -301,8 +305,8 @@ const {
         justify-content: center;
         align-items: center;
         gap: 4px;
-        width: 36px;
-        height: 36px;
+        width: 44px;
+        height: 44px;
         padding: 8px;
         border: 1px solid var(--line);
         border-radius: 999px;
@@ -401,16 +405,13 @@ const {
     <slot name="head" />
   </head>
   <body>
-    <div class="paint" aria-hidden="true"><slot name="paint" /></div>
-    <slot name="after-paint" />
-
     <div class="site">
       <header class="header">
         <div class="container">
           <div class="header-inner">
-            <a href="/" class="logo">
-              <img src="/assets/logo.svg" alt="Tako logo" />
-              <span id="logo-text" aria-label="tako"></span>
+            <a href="/" class="logo" aria-label="Tako home">
+              <img src="/assets/logo.svg" alt="" aria-hidden="true" />
+              <span id="logo-text"></span>
             </a>
             <nav class="nav nav-links desktop-nav">
               <NavLinks />
@@ -428,10 +429,9 @@ const {
               </button>
             </div>
           </div>
-          <nav class="mobile-menu" id="mobile-menu">
-            <a href="/blog"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 6px;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>blog</a>
-            <a href="https://www.youtube.com/watch?v=dQw4w9WgXcQ" target="_blank" rel="noopener noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: -2px; margin-right: 6px;"><path d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"/></svg>cloud</a>
-            <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: -2px; margin-right: 6px;"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>follow progress</a>
+          <nav class="mobile-menu" id="mobile-menu" aria-hidden="true">
+            <a href="/blog"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style="vertical-align: -2px; margin-right: 6px;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>blog</a>
+            <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false" style="vertical-align: -2px; margin-right: 6px;"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>follow progress</a>
           </nav>
         </div>
       </header>
@@ -444,7 +444,7 @@ const {
             <div class="footer-inner">
               <a href="/docs">docs</a>
               <a href="/blog">blog</a>
-              <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer">𝕏</a>
+              <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer" aria-label="Follow on X">𝕏</a>
               <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer">github</a>
             </div>
             <p class="footer-note">made in Japan</p>
@@ -464,12 +464,14 @@ const {
           var isOpen = mobileMenu.classList.toggle('is-open');
           hamburger.classList.toggle('is-open');
           hamburger.setAttribute('aria-expanded', String(isOpen));
+          mobileMenu.setAttribute('aria-hidden', String(!isOpen));
         });
         document.addEventListener('click', function(e) {
           if (!mobileMenu.contains(e.target) && !hamburger.contains(e.target)) {
             mobileMenu.classList.remove('is-open');
             hamburger.classList.remove('is-open');
             hamburger.setAttribute('aria-expanded', 'false');
+            mobileMenu.setAttribute('aria-hidden', 'true');
           }
         });
       })();

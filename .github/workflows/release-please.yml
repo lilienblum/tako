@@ -28,8 +28,8 @@ jobs:
     needs: release-please
     if: needs.release-please.outputs.prs != '[]' && needs.release-please.outputs.prs != ''
     runs-on: ubuntu-latest
-    environment: release
     strategy:
+      fail-fast: false
       matrix:
         pr: ${{ fromJson(needs.release-please.outputs.prs) }}
     steps:
@@ -37,15 +37,27 @@ jobs:
         uses: actions/checkout@v6
         with:
           ref: ${{ matrix.pr.headBranchName }}
-          token: ${{ secrets.GH_PAT }}
+
+      - name: Check for Cargo.toml changes
+        id: check
+        run: |
+          git fetch origin master --depth=1
+          if git diff origin/master --name-only | grep -q 'Cargo.toml'; then
+            echo "needs_fix=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "No Cargo.toml changes, skipping"
+          fi
 
       - name: Setup Rust
+        if: steps.check.outputs.needs_fix == 'true'
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Regenerate Cargo.lock
-        run: cargo generate-lockfile
+      - name: Update workspace lockfile
+        if: steps.check.outputs.needs_fix == 'true'
+        run: cargo update --workspace
 
       - name: Push if changed
+        if: steps.check.outputs.needs_fix == 'true'
         run: |
           if git diff --quiet Cargo.lock; then
             echo "Cargo.lock is already correct"

@@ -6,665 +6,8 @@ import CopyButton from "../components/CopyButton.astro";
   title="Tako | Ship it like FTP"
   description="Deploy Node.js, Bun, and Deno apps to your own servers with rolling deploys, health checks, TLS, logs, and secrets. Tako is a self-hosted alternative to managed PaaS platforms."
 >
-  <Fragment slot="head"><style is:inline>
-  .blob {
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(18px);
-    opacity: 0.7;
-    animation: drift 11s ease-in-out infinite;
-  }
-
-  .blob.one {
-    width: 360px;
-    height: 360px;
-    top: -110px;
-    left: -120px;
-    background: rgba(232, 135, 131, 0.45);
-  }
-
-  .blob.two {
-    width: 460px;
-    height: 460px;
-    top: 34%;
-    right: -180px;
-    background: rgba(155, 196, 182, 0.4);
-    animation-delay: -4s;
-  }
-
-  .blob.three {
-    width: 320px;
-    height: 320px;
-    bottom: -130px;
-    left: 18%;
-    background: rgba(158, 201, 255, 0.45);
-    animation-delay: -8s;
-  }
-
-  .hero {
-    border-radius: var(--panel-radius);
-    border: 2px solid var(--line);
-    background: rgba(255, 255, 255, 0.8);
-    box-shadow: 0 18px 45px rgba(47, 42, 68, 0.1);
-    padding: clamp(24px, 5vw, 54px);
-    overflow: visible;
-    position: relative;
-    isolation: isolate;
-  }
-
-  .hero-bg {
-    position: absolute;
-    inset: 0;
-    border-radius: inherit;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 0;
-  }
-
-  .hero > *:not(.panel-hanger):not(.hero-bg) {
-    position: relative;
-    z-index: 2;
-  }
-
-  .panel-hanger {
-    position: absolute;
-    top: 26px;
-    right: 10px;
-    width: 164px;
-    height: 152px;
-    z-index: 12;
-    --swing-angle: 0.17rad;
-    --thread-length: 48px;
-    --card-tilt: -0.06rad;
-    --hanger-axis: 112px;
-  }
-
-  .panel-pin {
-    position: absolute;
-    top: 10px;
-    left: calc(var(--hanger-axis) - 5px);
-    width: 10px;
-    height: 10px;
-    border: 2px solid rgba(47, 42, 68, 0.28);
-    border-radius: 50%;
-    background: var(--secondary);
-    box-shadow: 0 2px 0 rgba(47, 42, 68, 0.15);
-  }
-
-  .panel-arm {
-    position: absolute;
-    top: 16px;
-    left: var(--hanger-axis);
-    width: 0;
-    transform-origin: top center;
-    transform: rotate(var(--swing-angle));
-    pointer-events: none;
-  }
-
-  .panel-thread {
-    display: block;
-    width: 2px;
-    margin-left: -1px;
-    height: var(--thread-length);
-    background: rgba(47, 42, 68, 0.45);
-  }
-
-  .panel-tag {
-    position: absolute;
-    left: 0;
-    top: var(--thread-length);
-    transform: translateX(-50%) rotate(var(--card-tilt));
-    transform-origin: top center;
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    width: 86px;
-    border: 2px solid rgba(47, 42, 68, 0.26);
-    border-radius: 12px 12px 16px 16px;
-    background: linear-gradient(160deg, rgba(255, 255, 255, 0.97), rgba(255, 255, 255, 0.88));
-    box-shadow: 0 8px 14px rgba(47, 42, 68, 0.16);
-    padding: 8px 10px 10px;
-    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    font-size: 12px;
-    color: rgba(47, 42, 68, 0.86);
-    text-align: center;
-    z-index: 1;
-    pointer-events: auto;
-    cursor: grab;
-    touch-action: none;
-    user-select: none;
-  }
-
-  .panel-tag-label {
-    display: block;
-    font-size: 10px;
-    letter-spacing: 0.1em;
-    line-height: 1;
-    opacity: 0.72;
-    text-transform: uppercase;
-  }
-
-  .panel-tag-value {
-    display: block;
-    margin-top: 2px;
-    font-size: 18px;
-    font-weight: 700;
-    letter-spacing: 0.08em;
-    line-height: 1;
-    color: var(--primary);
-  }
-
-  .hero-bg::after {
-    content: "";
-    position: absolute;
-    width: 186px;
-    height: 186px;
-    right: 16px;
-    bottom: 16px;
-    border-radius: 42% 58% 60% 40%;
-    background: linear-gradient(120deg, rgba(232, 135, 131, 0.38), rgba(255, 217, 125, 0.42));
-    transform: rotate(-13deg);
-    z-index: 0;
-  }
-
-
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 9px 14px;
-    border-radius: 999px;
-    border: 2px solid rgba(47, 42, 68, 0.22);
-    background: rgba(255, 255, 255, 0.82);
-    font-size: clamp(18px, 2.8vw, 23px);
-    margin-bottom: 14px;
-  }
-
-  .badge-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--primary);
-    animation: pulseDot 2s ease-in-out infinite;
-  }
-
-  .title {
-    font-family: var(--font-heading);
-    font-size: clamp(38px, 8vw, 72px);
-    line-height: 1;
-    letter-spacing: 0.01em;
-    margin-bottom: 14px;
-  }
-
-  .mobile-br {
-    display: none;
-  }
-
-  .title .swirl {
-    color: var(--primary);
-  }
-
-  .subtitle {
-    max-width: 680px;
-    font-size: clamp(18px, 2.8vw, 26px);
-    line-height: 1.2;
-    color: var(--muted);
-    margin-bottom: 24px;
-  }
-
-  .command-card {
-    border: 2px solid rgba(47, 42, 68, 0.2);
-    border-radius: 20px;
-    background: var(--paper);
-    overflow: hidden;
-    max-width: 700px;
-  }
-
-  .command-head {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    position: relative;
-    background: rgba(158, 201, 255, 0.22);
-    border-bottom: 2px solid rgba(47, 42, 68, 0.14);
-    padding: 10px 14px;
-  }
-
-  .dots {
-    display: inline-flex;
-    gap: 6px;
-    position: absolute;
-    left: 14px;
-    top: 50%;
-    transform: translateY(-50%);
-  }
-
-  .dots span {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: rgba(47, 42, 68, 0.28);
-  }
-
-  .command-title {
-    font-family: var(--font-heading);
-    font-size: 19px;
-    font-weight: 600;
-  }
-
-  .command-body {
-    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-    font-size: clamp(14px, 2.1vw, 18px);
-    padding: 16px;
-    display: flex;
-    flex-wrap: nowrap;
-    gap: 10px;
-    align-items: center;
-    justify-content: flex-start;
-    overflow-x: auto;
-  }
-
-  .prompt {
-    color: var(--primary);
-  }
-
-  .cmd {
-    color: #3c3559;
-    min-height: 1.2em;
-    white-space: nowrap;
-    flex: 0 0 auto;
-  }
-
-  .cursor {
-    width: 8px;
-    height: 18px;
-    background: var(--ink);
-    animation: blink 1s steps(1, end) infinite;
-    flex: 0 0 auto;
-  }
-
-  .command-actions {
-    display: flex;
-    flex-wrap: nowrap;
-    justify-content: space-between;
-    align-items: center;
-    gap: 10px;
-    padding: 0 16px 16px;
-  }
-
-  .command-selector {
-    display: inline-flex;
-    border: 2px solid rgba(47, 42, 68, 0.22);
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.78);
-    overflow: hidden;
-    margin-left: auto;
-  }
-
-  .command-mode {
-    border: 0;
-    background: transparent;
-    color: rgba(47, 42, 68, 0.72);
-    padding: 7px 12px;
-    font-family: "Nunito", sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    text-transform: lowercase;
-    cursor: pointer;
-  }
-
-  .command-mode.is-active {
-    background: rgba(232, 135, 131, 0.28);
-    color: rgba(47, 42, 68, 0.95);
-  }
-
-  .btn {
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.8);
-    color: var(--ink);
-    padding: 7px 14px;
-    font-family: "Nunito", sans-serif;
-    font-size: 16px;
-    font-weight: 600;
-    line-height: 1;
-    text-decoration: none;
-    cursor: pointer;
-  }
-
-  .btn:hover {
-    transform: translateY(-1px);
-    background: rgba(232, 135, 131, 0.18);
-  }
-
-  .btn.primary {
-    background: rgba(232, 135, 131, 0.28);
-  }
-
-  .copy-inline {
-    width: 36px;
-    height: 36px;
-    margin-left: auto;
-    border: 2px solid rgba(47, 42, 68, 0.26);
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.86);
-    color: var(--ink);
-    cursor: pointer;
-    flex: 0 0 auto;
-  }
-
-  .copy-inline:hover {
-    transform: translateY(-1px);
-  }
-
-  .copy-inline .copy-button-icon {
-    width: 17px;
-    height: 17px;
-  }
-
-  .copy-inline.is-copied {
-    background: rgba(155, 196, 182, 0.24);
-    border-color: rgba(155, 196, 182, 0.58);
-    color: rgba(22, 110, 80, 0.95);
-  }
-
-  .hero-block {
-    margin-top: 26px;
-    padding-top: 0;
-    border-top: 0;
-  }
-
-  .hero-block-head {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 14px;
-  }
-
-  .hero-block-label {
-    font-family: var(--font-heading);
-    font-size: 18px;
-    font-weight: 600;
-    letter-spacing: 0.01em;
-    color: rgba(47, 42, 68, 0.9);
-  }
-
-  .hero-block-rule {
-    flex: 1;
-    height: 2px;
-    border-radius: 999px;
-    background: linear-gradient(90deg, rgba(232, 135, 131, 0.42), rgba(155, 196, 182, 0.26), rgba(47, 42, 68, 0.05));
-  }
-
-  .feature-grid {
-    margin-top: 0;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .feature-grid.feature-problem-outcome {
-    grid-template-columns: 1fr;
-    gap: 0;
-  }
-
-  .feature-grid.feature-problem-outcome .feature-item {
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    padding: 14px 0;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(72px, 88px) 1fr;
-    align-items: start;
-    gap: 10px;
-    border-top: 1px solid rgba(47, 42, 68, 0.16);
-  }
-
-  .feature-grid.feature-problem-outcome .feature-item:first-child {
-    border-top: 0;
-  }
-
-  .feature-grid.feature-problem-outcome .feature-item:nth-child(odd),
-  .feature-grid.feature-problem-outcome .feature-item:nth-child(even) {
-    background: transparent;
-  }
-
-  .feature-grid.feature-problem-outcome .feature-kicker {
-    border: 0;
-    border-radius: 0;
-    padding: 2px 0 0;
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    background: transparent;
-  }
-
-  .feature-flow {
-    margin: 0;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 8px;
-    font-size: 15px;
-    line-height: 1.35;
-  }
-
-  .feature-problem {
-    font-weight: 700;
-    color: rgba(47, 42, 68, 0.92);
-  }
-
-  .feature-outcome {
-    font-weight: 400;
-    color: rgba(47, 42, 68, 0.76);
-  }
-
-  .feature-item {
-    border: 2px solid rgba(47, 42, 68, 0.16);
-    border-radius: 18px;
-    background: rgba(255, 255, 255, 0.86);
-    padding: 14px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    min-height: 138px;
-  }
-
-  .feature-item:nth-child(odd) {
-    background: rgba(255, 255, 255, 0.88);
-  }
-
-  .feature-item:nth-child(even) {
-    background: rgba(155, 196, 182, 0.12);
-  }
-
-  .feature-kicker {
-    display: inline-flex;
-    width: fit-content;
-    border: 1px solid rgba(47, 42, 68, 0.2);
-    border-radius: 999px;
-    padding: 3px 8px;
-    font-family: "Nunito", sans-serif;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: rgba(47, 42, 68, 0.72);
-    background: rgba(255, 255, 255, 0.7);
-  }
-
-  .feature-title {
-    font-family: var(--font-heading);
-    font-size: 19px;
-    font-weight: 600;
-    line-height: 1.2;
-    color: rgba(47, 42, 68, 0.92);
-  }
-
-  .feature-desc {
-    font-size: 15px;
-    line-height: 1.35;
-    color: rgba(47, 42, 68, 0.76);
-  }
-
-  .feature-more {
-    margin-top: 10px;
-    text-align: center;
-    font-family: "Nunito", sans-serif;
-    font-size: 14px;
-    letter-spacing: 0.08em;
-    text-transform: lowercase;
-    color: rgba(47, 42, 68, 0.58);
-  }
-
-  .feature-more-prefix {
-    text-decoration: none;
-  }
-
-  .feature-more-link {
-    text-decoration-line: underline;
-    text-decoration-color: rgba(47, 42, 68, 0.52);
-    text-decoration-thickness: 0.08em;
-    text-underline-offset: 0.22em;
-    color: inherit;
-  }
-
-  .links-grid {
-    margin-top: 0;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
-  }
-
-  .link-card {
-    border-radius: 18px;
-    border: 2px solid rgba(47, 42, 68, 0.16);
-    background: rgba(255, 255, 255, 0.82);
-    padding: 14px;
-    text-decoration: none;
-    color: var(--ink);
-    transition: transform 0.18s ease, box-shadow 0.18s ease;
-  }
-
-  .link-card strong {
-    display: block;
-    font-family: var(--font-heading);
-    font-size: 22px;
-    font-weight: 600;
-    line-height: 1;
-  }
-
-  .link-card span {
-    display: block;
-    font-size: 16px;
-    color: rgba(47, 42, 68, 0.76);
-    line-height: 1.25;
-    margin-top: 6px;
-  }
-
-  .link-card:nth-child(1) { border-top: 3px solid rgba(232, 135, 131, 0.55); }
-  .link-card:nth-child(2) { border-top: 3px solid rgba(155, 196, 182, 0.65); }
-  .link-card:nth-child(3) { border-top: 3px solid rgba(158, 201, 255, 0.65); }
-  .link-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(47, 42, 68, 0.12); }
-
-  @keyframes drift {
-    0%,
-    100% { transform: translateY(0) scale(1); }
-    50% { transform: translateY(-10px) scale(1.04); }
-  }
-
-
-  @keyframes pulseDot {
-    0%,
-    100% { transform: scale(1); }
-    50% { transform: scale(0.72); }
-  }
-
-  @keyframes blink {
-    0%,
-    50% { opacity: 1; }
-    51%,
-    100% { opacity: 0; }
-  }
-
-  @media (max-width: 900px) {
-    .feature-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .links-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .hero-bg::after {
-      width: 160px;
-      height: 160px;
-      right: 12px;
-      bottom: 12px;
-    }
-
-    .panel-hanger {
-      right: 8px;
-      top: 20px;
-      transform: scale(0.9);
-      transform-origin: top right;
-    }
-  }
-
-  @media (max-width: 640px) {
-    .mobile-br {
-      display: block;
-    }
-
-    .command-actions {
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
-    .feature-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .feature-item {
-      min-height: 0;
-    }
-
-    .feature-grid.feature-problem-outcome .feature-item {
-      grid-template-columns: 1fr;
-      gap: 4px;
-    }
-
-    .feature-flow {
-      gap: 6px;
-    }
-
-    .hero-block {
-      margin-top: 22px;
-      padding-top: 0;
-    }
-
-    .hero-block-label {
-      font-size: 16px;
-    }
-
-    .panel-hanger {
-      right: -8px;
-      top: 10px;
-      transform: scale(0.78);
-      transform-origin: top right;
-    }
-  }
-  </style></Fragment>
-
-  <Fragment slot="paint">
-    <div class="blob one"></div>
-    <div class="blob two"></div>
-    <div class="blob three"></div>
-  </Fragment>
+  <link slot="head" rel="preload" as="image" href="/assets/hero-garden.webp" />
   <section class="hero">
-    <div class="hero-bg" aria-hidden="true"></div>
     <div
       class="panel-hanger"
       id="mit-hanger"
@@ -680,16 +23,13 @@ import CopyButton from "../components/CopyButton.astro";
         </div>
       </div>
     </div>
-    <div class="badge"><span class="badge-dot"></span>self-hosted app workflow</div>
     <h1 class="title">Your servers<br />were <span class="swirl">fine</span><br />all along.</h1>
     <p class="subtitle">
-      Tako keeps the power-user workflow while giving your deploy day some personality.
-      Routes, logs, secrets, rolling deploys. All on your own servers.
+      Development to production and everything in between &mdash; one tool, your servers
     </p>
 
     <div class="command-card">
       <div class="command-head">
-        <div class="dots"><span></span><span></span><span></span></div>
         <div class="command-title">install</div>
       </div>
       <div class="command-body">
@@ -706,118 +46,110 @@ import CopyButton from "../components/CopyButton.astro";
         </div>
       </div>
     </div>
-
-    <div class="hero-block">
-      <div class="hero-block-head">
-        <p class="hero-block-label">Things you'll love about tako</p>
-        <span class="hero-block-rule" aria-hidden="true"></span>
-      </div>
-      <div class="feature-grid feature-problem-outcome">
-        <article class="feature-item">
-          <span class="feature-kicker">deploy</span>
-          <p class="feature-flow">
-            <span class="feature-problem">Rolling deploys without drama</span>
-            <span class="feature-outcome">Bring up new instances first, then shift traffic after health checks pass.</span>
-          </p>
-        </article>
-        <article class="feature-item">
-          <span class="feature-kicker">runtime</span>
-          <p class="feature-flow">
-            <span class="feature-problem">Automatic health-based routing</span>
-            <span class="feature-outcome">When an instance degrades, requests route to healthy ones in seconds.</span>
-          </p>
-        </article>
-        <article class="feature-item">
-          <span class="feature-kicker">ops</span>
-          <p class="feature-flow">
-            <span class="feature-problem">Logs and status in one place</span>
-            <span class="feature-outcome">Inspect what is running and what failed with direct CLI commands.</span>
-          </p>
-        </article>
-        <article class="feature-item">
-          <span class="feature-kicker">security</span>
-          <p class="feature-flow">
-            <span class="feature-problem">Keep secrets safe</span>
-            <span class="feature-outcome">Manage and rotate them centrally across environments.</span>
-          </p>
-        </article>
-        <article class="feature-item">
-          <span class="feature-kicker">rollback</span>
-          <p class="feature-flow">
-            <span class="feature-problem">Fast rollback path</span>
-            <span class="feature-outcome">Recover quickly when a release misbehaves without a full rebuild cycle.</span>
-          </p>
-        </article>
-        <article class="feature-item">
-          <span class="feature-kicker">ownership</span>
-          <p class="feature-flow">
-            <span class="feature-problem">Bring your own servers</span>
-            <span class="feature-outcome">Keep control of hosts, domains, and certs with zero platform lock-in.</span>
-          </p>
-        </article>
-      </div>
-      <p class="feature-more"><span class="feature-more-prefix">and </span><a class="feature-more-link" href="/docs#what-tako-does-well">more</a></p>
+    <div class="hero-mobile-cta">
+      <a href="/docs/quickstart" class="btn cta-btn">get started</a>
+      <a href="/docs" class="cta-link">or read the docs &rarr;</a>
     </div>
+  </section>
 
-    <div class="hero-block">
-      <div class="hero-block-head">
-        <p class="hero-block-label">Explore</p>
-        <span class="hero-block-rule" aria-hidden="true"></span>
-      </div>
-      <div class="links-grid">
-        <a href="/docs" class="link-card">
-          <strong>Intro</strong>
-          <span>See who Tako is for and what it does best</span>
-        </a>
-        <a href="/docs/quickstart" class="link-card">
-          <strong>Quickstart</strong>
-          <span>Get from zero to first app run fast</span>
-        </a>
-        <a href="/docs/quickstart#remote-setup" class="link-card">
-          <strong>Remote Setup</strong>
-          <span>Set up hosts and install tako-server</span>
-        </a>
-      </div>
+  <section class="workflow-section">
+    <div class="hero-block-head">
+      <h2 class="hero-block-label">Three commands and you're live</h2>
+      <span class="hero-block-rule" aria-hidden="true"></span>
     </div>
+    <ol class="workflow-steps">
+      <li class="workflow-step">
+        <a href="/docs/quickstart" class="workflow-link">
+          <div class="workflow-visual">
+            <span class="workflow-orb workflow-orb-1" aria-hidden="true">1</span>
+            <img src="/assets/step-init.webp" alt="" class="workflow-img" width="120" height="120" loading="lazy" />
+          </div>
+          <code class="workflow-cmd">tako init</code>
+          <p class="workflow-desc">Detect runtime, create config</p>
+        </a>
+      </li>
+      <li class="workflow-step">
+        <a href="/docs/development" class="workflow-link">
+          <div class="workflow-visual">
+            <span class="workflow-orb workflow-orb-2" aria-hidden="true">2</span>
+            <img src="/assets/step-dev.webp" alt="" class="workflow-img" width="120" height="120" loading="lazy" />
+          </div>
+          <code class="workflow-cmd">tako dev</code>
+          <p class="workflow-desc">Develop locally with HTTPS</p>
+        </a>
+      </li>
+      <li class="workflow-step">
+        <a href="/docs/deployment" class="workflow-link">
+          <div class="workflow-visual">
+            <span class="workflow-orb workflow-orb-3" aria-hidden="true">3</span>
+            <img src="/assets/step-deploy.webp" alt="" class="workflow-img" width="120" height="120" loading="lazy" />
+          </div>
+          <code class="workflow-cmd">tako deploy</code>
+          <p class="workflow-desc">Build, upload, rolling update</p>
+        </a>
+      </li>
+    </ol>
+  </section>
 
+  <section class="features-section">
+    <div class="hero-block-head">
+      <h2 class="hero-block-label">What Tako handles for you</h2>
+      <span class="hero-block-rule" aria-hidden="true"></span>
+    </div>
+    <div class="feature-list">
+      <a href="/docs/tako-toml" class="feature-link">
+        <span class="feature-link-title">Highly opinionated</span>
+        <span class="feature-link-desc">Is it <code>dev</code> or <code>development</code>? Tako already decided. You just ship</span>
+      </a>
+      <a href="/docs/deployment" class="feature-link">
+        <span class="feature-link-title">Rolling deploys</span>
+        <span class="feature-link-desc">New instances come up first, traffic shifts after health checks pass</span>
+      </a>
+      <a href="/docs/how-tako-works#health-checks-and-instance-lifecycle" class="feature-link">
+        <span class="feature-link-title">Health-based routing</span>
+        <span class="feature-link-desc">Degraded instances lose traffic in seconds, no manual intervention</span>
+      </a>
+      <a href="/docs/cli" class="feature-link">
+        <span class="feature-link-title">Logs, status, secrets</span>
+        <span class="feature-link-desc">Inspect what's running, manage secrets, check history &mdash; all from the CLI</span>
+      </a>
+      <a href="/docs/how-tako-works#scaling" class="feature-link">
+        <span class="feature-link-title">Scale to zero and back</span>
+        <span class="feature-link-desc">Idle apps sleep, the next request wakes them up</span>
+      </a>
+      <a href="/docs/how-tako-works#tls-and-certificates" class="feature-link">
+        <span class="feature-link-title">Automatic TLS</span>
+        <span class="feature-link-desc">Let's Encrypt in production, local CA in dev &mdash; zero config</span>
+      </a>
+      <a href="/docs/how-tako-works#rolling-updates" class="feature-link">
+        <span class="feature-link-title">Instant rollback</span>
+        <span class="feature-link-desc">Previous version stays ready, one command to revert</span>
+      </a>
+      <a href="/docs/presets" class="feature-link">
+        <span class="feature-link-title">Impatient by default</span>
+        <span class="feature-link-desc">Presets tuned for fast builds &mdash; deploy in seconds</span>
+      </a>
+      <a href="/docs/development" class="feature-link">
+        <span class="feature-link-title">Agent-friendly</span>
+        <span class="feature-link-desc">Each worktree gets its own URL &mdash; <code>myapp-fix69.tako.test</code></span>
+      </a>
+      <a href="/docs/how-tako-works" class="feature-link">
+        <span class="feature-link-title">Bun, Node, Deno &mdash; you name it</span>
+        <span class="feature-link-desc">Runtime auto-detected, or pick your own</span>
+      </a>
+    </div>
+  </section>
+
+  <section class="cta-section">
+    <p class="cta-text">Your servers are waiting.</p>
+    <div class="cta-actions">
+      <a href="/docs/quickstart" class="btn cta-btn">get started</a>
+      <a href="/docs/how-tako-works" class="cta-link">or read how Tako works &rarr;</a>
+    </div>
   </section>
 </BaseLayout>
 
 <style is:global>
-  .blob {
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(18px);
-    opacity: 0.7;
-    animation: drift 11s ease-in-out infinite;
-  }
-
-  .blob.one {
-    width: 360px;
-    height: 360px;
-    top: -110px;
-    left: -120px;
-    background: rgba(232, 135, 131, 0.45);
-  }
-
-  .blob.two {
-    width: 460px;
-    height: 460px;
-    top: 34%;
-    right: -180px;
-    background: rgba(155, 196, 182, 0.4);
-    animation-delay: -4s;
-  }
-
-  .blob.three {
-    width: 320px;
-    height: 320px;
-    bottom: -130px;
-    left: 18%;
-    background: rgba(158, 201, 255, 0.45);
-    animation-delay: -8s;
-  }
-
   .hero {
     border-radius: var(--panel-radius);
     border: 2px solid var(--line);
@@ -829,16 +161,21 @@ import CopyButton from "../components/CopyButton.astro";
     isolation: isolate;
   }
 
-  .hero-bg {
+  .hero::before {
+    content: "";
     position: absolute;
     inset: 0;
     border-radius: inherit;
-    overflow: hidden;
-    pointer-events: none;
+    background:
+      linear-gradient(105deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.78) 40%, rgba(255, 255, 255, 0.48) 72%, rgba(255, 255, 255, 0.35) 100%),
+      url('/assets/hero-garden.webp') right center / auto 100% no-repeat;
     z-index: 0;
+    pointer-events: none;
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0px, black 50px, black calc(100% - 50px), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0px, black 50px, black calc(100% - 50px), transparent 100%);
   }
 
-  .hero > *:not(.panel-hanger):not(.hero-bg) {
+  .hero > *:not(.panel-hanger) {
     position: relative;
     z-index: 2;
   }
@@ -914,10 +251,10 @@ import CopyButton from "../components/CopyButton.astro";
 
   .panel-tag-label {
     display: block;
-    font-size: 10px;
+    font-size: 11px;
     letter-spacing: 0.1em;
     line-height: 1;
-    opacity: 0.72;
+    opacity: 0.82;
     text-transform: uppercase;
   }
 
@@ -928,41 +265,7 @@ import CopyButton from "../components/CopyButton.astro";
     font-weight: 700;
     letter-spacing: 0.08em;
     line-height: 1;
-    color: var(--primary);
-  }
-
-  .hero-bg::after {
-    content: "";
-    position: absolute;
-    width: 186px;
-    height: 186px;
-    right: 16px;
-    bottom: 16px;
-    border-radius: 42% 58% 60% 40%;
-    background: linear-gradient(120deg, rgba(232, 135, 131, 0.38), rgba(255, 217, 125, 0.42));
-    transform: rotate(-13deg);
-    z-index: 0;
-  }
-
-
-  .badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 9px 14px;
-    border-radius: 999px;
-    border: 2px solid rgba(47, 42, 68, 0.22);
-    background: rgba(255, 255, 255, 0.82);
-    font-size: clamp(18px, 2.8vw, 23px);
-    margin-bottom: 14px;
-  }
-
-  .badge-dot {
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    background: var(--primary);
-    animation: pulseDot 2s ease-in-out infinite;
+    color: var(--primary-text);
   }
 
   .title {
@@ -973,12 +276,8 @@ import CopyButton from "../components/CopyButton.astro";
     margin-bottom: 14px;
   }
 
-  .mobile-br {
-    display: none;
-  }
-
   .title .swirl {
-    color: var(--primary);
+    color: var(--primary-text);
   }
 
   .subtitle {
@@ -987,6 +286,14 @@ import CopyButton from "../components/CopyButton.astro";
     line-height: 1.2;
     color: var(--muted);
     margin-bottom: 24px;
+  }
+
+  .hero-mobile-cta {
+    display: none;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 12px;
+    margin-top: 20px;
   }
 
   .command-card {
@@ -1003,25 +310,9 @@ import CopyButton from "../components/CopyButton.astro";
     justify-content: center;
     gap: 12px;
     position: relative;
-    background: rgba(158, 201, 255, 0.22);
+    background: var(--mint-soft);
     border-bottom: 2px solid rgba(47, 42, 68, 0.14);
     padding: 10px 14px;
-  }
-
-  .dots {
-    display: inline-flex;
-    gap: 6px;
-    position: absolute;
-    left: 14px;
-    top: 50%;
-    transform: translateY(-50%);
-  }
-
-  .dots span {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    background: rgba(47, 42, 68, 0.28);
   }
 
   .command-title {
@@ -1043,11 +334,11 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   .prompt {
-    color: var(--primary);
+    color: var(--primary-text);
   }
 
   .cmd {
-    color: #3c3559;
+    color: var(--ink);
     min-height: 1.2em;
     white-space: nowrap;
     flex: 0 0 auto;
@@ -1090,6 +381,7 @@ import CopyButton from "../components/CopyButton.astro";
     letter-spacing: 0.03em;
     text-transform: lowercase;
     cursor: pointer;
+    transition: background 0.15s ease, color 0.15s ease;
   }
 
   .command-mode.is-active {
@@ -1098,31 +390,36 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   .btn {
-    border: 1px solid var(--line);
+    border: 1.5px solid rgba(232, 135, 131, 0.4);
     border-radius: 999px;
-    background: rgba(255, 255, 255, 0.8);
+    background: rgba(232, 135, 131, 0.2);
     color: var(--ink);
-    padding: 7px 14px;
+    padding: 8px 18px;
     font-family: "Nunito", sans-serif;
     font-size: 16px;
-    font-weight: 600;
+    font-weight: 700;
     line-height: 1;
     text-decoration: none;
     cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
   }
 
   .btn:hover {
     transform: translateY(-1px);
-    background: rgba(232, 135, 131, 0.18);
+    background: rgba(232, 135, 131, 0.32);
+    border-color: rgba(232, 135, 131, 0.55);
   }
 
-  .btn.primary {
-    background: rgba(232, 135, 131, 0.28);
+  .btn:focus-visible,
+  .command-mode:focus-visible,
+  .copy-inline:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
 
   .copy-inline {
-    width: 36px;
-    height: 36px;
+    width: 44px;
+    height: 44px;
     margin-left: auto;
     border: 2px solid rgba(47, 42, 68, 0.26);
     border-radius: 10px;
@@ -1130,6 +427,7 @@ import CopyButton from "../components/CopyButton.astro";
     color: var(--ink);
     cursor: pointer;
     flex: 0 0 auto;
+    transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
   }
 
   .copy-inline:hover {
@@ -1147,12 +445,7 @@ import CopyButton from "../components/CopyButton.astro";
     color: rgba(22, 110, 80, 0.95);
   }
 
-  .hero-block {
-    margin-top: 26px;
-    padding-top: 0;
-    border-top: 0;
-  }
-
+  /* Shared section header */
   .hero-block-head {
     display: flex;
     align-items: center;
@@ -1172,191 +465,227 @@ import CopyButton from "../components/CopyButton.astro";
     flex: 1;
     height: 2px;
     border-radius: 999px;
-    background: linear-gradient(90deg, rgba(232, 135, 131, 0.42), rgba(155, 196, 182, 0.26), rgba(47, 42, 68, 0.05));
+    background: linear-gradient(90deg, rgba(232, 135, 131, 0.35), rgba(155, 196, 182, 0.25), transparent);
   }
 
-  .feature-grid {
-    margin-top: 0;
+  /* Workflow section */
+  .workflow-section {
+    margin-top: 32px;
+  }
+
+  .workflow-steps {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    list-style: none;
+    padding: 0;
   }
 
-  .feature-grid.feature-problem-outcome {
-    grid-template-columns: 1fr;
-    gap: 0;
-  }
-
-  .feature-grid.feature-problem-outcome .feature-item {
-    border: 0;
-    border-radius: 0;
-    background: transparent;
-    padding: 14px 0;
-    min-height: 0;
-    display: grid;
-    grid-template-columns: minmax(72px, 88px) 1fr;
-    align-items: start;
-    gap: 10px;
-    border-top: 1px solid rgba(47, 42, 68, 0.16);
-  }
-
-  .feature-grid.feature-problem-outcome .feature-item:first-child {
-    border-top: 0;
-  }
-
-  .feature-grid.feature-problem-outcome .feature-item:nth-child(odd),
-  .feature-grid.feature-problem-outcome .feature-item:nth-child(even) {
-    background: transparent;
-  }
-
-  .feature-grid.feature-problem-outcome .feature-kicker {
-    border: 0;
-    border-radius: 0;
-    padding: 2px 0 0;
-    font-size: 11px;
-    letter-spacing: 0.08em;
-    background: transparent;
-  }
-
-  .feature-flow {
-    margin: 0;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: baseline;
-    gap: 8px;
-    font-size: 15px;
-    line-height: 1.35;
-  }
-
-  .feature-problem {
-    font-weight: 700;
-    color: rgba(47, 42, 68, 0.92);
-  }
-
-  .feature-outcome {
-    font-weight: 400;
-    color: rgba(47, 42, 68, 0.76);
-  }
-
-  .feature-item {
-    border: 2px solid rgba(47, 42, 68, 0.16);
-    border-radius: 18px;
-    background: rgba(255, 255, 255, 0.86);
-    padding: 14px;
+  .workflow-link {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    min-height: 138px;
-  }
-
-  .feature-item:nth-child(odd) {
-    background: rgba(255, 255, 255, 0.88);
-  }
-
-  .feature-item:nth-child(even) {
-    background: rgba(155, 196, 182, 0.12);
-  }
-
-  .feature-kicker {
-    display: inline-flex;
-    width: fit-content;
-    border: 1px solid rgba(47, 42, 68, 0.2);
-    border-radius: 999px;
-    padding: 3px 8px;
-    font-family: "Nunito", sans-serif;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: rgba(47, 42, 68, 0.72);
-    background: rgba(255, 255, 255, 0.7);
-  }
-
-  .feature-title {
-    font-family: var(--font-heading);
-    font-size: 19px;
-    font-weight: 600;
-    line-height: 1.2;
-    color: rgba(47, 42, 68, 0.92);
-  }
-
-  .feature-desc {
-    font-size: 15px;
-    line-height: 1.35;
-    color: rgba(47, 42, 68, 0.76);
-  }
-
-  .feature-more {
-    margin-top: 10px;
+    align-items: center;
     text-align: center;
-    font-family: "Nunito", sans-serif;
-    font-size: 14px;
-    letter-spacing: 0.08em;
-    text-transform: lowercase;
-    color: rgba(47, 42, 68, 0.58);
-  }
-
-  .feature-more-prefix {
+    gap: 4px;
+    padding: 16px;
     text-decoration: none;
   }
 
-  .feature-more-link {
-    text-decoration-line: underline;
-    text-decoration-color: rgba(47, 42, 68, 0.52);
-    text-decoration-thickness: 0.08em;
-    text-underline-offset: 0.22em;
-    color: inherit;
+  .workflow-visual {
+    position: relative;
+    width: 140px;
+    height: 140px;
+    margin: 0 auto 8px;
+    isolation: isolate;
   }
 
-  .links-grid {
-    margin-top: 0;
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 12px;
+  .workflow-orb {
+    position: absolute;
+    top: -4px;
+    left: -4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    font-family: var(--font-heading);
+    font-size: 16px;
+    font-weight: 700;
+    color: white;
+    z-index: 1;
+    box-shadow: 0 2px 6px rgba(47, 42, 68, 0.15);
   }
 
-  .link-card {
-    border-radius: 18px;
-    border: 2px solid rgba(47, 42, 68, 0.16);
-    background: rgba(255, 255, 255, 0.82);
-    padding: 14px;
-    text-decoration: none;
+  .workflow-orb-1 { background: var(--primary); }
+  .workflow-orb-2 { background: var(--secondary); }
+  .workflow-orb-3 { background: var(--gold); }
+
+  .workflow-img {
+    width: 140px;
+    height: 140px;
+    object-fit: contain;
+    display: block;
+    transition: transform 0.2s ease;
+  }
+
+  .workflow-visual::after {
+    content: "";
+    position: absolute;
+    inset: 15%;
+    border-radius: 50%;
+    background: rgba(232, 135, 131, 0.12);
+    filter: blur(16px);
+    z-index: -1;
+  }
+
+  .workflow-step:nth-child(2) .workflow-visual::after {
+    background: rgba(155, 196, 182, 0.14);
+  }
+
+  .workflow-step:nth-child(3) .workflow-visual::after {
+    background: rgba(214, 166, 62, 0.12);
+  }
+
+  .workflow-link:hover {
+    background: rgba(232, 135, 131, 0.06);
+    border-radius: 14px;
+  }
+
+  .workflow-link:hover .workflow-cmd {
+    color: var(--accent);
+  }
+
+  .workflow-link:hover .workflow-img {
+    transform: scale(1.15);
+  }
+
+  .workflow-link:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+    border-radius: 14px;
+  }
+
+  .workflow-cmd {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 16px;
+    font-weight: 700;
     color: var(--ink);
-    transition: transform 0.18s ease, box-shadow 0.18s ease;
+    background: none;
+    padding: 0;
+    transition: color 0.15s ease;
   }
 
-  .link-card strong {
+  .workflow-desc {
+    font-size: 14px;
+    line-height: 1.35;
+    color: var(--muted);
+  }
+
+  .cta-link:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+
+  /* Features section */
+  .features-section {
+    margin-top: 28px;
+  }
+
+  .feature-list {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 2px;
+  }
+
+  .feature-link {
+    display: block;
+    text-decoration: none;
+    padding: 14px 16px;
+    border-radius: 14px;
+    transition: background 0.15s ease;
+  }
+
+  .feature-link:hover {
+    background: rgba(232, 135, 131, 0.08);
+  }
+
+  .feature-link:hover .feature-link-title {
+    color: var(--accent);
+  }
+
+  .feature-link:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+
+  .feature-link-title {
     display: block;
     font-family: var(--font-heading);
-    font-size: 22px;
-    font-weight: 600;
-    line-height: 1;
-  }
-
-  .link-card span {
-    display: block;
     font-size: 16px;
-    color: rgba(47, 42, 68, 0.76);
-    line-height: 1.25;
-    margin-top: 6px;
+    font-weight: 600;
+    color: var(--ink);
+    line-height: 1.2;
+    transition: color 0.15s ease;
   }
 
-  .link-card:nth-child(1) { border-top: 3px solid rgba(232, 135, 131, 0.55); }
-  .link-card:nth-child(2) { border-top: 3px solid rgba(155, 196, 182, 0.65); }
-  .link-card:nth-child(3) { border-top: 3px solid rgba(158, 201, 255, 0.65); }
-  .link-card:hover { transform: translateY(-3px); box-shadow: 0 8px 24px rgba(47, 42, 68, 0.12); }
-
-  @keyframes drift {
-    0%,
-    100% { transform: translateY(0) scale(1); }
-    50% { transform: translateY(-10px) scale(1.04); }
+  .feature-link-desc {
+    display: block;
+    font-size: 14px;
+    line-height: 1.35;
+    color: var(--muted);
+    margin-top: 2px;
   }
 
+  .feature-link-desc code {
+    font-family: "IBM Plex Mono", ui-monospace, monospace;
+    font-size: 0.9em;
+    padding: 1px 4px;
+    border-radius: 4px;
+    background: rgba(47, 42, 68, 0.06);
+    color: var(--ink);
+  }
 
-  @keyframes pulseDot {
-    0%,
-    100% { transform: scale(1); }
-    50% { transform: scale(0.72); }
+  /* CTA section */
+  .cta-section {
+    margin-top: 32px;
+    text-align: center;
+    padding: 48px 0 24px;
+  }
+
+  .cta-text {
+    font-family: var(--font-heading);
+    font-size: clamp(18px, 3vw, 22px);
+    font-weight: 600;
+    color: var(--ink);
+    margin-bottom: 16px;
+  }
+
+  .cta-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .cta-btn {
+    padding: 10px 24px;
+    font-size: 17px;
+  }
+
+  .cta-link {
+    font-family: "Nunito", sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--ink);
+    text-decoration: none;
+    opacity: 0.7;
+    transition: color 0.15s ease;
+  }
+
+  .cta-link:hover {
+    color: var(--accent);
   }
 
   @keyframes blink {
@@ -1366,22 +695,19 @@ import CopyButton from "../components/CopyButton.astro";
     100% { opacity: 0; }
   }
 
+  @media (prefers-reduced-motion: reduce) {
+    .cursor { animation: none; }
+    .feature-link,
+    .feature-link-title,
+    .workflow-cmd,
+    .workflow-img,
+    .btn,
+    .copy-inline,
+    .command-mode,
+    .cta-link { transition: none; }
+  }
+
   @media (max-width: 900px) {
-    .feature-grid {
-      grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    .links-grid {
-      grid-template-columns: 1fr;
-    }
-
-    .hero-bg::after {
-      width: 160px;
-      height: 160px;
-      right: 12px;
-      bottom: 12px;
-    }
-
     .panel-hanger {
       right: 8px;
       top: 20px;
@@ -1391,8 +717,59 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   @media (max-width: 640px) {
-    .mobile-br {
-      display: block;
+    .panel-hanger {
+      right: -8px;
+      top: 10px;
+      transform: scale(0.78);
+      transform-origin: top right;
+    }
+
+    .subtitle {
+      color: var(--ink);
+    }
+
+    .hero::before {
+      background:
+        linear-gradient(105deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.85) 50%, rgba(255, 255, 255, 0.5) 80%, rgba(255, 255, 255, 0.35) 100%),
+        url('/assets/hero-garden.webp') right center / auto 100% no-repeat;
+    }
+
+    .command-card {
+      display: none;
+    }
+
+    .hero-mobile-cta {
+      display: flex;
+    }
+
+    .workflow-link {
+      flex-direction: row;
+      text-align: left;
+      gap: 12px;
+    }
+
+    .workflow-visual {
+      width: 56px;
+      height: 56px;
+      margin: 0;
+      flex-shrink: 0;
+    }
+
+    .workflow-img {
+      width: 56px;
+      height: 56px;
+    }
+
+    .workflow-orb {
+      width: 22px;
+      height: 22px;
+      font-size: 12px;
+      top: -3px;
+      left: -3px;
+    }
+
+    .workflow-visual::after {
+      display: none;
     }
 
     .command-actions {
@@ -1400,38 +777,32 @@ import CopyButton from "../components/CopyButton.astro";
       align-items: center;
     }
 
-    .feature-grid {
+    .btn {
+      padding: 10px 20px;
+    }
+
+    .command-mode {
+      padding: 12px 14px;
+    }
+
+    .feature-list {
+      grid-template-columns: 1fr;
+      gap: 0;
+    }
+
+    .workflow-steps {
       grid-template-columns: 1fr;
     }
 
-    .feature-item {
-      min-height: 0;
-    }
-
-    .feature-grid.feature-problem-outcome .feature-item {
-      grid-template-columns: 1fr;
-      gap: 4px;
-    }
-
-    .feature-flow {
-      gap: 6px;
-    }
-
-    .hero-block {
-      margin-top: 22px;
-      padding-top: 0;
+    .workflow-section,
+    .features-section {
+      margin-top: 24px;
     }
 
     .hero-block-label {
       font-size: 16px;
     }
 
-    .panel-hanger {
-      right: -8px;
-      top: 10px;
-      transform: scale(0.78);
-      transform-origin: top right;
-    }
   }
 </style>
 
@@ -1551,6 +922,7 @@ import CopyButton from "../components/CopyButton.astro";
     let length = restLength * 0.5;
     let lengthVelocity = 210;
     let dragging = false;
+    let animating = false;
     const gravity = 1200;
     const angularDamping = 2.8;
     const angleSpring = 2.2;
@@ -1632,6 +1004,14 @@ import CopyButton from "../components/CopyButton.astro";
       document.body.style.userSelect = "";
     };
 
+    const startAnimation = () => {
+      if (!animating && !window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        animating = true;
+        lastFrame = performance.now();
+        requestAnimationFrame(tick);
+      }
+    };
+
     tag.addEventListener("pointerdown", (event) => {
       dragging = true;
       tag.setPointerCapture(event.pointerId);
@@ -1642,6 +1022,7 @@ import CopyButton from "../components/CopyButton.astro";
       dragAngleSample = angle;
       dragLengthSample = length;
       applyPose();
+      startAnimation();
       tag.style.cursor = "grabbing";
       document.body.style.userSelect = "none";
     });
@@ -1701,10 +1082,23 @@ import CopyButton from "../components/CopyButton.astro";
       }
 
       applyPose();
-      requestAnimationFrame(tick);
+
+      if (!dragging && isNearRest()) {
+        animating = false;
+      } else {
+        requestAnimationFrame(tick);
+      }
     };
 
-    applyPose();
-    requestAnimationFrame(tick);
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reducedMotion) {
+      angle = restAngle;
+      length = restLength;
+      applyPose();
+    } else {
+      applyPose();
+      animating = true;
+      requestAnimationFrame(tick);
+    }
   }
 </script>

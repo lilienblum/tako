@@ -12,11 +12,15 @@ export interface Props {
   date: string;
   author?: string;
   image?: string;
+  imageAlt?: string;
+  description?: string;
   frontmatter?: {
     title?: string;
     date?: string;
     author?: string;
     image?: string;
+    imageAlt?: string;
+    description?: string;
   };
 }
 
@@ -27,6 +31,8 @@ const authorId = Astro.props.author ?? frontmatter.author ?? "";
 const { name: author, link: authorLink } = authors[authorId] ?? defaultAuthor;
 const rawImage = Astro.props.image ?? frontmatter.image ?? "";
 const image = rawImage ? `/assets/blog/${rawImage}.webp` : "";
+const imageAlt = Astro.props.imageAlt ?? frontmatter.imageAlt ?? title;
+const description = Astro.props.description ?? frontmatter.description ?? title;
 
 const formatted = date
   ? new Date(date + "T00:00:00").toLocaleDateString("en-US", {
@@ -36,10 +42,10 @@ const formatted = date
     })
   : "";
 ---
-<BaseLayout title={`${title} - Tako Blog`} description={title}>
+<BaseLayout title={`${title} - Tako Blog`} description={description}>
   <section class={`blog-sheet ${image ? "has-hero" : ""}`}>
     {image && (
-      <div class="blog-hero"><img src={image} alt="" /></div>
+      <div class="blog-hero"><img src={image} alt={imageAlt} width="1200" height="480" loading="eager" fetchpriority="high" /></div>
     )}
     <div class="blog-top">
       <a href="/blog" class="blog-back">&larr; back</a>
@@ -164,6 +170,11 @@ const formatted = date
     color: var(--accent);
   }
 
+  .blog-back:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+
   .blog-header {
     margin-bottom: 24px;
   }
@@ -193,6 +204,12 @@ const formatted = date
 
   .blog-author:hover {
     color: var(--accent);
+  }
+
+  .blog-author:focus-visible,
+  .blog-article.content a:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
 
   .blog-article.content {
@@ -259,7 +276,7 @@ const formatted = date
     padding: 2px 6px;
     border-radius: 8px;
     background: rgba(232, 135, 131, 0.12);
-    color: #3f3557;
+    color: var(--ink);
   }
 
   .blog-article.content pre {
@@ -271,7 +288,7 @@ const formatted = date
     font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     font-size: 13px;
     line-height: 1.5;
-    color: #2b2640;
+    color: var(--ink);
   }
 
   .blog-article.content pre code {
@@ -284,11 +301,11 @@ const formatted = date
     background: var(--mint-soft);
     border-radius: 0 12px 12px 0;
     padding: 12px 14px;
-    color: #2c2b3d;
+    color: var(--ink);
   }
 
   .blog-article.content strong {
-    color: #2f2a44;
+    color: var(--ink);
   }
 
   .blog-article.content hr {

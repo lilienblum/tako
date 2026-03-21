@@ -47,8 +47,7 @@ const docsNav = [
         aria-expanded="false"
         aria-controls="docs-nav-sidebar"
       >
-        <span class="docs-menu-icon" aria-hidden="true"></span>
-        <span>Menu</span>
+        show sections
       </button>
     </div>
 
@@ -87,6 +86,7 @@ const docsNav = [
     if (toggle instanceof HTMLButtonElement && sidebar instanceof HTMLElement) {
       const setOpen = (open) => {
         toggle.setAttribute("aria-expanded", open ? "true" : "false");
+        toggle.textContent = open ? "hide sections" : "show sections";
         sidebar.classList.toggle("is-open", open);
       };
 
@@ -283,35 +283,6 @@ const docsNav = [
 </BaseLayout>
 
 <style is:global>
-  .paint::before,
-  .paint::after {
-    content: "";
-    position: absolute;
-    border-radius: 50%;
-    filter: blur(18px);
-    animation: floatBlob 10s ease-in-out infinite;
-  }
-
-  .paint::before {
-    width: 340px;
-    height: 340px;
-    top: -120px;
-    left: -130px;
-    background: rgba(232, 135, 131, 0.32);
-  }
-
-  .paint::after {
-    width: 420px;
-    height: 420px;
-    bottom: -170px;
-    right: -160px;
-    background: rgba(155, 196, 182, 0.3);
-    animation-delay: -4s;
-  }
-
-  .site {
-    z-index: 2;
-  }
 
   .sheet {
     border: 2px solid var(--line);
@@ -345,8 +316,14 @@ const docsNav = [
     color: var(--accent);
   }
 
+  .breadcrumb a:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
+  }
+
   .breadcrumb span {
-    color: var(--accent);
+    color: var(--ink);
+    font-weight: 600;
   }
 
   .docs-shell {
@@ -379,6 +356,12 @@ const docsNav = [
     padding: 7px 10px;
     font-size: 15px;
     line-height: 1.3;
+  }
+
+  .docs-nav-link:focus-visible,
+  .docs-menu-toggle:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
 
   .docs-nav-link:hover {
@@ -417,6 +400,11 @@ const docsNav = [
     color: var(--ink);
     background: rgba(155, 196, 182, 0.14);
     border-color: rgba(155, 196, 182, 0.35);
+  }
+
+  .docs-nav-sub-link:focus-visible {
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
 
   .docs-nav-sub-link.is-level-3 {
@@ -534,7 +522,7 @@ const docsNav = [
     padding: 2px 6px;
     border-radius: 8px;
     background: rgba(232, 135, 131, 0.12);
-    color: #3f3557;
+    color: var(--ink);
   }
 
   .content pre {
@@ -546,7 +534,7 @@ const docsNav = [
     font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     font-size: 13px;
     line-height: 1.5;
-    color: #2b2640;
+    color: var(--ink);
   }
 
   .content .docs-code-wrap {
@@ -589,11 +577,19 @@ const docsNav = [
   }
 
   .content .docs-code-wrap:hover .docs-copy-button,
-  .content .docs-code-wrap:focus-within .docs-copy-button,
+  .content .docs-code-wrap:focus-within .docs-copy-button {
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0) scale(1);
+  }
+
   .content .docs-copy-button:focus-visible {
     opacity: 1;
     pointer-events: auto;
     transform: translateY(0) scale(1);
+    transition: none;
+    outline: 2px solid var(--primary);
+    outline-offset: 2px;
   }
 
   .content .docs-copy-button:hover {
@@ -611,7 +607,7 @@ const docsNav = [
   .content .docs-copy-button.is-error {
     background: rgba(232, 135, 131, 0.18);
     border-color: rgba(232, 135, 131, 0.75);
-    color: #8d2727;
+    color: rgba(141, 39, 39, 0.95);
   }
 
   .content pre code {
@@ -624,7 +620,7 @@ const docsNav = [
     background: var(--mint-soft);
     border-radius: 0 12px 12px 0;
     padding: 12px 14px;
-    color: #2c2b3d;
+    color: var(--ink);
   }
 
   .content table {
@@ -642,7 +638,7 @@ const docsNav = [
 
   .content th {
     font-family: "Nunito", sans-serif;
-    color: #2f2a44;
+    color: var(--ink);
     background: rgba(155, 196, 182, 0.18);
   }
 
@@ -653,62 +649,16 @@ const docsNav = [
   }
 
   .content strong {
-    color: #2f2a44;
+    color: var(--ink);
   }
 
   .content .dynamic-phrase {
-    display: inline-block;
+    display: inline;
     font-weight: 700;
+    font-style: italic;
     color: inherit;
-    background: var(--secondary);
-    padding: 0.08em 0.35em;
-    line-height: 1;
-  }
-
-  .docs-menu-icon,
-  .docs-menu-icon::before,
-  .docs-menu-icon::after {
-    content: "";
-    display: block;
-    width: 16px;
-    height: 2px;
-    border-radius: 2px;
-    background: var(--ink);
-    transition: transform 0.16s ease;
-  }
-
-  .docs-menu-icon {
-    position: relative;
-  }
-
-  .docs-menu-icon::before {
-    position: absolute;
-    top: -5px;
-    left: 0;
-  }
-
-  .docs-menu-icon::after {
-    position: absolute;
-    top: 5px;
-    left: 0;
-  }
-
-  .docs-menu-toggle[aria-expanded="true"] .docs-menu-icon {
-    background: transparent;
-  }
-
-  .docs-menu-toggle[aria-expanded="true"] .docs-menu-icon::before {
-    transform: translateY(5px) rotate(45deg);
-  }
-
-  .docs-menu-toggle[aria-expanded="true"] .docs-menu-icon::after {
-    transform: translateY(-5px) rotate(-45deg);
-  }
-
-  @keyframes floatBlob {
-    0%,
-    100% { transform: translateY(0); }
-    50% { transform: translateY(-10px); }
+    background: linear-gradient(to top, rgba(232, 135, 131, 0.25) 40%, transparent 40%);
+    padding: 0 0.1em;
   }
 
   .docs-menu-toggle {
