@@ -139,7 +139,10 @@ impl SniCertResolver {
 
         // Load full chain: first cert is the leaf, rest are intermediates.
         let all_certs = X509::stack_from_pem(&cert_pem)?;
-        let cert = all_certs.first().cloned().ok_or_else(openssl::error::ErrorStack::get)?;
+        let cert = all_certs
+            .first()
+            .cloned()
+            .ok_or_else(openssl::error::ErrorStack::get)?;
         let chain = all_certs.into_iter().skip(1).collect();
         let key = PKey::private_key_from_pem(&key_pem)?;
 
