@@ -53,14 +53,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: SDK build
+        run: bun run --filter 'tako.sh' build
+
       - name: Typecheck
         run: bun run --filter 'tako.sh' typecheck
 
       - name: Test
         run: bun test --cwd sdk/javascript
-
-      - name: SDK build
-        run: bun run --filter 'tako.sh' build
 
   cli:
     name: CLI Tests
