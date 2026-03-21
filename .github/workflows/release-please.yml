@@ -12,7 +12,47 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     environment: release
+    outputs:
+      prs: ${{ steps.release.outputs.prs }}
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           token: ${{ secrets.GH_PAT }}
+
+  # release-please does string replacement on Cargo.lock which can leave it
+  # out of sync. This job checks out each release PR branch, runs cargo update
+  # to regenerate the lockfile, and pushes the fix if needed.
+  fix-lockfile:
+    name: Fix Cargo.lock
+    needs: release-please
+    if: needs.release-please.outputs.prs != '[]' && needs.release-please.outputs.prs != ''
+    runs-on: ubuntu-latest
+    environment: release
+    strategy:
+      matrix:
+        pr: ${{ fromJson(needs.release-please.outputs.prs) }}
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ matrix.pr.headBranchName }}
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Regenerate Cargo.lock
+        run: cargo generate-lockfile
+
+      - name: Push if changed
+        run: |
+          if git diff --quiet Cargo.lock; then
+            echo "Cargo.lock is already correct"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add Cargo.lock
+            git commit -m "chore: regenerate Cargo.lock"
+            git push
+          fi
