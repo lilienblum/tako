@@ -184,7 +184,7 @@ export class TakoTerminal {
   screenText(): string {
     const buf = this.terminal.buffer.active;
     const lines: string[] = [];
-    for (let y = 0; y < this.terminal.rows; y++) {
+    for (let y = 0; y < buf.length; y++) {
       const line = buf.getLine(y);
       lines.push(line ? line.translateToString(true) : "");
     }

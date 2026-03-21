@@ -204,7 +204,8 @@ describe("tako doctor --ci", () => {
 // ── Helpers ─────────────────────────────────────────────────────────
 
 function findRowContaining(term: TakoTerminal, text: string): number | null {
-  for (let y = 0; y < 40; y++) {
+  const totalRows = term.terminal.buffer.active.length;
+  for (let y = 0; y < totalRows; y++) {
     if (term.row(y).includes(text)) return y;
   }
   return null;
