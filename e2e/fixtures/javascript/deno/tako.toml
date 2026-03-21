@@ -1,5 +1,6 @@
 name = "deno-e2e"
 runtime = "deno"
+package_manager = "bun"
 
 [envs.production]
 route = "deno-e2e.example.com"
