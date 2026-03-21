@@ -63,10 +63,11 @@ impl Spawner {
         );
 
         let env = build_instance_env(&config, &instance);
+        let extra_args = build_instance_args(&config, &instance);
 
         let app_user = self.app_user;
 
-        let child = spawn_child_process(&config, &env, app_user)?;
+        let child = spawn_child_process(&config, &env, &extra_args, app_user)?;
 
         instance.set_process(child);
         instance.set_state(InstanceState::Starting);
@@ -267,40 +268,93 @@ impl Spawner {
     }
 }
 
-fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String, String> {
+fn build_instance_env(config: &AppConfig, _instance: &Instance) -> HashMap<String, String> {
     let mut env = config.env_vars.clone();
 
-    env.insert("TAKO_INSTANCE".to_string(), instance.id.clone());
+    env.entry("NODE_ENV".to_string())
+        .or_insert_with(|| "production".to_string());
+
+    // For monorepo apps, add the release root's node_modules to NODE_PATH
+    // so bare module specifiers resolve from the workspace root.
+    if !config.app_subdir.is_empty() {
+        let release_root = config
+            .path
+            .to_string_lossy()
+            .strip_suffix(&config.app_subdir)
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_default();
+        if !release_root.is_empty() {
+            let root_node_modules = format!("{}/node_modules", release_root);
+            if std::path::Path::new(&root_node_modules).is_dir() {
+                let existing = env.get("NODE_PATH").cloned().unwrap_or_default();
+                let node_path = if existing.is_empty() {
+                    root_node_modules
+                } else {
+                    format!("{}:{}", root_node_modules, existing)
+                };
+                env.insert("NODE_PATH".to_string(), node_path);
+            }
+        }
+    }
+
+    env
+}
+
+/// Build the extra CLI args for the entrypoint (internal protocol, not env vars).
+fn build_instance_args(config: &AppConfig, instance: &Instance) -> Vec<String> {
+    let mut args = Vec::new();
 
     #[cfg(unix)]
     {
         let socket_template = instance
             .socket_template()
             .expect("unix instances must provide a unix socket template");
-        env.insert("TAKO_APP_SOCKET".to_string(), socket_template.to_string());
+        args.push("--socket".to_string());
+        args.push(socket_template.to_string());
     }
 
-    env.entry("NODE_ENV".to_string())
-        .or_insert_with(|| "production".to_string());
+    args.push("--instance".to_string());
+    args.push(instance.id.clone());
 
-    // Signal to the SDK that secrets will be pushed via socket.
-    // The SDK should wait for POST /secrets before importing the user's app.
-    if !config.secrets.is_empty() {
-        env.insert("TAKO_HAS_SECRETS".to_string(), "1".to_string());
+    args.push("--version".to_string());
+    args.push(config.version.clone());
+
+    args
+}
+
+/// Resolve a binary name against the app's PATH env, falling back to the bare name.
+fn resolve_binary_from_env(binary: &str, env: &HashMap<String, String>) -> String {
+    use std::path::Path;
+    // Already absolute — use as-is
+    if binary.starts_with('/') {
+        return binary.to_string();
     }
-
-    env
+    // Search the app's PATH
+    if let Some(path_var) = env.get("PATH") {
+        for dir in path_var.split(':') {
+            let candidate = Path::new(dir).join(binary);
+            if candidate.is_file() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    // Fallback to bare name (Command::new will search process PATH)
+    binary.to_string()
 }
 
 fn build_child_command(
     config: &AppConfig,
     env: &HashMap<String, String>,
+    extra_args: &[String],
     app_user: Option<(u32, u32)>,
     use_app_user: bool,
 ) -> Command {
-    let mut child_cmd = Command::new(&config.command[0]);
+    // Resolve the binary using the app's env PATH (not the server's PATH).
+    let binary = resolve_binary_from_env(&config.command[0], env);
+    let mut child_cmd = Command::new(&binary);
     child_cmd
         .args(&config.command[1..])
+        .args(extra_args)
         .current_dir(&config.path)
         .envs(env)
         .stdout(std::process::Stdio::piped())
@@ -326,9 +380,10 @@ fn should_retry_spawn_without_app_user(
 fn spawn_child_process(
     config: &AppConfig,
     env: &HashMap<String, String>,
+    extra_args: &[String],
     app_user: Option<(u32, u32)>,
 ) -> std::io::Result<tokio::process::Child> {
-    let mut child_cmd = build_child_command(config, env, app_user, true);
+    let mut child_cmd = build_child_command(config, env, extra_args, app_user, true);
     match child_cmd.spawn() {
         Ok(child) => Ok(child),
         Err(error) if should_retry_spawn_without_app_user(&error, app_user) => {
@@ -336,7 +391,7 @@ fn spawn_child_process(
                 error = %error,
                 "Failed to switch to tako-app user; retrying spawn as service user"
             );
-            let mut fallback = build_child_command(config, env, app_user, false);
+            let mut fallback = build_child_command(config, env, extra_args, app_user, false);
             fallback.spawn()
         }
         Err(error) => Err(error),
@@ -554,7 +609,7 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn build_instance_env_uses_unix_socket_without_port_when_socket_template_exists() {
+    fn build_instance_env_only_has_app_vars() {
         use std::collections::HashMap;
 
         let (instance_tx, _instance_rx) = mpsc::channel(4);
@@ -573,13 +628,34 @@ mod tests {
         assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
         // Secrets are NOT injected as env vars — they're pushed via socket.
         assert!(!env.contains_key("SECRET"));
-        assert_eq!(env.get("TAKO_HAS_SECRETS").map(String::as_str), Some("1"));
-        assert_eq!(
-            env.get("TAKO_INSTANCE").map(String::as_str),
-            Some(instance.id.as_str())
+        // TAKO_ internal vars are passed as CLI args, not env vars.
+        assert!(!env.contains_key("TAKO_INSTANCE"));
+        assert!(!env.contains_key("TAKO_APP_SOCKET"));
+        assert!(!env.contains_key("TAKO_HAS_SECRETS"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn build_instance_args_has_socket_and_instance() {
+        use std::collections::HashMap;
+
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let app = App::new(
+            AppConfig {
+                name: "test-app".to_string(),
+                version: "v42".to_string(),
+                ..Default::default()
+            },
+            instance_tx,
         );
-        assert!(env.contains_key("TAKO_APP_SOCKET"));
-        assert!(!env.contains_key("PORT"));
+        let instance = app.allocate_instance();
+
+        let args = build_instance_args(&app.config.read().clone(), &instance);
+        assert!(args.contains(&"--socket".to_string()));
+        assert!(args.contains(&"--instance".to_string()));
+        assert!(args.contains(&instance.id));
+        assert!(args.contains(&"--version".to_string()));
+        assert!(args.contains(&"v42".to_string()));
     }
 
     #[tokio::test]

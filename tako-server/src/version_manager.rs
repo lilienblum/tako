@@ -27,7 +27,7 @@ pub(crate) async fn install_and_resolve(
     version: Option<&str>,
     data_dir: &Path,
 ) -> Option<String> {
-    let def = match tako_runtime::builtin_runtime(tool) {
+    let def = match tako_runtime::runtime_def_for(tool, None) {
         Some(def) => def,
         None => {
             tracing::warn!(tool, "Unknown runtime; cannot download binary");

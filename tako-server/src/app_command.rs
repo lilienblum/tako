@@ -1,26 +1,17 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-pub(crate) fn entrypoint_relative_path(runtime: &str) -> Option<String> {
-    let def = tako_runtime::builtin_runtime(runtime)?;
-    def.server.entrypoint_path.clone()
-}
-
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct ReleaseManifest {
     pub runtime: String,
     pub main: String,
     pub idle_timeout: u32,
     #[serde(default)]
-    pub start: Vec<String>,
-    #[serde(default)]
     pub env_vars: HashMap<String, String>,
-    #[serde(default)]
-    pub install: Option<String>,
     #[serde(default)]
     pub runtime_version: Option<String>,
     #[serde(default)]
-    pub runtime_bin: Option<String>,
+    pub package_manager: Option<String>,
 }
 
 pub(crate) fn load_release_manifest(release_dir: &Path) -> Result<ReleaseManifest, String> {
@@ -60,59 +51,14 @@ pub fn runtime_from_release_dir(release_dir: &Path) -> Result<String, String> {
     Ok(manifest.runtime)
 }
 
-pub fn install_command_from_release_dir(release_dir: &Path) -> Result<Option<String>, String> {
-    Ok(load_release_manifest(release_dir)?.install)
-}
-
-/// Write `runtime_bin` into an existing `app.json` without losing other fields.
-pub(crate) fn write_runtime_bin(release_dir: &Path, bin_path: &str) -> Result<(), String> {
-    let manifest_path = release_dir.join("app.json");
-    let content = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        format!(
-            "failed to read deploy manifest {}: {}",
-            manifest_path.display(),
-            e
-        )
-    })?;
-    let mut value: serde_json::Value = serde_json::from_str(&content).map_err(|e| {
-        format!(
-            "failed to parse deploy manifest {}: {}",
-            manifest_path.display(),
-            e
-        )
-    })?;
-    value["runtime_bin"] = serde_json::Value::String(bin_path.to_string());
-    let updated = serde_json::to_string_pretty(&value).map_err(|e| {
-        format!(
-            "failed to serialize deploy manifest {}: {}",
-            manifest_path.display(),
-            e
-        )
-    })?;
-    std::fs::write(&manifest_path, updated).map_err(|e| {
-        format!(
-            "failed to write deploy manifest {}: {}",
-            manifest_path.display(),
-            e
-        )
-    })
-}
-
-/// Resolve the binary to use for a runtime. Uses `runtime_bin` if set and the
-/// file still exists on disk, otherwise falls back to the bare runtime name.
-fn resolve_runtime_binary(manifest: &ReleaseManifest) -> String {
-    if let Some(bin) = &manifest.runtime_bin
-        && Path::new(bin).is_file()
-    {
-        return bin.clone();
-    }
-    manifest.runtime.clone()
-}
-
-/// Build the launch command from an already-loaded manifest.
+/// Build the launch command from a manifest using the plugin system.
+///
+/// The manifest is declarative (runtime, main, package_manager). The plugin
+/// provides the actual launch args and entrypoint path.
 pub(crate) fn command_from_manifest(
     manifest: &ReleaseManifest,
     release_dir: &Path,
+    runtime_bin: Option<&str>,
 ) -> Result<Vec<String>, String> {
     let manifest_path = release_dir.join("app.json");
     if manifest.main.trim().is_empty() {
@@ -122,21 +68,14 @@ pub(crate) fn command_from_manifest(
         ));
     }
 
-    if !manifest.start.is_empty() {
-        return Ok(manifest
-            .start
-            .iter()
-            .map(|arg| {
-                if arg == "{main}" {
-                    manifest.main.clone()
-                } else {
-                    arg.clone()
-                }
-            })
-            .collect());
-    }
-
-    let def = tako_runtime::builtin_runtime(&manifest.runtime).ok_or_else(|| {
+    let ctx = manifest
+        .package_manager
+        .as_ref()
+        .map(|pm| tako_runtime::PluginContext {
+            project_dir: release_dir,
+            package_manager: Some(pm.as_str()),
+        });
+    let def = tako_runtime::runtime_def_for(&manifest.runtime, ctx.as_ref()).ok_or_else(|| {
         format!(
             "unsupported runtime '{}' in deploy manifest {}",
             manifest.runtime,
@@ -144,14 +83,10 @@ pub(crate) fn command_from_manifest(
         )
     })?;
 
-    let rel_path = def.server.entrypoint_path.as_deref().ok_or_else(|| {
-        format!(
-            "runtime '{}' has no server entrypoint path configured",
-            manifest.runtime
-        )
-    })?;
-    let entrypoint = resolve_entrypoint_path(release_dir, rel_path);
-    let bin = resolve_runtime_binary(manifest);
+    let bin = runtime_bin
+        .map(str::to_string)
+        .unwrap_or_else(|| manifest.runtime.clone());
+    let resolved_main = resolve_main_path(release_dir, &manifest.main);
 
     let cmd: Vec<String> = def
         .server
@@ -159,8 +94,7 @@ pub(crate) fn command_from_manifest(
         .iter()
         .map(|arg| match arg.as_str() {
             "{bin}" => bin.clone(),
-            "{entrypoint}" => entrypoint.clone(),
-            "{main}" => manifest.main.clone(),
+            "{main}" => resolved_main.clone(),
             other => other.to_string(),
         })
         .collect();
@@ -173,22 +107,18 @@ pub(crate) fn command_from_manifest(
 /// Release launch behavior is derived from deploy manifest (`app.json`) only.
 pub fn command_for_release_dir(release_dir: &Path) -> Result<Vec<String>, String> {
     let manifest = load_release_manifest(release_dir)?;
-    command_from_manifest(&manifest, release_dir)
+    command_from_manifest(&manifest, release_dir, None)
 }
 
-fn resolve_entrypoint_path(release_dir: &Path, relative_path: &str) -> String {
-    let mut current = Some(release_dir);
-    while let Some(dir) = current {
-        let candidate = dir.join(relative_path);
-        if candidate.is_file() {
-            return candidate.to_string_lossy().to_string();
-        }
-        current = dir.parent();
+/// Resolve the main entrypoint for the launch command.
+/// - If the file exists on disk, return the absolute path.
+/// - Otherwise pass through as-is (bare module specifier).
+fn resolve_main_path(release_dir: &Path, main: &str) -> String {
+    let candidate = release_dir.join(main);
+    if candidate.is_file() {
+        return candidate.to_string_lossy().to_string();
     }
-    release_dir
-        .join(relative_path)
-        .to_string_lossy()
-        .to_string()
+    main.to_string()
 }
 
 #[cfg(test)]
@@ -248,15 +178,8 @@ mod tests {
     }
 
     #[test]
-    fn uses_manifest_main_when_present() {
+    fn bun_command_uses_entrypoint_path() {
         let dir = TempDir::new().unwrap();
-        std::fs::create_dir_all(dir.path().join("node_modules/tako.sh/src/entrypoints")).unwrap();
-        std::fs::write(
-            dir.path()
-                .join("node_modules/tako.sh/src/entrypoints/bun.ts"),
-            "export {};",
-        )
-        .unwrap();
         std::fs::write(
             dir.path().join("app.json"),
             r#"{"runtime":"bun","main":"server/entry.js","idle_timeout":300}"#,
@@ -264,38 +187,10 @@ mod tests {
         .unwrap();
 
         let cmd = command_for_release_dir(dir.path()).unwrap();
-        assert_eq!(
-            cmd,
-            vec![
-                "bun",
-                "run",
-                &dir.path()
-                    .join("node_modules/tako.sh/src/entrypoints/bun.ts")
-                    .to_string_lossy(),
-                "server/entry.js"
-            ]
-        );
-    }
-
-    #[test]
-    fn uses_manifest_start_command_when_present() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"server/entry.js","idle_timeout":300,"start":["bun","run","node_modules/tako.sh/src/entrypoints/bun.ts","{main}"]}"#,
-        )
-        .unwrap();
-
-        let cmd = command_for_release_dir(dir.path()).unwrap();
-        assert_eq!(
-            cmd,
-            vec![
-                "bun",
-                "run",
-                "node_modules/tako.sh/src/entrypoints/bun.ts",
-                "server/entry.js"
-            ]
-        );
+        assert_eq!(cmd[0], "bun");
+        assert_eq!(cmd[1], "run");
+        assert!(cmd[2].contains("tako.sh/dist/entrypoints/bun.mjs"));
+        assert_eq!(cmd.last().unwrap(), "server/entry.js");
     }
 
     #[test]
@@ -318,7 +213,7 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_node_runtime_command_when_start_is_missing() {
+    fn node_command_uses_entrypoint_path() {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
@@ -327,21 +222,13 @@ mod tests {
         .unwrap();
 
         let cmd = command_for_release_dir(dir.path()).unwrap();
-        assert_eq!(
-            cmd,
-            vec![
-                "node",
-                "--experimental-strip-types",
-                &dir.path()
-                    .join("node_modules/tako.sh/src/entrypoints/node.ts")
-                    .to_string_lossy(),
-                "server/index.mjs",
-            ]
-        );
+        assert_eq!(cmd[0], "node");
+        assert!(cmd.iter().any(|a| a.contains("entrypoints/node.mjs")));
+        assert_eq!(cmd.last().unwrap(), "server/index.mjs");
     }
 
     #[test]
-    fn falls_back_to_deno_runtime_command_when_start_is_missing() {
+    fn deno_command_uses_entrypoint_path() {
         let dir = TempDir::new().unwrap();
         std::fs::write(
             dir.path().join("app.json"),
@@ -350,20 +237,9 @@ mod tests {
         .unwrap();
 
         let cmd = command_for_release_dir(dir.path()).unwrap();
-        assert_eq!(
-            cmd,
-            vec![
-                "deno",
-                "run",
-                "--allow-net",
-                "--allow-env",
-                "--allow-read",
-                &dir.path()
-                    .join("node_modules/tako.sh/src/entrypoints/deno.ts")
-                    .to_string_lossy(),
-                "server/main.ts",
-            ]
-        );
+        assert_eq!(cmd[0], "deno");
+        assert!(cmd.iter().any(|a| a.contains("entrypoints/deno.mjs")));
+        assert_eq!(cmd.last().unwrap(), "server/main.ts");
     }
 
     #[test]
@@ -380,57 +256,34 @@ mod tests {
     }
 
     #[test]
-    fn resolves_bun_entrypoint_from_parent_node_modules() {
+    fn main_resolved_to_absolute_when_file_exists() {
         let dir = TempDir::new().unwrap();
-        let release_root = dir.path().join("releases/v1");
-        let app_dir = release_root.join("apps/web");
-        std::fs::create_dir_all(app_dir.join("src")).unwrap();
-        std::fs::create_dir_all(release_root.join("node_modules/tako.sh/src/entrypoints")).unwrap();
-        std::fs::write(
-            release_root.join("node_modules/tako.sh/src/entrypoints/bun.ts"),
-            "export {};",
-        )
-        .unwrap();
-        std::fs::write(app_dir.join("src/app.ts"), "export default {};\n").unwrap();
-        std::fs::write(
-            app_dir.join("app.json"),
-            r#"{"runtime":"bun","main":"src/app.ts","idle_timeout":300}"#,
-        )
-        .unwrap();
-
-        let cmd = command_for_release_dir(&app_dir).unwrap();
-        assert_eq!(cmd[0], "bun");
-        assert_eq!(cmd[1], "run");
-        assert_eq!(
-            cmd[2],
-            release_root
-                .join("node_modules/tako.sh/src/entrypoints/bun.ts")
-                .to_string_lossy()
-        );
-        assert_eq!(cmd[3], "src/app.ts");
-    }
-
-    #[test]
-    fn uses_default_entrypoint_path_when_entrypoint_is_missing() {
-        let dir = TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/app.ts"), "export default {};\n").unwrap();
         std::fs::write(
             dir.path().join("app.json"),
             r#"{"runtime":"bun","main":"src/app.ts","idle_timeout":300}"#,
         )
         .unwrap();
-        std::fs::create_dir_all(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/app.ts"), "export default {};\n").unwrap();
 
         let cmd = command_for_release_dir(dir.path()).unwrap();
-        assert_eq!(cmd[0], "bun");
-        assert_eq!(cmd[1], "run");
         assert_eq!(
-            cmd[2],
-            dir.path()
-                .join("node_modules/tako.sh/src/entrypoints/bun.ts")
-                .to_string_lossy()
+            cmd.last().unwrap(),
+            &dir.path().join("src/app.ts").to_string_lossy().to_string()
         );
-        assert_eq!(cmd[3], "src/app.ts");
+    }
+
+    #[test]
+    fn bare_specifier_main_passed_through() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"bun","main":"@tanstack/react-start/server-entry","idle_timeout":300}"#,
+        )
+        .unwrap();
+
+        let cmd = command_for_release_dir(dir.path()).unwrap();
+        assert_eq!(cmd.last().unwrap(), "@tanstack/react-start/server-entry");
     }
 
     #[test]
@@ -457,56 +310,5 @@ mod tests {
 
         let manifest = load_release_manifest(dir.path()).unwrap();
         assert!(manifest.runtime_version.is_none());
-    }
-
-    #[test]
-    fn uses_runtime_bin_when_set_and_file_exists() {
-        let dir = TempDir::new().unwrap();
-        let fake_bin = dir.path().join("fake-bun");
-        std::fs::write(&fake_bin, "#!/bin/sh\n").unwrap();
-
-        std::fs::write(
-            dir.path().join("app.json"),
-            format!(
-                r#"{{"runtime":"bun","main":"index.ts","idle_timeout":300,"runtime_bin":"{}"}}"#,
-                fake_bin.display()
-            ),
-        )
-        .unwrap();
-
-        let cmd = command_for_release_dir(dir.path()).unwrap();
-        assert_eq!(cmd[0], fake_bin.to_string_lossy());
-        assert_eq!(cmd[1], "run");
-    }
-
-    #[test]
-    fn falls_back_to_bare_runtime_when_runtime_bin_missing_on_disk() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"runtime_bin":"/nonexistent/bun"}"#,
-        )
-        .unwrap();
-
-        let cmd = command_for_release_dir(dir.path()).unwrap();
-        assert_eq!(cmd[0], "bun");
-    }
-
-    #[test]
-    fn write_runtime_bin_updates_manifest_preserving_other_fields() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(
-            dir.path().join("app.json"),
-            r#"{"runtime":"bun","main":"index.ts","idle_timeout":300,"app_name":"myapp"}"#,
-        )
-        .unwrap();
-
-        write_runtime_bin(dir.path(), "/usr/local/bin/bun").unwrap();
-
-        let content = std::fs::read_to_string(dir.path().join("app.json")).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&content).unwrap();
-        assert_eq!(value["runtime_bin"], "/usr/local/bin/bun");
-        assert_eq!(value["app_name"], "myapp");
-        assert_eq!(value["runtime"], "bun");
     }
 }
