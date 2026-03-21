@@ -122,6 +122,7 @@ const formatted = date
 
   .blog-hero img {
     width: 100%;
+    height: auto;
     display: block;
     -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 50px), transparent 100%);
     mask-image: linear-gradient(to bottom, black calc(100% - 50px), transparent 100%);
@@ -216,6 +217,11 @@ const formatted = date
     line-height: 1.55;
     font-size: clamp(16px, 1.5vw, 19px);
     color: var(--muted);
+  }
+
+  .blog-article.content img {
+    max-width: 100%;
+    height: auto;
   }
 
   .blog-article.content h1,
