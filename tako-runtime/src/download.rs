@@ -56,15 +56,22 @@ impl DownloadManager {
             verify_checksum(&archive_bytes, &checksum_url, checksum_format, &url).await?;
         }
 
+        // Atomic install: extract to temp dir, then rename to final path.
+        // Prevents partial/corrupted installs from concurrent deploys.
         let version_dir = self.install_dir.join(id).join(version);
-        std::fs::create_dir_all(&version_dir)
-            .map_err(|e| format!("failed to create {}: {e}", version_dir.display()))?;
+        let tmp_dir = self
+            .install_dir
+            .join(id)
+            .join(format!(".{version}.installing"));
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+        std::fs::create_dir_all(&tmp_dir)
+            .map_err(|e| format!("failed to create {}: {e}", tmp_dir.display()))?;
 
         let format = download.format.as_deref().unwrap_or("tar.gz");
         extract_archive(
             &archive_bytes,
             format,
-            &version_dir,
+            &tmp_dir,
             download,
             version,
             &os,
@@ -74,7 +81,7 @@ impl DownloadManager {
         // Create symlinks
         if let Some(ref extract) = download.extract {
             for symlink in &extract.symlinks {
-                let link_path = version_dir.join(&symlink.name);
+                let link_path = tmp_dir.join(&symlink.name);
                 let _ = std::fs::remove_file(&link_path);
                 #[cfg(unix)]
                 {
@@ -92,23 +99,34 @@ impl DownloadManager {
         // Make binary executable
         let binary_name = extract_binary_name(def)
             .ok_or_else(|| format!("runtime '{id}' has no extract.binary path"))?;
-        let binary_path = version_dir.join(binary_name);
+        let tmp_binary_path = tmp_dir.join(binary_name);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = std::fs::metadata(&binary_path)
-                .map_err(|e| format!("binary not found at {}: {e}", binary_path.display()))?
+            let mut perms = std::fs::metadata(&tmp_binary_path)
+                .map_err(|e| format!("binary not found at {}: {e}", tmp_binary_path.display()))?
                 .permissions();
             perms.set_mode(0o755);
-            std::fs::set_permissions(&binary_path, perms).map_err(|e| {
+            std::fs::set_permissions(&tmp_binary_path, perms).map_err(|e| {
                 format!(
                     "failed to set permissions on {}: {e}",
-                    binary_path.display()
+                    tmp_binary_path.display()
                 )
             })?;
         }
 
-        Ok(binary_path)
+        // Atomic rename: move temp dir to final path.
+        // If the final path already exists (concurrent install won), that's fine.
+        let _ = std::fs::remove_dir_all(&version_dir);
+        std::fs::rename(&tmp_dir, &version_dir).map_err(|e| {
+            let _ = std::fs::remove_dir_all(&tmp_dir);
+            format!(
+                "failed to finalize install at {}: {e}",
+                version_dir.display()
+            )
+        })?;
+
+        Ok(version_dir.join(binary_name))
     }
 }
 
