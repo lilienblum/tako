@@ -311,4 +311,40 @@ mod tests {
         let manifest = load_release_manifest(dir.path()).unwrap();
         assert!(manifest.runtime_version.is_none());
     }
+
+    #[test]
+    fn go_command_runs_binary_directly() {
+        let dir = TempDir::new().unwrap();
+        // Create the binary file so main resolves to absolute path
+        std::fs::write(dir.path().join("app"), "").unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"go","main":"app","idle_timeout":300}"#,
+        )
+        .unwrap();
+
+        let cmd = command_for_release_dir(dir.path()).unwrap();
+        // Go launch_args is ["{main}"] — binary runs directly, no runtime prefix
+        assert_eq!(cmd.len(), 1);
+        assert!(
+            cmd[0].ends_with("/app"),
+            "expected absolute path to binary, got: {}",
+            cmd[0]
+        );
+    }
+
+    #[test]
+    fn go_command_no_bin_placeholder() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"go","main":"my-server","idle_timeout":300}"#,
+        )
+        .unwrap();
+
+        let cmd = command_for_release_dir(dir.path()).unwrap();
+        assert_eq!(cmd.len(), 1);
+        // When binary doesn't exist on disk, main is passed through as-is
+        assert_eq!(cmd[0], "my-server");
+    }
 }
