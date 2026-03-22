@@ -12,4 +12,5 @@ pub mod scale;
 pub mod secret;
 pub mod server;
 pub mod status;
+pub mod typegen;
 pub mod upgrade;

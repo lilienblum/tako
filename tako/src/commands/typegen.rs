@@ -1,0 +1,46 @@
+use std::path::Path;
+
+use crate::build::{self, PresetGroup, detect_build_adapter};
+use crate::commands::project_context;
+use crate::config::TakoToml;
+use crate::output;
+
+pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
+    let ctx = project_context::resolve(config_path)?;
+    let tako_config = TakoToml::load_from_file(&ctx.config_path)?;
+
+    let adapter = if let Some(runtime) = tako_config
+        .runtime
+        .as_deref()
+        .map(str::trim)
+        .filter(|v: &&str| !v.is_empty())
+    {
+        build::BuildAdapter::from_id(runtime).unwrap_or(detect_build_adapter(&ctx.project_dir))
+    } else {
+        detect_build_adapter(&ctx.project_dir)
+    };
+
+    match adapter.preset_group() {
+        PresetGroup::Js => {
+            let written = build::js::write_types(&ctx.project_dir)?;
+            if written {
+                output::success("Generated tako.d.ts");
+            } else {
+                output::success("tako.d.ts is up to date");
+            }
+        }
+        PresetGroup::Go => {
+            let written = build::go::write_types(&ctx.project_dir)?;
+            if written {
+                output::success("Generated tako_secrets.go");
+            } else {
+                output::success("tako_secrets.go is up to date");
+            }
+        }
+        PresetGroup::Unknown => {
+            return Err("Could not detect project language. Set `runtime` in tako.toml.".into());
+        }
+    }
+
+    Ok(())
+}
