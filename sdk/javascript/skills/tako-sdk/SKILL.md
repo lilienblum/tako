@@ -14,7 +14,7 @@ sources:
 
 Runtime SDK for JavaScript/TypeScript apps deployed with Tako.
 
-> **CRITICAL**: Tako uses the **web-standard fetch handler** interface. Your app exports a function `(Request, env) => Response`. No proprietary API required — the SDK is optional.
+> **CRITICAL**: The `tako.sh` package is **required** — it provides the entrypoint binaries (`tako-bun`, `tako-node`, `tako-deno`) that tako-server launches to run your app. Your app exports a standard fetch handler `(Request, env) => Response`, but importing the `Tako` class is optional.
 
 > **CRITICAL**: The Vite plugin (`tako.sh/vite`) is only for SSR/server framework builds (e.g. TanStack Start, Nuxt, SolidStart). Plain fetch-handler apps do not need it.
 

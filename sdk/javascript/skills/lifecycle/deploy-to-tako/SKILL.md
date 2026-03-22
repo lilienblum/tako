@@ -17,7 +17,7 @@ sources:
 
 This guide covers adding Tako to a new or existing JS/TS project. Complete the steps in order.
 
-> **CRITICAL**: Tako uses the web-standard fetch handler interface. Your app exports `(Request, env) => Response`. No proprietary runtime API is required — the SDK is optional.
+> **CRITICAL**: The `tako.sh` package is **required** — it provides the entrypoint binaries that tako-server launches to run your app. Your app exports a standard fetch handler `(Request, env) => Response`, but importing the `Tako` class is optional.
 
 > **CRITICAL**: `tako.toml` is your project's deployment config. It lives in the project root alongside `package.json`.
 
@@ -108,8 +108,8 @@ The Vite plugin emits `tako-entry.mjs` in your build output that normalizes any 
 Secrets are managed via the Tako CLI:
 
 ```bash
-tako secret set DATABASE_URL "postgres://..."
-tako secret set API_KEY "sk-..."
+tako secrets set DATABASE_URL "postgres://..."
+tako secrets set API_KEY "sk-..."
 ```
 
 Access in code:

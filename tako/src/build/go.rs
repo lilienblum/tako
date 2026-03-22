@@ -97,15 +97,16 @@ fn detect_package_name(project_dir: &Path) -> String {
             && path
                 .file_name()
                 .is_some_and(|name| name != "tako_secrets.go")
-            && let Ok(content) = fs::read_to_string(&path) {
-                for line in content.lines() {
-                    let line = line.trim();
-                    if let Some(rest) = line.strip_prefix("package ") {
-                        let pkg = rest.split_whitespace().next().unwrap_or("main");
-                        return pkg.to_string();
-                    }
+            && let Ok(content) = fs::read_to_string(&path)
+        {
+            for line in content.lines() {
+                let line = line.trim();
+                if let Some(rest) = line.strip_prefix("package ") {
+                    let pkg = rest.split_whitespace().next().unwrap_or("main");
+                    return pkg.to_string();
                 }
             }
+        }
     }
 
     "main".to_string()
