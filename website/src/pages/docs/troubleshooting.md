@@ -155,7 +155,7 @@ Things to check:
 - **Preset resolution:** Make sure your `preset` value is a runtime-local alias (like `tanstack-start`), not a namespaced alias (like `js/tanstack-start`, which is rejected). `github:` refs are also not supported.
 - **Build commands:** Check your `[build].run` or `[[build_stages]]` entries. These two are mutually exclusive -- you cannot have both.
 - **Working directory:** If using `cwd` in `[build]` or `[[build_stages]]`, make sure the path is relative and does not escape the project root.
-- **Preset fetch:** Unpinned official aliases are fetched from `master` on each resolve. If fetch fails, resolution fails. Runtime base aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from fetched family manifests. Presets are fetched from `presets/<language>/<language>.toml`.
+- **Preset fetch:** Unpinned official aliases are fetched from `master` on each resolve. If fetch fails, resolution fails. Runtime base aliases (`bun`, `node`, `deno`, `go`) fall back to embedded defaults when missing from fetched family manifests. Presets are fetched from `presets/<language>/<language>.toml`.
 
 ### Deploy entrypoint missing after build
 

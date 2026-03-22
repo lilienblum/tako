@@ -58,7 +58,7 @@ Optional entrypoint override for your app. Written into the deployed `app.json` 
 main = "server/index.mjs"
 ```
 
-If omitted, Tako checks the manifest main field (e.g. `package.json` `main`) first, then falls back to the preset's top-level `main`. For JS runtimes (`bun`, `node`, `deno`), when the preset `main` is `index.<ext>` or `src/index.<ext>` (where `<ext>` is `ts`, `tsx`, `js`, or `jsx`), Tako resolves the entrypoint by checking for an existing `index.<ext>` first, then `src/index.<ext>`, then falls back to the preset value.
+If omitted, Tako checks the manifest main field (e.g. `package.json` `main`) first, then falls back to the preset's top-level `main`. For JS runtimes (`bun`, `node`, `deno`), when the preset `main` is `index.<ext>` or `src/index.<ext>` (where `<ext>` is `ts`, `tsx`, `js`, or `jsx`), Tako resolves the entrypoint by checking for an existing `index.<ext>` first, then `src/index.<ext>`, then falls back to the preset value. For Go, the default `main` is `app` (the compiled binary name).
 
 If neither `tako.toml`, manifest main, nor the preset provides a `main`, deploy and dev will fail with guidance.
 
@@ -72,7 +72,7 @@ Optional runtime adapter override. Controls which base preset is used when `pres
 runtime = "bun"
 ```
 
-Accepted values: `bun`, `node`, `deno`. When omitted, Tako auto-detects the runtime from your project files. If detection returns `unknown`, it defaults to `bun`.
+Accepted values: `bun`, `node`, `deno`, `go`. When omitted, Tako auto-detects the runtime from your project files (e.g. `go.mod` for Go). If detection returns `unknown`, it defaults to `bun`.
 
 ### `runtime_version`
 
@@ -107,9 +107,9 @@ When omitted, Tako uses the base preset for the selected runtime (from `runtime`
 **How presets work:**
 
 - Presets are metadata-only: they define `name`, `main`, and `assets` defaults. They do not contain build, install, start, or dev commands.
-- Base presets (`bun`, `node`, `deno`) are built into the CLI from embedded runtime definitions.
+- Base presets (`bun`, `node`, `deno`, `go`) are built into the CLI from embedded runtime definitions.
 - Family presets (like `tanstack-start`) live in `presets/<language>/<language>.toml` in the Tako repo and are fetched from `master` on each resolve. Fetch failures fail the resolve.
-- Base runtime aliases (`bun`, `node`, `deno`) fall back to embedded defaults when missing from the fetched family manifest.
+- Base runtime aliases (`bun`, `node`, `deno`, `go`) fall back to embedded defaults when missing from the fetched family manifest.
 - Resolved preset metadata is written to `.tako/build.lock.json` for visibility and cache-key inputs.
 
 **Preset effect on `tako dev`:**
@@ -118,6 +118,7 @@ When omitted, Tako uses the base preset for the selected runtime (from `runtime`
   - Bun: `bun run dev`
   - Node: `npm run dev`
   - Deno: `deno task dev`
+  - Go: `go run .`
 - When `preset` is explicitly set, the same runtime-default dev scripts are used (presets do not define dev commands).
 
 See [Presets](/docs/presets) for the full preset schema and available presets.
@@ -140,7 +141,7 @@ Optional package manager override. Controls which package manager Tako uses for 
 package_manager = "pnpm"
 ```
 
-When omitted, Tako auto-detects the package manager from your `package.json` `packageManager` field or lockfiles.
+When omitted, Tako auto-detects the package manager from your `package.json` `packageManager` field or lockfiles. For Go projects, the package manager is Go Modules (detected from `go.sum`).
 
 ---
 
@@ -201,7 +202,7 @@ Glob patterns for files to exclude from the deploy artifact.
 exclude = ["**/*.map", "tests/**"]
 ```
 
-Some paths are always excluded regardless of config: `.git/`, `.tako/`, and `.env*`. Additional exclusions (like `node_modules/`) come from `.gitignore`.
+Some paths are always excluded regardless of config: `.git/`, `.tako/`, and `.env*`. Additional exclusions (like `node_modules/` for JS projects) come from `.gitignore`.
 
 ---
 
@@ -274,7 +275,7 @@ For any target environment, variables are merged in this order (later overrides 
 3. **Auto-set by Tako** -- injected automatically during deploy:
    - `TAKO_ENV=<environment>`
    - `TAKO_BUILD=<version>`
-   - Runtime convention vars (for Bun/Node: `NODE_ENV`, `BUN_ENV`)
+   - Runtime convention vars (for Bun/Node: `NODE_ENV`, `BUN_ENV`; Go has no equivalent)
 
 Since auto-set variables are applied last, they override any manually set values for those keys.
 

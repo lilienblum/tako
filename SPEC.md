@@ -8,9 +8,9 @@ Tako is a deployment and development platform consisting of:
 
 - **`tako` CLI** - Local tool for development, deployment, server/secret management
 - **`tako-server`** - Remote server binary that manages app processes, routing, and rolling updates
-- **`tako.sh` SDK** - Current SDK implementation for JavaScript/TypeScript apps
+- **`tako.sh` SDK** - SDK implementations for JavaScript/TypeScript and Go apps
 
-Built in Rust (2024 edition). The current SDK implementation is `tako.sh` for JavaScript/TypeScript. Uses Pingora (Cloudflare's proxy) for production-grade performance.
+Built in Rust (2024 edition). SDKs available for JavaScript/TypeScript (`tako.sh` npm package) and Go (`tako.sh` Go module). Uses Pingora (Cloudflare's proxy) for production-grade performance.
 
 ## Design Goals
 
@@ -20,7 +20,7 @@ Built in Rust (2024 edition). The current SDK implementation is `tako.sh` for Ja
 
 **Reliability:** Strong test coverage, graceful edge case handling, users can delete files/folders safely with recovery paths.
 
-**Extensibility:** Support multiple runtimes (Bun first, then Node/Deno/Python/Go). Runtime-agnostic architecture.
+**Extensibility:** Support multiple runtimes (Bun, Node, Deno, Go). Runtime-agnostic architecture.
 
 ## Configuration
 
@@ -111,7 +111,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - If `main` is omitted in `tako.toml`, deploy/dev check the manifest main field (e.g. `package.json` `main`), then fall back to preset `main`.
 - For JS adapters (`bun`, `node`, `deno`), when preset `main` is `index.<ext>` or `src/index.<ext>` (`ext`: `ts`, `tsx`, `js`, `jsx`), deploy/dev resolve in this order: existing `index.<ext>`, then existing `src/index.<ext>`, then preset `main`.
 - If neither `tako.toml main`, manifest main, nor preset `main` is set, deploy/dev fail with guidance.
-- Top-level `runtime` is optional; when set to `bun`, `node`, or `deno`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
+- Top-level `runtime` is optional; when set to `bun`, `node`, `deno`, or `go`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
 - Top-level `runtime_version` is optional; when set (e.g. `"1.2.3"`), deploy uses it directly instead of auto-detecting with `<runtime> --version`. `tako init` pins the locally-installed version by default.
 - Top-level `preset` is optional. Presets are metadata-only (`name`, `main`, `assets`) providing entrypoint and asset defaults. They do not contain build, install, start, or dev commands.
 - Top-level `assets` is optional; lists asset directories to include in the deploy artifact (e.g. `["dist/client"]`). Asset roots are preset `assets` plus top-level `assets` (deduplicated).
@@ -132,6 +132,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
   - Bun: `bun run dev`
   - Node: `npm run dev`
   - Deno: `deno task dev`
+  - Go: `go run .` (with file watching for `**/*.go`, `go.mod`, `go.sum`)
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for visibility and cache-key inputs.
 - Unpinned official preset aliases are fetched from the `master` branch on each resolve; if fetch fails, preset resolution fails.
 - Deploy sends app vars + runtime vars to `tako-server` in the `deploy` command payload (non-secret env vars in `app.json`); secrets are sent separately and stored encrypted in SQLite. `tako-server` pushes secrets to instances via `POST /secrets` on `Host: tako` at spawn time.
@@ -336,13 +337,14 @@ Template behavior:
 - Writes the selected config file (default `./tako.toml`).
 - Prompts for required app `name` (default from selected-config parent directory-derived app name).
 - Prompts for required production route (`[envs.production].route`) with default `{name}.example.com`.
-- Detects adapter (`bun`, `node`, `deno`, fallback `unknown`) and prompts for runtime selection.
-- After generating `tako.toml`, init installs the `tako.sh` SDK package via the selected runtime's package-manager `add` command.
+- Detects adapter (`bun`, `node`, `deno`, `go`, fallback `unknown`) and prompts for runtime selection.
+- After generating `tako.toml`, init installs the `tako.sh` SDK package via the selected runtime's package-manager `add` command (for JS: `bun add tako.sh`, etc.; for Go: `go get tako.sh`).
 - In interactive mode, init fetches runtime-family preset names from official family manifest files (`presets/<language>/<language>.toml`) and shows `Fetching presets...` while loading.
 - For built-in base adapters, init defaults to:
   - Bun: `bun`
   - Node: `node`
   - Deno: `deno`
+  - Go: `go`
 - Init prints the full "Detected" summary block only in verbose mode; default output keeps setup concise and action-oriented.
 - If no family presets are available after fetch, init skips preset selection and uses the runtime base preset.
 - When "custom preset reference" is selected, init leaves top-level `preset` unset (commented) but still writes top-level `runtime`.
@@ -842,6 +844,7 @@ When the stored desired instance count is `0`, rolling deploy still starts one w
   - `bun`: `bun run <resolved-entrypoint> <app.json.main>`
   - `node`: `node --experimental-strip-types <resolved-entrypoint> <app.json.main>`
   - `deno`: `deno run --allow-net --allow-env --allow-read <resolved-entrypoint> <app.json.main>`
+  - `go`: `<app.json.main>` (compiled binary runs directly — no runtime binary or SDK entrypoint wrapper needed)
   - if the entrypoint is missing, warm-instance startup fails with an explicit error
 - Unknown runtime values in `app.json` are rejected with an explicit unsupported-runtime error.
 
@@ -1370,13 +1373,15 @@ Pass `--acme-staging` to `tako-server` to use Let's Encrypt staging:
 
 ## tako.sh SDK
 
-### Installation
+### JavaScript/TypeScript SDK
+
+#### Installation
 
 ```bash
 npm install tako.sh
 ```
 
-### Interface
+#### Interface
 
 Apps export a Web Standard fetch handler:
 
@@ -1391,6 +1396,44 @@ export default function fetch(request: Request): Response | Promise<Response> {
 ```typescript
 import { Tako } from "tako.sh";
 ```
+
+### Go SDK
+
+#### Installation
+
+```bash
+go get tako.sh
+```
+
+#### Interface
+
+Go apps use the `tako` package to serve an `http.Handler`:
+
+```go
+package main
+
+import (
+    "net/http"
+    "tako.sh"
+)
+
+func main() {
+    mux := http.NewServeMux()
+    mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+        w.Write([]byte("Hello from Tako!"))
+    })
+    tako.ListenAndServe(mux)
+}
+```
+
+#### Key Differences from JS SDK
+
+- Go compiles to a native binary — no runtime download needed on the server.
+- The compiled binary runs directly (`launch_args: ["{main}"]`), no SDK entrypoint wrapper.
+- `tako.ListenAndServe()` handles the full protocol: CLI arg parsing (`--socket`, `--instance`, `--version`), Unix socket serving in production, TCP in dev mode, `Host: tako` endpoint interception.
+- Deploy auto-injects `GOOS=linux` and `GOARCH` for cross-compilation to the target server.
+- Default build: `CGO_ENABLED=0 go build -o app .` producing a static binary.
+- Secrets: `tako.Secret("name")` and `tako.Secrets()` provide access to Tako-managed secrets.
 
 ### Vite Plugin
 
@@ -1408,6 +1451,7 @@ import { tako } from "tako.sh/vite";
 ### Feature Overview
 
 - Internal fetch handler adapters for Bun/Node/Deno runtimes (used by entrypoint binaries)
+- Go SDK with `tako.ListenAndServe()` for native http.Handler support
 - Deployed app serving over private TCP with `PORT`/`HOST`; `tako dev` also uses TCP (`PORT`)
 - Internal status endpoint (`Host: tako` + `/status`)
 - Graceful shutdown handling

@@ -507,4 +507,57 @@ mod tests {
             assert_ne!(loaded_a.as_bytes(), loaded_b.as_bytes());
         });
     }
+
+    /// One-off helper to generate real encrypted secrets.json for Go examples.
+    /// Run with: cargo test -p tako -- generate_go_example_secrets --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn generate_go_example_secrets() {
+        let passphrase = "tako-example";
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap();
+        let example_dirs = [
+            repo_root.join("examples/go/basic"),
+            repo_root.join("examples/go/gin"),
+            repo_root.join("examples/go/echo"),
+            repo_root.join("examples/go/chi"),
+        ];
+        let secrets_data = [
+            ("API_KEY", "sk-example-key-12345"),
+            ("DATABASE_URL", "postgres://localhost:5432/myapp"),
+            ("EXAMPLE_SECRET", "hello-from-tako"),
+        ];
+
+        for dir in &example_dirs {
+            let dir = dir.as_path();
+            if !dir.exists() {
+                eprintln!("skipping {} (not found)", dir.display());
+                continue;
+            }
+            let tako_dir = dir.join(".tako");
+            std::fs::create_dir_all(&tako_dir).unwrap();
+
+            let salt = generate_salt();
+            let salt_b64 = encode_salt(&salt);
+            let key = EncryptionKey::derive(passphrase, &salt).unwrap();
+
+            let mut secrets_map = serde_json::Map::new();
+            for (name, value) in &secrets_data {
+                let encrypted = encrypt(value, &key).unwrap();
+                secrets_map.insert(name.to_string(), serde_json::Value::String(encrypted));
+            }
+
+            let json = serde_json::json!({
+                "development": {
+                    "salt": salt_b64,
+                    "secrets": secrets_map
+                }
+            });
+
+            let path = tako_dir.join("secrets.json");
+            std::fs::write(&path, serde_json::to_string_pretty(&json).unwrap()).unwrap();
+            eprintln!("wrote {}", path.display());
+        }
+    }
 }

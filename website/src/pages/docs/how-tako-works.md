@@ -7,7 +7,7 @@ current: how-tako-works
 
 # How Tako Works
 
-Tako is a deployment and development platform that takes your JavaScript/TypeScript app from local development to production with minimal configuration. It handles building, deploying, routing, TLS, health checks, scaling, and rolling updates -- so you can focus on your app.
+Tako is a deployment and development platform that takes your JavaScript/TypeScript or Go app from local development to production with minimal configuration. It handles building, deploying, routing, TLS, health checks, scaling, and rolling updates -- so you can focus on your app.
 
 This page walks through Tako's architecture, how requests flow through it, and the key concepts that make it tick.
 
@@ -19,7 +19,7 @@ Tako is made up of three parts that work together:
 
 **`tako-server`** -- Runs on your deployment server(s). Manages app processes, routes incoming traffic, handles TLS certificates, performs health checks, and orchestrates rolling updates. Built on [Pingora](https://github.com/cloudflare/pingora), Cloudflare's production proxy.
 
-**`tako.sh` SDK** -- An npm package your app uses. Provides runtime adapters for Bun, Node.js, and Deno, a standard fetch handler interface, and a built-in health check endpoint that Tako uses to verify your app is running.
+**`tako.sh` SDK** -- A package your app uses. For JavaScript/TypeScript, it's an npm package providing runtime adapters for Bun, Node.js, and Deno with a standard fetch handler interface. For Go, install with `go get tako.sh` and use `tako.ListenAndServe(handler)`. Both provide a built-in health check endpoint that Tako uses to verify your app is running.
 
 ## Two Paths: Management and Traffic
 
@@ -70,9 +70,9 @@ Tako validates the selected config file, resolves your app name, checks that sec
 
 Your app is always built on your machine, never on the server. Tako:
 
-- Copies your project into a clean workdir (respecting `.gitignore`), symlinks `node_modules/` from the original tree
+- Copies your project into a clean workdir (respecting `.gitignore`), symlinks `node_modules/` from the original tree (JS runtimes only)
 - Runs your build commands (`[build]` or `[[build_stages]]`)
-- Packages the result into a deploy artifact (excluding `node_modules/` -- the server installs its own production dependencies)
+- Packages the result into a deploy artifact (excluding `node_modules/` -- for JS runtimes, the server installs its own production dependencies; Go deploys a self-contained binary with no production install step)
 - Caches artifacts locally so unchanged builds are instant on subsequent deploys
 
 ### 3. Upload and Deploy

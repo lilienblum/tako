@@ -125,10 +125,10 @@ tako deploy --dry-run
 ### What happens during deploy
 
 1. **Pre-validation** -- Checks that secrets are present, server target metadata exists for all selected servers, and routes are valid.
-2. **Workdir setup** -- Copies project files into a clean workdir (respecting `.gitignore`), symlinks `node_modules/` from the original tree so build tools can resolve dependencies without a full install. `.git/`, `.tako/`, and `.env*` are always excluded.
-3. **Entrypoint resolution** -- Resolves the deploy `main` file from `tako.toml`, then preset defaults, with JS-specific fallback order (`index.<ext>`, then `src/index.<ext>`).
+2. **Workdir setup** -- Copies project files into a clean workdir (respecting `.gitignore`), symlinks `node_modules/` from the original tree for JS projects so build tools can resolve dependencies without a full install. `.git/`, `.tako/`, and `.env*` are always excluded.
+3. **Entrypoint resolution** -- Resolves the deploy `main` file from `tako.toml`, then preset defaults, with JS-specific fallback order (`index.<ext>`, then `src/index.<ext>`). For Go, the default main is `app` (the compiled binary name).
 4. **Preset resolution** -- Resolves the app preset from `tako.toml` `preset` or the adapter base preset. Unpinned official presets are fetched from `master` on each deploy.
-5. **Artifact build** -- Runs your build commands (`[build]` or `[[build_stages]]`) in the workdir. Uses local cache when build inputs are unchanged. The resulting artifact excludes `node_modules/` -- the server installs its own production dependencies after extracting the artifact.
+5. **Artifact build** -- Runs your build commands (`[build]` or `[[build_stages]]`) in the workdir. Uses local cache when build inputs are unchanged. For JS projects, the resulting artifact excludes `node_modules/` -- the server installs its own production dependencies after extracting the artifact. For Go, the build produces a self-contained binary (default: `CGO_ENABLED=0 go build -o app .`) and Tako auto-injects `GOOS=linux` and the target `GOARCH` for cross-compilation. No production install step is needed.
 6. **Parallel deploy** -- Deploys to all target servers simultaneously. Each server is handled independently, so partial success is possible.
 
 ### Per-server deploy steps
@@ -144,11 +144,11 @@ For each server, the CLI:
 7. Uploads and extracts the target artifact into `/opt/tako/apps/<app>/<env>/releases/<version>/`
 8. Links shared directories (e.g., `logs`)
 9. Syncs secrets if needed (compares hashes; only sends when changed)
-10. Runs runtime prep (production dependency install via the runtime's package manager)
+10. Runs runtime prep (production dependency install via the runtime's package manager for JS; skipped for Go since the binary is self-contained)
 11. Performs a rolling update over per-instance private TCP upstreams
 12. Updates the `current` symlink and cleans up old releases (older than 30 days)
 
-Server-side runtime prep uses the runtime's package manager to install production dependencies from the deployed manifest.
+Server-side runtime prep uses the runtime's package manager to install production dependencies from the deployed manifest. For Go apps, this step is skipped -- the deployed binary runs directly with no runtime download or dependency install.
 
 ### CLI output modes
 

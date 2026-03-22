@@ -66,13 +66,13 @@ Init walks you through setting up your project. It prompts for:
 
 - **App name** -- defaults to the selected config file's parent directory name, sanitized for DNS compatibility.
 - **Production route** -- the hostname your app will be served at (defaults to `{name}.example.com`).
-- **Runtime** -- detects your runtime automatically (Bun, Node, Deno) and lets you confirm or override.
+- **Runtime** -- detects your runtime automatically (Bun, Node, Deno, Go) and lets you confirm or override.
 - **Preset** -- fetches available presets for your runtime and lets you pick one, or use the base runtime preset.
 - **Main entrypoint** -- only prompted when neither adapter inference nor the chosen preset provides a default.
 
 The generated `tako.toml` leaves only essential options uncommented (`name`, `runtime`, `runtime_version`, `route`) with all other options included as commented examples. `runtime_version` is pinned from the locally-installed runtime version.
 
-After generating `tako.toml`, init installs the `tako.sh` SDK package using the selected runtime's built-in package-manager command (for example `bun add tako.sh` for Bun, `npm install tako.sh` for Node).
+After generating `tako.toml`, init installs the `tako.sh` SDK package using the selected runtime's built-in package-manager command (for example `bun add tako.sh` for Bun, `npm install tako.sh` for Node, `go get tako.sh` for Go).
 
 Init also updates `.gitignore` so `.tako/*` is ignored while `.tako/secrets.json` remains trackable. When the project lives inside a git repo, the repo-root `.gitignore` is updated; otherwise a local `.gitignore` is used.
 
@@ -176,9 +176,9 @@ In interactive terminals, deploying to `production` requires confirmation unless
 1. Validates configuration and secrets
 2. Sets up a clean workdir from your project (respecting `.gitignore`)
 3. Resolves preset metadata and runs your build commands
-4. Packages the deploy artifact (excluding `node_modules/`)
+4. Packages the deploy artifact (excluding `node_modules/` for JS projects)
 5. Uploads the artifact to all servers in the target environment
-6. Server installs production dependencies and performs a rolling update
+6. Server installs production dependencies (JS runtimes) or runs the binary directly (Go), and performs a rolling update
 7. Cleans up releases older than 30 days
 
 Deploy resolves app identity from `name` in the selected config file, falling back to the sanitized selected config parent directory name.

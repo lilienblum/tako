@@ -184,12 +184,12 @@ https://my-app.tako.test:47831/
 
 ### Automatically set
 
-| Variable   | Value         | Purpose                            |
-| ---------- | ------------- | ---------------------------------- |
-| `PORT`     | _(ephemeral)_ | The port your app should listen on |
-| `ENV`      | `development` | General environment hint           |
-| `NODE_ENV` | `development` | Node.js convention                 |
-| `BUN_ENV`  | `development` | Bun convention                     |
+| Variable   | Value         | Purpose                               |
+| ---------- | ------------- | ------------------------------------- |
+| `PORT`     | _(ephemeral)_ | The port your app should listen on    |
+| `ENV`      | `development` | General environment hint              |
+| `NODE_ENV` | `development` | Node.js convention (JS runtimes only) |
+| `BUN_ENV`  | `development` | Bun convention (JS runtimes only)     |
 
 ### From tako.toml
 
@@ -215,6 +215,8 @@ Source-level hot reload is **runtime-driven**. Tako does not watch your source f
 - Bun's built-in watch mode
 - Vite's HMR
 - Any framework dev server with its own file watching
+
+For Go apps, Tako watches for file changes (`**/*.go`, `go.mod`, `go.sum`) and restarts the app process automatically.
 
 Tako's role is to keep the HTTPS proxy and DNS routing stable while the runtime handles reloading.
 
@@ -312,6 +314,7 @@ Dev routes have a few constraints:
 - Bun: `bun run dev`
 - Node: `npm run dev`
 - Deno: `deno task dev`
+- Go: `go run .`
 
 Presets do not define dev commands -- the runtime default is always used.
 

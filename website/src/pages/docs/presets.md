@@ -13,13 +13,13 @@ Every app uses a preset. If you do not set one explicitly, Tako picks the **base
 
 ## Base presets
 
-Tako ships with three built-in runtime base presets: `bun`, `node`, and `deno`. These are compiled into the CLI -- they are never loaded from files on disk.
+Tako ships with four built-in runtime base presets: `bun`, `node`, `deno`, and `go`. These are compiled into the CLI -- they are never loaded from files on disk.
 
 Each base preset defines a default entrypoint for its runtime:
 
-| Field  | Bun            | Node       | Deno      |
-| ------ | -------------- | ---------- | --------- |
-| `main` | `src/index.ts` | `index.js` | `main.ts` |
+| Field  | Bun            | Node       | Deno      | Go    |
+| ------ | -------------- | ---------- | --------- | ----- |
+| `main` | `src/index.ts` | `index.js` | `main.ts` | `app` |
 
 ## Official presets
 
@@ -40,7 +40,7 @@ Namespaced syntax like `js/tanstack-start` is not supported in `tako.toml`. Choo
 
 When you deploy or run dev, Tako fetches the official preset definition from the `master` branch of the presets repository. If the fetch fails, preset resolution fails and the deploy is aborted.
 
-For base runtime aliases (`bun`, `node`, `deno`), if their section is missing from the fetched family manifest, Tako falls back to its embedded defaults. Framework presets like `tanstack-start` do not have this fallback -- they must be found in the fetched manifest.
+For base runtime aliases (`bun`, `node`, `deno`, `go`), if their section is missing from the fetched family manifest, Tako falls back to its embedded defaults. Framework presets like `tanstack-start` do not have this fallback -- they must be found in the fetched manifest.
 
 After resolution, Tako writes the resolved preset metadata to `.tako/build.lock.json` with `preset_ref`, `repo`, `path`, and `commit` fields. This file is used for cache-key inputs and visibility into what was resolved.
 
@@ -78,13 +78,14 @@ This tells Tako that TanStack Start apps use `@tanstack/react-start/server-entry
 
 ## Preset family files
 
-Official preset definitions are organized by language: `presets/<language>/<language>.toml`. Currently there is one family file:
+Official preset definitions are organized by language: `presets/<language>/<language>.toml`. Currently there are two family files:
 
 ```
 presets/javascript/javascript.toml
+presets/go/go.toml
 ```
 
-This file contains all JavaScript/TypeScript framework presets as TOML sections. Each section name is the preset alias:
+Each file contains framework presets for that language as TOML sections. Each section name is the preset alias:
 
 ```toml
 # presets/javascript/javascript.toml
@@ -111,6 +112,7 @@ Presets provide defaults for `main` and `assets`. Your `tako.toml` settings take
 - Bun: `bun run dev`
 - Node: `npm run dev`
 - Deno: `deno task dev`
+- Go: `go run .`
 
 ## Build execution
 
