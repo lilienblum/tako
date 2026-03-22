@@ -5,6 +5,6 @@
   "devDependencies": {
     "@tsconfig/strictest": "catalog:dev",
     "@types/bun": "catalog:dev",
-    "@xterm/headless": "^5.5.0"
+    "@xterm/headless": "^6.0.0"
   }
 }
