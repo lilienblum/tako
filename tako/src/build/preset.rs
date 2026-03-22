@@ -11,6 +11,7 @@ const FALLBACK_OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const OFFICIAL_PRESET_BRANCH: &str = "master";
 const EMBEDDED_JS_GROUP_PRESETS_PATH: &str = "presets/javascript/javascript.toml";
+const EMBEDDED_GO_GROUP_PRESETS_PATH: &str = "presets/go/go.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -267,7 +268,15 @@ pub async fn load_build_preset(
                 );
                 let preset = parse_embedded_runtime_base_preset(alias)?;
                 (official_repo.clone(), "embedded".to_string(), preset)
-            } else if let Some(embedded_path) = official_group_manifest_path(PresetGroup::Js) {
+            } else if let Some(embedded_path) = {
+                // Try the runtime's own group first, then fall back to JS for backward compat.
+                let adapter = BuildAdapter::from_id(alias);
+                let group = adapter
+                    .map(|a| a.preset_group())
+                    .unwrap_or(PresetGroup::Unknown);
+                official_group_manifest_path(group)
+                    .or_else(|| official_group_manifest_path(PresetGroup::Js))
+            } {
                 tracing::debug!(
                     "Preset fetch failed, trying embedded group manifest: {}",
                     fetch_error
@@ -311,6 +320,7 @@ fn official_alias_to_path(alias: &str) -> String {
 fn official_group_manifest_path(group: PresetGroup) -> Option<&'static str> {
     match group {
         PresetGroup::Js => Some(EMBEDDED_JS_GROUP_PRESETS_PATH),
+        PresetGroup::Go => Some(EMBEDDED_GO_GROUP_PRESETS_PATH),
         PresetGroup::Unknown => None,
     }
 }
@@ -320,6 +330,7 @@ fn embedded_group_manifest_content(path: &str) -> String {
         "presets/javascript/javascript.toml" => {
             include_str!("../../presets/javascript/javascript.toml").to_string()
         }
+        "presets/go/go.toml" => include_str!("../../presets/go/go.toml").to_string(),
         _ => String::new(),
     }
 }
@@ -767,6 +778,7 @@ mod tests {
             official_alias_to_path("deno"),
             "presets/javascript/javascript.toml"
         );
+        assert_eq!(official_alias_to_path("go"), "presets/go/go.toml");
     }
 
     #[test]
@@ -774,6 +786,10 @@ mod tests {
         assert_eq!(
             official_group_manifest_path(PresetGroup::Js),
             Some("presets/javascript/javascript.toml")
+        );
+        assert_eq!(
+            official_group_manifest_path(PresetGroup::Go),
+            Some("presets/go/go.toml")
         );
         assert_eq!(official_group_manifest_path(PresetGroup::Unknown), None);
     }

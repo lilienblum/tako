@@ -6,6 +6,7 @@ use tako_runtime::{PluginContext, RuntimeDef};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PresetGroup {
     Js,
+    Go,
     Unknown,
 }
 
@@ -13,6 +14,7 @@ impl PresetGroup {
     pub fn id(self) -> &'static str {
         match self {
             PresetGroup::Js => "javascript",
+            PresetGroup::Go => "go",
             PresetGroup::Unknown => "unknown",
         }
     }
@@ -23,6 +25,7 @@ pub enum BuildAdapter {
     Bun,
     Node,
     Deno,
+    Go,
     Unknown,
 }
 
@@ -32,6 +35,7 @@ impl BuildAdapter {
             "bun" => Some(BuildAdapter::Bun),
             "node" => Some(BuildAdapter::Node),
             "deno" => Some(BuildAdapter::Deno),
+            "go" => Some(BuildAdapter::Go),
             _ => None,
         }
     }
@@ -41,6 +45,7 @@ impl BuildAdapter {
             BuildAdapter::Bun => "bun",
             BuildAdapter::Node => "node",
             BuildAdapter::Deno => "deno",
+            BuildAdapter::Go => "go",
             BuildAdapter::Unknown => "unknown",
         }
     }
@@ -52,6 +57,7 @@ impl BuildAdapter {
     pub fn preset_group(self) -> PresetGroup {
         match self {
             BuildAdapter::Bun | BuildAdapter::Node | BuildAdapter::Deno => PresetGroup::Js,
+            BuildAdapter::Go => PresetGroup::Go,
             BuildAdapter::Unknown => PresetGroup::Unknown,
         }
     }
@@ -115,6 +121,10 @@ pub fn detect_build_adapter(project_dir: &Path) -> BuildAdapter {
 
     if has_ancestor_file(project_dir, "bun.lockb") || has_ancestor_file(project_dir, "bun.lock") {
         return BuildAdapter::Bun;
+    }
+
+    if project_dir.join("go.mod").is_file() {
+        return BuildAdapter::Go;
     }
 
     if project_dir.join("package.json").is_file() {
@@ -330,10 +340,12 @@ mod tests {
         let bun = builtin_base_preset_content_for_alias("bun").expect("bun preset");
         let node = builtin_base_preset_content_for_alias("node").expect("node preset");
         let deno = builtin_base_preset_content_for_alias("deno").expect("deno preset");
+        let go = builtin_base_preset_content_for_alias("go").expect("go preset");
 
         assert!(bun.contains("main = \"src/index.ts\""));
         assert!(node.contains("main = \"index.js\""));
         assert!(deno.contains("main = \"main.ts\""));
+        assert!(go.contains("main = \"app\""));
     }
 
     #[test]
@@ -341,6 +353,7 @@ mod tests {
         assert_eq!(BuildAdapter::from_id("bun"), Some(BuildAdapter::Bun));
         assert_eq!(BuildAdapter::from_id("node"), Some(BuildAdapter::Node));
         assert_eq!(BuildAdapter::from_id("deno"), Some(BuildAdapter::Deno));
+        assert_eq!(BuildAdapter::from_id("go"), Some(BuildAdapter::Go));
         assert_eq!(BuildAdapter::from_id("python"), None);
     }
 
@@ -349,13 +362,22 @@ mod tests {
         assert_eq!(BuildAdapter::Bun.preset_group(), PresetGroup::Js);
         assert_eq!(BuildAdapter::Node.preset_group(), PresetGroup::Js);
         assert_eq!(BuildAdapter::Deno.preset_group(), PresetGroup::Js);
+        assert_eq!(BuildAdapter::Go.preset_group(), PresetGroup::Go);
         assert_eq!(BuildAdapter::Unknown.preset_group(), PresetGroup::Unknown);
         assert_eq!(PresetGroup::Js.id(), "javascript");
+        assert_eq!(PresetGroup::Go.id(), "go");
+    }
+
+    #[test]
+    fn detect_build_adapter_uses_go_mod_for_go() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("go.mod"), "module example.com/app").unwrap();
+        assert_eq!(detect_build_adapter(temp.path()), BuildAdapter::Go);
     }
 
     #[test]
     fn builtin_base_preset_content_parses_as_valid_preset() {
-        for alias in &["bun", "node", "deno"] {
+        for alias in &["bun", "node", "deno", "go"] {
             let content = builtin_base_preset_content_for_alias(alias).unwrap();
             let parsed: toml::Value = toml::from_str(&content).unwrap_or_else(|e| {
                 panic!("failed to parse generated preset for {alias}: {e}\n---\n{content}")

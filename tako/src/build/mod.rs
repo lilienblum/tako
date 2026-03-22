@@ -10,6 +10,7 @@ mod artifact;
 mod cache;
 mod container;
 mod executor;
+pub mod go;
 pub mod js;
 mod preset;
 mod workdir;
