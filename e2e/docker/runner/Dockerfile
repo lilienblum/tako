@@ -26,7 +26,8 @@ RUN curl -fsSL https://deno.land/install.sh | sh \
 
 # Go (for go fixtures)
 RUN ARCH="$(dpkg --print-architecture)" \
-  && curl -fsSL "https://go.dev/dl/go1.22.10.linux-${ARCH}.tar.gz" | tar -C /usr/local -xz
+  && curl -fsSL "https://go.dev/dl/go1.22.10.linux-${ARCH}.tar.gz" | tar -C /usr/local -xz \
+  && ln -s /usr/local/go/bin/go /usr/local/bin/go
 ENV PATH="/usr/local/go/bin:$PATH"
 
 WORKDIR /workspace

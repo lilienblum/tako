@@ -1430,7 +1430,7 @@ func main() {
 
 - Go compiles to a native binary — no runtime download needed on the server.
 - The compiled binary runs directly (`launch_args: ["{main}"]`), no SDK entrypoint wrapper.
-- `tako.ListenAndServe()` handles the full protocol: CLI arg parsing (`--socket`, `--instance`, `--version`), Unix socket serving in production, TCP in dev mode, `Host: tako` endpoint interception.
+- `tako.ListenAndServe()` handles the full protocol: CLI arg parsing (`--instance`, `--version`), TCP serving, `Host: tako` endpoint interception.
 - Deploy auto-injects `GOOS=linux` and `GOARCH` for cross-compilation to the target server.
 - Default build: `CGO_ENABLED=0 go build -o app .` producing a static binary.
 - Secrets: `tako.Secret("name")` and `tako.Secrets()` provide access to Tako-managed secrets.

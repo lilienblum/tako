@@ -109,7 +109,7 @@ Generates `tako_secrets.go` with a typed `Secrets` struct. Run standalone — no
 
 `ListenAndServe` = `Listener()` + protocol wrapping + `http.Serve()`:
 
-- **Production** (`--socket` flag): Unix socket for tako-server
+- **Production**: TCP on `HOST`/`PORT` env vars set by tako-server
 - **Development** (no flags): TCP on `PORT` env var or `:3000`
 - Intercepts `Host: tako` requests for health checks and secrets
 - Forwards everything else to your handler
