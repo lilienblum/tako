@@ -53,6 +53,7 @@ import CopyButton from "../components/CopyButton.astro";
   </section>
 
   <section class="philosophy-section">
+    <h2 class="philosophy-label">Philosophy</h2>
     <p class="philosophy-text">
       Highly <strong class="accent-coral">opinionated.</strong> Tako already decided &mdash; you just ship.
     </p>
@@ -102,10 +103,9 @@ import CopyButton from "../components/CopyButton.astro";
 
   <section class="features-section">
     <div class="hero-block-head">
-      <h2 class="hero-block-label">What's inside</h2>
+      <h2 class="hero-block-label">What's inside <span class="hero-block-aside">&mdash; each one normally needs its own tool</span></h2>
       <span class="hero-block-rule" aria-hidden="true"></span>
     </div>
-    <p class="included-lead">Each one normally needs its own tool.</p>
     <div class="included-tags" role="group" aria-label="Filter features by category">
       <button class="included-tag" data-category="server" type="button">server</button>
       <button class="included-tag" data-category="process" type="button">process management</button>
@@ -113,38 +113,70 @@ import CopyButton from "../components/CopyButton.astro";
       <button class="included-tag" data-category="development" type="button">development</button>
     </div>
     <div class="feature-list">
+      <a href="/docs/deployment" class="feature-link" data-categories="deploy">
+        <span class="feature-link-title">Build locally, deploy anywhere</span>
+        <span class="feature-link-desc">No CI required &mdash; build and deploy with the CLI</span>
+      </a>
       <a href="/docs/deployment" class="feature-link" data-categories="server,deploy,process">
         <span class="feature-link-title">Rolling deploys</span>
-        <span class="feature-link-desc">New instances come up first, traffic shifts after health checks pass</span>
+        <span class="feature-link-desc">New instances first, traffic shifts after health checks</span>
       </a>
-      <a href="/docs/how-tako-works#health-checks-and-instance-lifecycle" class="feature-link" data-categories="server">
-        <span class="feature-link-title">Health-based routing</span>
-        <span class="feature-link-desc">Degraded instances lose traffic in seconds, no manual intervention</span>
+      <a href="/docs/how-tako-works" class="feature-link" data-categories="server">
+        <span class="feature-link-title">Reverse proxy</span>
+        <span class="feature-link-desc">Pingora-based with sensible defaults, zero config needed</span>
       </a>
-      <a href="/docs/cli" class="feature-link" data-categories="process">
-        <span class="feature-link-title">Logs, status, secrets</span>
-        <span class="feature-link-desc">Inspect what's running, manage secrets, check history &mdash; all from the CLI</span>
+      <a href="/docs/how-tako-works#tls-and-certificates" class="feature-link" data-categories="server">
+        <span class="feature-link-title">Automatic TLS</span>
+        <span class="feature-link-desc">Let's Encrypt with wildcard support, auto-renewed</span>
       </a>
       <a href="/docs/how-tako-works#scaling" class="feature-link" data-categories="server,process">
         <span class="feature-link-title">Scale to zero and back</span>
-        <span class="feature-link-desc">Idle apps sleep, the next request wakes them up</span>
+        <span class="feature-link-desc">Idle apps sleep, the next request wakes them</span>
       </a>
-      <a href="/docs/how-tako-works#tls-and-certificates" class="feature-link" data-categories="server,development">
-        <span class="feature-link-title">Automatic TLS</span>
-        <span class="feature-link-desc">Let's Encrypt in production, local CA in dev &mdash; zero config</span>
+      <a href="/docs/how-tako-works#health-checks-and-instance-lifecycle" class="feature-link" data-categories="server">
+        <span class="feature-link-title">Health-based routing</span>
+        <span class="feature-link-desc">Unhealthy instances get pulled from rotation automatically</span>
       </a>
       <a href="/docs/how-tako-works#rolling-updates" class="feature-link" data-categories="deploy,process">
         <span class="feature-link-title">Instant rollback</span>
         <span class="feature-link-desc">Previous version stays ready, one command to revert</span>
       </a>
-      <a href="/docs/development" class="feature-link" data-categories="development">
-        <span class="feature-link-title">Agent-friendly</span>
-        <span class="feature-link-desc">Each worktree gets its own URL &mdash; <code>myapp-fix69.tako.test</code></span>
+      <a href="/docs/presets" class="feature-link" data-categories="deploy,development">
+        <span class="feature-link-title">Presets</span>
+        <span class="feature-link-desc">Framework-aware defaults for TanStack, Astro, and more</span>
       </a>
       <a href="/docs/how-tako-works" class="feature-link" data-categories="server">
         <span class="feature-link-title">Bun, Node, Go &mdash; you name it</span>
-        <span class="feature-link-desc">Auto-detected runtimes, more coming soon</span>
+        <span class="feature-link-desc">Runtimes detected and managed automatically</span>
       </a>
+      <a href="/docs/development" class="feature-link" data-categories="development">
+        <span class="feature-link-title">Local HTTPS</span>
+        <span class="feature-link-desc">Auto-trusted local CA, no mkcert needed</span>
+      </a>
+      <a href="/docs/deployment" class="feature-link" data-categories="server,deploy">
+        <span class="feature-link-title">Static files</span>
+        <span class="feature-link-desc">Add files to public/, no setup needed</span>
+      </a>
+      <a href="/docs/cli" class="feature-link" data-categories="process">
+        <span class="feature-link-title">Logs</span>
+        <span class="feature-link-desc">Stream live or pull recent history across all servers</span>
+      </a>
+      <a href="/docs/cli" class="feature-link" data-categories="process,deploy">
+        <span class="feature-link-title">Secrets</span>
+        <span class="feature-link-desc">Encrypted and managed from the CLI</span>
+      </a>
+      <a href="/docs/cli" class="feature-link" data-categories="process,server">
+        <span class="feature-link-title">Inspect &amp; monitor</span>
+        <span class="feature-link-desc">Running instances, deploy history, all at a glance</span>
+      </a>
+      <a href="/docs/development" class="feature-link" data-categories="development">
+        <span class="feature-link-title">Agent-friendly</span>
+        <span class="feature-link-desc">Each worktree gets its own URL</span>
+      </a>
+      <span class="feature-link feature-link-soon" data-categories="server">
+        <span class="feature-link-title">Channels <span class="soon-badge">soon</span></span>
+        <span class="feature-link-desc">Real-time out of the box</span>
+      </span>
     </div>
   </section>
 
@@ -600,12 +632,24 @@ import CopyButton from "../components/CopyButton.astro";
     margin-top: 32px;
   }
 
+  .philosophy-label {
+    font-family: "Caveat", cursive;
+    font-weight: 500;
+    font-size: 22px;
+    color: var(--primary-text);
+    margin-bottom: 8px;
+    display: inline-block;
+    transform: rotate(-2deg);
+    transform-origin: left center;
+  }
+
   .philosophy-text {
     font-family: var(--font-heading);
     font-size: clamp(20px, 3.5vw, 28px);
     font-weight: 600;
     line-height: 1.3;
     color: var(--muted);
+    max-width: 720px;
   }
 
   .philosophy-text + .philosophy-text {
@@ -630,12 +674,14 @@ import CopyButton from "../components/CopyButton.astro";
     background: rgba(155, 196, 182, 0.3);
   }
 
-  /* Included pills (inside features section) */
-  .included-lead {
-    font-size: 15px;
+  .hero-block-aside {
+    font-weight: 400;
+    font-family: "Nunito", sans-serif;
+    font-size: 14px;
     color: var(--muted);
-    margin-bottom: 12px;
   }
+
+  /* Included pills (inside features section) */
 
   .included-tags {
     display: flex;
@@ -654,7 +700,17 @@ import CopyButton from "../components/CopyButton.astro";
     color: rgba(47, 42, 68, 0.72);
     white-space: nowrap;
     cursor: pointer;
-    transition: opacity 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+    transition: opacity 0.2s ease, border-color 0.2s ease, background 0.2s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  }
+
+  .included-tag:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 8px rgba(47, 42, 68, 0.1);
+  }
+
+  .included-tag:active {
+    transform: translateY(0.5px);
+    box-shadow: none;
   }
 
   .included-tag:focus-visible {
@@ -662,27 +718,62 @@ import CopyButton from "../components/CopyButton.astro";
     outline-offset: 2px;
   }
 
+  .included-tag.is-active {
+    box-shadow: 0 2px 8px rgba(47, 42, 68, 0.12);
+  }
+
   .included-tag.is-muted {
     opacity: 0.3;
+    transform: none;
+    box-shadow: none;
   }
 
   .feature-link.is-muted {
     opacity: 0.2;
   }
 
-  .included-tag:nth-child(3n+1) {
+  .included-tag:nth-child(4n+1) {
     border-color: rgba(232, 135, 131, 0.25);
     background: rgba(232, 135, 131, 0.07);
   }
 
-  .included-tag:nth-child(3n+2) {
+  .included-tag:nth-child(4n+1):hover,
+  .included-tag:nth-child(4n+1).is-active {
+    border-color: rgba(232, 135, 131, 0.45);
+    background: rgba(232, 135, 131, 0.14);
+  }
+
+  .included-tag:nth-child(4n+2) {
     border-color: rgba(155, 196, 182, 0.3);
     background: rgba(155, 196, 182, 0.08);
   }
 
-  .included-tag:nth-child(3n) {
+  .included-tag:nth-child(4n+2):hover,
+  .included-tag:nth-child(4n+2).is-active {
+    border-color: rgba(155, 196, 182, 0.5);
+    background: rgba(155, 196, 182, 0.16);
+  }
+
+  .included-tag:nth-child(4n+3) {
     border-color: rgba(214, 166, 62, 0.25);
     background: rgba(214, 166, 62, 0.07);
+  }
+
+  .included-tag:nth-child(4n+3):hover,
+  .included-tag:nth-child(4n+3).is-active {
+    border-color: rgba(214, 166, 62, 0.45);
+    background: rgba(214, 166, 62, 0.14);
+  }
+
+  .included-tag:nth-child(4n+4) {
+    border-color: rgba(47, 42, 68, 0.18);
+    background: rgba(47, 42, 68, 0.04);
+  }
+
+  .included-tag:nth-child(4n+4):hover,
+  .included-tag:nth-child(4n+4).is-active {
+    border-color: rgba(47, 42, 68, 0.3);
+    background: rgba(47, 42, 68, 0.08);
   }
 
   /* Features section */
@@ -701,7 +792,7 @@ import CopyButton from "../components/CopyButton.astro";
     text-decoration: none;
     padding: 14px 16px;
     border-radius: 14px;
-    transition: background 0.15s ease;
+    transition: background 0.15s ease, opacity 0.2s ease;
   }
 
   .feature-link:hover {
@@ -710,6 +801,27 @@ import CopyButton from "../components/CopyButton.astro";
 
   .feature-link:hover .feature-link-title {
     color: var(--accent);
+  }
+
+  .feature-link-soon {
+    opacity: 0.5;
+    cursor: default;
+  }
+
+  .feature-link-soon:hover {
+    background: none;
+  }
+
+  .feature-link-soon:hover .feature-link-title {
+    color: var(--ink);
+  }
+
+  .soon-badge {
+    font-family: "Caveat", cursive;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--primary-text);
+    margin-left: 4px;
   }
 
   .feature-link:focus-visible {
