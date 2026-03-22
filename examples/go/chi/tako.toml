@@ -1,0 +1,13 @@
+name = "go-chi-example"
+runtime = "go"
+main = "app"
+
+[build]
+run = "CGO_ENABLED=0 go build -o app ."
+
+[envs.development]
+route = "go-chi.tako.test"
+
+[envs.production]
+route = "go-chi.tako.sh"
+servers = ["tako-demo"]
