@@ -93,6 +93,43 @@ fn format_output_field(bytes: &[u8]) -> String {
     }
 }
 
+fn bun_app_source(body: &str) -> String {
+    format!(
+        r#"const port = Number(process.env.PORT ?? "3000");
+const host = process.env.HOST ?? "127.0.0.1";
+const internalToken = process.env.TAKO_INTERNAL_TOKEN;
+if (!internalToken) {{
+  throw new Error("TAKO_INTERNAL_TOKEN is required");
+}}
+
+Bun.serve({{
+  hostname: host,
+  port,
+  fetch(request) {{
+    const url = new URL(request.url);
+    const path = url.pathname;
+    const requestHost = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (requestHost === "tako" && path === "/status") {{
+      if (request.headers.get("x-tako-internal-token") !== internalToken) {{
+        return new Response(JSON.stringify({{ error: "forbidden" }}), {{
+          status: 403,
+          headers: {{ "Content-Type": "application/json" }},
+        }});
+      }}
+      return new Response(JSON.stringify({{ status: "ok" }}), {{
+        headers: {{
+          "Content-Type": "application/json",
+          "X-Tako-Internal-Token": internalToken,
+        }},
+      }});
+    }}
+    return new Response({body:?});
+  }},
+}});
+"#
+    )
+}
+
 /// E2E test environment with tako-server running.
 struct E2EEnvironment {
     server_process: Option<Child>,
@@ -122,6 +159,7 @@ impl E2EEnvironment {
             .arg("--tls-port")
             .arg(https_port.to_string())
             .arg("--no-acme")
+            .env("TAKO_UNSAFE_HOST_UPSTREAM", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
@@ -332,32 +370,9 @@ mod deploy_flow {
         }
 
         let env = E2EEnvironment::new();
+        let app_source = bun_app_source("Hello from Tako!");
 
-        let app_dir = env.create_test_app(
-            "hello-world",
-            "v1",
-            r#"
-const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
-if (!appSocket) {
-  throw new Error("TAKO_APP_SOCKET is required");
-}
-
-Bun.serve({
-  unix: appSocket,
-  fetch(request) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako" && path === "/status") {
-      return new Response(JSON.stringify({ status: "ok" }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return new Response("Hello from Tako!");
-  },
-});
-"#,
-        );
+        let app_dir = env.create_test_app("hello-world", "v1", &app_source);
 
         let response = env.send_command(&deploy_command(
             "hello-world",
@@ -392,57 +407,11 @@ mod routing {
         }
 
         let env = E2EEnvironment::new();
+        let app_a_source = bun_app_source("App A");
+        let app_b_source = bun_app_source("App B");
 
-        let app_a = env.create_test_app(
-            "app-a",
-            "v1",
-            r#"
-const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
-if (!appSocket) {
-  throw new Error("TAKO_APP_SOCKET is required");
-}
-
-Bun.serve({
-  unix: appSocket,
-  fetch(request) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako" && path === "/status") {
-      return new Response(JSON.stringify({ status: "ok" }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return new Response("App A");
-  },
-});
-"#,
-        );
-        let app_b = env.create_test_app(
-            "app-b",
-            "v1",
-            r#"
-const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
-if (!appSocket) {
-  throw new Error("TAKO_APP_SOCKET is required");
-}
-
-Bun.serve({
-  unix: appSocket,
-  fetch(request) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako" && path === "/status") {
-      return new Response(JSON.stringify({ status: "ok" }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return new Response("App B");
-  },
-});
-"#,
-        );
+        let app_a = env.create_test_app("app-a", "v1", &app_a_source);
+        let app_b = env.create_test_app("app-b", "v1", &app_b_source);
 
         let deploy_a = env.send_command(&deploy_command(
             "app-a",
@@ -494,32 +463,9 @@ mod rolling_updates {
         }
 
         let env = E2EEnvironment::new();
+        let v1_source = bun_app_source("v1");
 
-        let v1_dir = env.create_test_app(
-            "versioned-app",
-            "v1",
-            r#"
-const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
-if (!appSocket) {
-  throw new Error("TAKO_APP_SOCKET is required");
-}
-
-Bun.serve({
-  unix: appSocket,
-  fetch(request) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako" && path === "/status") {
-      return new Response(JSON.stringify({ status: "ok" }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return new Response("v1");
-  },
-});
-"#,
-        );
+        let v1_dir = env.create_test_app("versioned-app", "v1", &v1_source);
 
         let deploy_v1 = env.send_command(&deploy_command(
             "versioned-app",
@@ -540,31 +486,8 @@ Bun.serve({
             before
         );
 
-        let v2_dir = env.create_test_app(
-            "versioned-app",
-            "v2",
-            r#"
-const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
-if (!appSocket) {
-  throw new Error("TAKO_APP_SOCKET is required");
-}
-
-Bun.serve({
-  unix: appSocket,
-  fetch(request) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako" && path === "/status") {
-      return new Response(JSON.stringify({ status: "ok" }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return new Response("v2");
-  },
-});
-"#,
-        );
+        let v2_source = bun_app_source("v2");
+        let v2_dir = env.create_test_app("versioned-app", "v2", &v2_source);
 
         let deploy_v2 = env.send_command(&deploy_command(
             "versioned-app",
@@ -611,33 +534,10 @@ mod reload {
         }
 
         let env = E2EEnvironment::new();
+        let app_source = bun_app_source("reload-test-v1");
 
         // Deploy an app
-        let app_dir = env.create_test_app(
-            "reload-test",
-            "v1",
-            r#"
-const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
-if (!appSocket) {
-  throw new Error("TAKO_APP_SOCKET is required");
-}
-
-Bun.serve({
-  unix: appSocket,
-  fetch(request) {
-    const url = new URL(request.url);
-    const path = url.pathname;
-    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako" && path === "/status") {
-      return new Response(JSON.stringify({ status: "ok" }), {
-        headers: { "Content-Type": "application/json" },
-      });
-    }
-    return new Response("reload-test-v1");
-  },
-});
-"#,
-        );
+        let app_dir = env.create_test_app("reload-test", "v1", &app_source);
 
         let resp = env.send_command(&deploy_command(
             "reload-test",

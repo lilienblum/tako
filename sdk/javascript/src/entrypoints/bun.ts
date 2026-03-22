@@ -5,17 +5,12 @@
 
 import { createEntrypoint } from "../create-entrypoint";
 
-const { run, appSocketPath, port, setDraining } = createEntrypoint();
+const { run, host, port, setDraining } = createEntrypoint();
 
 if (import.meta.main) {
   void run((handleRequest) => {
-    if (appSocketPath) {
-      Bun.serve({ unix: appSocketPath, fetch: handleRequest });
-      console.log(`Application listening on ${appSocketPath}`);
-    } else {
-      Bun.serve({ port, fetch: handleRequest });
-      console.log(`Application listening on http://localhost:${port}`);
-    }
+    Bun.serve({ hostname: host, port, fetch: handleRequest });
+    console.log(`Application listening on http://${host}:${port}`);
   });
 
   process.on("SIGTERM", () => {

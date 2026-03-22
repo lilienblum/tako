@@ -195,6 +195,8 @@ https://my-app.tako.test:47831/
 
 Variables from `[vars]` (base) and `[vars.development]` (environment-specific) are merged and injected into the app process. Later values override earlier ones.
 
+`tako dev` always uses loopback TCP via `PORT`.
+
 ### App log level
 
 Each `[envs.*]` block can set `log_level` to control the app's log verbosity: `debug`, `info`, `warn`, or `error`. Development defaults to `debug`. The resolved level is passed to your app as `TAKO_APP_LOG_LEVEL`.

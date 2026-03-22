@@ -187,6 +187,8 @@ Deploy resolves app identity from `name` in the selected config file, falling ba
 
 **Failure handling:** If some servers fail while others succeed, deploy continues and reports failures at the end. Failed deploys automatically roll back on the affected server and clean up partial release directories.
 
+**Upstream transport:** Deploy always uses per-instance private TCP upstreams. The deployed app should listen on the provided `PORT`.
+
 ---
 
 ## `tako delete`

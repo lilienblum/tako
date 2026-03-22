@@ -247,6 +247,7 @@ fn spawn_test_server(
         .arg("--no-acme")
         .arg("--metrics-port")
         .arg("0")
+        .env("TAKO_UNSAFE_HOST_UPSTREAM", "1")
         .env("RUST_LOG", "warn")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -321,7 +322,7 @@ mod instance_management {
 
         let server = TestServer::start();
 
-        // Create a Bun app that serves requests on TAKO_APP_SOCKET.
+        // Create a Bun app that serves requests on PORT.
         let app_dir = server
             .data_dir()
             .join("apps")
@@ -348,19 +349,31 @@ mod instance_management {
         fs::write(
             app_dir.join("index.ts"),
             r#"
-const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{pid}", String(process.pid));
-if (!appSocket) {
-  throw new Error("TAKO_APP_SOCKET is required");
+const port = Number(process.env.PORT ?? "3000");
+const host = process.env.HOST ?? "127.0.0.1";
+const internalToken = process.env.TAKO_INTERNAL_TOKEN;
+if (!internalToken) {
+  throw new Error("TAKO_INTERNAL_TOKEN is required");
 }
 
 Bun.serve({
-  unix: appSocket,
+  hostname: host,
+  port,
   fetch(request) {
     const url = new URL(request.url);
-    const host = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako" && url.pathname === "/status") {
+    const requestHost = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (requestHost === "tako" && url.pathname === "/status") {
+      if (request.headers.get("x-tako-internal-token") !== internalToken) {
+        return new Response(JSON.stringify({ error: "forbidden" }), {
+          status: 403,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
       return new Response(JSON.stringify({ status: "ok" }), {
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Tako-Internal-Token": internalToken,
+        },
       });
     }
     return new Response("test");

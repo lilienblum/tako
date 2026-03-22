@@ -12,7 +12,7 @@ use crate::socket::InstanceState;
 use dashmap::DashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
@@ -181,7 +181,7 @@ impl LoadBalancer {
         Some(Backend {
             app_name: app_name.to_string(),
             instance_id: instance.id.clone(),
-            socket_path: instance.socket_path(),
+            endpoint: instance.endpoint(),
         })
     }
 
@@ -213,13 +213,13 @@ pub struct Backend {
     pub app_name: String,
     /// Instance ID
     pub instance_id: String,
-    /// Optional Unix socket path for upstream proxying
-    pub socket_path: Option<String>,
+    /// Optional TCP endpoint for upstream proxying
+    pub endpoint: Option<SocketAddr>,
 }
 
 impl Backend {
-    pub fn socket_path(&self) -> Option<&str> {
-        self.socket_path.as_deref()
+    pub fn endpoint(&self) -> Option<SocketAddr> {
+        self.endpoint
     }
 }
 
@@ -334,69 +334,53 @@ mod tests {
         let backend = lb.get_backend("my-app").unwrap();
         assert_eq!(backend.app_name, "my-app");
         assert_eq!(backend.instance_id, instance.id);
-        assert_eq!(backend.socket_path(), None);
+        assert_eq!(backend.endpoint(), None);
     }
 
     #[test]
-    #[cfg(unix)]
-    fn test_global_load_balancer_prefers_unix_socket_backend_when_available() {
-        use std::os::unix::net::UnixListener;
-        use tempfile::TempDir;
-
-        let temp = TempDir::new().unwrap();
+    fn test_global_load_balancer_returns_tcp_backend_when_port_is_bound() {
         let manager = Arc::new(AppManager::new());
         let lb = LoadBalancer::new(manager.clone());
 
-        let config = AppConfig {
+        let app = manager.register_app(AppConfig {
             name: "my-app".to_string(),
-            app_socket_dir: temp.path().to_path_buf(),
             ..Default::default()
-        };
-        let app = manager.register_app(config);
+        });
+        lb.register_app(app.clone());
 
         let instance = app.allocate_instance();
-        instance.set_pid(42_424);
-        let socket_path = instance
-            .socket_path()
-            .expect("instance should resolve socket path with pid");
-        let Ok(_listener) = UnixListener::bind(&socket_path) else {
-            return;
-        };
+        instance.set_port(47_831);
         instance.set_state(InstanceState::Healthy);
 
-        lb.register_app(app);
+        let backend = lb
+            .get_backend("my-app")
+            .expect("backend should be selected");
 
-        let backend = lb.get_backend("my-app").unwrap();
-        assert_eq!(backend.socket_path(), Some(socket_path.as_str()));
+        assert_eq!(
+            backend.endpoint(),
+            Some("127.0.0.1:47831".parse().expect("loopback socket addr"))
+        );
     }
 
     #[test]
-    #[cfg(unix)]
-    fn test_global_load_balancer_keeps_unix_socket_path_even_when_path_does_not_exist() {
-        use tempfile::TempDir;
-
+    fn test_global_load_balancer_keeps_backend_when_port_is_not_bound_yet() {
         let manager = Arc::new(AppManager::new());
         let lb = LoadBalancer::new(manager.clone());
 
         let app = manager.register_app(AppConfig {
             name: "test-app".to_string(),
-            app_socket_dir: TempDir::new().unwrap().path().to_path_buf(),
             ..Default::default()
         });
         lb.register_app(app.clone());
 
         let instance = app.allocate_instance();
         instance.set_state(InstanceState::Healthy);
-        instance.set_pid(4242);
-        let expected_socket_path = instance
-            .socket_path()
-            .expect("instance should resolve socket path with pid");
 
         let backend = lb
             .get_backend("test-app")
             .expect("backend should be selected");
 
-        assert_eq!(backend.socket_path(), Some(expected_socket_path.as_str()));
+        assert_eq!(backend.endpoint(), None);
     }
 
     #[test]

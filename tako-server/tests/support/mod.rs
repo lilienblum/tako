@@ -151,6 +151,7 @@ impl TestServer {
             &tls_port.to_string(),
             "--no-acme",
         ])
+        .env("TAKO_UNSAFE_HOST_UPSTREAM", "1")
         .env("RUST_LOG", "warn")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())
@@ -285,6 +286,45 @@ impl Drop for TestServer {
     }
 }
 
+fn bun_app_source(body: &str) -> String {
+    format!(
+        r#"const port = Number(process.env.PORT ?? "3000");
+const host = process.env.HOST ?? "127.0.0.1";
+const internalToken = process.env.TAKO_INTERNAL_TOKEN;
+if (!internalToken) {{
+  throw new Error("TAKO_INTERNAL_TOKEN is required");
+}}
+
+Bun.serve({{
+  hostname: host,
+  port,
+  fetch(req) {{
+    const url = new URL(req.url);
+    const requestHost = (req.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
+    if (requestHost === "tako" && url.pathname === "/status") {{
+      if (req.headers.get("x-tako-internal-token") !== internalToken) {{
+        return new Response(JSON.stringify({{ error: "forbidden" }}), {{
+          status: 403,
+          headers: {{ "content-type": "application/json" }},
+        }});
+      }}
+      return new Response(JSON.stringify({{ healthy: true }}), {{
+        headers: {{
+          "content-type": "application/json",
+          "X-Tako-Internal-Token": internalToken,
+        }},
+      }});
+    }}
+    if (url.pathname === "/") {{
+      return new Response({body:?}, {{ headers: {{ "content-type": "text/plain" }} }});
+    }}
+    return new Response("not found", {{ status: 404 }});
+  }},
+}});
+"#
+    )
+}
+
 pub fn write_bun_app(app_dir: &Path, body: &str) {
     fs::create_dir_all(app_dir.join("src")).unwrap();
     fs::create_dir_all(app_dir.join("node_modules/tako.sh/src/entrypoints")).unwrap();
@@ -303,33 +343,5 @@ pub fn write_bun_app(app_dir: &Path, body: &str) {
         r#"{"runtime":"bun","main":"src/index.ts","idle_timeout":300,"install":"true","start":["bun","{main}"]}"#,
     )
     .unwrap();
-    fs::write(
-        app_dir.join("src/index.ts"),
-        format!(
-            r#"const appSocket = process.env.TAKO_APP_SOCKET?.replaceAll("{{pid}}", String(process.pid));
-if (!appSocket) {{
-  throw new Error("TAKO_APP_SOCKET is required");
-}}
-
-Bun.serve({{
-  unix: appSocket,
-  fetch(req) {{
-    const url = new URL(req.url);
-    const host = (req.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (host === "tako" && url.pathname === "/status") {{
-      return new Response(JSON.stringify({{ healthy: true }}), {{
-        headers: {{ "content-type": "application/json" }},
-      }});
-    }}
-    if (url.pathname === "/") {{
-      return new Response({:?}, {{ headers: {{ "content-type": "text/plain" }} }});
-    }}
-    return new Response("not found", {{ status: 404 }});
-  }},
-}});
-"#,
-            body
-        ),
-    )
-    .unwrap();
+    fs::write(app_dir.join("src/index.ts"), bun_app_source(body)).unwrap();
 }

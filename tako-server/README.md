@@ -16,7 +16,7 @@ Rust crate for the remote Tako runtime and proxy.
 - Validate on-demand deploy startup when the desired instance count is `0` before finalizing idle state.
 - Validate app ids, release ids, and deploy paths at the management socket boundary.
 - Persist app runtime registration (config/routes + release metadata) to SQLite and restore it on restart.
-- Read non-secret env vars from release `app.json` and secrets from per-app `secrets.json` (0600) under the data directory.
+- Read non-secret env vars from release `app.json` and secrets from encrypted SQLite state, then push secrets to instances over the internal HTTP endpoint.
 - Persist server upgrade mode in SQLite and reject mutating commands while upgrading.
 - Use a single-owner durable upgrade lock so only one upgrade controller can enter upgrading mode at a time.
 - Expose `server_info`, `enter_upgrading`, and `exit_upgrading` management commands for upgrade orchestration.

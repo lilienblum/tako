@@ -13,6 +13,9 @@ import { injectSecrets } from "./secrets";
 export const TAKO_INTERNAL_HOST = "tako";
 export const TAKO_INTERNAL_STATUS_PATH = "/status";
 export const TAKO_INTERNAL_SECRETS_PATH = "/secrets";
+export const TAKO_INTERNAL_TOKEN_ENV = "TAKO_INTERNAL_TOKEN";
+export const TAKO_INTERNAL_TOKEN_HEADER = "x-tako-internal-token";
+const LOOPBACK_INTERNAL_HOSTS = new Set(["127.0.0.1", "localhost", "0.0.0.0"]);
 
 function normalizeHost(value: string | null): string | null {
   if (!value) {
@@ -33,6 +36,54 @@ function requestHost(request: Request, url: URL): string | null {
   return normalizeHost(url.host);
 }
 
+function isInternalHost(host: string | null): boolean {
+  if (!host) {
+    return false;
+  }
+  return host === TAKO_INTERNAL_HOST || LOOPBACK_INTERNAL_HOSTS.has(host);
+}
+
+function internalToken(): string | null {
+  if (typeof process !== "undefined") {
+    const token = process.env?.[TAKO_INTERNAL_TOKEN_ENV];
+    if (token) {
+      return token;
+    }
+  }
+
+  const maybeDeno = (
+    globalThis as { Deno?: { env?: { get: (key: string) => string | undefined } } }
+  ).Deno;
+  if (maybeDeno?.env) {
+    try {
+      const token = maybeDeno.env.get(TAKO_INTERNAL_TOKEN_ENV);
+      if (token) {
+        return token;
+      }
+    } catch {
+      // ignore env access failures
+    }
+  }
+
+  return null;
+}
+
+function internalResponse(
+  body: unknown,
+  status: number,
+  token: string,
+  extraHeaders?: Record<string, string>,
+): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+      [TAKO_INTERNAL_TOKEN_HEADER]: token,
+      ...extraHeaders,
+    },
+  });
+}
+
 /**
  * Handle Tako internal endpoints (internal host only).
  *
@@ -44,47 +95,45 @@ export async function handleTakoEndpoint(
   status: TakoStatus,
 ): Promise<Response | null> {
   const url = new URL(request.url);
+  const token = internalToken();
   const host = requestHost(request, url);
   const path = url.pathname;
 
-  if (host !== TAKO_INTERNAL_HOST) {
+  if (!isInternalHost(host)) {
     return null;
+  }
+  if (!token || request.headers.get(TAKO_INTERNAL_TOKEN_HEADER) !== token) {
+    return new Response(JSON.stringify({ error: "Forbidden" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 
   switch (path) {
     case TAKO_INTERNAL_STATUS_PATH:
-      return handleStatus(status);
+      return handleStatus(status, token);
 
     case TAKO_INTERNAL_SECRETS_PATH:
-      return handleSetSecrets(request);
+      return handleSetSecrets(request, token);
 
     default:
-      return new Response(JSON.stringify({ error: "Not found" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
+      return internalResponse({ error: "Not found" }, 404, token);
   }
 }
 
 /**
  * GET /status on Host: tako — Full status information
  */
-function handleStatus(status: TakoStatus): Response {
-  return new Response(JSON.stringify(status), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+function handleStatus(status: TakoStatus, token: string): Response {
+  return internalResponse(status, 200, token);
 }
 
 /**
  * POST /secrets on Host: tako — Receive secrets from tako-server
  */
-async function handleSetSecrets(request: Request): Promise<Response> {
+async function handleSetSecrets(request: Request, token: string): Promise<Response> {
   if (request.method !== "POST") {
-    return new Response(JSON.stringify({ error: "Method not allowed" }), {
-      status: 405,
-      headers: { "Content-Type": "application/json" },
-    });
+    return internalResponse({ error: "Method not allowed" }, 405, token);
   }
 
   try {
@@ -95,20 +144,11 @@ async function handleSetSecrets(request: Request): Promise<Response> {
       Array.isArray(secrets) ||
       !Object.values(secrets).every((v) => typeof v === "string")
     ) {
-      return new Response(JSON.stringify({ error: "Expected object with string values" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+      return internalResponse({ error: "Expected object with string values" }, 400, token);
     }
     injectSecrets(secrets as Record<string, string>);
-    return new Response(JSON.stringify({ status: "ok" }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" },
-    });
+    return internalResponse({ status: "ok" }, 200, token);
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
-      status: 400,
-      headers: { "Content-Type": "application/json" },
-    });
+    return internalResponse({ error: "Invalid JSON body" }, 400, token);
   }
 }

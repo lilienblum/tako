@@ -5,18 +5,12 @@
 
 import { createEntrypoint } from "../create-entrypoint";
 
-const { run, appSocketPath, port, setDraining } = createEntrypoint();
+const { run, host, port, setDraining } = createEntrypoint();
 
 void run((handleRequest) => {
-  if (appSocketPath) {
-    // @ts-ignore - Deno.serve accepts path for unix sockets
-    Deno.serve({ path: appSocketPath }, handleRequest);
-    console.log(`Application listening on ${appSocketPath}`);
-  } else {
-    // @ts-ignore - Deno global
-    Deno.serve({ port }, handleRequest);
-    console.log(`Application listening on http://localhost:${port}`);
-  }
+  // @ts-ignore - Deno global
+  Deno.serve({ hostname: host, port }, handleRequest);
+  console.log(`Application listening on http://${host}:${port}`);
 
   // @ts-ignore - Deno global
   Deno.addSignalListener?.("SIGTERM", () => {

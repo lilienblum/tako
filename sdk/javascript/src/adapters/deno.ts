@@ -63,10 +63,12 @@ export function getStatus(): TakoStatus {
 export function serve(
   handler: FetchHandler,
   options?: {
+    host?: string;
     port?: number;
     tako?: TakoOptions;
   },
 ): void {
+  const host = options?.host ?? getEnv("HOST", "127.0.0.1");
   const port = options?.port ?? parseInt(getEnv("PORT", "3000"), 10);
   const userFetch = handler;
 
@@ -105,9 +107,9 @@ export function serve(
 
   // Start Deno server
   // @ts-ignore - Deno global
-  Deno.serve({ port }, wrappedFetch);
+  Deno.serve({ hostname: host, port }, wrappedFetch);
 
-  console.log(`[tako.sh] Deno server listening on http://localhost:${port}`);
+  console.log(`[tako.sh] Deno server listening on http://${host}:${port}`);
 
   // Handle shutdown signals
   // @ts-ignore - Deno global

@@ -1,7 +1,12 @@
 //! Instance spawner - spawns and monitors app processes
 
-use super::{App, AppConfig, Instance, InstanceError, InstanceEvent, InstanceState};
+use super::{
+    App, AppConfig, INTERNAL_TOKEN_ENV, INTERNAL_TOKEN_HEADER, Instance, InstanceError,
+    InstanceEvent, InstanceState, UpstreamManager,
+};
 use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,6 +18,8 @@ pub struct Spawner {
     /// UID/GID of the `tako-app` user for process isolation when running privileged (Unix only)
     #[cfg(unix)]
     app_user: Option<(u32, u32)>,
+    upstreams: UpstreamManager,
+    server_exe: Option<PathBuf>,
 }
 
 impl Spawner {
@@ -20,6 +27,8 @@ impl Spawner {
         Self {
             #[cfg(unix)]
             app_user: resolve_app_user(),
+            upstreams: UpstreamManager::new(),
+            server_exe: std::env::current_exe().ok(),
         }
     }
 }
@@ -62,12 +71,29 @@ impl Spawner {
             "Spawning instance"
         );
 
+        if instance.endpoint().is_none() {
+            instance.set_upstream(self.upstreams.prepare(&instance.id)?);
+        }
+
         let env = build_instance_env(&config, &instance);
-        let extra_args = build_instance_args(&config, &instance);
+        let extra_args = build_instance_args(&instance);
 
         let app_user = self.app_user;
 
-        let child = spawn_child_process(&config, &env, &extra_args, app_user)?;
+        let child = match spawn_child_process(
+            &config,
+            &env,
+            &extra_args,
+            app_user,
+            instance.namespace_path().as_deref(),
+            self.server_exe.as_deref(),
+        ) {
+            Ok(child) => child,
+            Err(error) => {
+                instance.cleanup_upstream();
+                return Err(error.into());
+            }
+        };
 
         instance.set_process(child);
         instance.set_state(InstanceState::Starting);
@@ -87,8 +113,8 @@ impl Spawner {
         let secrets = config.secrets.clone();
 
         match timeout(config.startup_timeout, async {
-            // Push secrets to the instance before health checking.
-            // The SDK blocks on receiving secrets before importing the user's app.
+            // Push secrets to the instance before health checking so the
+            // instance has its runtime secrets before it starts serving.
             if !secrets.is_empty() {
                 self.push_secrets_to_instance(&instance, &secrets).await?;
             }
@@ -206,14 +232,15 @@ impl Spawner {
         health_check_host: &str,
         probe_timeout: Duration,
     ) -> bool {
-        let Some(socket_path) = instance.socket_path() else {
+        let Some(endpoint) = instance.endpoint() else {
             return false;
         };
         matches!(
-            probe_unix_socket(
-                &socket_path,
+            probe_endpoint_tcp(
+                endpoint,
                 health_check_path,
                 health_check_host,
+                instance.internal_token(),
                 probe_timeout,
             )
             .await,
@@ -223,9 +250,9 @@ impl Spawner {
 
     /// Push secrets to an instance via `POST /secrets` on `Host: tako`.
     ///
-    /// Retries until the instance socket is up and accepts the request.
-    /// The SDK blocks app import until secrets arrive, so this must succeed
-    /// before health checks can pass.
+    /// Retries until the instance port is up and accepts the request.
+    /// This must succeed before health checks can pass for instances that rely
+    /// on the pushed secret set.
     async fn push_secrets_to_instance(
         &self,
         instance: &Arc<Instance>,
@@ -245,14 +272,15 @@ impl Spawner {
                 return Err(InstanceError::HealthCheckFailed(detail));
             }
 
-            let Some(socket_path) = instance.socket_path() else {
+            let Some(endpoint) = instance.endpoint() else {
                 continue;
             };
 
-            match post_unix_socket(
-                &socket_path,
+            match post_endpoint_tcp(
+                endpoint,
                 "/secrets",
                 "tako",
+                instance.internal_token(),
                 &json,
                 Duration::from_secs(5),
             )
@@ -268,8 +296,23 @@ impl Spawner {
     }
 }
 
-fn build_instance_env(config: &AppConfig, _instance: &Instance) -> HashMap<String, String> {
+fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String, String> {
     let mut env = config.env_vars.clone();
+
+    let port = instance
+        .port()
+        .expect("instances must have an upstream endpoint before spawn");
+    env.insert("PORT".to_string(), port.to_string());
+    env.insert(
+        "HOST".to_string(),
+        instance
+            .bind_host()
+            .expect("instances must have an upstream bind host before spawn"),
+    );
+    env.insert(
+        INTERNAL_TOKEN_ENV.to_string(),
+        instance.internal_token().to_string(),
+    );
 
     env.entry("NODE_ENV".to_string())
         .or_insert_with(|| "production".to_string());
@@ -278,30 +321,17 @@ fn build_instance_env(config: &AppConfig, _instance: &Instance) -> HashMap<Strin
 }
 
 /// Build the extra CLI args for the entrypoint (internal protocol, not env vars).
-fn build_instance_args(config: &AppConfig, instance: &Instance) -> Vec<String> {
-    let mut args = Vec::new();
-
-    #[cfg(unix)]
-    {
-        let socket_template = instance
-            .socket_template()
-            .expect("unix instances must provide a unix socket template");
-        args.push("--socket".to_string());
-        args.push(socket_template.to_string());
-    }
-
-    args.push("--instance".to_string());
-    args.push(instance.id.clone());
-
-    args.push("--version".to_string());
-    args.push(config.version.clone());
-
-    args
+fn build_instance_args(instance: &Instance) -> Vec<String> {
+    vec![
+        "--instance".to_string(),
+        instance.id.clone(),
+        "--version".to_string(),
+        instance.build_version().to_string(),
+    ]
 }
 
 /// Resolve a binary name against the app's PATH env, falling back to the bare name.
 fn resolve_binary_from_env(binary: &str, env: &HashMap<String, String>) -> String {
-    use std::path::Path;
     // Already absolute — use as-is
     if binary.starts_with('/') {
         return binary.to_string();
@@ -325,26 +355,81 @@ fn build_child_command(
     extra_args: &[String],
     app_user: Option<(u32, u32)>,
     use_app_user: bool,
-) -> Command {
+    namespace_path: Option<&Path>,
+    server_exe: Option<&Path>,
+) -> std::io::Result<Command> {
     // Resolve the binary using the app's env PATH (not the server's PATH).
     let binary = resolve_binary_from_env(&config.command[0], env);
-    let mut child_cmd = Command::new(&binary);
+    let mut child_cmd = if let Some(namespace_path) = namespace_path {
+        build_namespaced_child_command(
+            server_exe,
+            namespace_path,
+            &binary,
+            &config.command[1..],
+            extra_args,
+            app_user,
+            use_app_user,
+        )?
+    } else {
+        let mut child_cmd = Command::new(&binary);
+        child_cmd.args(&config.command[1..]).args(extra_args);
+
+        #[cfg(unix)]
+        if use_app_user && let Some((uid, gid)) = app_user {
+            child_cmd.uid(uid);
+            child_cmd.gid(gid);
+        }
+
+        child_cmd
+    };
+
     child_cmd
-        .args(&config.command[1..])
-        .args(extra_args)
         .current_dir(&config.path)
         .envs(env)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
 
-    #[cfg(unix)]
+    Ok(child_cmd)
+}
+
+fn build_namespaced_child_command(
+    server_exe: Option<&Path>,
+    namespace_path: &Path,
+    binary: &str,
+    command_args: &[String],
+    extra_args: &[String],
+    app_user: Option<(u32, u32)>,
+    use_app_user: bool,
+) -> std::io::Result<Command> {
+    let Some(server_exe) = server_exe else {
+        return Err(std::io::Error::other(
+            "failed to resolve tako-server path for namespace execution",
+        ));
+    };
+
+    let mut child_cmd = Command::new(server_exe);
+    child_cmd
+        .arg("--exec-in-netns")
+        .arg("--netns")
+        .arg(namespace_path)
+        .arg("--binary")
+        .arg(binary);
+
     if use_app_user && let Some((uid, gid)) = app_user {
-        child_cmd.uid(uid);
-        child_cmd.gid(gid);
+        child_cmd.arg("--uid").arg(uid.to_string());
+        child_cmd.arg("--gid").arg(gid.to_string());
     }
 
-    child_cmd
+    child_cmd.arg("--");
+    for arg in command_args {
+        child_cmd.arg(arg);
+    }
+    for arg in extra_args {
+        child_cmd.arg(arg);
+    }
+
+    Ok(child_cmd)
 }
 
 fn should_retry_spawn_without_app_user(
@@ -354,13 +439,29 @@ fn should_retry_spawn_without_app_user(
     app_user.is_some() && error.kind() == std::io::ErrorKind::PermissionDenied
 }
 
+fn reserve_loopback_tcp_port() -> std::io::Result<(u16, std::net::TcpListener)> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    Ok((port, listener))
+}
+
 fn spawn_child_process(
     config: &AppConfig,
     env: &HashMap<String, String>,
     extra_args: &[String],
     app_user: Option<(u32, u32)>,
+    namespace_path: Option<&Path>,
+    server_exe: Option<&Path>,
 ) -> std::io::Result<tokio::process::Child> {
-    let mut child_cmd = build_child_command(config, env, extra_args, app_user, true);
+    let mut child_cmd = build_child_command(
+        config,
+        env,
+        extra_args,
+        app_user,
+        true,
+        namespace_path,
+        server_exe,
+    )?;
     match child_cmd.spawn() {
         Ok(child) => Ok(child),
         Err(error) if should_retry_spawn_without_app_user(&error, app_user) => {
@@ -368,67 +469,64 @@ fn spawn_child_process(
                 error = %error,
                 "Failed to switch to tako-app user; retrying spawn as service user"
             );
-            let mut fallback = build_child_command(config, env, extra_args, app_user, false);
+            let mut fallback = build_child_command(
+                config,
+                env,
+                extra_args,
+                app_user,
+                false,
+                namespace_path,
+                server_exe,
+            )?;
             fallback.spawn()
         }
         Err(error) => Err(error),
     }
 }
 
-#[cfg(unix)]
-async fn probe_unix_socket(
-    socket_path: &str,
+async fn probe_endpoint_tcp(
+    endpoint: SocketAddr,
     health_check_path: &str,
     health_check_host: &str,
+    internal_token: &str,
     probe_timeout: Duration,
 ) -> Result<bool, std::io::Error> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
-    let mut socket =
-        match timeout(probe_timeout, tokio::net::UnixStream::connect(socket_path)).await {
-            Ok(result) => result?,
-            Err(_) => return Ok(false),
-        };
+    let mut socket = match timeout(probe_timeout, tokio::net::TcpStream::connect(endpoint)).await {
+        Ok(result) => result?,
+        Err(_) => return Ok(false),
+    };
     let request = format!(
-        "GET {health_check_path} HTTP/1.1\r\nHost: {health_check_host}\r\nConnection: close\r\n\r\n"
+        "GET {health_check_path} HTTP/1.1\r\nHost: {health_check_host}\r\n{INTERNAL_TOKEN_HEADER}: {internal_token}\r\nConnection: close\r\n\r\n"
     );
     match timeout(probe_timeout, socket.write_all(request.as_bytes())).await {
         Ok(result) => result?,
         Err(_) => return Ok(false),
     }
 
-    let mut response_buf = [0_u8; 2048];
-    let bytes_read = match timeout(probe_timeout, socket.read(&mut response_buf)).await {
-        Ok(result) => result?,
-        Err(_) => return Ok(false),
-    };
-    if bytes_read == 0 {
+    let Some(response) = read_http_response_headers(&mut socket, probe_timeout).await? else {
         return Ok(false);
-    }
-
-    let response = String::from_utf8_lossy(&response_buf[..bytes_read]);
-    let status_line = response.lines().next().unwrap_or_default();
-    Ok(http_status_is_success(status_line))
+    };
+    Ok(http_response_is_internal_success(&response, internal_token))
 }
 
-/// Send an HTTP POST request over a Unix socket and check for 2xx response.
-#[cfg(unix)]
-async fn post_unix_socket(
-    socket_path: &str,
+async fn post_endpoint_tcp(
+    endpoint: SocketAddr,
     path: &str,
     host: &str,
+    internal_token: &str,
     body: &str,
     post_timeout: Duration,
 ) -> Result<bool, std::io::Error> {
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::io::AsyncWriteExt;
 
-    let mut socket = match timeout(post_timeout, tokio::net::UnixStream::connect(socket_path)).await
-    {
+    let mut socket = match timeout(post_timeout, tokio::net::TcpStream::connect(endpoint)).await {
         Ok(result) => result?,
         Err(_) => return Ok(false),
     };
     let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        "POST {path} HTTP/1.1\r\nHost: {host}\r\n{INTERNAL_TOKEN_HEADER}: {internal_token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
     match timeout(post_timeout, socket.write_all(request.as_bytes())).await {
@@ -436,18 +534,42 @@ async fn post_unix_socket(
         Err(_) => return Ok(false),
     }
 
-    let mut response_buf = [0_u8; 2048];
-    let bytes_read = match timeout(post_timeout, socket.read(&mut response_buf)).await {
-        Ok(result) => result?,
-        Err(_) => return Ok(false),
-    };
-    if bytes_read == 0 {
+    let Some(response) = read_http_response_headers(&mut socket, post_timeout).await? else {
         return Ok(false);
+    };
+    Ok(http_response_is_internal_success(&response, internal_token))
+}
+
+async fn read_http_response_headers(
+    socket: &mut tokio::net::TcpStream,
+    io_timeout: Duration,
+) -> Result<Option<String>, std::io::Error> {
+    use tokio::io::AsyncReadExt;
+
+    let mut response = Vec::with_capacity(1024);
+    let mut chunk = [0_u8; 1024];
+
+    loop {
+        let bytes_read = match timeout(io_timeout, socket.read(&mut chunk)).await {
+            Ok(result) => result?,
+            Err(_) => return Ok(None),
+        };
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        response.extend_from_slice(&chunk[..bytes_read]);
+        if response.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
     }
 
-    let response = String::from_utf8_lossy(&response_buf[..bytes_read]);
-    let status_line = response.lines().next().unwrap_or_default();
-    Ok(http_status_is_success(status_line))
+    if response.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(String::from_utf8_lossy(&response).into_owned()))
 }
 
 fn http_status_is_success(status_line: &str) -> bool {
@@ -463,6 +585,21 @@ fn http_status_is_success(status_line: &str) -> bool {
         .and_then(|code| code.parse::<u16>().ok())
         .map(|code| (200..300).contains(&code))
         .unwrap_or(false)
+}
+
+fn http_response_is_internal_success(response: &str, expected_token: &str) -> bool {
+    let mut lines = response.lines();
+    let status_line = lines.next().unwrap_or_default();
+    if !http_status_is_success(status_line) {
+        return false;
+    }
+
+    lines
+        .take_while(|line| !line.is_empty())
+        .filter_map(|line| line.split_once(':'))
+        .any(|(name, value)| {
+            name.eq_ignore_ascii_case(INTERNAL_TOKEN_HEADER) && value.trim() == expected_token
+        })
 }
 
 async fn startup_exit_detail(instance: Arc<Instance>) -> String {
@@ -600,20 +737,25 @@ mod tests {
             instance_tx,
         );
         let instance = app.allocate_instance();
+        instance.set_port(48_123);
 
         let env = build_instance_env(&app.config.read().clone(), &instance);
         assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
-        // Secrets are NOT injected as env vars — they're pushed via socket.
+        // Secrets are NOT injected as env vars — they're pushed over the internal HTTP endpoint.
         assert!(!env.contains_key("SECRET"));
-        // TAKO_ internal vars are passed as CLI args, not env vars.
+        assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
+        assert!(env.contains_key("PORT"));
+        assert_eq!(
+            env.get(INTERNAL_TOKEN_ENV).map(String::as_str),
+            Some(instance.internal_token())
+        );
+        // TAKO_ runtime identity vars are passed as CLI args, not env vars.
         assert!(!env.contains_key("TAKO_INSTANCE"));
-        assert!(!env.contains_key("TAKO_APP_SOCKET"));
         assert!(!env.contains_key("TAKO_HAS_SECRETS"));
     }
 
     #[test]
-    #[cfg(unix)]
-    fn build_instance_args_has_socket_and_instance() {
+    fn build_instance_args_has_instance_and_version() {
         let (instance_tx, _instance_rx) = mpsc::channel(4);
         let app = App::new(
             AppConfig {
@@ -625,28 +767,82 @@ mod tests {
         );
         let instance = app.allocate_instance();
 
-        let args = build_instance_args(&app.config.read().clone(), &instance);
-        assert!(args.contains(&"--socket".to_string()));
+        let args = build_instance_args(&instance);
         assert!(args.contains(&"--instance".to_string()));
         assert!(args.contains(&instance.id));
         assert!(args.contains(&"--version".to_string()));
         assert!(args.contains(&"v42".to_string()));
     }
 
-    #[tokio::test]
-    #[cfg(unix)]
-    async fn health_check_uses_unix_socket_when_available() {
-        use std::os::unix::net::UnixListener as StdUnixListener;
-        use tempfile::TempDir;
+    #[test]
+    fn build_instance_env_sets_port_host_and_internal_token() {
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let app = App::new(
+            AppConfig {
+                name: "test-app".to_string(),
+                ..Default::default()
+            },
+            instance_tx,
+        );
+        let instance = app.allocate_instance();
+        instance.set_port(48_123);
 
-        let temp = TempDir::new().unwrap();
-        let pid = std::process::id();
-        let socket_path = temp.path().join(format!("tako-app-test-app-{pid}.sock"));
-        let Ok(listener) = StdUnixListener::bind(&socket_path) else {
+        let env = build_instance_env(&app.config.read().clone(), &instance);
+        assert_eq!(env.get("PORT").map(String::as_str), Some("48123"));
+        assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
+        assert_eq!(
+            env.get(INTERNAL_TOKEN_ENV).map(String::as_str),
+            Some(instance.internal_token())
+        );
+    }
+
+    #[test]
+    fn build_instance_env_overwrites_user_host_with_runtime_bind_host() {
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let app = App::new(
+            AppConfig {
+                name: "test-app".to_string(),
+                env_vars: HashMap::from([("HOST".to_string(), "0.0.0.0".to_string())]),
+                ..Default::default()
+            },
+            instance_tx,
+        );
+        let instance = app.allocate_instance();
+        instance.set_port(48_123);
+
+        let env = build_instance_env(&app.config.read().clone(), &instance);
+        assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
+    }
+
+    #[test]
+    fn build_instance_args_never_includes_socket_flag() {
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let app = App::new(
+            AppConfig {
+                name: "test-app".to_string(),
+                version: "v42".to_string(),
+                ..Default::default()
+            },
+            instance_tx,
+        );
+        let instance = app.allocate_instance();
+        instance.set_port(48_123);
+
+        let args = build_instance_args(&instance);
+        assert!(!args.contains(&"--socket".to_string()));
+        assert!(args.contains(&"--instance".to_string()));
+        assert!(args.contains(&"--version".to_string()));
+        assert!(args.contains(&"v42".to_string()));
+    }
+
+    #[tokio::test]
+    async fn health_check_requires_matching_internal_token() {
+        let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
             return;
         };
-        listener.set_nonblocking(true).unwrap();
-        let listener = tokio::net::UnixListener::from_std(listener).unwrap();
+        let port = listener.local_addr().expect("listener addr").port();
+        let token = "spawner-health-token".to_string();
+        let closure_token = token.clone();
 
         tokio::spawn(async move {
             let (mut socket, _) = listener.accept().await.expect("accept");
@@ -659,82 +855,144 @@ mod tests {
                 && request
                     .lines()
                     .any(|line| line.eq_ignore_ascii_case("host: tako"));
+            let has_token = request.lines().any(|line| {
+                line.eq_ignore_ascii_case(&format!("{INTERNAL_TOKEN_HEADER}: {closure_token}"))
+            });
 
-            let response = if is_internal_status {
-                b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".as_slice()
+            let response = if is_internal_status && has_token {
+                format!(
+                    "HTTP/1.1 200 OK\r\n{INTERNAL_TOKEN_HEADER}: {closure_token}\r\nContent-Length: 2\r\n\r\nok"
+                )
             } else {
-                b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found".as_slice()
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found".to_string()
             };
 
-            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response).await;
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response.as_bytes()).await;
         });
 
         let (instance_tx, _instance_rx) = mpsc::channel(4);
         let config = AppConfig {
             name: "test-app".to_string(),
-            app_socket_dir: temp.path().to_path_buf(),
             health_check_path: "/status".to_string(),
             health_check_host: "tako".to_string(),
             ..Default::default()
         };
         let app = App::new(config, instance_tx);
         let instance = app.allocate_instance();
-        instance.set_pid(pid);
+        instance.set_port(port);
+        let token_field = instance.internal_token().to_string();
+        assert_ne!(token_field, token, "test should use the instance token");
+
+        let spawner = Spawner::new();
+        assert!(
+            !spawner.health_check(&app, &instance).await,
+            "mismatched token must fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn health_check_uses_loopback_tcp_with_matching_internal_token() {
+        let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
+            return;
+        };
+        let port = listener.local_addr().expect("listener addr").port();
+
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let config = AppConfig {
+            name: "test-app".to_string(),
+            health_check_path: "/status".to_string(),
+            health_check_host: "tako".to_string(),
+            ..Default::default()
+        };
+        let app = App::new(config, instance_tx);
+        let instance = app.allocate_instance();
+        instance.set_port(port);
+        let token = instance.internal_token().to_string();
+
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request_buf = [0_u8; 2048];
+            let n = tokio::io::AsyncReadExt::read(&mut socket, &mut request_buf)
+                .await
+                .expect("read request");
+            let request = String::from_utf8_lossy(&request_buf[..n]);
+            let is_internal_status = request.starts_with("GET /status ")
+                && request
+                    .lines()
+                    .any(|line| line.eq_ignore_ascii_case("host: tako"));
+            let has_token = request.lines().any(|line| {
+                line.eq_ignore_ascii_case(&format!("{INTERNAL_TOKEN_HEADER}: {token}"))
+            });
+
+            let response = if is_internal_status && has_token {
+                format!(
+                    "HTTP/1.1 200 OK\r\n{INTERNAL_TOKEN_HEADER}: {token}\r\nContent-Length: 2\r\n\r\nok"
+                )
+            } else {
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found".to_string()
+            };
+
+            let _ = tokio::io::AsyncWriteExt::write_all(&mut socket, response.as_bytes()).await;
+        });
 
         let spawner = Spawner::new();
         assert!(spawner.health_check(&app, &instance).await);
     }
 
     #[tokio::test]
-    #[cfg(unix)]
-    async fn health_check_does_not_fallback_to_tcp_when_unix_socket_path_is_configured() {
-        use tempfile::TempDir;
-
+    async fn health_check_reads_response_headers_across_multiple_chunks() {
         let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {
             return;
         };
-        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let port = listener.local_addr().expect("listener addr").port();
 
-        tokio::spawn(async move {
-            let accepted = tokio::time::timeout(Duration::from_secs(1), listener.accept())
-                .await
-                .is_ok();
-            let _ = accepted_tx.send(accepted);
-        });
-
-        let temp = TempDir::new().unwrap();
         let (instance_tx, _instance_rx) = mpsc::channel(4);
         let config = AppConfig {
             name: "test-app".to_string(),
-            app_socket_dir: temp.path().to_path_buf(),
             health_check_path: "/status".to_string(),
             health_check_host: "tako".to_string(),
             ..Default::default()
         };
         let app = App::new(config, instance_tx);
         let instance = app.allocate_instance();
-        instance.set_pid(std::process::id());
+        instance.set_port(port);
+        let token = instance.internal_token().to_string();
 
-        let socket_path = instance
-            .socket_path()
-            .expect("instance should resolve socket path with pid");
-        assert!(
-            !std::path::Path::new(&socket_path).exists(),
-            "test precondition: unix socket should be absent"
-        );
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt;
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut request_buf = [0_u8; 2048];
+            let n = tokio::io::AsyncReadExt::read(&mut socket, &mut request_buf)
+                .await
+                .expect("read request");
+            let request = String::from_utf8_lossy(&request_buf[..n]);
+            let is_internal_status = request.starts_with("GET /status ")
+                && request
+                    .lines()
+                    .any(|line| line.eq_ignore_ascii_case("host: tako"));
+            let has_token = request.lines().any(|line| {
+                line.eq_ignore_ascii_case(&format!("{INTERNAL_TOKEN_HEADER}: {token}"))
+            });
+
+            if is_internal_status && has_token {
+                socket
+                    .write_all(b"HTTP/1.1 200 OK\r\nX-Tako-Internal-Token: ")
+                    .await
+                    .expect("write response prefix");
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                socket
+                    .write_all(format!("{token}\r\nContent-Length: 2\r\n\r\nok").as_bytes())
+                    .await
+                    .expect("write response suffix");
+            } else {
+                socket
+                    .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nnot found")
+                    .await
+                    .expect("write not found");
+            }
+        });
 
         let spawner = Spawner::new();
-        assert!(
-            !spawner
-                .probe_health(&instance, "/status", "tako", Duration::from_millis(200),)
-                .await
-        );
-        let accepted = accepted_rx
-            .await
-            .expect("listener should report acceptance result");
-        assert!(
-            !accepted,
-            "tcp fallback should not be attempted when unix socket path is configured"
-        );
+        assert!(spawner.health_check(&app, &instance).await);
     }
 }

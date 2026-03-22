@@ -377,6 +377,12 @@ Defaults to `300` (5 minutes). Instances are never stopped while serving in-flig
 
 When desired instances is `0` (scale-to-zero), instances start on demand when a request arrives and stop after this timeout with no traffic.
 
+### App upstreams
+
+Deployed app upstreams always use per-instance TCP endpoints.
+
+On Linux servers, `tako-server` creates a network namespace per instance, assigns a private virtual IP, sets `PORT=3000`, and sets `HOST=0.0.0.0` in production while routing to the instance's private IP.
+
 ### `log_level`
 
 App log verbosity for this environment. Passed to your app as the `TAKO_APP_LOG_LEVEL` environment variable.

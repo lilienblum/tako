@@ -491,9 +491,15 @@ pub fn dry_run_skip(message: &str) {
             brand_fg(message),
             brand_muted("(dry run)")
         );
+    } else if is_ci() {
+        eprintln!("{}", format_dry_run_skip_plain(message));
     } else {
         tracing::info!("dry-run skip: {}", message);
     }
+}
+
+fn format_dry_run_skip_plain(message: &str) -> String {
+    format!("⏭ {message} (dry-run)")
 }
 
 pub fn muted(message: &str) {
@@ -2525,6 +2531,14 @@ mod tests {
         assert_eq!(
             format_warning_bullet_line("Configure local DNS for *.tako.test"),
             "┃ • Configure local DNS for *.tako.test"
+        );
+    }
+
+    #[test]
+    fn format_dry_run_skip_plain_uses_ci_friendly_text() {
+        assert_eq!(
+            format_dry_run_skip_plain("Add server test-srv"),
+            "⏭ Add server test-srv (dry-run)"
         );
     }
 

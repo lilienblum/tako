@@ -793,21 +793,17 @@ impl ProxyHttp for TakoProxy {
             .clone()
             .ok_or_else(|| Error::new(ErrorType::ConnectNoRoute))?;
 
-        let socket_path = backend.socket_path().ok_or_else(|| {
-            Error::explain(
+        let mut peer = if let Some(endpoint) = backend.endpoint() {
+            HttpPeer::new(endpoint, false, String::new())
+        } else {
+            return Err(Error::explain(
                 ErrorType::ConnectNoRoute,
                 format!(
-                    "Missing upstream unix socket for app '{}' instance {}",
+                    "Missing upstream endpoint for app '{}' instance {}",
                     backend.app_name, backend.instance_id
                 ),
-            )
-        })?;
-        let mut peer = HttpPeer::new_uds(socket_path, false, String::new()).map_err(|e| {
-            Error::explain(
-                ErrorType::ConnectNoRoute,
-                format!("Invalid upstream unix socket '{}': {}", socket_path, e),
-            )
-        })?;
+            ));
+        };
 
         // Upstream timeouts prevent hung backends from holding proxy tasks
         // and Tokio worker threads indefinitely (critical under DDoS / slowloris).

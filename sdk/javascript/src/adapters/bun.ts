@@ -15,7 +15,6 @@
 
 import type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 import { handleTakoEndpoint } from "../endpoints";
-import { resolveAppSocketPath } from "../socket-path";
 
 // Re-export core classes
 export { Tako } from "../tako";
@@ -31,18 +30,18 @@ export type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 export function serve(
   handler: FetchHandler,
   options?: {
+    host?: string;
     port?: number;
     tako?: TakoOptions;
   },
 ): void {
+  const host = options?.host ?? process.env["HOST"] ?? "127.0.0.1";
   const port = options?.port ?? parseInt(process.env["PORT"] || "3000", 10);
   const userFetch = handler;
 
   // Environment variables set by tako
   const TAKO_VERSION = process.env["TAKO_VERSION"] || "unknown";
   const TAKO_INSTANCE = process.env["TAKO_INSTANCE"] || "unknown";
-  const TAKO_APP_SOCKET = process.env["TAKO_APP_SOCKET"];
-  const appSocketPath = resolveAppSocketPath(TAKO_APP_SOCKET);
 
   const startedAt = Date.now();
   let status: TakoStatus["status"] = "starting";
@@ -84,29 +83,17 @@ export function serve(
     }
   };
 
-  // Start server
-  if (appSocketPath) {
-    // Production: Unix socket
-    Bun.serve({
-      unix: appSocketPath,
-      fetch: wrappedFetch,
-    });
-    console.log(`[tako.sh] Bun server listening on ${appSocketPath}`);
-  } else {
-    // Development: TCP
-    Bun.serve({
-      port,
-      fetch: wrappedFetch,
-    });
-    console.log(`[tako.sh] Bun server listening on http://localhost:${port}`);
-  }
+  Bun.serve({
+    hostname: host,
+    port,
+    fetch: wrappedFetch,
+  });
+  console.log(`[tako.sh] Bun server listening on http://${host}:${port}`);
 
   status = "healthy";
 
   // Handle shutdown
-  if (appSocketPath) {
-    process.on("SIGTERM", () => {
-      status = "draining";
-    });
-  }
+  process.on("SIGTERM", () => {
+    status = "draining";
+  });
 }

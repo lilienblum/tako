@@ -7,7 +7,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { Readable } from "node:stream";
 import { createEntrypoint } from "../create-entrypoint";
 
-const { run, appSocketPath, port, setDraining } = createEntrypoint();
+const { run, host, port, setDraining } = createEntrypoint();
 
 function incomingMessageToRequest(req: IncomingMessage): Request {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -78,15 +78,9 @@ void run((handleRequest) => {
     }
   });
 
-  if (appSocketPath) {
-    server.listen(appSocketPath, () => {
-      console.log(`Application listening on ${appSocketPath}`);
-    });
-  } else {
-    server.listen(port, () => {
-      console.log(`Application listening on http://localhost:${port}`);
-    });
-  }
+  server.listen(port, host, () => {
+    console.log(`Application listening on http://${host}:${port}`);
+  });
 
   process.on("SIGTERM", () => {
     setDraining();

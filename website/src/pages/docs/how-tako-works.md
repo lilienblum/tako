@@ -26,7 +26,7 @@ Tako is made up of three parts that work together:
 Everything in Tako falls into one of two paths:
 
 - **Management path** -- CLI commands that change state: `tako deploy`, `tako scale`, `tako secrets set`, `tako servers add`. These talk to `tako-server` over a Unix socket.
-- **Traffic path** -- Real HTTP/HTTPS requests from users flowing through the proxy to your app instances. This is pure Pingora performance.
+- **Traffic path** -- Real HTTP/HTTPS requests from users flowing through the proxy to your app instances over per-instance private TCP endpoints. This is pure Pingora performance.
 
 This separation keeps things predictable. Commands change your deployment state. The proxy serves traffic.
 
@@ -131,7 +131,7 @@ Tako actively monitors every app instance with HTTP health probes:
 
 - **Probe interval**: every 1 second
 - **Probe request**: `GET /status` with `Host: tako` header
-- **Transport**: Unix socket (in production deployments)
+- **Transport**: the instance's private TCP endpoint
 - **Unhealthy**: 2 consecutive failures removes the instance from load balancing
 - **Dead**: 5 consecutive failures kills the instance process
 - **Recovery**: a single successful probe restores the instance to healthy
@@ -209,7 +209,7 @@ The CLI and `tako-server` communicate over a Unix socket at `/var/run/tako/tako.
 | `rollback` | Roll back to a previous release                       |
 | `routes`   | List current route mappings                           |
 
-App instances do not connect to this management socket. Instead, `tako-server` manages their lifecycle directly (spawn, health check, stop) and proxies HTTP traffic to per-instance Unix sockets.
+App instances do not connect to this management socket. Instead, `tako-server` manages their lifecycle directly (spawn, health check, stop) and proxies HTTP traffic to each instance's private TCP endpoint.
 
 ## Server Filesystem Layout
 

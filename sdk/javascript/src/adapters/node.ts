@@ -21,6 +21,8 @@ import {
   TAKO_INTERNAL_HOST,
   TAKO_INTERNAL_STATUS_PATH,
   TAKO_INTERNAL_SECRETS_PATH,
+  TAKO_INTERNAL_TOKEN_ENV,
+  TAKO_INTERNAL_TOKEN_HEADER,
 } from "../endpoints";
 import { injectSecrets } from "../secrets";
 
@@ -31,6 +33,7 @@ export type { TakoOptions, TakoStatus, FetchHandler } from "../types";
 // Environment variables set by tako
 const TAKO_VERSION = process.env["TAKO_VERSION"] || "unknown";
 const TAKO_INSTANCE = process.env["TAKO_INSTANCE"] || "unknown";
+const TAKO_INTERNAL_TOKEN = process.env[TAKO_INTERNAL_TOKEN_ENV] || "";
 
 const startedAt = Date.now();
 let status: TakoStatus["status"] = "starting";
@@ -92,15 +95,27 @@ export function createMiddleware(): (
     const method = req.method || "GET";
     const host = normalizeHost(req.headers?.host);
     const pathname = requestPathname(url);
+    const token = (req.headers as Record<string, string | string[] | undefined> | undefined)?.[
+      TAKO_INTERNAL_TOKEN_HEADER
+    ];
+    const normalizedToken = Array.isArray(token) ? token[0] : token;
 
     if (host !== TAKO_INTERNAL_HOST) {
       next();
       return;
     }
+    if (!TAKO_INTERNAL_TOKEN || normalizedToken !== TAKO_INTERNAL_TOKEN) {
+      res.writeHead(403, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Forbidden" }));
+      return;
+    }
 
     if (pathname === TAKO_INTERNAL_STATUS_PATH && method === "GET") {
       const statusData = getStatus();
-      res.writeHead(200, { "Content-Type": "application/json" });
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        [TAKO_INTERNAL_TOKEN_HEADER]: TAKO_INTERNAL_TOKEN,
+      });
       res.end(JSON.stringify(statusData));
       return;
     }
@@ -114,7 +129,10 @@ export function createMiddleware(): (
         try {
           const secrets = JSON.parse(body);
           injectSecrets(secrets);
-          res.writeHead(200, { "Content-Type": "application/json" });
+          res.writeHead(200, {
+            "Content-Type": "application/json",
+            [TAKO_INTERNAL_TOKEN_HEADER]: TAKO_INTERNAL_TOKEN,
+          });
           res.end(JSON.stringify({ status: "ok" }));
         } catch {
           res.writeHead(400, { "Content-Type": "application/json" });

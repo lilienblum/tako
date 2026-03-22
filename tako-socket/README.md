@@ -8,7 +8,7 @@ Shared Unix-socket transport helpers for Tako components.
 - Message size/limit checks.
 - Generic request/response connection loop utilities.
 
-Used by both local and remote control channels.
+Used by local and remote control channels.
 
 ## Test
 

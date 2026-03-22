@@ -114,7 +114,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Top-level `runtime` is optional; when set to `bun`, `node`, or `deno`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
 - Top-level `runtime_version` is optional; when set (e.g. `"1.2.3"`), deploy uses it directly instead of auto-detecting with `<runtime> --version`. `tako init` pins the locally-installed version by default.
 - Top-level `preset` is optional. Presets are metadata-only (`name`, `main`, `assets`) providing entrypoint and asset defaults. They do not contain build, install, start, or dev commands.
-- Top-level `assets` is optional; lists asset directories to include in the deploy artifact (e.g. `["dist/client"]`). Preset `assets` are used when the top-level `assets` list is empty.
+- Top-level `assets` is optional; lists asset directories to include in the deploy artifact (e.g. `["dist/client"]`). Asset roots are preset `assets` plus top-level `assets` (deduplicated).
 - `preset` supports:
   - runtime-local aliases: `tanstack-start` (resolved under selected runtime, e.g. `runtime = "bun"`)
   - pinned runtime-local aliases: `tanstack-start@<commit-hash>`
@@ -127,6 +127,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Server membership is declared per environment with `[envs.<name>].servers`.
 - The same server name may be assigned to multiple non-development environments in one project. Each environment deploys to its own server-side app identity and filesystem path under `/opt/tako/apps/{app}/{env}`.
 - `development` is for `tako dev`; `servers` declared there are ignored by deploy validation.
+- Deployed app upstreams always use per-instance TCP endpoints. On Linux servers, `tako-server` isolates each app instance in its own network namespace, assigns a private virtual IP, sets `PORT=3000`, and sets `HOST=0.0.0.0` for the app process in production.
 - For `tako dev`, when top-level `preset` is omitted, Tako runs a runtime-default dev command:
   - Bun: `bun run dev`
   - Node: `npm run dev`
@@ -606,7 +607,7 @@ Service-manager restart/stop behavior:
 - On systemd hosts, installer configures `KillMode=control-group` and `TimeoutStopSec=30min`, allowing all app processes in the service cgroup time to handle graceful shutdown before forced termination.
 - On OpenRC hosts, installer configures `retry="TERM/1800/KILL/5"` in the init script so restart/stop waits up to 30 minutes before forced termination.
 
-`tako-server` persists app runtime registration (app config and routes) in SQLite under the data directory and restores it on startup so app routing/config survives process restarts and crashes. Env vars are stored in `app.json` in the release directory; secrets are stored encrypted (AES-256-GCM) in the same SQLite database using a per-device key. Secrets are pushed to app instances via `POST /secrets` on `Host: tako` over the instance Unix socket — they never touch disk as plaintext.
+`tako-server` persists app runtime registration (app config and routes) in SQLite under the data directory and restores it on startup so app routing/config survives process restarts and crashes. Env vars are stored in `app.json` in the release directory; secrets are stored encrypted (AES-256-GCM) in the same SQLite database using a per-device key. Secrets are pushed to app instances via `POST /secrets` on `Host: tako` over the instance's private TCP endpoint with the per-instance internal token header — they never touch disk as plaintext.
 
 During single-host upgrade orchestration, `tako-server` may enter an internal `upgrading` server mode that temporarily rejects mutating management commands (`deploy`, `stop`, `delete`, `update-secrets`) until the upgrade window ends.
 Upgrade mode transitions are guarded by a durable single-owner upgrade lock in SQLite so only one upgrade controller can hold the upgrade window at a time.
@@ -649,7 +650,7 @@ Remove tako-server and all data from a remote server.
    - Removes systemd service files, drop-ins, and OpenRC init scripts.
    - Runs `systemctl daemon-reload` on systemd hosts.
    - Removes binaries: `/usr/local/bin/tako-server`, `tako-server-service`, `tako-server-install-refresh`.
-   - Removes data directory (`/opt/tako/`), socket directories (`/var/run/tako/`, `/var/run/tako-app/`).
+   - Removes data directory (`/opt/tako/`) and the management socket directory (`/var/run/tako/`).
 4. Removes the server from the local `config.toml` server list.
 
 Alias: `tako servers uninstall`.
@@ -1012,6 +1013,7 @@ Installer SSH key behavior:
 - CLI SSH connections require host key verification against `~/.ssh/known_hosts` (or configured SSH keys directory); unknown/changed host keys are rejected.
 - Installer detects host target (`arch` + `libc`) and downloads matching artifact name `tako-server-linux-{arch}-{libc}` (supported: `x86_64`/`aarch64` with `glibc`/`musl`).
 - Installer ensures `nc` (netcat) is available so CLI management commands can talk to `/var/run/tako/tako.sock`.
+- Installer ensures Linux namespace networking tools (`ip`, `iptables`, `sysctl`) are available so deployed app instances can run on isolated private TCP endpoints.
 - Installer creates both `tako` and `tako-app` OS users.
 - Installer installs restricted maintenance helpers and scoped sudoers policy so the `tako` SSH user can perform non-interactive server upgrade/reload operations.
 - Installer supports systemd and OpenRC hosts.
@@ -1111,31 +1113,29 @@ Reference scripts in this repo:
 
 - Symlink path: `/var/run/tako/tako.sock` (always points to the active server socket)
 - PID-specific socket path: `/var/run/tako/tako-{pid}.sock` (created by active server; symlink updated atomically on ready)
-- Used by: CLI for deploy/delete/status/routes commands, apps for status/heartbeat
+- Used by: CLI for deploy/delete/status/routes commands
 
-**App instance sockets:**
+**App instance upstream transport:**
 
-- Path: `{app_socket_dir}/tako-app-{deployment-id}-{pid}.sock`
-  - `app_socket_dir` is `/var/run/tako-app` when that directory exists (created by the server installer), otherwise derived from the management socket path (defaults to `/var/run`)
-  - `deployment-id` is the URL-encoded deployment identity (e.g. `my-app%2Fproduction`)
-- Created by app on startup
-- Used by: tako-server to proxy HTTP requests
-- Required on Unix deploys: instances must expose health/status and request traffic on this socket.
+- TCP only
+  - On Linux servers, `tako-server` creates a per-instance network namespace and assigns a private virtual IP
+  - `tako-server` sets `PORT=3000`, `HOST=0.0.0.0`, and a per-instance `TAKO_INTERNAL_TOKEN`
+  - Used by: tako-server to proxy HTTP requests, push secrets, and probe health
 
 ### Environment Variables for Apps
 
-| Name               | Used by         | Meaning                                       | Typical source                                                                             |
-| ------------------ | --------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `PORT`             | app             | Listen port for HTTP server                   | Set by `tako dev` for the local app process.                                               |
-| `TAKO_ENV`         | app             | Environment name                              | Set during deploy manifest generation (`production`, `staging`, etc.).                     |
-| `NODE_ENV`         | app             | Node.js convention env                        | Set by runtime adapter / server (`development` or `production`).                           |
-| `BUN_ENV`          | app             | Bun convention env                            | Set by runtime adapter (`development` or `production`).                                    |
-| `TAKO_BUILD`       | app             | Deployed build/version identifier             | Included in deploy command payload and injected by `tako-server` at process spawn.         |
-| `TAKO_APP_SOCKET`  | app / `tako.sh` | Unix socket path the app should listen on     | path string on Unix deploys (with `{pid}` token); unset in local dev                       |
-| `TAKO_VERSION`     | app / `tako.sh` | App version string (if you choose to set one) | string                                                                                     |
-| `TAKO_INSTANCE`    | app / `tako.sh` | Instance identifier                           | 8-character nanoid string                                                                  |
-| `TAKO_HAS_SECRETS` | app / `tako.sh` | Signals SDK to wait for secrets push          | Set to `1` when app has secrets; SDK waits for `POST /secrets` before health check passes. |
-| _user-defined_     | app             | User config vars                              | From `app.json` in the release dir. Secrets pushed via socket, not env vars.               |
+| Name                  | Used by         | Meaning                                                | Typical source                                                                                                                |
+| --------------------- | --------------- | ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                | app             | Listen port for HTTP server                            | Set by `tako dev` for the local app process, and by `tako-server` on deploys (`3000` in isolated production instances).       |
+| `HOST`                | app             | Listen host for HTTP server                            | Set by `tako dev` to loopback TCP; on Linux deploys `tako-server` sets it to `0.0.0.0` inside the instance network namespace. |
+| `TAKO_ENV`            | app             | Environment name                                       | Set during deploy manifest generation (`production`, `staging`, etc.).                                                        |
+| `NODE_ENV`            | app             | Node.js convention env                                 | Set by runtime adapter / server (`development` or `production`).                                                              |
+| `BUN_ENV`             | app             | Bun convention env                                     | Set by runtime adapter (`development` or `production`).                                                                       |
+| `TAKO_BUILD`          | app             | Deployed build/version identifier                      | Included in deploy command payload and injected by `tako-server` at process spawn.                                            |
+| `TAKO_INTERNAL_TOKEN` | app / `tako.sh` | Per-instance token for internal health/secrets traffic | Generated by `tako-server` for each app instance.                                                                             |
+| `TAKO_VERSION`        | app / `tako.sh` | App version string (if you choose to set one)          | string                                                                                                                        |
+| `TAKO_INSTANCE`       | app / `tako.sh` | Instance identifier                                    | 8-character nanoid string                                                                                                     |
+| _user-defined_        | app             | User config vars                                       | From `app.json` in the release dir. Secrets pushed via instance endpoint, not env vars.                                       |
 
 ### Messages (JSON over Unix Socket)
 
@@ -1246,8 +1246,8 @@ Server-side validation on `deploy` and app-scoped commands:
 
 - App processes do not connect to the management socket.
 - `tako-server` controls lifecycle directly (spawn/stop/rolling update) and determines readiness/health via active HTTP probing only.
-- On Unix deploys, app processes receive `TAKO_APP_SOCKET` and must bind that per-instance Unix socket for request traffic.
-- Secrets are pushed to instances via `POST /secrets` on `Host: tako` over the instance Unix socket before health checks begin. When `TAKO_HAS_SECRETS=1` is set, the SDK waits for this push before importing user code.
+- App processes receive `PORT` and must listen on that TCP endpoint for request traffic. On Linux deploys, Tako also sets `HOST=0.0.0.0` inside the network namespace while the server connects over the instance's private virtual IP.
+- Secrets are pushed to instances via `POST /secrets` on `Host: tako` over the instance's private TCP endpoint before health checks begin.
 - Secret updates (`update_secrets` command) store new secrets in SQLite and trigger a rolling restart to push updated secrets to fresh instances.
 
 ### Health Checks
@@ -1256,7 +1256,7 @@ Active HTTP probing is the source of truth for instance health:
 
 - **Probe interval**: 1 second by default (configurable)
 - **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako`
-- **Transport**: On Unix deploys, probes use the instance Unix socket path from `TAKO_APP_SOCKET` (no TCP fallback).
+- **Transport**: Probes use the instance's private TCP endpoint.
 - **Unhealthy threshold**: 2 consecutive failures → mark unhealthy, remove from load balancer
 - **Dead threshold**: 5 consecutive failures → mark stopped, kill process
 - **Recovery**: Single successful probe resets failure count and restores to healthy
@@ -1268,6 +1268,7 @@ Tako-server performs health checks against the deployed app process:
 ```
 GET /status
 Host: tako
+X-Tako-Internal-Token: <instance-token>
 ```
 
 Expected response:
@@ -1284,6 +1285,7 @@ Expected response:
 ```
 
 The SDK wrappers implement this endpoint automatically. The edge proxy does not reserve or bypass `Host: tako` routes.
+The expected response includes the same `X-Tako-Internal-Token` header value. The SDK wrappers enforce and echo this token automatically.
 
 ### Prometheus Metrics
 
@@ -1409,7 +1411,7 @@ import { tako } from "tako.sh/vite";
 ### Feature Overview
 
 - Fetch handler adapters for Bun/Node/Deno runtimes
-- Unix socket serving for deployed Unix apps via `TAKO_APP_SOCKET`; `tako dev` remains TCP (`PORT`)
+- Deployed app serving over private TCP with `PORT`/`HOST`; `tako dev` also uses TCP (`PORT`)
 - Internal status endpoint (`Host: tako` + `/status`)
 - Graceful shutdown handling
 

@@ -191,7 +191,7 @@ Deploy requires valid `arch` and `libc` metadata for each server in `config.toml
 
 ### How health checks work
 
-Tako-server probes each instance by sending `GET /status` with `Host: tako` over the instance's Unix socket. The SDK implements this endpoint automatically.
+Tako-server probes each instance by sending `GET /status` with `Host: tako` over the instance's private TCP endpoint. The request includes the per-instance internal token header, and the SDK implements and echoes that contract automatically.
 
 - **Probe interval:** 1 second
 - **Unhealthy threshold:** 2 consecutive failures removes the instance from the load balancer
@@ -276,7 +276,7 @@ If `.tako/secrets.json` is deleted, Tako shows a warning and prompts you to rest
 
 ### Secrets sync
 
-`tako secrets sync` pushes local secrets to all servers in the target environment. If `--env` is not specified, it syncs all environments. Secrets are sent to `tako-server`, which writes them to a per-app `secrets.json` file (with 0600 permissions) and triggers a rolling restart of running instances.
+`tako secrets sync` pushes local secrets to all servers in the target environment. If `--env` is not specified, it syncs all environments. Secrets are sent to `tako-server`, which stores them encrypted in its SQLite state database and triggers a rolling restart of running instances.
 
 Environments with no mapped servers are skipped with a warning.
 

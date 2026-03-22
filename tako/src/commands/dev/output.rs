@@ -49,7 +49,7 @@ const INDENT: &str = "  ";
 const STACKED_THRESHOLD: usize = 76;
 
 // Panel column widths (wide mode).
-const COL3_W: usize = 22; // cpu · ram · pid
+const COL3_W: usize = 22; // cpu · ram · pid · port
 const COL_SEP: usize = 2; // gap between columns
 const BAR_W: usize = 8; // chars inside the progress bar
 const ROUTES_LABEL_W: usize = 8; // "routes  " prefix
@@ -330,6 +330,7 @@ pub fn format_panel(
     worktree_name: Option<&str>,
     hosts: &[String],
     port: u16,
+    app_port: u16,
     cpu: Option<f32>,
     mem_bytes: Option<u64>,
     pid: Option<usize>,
@@ -345,6 +346,7 @@ pub fn format_panel(
             worktree_name,
             hosts,
             port,
+            app_port,
             cpu,
             mem_bytes,
             pid,
@@ -360,6 +362,7 @@ pub fn format_panel(
             worktree_name,
             hosts,
             port,
+            app_port,
             cpu,
             mem_bytes,
             pid,
@@ -378,6 +381,7 @@ fn format_panel_wide(
     worktree_name: Option<&str>,
     hosts: &[String],
     port: u16,
+    app_port: u16,
     cpu: Option<f32>,
     mem_bytes: Option<u64>,
     pid: Option<usize>,
@@ -468,7 +472,8 @@ fn format_panel_wide(
         pid.map(|p| p.to_string())
             .unwrap_or_else(|| "—".to_string())
     );
-    let right = [r0, r1, r2];
+    let r3 = format!("{DIM}port {RESET}{app_port}");
+    let right = [r0, r1, r2, r3];
 
     // ── Assemble ──────────────────────────────────────────────────────────────
     let data_rows = left.len().max(mid.len()).max(right.len());
@@ -493,6 +498,7 @@ fn format_panel_stacked(
     worktree_name: Option<&str>,
     hosts: &[String],
     port: u16,
+    app_port: u16,
     cpu: Option<f32>,
     mem_bytes: Option<u64>,
     pid: Option<usize>,
@@ -576,6 +582,10 @@ fn format_panel_stacked(
     );
     rows.push(stacked_row(
         &format!("{cpu_str}  {ram_str}  {pid_str}"),
+        inner_w,
+    ));
+    rows.push(stacked_row(
+        &format!("{DIM}port{RESET} {app_port}"),
         inner_w,
     ));
 
@@ -858,6 +868,7 @@ impl FooterState {
         adapter_name: &str,
         hosts: &[String],
         port: u16,
+        app_port: u16,
     ) -> Vec<String> {
         let mut lines = format_panel(
             app_name,
@@ -868,6 +879,7 @@ impl FooterState {
             self.worktree_name.as_deref(),
             hosts,
             port,
+            app_port,
             self.cpu,
             self.mem_bytes,
             self.pid,
@@ -888,8 +900,9 @@ impl FooterState {
         adapter_name: &str,
         hosts: &[String],
         port: u16,
+        app_port: u16,
     ) {
-        footer.set(self.build_lines(app_name, adapter_name, hosts, port));
+        footer.set(self.build_lines(app_name, adapter_name, hosts, port, app_port));
     }
 }
 
@@ -915,8 +928,6 @@ pub async fn run_dev_output(
     control_tx: mpsc::Sender<ControlCmd>,
     log_store_path: Option<PathBuf>,
 ) -> Result<DevOutputExit, Box<dyn std::error::Error>> {
-    let _ = app_port;
-
     let _guard = TerminalGuard::enter(&app_name)?;
 
     rawln("");
@@ -931,7 +942,14 @@ pub async fn run_dev_output(
 
     let mut footer = StickyFooter::new();
     let mut fs = FooterState::new(repo_slug, repo_path, worktree_name);
-    fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
+    fs.refresh(
+        &mut footer,
+        &app_name,
+        &adapter_name,
+        &hosts,
+        port,
+        app_port,
+    );
 
     let (key_tx, mut key_rx) = mpsc::channel::<Event>(64);
     spawn_key_reader(key_tx);
@@ -971,7 +989,7 @@ pub async fn run_dev_output(
             _ = &mut resize_sleep, if has_resize => {
                 resize_deadline = None;
                 footer.set_after_resize(
-                    fs.build_lines(&app_name, &adapter_name, &hosts, port),
+                    fs.build_lines(&app_name, &adapter_name, &hosts, port, app_port),
                 );
             }
             _ = ticker.tick() => {
@@ -986,7 +1004,14 @@ pub async fn run_dev_output(
                             fs.cpu = Some(cpu);
                             fs.mem_bytes = Some(mem);
                             if changed {
-                                fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
+                                fs.refresh(
+                                    &mut footer,
+                                    &app_name,
+                                    &adapter_name,
+                                    &hosts,
+                                    port,
+                                    app_port,
+                                );
                             }
                         }
                     }
@@ -1012,11 +1037,25 @@ pub async fn run_dev_output(
                                 fs.mem_bytes = Some(mem);
                             }
                         }
-                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
+                        fs.refresh(
+                            &mut footer,
+                            &app_name,
+                            &adapter_name,
+                            &hosts,
+                            port,
+                            app_port,
+                        );
                     }
                     DevEvent::AppLaunching => {
                         fs.status = "launching...".to_string();
-                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
+                        fs.refresh(
+                            &mut footer,
+                            &app_name,
+                            &adapter_name,
+                            &hosts,
+                            port,
+                            app_port,
+                        );
                     }
                     DevEvent::AppStopped => {
                         app_pid = None;
@@ -1024,16 +1063,37 @@ pub async fn run_dev_output(
                         fs.mem_bytes = None;
                         fs.pid = None;
                         fs.status = "stopped".to_string();
-                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
+                        fs.refresh(
+                            &mut footer,
+                            &app_name,
+                            &adapter_name,
+                            &hosts,
+                            port,
+                            app_port,
+                        );
                     }
                     DevEvent::AppPid(pid) => {
                         app_pid = Some(Pid::from(pid as usize));
                         fs.pid = Some(pid as usize);
-                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
+                        fs.refresh(
+                            &mut footer,
+                            &app_name,
+                            &adapter_name,
+                            &hosts,
+                            port,
+                            app_port,
+                        );
                     }
                     DevEvent::AppError(ref e) => {
                         fs.status = "error".to_string();
-                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
+                        fs.refresh(
+                            &mut footer,
+                            &app_name,
+                            &adapter_name,
+                            &hosts,
+                            port,
+                            app_port,
+                        );
                         footer.println(&format!("\x1b[38;2;232;163;160merror:{RESET} {e}"));
                     }
                     DevEvent::ExitWithMessage(msg) => {
@@ -1196,6 +1256,7 @@ mod tests {
             None,
             &["myapp.tako.test".to_string()],
             443,
+            3000,
             None,
             None,
             None,
@@ -1216,6 +1277,7 @@ mod tests {
             None,
             &["app.tako.test".to_string()],
             443,
+            3000,
             None,
             None,
             None,
@@ -1229,7 +1291,7 @@ mod tests {
     fn format_panel_shows_all_urls() {
         let hosts = vec!["a.tako.test".to_string(), "b.tako.test".to_string()];
         let panel = format_panel(
-            "app", "running", "bun", "u/r", "", None, &hosts, 443, None, None, None,
+            "app", "running", "bun", "u/r", "", None, &hosts, 443, 3000, None, None, None,
         );
         let plain = strip_ansi(&panel);
         assert!(plain.contains("https://a.tako.test"));
@@ -1253,6 +1315,7 @@ mod tests {
             None,
             &hosts,
             443,
+            3000,
             None,
             None,
             None,
@@ -1286,6 +1349,7 @@ mod tests {
             None,
             &["app.tako.test".to_string()],
             443,
+            3000,
             None,
             None,
             None,
@@ -1305,6 +1369,7 @@ mod tests {
             None,
             &["app.tako.test".to_string()],
             47831,
+            3000,
             None,
             None,
             None,
@@ -1324,6 +1389,7 @@ mod tests {
             None,
             &["app.tako.test".to_string()],
             443,
+            3001,
             Some(50.0),
             Some(100 * 1024 * 1024),
             Some(9999),
@@ -1332,6 +1398,8 @@ mod tests {
         assert!(plain.contains("50%") || plain.contains("50"));
         assert!(plain.contains("100 MB"));
         assert!(plain.contains("9999"));
+        assert!(plain.contains("port"));
+        assert!(plain.contains("3001"));
     }
 
     #[test]
@@ -1345,6 +1413,7 @@ mod tests {
             None,
             &["app.tako.test".to_string()],
             443,
+            3000,
             None,
             None,
             None,
@@ -1363,6 +1432,7 @@ mod tests {
             None,
             &["app.tako.test".to_string()],
             443,
+            3000,
             None,
             None,
             None,
@@ -1385,6 +1455,7 @@ mod tests {
             None,
             &["app.tako.test".to_string()],
             443,
+            3000,
             Some(25.0),
             Some(50 * 1024 * 1024),
             Some(1234),
@@ -1399,6 +1470,8 @@ mod tests {
         assert!(plain.contains("cpu"));
         assert!(plain.contains("ram"));
         assert!(plain.contains("pid"));
+        assert!(plain.contains("port 3000"));
+        assert!(plain.contains("3000"));
         assert!(plain.contains("1234"));
     }
 
@@ -1473,6 +1546,7 @@ mod tests {
             Some("wt1"),
             &["app.tako.test".to_string()],
             443,
+            3000,
             None,
             None,
             None,
@@ -1492,6 +1566,7 @@ mod tests {
             None,
             &["app.tako.test".to_string()],
             443,
+            3000,
             None,
             None,
             None,

@@ -2,13 +2,12 @@
 #![allow(dead_code)]
 
 #[cfg(not(unix))]
-compile_error!("tako-server requires Unix (management and app routing use Unix sockets).");
+compile_error!("tako-server requires Unix (management commands use Unix sockets).");
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod app_command;
-mod app_socket_cleanup;
 mod defaults;
 mod instances;
 mod lb;
@@ -44,7 +43,17 @@ use crate::tls::{
 };
 use clap::Parser;
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
+use std::ffi::OsString;
+#[cfg(target_os = "linux")]
+use std::io;
+#[cfg(target_os = "linux")]
+use std::os::fd::AsRawFd;
+#[cfg(target_os = "linux")]
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
+use std::process::Command as StdCommand;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
@@ -74,6 +83,117 @@ fn server_version() -> &'static str {
         }
     });
     &VERSION
+}
+
+fn maybe_run_exec_in_netns_mode() -> Result<bool, Box<dyn std::error::Error>> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut args = std::env::args_os();
+        let _ = args.next();
+        let Some(first) = args.next() else {
+            return Ok(false);
+        };
+        if first != "--exec-in-netns" {
+            return Ok(false);
+        }
+        run_exec_in_netns_mode(args)?;
+        return Ok(true);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(false)
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn run_exec_in_netns_mode(
+    mut args: impl Iterator<Item = OsString>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut netns_path = None;
+    let mut binary = None;
+    let mut uid = None;
+    let mut gid = None;
+    let mut passthrough = false;
+    let mut binary_args = Vec::new();
+
+    while let Some(arg) = args.next() {
+        if passthrough {
+            binary_args.push(arg);
+            continue;
+        }
+        match arg.to_string_lossy().as_ref() {
+            "--netns" => netns_path = Some(PathBuf::from(next_required_arg(&mut args, "--netns")?)),
+            "--binary" => binary = Some(next_required_arg(&mut args, "--binary")?),
+            "--uid" => {
+                uid = Some(parse_u32_arg(
+                    next_required_arg(&mut args, "--uid")?,
+                    "--uid",
+                )?)
+            }
+            "--gid" => {
+                gid = Some(parse_u32_arg(
+                    next_required_arg(&mut args, "--gid")?,
+                    "--gid",
+                )?)
+            }
+            "--" => passthrough = true,
+            other => {
+                return Err(format!("unknown --exec-in-netns argument: {other}").into());
+            }
+        }
+    }
+
+    let netns_path = netns_path.ok_or_else(|| "missing --netns for --exec-in-netns".to_string())?;
+    let binary = binary.ok_or_else(|| "missing --binary for --exec-in-netns".to_string())?;
+
+    let namespace = std::fs::File::open(&netns_path)
+        .map_err(|error| format!("open namespace {}: {error}", netns_path.display()))?;
+    // SAFETY: setns is called with a valid file descriptor for a Linux network namespace.
+    let setns_result = unsafe { libc::setns(namespace.as_raw_fd(), libc::CLONE_NEWNET) };
+    if setns_result != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+
+    if uid.is_some() || gid.is_some() {
+        // SAFETY: clearing supplementary groups before setgid/setuid is required when
+        // dropping privileges from a privileged helper process.
+        if unsafe { libc::setgroups(0, std::ptr::null()) } != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+    }
+    if let Some(gid) = gid {
+        // SAFETY: setgid is safe to call with the requested target gid.
+        if unsafe { libc::setgid(gid) } != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+    }
+    if let Some(uid) = uid {
+        // SAFETY: setuid is safe to call with the requested target uid.
+        if unsafe { libc::setuid(uid) } != 0 {
+            return Err(io::Error::last_os_error().into());
+        }
+    }
+
+    let error = StdCommand::new(binary).args(binary_args).exec();
+    Err(Box::new(error))
+}
+
+#[cfg(target_os = "linux")]
+fn next_required_arg(
+    args: &mut impl Iterator<Item = OsString>,
+    flag: &str,
+) -> Result<OsString, Box<dyn std::error::Error>> {
+    args.next()
+        .ok_or_else(|| format!("missing value for {flag}").into())
+}
+
+#[cfg(target_os = "linux")]
+fn parse_u32_arg(value: OsString, flag: &str) -> Result<u32, Box<dyn std::error::Error>> {
+    value
+        .to_string_lossy()
+        .parse::<u32>()
+        .map_err(|error| format!("invalid {flag} value: {error}").into())
 }
 
 /// Tako Server - Application runtime and proxy
@@ -188,46 +308,6 @@ impl ServerRuntimeConfig {
             server_name: self.server_name.clone(),
         }
     }
-
-    fn app_socket_dir(&self) -> PathBuf {
-        // Prefer /var/run/tako-app (production) for isolation; fall back to
-        // a directory derived from the management socket path (dev/local runs).
-        let preferred = PathBuf::from("/var/run/tako-app");
-        if preferred.exists() {
-            preferred
-        } else {
-            app_socket_dir_for_management_socket(&self.socket)
-        }
-    }
-}
-
-fn app_socket_dir_for_management_socket(socket_path: &str) -> PathBuf {
-    let socket_path = Path::new(socket_path);
-    let Some(parent) = socket_path.parent() else {
-        return PathBuf::from("/var/run");
-    };
-
-    if parent.file_name().is_some_and(|name| name == "tako")
-        && let Some(grandparent) = parent.parent()
-    {
-        return grandparent.to_path_buf();
-    }
-
-    parent.to_path_buf()
-}
-
-fn app_socket_cleanup_dirs(socket_path: &str) -> Vec<PathBuf> {
-    let mut dirs = vec![
-        app_socket_dir_for_management_socket(socket_path),
-        PathBuf::from("/var/run"),
-        PathBuf::from("/var/run/tako"),
-    ];
-    if let Some(parent) = Path::new(socket_path).parent() {
-        dirs.push(parent.to_path_buf());
-    }
-    dirs.sort();
-    dirs.dedup();
-    dirs
 }
 
 fn extract_zstd_archive(archive_path: &Path, dest_dir: &Path) -> Result<(), String> {
@@ -443,12 +523,7 @@ impl ServerState {
 
             let should_start = config.min_instances > 0;
             let release_path = release_app_path(&self.runtime.data_dir, &config);
-            if let Err(error) = apply_release_runtime_to_config(
-                &mut config,
-                release_path,
-                self.runtime.app_socket_dir(),
-                None,
-            ) {
+            if let Err(error) = apply_release_runtime_to_config(&mut config, release_path, None) {
                 tracing::error!(app = %app_name, "Failed to restore app config: {}", error);
                 continue;
             }
@@ -748,7 +823,6 @@ impl ServerState {
                 if let Err(error) = apply_release_runtime_to_config(
                     &mut config,
                     release_path.clone(),
-                    self.runtime.app_socket_dir(),
                     runtime_bin_path.as_deref(),
                 ) {
                     return Response::error(format!("Invalid app release: {}", error));
@@ -771,7 +845,6 @@ impl ServerState {
                 if let Err(error) = apply_release_runtime_to_config(
                     &mut config,
                     release_path.clone(),
-                    self.runtime.app_socket_dir(),
                     runtime_bin_path.as_deref(),
                 ) {
                     return Response::error(format!("Invalid app release: {}", error));
@@ -1444,7 +1517,6 @@ fn release_app_path(data_dir: &Path, config: &AppConfig) -> PathBuf {
 fn apply_release_runtime_to_config(
     config: &mut AppConfig,
     release_path: PathBuf,
-    app_socket_dir: PathBuf,
     runtime_bin: Option<&str>,
 ) -> Result<(), String> {
     config.path = release_path;
@@ -1452,7 +1524,6 @@ fn apply_release_runtime_to_config(
     config.command = command_from_manifest(&manifest, &config.path, runtime_bin)?;
     config.env_vars = manifest.env_vars;
     config.idle_timeout = Duration::from_secs(u64::from(manifest.idle_timeout));
-    config.app_socket_dir = app_socket_dir;
     Ok(())
 }
 
@@ -1920,6 +1991,10 @@ fn sd_notify_ready() {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    if maybe_run_exec_in_netns_mode()? {
+        return Ok(());
+    }
+
     install_rustls_crypto_provider();
 
     // Initialize tracing with a non-blocking writer so log I/O never stalls
@@ -2374,27 +2449,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             );
                         }
                     }
-                }
-            }
-        });
-    }
-
-    // Best-effort cleanup for stale app unix socket files.
-    // This matters if an app crashes and leaves behind a stale socket path.
-    // During rolling updates multiple instances can be alive concurrently; we only remove sockets
-    // whose PID no longer exists.
-    {
-        let dirs = app_socket_cleanup_dirs(&socket);
-        for d in &dirs {
-            app_socket_cleanup::cleanup_stale_app_sockets(d);
-        }
-
-        rt.spawn(async move {
-            let mut ticker = tokio::time::interval(Duration::from_secs(30));
-            loop {
-                ticker.tick().await;
-                for d in &dirs {
-                    app_socket_cleanup::cleanup_stale_app_sockets(d);
                 }
             }
         });
@@ -3114,15 +3168,16 @@ mod tests {
             .unwrap_or(false)
     }
 
-    fn python3_can_bind_unix_socket() -> bool {
-        let temp = TempDir::new().unwrap();
-        let socket_path = temp.path().join("probe.sock");
+    fn python3_can_bind_loopback_tcp() -> bool {
+        let Some(port) = pick_free_port() else {
+            return false;
+        };
         StdCommand::new("python3")
             .args([
                 "-c",
-                "import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); s.close()",
+                "import socket, sys; s = socket.socket(); s.bind(('127.0.0.1', int(sys.argv[1]))); s.close()",
             ])
-            .arg(&socket_path)
+            .arg(port.to_string())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -3941,7 +3996,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs rewrite for plugin architecture"]
     async fn deploy_on_demand_keeps_one_warm_instance_after_successful_deploy() {
-        if !python3_ok() || !python3_can_bind_unix_socket() {
+        if !python3_ok() || !python3_can_bind_loopback_tcp() {
             return;
         }
 
@@ -3950,9 +4005,6 @@ mod tests {
             cert_dir: temp.path().join("certs"),
             ..Default::default()
         }));
-        // Use a runtime config with the socket inside temp dir so that
-        // app_socket_dir resolves to a short writable location (not /var/run),
-        // keeping the unix socket path under platform limits.
         let runtime = ServerRuntimeConfig {
             socket: "/tmp/tako-warm.sock".to_string(),
             ..ServerRuntimeConfig::for_defaults(temp.path().to_path_buf())
@@ -3973,32 +4025,38 @@ mod tests {
         std::fs::write(
             &fake_server_py,
             r#"import os
-import socketserver
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
-socket_path = (os.environ.get("TAKO_APP_SOCKET") or "").replace("{pid}", str(os.getpid()))
-if not socket_path:
-    raise SystemExit("TAKO_APP_SOCKET is required")
-if os.path.exists(socket_path):
-    os.remove(socket_path)
+port = int(os.environ.get("PORT") or "0")
+internal_token = os.environ.get("TAKO_INTERNAL_TOKEN") or ""
+if not port or not internal_token:
+    raise SystemExit("PORT and TAKO_INTERNAL_TOKEN are required")
 
-class Handler(socketserver.StreamRequestHandler):
-    def handle(self):
-        try:
-            _ = self.rfile.readline()
-            while True:
-                line = self.rfile.readline()
-                if not line or line in (b"\r\n", b"\n"):
-                    break
-            self.wfile.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
-        except Exception:
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/status" and (self.headers.get("Host") or "").split(":")[0].lower() == "tako":
+            if self.headers.get("X-Tako-Internal-Token") != internal_token:
+                self.send_response(403)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"forbidden"}')
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("X-Tako-Internal-Token", internal_token)
+            self.end_headers()
+            self.wfile.write(b'{"status":"ok"}')
             return
+        self.send_response(404)
+        self.end_headers()
 
-socketserver.UnixStreamServer(socket_path, Handler).serve_forever()
+    def log_message(self, format, *args):
+        return
+
+HTTPServer(("127.0.0.1", port), Handler).serve_forever()
 "#,
         )
         .unwrap();
-        // Use exec so python3 replaces the shell — its PID matches what
-        // the spawner records, so the health-check socket path resolves.
         std::fs::write(
             &fake_bun,
             format!(

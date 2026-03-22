@@ -5,35 +5,29 @@
  * and only provides the server binding layer.
  *
  * CLI args (appended by tako-server):
- *   <main> --socket <path> --instance <id> --version <ver>
+ *   <main> --instance <id> --version <ver>
  */
 
 import { handleTakoEndpoint } from "./endpoints";
-import { resolveAppSocketPath } from "./socket-path";
 import { Tako } from "./tako";
 import type { FetchFunction, TakoStatus } from "./types";
 
 interface ParsedArgs {
   main: string;
-  socket: string | undefined;
   instance: string;
   version: string;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  // argv: [runtime, entrypoint, main, --socket, path, --instance, id, --version, ver]
+  // argv: [runtime, entrypoint, main, --instance, id, --version, ver]
   // Skip argv[0] (runtime) and argv[1] (entrypoint script)
   const args = argv.slice(2);
   let main = "";
-  let socket: string | undefined;
   let instance = "unknown";
   let version = "unknown";
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
-      case "--socket":
-        socket = args[++i] ?? "";
-        break;
       case "--instance":
         instance = args[++i] ?? "unknown";
         break;
@@ -48,13 +42,13 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  return { main, socket, instance, version };
+  return { main, instance, version };
 }
 
 export function createEntrypoint() {
   const parsed = parseArgs(process.argv);
-  const appSocketPath = resolveAppSocketPath(parsed.socket);
   const port = parseInt(process.env["PORT"] || "3000", 10);
+  const host = process.env["HOST"] || "127.0.0.1";
 
   const startedAt = Date.now();
   let currentStatus: TakoStatus["status"] = "starting";
@@ -78,9 +72,7 @@ export function createEntrypoint() {
     startServer: (handleRequest: (request: Request) => Promise<Response>) => void,
   ): Promise<void> {
     if (!parsed.main) {
-      console.error(
-        "Usage: <runtime> entrypoint <main> [--socket <path>] [--instance <id>] [--version <ver>]",
-      );
+      console.error("Usage: <runtime> entrypoint <main> [--instance <id>] [--version <ver>]");
       process.exit(1);
     }
 
@@ -137,5 +129,5 @@ export function createEntrypoint() {
     console.log("Entrypoint initialized successfully");
   }
 
-  return { run, appSocketPath, port, setDraining };
+  return { run, host, port, setDraining };
 }

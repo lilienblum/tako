@@ -4432,6 +4432,24 @@ route = "app.example.com"
     }
 
     #[test]
+    fn extract_semver_from_version_output_handles_common_formats() {
+        assert_eq!(
+            extract_semver_from_version_output("bun 1.3.11"),
+            Some("1.3.11".to_string())
+        );
+        assert_eq!(
+            extract_semver_from_version_output(
+                "deno 2.7.6 (stable, release, aarch64-apple-darwin)"
+            ),
+            Some("2.7.6".to_string())
+        );
+        assert_eq!(
+            extract_semver_from_version_output("v22.12.0"),
+            Some("22.12.0".to_string())
+        );
+    }
+
+    #[test]
     fn save_runtime_version_cleans_up_old_version_file() {
         let temp = TempDir::new().unwrap();
         let workspace = temp.path().join("workspace");

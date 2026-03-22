@@ -34,7 +34,7 @@ The installer handles everything:
 - Creates required directories (`/opt/tako` for data, `/var/run/tako` for sockets)
 - Configures privileged port binding (`:80` and `:443`) via service capabilities
 - Installs restricted maintenance helpers and sudoers policy for non-interactive upgrades
-- Ensures `nc` (netcat), `tar`, `base64`, `which`, and standard shell tools are available
+- Ensures `nc` (netcat), Linux namespace networking tools (`ip`, `iptables`, `sysctl`), `tar`, `base64`, `which`, and standard shell tools are available
 - Verifies `tako-server` starts successfully after installation
 
 **SSH key setup:** The installer needs an SSH public key for the `tako` user so the CLI can connect later.
@@ -145,7 +145,7 @@ For each server, the CLI:
 8. Links shared directories (e.g., `logs`)
 9. Syncs secrets if needed (compares hashes; only sends when changed)
 10. Runs runtime prep (production dependency install via the runtime's package manager)
-11. Performs a rolling update
+11. Performs a rolling update over per-instance private TCP upstreams
 12. Updates the `current` symlink and cleans up old releases (older than 30 days)
 
 Server-side runtime prep uses the runtime's package manager to install production dependencies from the deployed manifest.
@@ -253,13 +253,17 @@ idle_timeout = 120  # 2 minutes
 
 Instances are never stopped while serving in-flight requests.
 
+### Upstream transport
+
+Production instances always use per-instance private TCP endpoints. On Linux servers, `tako-server` creates a network namespace for each instance, assigns a private virtual IP, sets `PORT=3000`, and sets `HOST=0.0.0.0` in production while the server routes to the instance's private IP.
+
 ## Secrets management
 
 Secrets are encrypted locally in `.tako/secrets.json` and synced to servers during deploy.
 
 ### How secrets flow during deploy
 
-During deploy, the CLI compares a hash of local secrets against the server's current secrets. Secrets are only transmitted when they differ (or when the app is new). On the server, secrets are stored in a per-app `secrets.json` file with `0600` permissions.
+During deploy, the CLI compares a hash of local secrets against the server's current secrets. Secrets are only transmitted when they differ (or when the app is new). On the server, secrets are stored encrypted in Tako's SQLite state database and pushed to fresh instances over the app upstream endpoint before health checks begin.
 
 ### Managing secrets
 

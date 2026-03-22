@@ -36,6 +36,7 @@ CFG
 
 cat > /usr/local/bin/tako-server <<'BIN'
 #!/bin/sh
+export TAKO_UNSAFE_HOST_UPSTREAM=1
 exec /home/tako/tako-server "$@"
 BIN
 chmod +x /usr/local/bin/tako-server

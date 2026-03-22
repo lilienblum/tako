@@ -493,7 +493,7 @@ pub async fn implode_server(
         "  Binaries:  /usr/local/bin/tako-server, tako-server-service, tako-server-install-refresh",
     );
     output::muted("  Data:      /opt/tako/");
-    output::muted("  Sockets:   /var/run/tako/, /var/run/tako-app/");
+    output::muted("  Sockets:   /var/run/tako/");
     output::muted("  Service files (systemd/OpenRC)");
     eprintln!();
 
@@ -566,7 +566,6 @@ fn build_server_implode_script() -> String {
         // Remove data and sockets
         "rm -rf /opt/tako",
         "rm -rf /var/run/tako",
-        "rm -rf /var/run/tako-app",
     ]
     .join("\n")
 }
@@ -656,7 +655,6 @@ mod tests {
         let script = build_server_implode_script();
         assert!(script.contains("rm -rf /opt/tako"));
         assert!(script.contains("rm -rf /var/run/tako"));
-        assert!(script.contains("rm -rf /var/run/tako-app"));
     }
 
     #[test]
