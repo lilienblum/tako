@@ -24,6 +24,11 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 RUN curl -fsSL https://deno.land/install.sh | sh \
   && ln -s /root/.deno/bin/deno /usr/local/bin/deno
 
+# Go (for go fixtures)
+RUN ARCH="$(dpkg --print-architecture)" \
+  && curl -fsSL "https://go.dev/dl/go1.22.10.linux-${ARCH}.tar.gz" | tar -C /usr/local -xz
+ENV PATH="/usr/local/go/bin:$PATH"
+
 WORKDIR /workspace
 
 COPY e2e/docker/runner/run-e2e.sh /usr/local/bin/run-e2e.sh

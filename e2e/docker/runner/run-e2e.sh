@@ -308,19 +308,34 @@ if [[ -x "$TAKO_SERVER_MUSL" ]]; then
   start_tako_server server-alpine "$TAKO_SERVER_MUSL"
 fi
 
-# Stage a minimal JS monorepo copy so Bun workspace/catalog references resolve
-# like local dev, without rewriting dependency declarations.
-jq --arg fixture_rel "$FIXTURE_REL" '
-  .workspaces.packages = ["sdk/javascript", $fixture_rel]
-' "$WORKSPACE/package.json" > "$JS_WORKSPACE_DIR/package.json"
-mkdir -p "$JS_WORKSPACE_DIR/sdk"
-cp -R "$WORKSPACE/sdk/javascript" "$JS_WORKSPACE_DIR/sdk/javascript"
+# Stage a workspace copy for the fixture. JS fixtures need a monorepo-style
+# workspace; Go fixtures just need the SDK source for the replace directive.
 mkdir -p "$(dirname "$PROJECT_DIR")"
 cp -R "$FIXTURE_DIR" "$PROJECT_DIR"
-rm -rf "$JS_WORKSPACE_DIR/sdk/javascript/node_modules" "$PROJECT_DIR/node_modules"
-# Ensure deploy uses this staged JS workspace as source root so Bun workspace
-# dependencies (for example tako.sh = workspace:*) resolve on remote installs.
-(cd "$JS_WORKSPACE_DIR" && git init -q)
+
+if [[ -f "$PROJECT_DIR/go.mod" ]]; then
+  # ── Go fixture setup ─────────────────────────────────────────────
+  # Copy the Go SDK source so the fixture's replace directive resolves.
+  mkdir -p "$JS_WORKSPACE_DIR/sdk/go"
+  cp -R "$WORKSPACE/sdk/go/." "$JS_WORKSPACE_DIR/sdk/go/"
+  (cd "$JS_WORKSPACE_DIR" && git init -q)
+  # Rewrite the replace directive to point to the staged SDK location
+  sed -i "s|=> .*sdk/go|=> $JS_WORKSPACE_DIR/sdk/go|" "$PROJECT_DIR/go.mod"
+  (cd "$PROJECT_DIR" && go mod tidy 2>&1 || true)
+else
+  # ── JS fixture setup ─────────────────────────────────────────────
+  # Stage a minimal JS monorepo copy so Bun workspace/catalog references resolve
+  # like local dev, without rewriting dependency declarations.
+  jq --arg fixture_rel "$FIXTURE_REL" '
+    .workspaces.packages = ["sdk/javascript", $fixture_rel]
+  ' "$WORKSPACE/package.json" > "$JS_WORKSPACE_DIR/package.json"
+  mkdir -p "$JS_WORKSPACE_DIR/sdk"
+  cp -R "$WORKSPACE/sdk/javascript" "$JS_WORKSPACE_DIR/sdk/javascript"
+  rm -rf "$JS_WORKSPACE_DIR/sdk/javascript/node_modules" "$PROJECT_DIR/node_modules"
+  # Ensure deploy uses this staged JS workspace as source root so Bun workspace
+  # dependencies (for example tako.sh = workspace:*) resolve on remote installs.
+  (cd "$JS_WORKSPACE_DIR" && git init -q)
+fi
 
 if [[ -f "$PROJECT_DIR/package.json" ]]; then
   if ! command -v bun >/dev/null 2>&1; then

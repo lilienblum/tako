@@ -1,0 +1,9 @@
+name = "go-e2e"
+runtime = "go"
+main = "app"
+
+[build]
+run = "CGO_ENABLED=0 go build -o app ."
+
+[envs.production]
+route = "go-e2e.example.com"
