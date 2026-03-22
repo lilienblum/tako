@@ -33,6 +33,7 @@ pub fn plugin_for_id(id: &str) -> Option<&'static dyn RuntimePlugin> {
         "bun" => Some(&super::plugins::javascript::BunPlugin),
         "node" => Some(&super::plugins::javascript::NodePlugin),
         "deno" => Some(&super::plugins::javascript::DenoPlugin),
+        "go" => Some(&super::plugins::go::GoPlugin),
         _ => None,
     }
 }
