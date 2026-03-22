@@ -3,6 +3,7 @@ pub mod deploy;
 pub mod dev;
 pub mod doctor;
 pub mod helpers;
+pub mod implode;
 pub mod init;
 pub mod logs;
 pub mod project_context;

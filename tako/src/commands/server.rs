@@ -66,6 +66,17 @@ pub enum ServerCommands {
         stable: bool,
     },
 
+    /// Remove tako-server and all data from a server
+    #[command(visible_alias = "uninstall")]
+    Implode {
+        /// Server name (omit to choose interactively)
+        name: Option<String>,
+
+        /// Skip confirmation prompts
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+
     /// Show global deployment status across configured servers
     #[command(visible_alias = "info")]
     Status,
@@ -117,8 +128,54 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
             canary,
             stable,
         } => upgrade_servers(name.as_deref(), canary, stable).await,
+        ServerCommands::Implode { name, yes } => implode_server_cmd(name.as_deref(), yes).await,
         ServerCommands::Status => crate::commands::status::run().await,
     }
+}
+
+async fn implode_server_cmd(
+    name: Option<&str>,
+    assume_yes: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::config::ServersToml;
+
+    let servers = ServersToml::load()?;
+
+    if servers.is_empty() {
+        output::error("No servers configured.");
+        return Ok(());
+    }
+
+    let server_name = match name {
+        Some(n) => {
+            if !servers.contains(n) {
+                return Err(format!("Server '{}' not found.", n).into());
+            }
+            n.to_string()
+        }
+        None => {
+            if !output::is_interactive() {
+                return Err(
+                    "No server name provided and selection requires an interactive terminal. Run 'tako servers implode <name>'."
+                        .into(),
+                );
+            }
+            let mut names = servers.names();
+            names.sort_unstable();
+            let options: Vec<(String, String)> = names
+                .into_iter()
+                .map(|n| (n.to_string(), n.to_string()))
+                .collect();
+            output::select("Select server to remove", None, options)?
+        }
+    };
+
+    let server = servers
+        .get(&server_name)
+        .ok_or_else(|| format!("Server '{}' not found.", server_name))?
+        .clone();
+
+    crate::commands::implode::implode_server(&server_name, &server, assume_yes).await
 }
 
 pub async fn prompt_to_add_server(

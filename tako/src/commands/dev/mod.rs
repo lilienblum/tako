@@ -9,7 +9,7 @@
 
 mod ca_setup;
 mod linux_setup;
-mod loopback_proxy;
+pub(crate) mod loopback_proxy;
 mod output;
 mod watcher;
 

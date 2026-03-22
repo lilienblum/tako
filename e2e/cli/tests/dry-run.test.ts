@@ -71,7 +71,11 @@ describe("deploy --dry-run", () => {
     await setupProject({ servers: { prod: { host: "10.0.0.1" } } });
 
     // Without --env, the CLI auto-resolves to production and shows ContextBlock
-    const { term, screen, exitCode } = await run(["--dry-run", "deploy"], {
+    const {
+      term: _term,
+      screen,
+      exitCode,
+    } = await run(["--dry-run", "deploy"], {
       cwd: tempDir,
       env: { HOME: tempDir, TAKO_HOME: takoHome },
     });

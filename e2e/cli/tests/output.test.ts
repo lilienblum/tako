@@ -8,8 +8,8 @@
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
-import { TakoTerminal, run, type CellInfo } from "../helpers/terminal";
-import { mkdtemp, writeFile, rm, mkdir } from "node:fs/promises";
+import { TakoTerminal, run } from "../helpers/terminal";
+import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -27,10 +27,10 @@ afterEach(async () => {
 
 // ── Brand colors from output.rs ─────────────────────────────────────
 
-const BRAND_GREEN = [155, 217, 179] as const; // success ✓
+const _BRAND_GREEN = [155, 217, 179] as const; // success ✓
 const BRAND_AMBER = [234, 211, 156] as const; // warning !
 const BRAND_RED = [232, 163, 160] as const; // error ✗
-const ACCENT = [125, 196, 228] as const; // accent/secondary
+const _ACCENT = [125, 196, 228] as const; // accent/secondary
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -165,7 +165,7 @@ describe("--verbose mode", () => {
       'name = "test-app"\nruntime = "node"\n\n[envs.production]\nroute = "test.example.com"\n',
     );
 
-    const { term, screen } = await run(["-v", "servers", "ls"], {
+    const { term, screen: _screen } = await run(["-v", "servers", "ls"], {
       cwd: tempDir,
       env: { HOME: tempDir, TAKO_HOME: takoHome },
     });
@@ -192,7 +192,7 @@ describe("error output", () => {
     expect(exitCode).toBe(1);
 
     // Find the ✗ error marker
-    const fullText = term.fullText();
+    const _fullText = term.fullText();
     const errorRow = findRowContaining(term, "✗");
     if (errorRow !== null) {
       const errorCol = findCharInRow(term, errorRow, "✗");

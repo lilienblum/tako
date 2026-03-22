@@ -443,6 +443,25 @@ tako servers upgrade production
 tako servers upgrade staging --canary
 ```
 
+### `tako servers implode`
+
+Remove `tako-server` and all data from a remote server.
+
+```bash
+tako servers implode [NAME] [-y|--yes]
+```
+
+| Argument/Flag | Description                                               |
+| ------------- | --------------------------------------------------------- |
+| `NAME`        | Server name (omit for interactive selector in a terminal) |
+| `-y`, `--yes` | Skip confirmation prompts                                 |
+
+Alias: `tako servers uninstall`
+
+Connects via SSH and removes everything Tako installed on the server: services (systemd and OpenRC), binaries, data directory (`/opt/tako/`), socket directories, and service configuration files. After the remote teardown, removes the server from your local config.
+
+Requires root privileges on the server (root login or sudo-capable user).
+
 ### `tako servers status`
 
 Show global deployment status across all configured servers.
@@ -611,6 +630,31 @@ curl -fsSL https://tako.sh/install-canary.sh | sh
 
 ---
 
+## `tako implode`
+
+Remove the local Tako CLI and all associated data.
+
+```bash
+tako implode [-y|--yes]
+```
+
+| Flag          | Description              |
+| ------------- | ------------------------ |
+| `-y`, `--yes` | Skip confirmation prompt |
+
+Alias: `tako uninstall`
+
+Removes the Tako config directory, data directory (CA certs, encryption keys, dev server state), and CLI binaries (`tako`, `tako-dev-server`, `tako-loopback-proxy`). Stops the dev server before removal.
+
+Also removes system-level services installed by `tako dev` (requires sudo):
+
+- **macOS:** loopback proxy LaunchDaemons, `/Library/Application Support/Tako/`, `/etc/resolver/tako.test`, CA certificate in system keychain, loopback alias.
+- **Linux:** systemd redirect service, resolved drop-in, CA certificate in system trust store, iptables rules, loopback alias.
+
+If nothing exists to remove, reports that and exits.
+
+---
+
 ## `tako help`
 
 Show all available commands with brief descriptions.
@@ -643,6 +687,7 @@ Running `tako` with no arguments also prints help.
 | `tako servers ls`              | List servers                              |
 | `tako servers restart <NAME>`  | Restart tako-server                       |
 | `tako servers upgrade <NAME>`  | Upgrade tako-server                       |
+| `tako servers implode [NAME]`  | Remove tako-server and all data           |
 | `tako servers status`          | Show deployment status                    |
 | `tako secrets set <NAME>`      | Set a secret                              |
 | `tako secrets rm <NAME>`       | Remove a secret                           |
@@ -651,4 +696,5 @@ Running `tako` with no arguments also prints help.
 | `tako secrets key import`      | Import encryption key                     |
 | `tako secrets key export`      | Export encryption key                     |
 | `tako upgrade`                 | Upgrade the CLI                           |
+| `tako implode`                 | Remove Tako CLI and all local data        |
 | `tako help`                    | Show help                                 |

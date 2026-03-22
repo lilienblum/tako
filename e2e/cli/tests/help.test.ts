@@ -1,5 +1,5 @@
-import { describe, test, expect, afterEach } from "bun:test";
-import { TakoTerminal, run } from "../helpers/terminal";
+import { describe, test, expect } from "bun:test";
+import { run } from "../helpers/terminal";
 
 describe("tako --help", () => {
   test("prints usage and command list", async () => {

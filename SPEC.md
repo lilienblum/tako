@@ -638,6 +638,39 @@ Failure behavior:
 - If failure happens before the reload signal, CLI performs best-effort cleanup (exits upgrade mode).
 - If the reload was sent but the socket did not become ready within the timeout, CLI warns that upgrade mode may remain enabled until the primary recovers.
 
+### tako servers implode [name] [-y|--yes]
+
+Remove tako-server and all data from a remote server.
+
+1. If `name` is omitted in an interactive terminal, prompts to select from configured servers.
+2. Displays what will be removed (services, binaries, data, sockets, service files) and asks for confirmation (skipped with `-y`).
+3. SSHes into the server with root/sudo privileges and:
+   - Stops and disables `tako-server` and `tako-server-worker` services (systemd and OpenRC).
+   - Removes systemd service files, drop-ins, and OpenRC init scripts.
+   - Runs `systemctl daemon-reload` on systemd hosts.
+   - Removes binaries: `/usr/local/bin/tako-server`, `tako-server-service`, `tako-server-install-refresh`.
+   - Removes data directory (`/opt/tako/`), socket directories (`/var/run/tako/`, `/var/run/tako-app/`).
+4. Removes the server from the local `config.toml` server list.
+
+Alias: `tako servers uninstall`.
+
+### tako implode [-y|--yes]
+
+Remove the local Tako CLI and all local data.
+
+1. Gathers removal targets:
+   - **User-level:** config directory, data directory, CLI binaries (`tako`, `tako-dev-server`, `tako-loopback-proxy`).
+   - **System-level (requires sudo):** platform-specific services and config installed by `tako dev`:
+     - macOS: loopback proxy LaunchDaemons (`sh.tako.loopback-proxy`, `sh.tako.loopback-bootstrap`), `/Library/Application Support/Tako/`, `/etc/resolver/tako.test`, CA certificate in system keychain, loopback alias `127.77.0.1`.
+     - Linux: systemd service (`tako-dev-redirect.service`), systemd-resolved drop-in (`tako-dev.conf`), CA certificate in system trust store, iptables NAT redirect rules, loopback alias `127.77.0.1`.
+2. If nothing exists, reports "nothing to remove" and exits.
+3. Displays what will be removed (including system items that require sudo) and asks for confirmation (skipped with `-y`).
+4. Best-effort stops the dev server (unregisters all dev apps).
+5. Removes system-level items via `sudo` (best-effort), then removes user-level directories and binaries.
+6. Reports success or partial removal if some items could not be deleted.
+
+Alias: `tako uninstall`.
+
 ### tako secrets set [--env {environment}] [--sync] {name}
 
 Set/update secret for environment (defaults to production).

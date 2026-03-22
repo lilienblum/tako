@@ -920,6 +920,14 @@ pub enum Commands {
         yes: bool,
     },
 
+    /// Remove Tako CLI and all local data
+    #[command(visible_alias = "uninstall")]
+    Implode {
+        /// Skip confirmation prompts
+        #[arg(short = 'y', long = "yes")]
+        yes: bool,
+    },
+
     /// Show version information
     Version,
 
@@ -987,6 +995,7 @@ impl Cli {
             Commands::Secrets(cmd) => secret::run(cmd, self.config.as_deref()),
             Commands::Releases(cmd) => releases::run(cmd, self.config.as_deref()),
             Commands::Upgrade { canary, stable } => upgrade::run(canary, stable),
+            Commands::Implode { yes } => commands::implode::run(yes),
             Commands::Deploy { env, yes } => {
                 commands::deploy::run(env.as_deref(), yes, self.config.as_deref())
             }
