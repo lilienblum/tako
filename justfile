@@ -13,11 +13,14 @@ tako *arguments:
 fmt:
     cargo fmt
     bun run fmt
+    gofmt -w sdk/go/ examples/go/
 
 lint:
     cargo clippy --fix --allow-dirty --workspace --all-targets
     bun run lint
     bun run --filter '*' typecheck
+    cd sdk/go && go vet ./...
+    for dir in examples/go/*/; do (cd "$dir" && go vet ./...); done
 
 ci: fmt lint test::all
 

@@ -58,6 +58,55 @@ jobs:
       - name: Run perf smoke tests
         run: cargo test -p tako-server --locked perf_smoke_
 
+  go:
+    name: Go SDK
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.website_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Check Go SDK changes
+        id: changes
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            go:
+              - 'sdk/go/**'
+              - 'examples/go/**'
+
+      - name: Setup Go
+        if: steps.changes.outputs.go == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Format check
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          test -z "$(gofmt -l sdk/go/ examples/go/)" || {
+            echo "Go files not formatted. Run: gofmt -w sdk/go/ examples/go/"
+            gofmt -l sdk/go/ examples/go/
+            exit 1
+          }
+
+      - name: Vet
+        if: steps.changes.outputs.go == 'true'
+        run: cd sdk/go && go vet ./...
+
+      - name: Test
+        if: steps.changes.outputs.go == 'true'
+        run: cd sdk/go && go test ./...
+
+      - name: Build examples
+        if: steps.changes.outputs.go == 'true'
+        run: |
+          for dir in examples/go/*/; do
+            echo "Building $dir..."
+            (cd "$dir" && go build -o /dev/null .)
+          done
+
   bun:
     name: Bun
     runs-on: ubuntu-latest
@@ -420,6 +469,6 @@ jobs:
           E2E_BIN_DIR: ${{ github.workspace }}/.e2e-bin
         run: |
           set -euo pipefail
-          for fixture in $(find e2e/fixtures/javascript -mindepth 1 -maxdepth 1 -type d | sort); do
+          for fixture in $(find e2e/fixtures -mindepth 2 -maxdepth 2 -type d | sort); do
             ./e2e/run.sh "$fixture"
           done

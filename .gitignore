@@ -8,7 +8,7 @@ dist/
 .output/
 .tanstack/
 .astro/
-.tako/
+.tako/*
 !.tako/secrets.json
 .e2e-cache/
 .e2e-bin/
