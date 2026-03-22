@@ -285,7 +285,7 @@ impl Config {
             }
             if BuildAdapter::from_id(trimmed).is_none() {
                 return Err(ConfigError::Validation(
-                    "runtime must be one of: bun, node, deno".to_string(),
+                    "runtime must be one of: bun, node, deno, go".to_string(),
                 ));
             }
         }
@@ -1584,7 +1584,7 @@ runtime = "python"
         let err = Config::parse(unknown).unwrap_err();
         assert!(
             err.to_string()
-                .contains("runtime must be one of: bun, node, deno")
+                .contains("runtime must be one of: bun, node, deno, go")
         );
     }
 

@@ -405,7 +405,7 @@ fn resolve_dev_build_adapter(project_dir: &Path, cfg: &TakoToml) -> Result<Build
     {
         return BuildAdapter::from_id(adapter_override).ok_or_else(|| {
             format!(
-                "Invalid runtime '{}'; expected one of: bun, node, deno",
+                "Invalid runtime '{}'; expected one of: bun, node, deno, go",
                 adapter_override
             )
         });

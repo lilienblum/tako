@@ -1747,7 +1747,7 @@ fn resolve_build_adapter(
     {
         return BuildAdapter::from_id(adapter_override).ok_or_else(|| {
             format!(
-                "Invalid runtime '{}'; expected one of: bun, node, deno",
+                "Invalid runtime '{}'; expected one of: bun, node, deno, go",
                 adapter_override
             )
         });
@@ -2145,7 +2145,7 @@ async fn build_target_artifacts(
     let target_groups = build_artifact_target_groups(server_targets, use_unified_target_process);
     let has_multiple_targets = target_groups.len() > 1;
     let mut artifacts = HashMap::new();
-    let _runtime_adapter = BuildAdapter::from_id(runtime_tool).unwrap_or(BuildAdapter::Unknown);
+    let runtime_adapter = BuildAdapter::from_id(runtime_tool).unwrap_or(BuildAdapter::Unknown);
 
     for target_group in target_groups {
         let build_target_label = target_group.build_target_label;
@@ -2165,8 +2165,10 @@ async fn build_target_artifacts(
             let _t = output::timed("Workdir setup");
             crate::build::create_workdir(project_dir, &workdir)
                 .map_err(|e| format!("Failed to create workdir: {e}"))?;
-            crate::build::symlink_node_modules(project_dir, &workdir)
-                .map_err(|e| format!("Failed to symlink node_modules: {e}"))?;
+            if runtime_adapter.preset_group() == PresetGroup::Js {
+                crate::build::symlink_node_modules(project_dir, &workdir)
+                    .map_err(|e| format!("Failed to symlink node_modules: {e}"))?;
+            }
         }
         let workspace = workdir.clone();
 
@@ -2238,6 +2240,30 @@ async fn build_target_artifacts(
             }
         }
 
+        // For Go builds, inject GOOS/GOARCH for cross-compilation to the
+        // target server. Deploy targets are always Linux; the arch is derived
+        // from the build_target_label (e.g. "linux-aarch64-glibc").
+        let go_cross_envs: Vec<(&str, String)> = if runtime_adapter.preset_group()
+            == PresetGroup::Go
+        {
+            let goarch =
+                if build_target_label.contains("aarch64") || build_target_label.contains("arm64") {
+                    "arm64"
+                } else {
+                    "amd64"
+                };
+            vec![
+                ("GOOS", "linux".to_string()),
+                ("GOARCH", goarch.to_string()),
+            ]
+        } else {
+            Vec::new()
+        };
+        let extra_envs: Vec<(&str, &str)> = go_cross_envs
+            .iter()
+            .map(|(k, v)| (*k, v.as_str()))
+            .collect();
+
         let build_result = (|| -> Result<u64, String> {
             let build_label = format_build_artifact_message(display_target_label);
             let build_success = format_build_artifact_success(display_target_label);
@@ -2245,12 +2271,12 @@ async fn build_target_artifacts(
                 output::with_spinner(&build_label, &build_success, || {
                     tracing::debug!("Building target {}…", build_target_label);
                     let _t = output::timed("Target build");
-                    run_local_build(&workspace, &tako_config.build, custom_stages)
+                    run_local_build(&workspace, &tako_config.build, custom_stages, &extra_envs)
                 })?;
             } else {
                 output::bullet(&build_label);
                 let _t = output::timed("Target build");
-                run_local_build(&workspace, &tako_config.build, custom_stages)?;
+                run_local_build(&workspace, &tako_config.build, custom_stages, &extra_envs)?;
             }
             save_runtime_version_to_manifest(&workspace, &runtime_version)?;
             output::bullet(&format_build_completed_message(display_target_label));
@@ -2312,6 +2338,7 @@ fn run_local_build(
     workspace: &Path,
     build_config: &crate::config::BuildConfig,
     custom_stages: &[BuildStage],
+    extra_envs: &[(&str, &str)],
 ) -> Result<(), String> {
     if !workspace.is_dir() {
         return Err(format!(
@@ -2351,10 +2378,14 @@ fn run_local_build(
 
     let run_shell =
         |cwd: &Path, command: &str, phase: &str, stage_label: &str| -> Result<(), String> {
-            let output = std::process::Command::new("sh")
-                .args(["-lc", command])
+            let mut cmd = std::process::Command::new("sh");
+            cmd.args(["-lc", command])
                 .current_dir(cwd)
-                .env("TAKO_APP_DIR", &app_dir_value)
+                .env("TAKO_APP_DIR", &app_dir_value);
+            for (key, value) in extra_envs {
+                cmd.env(key, value);
+            }
+            let output = cmd
                 .stdin(std::process::Stdio::null())
                 .output()
                 .map_err(|e| format!("Failed to run local {stage_label} {phase} command: {e}"))?;
@@ -2478,7 +2509,8 @@ fn save_runtime_version_to_manifest(workspace: &Path, runtime_version: &str) -> 
 fn extract_semver_from_version_output(output: &str) -> Option<String> {
     let line = output.lines().map(str::trim).find(|l| !l.is_empty())?;
     for word in line.split_whitespace() {
-        let word = word.trim_start_matches('v');
+        // Strip non-digit prefixes: 'v' for node/bun/deno, 'go' for Go
+        let word = word.trim_start_matches(|c: char| !c.is_ascii_digit());
         if word.chars().next().is_some_and(|c| c.is_ascii_digit())
             && word.contains('.')
             && word
@@ -4338,7 +4370,7 @@ route = "app.example.com"
             },
         ];
 
-        run_local_build(&workspace, &Default::default(), &stages).unwrap();
+        run_local_build(&workspace, &Default::default(), &stages, &[]).unwrap();
         let order = std::fs::read_to_string(workspace.join("order.log")).unwrap();
         assert_eq!(order, "stage-1-run\nstage-2-install\nstage-2-run\n");
     }
@@ -4378,7 +4410,7 @@ route = "app.example.com"
             run: "true".to_string(),
         }];
 
-        let err = run_local_build(&workspace, &Default::default(), &stages).unwrap_err();
+        let err = run_local_build(&workspace, &Default::default(), &stages, &[]).unwrap_err();
         assert!(err.contains("stage 1"));
         assert!(err.contains("working directory"));
     }
