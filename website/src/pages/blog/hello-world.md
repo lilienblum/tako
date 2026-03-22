@@ -3,6 +3,7 @@ layout: ../../layouts/BlogPostLayout.astro
 title: Hello, world
 date: "2026-03-17"
 author: dan
+description: "Tako is live — a complete platform for running apps on your own servers. Deployment, routing, TLS, secrets, and local dev in a single tool."
 image: 50276c4cfc15
 ---
 
