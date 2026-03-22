@@ -965,15 +965,15 @@ const SERVER_CHECKSUM_MANIFEST_ASSET: &str = "tako-server-sha256s.txt";
 const SERVER_CHECKSUM_SIGNATURE_ASSET: &str = "tako-server-sha256s.txt.sig";
 const ALLOW_INSECURE_DOWNLOAD_BASE_ENV: &str = "TAKO_ALLOW_INSECURE_DOWNLOAD_BASE";
 const SERVER_RELEASE_SIGNING_PUBLIC_KEY_PEM: &str = "-----BEGIN PUBLIC KEY-----\n\
-MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAudDa2LxdNH1ApSWLi+eW\n\
-7CY0wmUM4PIcGUW6qArzP7NRxQNJjlbFxhx/tQPQ6O2RBq4Nl9fJ/CCRRJFAdi/L\n\
-Y7kD6MtTVdaTV5fVQ73nWqF9qoJfn64Son6RCVhTMu00DjM78ZkwKDigqnYcWB0N\n\
-qQ3N7rr9Qykis8k9tfjE8qGF/p+PtfIv5EjN9MQZnVIUZeNn11ub3x+Pb/gWPyCJ\n\
-Ok0YZHjwlbMciVKZmKGvpYtbs3wWIlxt+5JK4ybu97Vg7hgbXm2UTZ4QvgA+I796\n\
-31XizMYY7kbudGI0qFWbDNeR87/v5gLVMgi0lRTyik78c5DI5fsFQCT4gc6MIuvB\n\
-t7MNd4hRVTq/XDivla/L7vcZMhHtWE7K2efPAjQKjTM7/7qksHsqb+I+XsxWULOj\n\
-1PS1Veak7zLM45CiFBopFZGcqkLhrpXiCPy+YUQhHO5EfmeNi3Vh8SOGb6ehM7s2\n\
-XnU5wADjT1jAIp3xWAglPRPm0FS/pHCxipilpnJ4/fqVAgMBAAE=\n\
+MIIBojANBgkqhkiG9w0BAQEFAAOCAY8AMIIBigKCAYEAuSti08sNCTG7S1oGDSB3\n\
+vThbzAfQQzGq+wQjVkjN1VEPFk21eWqYMEAN2jU3FhTZDrsfl5iEMv1NsE6bimjd\n\
+LN3UtdvqnxdF08wlCmbu4tO7thJE4CNY1uY4qHjI1aqBSozJ92x8vkel1DZKUxG0\n\
+aK1YdrP0bqbuikK8f5wFgMGPO0sfSH5FKH7N0SseEoMZt1bGh7bL8G2EEDo91uEb\n\
+w0OcbZGhZ/G3Kbv9dBQAS16eEgH/d0ssruPjdsQbFD+hnywgiqC8lOro1cmr1bBN\n\
+d+Q7l60r6e3Y4kmH3OCqRzmIcKnv+6Piot9YHqMxptd6BuiE6x72w9j2loOLnB5j\n\
+ytknLq3YykchWrbwLYqVspjN6FcqPZgI6bIEhsaFLRD6tjTqYBmEHcpLk//26p7a\n\
+1/r22DyKdHO3/GS0L2sYVKkD/7R9N5QfnRd3erbx7je0pzDDe/x31h4X7vGgjCTy\n\
+xm4tDiIHBg92bd3+ag9qnvulBH1uEb2i+grxFYefUkKpAgMBAAE=\n\
 -----END PUBLIC KEY-----\n";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1180,14 +1180,30 @@ async fn resolve_verified_server_release_asset(
     target: &crate::config::ServerTarget,
 ) -> Result<VerifiedReleaseAsset, String> {
     let allow_insecure = allow_insecure_download_base();
-    let base = server_download_base(channel, tag, None, allow_insecure)?;
+    let custom_base = std::env::var("TAKO_DOWNLOAD_BASE_URL").ok();
+    let custom_base_ref = custom_base.as_deref();
+    let base = server_download_base(channel, tag, custom_base_ref, allow_insecure)?;
+    let is_custom_source = custom_base_ref
+        .map(|b| !b.trim().is_empty())
+        .unwrap_or(false);
     let archive_name = server_binary_archive_name(target);
-    let download_url = server_binary_download_url(channel, tag, target, None, allow_insecure)?;
+    let download_url =
+        server_binary_download_url(channel, tag, target, custom_base_ref, allow_insecure)?;
     let manifest_url = format!("{base}/{SERVER_CHECKSUM_MANIFEST_ASSET}");
-    let signature_url = format!("{base}/{SERVER_CHECKSUM_SIGNATURE_ASSET}");
     let manifest = fetch_release_bytes(&manifest_url).await?;
-    let signature = fetch_release_bytes(&signature_url).await?;
-    verify_signed_server_checksum_manifest(&manifest, &signature)?;
+    if is_custom_source {
+        // Custom download source: skip signature verification since the embedded
+        // public key only matches the upstream signing key. Checksum verification
+        // on the remote host still protects against corrupt downloads.
+        output::warning(
+            "Skipping release signature verification because TAKO_DOWNLOAD_BASE_URL is set. \
+             Checksums will still be verified after download.",
+        );
+    } else {
+        let signature_url = format!("{base}/{SERVER_CHECKSUM_SIGNATURE_ASSET}");
+        let signature = fetch_release_bytes(&signature_url).await?;
+        verify_signed_server_checksum_manifest(&manifest, &signature)?;
+    }
     let manifest_text = std::str::from_utf8(&manifest)
         .map_err(|e| format!("signed checksum manifest was not valid UTF-8: {e}"))?;
     let expected_sha256 = parse_sha256_manifest_value(manifest_text, &archive_name)?;
@@ -2172,7 +2188,7 @@ mod tests {
 
     const TEST_SERVER_CHECKSUM_MANIFEST: &str = "1111111111111111111111111111111111111111111111111111111111111111  tako-server-linux-x86_64-glibc.tar.zst\n\
          2222222222222222222222222222222222222222222222222222222222222222  tako-server-linux-aarch64-musl.tar.zst\n";
-    const TEST_SERVER_CHECKSUM_MANIFEST_SIG_BASE64: &str = "eqpHPWSFBsUlDUNVKIACV/diCci/+7KAAgedPYAWDsk3AC/8LHImyjHJjUSMZGdCcabEjD1z5KZdua9J/cKiBuVNSP25pmNwQiFUyrvjIwk6PjBwkkBBQSEy3PT2ybYIlGGRaf+jlzB/t0Xrbej23DkPkrYZ8gOHop288R3IVA6q3fqmpxSTAyy1obUmK6hUV15RujSPCJ7eevNGuNsYKtokxLhDIH6w27Mo8UYdj8wiEwL8b1HMOoUNRpA5OWigw4NL5/9RouroOujvlAhgpzGePUpsbDWnsLl+kd13MKdmRiUQzRgrH8Br+cYaAQTmnrN5Bo6a5UpkSSVyN0KLq2CJ2u3WkSNM5Q/SLGrjZDYe4Cm/jns3m2+/IPS10NSCrCkDh8zjRo/d+QRwVNl9jq1Ypata98ARujZDnM+dWyOOQ5d6XMmjVEh6GliXRwCbrE4qMfwnZWcs6Cj1k7KAfUwgIHAyOyKbmskiU5yhqcqKyFQUqKyRSz9sT/tSCLXw";
+    const TEST_SERVER_CHECKSUM_MANIFEST_SIG_BASE64: &str = "nZdPJ9zO2xgD3KYpdDWovNaMNko8XtBjcqSJVdNZs0aIwKKfc4pG8g0paADEUHIjwabW80jfj35n5qmEH1ko111qsUUsNwdB0ewUAckN5fvO+tprTmhWsFV9653I7q36LzFT3E3ORNI5JUHLQKqgn15DoOloPR7pi1sU/r4y2FFXJcfBIir0LR5jrR9eXuyPAqDDJSX2QJX19WtEnWNXZsAZUaTsHUtXrlHdqtQDb9fA+pr3w+dVUjg12mYRBi1CJbnxTbrZUyy7+LMDQwXWagTjivHXCaSiZVGz4JGuEMds838wNsy8nfwCqXhffrMXuIb3sOZ6sfPVLZgeUnr12ZpkDjYEiDAz0HEekNQUIIQqjvlcIkgxZYByZLRap0Vvi4NMfPkRI7K7FDtY1hhs7CurJ7Xcag784cx5V+pFEPIbCfMnEjK/beP+V36UbSbjnbOtbw4WUKQZH+knspw+MUBmy3ZdqGsgYDSyVQ6dE5u7lvl4V9/ai8f5pue5uWgL";
 
     #[test]
     fn build_upgrade_owner_is_shell_safe() {
