@@ -11,14 +11,6 @@
  * }
  * ```
  *
- * @example
- * ```typescript
- * // Runtime-specific imports
- * import { Tako } from 'tako.sh/bun';   // Bun
- * import { Tako } from 'tako.sh/node';  // Node.js
- * import { Tako } from 'tako.sh/deno';  // Deno
- * ```
- *
  * @packageDocumentation
  */
 

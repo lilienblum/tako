@@ -1386,13 +1386,10 @@ export default function fetch(request: Request): Response | Promise<Response> {
 }
 ```
 
-### Runtime Adapters
+### Tako Class
 
 ```typescript
-import { Tako } from "tako.sh/bun"; // Bun
-import { Tako } from "tako.sh/node"; // Node.js
-import { Tako } from "tako.sh/deno"; // Deno
-import { Tako } from "tako.sh"; // Auto-detect
+import { Tako } from "tako.sh";
 ```
 
 ### Vite Plugin
@@ -1410,7 +1407,7 @@ import { tako } from "tako.sh/vite";
 
 ### Feature Overview
 
-- Fetch handler adapters for Bun/Node/Deno runtimes
+- Internal fetch handler adapters for Bun/Node/Deno runtimes (used by entrypoint binaries)
 - Deployed app serving over private TCP with `PORT`/`HOST`; `tako dev` also uses TCP (`PORT`)
 - Internal status endpoint (`Host: tako` + `/status`)
 - Graceful shutdown handling

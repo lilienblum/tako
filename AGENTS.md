@@ -147,9 +147,10 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
    - `website/src/pages/docs/deployment.md`
    - `website/src/pages/docs/development.md`
 5. If preset definitions changed, update the relevant `presets/<language>/<language>.toml` file and ensure no old per-preset files are introduced.
-6. Update affected README.md files if setup/usage/run commands changed
-7. Close or update the related issue/task entry
-8. Keep implementation details OUT of SPEC.md (focus on what users see/do)
+6. If SDK exports, adapters, or usage patterns changed, update the agent skills in `sdk/javascript/skills/` to match.
+7. Update affected README.md files if setup/usage/run commands changed
+8. Close or update the related issue/task entry
+9. Keep implementation details OUT of SPEC.md (focus on what users see/do)
 
 ### Example Changes
 

@@ -1,16 +1,7 @@
 /**
- * tako.sh Deno Adapter
+ * tako.sh Deno Adapter (internal)
  *
- * Provides Deno-specific Tako functionality.
- *
- * @example
- * ```typescript
- * import { serve } from 'tako.sh/deno';
- *
- * serve((request: Request) => {
- *   return new Response("Hello from Deno!");
- * });
- * ```
+ * Used by the tako-deno entrypoint binary. Not a public API.
  */
 
 import type { TakoOptions, TakoStatus, FetchHandler } from "../types";

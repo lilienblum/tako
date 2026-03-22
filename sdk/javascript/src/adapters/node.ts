@@ -1,19 +1,7 @@
 /**
- * tako.sh Node.js Adapter
+ * tako.sh Node.js Adapter (internal)
  *
- * Provides Node.js-specific Tako functionality.
- * Works with Express, Fastify, or native http module.
- *
- * @example
- * ```typescript
- * import { createMiddleware } from 'tako.sh/node';
- * import express from 'express';
- *
- * const app = express();
- * app.use(createMiddleware());
- * app.get('/', (req, res) => res.send('Hello from Node!'));
- * app.listen(3000);
- * ```
+ * Used by the tako-node entrypoint binary. Not a public API.
  */
 
 import type { TakoOptions, TakoStatus } from "../types";

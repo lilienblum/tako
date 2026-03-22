@@ -1,15 +1,14 @@
 # tako.sh SDK
 
-Current SDK implementation for JavaScript/TypeScript apps running on Tako.
+JavaScript/TypeScript SDK for apps running on Tako.
 
 Package name: `tako.sh`
 
 ## What It Provides
 
-- Runtime adapters for Bun, Node.js, and Deno.
-- Built-in internal status endpoint:
-  - `GET /status` when `Host: tako`
-- Optional lifecycle integration hooks (for example config reload handling).
+- `Tako` class with secrets management and build info
+- Vite plugin for SSR framework builds
+- Built-in internal status endpoint (`GET /status` on `Host: tako`)
 
 ## Install
 
@@ -23,14 +22,6 @@ bun add tako.sh
 export default function fetch(req: Request, env: Record<string, string>) {
   return new Response("ok");
 }
-```
-
-Runtime-specific imports are also available:
-
-```ts
-import { Tako as BunTako } from "tako.sh/bun";
-import { Tako as NodeTako } from "tako.sh/node";
-import { Tako as DenoTako } from "tako.sh/deno";
 ```
 
 ## Vite Plugin

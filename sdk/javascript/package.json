@@ -17,13 +17,9 @@
     "url": "git+https://github.com/lilienblum/tako.git",
     "directory": "sdk/javascript"
   },
-  "bin": {
-    "tako-bun": "dist/entrypoints/bun.mjs",
-    "tako-deno": "dist/entrypoints/deno.mjs",
-    "tako-node": "dist/entrypoints/node.mjs"
-  },
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "type": "module",
   "main": "dist/index.mjs",
@@ -32,18 +28,6 @@
     ".": {
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
-    },
-    "./bun": {
-      "types": "./dist/bun.d.mts",
-      "import": "./dist/bun.mjs"
-    },
-    "./node": {
-      "types": "./dist/node.d.mts",
-      "import": "./dist/node.mjs"
-    },
-    "./deno": {
-      "types": "./dist/deno.d.mts",
-      "import": "./dist/deno.mjs"
     },
     "./vite": {
       "types": "./dist/vite.d.mts",

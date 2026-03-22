@@ -1,16 +1,7 @@
 /**
- * tako.sh Bun Adapter
+ * tako.sh Bun Adapter (internal)
  *
- * Provides Bun-specific Tako functionality.
- *
- * @example
- * ```typescript
- * import { Tako } from 'tako.sh/bun';
- *
- * export default function fetch(request: Request, env: Record<string, string>) {
- *   return new Response("Hello from Bun!");
- * }
- * ```
+ * Used by the tako-bun entrypoint binary. Not a public API.
  */
 
 import type { TakoOptions, TakoStatus, FetchHandler } from "../types";
