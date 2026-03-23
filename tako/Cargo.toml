@@ -30,7 +30,7 @@ tokio = { version = "1.49", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 console = "0.16"
-indicatif = "0.17"
+indicatif = "0.18"
 crossterm = "0.29"
 sysinfo = "0.38"
 base64 = "0.22"
