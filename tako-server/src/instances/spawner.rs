@@ -328,6 +328,7 @@ fn create_secrets_pipe(secrets: &HashMap<String, String>) -> std::io::Result<Own
     Ok(read_end)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_child_command(
     config: &AppConfig,
     env: &HashMap<String, String>,

@@ -20,19 +20,19 @@ describe("handleTakoEndpoint", () => {
 
   test("returns null for non-internal host even on /status", async () => {
     const request = new Request("http://example.com/status");
-    const response = await handleTakoEndpoint(request, mockStatus);
+    const response = handleTakoEndpoint(request, mockStatus);
     expect(response).toBeNull();
   });
 
   test("returns null for non-internal host paths", async () => {
     const request = new Request("http://example.com/api/users");
-    const response = await handleTakoEndpoint(request, mockStatus);
+    const response = handleTakoEndpoint(request, mockStatus);
     expect(response).toBeNull();
   });
 
   test("returns null for root path on non-internal host", async () => {
     const request = new Request("http://example.com/");
-    const response = await handleTakoEndpoint(request, mockStatus);
+    const response = handleTakoEndpoint(request, mockStatus);
     expect(response).toBeNull();
   });
 
@@ -41,7 +41,7 @@ describe("handleTakoEndpoint", () => {
       const request = new Request("http://tako/status", {
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
@@ -60,7 +60,7 @@ describe("handleTakoEndpoint", () => {
       const request = new Request("http://tako/status", {
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, unhealthyStatus);
+      const response = handleTakoEndpoint(request, unhealthyStatus);
 
       const body = await response!.json();
       expect(body.status).toBe("draining");
@@ -68,7 +68,7 @@ describe("handleTakoEndpoint", () => {
 
     test("returns 403 without the internal token header", async () => {
       const request = new Request("http://tako/status");
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(403);
@@ -78,7 +78,7 @@ describe("handleTakoEndpoint", () => {
       const request = new Request("http://tako:3000/status", {
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
@@ -88,7 +88,7 @@ describe("handleTakoEndpoint", () => {
       const request = new Request("http://127.0.0.1:3000/status", {
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
@@ -100,7 +100,7 @@ describe("handleTakoEndpoint", () => {
       const request = new Request("http://tako/unknown", {
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = handleTakoEndpoint(request, mockStatus);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(404);

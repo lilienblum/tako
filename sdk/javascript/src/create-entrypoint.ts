@@ -128,7 +128,7 @@ export function createEntrypoint() {
     }
 
     const handleRequest = async (request: Request): Promise<Response> => {
-      const takoResponse = await handleTakoEndpoint(request, getStatus());
+      const takoResponse = handleTakoEndpoint(request, getStatus());
       if (takoResponse) {
         return takoResponse;
       }
