@@ -10,19 +10,19 @@
     "start": "vite preview"
   },
   "dependencies": {
-    "@tanstack/react-router": "^1.168.2",
-    "@tanstack/react-start": "^1.167.3",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "@tanstack/react-router": "latest",
+    "@tanstack/react-start": "latest",
+    "react": "latest",
+    "react-dom": "latest",
     "tako.sh": "latest"
   },
   "devDependencies": {
-    "@tsconfig/strictest": "^2.0.0",
-    "@types/node": "^25.5.0",
-    "@types/react": "^19.0.8",
-    "@types/react-dom": "^19.0.3",
-    "@vitejs/plugin-react": "^6.0.1",
-    "typescript": "^5",
-    "vite": "^8.0.0"
+    "@tsconfig/strictest": "latest",
+    "@types/node": "latest",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "@vitejs/plugin-react": "latest",
+    "typescript": "latest",
+    "vite": "latest"
   }
 }

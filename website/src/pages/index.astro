@@ -1361,7 +1361,14 @@ import CopyButton from "../components/CopyButton.astro";
   {
     const tags = Array.from(document.querySelectorAll(".included-tag[data-category]"));
     const features = Array.from(document.querySelectorAll(".feature-link[data-categories]"));
+    const featureList = document.querySelector(".feature-list");
+    const showAllBtn = document.querySelector("[data-feature-show-all]");
     let activeCategory = null;
+
+    function setExpanded(expanded) {
+      if (featureList) featureList.classList.toggle("is-expanded", expanded);
+      if (showAllBtn) showAllBtn.style.display = expanded ? "none" : "";
+    }
 
     function applyFilter(category) {
       activeCategory = category;
@@ -1369,6 +1376,7 @@ import CopyButton from "../components/CopyButton.astro";
       if (!category) {
         for (const el of tags) el.classList.remove("is-active");
         for (const el of features) el.classList.remove("is-muted");
+        setExpanded(false);
         return;
       }
 
@@ -1380,6 +1388,8 @@ import CopyButton from "../components/CopyButton.astro";
         const cats = (el.dataset.categories || "").split(",");
         el.classList.toggle("is-muted", !cats.includes(category));
       }
+
+      setExpanded(true);
     }
 
     for (const t of tags) {
@@ -1393,27 +1403,8 @@ import CopyButton from "../components/CopyButton.astro";
       });
     }
 
-    // Mobile: cap visible items at 6 with "show all" toggle
-    const featureList = document.querySelector(".feature-list");
-    const showAllBtn = document.querySelector("[data-feature-show-all]");
-    if (showAllBtn instanceof HTMLButtonElement && featureList instanceof HTMLElement) {
-      showAllBtn.addEventListener("click", () => {
-        featureList.classList.add("is-expanded");
-        showAllBtn.style.display = "none";
-      });
-
-      // Filtering a category shows all matching items — expand automatically
-      const origApply = applyFilter;
-      applyFilter = (category) => {
-        origApply(category);
-        if (category) {
-          featureList.classList.add("is-expanded");
-          showAllBtn.style.display = "none";
-        } else {
-          featureList.classList.remove("is-expanded");
-          showAllBtn.style.display = "";
-        }
-      };
+    if (showAllBtn) {
+      showAllBtn.addEventListener("click", () => setExpanded(true));
     }
   }
 </script>
