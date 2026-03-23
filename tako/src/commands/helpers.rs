@@ -40,7 +40,7 @@ pub fn resolve_env(requested: Option<&str>) -> String {
         env.to_string()
     } else {
         let env = "production";
-        output::ContextBlock::new().env(env).print();
+        output::warning(&format!("Using {} environment", output::accent(env)));
         env.to_string()
     }
 }

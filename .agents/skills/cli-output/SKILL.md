@@ -1,6 +1,6 @@
 ---
 name: cli-output
-description: "Rules and patterns for Tako CLI output across normal, --verbose, and --ci modes. Use this skill whenever writing or modifying any Tako CLI command output — including print statements, spinners, log lines, prompts, progress indicators, context blocks, or error messages in the `tako/` crate. Also use when adding new commands, reviewing output consistency, or fixing output bugs. Triggers on any work touching `tako/src/output.rs`, `tako/src/commands/`, or CLI user-facing text."
+description: "Rules and patterns for Tako CLI output across normal, --verbose, and --ci modes. Use this skill whenever writing or modifying any Tako CLI command output — including print statements, spinners, log lines, prompts, progress indicators, or error messages in the `tako/` crate. Also use when adding new commands, reviewing output consistency, or fixing output bugs. Triggers on any work touching `tako/src/output.rs`, `tako/src/commands/`, or CLI user-facing text."
 ---
 
 # Tako CLI Output
@@ -90,18 +90,20 @@ These functions print in normal mode, no-op in verbose/CI. Use `output::is_prett
 | `brand_error(v)` | Red text | Status words: "unreachable", "error" |
 | `brand_muted(v)` | Dim text | Elapsed times, metadata |
 
-### Context Blocks
+### Environment & Channel Context
 
-A vertical-bar-bordered block for environment/channel info, shown before the main output.
+Environment and channel info use standard output helpers — no special block structure.
 
-```rust
-output::ContextBlock::new()
-    .env("production")      // "Using *production* environment"
-    .channel("canary")      // "You're on *canary* channel"
-    .print();
-```
-
-Normal: dim accent-colored `┃` border. Verbose/CI: tracing::info! log lines.
+- **Environment** (auto-resolved): `output::warning()` with accented env name — draws attention since env selection has operational impact.
+  ```rust
+  output::warning(&format!("Using {} environment", output::accent(&env)));
+  // Normal: ! Using production environment
+  ```
+- **Channel** (canary): `output::muted()` — low-priority informational context.
+  ```rust
+  output::muted("You're on canary channel");
+  // Normal: You're on canary channel (dim)
+  ```
 
 ### Spinners
 
@@ -280,12 +282,10 @@ Deploy
   • Revision abc1234 deployed to production
 ```
 
-### 4. Context block before destructive commands
+### 4. Environment warning before destructive commands
 
 ```rust
-output::ContextBlock::new()
-    .env(&env_name)
-    .print();
+output::warning(&format!("Using {} environment", output::accent(&env_name)));
 ```
 
 ### 5. Accent for emphasis, not quotes
@@ -301,7 +301,6 @@ Human-facing CLI output goes to stderr. Structured data goes to stdout.
 | Name | RGB | Use |
 |------|-----|-----|
 | ACCENT | `(125, 196, 228)` | Primary CLI color: spinners, section titles, prompt labels |
-| ACCENT_DIM | `(79, 107, 122)` | Context block borders |
 | BRAND_GREEN | `(155, 217, 179)` | `✓`, "active", "trusted", "enabled" |
 | BRAND_AMBER | `(234, 211, 156)` | `!`, "disabled", "untrusted" |
 | BRAND_RED | `(232, 163, 160)` | `✗`, "unreachable", "error" |
@@ -337,5 +336,6 @@ Human-facing CLI output goes to stderr. Structured data goes to stdout.
 7. **Fatal error**? → `error()` then return Err
 8. **Meaningful internal step** for debugging? → `tracing::debug!()` with `[scope]` prefix
 9. **Noisy/repetitive instrumentation**? → `tracing::trace!()` or `timed()`
-10. **Environment/channel context**? → `ContextBlock`
-11. **Low-priority info**? → `muted()`
+10. **Environment context** (auto-resolved)? → `warning()` with `accent()` env name
+11. **Channel context** (canary)? → `muted()`
+12. **Low-priority info**? → `muted()`

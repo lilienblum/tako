@@ -47,7 +47,7 @@ pub fn run(canary: bool, stable: bool) -> Result<(), Box<dyn std::error::Error>>
     let channel = resolve_upgrade_channel(canary, stable)?;
 
     if channel == UpgradeChannel::Canary {
-        output::ContextBlock::new().channel("canary").print();
+        output::muted("You're on canary channel");
         let ver = current_version();
         output::info(&format!("Your current version: {}", output::strong(&ver)));
         tracing::info!("Current version: {ver}");
@@ -136,7 +136,8 @@ async fn run_canary_upgrade(
     install_dir: &Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Resolve canary-latest tag → commit SHA → version string
-    let remote_version = fetch_canary_version().await?;
+    let remote_version =
+        output::with_spinner_async_simple("Checking for updates", fetch_canary_version()).await?;
     let local_version = current_version();
 
     if remote_version == local_version {

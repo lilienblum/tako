@@ -65,7 +65,7 @@ async fn run_async(
 
     if tail {
         if requested_env.is_some() {
-            output::ContextBlock::new().env(&env).print();
+            output::warning(&format!("Using {} environment", output::accent(&env)));
         }
         stream_logs(
             &server_names,
@@ -77,7 +77,7 @@ async fn run_async(
         .await
     } else {
         if requested_env.is_some() {
-            output::ContextBlock::new().env(&env).print();
+            output::warning(&format!("Using {} environment", output::accent(&env)));
         }
         output::hint(&format!(
             "Showing logs for the last {days} days. Use {} to change",

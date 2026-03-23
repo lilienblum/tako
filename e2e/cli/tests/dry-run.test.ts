@@ -2,8 +2,8 @@
  * Tests for --dry-run flag behavior.
  *
  * Verifies that --dry-run shows what would happen without performing
- * side effects, and that the output formatting (ContextBlock, skip
- * markers, colors) is correct.
+ * side effects, and that the output formatting (environment warning,
+ * skip markers, colors) is correct.
  */
 
 import { describe, test, expect, beforeEach, afterEach } from "bun:test";
@@ -67,22 +67,17 @@ describe("--dry-run appears in help", () => {
 });
 
 describe("deploy --dry-run", () => {
-  test("shows ContextBlock when env is auto-resolved", async () => {
+  test("shows environment warning when env is auto-resolved", async () => {
     await setupProject({ servers: { prod: { host: "10.0.0.1" } } });
 
-    // Without --env, the CLI auto-resolves to production and shows ContextBlock
-    const {
-      term: _term,
-      screen,
-      exitCode,
-    } = await run(["--dry-run", "deploy"], {
+    // Without --env, the CLI auto-resolves to production and shows a warning
+    const { screen, exitCode } = await run(["--dry-run", "deploy"], {
       cwd: tempDir,
       env: { HOME: tempDir, TAKO_HOME: takoHome },
     });
 
     expect(exitCode).toBe(0);
-    // ContextBlock shows "Using production environment" with ┃ border
-    expect(screen).toContain("┃");
+    expect(screen).toContain("!");
     expect(screen).toContain("production");
   });
 
@@ -160,26 +155,28 @@ describe("deploy --dry-run", () => {
     expect(screen).toContain("✗");
   });
 
-  test("ContextBlock ┃ border is colored", async () => {
+  test("environment warning ! is colored", async () => {
     await setupProject({ servers: { prod: { host: "10.0.0.1" } } });
 
-    // Without --env to trigger ContextBlock
+    // Without --env to trigger warning
     const { term, screen } = await run(["--dry-run", "deploy"], {
       cwd: tempDir,
       env: { HOME: tempDir, TAKO_HOME: takoHome },
     });
 
-    expect(screen).toContain("┃");
+    expect(screen).toContain("!");
+    expect(screen).toContain("Using");
+    expect(screen).toContain("production");
 
-    const borderRow = findRowContaining(term, "┃");
-    expect(borderRow).not.toBeNull();
+    const warnRow = findRowContaining(term, "!");
+    expect(warnRow).not.toBeNull();
 
-    if (borderRow !== null) {
-      const borderCol = findCharInRow(term, borderRow, "┃");
-      if (borderCol !== null) {
-        const cell = term.cell(borderRow, borderCol);
+    if (warnRow !== null) {
+      const warnCol = findCharInRow(term, warnRow, "!");
+      if (warnCol !== null) {
+        const cell = term.cell(warnRow, warnCol);
         expect(cell).not.toBeNull();
-        // ContextBlock border uses accent color (RGB)
+        // Warning ! uses RGB color
         expect(cell!.isFgRGB).toBe(true);
       }
     }

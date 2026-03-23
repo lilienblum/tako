@@ -26,7 +26,6 @@ const BRAND_RED: (u8, u8, u8) = (232, 163, 160); // #E8A3A0 — error
 
 // Terminal accent colors (distinct from brand palette)
 const ACCENT: (u8, u8, u8) = (125, 196, 228); // #7DC4E4
-const ACCENT_DIM: (u8, u8, u8) = (79, 107, 122); // #4F6B7A
 
 fn should_colorize() -> bool {
     if cfg!(test) {
@@ -530,70 +529,6 @@ pub fn strong(value: &str) -> String {
 /// Accent color only (no bold). Secondary emphasis.
 pub fn accent(value: &str) -> String {
     brand_accent(value)
-}
-
-/// A block of context lines with a left border, printed together.
-///
-/// ```text
-/// ┃ Using production environment
-/// ┃ You're on canary channel
-/// ```
-///
-/// Stores raw data; formatting is applied at print time per output mode.
-pub struct ContextBlock {
-    entries: Vec<ContextEntry>,
-}
-
-enum ContextEntry {
-    Env(String),
-    Channel(String),
-}
-
-impl ContextBlock {
-    pub fn new() -> Self {
-        Self {
-            entries: Vec::new(),
-        }
-    }
-
-    /// Add "Using {value} environment".
-    pub fn env(mut self, env: &str) -> Self {
-        self.entries.push(ContextEntry::Env(env.to_string()));
-        self
-    }
-
-    /// Add "You're on {value} channel".
-    pub fn channel(mut self, channel: &str) -> Self {
-        self.entries
-            .push(ContextEntry::Channel(channel.to_string()));
-        self
-    }
-
-    /// Print the block (with trailing blank line). No-op if empty.
-    pub fn print(self) {
-        if self.entries.is_empty() {
-            return;
-        }
-        if is_pretty() {
-            let border = rgb_fg("┃", ACCENT_DIM);
-            for entry in &self.entries {
-                let line = match entry {
-                    ContextEntry::Env(v) => format!("Using {} environment", accent(v)),
-                    ContextEntry::Channel(v) => format!("You're on {} channel", accent(v)),
-                };
-                eprintln!("{border} {line}");
-            }
-            eprintln!();
-        } else {
-            for entry in &self.entries {
-                let line = match entry {
-                    ContextEntry::Env(v) => format!("Using {v} environment"),
-                    ContextEntry::Channel(v) => format!("You're on {v} channel"),
-                };
-                tracing::info!("{}", line);
-            }
-        }
-    }
 }
 
 // ---------------------------------------------------------------------------

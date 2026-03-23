@@ -226,7 +226,7 @@ async fn run_async(
     };
 
     if requested_env.is_none() {
-        output::ContextBlock::new().env(&env).print();
+        output::warning(&format!("Using {} environment", output::accent(&env)));
     }
 
     // Skip confirmation if the user explicitly passed --env production (they

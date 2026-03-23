@@ -1440,9 +1440,7 @@ async fn upgrade_servers(
         names
     };
 
-    output::ContextBlock::new()
-        .channel(channel.as_str())
-        .print();
+    output::muted(&format!("You're on {} channel", channel.as_str()));
 
     let interactive = output::is_pretty() && output::is_interactive();
 
@@ -1604,7 +1602,6 @@ async fn upgrade_servers(
     // ── Phase 2: Per-server upgrade ─────────────────────────────────
     let mut has_error = false;
     for (i, mut check) in checks.into_iter().enumerate() {
-        // First heading uses no leading blank (ContextBlock already printed one).
         if i > 0 {
             output::heading(&format!("Server {}", output::strong(&check.name)));
         } else {
