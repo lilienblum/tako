@@ -605,7 +605,9 @@ fn run_non_interactive(
         output::success("Created tako.toml");
     }
 
-    install_tako_sdk(project_dir, adapter);
+    if let Some(cmd) = sdk_install_command(adapter, project_dir) {
+        output::info(&format!("Install the SDK: {}", output::strong(&cmd)));
+    }
 
     Ok(())
 }
@@ -898,12 +900,30 @@ fn prompt_excludes(
 
 /// Detect the locally-installed version of a runtime by running `<tool> --version`.
 fn detect_local_runtime_version(runtime: &str) -> Option<String> {
-    let output = std::process::Command::new(runtime)
+    let mut child = std::process::Command::new(runtime)
         .arg("--version")
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null())
-        .output()
+        .spawn()
         .ok()?;
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return None;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+            Err(_) => return None,
+        }
+    }
+
+    let output = child.wait_with_output().ok()?;
     if !output.status.success() {
         return None;
     }

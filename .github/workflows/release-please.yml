@@ -28,6 +28,7 @@ jobs:
     needs: release-please
     if: needs.release-please.outputs.prs != '[]' && needs.release-please.outputs.prs != ''
     runs-on: ubuntu-latest
+    environment: release
     strategy:
       fail-fast: false
       matrix:
