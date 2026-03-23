@@ -586,6 +586,11 @@ impl LocalCAStore {
             ));
         }
 
+        // Skip if this exact cert is already trusted (avoid duplicate entries).
+        if self.is_ca_trusted() {
+            return Ok(());
+        }
+
         let output = Command::new("sudo")
             .args([
                 "security",

@@ -11,8 +11,9 @@ pub fn run(assume_yes: bool) -> Result<(), Box<dyn std::error::Error>> {
 async fn run_async(assume_yes: bool) -> Result<(), Box<dyn std::error::Error>> {
     let user_targets = gather_user_targets()?;
     let system_targets = gather_system_targets();
+    let has_ca_certs = has_ca_certs_in_keychain();
 
-    if user_targets.is_empty() && system_targets.is_empty() {
+    if user_targets.is_empty() && system_targets.is_empty() && !has_ca_certs {
         output::muted("Nothing to remove — Tako does not appear to be installed.");
         return Ok(());
     }
@@ -22,10 +23,13 @@ async fn run_async(assume_yes: bool) -> Result<(), Box<dyn std::error::Error>> {
     for target in &user_targets {
         output::muted(&format!("  {}", target.display()));
     }
-    if !system_targets.is_empty() {
+    if !system_targets.is_empty() || has_ca_certs {
         output::muted("  System services and config (requires sudo):");
         for desc in &system_targets {
             output::muted(&format!("    {}", desc.description));
+        }
+        if has_ca_certs {
+            output::muted("    CA certificate(s) in system keychain");
         }
     }
     eprintln!();
@@ -42,7 +46,7 @@ async fn run_async(assume_yes: bool) -> Result<(), Box<dyn std::error::Error>> {
     let _ = stop_dev_server().await;
 
     // Remove system-level items first (requires sudo)
-    if !system_targets.is_empty() {
+    if !system_targets.is_empty() || has_ca_certs {
         output::warning("Sudo is required to remove system-level components.");
         let sudo_status = Command::new("sudo")
             .arg("-v")
@@ -50,6 +54,9 @@ async fn run_async(assume_yes: bool) -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("failed to run sudo: {e}"))?;
         if sudo_status.success() {
             remove_system_targets(&system_targets);
+            if has_ca_certs {
+                remove_ca_certs_from_keychain();
+            }
         } else {
             output::error("Sudo authentication failed — skipping system-level cleanup");
         }
@@ -218,19 +225,9 @@ fn gather_macos_system_targets() -> Vec<SystemTarget> {
         });
     }
 
-    // CA certificate in system keychain
-    if ca_is_trusted_macos() {
-        targets.push(SystemTarget {
-            description: "CA certificate in system keychain".into(),
-            commands: vec![vec![
-                "security".into(),
-                "delete-certificate".into(),
-                "-c".into(),
-                "Tako Local Development CA".into(),
-                "/Library/Keychains/System.keychain".into(),
-            ]],
-        });
-    }
+    // CA certificate(s) in system keychain — handled separately because
+    // `delete-certificate -c` fails when multiple certs share the same CN.
+    // We delete by SHA-1 hash in a loop instead (see remove_ca_certs_macos).
 
     // Loopback alias
     if loopback_alias_exists_macos() {
@@ -248,8 +245,10 @@ fn gather_macos_system_targets() -> Vec<SystemTarget> {
     targets
 }
 
+/// Check whether any Tako CA certificates exist in the system keychain (macOS)
+/// or trust store (Linux).
 #[cfg(target_os = "macos")]
-fn ca_is_trusted_macos() -> bool {
+fn has_ca_certs_in_keychain() -> bool {
     Command::new("security")
         .args([
             "find-certificate",
@@ -263,6 +262,90 @@ fn ca_is_trusted_macos() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false)
+}
+
+#[cfg(target_os = "linux")]
+fn has_ca_certs_in_keychain() -> bool {
+    Path::new("/usr/local/share/ca-certificates/tako-ca.crt").exists()
+        || Path::new("/etc/pki/ca-trust/source/anchors/tako-ca.crt").exists()
+}
+
+/// Remove all Tako CA certificates from the macOS System keychain by SHA-1 hash.
+/// `delete-certificate -c` fails when multiple certs share the same CN, so we
+/// find each cert's hash individually and delete by `-Z <hash>` in a loop.
+#[cfg(target_os = "macos")]
+fn remove_ca_certs_from_keychain() {
+    let mut removed = 0u32;
+    loop {
+        // Get the SHA-1 hash of the first matching certificate.
+        let output = Command::new("security")
+            .args([
+                "find-certificate",
+                "-c",
+                "Tako Local Development CA",
+                "-Z",
+                "/Library/Keychains/System.keychain",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output();
+
+        let hash = match output {
+            Ok(out) if out.status.success() => {
+                // Output contains a line like: "SHA-1 hash: AABBCCDD..."
+                String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .find_map(|line| {
+                        line.strip_prefix("SHA-1 hash:")
+                            .or_else(|| line.strip_prefix("      SHA-1 hash:"))
+                            .map(|h| h.trim().to_string())
+                    })
+            }
+            _ => None,
+        };
+
+        let Some(hash) = hash else {
+            break;
+        };
+
+        let del = Command::new("sudo")
+            .args([
+                "security",
+                "delete-certificate",
+                "-Z",
+                &hash,
+                "/Library/Keychains/System.keychain",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+
+        match del {
+            Ok(s) if s.success() => {
+                removed += 1;
+            }
+            _ => {
+                output::warning("Could not fully remove: CA certificate(s) in system keychain");
+                return;
+            }
+        }
+    }
+
+    if removed > 0 {
+        output::success(&format!(
+            "Removed {} CA certificate{} from system keychain",
+            removed,
+            if removed == 1 { "" } else { "s" }
+        ));
+    }
+}
+
+/// On Linux the CA cert is removed as a regular SystemTarget (file delete + update-ca-certificates).
+#[cfg(target_os = "linux")]
+fn remove_ca_certs_from_keychain() {
+    // Handled by SystemTarget commands in gather_linux_system_targets.
 }
 
 #[cfg(target_os = "macos")]
