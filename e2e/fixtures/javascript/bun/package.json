@@ -3,6 +3,6 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "tako.sh": "latest"
+    "tako.sh": "*"
   }
 }
