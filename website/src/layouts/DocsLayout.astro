@@ -340,6 +340,10 @@ const docsNav = [
     padding: 12px;
     position: sticky;
     top: 92px;
+    max-height: calc(100vh - 92px - 36px);
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(47, 42, 68, 0.15) transparent;
   }
 
   .docs-nav-links {

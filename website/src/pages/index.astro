@@ -187,6 +187,7 @@ import CopyButton from "../components/CopyButton.astro";
         <span class="feature-link-desc">Real-time out of the box</span>
       </span>
     </div>
+    <button type="button" class="feature-show-all" data-feature-show-all>show all</button>
   </section>
 
   <section class="cta-section">
@@ -716,27 +717,8 @@ import CopyButton from "../components/CopyButton.astro";
     box-shadow: 0 3px 10px rgba(47, 42, 68, 0.15);
   }
 
-  .feature-link.is-highlighted-server {
-    background: rgba(232, 135, 131, 0.08);
-  }
-  .feature-link.is-highlighted-process {
-    background: rgba(155, 196, 182, 0.08);
-  }
-  .feature-link.is-highlighted-deploy {
-    background: rgba(214, 166, 62, 0.08);
-  }
-  .feature-link.is-highlighted-development {
-    background: rgba(47, 42, 68, 0.05);
-  }
-
-  @media (max-width: 640px) {
-    .feature-link.is-muted {
-      display: none;
-    }
-
-    .feature-link[class*="is-highlighted-"] {
-      background: none;
-    }
+  .feature-link.is-muted {
+    display: none;
   }
 
   .included-tag:nth-child(4n+1) {
@@ -792,6 +774,10 @@ import CopyButton from "../components/CopyButton.astro";
     display: grid;
     grid-template-columns: repeat(2, 1fr);
     gap: 2px;
+  }
+
+  .feature-show-all {
+    display: none;
   }
 
   .feature-link {
@@ -1014,7 +1000,39 @@ import CopyButton from "../components/CopyButton.astro";
 
     .feature-list {
       grid-template-columns: 1fr;
-      gap: 0;
+      gap: 6px;
+    }
+
+    .feature-link {
+      border: 1.5px solid var(--line);
+    }
+
+    .feature-list:not(.is-expanded) .feature-link:nth-child(n+7),
+    .feature-list:not(.is-expanded) .feature-link-soon:nth-child(n+7) {
+      display: none;
+    }
+
+    .feature-list.is-expanded ~ .feature-show-all {
+      display: none;
+    }
+
+    .feature-show-all {
+      display: block;
+      margin: 12px auto 0;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--muted);
+      background: none;
+      border: 1.5px solid var(--line);
+      border-radius: 999px;
+      padding: 8px 20px;
+      cursor: pointer;
+    }
+
+    .feature-show-all:hover {
+      color: var(--ink);
+      border-color: rgba(47, 42, 68, 0.3);
     }
 
     .workflow-steps {
@@ -1344,18 +1362,13 @@ import CopyButton from "../components/CopyButton.astro";
     const tags = Array.from(document.querySelectorAll(".included-tag[data-category]"));
     const features = Array.from(document.querySelectorAll(".feature-link[data-categories]"));
     let activeCategory = null;
-    const isMobile = window.matchMedia("(max-width: 640px)").matches;
-
-    const highlightClasses = ["is-highlighted-server", "is-highlighted-process", "is-highlighted-deploy", "is-highlighted-development"];
 
     function applyFilter(category) {
       activeCategory = category;
 
       if (!category) {
         for (const el of tags) el.classList.remove("is-active");
-        for (const el of features) {
-          el.classList.remove("is-muted", ...highlightClasses);
-        }
+        for (const el of features) el.classList.remove("is-muted");
         return;
       }
 
@@ -1363,13 +1376,9 @@ import CopyButton from "../components/CopyButton.astro";
         el.classList.toggle("is-active", el.dataset.category === category);
       }
 
-      const hlClass = "is-highlighted-" + category;
       for (const el of features) {
         const cats = (el.dataset.categories || "").split(",");
-        const matches = cats.includes(category);
-        el.classList.remove(...highlightClasses);
-        if (matches) el.classList.add(hlClass);
-        el.classList.toggle("is-muted", !matches);
+        el.classList.toggle("is-muted", !cats.includes(category));
       }
     }
 
@@ -1384,9 +1393,27 @@ import CopyButton from "../components/CopyButton.astro";
       });
     }
 
-    // On mobile, auto-filter to "server" so the list isn't overwhelming
-    if (isMobile) {
-      applyFilter("server");
+    // Mobile: cap visible items at 6 with "show all" toggle
+    const featureList = document.querySelector(".feature-list");
+    const showAllBtn = document.querySelector("[data-feature-show-all]");
+    if (showAllBtn instanceof HTMLButtonElement && featureList instanceof HTMLElement) {
+      showAllBtn.addEventListener("click", () => {
+        featureList.classList.add("is-expanded");
+        showAllBtn.style.display = "none";
+      });
+
+      // Filtering a category shows all matching items — expand automatically
+      const origApply = applyFilter;
+      applyFilter = (category) => {
+        origApply(category);
+        if (category) {
+          featureList.classList.add("is-expanded");
+          showAllBtn.style.display = "none";
+        } else {
+          featureList.classList.remove("is-expanded");
+          showAllBtn.style.display = "";
+        }
+      };
     }
   }
 </script>
