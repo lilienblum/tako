@@ -25,18 +25,18 @@ path = "src/bin/tako-loopback-proxy/main.rs"
 tako-core = { path = "../tako-core", version = "0.0.2" }
 tako-runtime = { path = "../tako-runtime", version = "0.0.1" }
 tako-socket = { path = "../tako-socket", version = "0.0.2" }
-clap = { version = "4.5", features = ["derive", "env"] }
-tokio = { version = "1.49", features = ["full"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+tokio = { version = "1.50", features = ["full"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "registry"] }
 console = "0.16"
-indicatif = "0.17"
+indicatif = "0.18"
 crossterm = "0.29"
 sysinfo = "0.38"
 base64 = "0.22"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-toml = "0.9"
+toml = "1.0"
 thiserror = "2.0"
 dirs = "6.0"
 
@@ -61,7 +61,7 @@ tokio-rustls = { version = "0.26", default-features = false, features = ["ring",
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 
 # SSH client
-russh = "0.57"
+russh = "0.58"
 russh-keys = "0.49"
 russh-sftp = "2.1"
 ssh-key = "0.6"
@@ -87,8 +87,8 @@ getrandom = "0.4"
 libc = "0.2"
 
 # SQLite state store for dev-server
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 
 
 [dev-dependencies]
-tempfile = "3.25"
+tempfile = "3.27"

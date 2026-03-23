@@ -17,8 +17,8 @@ path = "src/main.rs"
 tako-core = { path = "../tako-core", version = "0.0.2" }
 tako-runtime = { path = "../tako-runtime", version = "0.0.1" }
 tako-socket = { path = "../tako-socket", version = "0.0.2" }
-clap = { version = "4.5", features = ["derive", "env"] }
-tokio = { version = "1.49", features = ["full", "signal"] }
+clap = { version = "4.6", features = ["derive", "env"] }
+tokio = { version = "1.50", features = ["full", "signal"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
@@ -30,7 +30,7 @@ pingora-proxy = { version = "0.8", default-features = false, features = ["openss
 pingora-http = "0.8"
 pingora-cache = "0.8"
 openssl.workspace = true
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 thiserror = "2.0"
 dashmap = "6.1"
 parking_lot = "0.12"
@@ -52,4 +52,4 @@ prometheus = "0.14"
 hostname = "0.4"
 
 [dev-dependencies]
-tempfile = "3.25"
+tempfile = "3.27"
