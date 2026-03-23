@@ -325,19 +325,21 @@ const {
         height: 2px;
         background: var(--ink);
         border-radius: 1px;
-        transition: transform 0.2s, opacity 0.2s;
+        transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.2s ease;
+        transform-origin: center;
       }
 
       .hamburger.is-open .hamburger-line:nth-child(1) {
-        transform: translateY(6px) rotate(45deg);
+        transform: translateY(6px) rotate(135deg);
       }
 
       .hamburger.is-open .hamburger-line:nth-child(2) {
+        transform: scaleX(0);
         opacity: 0;
       }
 
       .hamburger.is-open .hamburger-line:nth-child(3) {
-        transform: translateY(-6px) rotate(-45deg);
+        transform: translateY(-6px) rotate(-135deg);
       }
 
       .mobile-menu {
@@ -447,7 +449,7 @@ const {
               <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer" aria-label="Follow on X">𝕏</a>
               <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer">github</a>
             </div>
-            <p class="footer-note">made in Japan</p>
+            <p class="footer-note">open source will win &middot; made in Japan</p>
           </div>
         </footer>
 

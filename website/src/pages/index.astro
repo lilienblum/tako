@@ -6,7 +6,6 @@ import CopyButton from "../components/CopyButton.astro";
   title="Tako | Ship it like FTP"
   description="Deploy Node.js, Bun, and Deno apps to your own servers with rolling deploys, health checks, TLS, logs, and secrets. Tako is a self-hosted alternative to managed PaaS platforms."
 >
-  <link slot="head" rel="preload" as="image" href="/assets/hero-garden.webp" />
   <section class="hero">
     <div
       class="panel-hanger"
@@ -53,12 +52,15 @@ import CopyButton from "../components/CopyButton.astro";
   </section>
 
   <section class="philosophy-section">
-    <h2 class="philosophy-label">Philosophy</h2>
+    <h2 class="philosophy-label">Takosophy</h2>
     <p class="philosophy-text">
-      Highly <strong class="accent-coral">opinionated.</strong> Tako already decided &mdash; you just ship.
+      Full <strong class="accent-coral">control.</strong> A real server, a real runtime &mdash; what runs locally runs in production.
     </p>
     <p class="philosophy-text">
-      Impatient by <strong class="accent-mint">default.</strong> Every step is optimized to get your code live fast.
+      Unapologetically <strong class="accent-mint">opinionated.</strong> No config rabbit holes &mdash; Tako picks the defaults so you can ship.
+    </p>
+    <p class="philosophy-text">
+      Built for the <strong class="accent-gold">impatient.</strong> Every step is optimized to get your code live fast.
     </p>
   </section>
 
@@ -70,30 +72,21 @@ import CopyButton from "../components/CopyButton.astro";
     <ol class="workflow-steps">
       <li class="workflow-step">
         <a href="/docs/quickstart" class="workflow-link">
-          <div class="workflow-visual">
-            <span class="workflow-orb workflow-orb-1" aria-hidden="true">1</span>
-            <img src="/assets/step-init.webp" alt="" class="workflow-img" width="120" height="120" loading="lazy" />
-          </div>
+          <span class="workflow-orb workflow-orb-1" aria-hidden="true">1</span>
           <code class="workflow-cmd">tako init</code>
           <p class="workflow-desc">Detect runtime, create config</p>
         </a>
       </li>
       <li class="workflow-step">
         <a href="/docs/development" class="workflow-link">
-          <div class="workflow-visual">
-            <span class="workflow-orb workflow-orb-2" aria-hidden="true">2</span>
-            <img src="/assets/step-dev.webp" alt="" class="workflow-img" width="120" height="120" loading="lazy" />
-          </div>
+          <span class="workflow-orb workflow-orb-2" aria-hidden="true">2</span>
           <code class="workflow-cmd">tako dev</code>
           <p class="workflow-desc">Develop locally with HTTPS</p>
         </a>
       </li>
       <li class="workflow-step">
         <a href="/docs/deployment" class="workflow-link">
-          <div class="workflow-visual">
-            <span class="workflow-orb workflow-orb-3" aria-hidden="true">3</span>
-            <img src="/assets/step-deploy.webp" alt="" class="workflow-img" width="120" height="120" loading="lazy" />
-          </div>
+          <span class="workflow-orb workflow-orb-3" aria-hidden="true">3</span>
           <code class="workflow-cmd">tako deploy</code>
           <p class="workflow-desc">Build, upload, rolling update</p>
         </a>
@@ -103,7 +96,7 @@ import CopyButton from "../components/CopyButton.astro";
 
   <section class="features-section">
     <div class="hero-block-head">
-      <h2 class="hero-block-label">What's inside <span class="hero-block-aside">&mdash; each one normally needs its own tool</span></h2>
+      <h2 class="hero-block-label">What's inside <span class="hero-block-aside">&mdash; each usually needs its own tool</span></h2>
       <span class="hero-block-rule" aria-hidden="true"></span>
     </div>
     <div class="included-tags" role="group" aria-label="Filter features by category">
@@ -113,13 +106,13 @@ import CopyButton from "../components/CopyButton.astro";
       <button class="included-tag" data-category="development" type="button">development</button>
     </div>
     <div class="feature-list">
-      <a href="/docs/deployment" class="feature-link" data-categories="deploy">
-        <span class="feature-link-title">Build locally, deploy anywhere</span>
-        <span class="feature-link-desc">No CI required &mdash; build and deploy with the CLI</span>
-      </a>
       <a href="/docs/deployment" class="feature-link" data-categories="server,deploy,process">
         <span class="feature-link-title">Rolling deploys</span>
         <span class="feature-link-desc">New instances first, traffic shifts after health checks</span>
+      </a>
+      <a href="/docs/deployment" class="feature-link" data-categories="deploy">
+        <span class="feature-link-title">Build locally, deploy anywhere</span>
+        <span class="feature-link-desc">No CI required &mdash; build and deploy with a single command</span>
       </a>
       <a href="/docs/how-tako-works" class="feature-link" data-categories="server">
         <span class="feature-link-title">Reverse proxy</span>
@@ -133,29 +126,37 @@ import CopyButton from "../components/CopyButton.astro";
         <span class="feature-link-title">Scale to zero and back</span>
         <span class="feature-link-desc">Idle apps sleep, the next request wakes them</span>
       </a>
-      <a href="/docs/how-tako-works#health-checks-and-instance-lifecycle" class="feature-link" data-categories="server">
-        <span class="feature-link-title">Health-based routing</span>
-        <span class="feature-link-desc">Unhealthy instances get pulled from rotation automatically</span>
-      </a>
       <a href="/docs/how-tako-works#rolling-updates" class="feature-link" data-categories="deploy,process">
         <span class="feature-link-title">Instant rollback</span>
         <span class="feature-link-desc">Previous version stays ready, one command to revert</span>
       </a>
-      <a href="/docs/presets" class="feature-link" data-categories="deploy,development">
-        <span class="feature-link-title">Presets</span>
-        <span class="feature-link-desc">Framework-aware defaults for TanStack, Astro, and more</span>
+      <a href="/docs/how-tako-works#health-checks-and-instance-lifecycle" class="feature-link" data-categories="server">
+        <span class="feature-link-title">Health-based routing</span>
+        <span class="feature-link-desc">Unhealthy instances get pulled from rotation automatically</span>
       </a>
       <a href="/docs/how-tako-works" class="feature-link" data-categories="server">
         <span class="feature-link-title">Bun, Node, Go &mdash; you name it</span>
         <span class="feature-link-desc">Runtimes detected and managed automatically</span>
       </a>
       <a href="/docs/development" class="feature-link" data-categories="development">
-        <span class="feature-link-title">Local HTTPS</span>
-        <span class="feature-link-desc">Auto-trusted local CA, no mkcert needed</span>
+        <span class="feature-link-title">Local DNS</span>
+        <span class="feature-link-desc">Each app gets a real domain automatically &mdash; no ports to remember</span>
+      </a>
+      <a href="/docs/development" class="feature-link" data-categories="development">
+        <span class="feature-link-title">Wildcard routing</span>
+        <span class="feature-link-desc">Subdomains for every app and branch, resolved automatically</span>
+      </a>
+      <a href="/docs/development" class="feature-link" data-categories="development">
+        <span class="feature-link-title">Always-on dev</span>
+        <span class="feature-link-desc">Never stop a server &mdash; idle apps cost nothing, wake when you need them</span>
+      </a>
+      <a href="/docs/presets" class="feature-link" data-categories="deploy,development">
+        <span class="feature-link-title">Presets</span>
+        <span class="feature-link-desc">Framework-aware defaults for Next.js, TanStack Start, and more</span>
       </a>
       <a href="/docs/deployment" class="feature-link" data-categories="server,deploy">
         <span class="feature-link-title">Static files</span>
-        <span class="feature-link-desc">Add files to public/, no setup needed</span>
+        <span class="feature-link-desc">Drop files in public/ &mdash; Tako serves them directly</span>
       </a>
       <a href="/docs/cli" class="feature-link" data-categories="process">
         <span class="feature-link-title">Logs</span>
@@ -163,11 +164,19 @@ import CopyButton from "../components/CopyButton.astro";
       </a>
       <a href="/docs/cli" class="feature-link" data-categories="process,deploy">
         <span class="feature-link-title">Secrets</span>
-        <span class="feature-link-desc">Encrypted and managed from the CLI</span>
+        <span class="feature-link-desc">Encrypted everywhere, even locally &mdash; no plain text files for agents to leak</span>
       </a>
       <a href="/docs/cli" class="feature-link" data-categories="process,server">
         <span class="feature-link-title">Inspect &amp; monitor</span>
         <span class="feature-link-desc">Running instances, deploy history, all at a glance</span>
+      </a>
+      <a href="/docs/how-tako-works" class="feature-link" data-categories="server,deploy">
+        <span class="feature-link-title">Runtime on autopilot</span>
+        <span class="feature-link-desc">Runtimes and package managers pinned and managed for you</span>
+      </a>
+      <a href="/docs/deployment" class="feature-link" data-categories="server,deploy">
+        <span class="feature-link-title">Environments &amp; servers</span>
+        <span class="feature-link-desc">Group servers by environment, deploy to the right one</span>
       </a>
       <a href="/docs/development" class="feature-link" data-categories="development">
         <span class="feature-link-title">Agent-friendly</span>
@@ -181,7 +190,7 @@ import CopyButton from "../components/CopyButton.astro";
   </section>
 
   <section class="cta-section">
-    <p class="cta-text">Your servers are waiting.</p>
+    <p class="cta-text">Stop configuring. Start shipping.</p>
     <div class="cta-actions">
       <a href="/docs/quickstart" class="btn cta-btn">get started</a>
       <a href="/docs/how-tako-works" class="cta-link">or read how Tako works &rarr;</a>
@@ -207,12 +216,26 @@ import CopyButton from "../components/CopyButton.astro";
     inset: 0;
     border-radius: inherit;
     background:
-      linear-gradient(105deg, rgba(255, 255, 255, 0.92) 0%, rgba(255, 255, 255, 0.78) 40%, rgba(255, 255, 255, 0.48) 72%, rgba(255, 255, 255, 0.35) 100%),
-      url('/assets/hero-garden.webp') right center / auto 100% no-repeat;
+      radial-gradient(ellipse at 85% 25%, rgba(155, 196, 182, 0.22) 0%, transparent 50%),
+      radial-gradient(ellipse at 70% 75%, rgba(232, 135, 131, 0.20) 0%, transparent 45%),
+      radial-gradient(ellipse at 95% 60%, rgba(214, 166, 62, 0.15) 0%, transparent 40%),
+      radial-gradient(ellipse at 30% 45%, rgba(232, 135, 131, 0.12) 0%, transparent 50%),
+      radial-gradient(ellipse at 55% 80%, rgba(155, 196, 182, 0.14) 0%, transparent 50%),
+      radial-gradient(ellipse at 20% 65%, rgba(214, 166, 62, 0.08) 0%, transparent 45%);
     z-index: 0;
     pointer-events: none;
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0px, black 50px, black calc(100% - 50px), transparent 100%);
-    mask-image: linear-gradient(to bottom, transparent 0px, black 50px, black calc(100% - 50px), transparent 100%);
+  }
+
+  .hero::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: url("data:image/svg+xml,%3Csvg viewBox='0 0 1024 1024' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    opacity: 0.09;
+    mix-blend-mode: overlay;
+    pointer-events: none;
+    z-index: 1;
   }
 
   .hero > *:not(.panel-hanger) {
@@ -527,78 +550,43 @@ import CopyButton from "../components/CopyButton.astro";
     align-items: center;
     text-align: center;
     gap: 4px;
-    padding: 16px;
+    padding: 24px 20px;
     text-decoration: none;
+    border-radius: 20px;
+    transition: background 0.15s ease;
   }
 
-  .workflow-visual {
-    position: relative;
-    width: 140px;
-    height: 140px;
-    margin: 0 auto 8px;
-    isolation: isolate;
-  }
+  .workflow-step:nth-child(1) .workflow-link { background: rgba(232, 135, 131, 0.06); }
+  .workflow-step:nth-child(2) .workflow-link { background: rgba(155, 196, 182, 0.07); }
+  .workflow-step:nth-child(3) .workflow-link { background: rgba(214, 166, 62, 0.06); }
 
   .workflow-orb {
-    position: absolute;
-    top: -4px;
-    left: -4px;
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
+    width: 56px;
+    height: 56px;
     border-radius: 50%;
     font-family: var(--font-heading);
-    font-size: 16px;
+    font-size: 24px;
     font-weight: 700;
     color: white;
-    z-index: 1;
     box-shadow: 0 2px 6px rgba(47, 42, 68, 0.15);
+    margin-bottom: 12px;
   }
 
   .workflow-orb-1 { background: var(--primary); }
   .workflow-orb-2 { background: var(--secondary); }
   .workflow-orb-3 { background: var(--gold); }
 
-  .workflow-img {
-    width: 140px;
-    height: 140px;
-    object-fit: contain;
-    display: block;
-    transition: transform 0.2s ease;
-  }
-
-  .workflow-visual::after {
-    content: "";
-    position: absolute;
-    inset: 15%;
-    border-radius: 50%;
-    background: rgba(232, 135, 131, 0.12);
-    filter: blur(16px);
-    z-index: -1;
-  }
-
-  .workflow-step:nth-child(2) .workflow-visual::after {
-    background: rgba(155, 196, 182, 0.14);
-  }
-
-  .workflow-step:nth-child(3) .workflow-visual::after {
-    background: rgba(214, 166, 62, 0.12);
-  }
-
   .workflow-link:hover {
-    background: rgba(232, 135, 131, 0.06);
-    border-radius: 14px;
+    background: rgba(47, 42, 68, 0.06);
   }
 
   .workflow-link:hover .workflow-cmd {
     color: var(--accent);
   }
 
-  .workflow-link:hover .workflow-img {
-    transform: scale(1.15);
-  }
 
   .workflow-link:focus-visible {
     outline: 2px solid var(--primary);
@@ -653,11 +641,12 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   .philosophy-text + .philosophy-text {
-    margin-top: 16px;
+    margin-top: 24px;
   }
 
   .philosophy-text .accent-coral,
-  .philosophy-text .accent-mint {
+  .philosophy-text .accent-mint,
+  .philosophy-text .accent-gold {
     color: var(--ink);
     padding: 1px 5px 2px;
     margin: 0 -1px;
@@ -673,6 +662,11 @@ import CopyButton from "../components/CopyButton.astro";
   .philosophy-text .accent-mint {
     background: rgba(155, 196, 182, 0.3);
   }
+
+  .philosophy-text .accent-gold {
+    background: rgba(214, 166, 62, 0.22);
+  }
+
 
   .hero-block-aside {
     font-weight: 400;
@@ -700,7 +694,7 @@ import CopyButton from "../components/CopyButton.astro";
     color: rgba(47, 42, 68, 0.72);
     white-space: nowrap;
     cursor: pointer;
-    transition: opacity 0.2s ease, border-color 0.2s ease, background 0.2s ease, transform 0.15s ease, box-shadow 0.15s ease;
+    transition: border-color 0.25s ease, background 0.25s ease, transform 0.2s ease, box-shadow 0.25s ease;
   }
 
   .included-tag:hover {
@@ -719,60 +713,74 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   .included-tag.is-active {
-    box-shadow: 0 2px 8px rgba(47, 42, 68, 0.12);
+    transform: translateY(-1px);
+    box-shadow: 0 3px 10px rgba(47, 42, 68, 0.15);
   }
 
-  .included-tag.is-muted {
-    opacity: 0.3;
-    transform: none;
-    box-shadow: none;
+  .feature-link.is-highlighted-server {
+    background: rgba(232, 135, 131, 0.08);
+  }
+  .feature-link.is-highlighted-process {
+    background: rgba(155, 196, 182, 0.08);
+  }
+  .feature-link.is-highlighted-deploy {
+    background: rgba(214, 166, 62, 0.08);
+  }
+  .feature-link.is-highlighted-development {
+    background: rgba(47, 42, 68, 0.05);
   }
 
-  .feature-link.is-muted {
-    opacity: 0.2;
+  @media (max-width: 640px) {
+    .feature-link.is-muted {
+      display: none;
+    }
+
+    .feature-link[class*="is-highlighted-"] {
+      background: none;
+    }
   }
 
   .included-tag:nth-child(4n+1) {
-    border-color: rgba(232, 135, 131, 0.25);
-    background: rgba(232, 135, 131, 0.07);
+    border-color: rgba(232, 135, 131, 0.35);
   }
-
-  .included-tag:nth-child(4n+1):hover,
+  .included-tag:nth-child(4n+1):hover {
+    border-color: rgba(232, 135, 131, 0.5);
+  }
   .included-tag:nth-child(4n+1).is-active {
-    border-color: rgba(232, 135, 131, 0.45);
-    background: rgba(232, 135, 131, 0.14);
+    border-color: rgba(232, 135, 131, 0.5);
+    background: rgba(232, 135, 131, 0.16);
   }
 
   .included-tag:nth-child(4n+2) {
-    border-color: rgba(155, 196, 182, 0.3);
-    background: rgba(155, 196, 182, 0.08);
+    border-color: rgba(155, 196, 182, 0.4);
   }
-
-  .included-tag:nth-child(4n+2):hover,
+  .included-tag:nth-child(4n+2):hover {
+    border-color: rgba(155, 196, 182, 0.55);
+  }
   .included-tag:nth-child(4n+2).is-active {
-    border-color: rgba(155, 196, 182, 0.5);
-    background: rgba(155, 196, 182, 0.16);
+    border-color: rgba(155, 196, 182, 0.55);
+    background: rgba(155, 196, 182, 0.18);
   }
 
   .included-tag:nth-child(4n+3) {
-    border-color: rgba(214, 166, 62, 0.25);
-    background: rgba(214, 166, 62, 0.07);
+    border-color: rgba(214, 166, 62, 0.35);
   }
-
-  .included-tag:nth-child(4n+3):hover,
+  .included-tag:nth-child(4n+3):hover {
+    border-color: rgba(214, 166, 62, 0.5);
+  }
   .included-tag:nth-child(4n+3).is-active {
-    border-color: rgba(214, 166, 62, 0.45);
-    background: rgba(214, 166, 62, 0.14);
+    border-color: rgba(214, 166, 62, 0.5);
+    background: rgba(214, 166, 62, 0.16);
   }
 
   .included-tag:nth-child(4n+4) {
-    border-color: rgba(47, 42, 68, 0.18);
-    background: rgba(47, 42, 68, 0.04);
+    border-color: rgba(47, 42, 68, 0.2);
   }
-
-  .included-tag:nth-child(4n+4):hover,
+  .included-tag:nth-child(4n+4):hover {
+    border-color: rgba(47, 42, 68, 0.35);
+  }
   .included-tag:nth-child(4n+4).is-active {
-    border-color: rgba(47, 42, 68, 0.3);
+    border-color: rgba(47, 42, 68, 0.35);
     background: rgba(47, 42, 68, 0.08);
   }
 
@@ -788,11 +796,14 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   .feature-link {
-    display: block;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
     text-decoration: none;
     padding: 14px 16px;
+    min-height: 76px;
     border-radius: 14px;
-    transition: background 0.15s ease, opacity 0.2s ease;
+    transition: background 0.25s ease;
   }
 
   .feature-link:hover {
@@ -860,15 +871,18 @@ import CopyButton from "../components/CopyButton.astro";
   .cta-section {
     margin-top: 32px;
     text-align: center;
-    padding: 48px 0 24px;
+    padding: 56px 0 28px;
+    background:
+      radial-gradient(ellipse at 45% 50%, rgba(232, 135, 131, 0.14) 0%, transparent 55%),
+      radial-gradient(ellipse at 55% 50%, rgba(155, 196, 182, 0.12) 0%, transparent 55%);
   }
 
   .cta-text {
     font-family: var(--font-heading);
-    font-size: clamp(18px, 3vw, 22px);
-    font-weight: 600;
+    font-size: clamp(24px, 4vw, 32px);
+    font-weight: 700;
     color: var(--ink);
-    margin-bottom: 16px;
+    margin-bottom: 20px;
   }
 
   .cta-actions {
@@ -880,8 +894,8 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   .cta-btn {
-    padding: 10px 24px;
-    font-size: 17px;
+    padding: 14px 36px;
+    font-size: 18px;
   }
 
   .cta-link {
@@ -911,7 +925,6 @@ import CopyButton from "../components/CopyButton.astro";
     .feature-link,
     .feature-link-title,
     .workflow-cmd,
-    .workflow-img,
     .btn,
     .copy-inline,
     .command-mode,
@@ -941,8 +954,11 @@ import CopyButton from "../components/CopyButton.astro";
 
     .hero::before {
       background:
-        linear-gradient(105deg, rgba(255, 255, 255, 0.95) 0%, rgba(255, 255, 255, 0.85) 50%, rgba(255, 255, 255, 0.5) 80%, rgba(255, 255, 255, 0.35) 100%),
-        url('/assets/hero-garden.webp') right center / auto 100% no-repeat;
+        radial-gradient(ellipse at 80% 30%, rgba(155, 196, 182, 0.45) 0%, transparent 60%),
+        radial-gradient(ellipse at 60% 70%, rgba(232, 135, 131, 0.40) 0%, transparent 55%),
+        radial-gradient(ellipse at 90% 55%, rgba(214, 166, 62, 0.28) 0%, transparent 50%),
+        radial-gradient(ellipse at 30% 40%, rgba(232, 135, 131, 0.18) 0%, transparent 60%),
+        radial-gradient(ellipse at 50% 85%, rgba(155, 196, 182, 0.22) 0%, transparent 55%);
     }
 
     .command-card {
@@ -958,6 +974,7 @@ import CopyButton from "../components/CopyButton.astro";
       align-items: center;
       text-align: left;
       gap: 12px;
+      padding: 16px;
     }
 
     .workflow-cmd {
@@ -965,28 +982,12 @@ import CopyButton from "../components/CopyButton.astro";
       flex-shrink: 0;
     }
 
-    .workflow-visual {
-      width: 56px;
-      height: 56px;
-      margin: 0;
-      flex-shrink: 0;
-    }
-
-    .workflow-img {
-      width: 56px;
-      height: 56px;
-    }
-
     .workflow-orb {
-      width: 22px;
-      height: 22px;
-      font-size: 12px;
-      top: -3px;
-      left: -3px;
-    }
-
-    .workflow-visual::after {
-      display: none;
+      width: 36px;
+      height: 36px;
+      font-size: 16px;
+      margin-bottom: 0;
+      flex-shrink: 0;
     }
 
     .command-actions {
@@ -1018,7 +1019,7 @@ import CopyButton from "../components/CopyButton.astro";
     }
 
     .included-tags {
-      gap: 6px;
+      gap: 8px;
     }
 
     .included-tag {
@@ -1334,30 +1335,49 @@ import CopyButton from "../components/CopyButton.astro";
     const tags = Array.from(document.querySelectorAll(".included-tag[data-category]"));
     const features = Array.from(document.querySelectorAll(".feature-link[data-categories]"));
     let activeCategory = null;
+    const isMobile = window.matchMedia("(max-width: 640px)").matches;
+
+    const highlightClasses = ["is-highlighted-server", "is-highlighted-process", "is-highlighted-deploy", "is-highlighted-development"];
+
+    function applyFilter(category) {
+      activeCategory = category;
+
+      if (!category) {
+        for (const el of tags) el.classList.remove("is-active");
+        for (const el of features) {
+          el.classList.remove("is-muted", ...highlightClasses);
+        }
+        return;
+      }
+
+      for (const el of tags) {
+        el.classList.toggle("is-active", el.dataset.category === category);
+      }
+
+      const hlClass = "is-highlighted-" + category;
+      for (const el of features) {
+        const cats = (el.dataset.categories || "").split(",");
+        const matches = cats.includes(category);
+        el.classList.remove(...highlightClasses);
+        if (matches) el.classList.add(hlClass);
+        el.classList.toggle("is-muted", !matches);
+      }
+    }
 
     for (const t of tags) {
       t.addEventListener("click", () => {
         const category = t.dataset.category;
-
         if (activeCategory === category) {
-          activeCategory = null;
-          for (const el of tags) el.classList.remove("is-muted", "is-active");
-          for (const el of features) el.classList.remove("is-muted");
-          return;
-        }
-
-        activeCategory = category;
-
-        for (const el of tags) {
-          el.classList.toggle("is-active", el.dataset.category === category);
-          el.classList.toggle("is-muted", el.dataset.category !== category);
-        }
-
-        for (const el of features) {
-          const cats = (el.dataset.categories || "").split(",");
-          el.classList.toggle("is-muted", !cats.includes(category));
+          applyFilter(null);
+        } else {
+          applyFilter(category);
         }
       });
+    }
+
+    // On mobile, auto-filter to "server" so the list isn't overwhelming
+    if (isMobile) {
+      applyFilter("server");
     }
   }
 </script>
