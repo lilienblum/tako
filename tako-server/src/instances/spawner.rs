@@ -374,19 +374,23 @@ fn build_child_command(
     // Pass secrets to the child via fd 3 (Tako runtime ABI).
     // pre_exec runs in the child after fork, before exec — dup2 the pipe
     // read end to fd 3 so it survives exec (no CLOEXEC).
+    // When there are no secrets, close fd 3 so stray inherited fds
+    // don't cause the entrypoint to block.
     #[cfg(unix)]
-    if let Some(fd) = secrets_fd {
-        unsafe {
-            child_cmd.pre_exec(move || {
+    unsafe {
+        child_cmd.pre_exec(move || {
+            if let Some(fd) = secrets_fd {
                 if fd != 3 {
                     if libc::dup2(fd, 3) == -1 {
                         return Err(std::io::Error::last_os_error());
                     }
                     libc::close(fd);
                 }
-                Ok(())
-            });
-        }
+            } else {
+                libc::close(3);
+            }
+            Ok(())
+        });
     }
 
     Ok(child_cmd)

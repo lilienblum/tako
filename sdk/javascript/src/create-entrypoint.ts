@@ -8,28 +8,32 @@
  *   <main> --instance <id> --version <ver>
  */
 
-import { readFileSync, closeSync } from "node:fs";
+import { readFileSync, closeSync, fstatSync } from "node:fs";
 import { handleTakoEndpoint } from "./endpoints";
 import { injectSecrets } from "./secrets";
 import { Tako } from "./tako";
 import type { FetchFunction, TakoStatus } from "./types";
 
-// Read secrets from fd 3 (Tako runtime ABI).
-// Must happen before parseArgs/import(main) so secrets are available
-// from the very first line of user code.
-try {
-  const data = readFileSync(3, "utf-8");
-  closeSync(3);
+function readSecretsFromFd(): void {
   try {
-    const secrets = JSON.parse(data);
-    injectSecrets(secrets);
+    // Check fd 3 is a pipe (Tako passes secrets this way).
+    // Without this guard, readFileSync(3) blocks forever if fd 3 is
+    // open but not a Tako pipe (e.g. GitHub Actions runner logging fd).
+    const stat = fstatSync(3);
+    if (!stat.isFIFO()) return;
+
+    const data = readFileSync(3, "utf-8");
+    closeSync(3);
+    try {
+      const secrets = JSON.parse(data);
+      injectSecrets(secrets);
+    } catch {
+      console.error("Tako: invalid secrets JSON on fd 3");
+      process.exit(1);
+    }
   } catch {
-    // fd 3 had data but it wasn't valid JSON — Tako launch path is broken
-    console.error("Tako: invalid secrets JSON on fd 3");
-    process.exit(1);
+    // Any error (EBADF, ENXIO, etc.) = not running under Tako
   }
-} catch {
-  // Any read error (EBADF, ENXIO, etc.) = not running under Tako — no secrets via fd
 }
 
 interface ParsedArgs {
@@ -66,6 +70,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 }
 
 export function createEntrypoint() {
+  readSecretsFromFd();
   const parsed = parseArgs(process.argv);
   const port = parseInt(process.env["PORT"] || "3000", 10);
   const host = process.env["HOST"] || "127.0.0.1";
