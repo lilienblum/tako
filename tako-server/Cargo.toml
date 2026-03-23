@@ -30,7 +30,7 @@ pingora-proxy = { version = "0.8", default-features = false, features = ["openss
 pingora-http = "0.8"
 pingora-cache = "0.8"
 openssl.workspace = true
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 thiserror = "2.0"
 dashmap = "6.1"
 parking_lot = "0.12"

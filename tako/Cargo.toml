@@ -87,7 +87,7 @@ getrandom = "0.4"
 libc = "0.2"
 
 # SQLite state store for dev-server
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
 
 
 [dev-dependencies]
