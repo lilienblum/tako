@@ -78,7 +78,7 @@ jobs:
 
       - name: Setup Go
         if: steps.changes.outputs.go == 'true'
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version: "1.22"
 
