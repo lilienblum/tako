@@ -4,9 +4,9 @@
   "workspaces": {
     "": {
       "devDependencies": {
-        "oxfmt": "0.41.0",
-        "oxlint": "^1.56.0",
-        "oxlint-tsgolint": "^0.17.1",
+        "oxfmt": "latest",
+        "oxlint": "latest",
+        "oxlint-tsgolint": "latest",
       },
     },
     "e2e/cli": {
@@ -45,11 +45,6 @@
     "sdk/javascript": {
       "name": "tako.sh",
       "version": "0.0.1",
-      "bin": {
-        "tako-bun": "dist/entrypoints/bun.mjs",
-        "tako-deno": "dist/entrypoints/deno.mjs",
-        "tako-node": "dist/entrypoints/node.mjs",
-      },
       "devDependencies": {
         "@tsconfig/strictest": "catalog:dev",
         "@types/bun": "catalog:dev",
