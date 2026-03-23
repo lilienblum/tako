@@ -3,16 +3,13 @@
  *
  * These endpoints are handled by the SDK automatically on Host: tako.
  *
- * - GET  /status       — Health/status check
- * - POST /secrets  — Receive secrets from tako-server
+ * - GET  /status — Health/status check
  */
 
 import type { TakoStatus } from "./types";
-import { injectSecrets } from "./secrets";
 
 export const TAKO_INTERNAL_HOST = "tako";
 export const TAKO_INTERNAL_STATUS_PATH = "/status";
-export const TAKO_INTERNAL_SECRETS_PATH = "/secrets";
 export const TAKO_INTERNAL_TOKEN_ENV = "TAKO_INTERNAL_TOKEN";
 export const TAKO_INTERNAL_TOKEN_HEADER = "x-tako-internal-token";
 const LOOPBACK_INTERNAL_HOSTS = new Set(["127.0.0.1", "localhost", "0.0.0.0"]);
@@ -88,12 +85,8 @@ function internalResponse(
  * Handle Tako internal endpoints (internal host only).
  *
  * Returns a Response for internal requests, or null for non-internal requests.
- * Async because POST /secrets needs to read the request body.
  */
-export async function handleTakoEndpoint(
-  request: Request,
-  status: TakoStatus,
-): Promise<Response | null> {
+export function handleTakoEndpoint(request: Request, status: TakoStatus): Response | null {
   const url = new URL(request.url);
   const token = internalToken();
   const host = requestHost(request, url);
@@ -113,9 +106,6 @@ export async function handleTakoEndpoint(
     case TAKO_INTERNAL_STATUS_PATH:
       return handleStatus(status, token);
 
-    case TAKO_INTERNAL_SECRETS_PATH:
-      return handleSetSecrets(request, token);
-
     default:
       return internalResponse({ error: "Not found" }, 404, token);
   }
@@ -126,29 +116,4 @@ export async function handleTakoEndpoint(
  */
 function handleStatus(status: TakoStatus, token: string): Response {
   return internalResponse(status, 200, token);
-}
-
-/**
- * POST /secrets on Host: tako — Receive secrets from tako-server
- */
-async function handleSetSecrets(request: Request, token: string): Promise<Response> {
-  if (request.method !== "POST") {
-    return internalResponse({ error: "Method not allowed" }, 405, token);
-  }
-
-  try {
-    const secrets = await request.json();
-    if (
-      typeof secrets !== "object" ||
-      secrets === null ||
-      Array.isArray(secrets) ||
-      !Object.values(secrets).every((v) => typeof v === "string")
-    ) {
-      return internalResponse({ error: "Expected object with string values" }, 400, token);
-    }
-    injectSecrets(secrets as Record<string, string>);
-    return internalResponse({ status: "ok" }, 200, token);
-  } catch {
-    return internalResponse({ error: "Invalid JSON body" }, 400, token);
-  }
 }

@@ -14,6 +14,25 @@ import (
 	"tako.sh/internal"
 )
 
+func TestGetSecretFallsBackToEnv(t *testing.T) {
+	// When the secret store is empty, GetSecret falls back to os.Getenv.
+	secrets.Inject(map[string]string{})
+	key := "TAKO_TEST_SECRET_FALLBACK"
+	origVal := os.Getenv(key)
+	os.Setenv(key, "from-env")
+	defer setOrUnset(key, origVal)
+
+	if got := GetSecret(key); got != "from-env" {
+		t.Errorf("GetSecret(%q) = %q, want %q (env fallback)", key, got, "from-env")
+	}
+
+	// Store value takes priority over env.
+	secrets.Inject(map[string]string{key: "from-store"})
+	if got := GetSecret(key); got != "from-store" {
+		t.Errorf("GetSecret(%q) = %q, want %q (store priority)", key, got, "from-store")
+	}
+}
+
 func TestGetSecret(t *testing.T) {
 	secrets.Inject(map[string]string{"KEY": "value", "OTHER": "data"})
 
@@ -23,6 +42,8 @@ func TestGetSecret(t *testing.T) {
 	if got := GetSecret("OTHER"); got != "data" {
 		t.Errorf("GetSecret(OTHER) = %q, want %q", got, "data")
 	}
+	// MISSING is not in the store and should not be in env either.
+	os.Unsetenv("MISSING")
 	if got := GetSecret("MISSING"); got != "" {
 		t.Errorf("GetSecret(MISSING) = %q, want empty", got)
 	}
@@ -110,7 +131,7 @@ func TestFullProtocol(t *testing.T) {
 	defer ln.Close()
 
 	cfg := config()
-	wrapped := internal.NewEndpointHandler(cfg.InstanceID, cfg.Version, cfg.InternalToken, secrets, userHandler)
+	wrapped := internal.NewEndpointHandler(cfg.InstanceID, cfg.Version, cfg.InternalToken, userHandler)
 	go http.Serve(ln, wrapped)
 	time.Sleep(10 * time.Millisecond)
 
@@ -135,21 +156,6 @@ func TestFullProtocol(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&status)
 	if status.InstanceID != "full1234" {
 		t.Errorf("instance_id = %q, want %q", status.InstanceID, "full1234")
-	}
-
-	// Secrets injection (with token)
-	secretsBody := `{"SECRET_KEY":"secret_value"}`
-	req2, _ := http.NewRequest("POST", "http://"+addr+"/secrets", strings.NewReader(secretsBody))
-	req2.Host = "tako"
-	req2.Header.Set("x-tako-internal-token", "test-token")
-	resp2, err := client.Do(req2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp2.Body.Close()
-
-	if got := GetSecret("SECRET_KEY"); got != "secret_value" {
-		t.Errorf("GetSecret(SECRET_KEY) = %q, want %q", got, "secret_value")
 	}
 
 	// User passthrough

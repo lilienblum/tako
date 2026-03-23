@@ -81,7 +81,7 @@ export default function fetch(request: Request) {
 
 `Tako.secrets` is a Proxy that:
 
-- Reads from a mutable store populated at runtime via tako-server
+- Reads from a mutable store populated via fd 3 at startup (before user module is imported)
 - Individual access works: `Tako.secrets.MY_KEY` returns the string value
 - Resists bulk serialization: `toString()`, `toJSON()` return `"[REDACTED]"`
 - Keys are enumerable: `Object.keys(Tako.secrets)` works
@@ -140,20 +140,7 @@ interface TakoStatus {
 // For plain apps, just export a fetch handler and set main in tako.toml
 ```
 
-### 2. HIGH: Assuming secrets are available at import time
-
-```typescript
-// WRONG — secrets may not be populated yet at module load
-const DB_URL = Tako.secrets.DATABASE_URL; // may be undefined
-
-// CORRECT — access secrets at request time
-export default function fetch(req: Request) {
-  const dbUrl = Tako.secrets.DATABASE_URL; // always current
-  // ...
-}
-```
-
-### 3. HIGH: Serializing the secrets object
+### 2. HIGH: Serializing the secrets object
 
 ```typescript
 // WRONG — bulk access is redacted

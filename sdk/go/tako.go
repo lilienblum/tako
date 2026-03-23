@@ -47,7 +47,15 @@ import (
 )
 
 var (
-	secrets    = internal.NewSecretStore()
+	// secrets is populated from fd 3 at init time (Tako runtime ABI).
+	// In dev mode (no fd 3), GetSecret falls back to os.Getenv.
+	secrets = func() *internal.SecretStore {
+		s := internal.NewSecretStore()
+		if fd3Secrets := internal.SecretsFromFd3(); fd3Secrets != nil {
+			s.Inject(fd3Secrets)
+		}
+		return s
+	}()
 	configOnce sync.Once
 	configVal  internal.Config
 	startTime  = time.Now()
@@ -95,7 +103,7 @@ func ListenAndServe(handler http.Handler) error {
 	}
 
 	cfg := config()
-	wrapped := internal.NewEndpointHandler(cfg.InstanceID, cfg.Version, cfg.InternalToken, secrets, handler)
+	wrapped := internal.NewEndpointHandler(cfg.InstanceID, cfg.Version, cfg.InternalToken, handler)
 
 	srv := &http.Server{Handler: wrapped}
 
@@ -179,6 +187,9 @@ func Uptime() time.Duration {
 // in tako_secrets.go — use the typed Secrets struct instead of calling this
 // directly.
 //
+// In production, secrets are loaded from fd 3 at process startup.
+// In dev mode (no fd 3), falls back to os.Getenv.
+//
 // Run `tako typegen` to generate the Secrets struct:
 //
 //	// Generated in tako_secrets.go — use this:
@@ -187,5 +198,8 @@ func Uptime() time.Duration {
 //	// Instead of this:
 //	db := tako.GetSecret("DATABASE_URL")
 func GetSecret(name string) string {
-	return secrets.Get(name)
+	if v := secrets.Get(name); v != "" {
+		return v
+	}
+	return os.Getenv(name)
 }

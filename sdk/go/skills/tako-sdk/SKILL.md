@@ -14,7 +14,7 @@ sources:
 
 Runtime SDK for Go apps deployed with Tako.
 
-> **CRITICAL**: The Go SDK is **required** — your app must call `tako.ListenAndServe()` or use `tako.Listener()` to speak the Tako protocol (health checks, secrets injection, graceful shutdown).
+> **CRITICAL**: The Go SDK is **required** — your app must call `tako.ListenAndServe()` or use `tako.Listener()` to speak the Tako protocol (health checks, graceful shutdown). Secrets are loaded from fd 3 at init time.
 
 > **CRITICAL**: Any framework that implements `http.Handler` works directly with `ListenAndServe`. Only Fiber (fasthttp) needs the `Listener` path.
 
@@ -146,8 +146,8 @@ Run `tako typegen` after adding or removing secrets.
 The SDK transparently handles these — you don't interact with them directly:
 
 - `GET /status` on `Host: tako` — health check (returns JSON with status, instance_id, version, pid, uptime_seconds)
-- `POST /secrets` on `Host: tako` — receives secret injection from tako-server
 - Token authentication via `x-tako-internal-token` header (required in production, skipped in dev)
+- Secrets are read from fd 3 at process startup (Tako runtime ABI), not via HTTP
 
 ## Common Mistakes
 
@@ -157,24 +157,11 @@ The SDK transparently handles these — you don't interact with them directly:
 // WRONG — app won't respond to Tako protocol
 http.ListenAndServe(":3000", mux)
 
-// CORRECT — Tako handles health checks, secrets, graceful shutdown
+// CORRECT — Tako handles health checks, graceful shutdown, fd 3 secrets
 tako.ListenAndServe(mux)
 ```
 
-### 2. HIGH: Caching secrets at init time
-
-```go
-// WRONG — secrets may not be injected yet at startup
-var dbURL = Secrets.DatabaseUrl()
-
-// CORRECT — access secrets at request time
-func handleRequest(w http.ResponseWriter, r *http.Request) {
-    dbURL := Secrets.DatabaseUrl()
-    // ...
-}
-```
-
-### 3. HIGH: Hardcoding the listen address
+### 2. HIGH: Hardcoding the listen address
 
 ```go
 // WRONG — Tako sets HOST/PORT for the instance

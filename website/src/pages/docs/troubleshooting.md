@@ -276,7 +276,7 @@ If `.tako/secrets.json` is deleted, Tako shows a warning and prompts you to rest
 
 ### Secrets sync
 
-`tako secrets sync` pushes local secrets to all servers in the target environment. If `--env` is not specified, it syncs all environments. Secrets are sent to `tako-server`, which stores them encrypted in its SQLite state database and triggers a rolling restart of running instances.
+`tako secrets sync` pushes local secrets to all servers in the target environment. If `--env` is not specified, it syncs all environments. Secrets are sent to `tako-server`, which stores them encrypted in its SQLite state database and triggers a rolling restart so fresh instances receive updated secrets via fd 3.
 
 Environments with no mapped servers are skipped with a warning.
 

@@ -6,6 +6,8 @@ use super::{
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::Arc;
@@ -87,6 +89,7 @@ impl Spawner {
             app_user,
             instance.namespace_path().as_deref(),
             self.server_exe.as_deref(),
+            &config.secrets,
         ) {
             Ok(child) => child,
             Err(error) => {
@@ -107,25 +110,19 @@ impl Spawner {
             })
             .await;
 
-        // Wait for ready (push secrets first if app has any, then health check)
+        // Wait for ready (secrets are already available via fd 3)
         let health_check_path = config.health_check_path.clone();
         let health_host = config.health_check_host.clone();
-        let secrets = config.secrets.clone();
 
-        match timeout(config.startup_timeout, async {
-            // Push secrets to the instance before health checking so the
-            // instance has its runtime secrets before it starts serving.
-            if !secrets.is_empty() {
-                self.push_secrets_to_instance(&instance, &secrets).await?;
-            }
+        match timeout(
+            config.startup_timeout,
             self.wait_for_ready(
                 &health_check_path,
                 &health_host,
                 Duration::from_secs(5),
                 instance.clone(),
-            )
-            .await
-        })
+            ),
+        )
         .await
         {
             Ok(Ok(())) => {
@@ -247,53 +244,6 @@ impl Spawner {
             Ok(true)
         )
     }
-
-    /// Push secrets to an instance via `POST /secrets` on `Host: tako`.
-    ///
-    /// Retries until the instance port is up and accepts the request.
-    /// This must succeed before health checks can pass for instances that rely
-    /// on the pushed secret set.
-    async fn push_secrets_to_instance(
-        &self,
-        instance: &Arc<Instance>,
-        secrets: &HashMap<String, String>,
-    ) -> Result<(), InstanceError> {
-        let json = serde_json::to_string(secrets).map_err(|e| {
-            InstanceError::HealthCheckFailed(format!("Failed to serialize secrets: {e}"))
-        })?;
-
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
-
-        loop {
-            interval.tick().await;
-
-            if !instance.is_alive().await {
-                let detail = startup_exit_detail(instance.clone()).await;
-                return Err(InstanceError::HealthCheckFailed(detail));
-            }
-
-            let Some(endpoint) = instance.endpoint() else {
-                continue;
-            };
-
-            match post_endpoint_tcp(
-                endpoint,
-                "/secrets",
-                "tako",
-                instance.internal_token(),
-                &json,
-                Duration::from_secs(5),
-            )
-            .await
-            {
-                Ok(true) => {
-                    tracing::debug!(instance = %instance.id, "Pushed secrets to instance");
-                    return Ok(());
-                }
-                _ => continue,
-            }
-        }
-    }
 }
 
 fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String, String> {
@@ -349,6 +299,35 @@ fn resolve_binary_from_env(binary: &str, env: &HashMap<String, String>) -> Strin
     binary.to_string()
 }
 
+/// Create a pipe with secrets JSON on the read end.
+///
+/// The write end is closed after writing so the child gets EOF after reading.
+/// Returns the read-end `OwnedFd`; the caller must keep it alive until after spawn.
+#[cfg(unix)]
+fn create_secrets_pipe(secrets: &HashMap<String, String>) -> std::io::Result<OwnedFd> {
+    use std::io::Write;
+
+    let json = serde_json::to_vec(secrets)
+        .map_err(|e| std::io::Error::other(format!("failed to serialize secrets: {e}")))?;
+
+    let mut fds = [0i32; 2];
+    // SAFETY: pipe() is a standard POSIX call; fds is a valid 2-element array.
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    // SAFETY: pipe() just returned these file descriptors.
+    let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+    // Write secrets JSON and close write end so child gets EOF after reading.
+    let mut writer = std::fs::File::from(write_end);
+    writer.write_all(&json)?;
+    drop(writer);
+
+    Ok(read_end)
+}
+
 fn build_child_command(
     config: &AppConfig,
     env: &HashMap<String, String>,
@@ -357,6 +336,7 @@ fn build_child_command(
     use_app_user: bool,
     namespace_path: Option<&Path>,
     server_exe: Option<&Path>,
+    secrets_fd: Option<RawFd>,
 ) -> std::io::Result<Command> {
     // Resolve the binary using the app's env PATH (not the server's PATH).
     let binary = resolve_binary_from_env(&config.command[0], env);
@@ -389,6 +369,24 @@ fn build_child_command(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
+
+    // Pass secrets to the child via fd 3 (Tako runtime ABI).
+    // pre_exec runs in the child after fork, before exec — dup2 the pipe
+    // read end to fd 3 so it survives exec (no CLOEXEC).
+    #[cfg(unix)]
+    if let Some(fd) = secrets_fd {
+        unsafe {
+            child_cmd.pre_exec(move || {
+                if fd != 3 {
+                    if libc::dup2(fd, 3) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    libc::close(fd);
+                }
+                Ok(())
+            });
+        }
+    }
 
     Ok(child_cmd)
 }
@@ -452,7 +450,21 @@ fn spawn_child_process(
     app_user: Option<(u32, u32)>,
     namespace_path: Option<&Path>,
     server_exe: Option<&Path>,
+    secrets: &HashMap<String, String>,
 ) -> std::io::Result<tokio::process::Child> {
+    // Create a pipe with secrets JSON for the child to read on fd 3.
+    // The OwnedFd must stay alive until after spawn (fork copies the fd table).
+    #[cfg(unix)]
+    let secrets_pipe = if !secrets.is_empty() {
+        Some(create_secrets_pipe(secrets)?)
+    } else {
+        None
+    };
+    #[cfg(unix)]
+    let raw_fd = secrets_pipe.as_ref().map(|fd| fd.as_raw_fd());
+    #[cfg(not(unix))]
+    let raw_fd = None;
+
     let mut child_cmd = build_child_command(
         config,
         env,
@@ -461,6 +473,7 @@ fn spawn_child_process(
         true,
         namespace_path,
         server_exe,
+        raw_fd,
     )?;
     match child_cmd.spawn() {
         Ok(child) => Ok(child),
@@ -469,6 +482,7 @@ fn spawn_child_process(
                 error = %error,
                 "Failed to switch to tako-app user; retrying spawn as service user"
             );
+            // Pipe is still valid — fork either failed or the child exited before reading.
             let mut fallback = build_child_command(
                 config,
                 env,
@@ -477,11 +491,14 @@ fn spawn_child_process(
                 false,
                 namespace_path,
                 server_exe,
+                raw_fd,
             )?;
             fallback.spawn()
         }
         Err(error) => Err(error),
     }
+    // secrets_pipe dropped here — parent's copy of the read end is closed.
+    // The child already has its own copy from fork.
 }
 
 async fn probe_endpoint_tcp(
@@ -506,35 +523,6 @@ async fn probe_endpoint_tcp(
     }
 
     let Some(response) = read_http_response_headers(&mut socket, probe_timeout).await? else {
-        return Ok(false);
-    };
-    Ok(http_response_is_internal_success(&response, internal_token))
-}
-
-async fn post_endpoint_tcp(
-    endpoint: SocketAddr,
-    path: &str,
-    host: &str,
-    internal_token: &str,
-    body: &str,
-    post_timeout: Duration,
-) -> Result<bool, std::io::Error> {
-    use tokio::io::AsyncWriteExt;
-
-    let mut socket = match timeout(post_timeout, tokio::net::TcpStream::connect(endpoint)).await {
-        Ok(result) => result?,
-        Err(_) => return Ok(false),
-    };
-    let request = format!(
-        "POST {path} HTTP/1.1\r\nHost: {host}\r\n{INTERNAL_TOKEN_HEADER}: {internal_token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
-    match timeout(post_timeout, socket.write_all(request.as_bytes())).await {
-        Ok(result) => result?,
-        Err(_) => return Ok(false),
-    }
-
-    let Some(response) = read_http_response_headers(&mut socket, post_timeout).await? else {
         return Ok(false);
     };
     Ok(http_response_is_internal_success(&response, internal_token))
@@ -741,7 +729,7 @@ mod tests {
 
         let env = build_instance_env(&app.config.read().clone(), &instance);
         assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
-        // Secrets are NOT injected as env vars — they're pushed over the internal HTTP endpoint.
+        // Secrets are NOT injected as env vars — they're passed via fd 3 at spawn time.
         assert!(!env.contains_key("SECRET"));
         assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
         assert!(env.contains_key("PORT"));

@@ -1,12 +1,10 @@
 /**
  * Tako Secrets
  *
- * Secrets are pushed by tako-server via `POST /secrets` on `Host: tako`.
+ * Secrets are read from fd 3 at startup (Tako runtime ABI) and injected
+ * into the store before the user's module is imported.
  *
- * The returned secrets object is a Proxy that reads from a mutable store,
- * so secrets become available as soon as they're pushed — even if the
- * proxy was created before the push arrived.
- *
+ * The returned secrets object is a Proxy that reads from a mutable store.
  * toString/toJSON/inspect return "[REDACTED]" to prevent bulk leaks.
  */
 
@@ -14,7 +12,7 @@
 let secretStore: Record<string, string> = {};
 
 /**
- * Called by the `POST /secrets` endpoint handler to populate secrets.
+ * Called by the entrypoint after reading fd 3 to populate secrets.
  */
 export function injectSecrets(raw: Record<string, string>): void {
   secretStore = raw;

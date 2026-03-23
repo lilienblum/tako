@@ -1,8 +1,49 @@
 package internal
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
 	"sync"
+	"syscall"
 )
+
+// SecretsFromFd3 reads secrets JSON from file descriptor 3 (Tako runtime ABI).
+//
+// Returns nil if fd 3 does not exist (EBADF — not running under Tako).
+// Exits hard on invalid JSON (broken Tako launch path).
+func SecretsFromFd3() map[string]string {
+	return secretsFromFd(3)
+}
+
+// secretsFromFd reads secrets JSON from the given file descriptor.
+// Extracted from SecretsFromFd3 for testability (tests can use arbitrary fds
+// without clobbering fd 3 which the Go test harness uses).
+func secretsFromFd(fd int) map[string]string {
+	f := os.NewFile(uintptr(fd), "tako-secrets")
+	if f == nil {
+		return nil
+	}
+	defer f.Close()
+
+	data, err := io.ReadAll(f)
+	if err != nil {
+		if errors.Is(err, syscall.EBADF) {
+			return nil
+		}
+		fmt.Fprintf(os.Stderr, "tako: failed to read secrets from fd %d: %v\n", fd, err)
+		os.Exit(1)
+	}
+
+	var secrets map[string]string
+	if err := json.Unmarshal(data, &secrets); err != nil {
+		fmt.Fprintf(os.Stderr, "tako: invalid secrets JSON on fd %d: %v\n", fd, err)
+		os.Exit(1)
+	}
+	return secrets
+}
 
 // SecretStore is a thread-safe store for Tako-managed secrets.
 type SecretStore struct {
@@ -37,7 +78,6 @@ func (s *SecretStore) All() map[string]string {
 }
 
 // Inject replaces all secrets with the given map.
-// Called when tako-server pushes secrets via POST /secrets.
 func (s *SecretStore) Inject(secrets map[string]string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

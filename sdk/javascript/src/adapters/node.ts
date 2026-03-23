@@ -8,11 +8,9 @@ import type { TakoOptions, TakoStatus } from "../types";
 import {
   TAKO_INTERNAL_HOST,
   TAKO_INTERNAL_STATUS_PATH,
-  TAKO_INTERNAL_SECRETS_PATH,
   TAKO_INTERNAL_TOKEN_ENV,
   TAKO_INTERNAL_TOKEN_HEADER,
 } from "../endpoints";
-import { injectSecrets } from "../secrets";
 
 // Re-export core classes
 export { Tako } from "../tako";
@@ -105,28 +103,6 @@ export function createMiddleware(): (
         [TAKO_INTERNAL_TOKEN_HEADER]: TAKO_INTERNAL_TOKEN,
       });
       res.end(JSON.stringify(statusData));
-      return;
-    }
-
-    if (pathname === TAKO_INTERNAL_SECRETS_PATH && method === "POST") {
-      let body = "";
-      (req as any).on("data", (chunk: Buffer) => {
-        body += chunk.toString();
-      });
-      (req as any).on("end", () => {
-        try {
-          const secrets = JSON.parse(body);
-          injectSecrets(secrets);
-          res.writeHead(200, {
-            "Content-Type": "application/json",
-            [TAKO_INTERNAL_TOKEN_HEADER]: TAKO_INTERNAL_TOKEN,
-          });
-          res.end(JSON.stringify({ status: "ok" }));
-        } catch {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Invalid JSON body" }));
-        }
-      });
       return;
     }
 

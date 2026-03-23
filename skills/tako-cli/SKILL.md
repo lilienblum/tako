@@ -171,7 +171,7 @@ Upgrade Tako on a server.
 
 ## CLI Management
 
-### `tako version`
+### `tako --version`
 
 Show CLI version.
 

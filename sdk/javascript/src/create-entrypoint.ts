@@ -8,9 +8,29 @@
  *   <main> --instance <id> --version <ver>
  */
 
+import { readFileSync, closeSync } from "node:fs";
 import { handleTakoEndpoint } from "./endpoints";
+import { injectSecrets } from "./secrets";
 import { Tako } from "./tako";
 import type { FetchFunction, TakoStatus } from "./types";
+
+// Read secrets from fd 3 (Tako runtime ABI).
+// Must happen before parseArgs/import(main) so secrets are available
+// from the very first line of user code.
+try {
+  const data = readFileSync(3, "utf-8");
+  closeSync(3);
+  try {
+    const secrets = JSON.parse(data);
+    injectSecrets(secrets);
+  } catch {
+    // fd 3 had data but it wasn't valid JSON — Tako launch path is broken
+    console.error("Tako: invalid secrets JSON on fd 3");
+    process.exit(1);
+  }
+} catch {
+  // Any read error (EBADF, ENXIO, etc.) = not running under Tako — no secrets via fd
+}
 
 interface ParsedArgs {
   main: string;

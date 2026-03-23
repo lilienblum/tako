@@ -263,7 +263,7 @@ Secrets are encrypted locally in `.tako/secrets.json` and synced to servers duri
 
 ### How secrets flow during deploy
 
-During deploy, the CLI compares a hash of local secrets against the server's current secrets. Secrets are only transmitted when they differ (or when the app is new). On the server, secrets are stored encrypted in Tako's SQLite state database and pushed to fresh instances over the app upstream endpoint before health checks begin.
+During deploy, the CLI compares a hash of local secrets against the server's current secrets. Secrets are only transmitted when they differ (or when the app is new). On the server, secrets are stored encrypted in Tako's SQLite state database and passed to fresh instances via fd 3 at spawn time, before any user code runs.
 
 ### Managing secrets
 

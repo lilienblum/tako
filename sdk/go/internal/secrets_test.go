@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"os"
 	"sync"
 	"testing"
 )
@@ -66,4 +67,39 @@ func TestSecretStoreConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestSecretsFromFdWithPipe(t *testing.T) {
+	// Use secretsFromFd with the pipe's own fd (not fd 3, which the test harness owns).
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = w.WriteString(`{"DB_URL":"postgres://test","API_KEY":"key123"}`)
+	if err != nil {
+		r.Close()
+		w.Close()
+		t.Fatal(err)
+	}
+	w.Close()
+
+	secrets := secretsFromFd(int(r.Fd()))
+	if secrets == nil {
+		t.Fatal("secretsFromFd() returned nil, want map")
+	}
+	if got := secrets["DB_URL"]; got != "postgres://test" {
+		t.Errorf("DB_URL = %q, want %q", got, "postgres://test")
+	}
+	if got := secrets["API_KEY"]; got != "key123" {
+		t.Errorf("API_KEY = %q, want %q", got, "key123")
+	}
+}
+
+func TestSecretsFromFdReturnsNilOnBadFd(t *testing.T) {
+	// Use a high fd that definitely doesn't exist.
+	secrets := secretsFromFd(9999)
+	if secrets != nil {
+		t.Errorf("secretsFromFd(9999) = %v, want nil (EBADF)", secrets)
+	}
 }

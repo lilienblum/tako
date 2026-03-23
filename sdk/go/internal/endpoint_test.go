@@ -5,12 +5,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"testing"
 )
 
 func TestStatusEndpoint(t *testing.T) {
-	handler := NewEndpointHandler("test1234", "v1.0", "", NewSecretStore(), http.NotFoundHandler())
+	handler := NewEndpointHandler("test1234", "v1.0", "", http.NotFoundHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	req.Host = "tako"
@@ -37,7 +36,7 @@ func TestStatusEndpoint(t *testing.T) {
 }
 
 func TestTokenVerification(t *testing.T) {
-	handler := NewEndpointHandler("test1234", "v1.0", "secret-token", NewSecretStore(), http.NotFoundHandler())
+	handler := NewEndpointHandler("test1234", "v1.0", "secret-token", http.NotFoundHandler())
 
 	// Valid token → 200 + token echoed back
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
@@ -77,7 +76,7 @@ func TestTokenVerification(t *testing.T) {
 
 func TestNoTokenInDevMode(t *testing.T) {
 	// Empty token (dev mode) → no auth required
-	handler := NewEndpointHandler("test1234", "v1.0", "", NewSecretStore(), http.NotFoundHandler())
+	handler := NewEndpointHandler("test1234", "v1.0", "", http.NotFoundHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
 	req.Host = "tako"
@@ -89,24 +88,6 @@ func TestNoTokenInDevMode(t *testing.T) {
 	}
 }
 
-func TestSecretsEndpoint(t *testing.T) {
-	secrets := NewSecretStore()
-	handler := NewEndpointHandler("test1234", "v1.0", "", secrets, http.NotFoundHandler())
-
-	body := `{"DB_URL":"postgres://localhost","API_KEY":"secret"}`
-	req := httptest.NewRequest(http.MethodPost, "/secrets", strings.NewReader(body))
-	req.Host = "tako"
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status code = %d, want 200", w.Code)
-	}
-	if got := secrets.Get("DB_URL"); got != "postgres://localhost" {
-		t.Errorf("DB_URL = %q, want %q", got, "postgres://localhost")
-	}
-}
-
 func TestNonTakoHostPassthrough(t *testing.T) {
 	called := false
 	userApp := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +95,7 @@ func TestNonTakoHostPassthrough(t *testing.T) {
 		w.Write([]byte("user response"))
 	})
 
-	handler := NewEndpointHandler("test1234", "v1.0", "", NewSecretStore(), userApp)
+	handler := NewEndpointHandler("test1234", "v1.0", "", userApp)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "example.com"
@@ -123,18 +104,5 @@ func TestNonTakoHostPassthrough(t *testing.T) {
 
 	if !called {
 		t.Error("user app should be called for non-tako host")
-	}
-}
-
-func TestSecretsEndpointInvalidJSON(t *testing.T) {
-	handler := NewEndpointHandler("test1234", "v1.0", "", NewSecretStore(), http.NotFoundHandler())
-
-	req := httptest.NewRequest(http.MethodPost, "/secrets", strings.NewReader("not json"))
-	req.Host = "tako"
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("status code = %d, want 400", w.Code)
 	}
 }

@@ -4,7 +4,6 @@ import {
   TAKO_INTERNAL_TOKEN_HEADER,
   handleTakoEndpoint,
 } from "../src/endpoints";
-import { loadSecrets } from "../src/secrets";
 import type { TakoStatus } from "../src/types";
 
 describe("handleTakoEndpoint", () => {
@@ -93,54 +92,6 @@ describe("handleTakoEndpoint", () => {
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
-    });
-  });
-
-  describe("internal host /secrets", () => {
-    test("accepts POST with JSON body and injects secrets", async () => {
-      const secrets = { API_KEY: "secret123", DB_URL: "postgres://db" };
-      const request = new Request("http://tako/secrets", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          [TAKO_INTERNAL_TOKEN_HEADER]: "test-token",
-        },
-        body: JSON.stringify(secrets),
-      });
-      const response = await handleTakoEndpoint(request, mockStatus);
-
-      expect(response).not.toBeNull();
-      expect(response!.status).toBe(200);
-
-      const body = await response!.json();
-      expect(body.status).toBe("ok");
-
-      // Verify secrets are now accessible via the proxy
-      const loaded = loadSecrets();
-      expect(loaded.API_KEY).toBe("secret123");
-      expect(loaded.DB_URL).toBe("postgres://db");
-    });
-
-    test("returns 405 for GET", async () => {
-      const request = new Request("http://tako/secrets", {
-        headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
-      });
-      const response = await handleTakoEndpoint(request, mockStatus);
-
-      expect(response).not.toBeNull();
-      expect(response!.status).toBe(405);
-    });
-
-    test("returns 400 for invalid JSON", async () => {
-      const request = new Request("http://tako/secrets", {
-        method: "POST",
-        headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
-        body: "not json",
-      });
-      const response = await handleTakoEndpoint(request, mockStatus);
-
-      expect(response).not.toBeNull();
-      expect(response!.status).toBe(400);
     });
   });
 
