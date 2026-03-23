@@ -80,7 +80,7 @@ jobs:
         if: steps.changes.outputs.go == 'true'
         uses: actions/setup-go@v6
         with:
-          go-version: "1.22"
+          go-version: "1.25"
 
       - name: Format check
         if: steps.changes.outputs.go == 'true'
