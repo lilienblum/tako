@@ -4,6 +4,19 @@ default: all
 
 all: workspace sdk sdk-go cli e2e
 
+# Fast unit tests only (no heavy integration tests) — suitable for pre-commit
+unit: unit-rust unit-js unit-go
+
+unit-rust:
+    cargo test --workspace --lib --bins
+    cargo test -p tako --test cli_integration
+
+unit-js:
+    bun test --cwd sdk/javascript
+
+unit-go:
+    cd sdk/go && go test ./...
+
 workspace:
     cargo test --workspace
 

@@ -8,11 +8,28 @@ just fmt
 git add -u
 just lint
 
+staged=$(git diff --cached --name-only)
+
+# Rust: slow (~25s), only run when Rust/TOML/lockfile changed
+if echo "$staged" | grep -qE '\.(rs|toml)$|Cargo\.lock'; then
+    just test unit-rust
+fi
+
+# JS SDK
+if echo "$staged" | grep -qE '^sdk/javascript/'; then
+    just test unit-js
+fi
+
+# Go SDK
+if echo "$staged" | grep -qE '^sdk/go/|^examples/go/'; then
+    just test unit-go
+fi
+
 # Check for broken links if website files changed
-if git diff --cached --name-only | grep -q '^website/'; then
-    if command -v lychee >/dev/null 2>&1; then
-        just check::website
-    else
-        echo "warning: lychee not installed, skipping link check (brew install lychee)" >&2
+if echo "$staged" | grep -q '^website/'; then
+    if ! command -v lychee >/dev/null 2>&1; then
+        echo "error: lychee not installed, required for website link check (brew install lychee)" >&2
+        exit 1
     fi
+    just check::website
 fi
