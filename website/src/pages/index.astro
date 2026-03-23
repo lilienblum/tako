@@ -190,7 +190,7 @@ import CopyButton from "../components/CopyButton.astro";
   </section>
 
   <section class="cta-section">
-    <p class="cta-text">Stop configuring. Start shipping.</p>
+    <p class="cta-text">Stop configuring.<br class="mobile-break"> Start shipping.</p>
     <div class="cta-actions">
       <a href="/docs/quickstart" class="btn cta-btn">get started</a>
       <a href="/docs/how-tako-works" class="cta-link">or read how Tako works &rarr;</a>
@@ -872,8 +872,8 @@ import CopyButton from "../components/CopyButton.astro";
     text-align: center;
     padding: 56px 0 28px;
     background:
-      radial-gradient(ellipse at 45% 50%, rgba(232, 135, 131, 0.14) 0%, transparent 55%),
-      radial-gradient(ellipse at 55% 50%, rgba(155, 196, 182, 0.12) 0%, transparent 55%);
+      radial-gradient(ellipse at 45% 50%, rgba(232, 135, 131, 0.28) 0%, transparent 55%),
+      radial-gradient(ellipse at 55% 50%, rgba(155, 196, 182, 0.24) 0%, transparent 55%);
   }
 
   .cta-text {
@@ -882,6 +882,16 @@ import CopyButton from "../components/CopyButton.astro";
     font-weight: 700;
     color: var(--ink);
     margin-bottom: 20px;
+  }
+
+  .cta-text .mobile-break {
+    display: none;
+  }
+
+  @media (max-width: 480px) {
+    .cta-text .mobile-break {
+      display: block;
+    }
   }
 
   .cta-actions {
