@@ -9,32 +9,6 @@ use rusqlite::{Connection, params};
 
 const PID_FILE_DIR: &str = ".tako/dev-pids";
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum AppStatus {
-    Running,
-    Idle,
-    Stopped,
-}
-
-impl AppStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            AppStatus::Running => "running",
-            AppStatus::Idle => "idle",
-            AppStatus::Stopped => "stopped",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Option<Self> {
-        match s {
-            "running" => Some(AppStatus::Running),
-            "idle" => Some(AppStatus::Idle),
-            "stopped" => Some(AppStatus::Stopped),
-            _ => None,
-        }
-    }
-}
-
 /// Persistent app registration (survives server restarts).
 #[cfg_attr(not(test), allow(dead_code))]
 #[derive(Debug, Clone)]
@@ -56,7 +30,7 @@ pub struct RuntimeApp {
     pub variant: Option<String>,
     pub hosts: Vec<String>,
     pub upstream_port: u16,
-    pub status: AppStatus,
+    pub is_idle: bool,
     pub command: Vec<String>,
     pub env: HashMap<String, String>,
     pub log_path: String,

@@ -1020,12 +1020,7 @@ async fn resolve_deploy_server_names_with_setup(
             }
 
             let selected_server = if servers.len() == 1 {
-                servers
-                    .names()
-                    .into_iter()
-                    .next()
-                    .unwrap_or("<server>")
-                    .to_string()
+                servers.names()[0].to_string()
             } else {
                 select_production_server_for_mapping(servers)?
             };
@@ -1712,10 +1707,7 @@ fn build_artifact_target_groups(
     }
 
     if use_unified_target_process {
-        let build_target_label = unique_targets
-            .first()
-            .expect("unique targets cannot be empty")
-            .clone();
+        let build_target_label = unique_targets[0].clone();
         return vec![ArtifactBuildGroup {
             build_target_label,
             cache_target_label: UNIFIED_JS_CACHE_TARGET_LABEL.to_string(),
@@ -4270,6 +4262,7 @@ route = "app.example.com"
             name: "bun".to_string(),
             main: None,
             assets: vec!["public".to_string(), "dist/client".to_string()],
+            dev: vec![],
         };
         let config = TakoToml {
             assets: vec!["dist/client".to_string(), "assets/shared".to_string()],

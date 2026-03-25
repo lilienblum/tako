@@ -37,12 +37,15 @@ pub struct AppPreset {
     pub main: Option<String>,
     #[serde(default)]
     pub assets: Vec<String>,
+    /// Custom dev command (overrides runtime default in `tako dev`).
+    #[serde(default)]
+    pub dev: Vec<String>,
 }
 
 /// Backward-compatible alias.
 pub type BuildPreset = AppPreset;
 
-const KNOWN_PRESET_FIELDS: &[&str] = &["name", "main", "assets"];
+const KNOWN_PRESET_FIELDS: &[&str] = &["name", "main", "assets", "dev"];
 
 #[derive(Debug, Clone, Deserialize)]
 struct AppPresetRaw {
@@ -52,6 +55,8 @@ struct AppPresetRaw {
     main: Option<String>,
     #[serde(default)]
     assets: Vec<String>,
+    #[serde(default)]
+    dev: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -518,6 +523,7 @@ pub fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<A
         name,
         main: raw.main,
         assets: raw.assets,
+        dev: raw.dev,
     })
 }
 

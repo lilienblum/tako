@@ -145,8 +145,8 @@ jobs:
           name: bin-tako-linux-x86_64
           path: .e2e-bin
 
-      - name: Make binary executable
-        run: chmod +x .e2e-bin/tako
+      - name: Make binaries executable
+        run: chmod +x .e2e-bin/tako .e2e-bin/tako-dev-server
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -160,6 +160,13 @@ jobs:
         env:
           TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
         run: cd e2e/cli && bun test
+
+      - name: Run dev E2E tests
+        env:
+          TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
+          TAKO_DEV_E2E: "1"
+          PATH: ${{ github.workspace }}/.e2e-bin:${{ env.PATH }}
+        run: cd e2e/cli && sudo -E bun test tests/dev.test.ts
 
   cli-macos:
     name: CLI Tests (macOS)
@@ -176,8 +183,8 @@ jobs:
           name: bin-tako-darwin-aarch64
           path: .e2e-bin
 
-      - name: Make binary executable
-        run: chmod +x .e2e-bin/tako
+      - name: Make binaries executable
+        run: chmod +x .e2e-bin/tako .e2e-bin/tako-dev-server .e2e-bin/tako-loopback-proxy
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -191,6 +198,13 @@ jobs:
         env:
           TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
         run: cd e2e/cli && bun test
+
+      - name: Run dev E2E tests
+        env:
+          TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
+          TAKO_DEV_E2E: "1"
+          PATH: ${{ github.workspace }}/.e2e-bin:${{ env.PATH }}
+        run: cd e2e/cli && bun test tests/dev.test.ts
 
   links:
     name: Links

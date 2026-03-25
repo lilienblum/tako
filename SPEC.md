@@ -120,19 +120,21 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
   - pinned runtime-local aliases: `tanstack-start@<commit-hash>`
 - namespaced preset aliases in `tako.toml` (for example `js/tanstack-start`) are rejected; choose runtime via top-level `runtime` and keep `preset` runtime-local.
 - `github:` preset references are not supported in `tako.toml`.
-- Preset definitions live in `presets/<language>/<language>.toml` (for example `presets/javascript/javascript.toml`), where each preset is a section (`[tanstack-start]`, etc.). Each section contains only `name` (optional, fallback: section name), `main`, and `assets`.
-- `tanstack-start` preset defaults `main = "@tanstack/react-start/server-entry"` and `assets = ["dist/client"]`.
+- Preset definitions live in `presets/<language>/<language>.toml` (for example `presets/javascript/javascript.toml`), where each preset is a section (`[tanstack-start]`, etc.). Each section contains `name` (optional, fallback: section name), `main`, `assets`, and `dev` (custom dev command).
+- `tanstack-start` preset defaults `main = "@tanstack/react-start/server-entry"`, `assets = ["dist/client"]`, and `dev = ["vite", "dev"]`.
+- `vite` preset defaults `dev = ["vite", "dev"]` for projects using Vite as their dev server.
 - Runtime behavior (install commands, launch args, entrypoint resolution) lives in runtime plugins (`tako-runtime/src/plugins/`), not in presets.
 - `tako init` installs the `tako.sh` SDK via the selected runtime's package-manager `add` command.
 - Server membership is declared per environment with `[envs.<name>].servers`.
 - The same server name may be assigned to multiple non-development environments in one project. Each environment deploys to its own server-side app identity and filesystem path under `/opt/tako/apps/{app}/{env}`.
 - `development` is for `tako dev`; `servers` declared there are ignored by deploy validation.
 - Deployed app upstreams always use per-instance TCP endpoints. On Linux servers, `tako-server` isolates each app instance in its own network namespace, assigns a private virtual IP, sets `PORT=3000`, and sets `HOST=0.0.0.0` for the app process in production.
-- For `tako dev`, when top-level `preset` is omitted, Tako runs a runtime-default dev command:
-  - Bun: `bun run dev`
-  - Node: `npm run dev`
-  - Deno: `deno task dev`
-  - Go: `go run .` (with file watching for `**/*.go`, `go.mod`, `go.sum`)
+- `tako dev` resolves the dev command with this priority:
+  1. `dev` in `tako.toml` (user override, e.g. `dev = ["custom", "cmd"]`)
+  2. Preset `dev` command (e.g. vite preset uses `vite dev`)
+  3. Runtime default: JS runtimes run through the SDK entrypoint (`bun run node_modules/tako.sh/dist/entrypoints/bun.mjs {main}`), Go uses `go run .`
+- JS dev uses the same SDK entrypoint as production — the SDK wraps `export default function fetch()` or `export default { fetch }` into a proper HTTP server on `PORT`.
+- Process exit detection: `tako dev` polls `try_wait()` every 500ms to detect when the app process exits. On exit, the route goes idle (proxy stops forwarding) and the next HTTP request triggers a restart.
 - Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for visibility and cache-key inputs.
 - Unpinned official preset aliases are fetched from the `master` branch on each resolve; if fetch fails, preset resolution fails.
 - Deploy sends app vars + runtime vars to `tako-server` in the `deploy` command payload (non-secret env vars in `app.json`); secrets are sent separately and stored encrypted in SQLite. `tako-server` passes secrets to instances via fd 3 (file descriptor 3) at spawn time — the server writes secrets as JSON to a pipe and the child process reads fd 3 before any user code runs.
@@ -1260,8 +1262,8 @@ Active HTTP probing is the source of truth for instance health:
 - **Probe interval**: 1 second by default (configurable)
 - **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako`
 - **Transport**: Probes use the instance's private TCP endpoint.
-- **Unhealthy threshold**: 2 consecutive failures → mark unhealthy, remove from load balancer
-- **Dead threshold**: 5 consecutive failures → mark stopped, kill process
+- **Process exit fast path**: Before each probe, `try_wait()` checks if the process has exited. If so, the instance is immediately marked dead without waiting for the probe timeout.
+- **Failure threshold**: 1 failure → mark dead, trigger replacement. After the first successful probe confirms the app is healthy, any single probe failure means something is genuinely wrong.
 - **Recovery**: Single successful probe resets failure count and restores to healthy
 
 #### Internal Probe Contract

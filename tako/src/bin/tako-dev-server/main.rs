@@ -491,7 +491,7 @@ async fn handle_client(
                         variant: variant.clone(),
                         hosts: hosts.clone(),
                         upstream_port,
-                        status: state::AppStatus::Running,
+                        is_idle: false,
                         command,
                         env,
                         log_path,
@@ -551,10 +551,7 @@ async fn handle_client(
                     });
                 }
 
-                let has_active = s.apps.values().any(|a| {
-                    a.status == state::AppStatus::Running || a.status == state::AppStatus::Idle
-                });
-                if !has_active {
+                if s.apps.is_empty() {
                     s.schedule_idle_exit();
                 }
 
@@ -579,46 +576,52 @@ async fn handle_client(
                 config_path,
                 status,
             } => {
-                let mut s = state.lock().unwrap();
-                let parsed = state::AppStatus::from_str(&status);
-                match parsed {
-                    None => Response::Error {
-                        message: format!("unknown status: {status}"),
-                    },
-                    Some(app_status) => {
-                        let route_id = format!("reg:{}", config_path);
-                        let active = app_status == state::AppStatus::Running;
-                        s.routes.set_active(&route_id, active);
-
-                        let app_name = if let Some(app) = s.apps.get_mut(&config_path) {
-                            app.status = app_status;
-                            app.name.clone()
-                        } else {
-                            String::new()
-                        };
-
-                        if !app_name.is_empty() {
-                            s.events.broadcast(Response::Event {
-                                event: protocol::DevEvent::AppStatusChanged {
-                                    config_path: config_path.clone(),
-                                    app_name,
-                                    status: status.clone(),
-                                },
-                            });
-                        }
-
-                        Response::AppStatusUpdated {
-                            config_path,
-                            status,
-                        }
+                let is_idle = match status.as_str() {
+                    "idle" => true,
+                    "running" => false,
+                    _ => {
+                        write_resp(
+                            &mut w,
+                            &Response::Error {
+                                message: format!("unknown status: {status}"),
+                            },
+                        )
+                        .await?;
+                        continue;
                     }
+                };
+
+                let mut s = state.lock().unwrap();
+                let route_id = format!("reg:{}", config_path);
+                s.routes.set_active(&route_id, !is_idle);
+
+                let app_name = if let Some(app) = s.apps.get_mut(&config_path) {
+                    app.is_idle = is_idle;
+                    app.name.clone()
+                } else {
+                    String::new()
+                };
+
+                if !app_name.is_empty() {
+                    s.events.broadcast(Response::Event {
+                        event: protocol::DevEvent::AppStatusChanged {
+                            config_path: config_path.clone(),
+                            app_name,
+                            status: status.clone(),
+                        },
+                    });
+                }
+
+                Response::AppStatusUpdated {
+                    config_path,
+                    status,
                 }
             }
             Request::HandoffApp { config_path, pid } => {
                 let mut s = state.lock().unwrap();
                 let project_dir = if let Some(app) = s.apps.get_mut(&config_path) {
                     app.pid = Some(pid);
-                    app.status = state::AppStatus::Running;
+                    app.is_idle = false;
                     app.project_dir.clone()
                 } else {
                     String::new()
@@ -655,7 +658,7 @@ async fn handle_client(
                         variant: a.variant.clone(),
                         hosts: a.hosts.clone(),
                         upstream_port: a.upstream_port,
-                        status: a.status.as_str().to_string(),
+                        status: if a.is_idle { "idle" } else { "running" }.to_string(),
                         pid: a.pid,
                         client_pid: a.client_pid,
                     })
@@ -667,9 +670,6 @@ async fn handle_client(
                 let apps = s
                     .apps
                     .values()
-                    .filter(|a| {
-                        a.status == state::AppStatus::Running || a.status == state::AppStatus::Idle
-                    })
                     .map(|a| AppInfo {
                         app_name: a.name.clone(),
                         variant: a.variant.clone(),
@@ -817,7 +817,7 @@ async fn monitor_handoff_pid(
         if sys.process(sysinfo_pid).is_none() {
             let mut s = state.lock().unwrap();
             if let Some(app) = s.apps.get_mut(&config_path) {
-                app.status = state::AppStatus::Idle;
+                app.is_idle = true;
                 app.pid = None;
             }
             let route_id = format!("reg:{}", config_path);
@@ -912,7 +912,7 @@ async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: St
         s.apps
             .iter()
             .find(|(_, a)| {
-                if a.status != state::AppStatus::Idle {
+                if !a.is_idle {
                     return false;
                 }
                 a.hosts.iter().any(|route_pattern| {
@@ -951,7 +951,7 @@ async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: St
             {
                 let mut s = state.lock().unwrap();
                 if let Some(rt) = s.apps.get_mut(&config_path) {
-                    rt.status = state::AppStatus::Running;
+                    rt.is_idle = false;
                     rt.pid = pid;
                 }
                 let route_id = format!("reg:{}", config_path);
@@ -968,7 +968,7 @@ async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: St
                     let _ = child.wait().await;
                     let mut s = state.lock().unwrap();
                     if let Some(rt) = s.apps.get_mut(&config_path) {
-                        rt.status = state::AppStatus::Idle;
+                        rt.is_idle = true;
                         rt.pid = None;
                     }
                     let route_id = format!("reg:{}", config_path);
@@ -1372,7 +1372,7 @@ mod tests {
                 variant: None,
                 hosts: vec![format!("{name}.tako.test")],
                 upstream_port: 3000,
-                status: state::AppStatus::Running,
+                is_idle: false,
                 command: vec!["bun".to_string()],
                 env: std::collections::HashMap::new(),
                 log_path: "/log".to_string(),
@@ -1778,7 +1778,7 @@ mod tests {
                     variant: None,
                     hosts: vec!["my-app.tako.test".to_string()],
                     upstream_port: 3000,
-                    status: state::AppStatus::Running,
+                    is_idle: false,
                     command: vec!["sleep".to_string(), "60".to_string()],
                     env: std::collections::HashMap::new(),
                     log_path: "/log".to_string(),

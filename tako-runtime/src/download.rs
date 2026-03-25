@@ -254,7 +254,11 @@ fn extract_binary_name(def: &RuntimeDef) -> Option<&str> {
         Some(binary)
     } else {
         // Without extract_all, only the binary is extracted (flattened).
-        Some(binary.rsplit('/').next().unwrap_or(binary))
+        Some(
+            binary
+                .rsplit_once('/')
+                .map_or(binary, |(_, file_name)| file_name),
+        )
     }
 }
 
@@ -299,7 +303,9 @@ async fn verify_checksum(
     match checksum_format {
         "shasums" => {
             // SHASUMS256.txt format: "<hash>  <filename>"
-            let archive_filename = archive_url.rsplit('/').next().unwrap_or("");
+            let archive_filename = archive_url
+                .rsplit_once('/')
+                .map_or(archive_url, |(_, file_name)| file_name);
             for line in checksum_text.lines() {
                 let parts: Vec<&str> = line.splitn(2, char::is_whitespace).collect();
                 if parts.len() == 2 {
@@ -385,16 +391,20 @@ fn extract_zip(
         } else if let Some(template) = binary_template {
             let expected = apply_template(template, version, os, arch);
             if entry_name == expected || entry_name.trim_start_matches('/') == expected {
-                Some(expected.rsplit('/').next().unwrap_or(&expected).to_string())
+                Some(
+                    expected
+                        .rsplit_once('/')
+                        .map_or(expected.as_str(), |(_, file_name)| file_name)
+                        .to_string(),
+                )
             } else {
                 None
             }
         } else {
             Some(
                 entry_name
-                    .rsplit('/')
-                    .next()
-                    .unwrap_or(&entry_name)
+                    .rsplit_once('/')
+                    .map_or(entry_name.as_str(), |(_, file_name)| file_name)
                     .to_string(),
             )
         };
@@ -453,12 +463,22 @@ fn extract_tar_gz(
         } else if let Some(template) = binary_template {
             let expected = apply_template(template, version, os, arch);
             if path_str == expected || path_str.trim_start_matches('/') == expected {
-                Some(expected.rsplit('/').next().unwrap_or(&expected).to_string())
+                Some(
+                    expected
+                        .rsplit_once('/')
+                        .map_or(expected.as_str(), |(_, file_name)| file_name)
+                        .to_string(),
+                )
             } else {
                 None
             }
         } else {
-            Some(path_str.rsplit('/').next().unwrap_or(&path_str).to_string())
+            Some(
+                path_str
+                    .rsplit_once('/')
+                    .map_or(path_str.as_str(), |(_, file_name)| file_name)
+                    .to_string(),
+            )
         };
 
         let Some(rel) = output_rel else {

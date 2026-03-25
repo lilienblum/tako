@@ -309,14 +309,21 @@ Dev routes have a few constraints:
 
 ## App startup command
 
-`tako dev` always runs the runtime-default dev script for your detected or configured runtime:
+`tako dev` resolves the dev command with this priority:
 
-- Bun: `bun run dev`
-- Node: `npm run dev`
-- Deno: `deno task dev`
-- Go: `go run .`
+1. **`dev` in `tako.toml`** — user override (e.g. `dev = ["custom", "cmd"]`)
+2. **Preset dev command** — framework presets like `vite` and `tanstack-start` use `vite dev`
+3. **Runtime default** — JS runtimes (bun, node, deno) run your app through the Tako SDK entrypoint, same as production. Go uses `go run .`.
 
-Presets do not define dev commands -- the runtime default is always used.
+For JS apps, this means your `export default function fetch()` or `export default { fetch }` is automatically wrapped into an HTTP server by the SDK — no `dev` script in `package.json` needed.
+
+### Process monitoring
+
+`tako dev` monitors the app process and detects crashes:
+
+- If the app exits unexpectedly, the status changes to **exited** and the exit code is logged.
+- On the next HTTP request, the app is automatically restarted.
+- Before marking the app as "running", `tako dev` waits for the app to accept TCP connections on its port — preventing 502 errors during startup.
 
 ## Diagnostics with tako doctor
 

@@ -63,18 +63,23 @@ Preset definitions are TOML sections within a family file. Presets are metadata-
 - **`name`** (optional) -- Display name. Defaults to the TOML section name.
 - **`main`** (optional) -- Default app entrypoint. If your `tako.toml` sets `main`, it takes precedence.
 - **`assets`** (optional) -- List of directories to merge into `public/` after build.
+- **`dev`** (optional) -- Custom dev command for `tako dev`. Framework presets use this to run their own dev server (e.g. `vite dev`) instead of the SDK entrypoint.
 
-Presets do **not** contain build commands, install commands, start commands, or dev commands. All build configuration belongs in your app's `tako.toml` under `[build]` or `[[build_stages]]`.
+Presets do **not** contain build commands, install commands, or start commands. All build configuration belongs in your app's `tako.toml` under `[build]` or `[[build_stages]]`.
 
 ### Example preset definition
 
 ```toml
+[vite]
+dev = ["vite", "dev"]
+
 [tanstack-start]
 main = "@tanstack/react-start/server-entry"
 assets = ["dist/client"]
+dev = ["vite", "dev"]
 ```
 
-This tells Tako that TanStack Start apps use `@tanstack/react-start/server-entry` as their entrypoint and need `dist/client` merged into `public/` for static asset serving. Build commands are configured in your `tako.toml`.
+The `vite` preset tells `tako dev` to run `vite dev` instead of the SDK entrypoint. The `tanstack-start` preset provides the right entrypoint and asset directory, plus uses `vite dev` for development. Build commands are configured in your `tako.toml`.
 
 ## Preset family files
 
@@ -90,9 +95,13 @@ Each file contains framework presets for that language as TOML sections. Each se
 ```toml
 # presets/javascript/javascript.toml
 
+[vite]
+dev = ["vite", "dev"]
+
 [tanstack-start]
 main = "@tanstack/react-start/server-entry"
 assets = ["dist/client"]
+dev = ["vite", "dev"]
 ```
 
 During `tako init`, Tako fetches the family manifest to show you available presets for your detected runtime. If no family presets are available after fetch, init skips preset selection and uses the base preset.

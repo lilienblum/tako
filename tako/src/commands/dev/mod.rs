@@ -142,6 +142,10 @@ impl ScopedLog {
         Self::at(LogLevel::Error, scope, message)
     }
 
+    pub fn fatal(scope: impl Into<String>, message: impl Into<String>) -> Self {
+        Self::at(LogLevel::Fatal, scope, message)
+    }
+
     pub fn divider() -> Self {
         Self {
             timestamp: String::new(),
@@ -483,14 +487,40 @@ fn has_explicit_dev_preset(cfg: &TakoToml) -> bool {
 }
 
 fn resolve_dev_run_command(
-    _cfg: &TakoToml,
-    _preset: &BuildPreset,
+    cfg: &TakoToml,
+    preset: &BuildPreset,
     main: &str,
     runtime_adapter: BuildAdapter,
     _explicit_preset: bool,
+    project_dir: &Path,
 ) -> Result<Vec<String>, String> {
-    // Dev command always comes from the runtime plugin, not the preset.
-    resolve_runtime_default_dev_command(runtime_adapter, main)
+    // Resolve main to absolute path so the SDK entrypoint can find it
+    // (it resolves imports relative to its own location, not the CWD).
+    let abs_main = if Path::new(main).is_absolute() {
+        main.to_string()
+    } else {
+        project_dir.join(main).to_string_lossy().to_string()
+    };
+
+    // Priority: user override in tako.toml > preset dev command > runtime default.
+    let raw = if !cfg.dev.is_empty() {
+        cfg.dev.clone()
+    } else if !preset.dev.is_empty() {
+        preset.dev.clone()
+    } else {
+        return resolve_runtime_default_dev_command(runtime_adapter, &abs_main);
+    };
+
+    Ok(raw
+        .iter()
+        .map(|arg| {
+            if arg == "{main}" {
+                abs_main.clone()
+            } else {
+                arg.clone()
+            }
+        })
+        .collect())
 }
 
 fn infer_preset_name_from_ref(preset_ref: &str) -> String {
@@ -1128,7 +1158,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_dev_run_command_uses_runtime_default() {
+    fn resolve_dev_run_command_uses_sdk_entrypoint_for_bun() {
         let preset = parse_and_validate_preset(
             r#"
 main = "src/index.ts"
@@ -1137,24 +1167,25 @@ main = "src/index.ts"
         )
         .unwrap();
 
+        let pd = Path::new("/project");
         let cmd = resolve_dev_run_command(
             &TakoToml::default(),
             &preset,
             "src/index.ts",
             BuildAdapter::Bun,
             false,
+            pd,
         )
         .expect("runtime default dev command");
 
-        // Dev command always comes from the runtime plugin.
-        assert_eq!(
-            cmd,
-            vec!["bun".to_string(), "run".to_string(), "dev".to_string()]
-        );
+        // JS dev runs through the SDK entrypoint, same as production.
+        assert_eq!(cmd[0], "bun");
+        assert!(cmd.iter().any(|a| a.contains("entrypoints/bun.mjs")));
+        assert!(cmd.last().unwrap().ends_with("src/index.ts"));
     }
 
     #[test]
-    fn resolve_dev_run_command_falls_back_to_runtime_default_when_explicit_preset_has_no_dev() {
+    fn resolve_dev_run_command_uses_sdk_entrypoint_for_node() {
         let preset = parse_and_validate_preset(
             r#"
 main = "dist/server/tako-entry.mjs"
@@ -1163,19 +1194,69 @@ main = "dist/server/tako-entry.mjs"
         )
         .unwrap();
 
+        let pd = Path::new("/project");
         let cmd = resolve_dev_run_command(
             &TakoToml::default(),
             &preset,
             "src/index.ts",
             BuildAdapter::Node,
             true,
+            pd,
         )
         .expect("runtime default dev command");
 
-        assert_eq!(
-            cmd,
-            vec!["pnpm".to_string(), "run".to_string(), "dev".to_string()]
-        );
+        assert_eq!(cmd[0], "node");
+        assert!(cmd.iter().any(|a| a.contains("entrypoints/node.mjs")));
+        assert!(cmd.last().unwrap().ends_with("src/index.ts"));
+    }
+
+    #[test]
+    fn resolve_dev_run_command_preset_dev_overrides_runtime_default() {
+        let mut preset = parse_and_validate_preset(
+            r#"
+main = "src/index.ts"
+"#,
+            "vite",
+        )
+        .unwrap();
+        preset.dev = vec!["vite".to_string(), "dev".to_string()];
+
+        let pd = Path::new("/project");
+        let cmd = resolve_dev_run_command(
+            &TakoToml::default(),
+            &preset,
+            "src/index.ts",
+            BuildAdapter::Bun,
+            true,
+            pd,
+        )
+        .expect("preset dev command");
+
+        assert_eq!(cmd, vec!["vite", "dev"]);
+    }
+
+    #[test]
+    fn resolve_dev_run_command_config_dev_overrides_preset() {
+        let mut preset = parse_and_validate_preset(
+            r#"
+main = "src/index.ts"
+"#,
+            "vite",
+        )
+        .unwrap();
+        preset.dev = vec!["vite".to_string(), "dev".to_string()];
+
+        let cfg = TakoToml {
+            dev: vec!["custom".to_string(), "cmd".to_string()],
+            ..Default::default()
+        };
+
+        let pd = Path::new("/project");
+        let cmd =
+            resolve_dev_run_command(&cfg, &preset, "src/index.ts", BuildAdapter::Bun, true, pd)
+                .expect("config dev command");
+
+        assert_eq!(cmd, vec!["custom", "cmd"]);
     }
 
     #[test]
@@ -2275,18 +2356,11 @@ pub async fn run(
             }
 
             crate::dev_server_client::stop_server().await?;
-            for _ in 0..40 {
-                if crate::dev_server_client::info().await.is_err() {
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
+            wait_for_dev_server_stopped(&listen_addr).await;
         } else {
-            return Err(format!(
-                "A dev server is already running with listen {}. Stop it first and re-run `tako dev`.",
-                current_listen
-            )
-            .into());
+            // Non-interactive: auto-restart the daemon silently.
+            crate::dev_server_client::stop_server().await?;
+            wait_for_dev_server_stopped(&listen_addr).await;
         }
     }
 
@@ -2331,6 +2405,7 @@ pub async fn run(
         &main,
         runtime_adapter,
         has_explicit_dev_preset(&cfg),
+        &project_dir,
     )
     .map_err(|e| format!("Invalid dev start command: {}", e))?;
 
@@ -2500,6 +2575,7 @@ pub async fn run(
     let child_state = std::sync::Arc::new(tokio::sync::Mutex::new(None::<tokio::process::Child>));
     let reserve_state = std::sync::Arc::new(tokio::sync::Mutex::new(Some(reserve_listener)));
     let app_started_once = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let app_started_at = std::sync::Arc::new(tokio::sync::Mutex::new(std::time::Instant::now()));
     if dev_initial_instance_count() > 0 {
         // Free the reserved port so the app process can bind immediately.
         let _ = reserve_state.lock().await.take();
@@ -2515,14 +2591,32 @@ pub async fn run(
         )
         .await
         {
-            Ok(child) => {
+            Ok(mut child) => {
                 if let Some(pid) = child.id() {
                     emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppPid(pid))
                         .await;
                 }
-                *child_state.lock().await = Some(child);
-                app_started_once.store(true, std::sync::atomic::Ordering::Relaxed);
-                emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppStarted).await;
+                match wait_for_app_ready(&mut child, upstream_port, 30).await {
+                    Ok(()) => {
+                        *child_state.lock().await = Some(child);
+                        *app_started_at.lock().await = std::time::Instant::now();
+                        app_started_once.store(true, std::sync::atomic::Ordering::Relaxed);
+                        emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppStarted)
+                            .await;
+                    }
+                    Err(msg) => {
+                        let _ = child.kill().await;
+                        let _ = log_tx
+                            .send(ScopedLog::error("tako", format!("failed to start: {msg}")))
+                            .await;
+                        emit_persisted_app_event(
+                            &event_tx,
+                            &log_store_path,
+                            DevEvent::AppError(msg),
+                        )
+                        .await;
+                    }
+                }
             }
             Err(e) => {
                 let msg = e.to_string();
@@ -2637,6 +2731,7 @@ pub async fn run(
         let project_dir = project_dir.clone();
         let log_tx = log_tx.clone();
         let event_tx = event_tx.clone();
+        let app_started_at = app_started_at.clone();
         let log_store_path = log_store_path.clone();
         let should_exit_tx = should_exit_tx.clone();
         let terminate_requested = terminate_requested.clone();
@@ -2678,12 +2773,7 @@ pub async fn run(
                         .await
                         .map_err(|e| e.to_string());
                         match restarted {
-                            Ok(child) => {
-                                let _ = crate::dev_server_client::set_app_status(
-                                    &config_key,
-                                    "running",
-                                )
-                                .await;
+                            Ok(mut child) => {
                                 if let Some(pid) = child.id() {
                                     emit_persisted_app_event(
                                         &event_tx,
@@ -2692,14 +2782,40 @@ pub async fn run(
                                     )
                                     .await;
                                 }
-                                *lock = Some(child);
-                                app_started_once.store(true, std::sync::atomic::Ordering::Relaxed);
-                                emit_persisted_app_event(
-                                    &event_tx,
-                                    &log_store_path,
-                                    DevEvent::AppStarted,
-                                )
-                                .await;
+                                match wait_for_app_ready(&mut child, upstream_port, 30).await {
+                                    Ok(()) => {
+                                        let _ = crate::dev_server_client::set_app_status(
+                                            &config_key,
+                                            "running",
+                                        )
+                                        .await;
+                                        *lock = Some(child);
+                                        *app_started_at.lock().await = std::time::Instant::now();
+                                        app_started_once
+                                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                                        emit_persisted_app_event(
+                                            &event_tx,
+                                            &log_store_path,
+                                            DevEvent::AppStarted,
+                                        )
+                                        .await;
+                                    }
+                                    Err(msg) => {
+                                        let _ = child.kill().await;
+                                        let _ = log_tx
+                                            .send(ScopedLog::error(
+                                                "tako",
+                                                format!("failed to start: {msg}"),
+                                            ))
+                                            .await;
+                                        emit_persisted_app_event(
+                                            &event_tx,
+                                            &log_store_path,
+                                            DevEvent::AppError(msg),
+                                        )
+                                        .await;
+                                    }
+                                }
                             }
                             Err(msg) => {
                                 let _ = log_tx
@@ -2856,6 +2972,7 @@ pub async fn run(
             let log_store_path = log_store_path.clone();
             let last_req = last_req.clone();
             let inflight = inflight.clone();
+            let app_started_at = app_started_at.clone();
             let app_started_once = app_started_once.clone();
             let control_tx = control_tx.clone();
             let should_exit_tx = should_exit_tx.clone();
@@ -2890,6 +3007,23 @@ pub async fn run(
 
                                 let mut lock = child_state.lock().await;
                                 if lock.is_none() {
+                                    // Project dir or config gone — unregister and exit.
+                                    if !project_dir.exists() {
+                                        drop(lock);
+                                        let _ = log_tx
+                                            .send(ScopedLog::warn(
+                                                "tako",
+                                                "project directory no longer exists, removing app"
+                                                    .to_string(),
+                                            ))
+                                            .await;
+                                        let _ =
+                                            crate::dev_server_client::unregister_app(&config_key)
+                                                .await;
+                                        let _ = should_exit_tx.send(true);
+                                        break;
+                                    }
+
                                     if app_started_once.load(std::sync::atomic::Ordering::Relaxed) {
                                         let _ = log_tx.send(ScopedLog::divider()).await;
                                     }
@@ -2920,12 +3054,7 @@ pub async fn run(
                                     )
                                     .await
                                     {
-                                        Ok(child) => {
-                                            let _ = crate::dev_server_client::set_app_status(
-                                                &config_key,
-                                                "running",
-                                            )
-                                            .await;
+                                        Ok(mut child) => {
                                             if let Some(pid) = child.id() {
                                                 emit_persisted_app_event(
                                                     &event_tx,
@@ -2934,15 +3063,46 @@ pub async fn run(
                                                 )
                                                 .await;
                                             }
-                                            *lock = Some(child);
-                                            app_started_once
-                                                .store(true, std::sync::atomic::Ordering::Relaxed);
-                                            emit_persisted_app_event(
-                                                &event_tx,
-                                                &log_store_path,
-                                                DevEvent::AppStarted,
-                                            )
-                                            .await;
+                                            match wait_for_app_ready(&mut child, upstream_port, 30)
+                                                .await
+                                            {
+                                                Ok(()) => {
+                                                    let _ =
+                                                        crate::dev_server_client::set_app_status(
+                                                            &config_key,
+                                                            "running",
+                                                        )
+                                                        .await;
+                                                    *lock = Some(child);
+                                                    *app_started_at.lock().await =
+                                                        std::time::Instant::now();
+                                                    app_started_once.store(
+                                                        true,
+                                                        std::sync::atomic::Ordering::Relaxed,
+                                                    );
+                                                    emit_persisted_app_event(
+                                                        &event_tx,
+                                                        &log_store_path,
+                                                        DevEvent::AppStarted,
+                                                    )
+                                                    .await;
+                                                }
+                                                Err(msg) => {
+                                                    let _ = child.kill().await;
+                                                    let _ = log_tx
+                                                        .send(ScopedLog::error(
+                                                            "tako",
+                                                            format!("failed to start: {msg}"),
+                                                        ))
+                                                        .await;
+                                                    emit_persisted_app_event(
+                                                        &event_tx,
+                                                        &log_store_path,
+                                                        DevEvent::AppError(msg),
+                                                    )
+                                                    .await;
+                                                }
+                                            }
                                         }
                                         Err(e) => {
                                             let msg = e.to_string();
@@ -3054,6 +3214,71 @@ pub async fn run(
                             *reserve_state.lock().await = Some(listener);
                         }
                     }
+                }
+            });
+        }
+
+        // Child process exit monitor: detect when the app process exits
+        // unexpectedly and update status so the
+        // proxy stops routing to a dead port.
+        {
+            let child_state = child_state.clone();
+            let config_key = config_key.clone();
+            let event_tx = event_tx.clone();
+            let log_tx = log_tx.clone();
+            let log_store_path = log_store_path.clone();
+            let reserve_state = reserve_state.clone();
+            let app_started_at = app_started_at.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(Duration::from_millis(500)).await;
+
+                    let mut lock = child_state.lock().await;
+                    let Some(ref mut child) = *lock else {
+                        continue;
+                    };
+
+                    let Ok(Some(status)) = child.try_wait() else {
+                        continue;
+                    };
+
+                    // Child exited — remove from state.
+                    lock.take();
+                    drop(lock);
+
+                    // Re-reserve the upstream port so nothing else grabs it.
+                    if reserve_state.lock().await.is_none()
+                        && let Ok(std_listener) =
+                            std::net::TcpListener::bind(("127.0.0.1", upstream_port))
+                    {
+                        let _ = std_listener.set_nonblocking(true);
+                        if let Ok(listener) = TcpListener::from_std(std_listener) {
+                            *reserve_state.lock().await = Some(listener);
+                        }
+                    }
+
+                    let code_str = status
+                        .code()
+                        .map(|c| format!("exit code {c}"))
+                        .unwrap_or_else(|| "killed by signal".to_string());
+                    let uptime = app_started_at.lock().await.elapsed();
+                    let duration_str = if uptime.as_secs() < 1 {
+                        format!("after {}ms", uptime.as_millis())
+                    } else {
+                        format!("after {}s", uptime.as_secs())
+                    };
+                    let msg = format!("app exited ({code_str}, {duration_str})");
+                    let _ = log_tx.send(ScopedLog::fatal("tako", msg.clone())).await;
+
+                    // Mark idle (not stopped) so wake-on-request can restart
+                    // the app on the next HTTP request.
+                    let _ = crate::dev_server_client::set_app_status(&config_key, "idle").await;
+                    emit_persisted_app_event(
+                        &event_tx,
+                        &log_store_path,
+                        DevEvent::AppProcessExited(msg),
+                    )
+                    .await;
                 }
             });
         }
@@ -3179,7 +3404,7 @@ pub async fn run(
                                 DevEvent::AppStopped => {
                                     println!("○ App stopped (idle)");
                                 }
-                                DevEvent::AppPid(_) => {}
+                                DevEvent::AppPid(_) | DevEvent::AppProcessExited(_) => {}
                                 DevEvent::AppError(e) => {
                                     eprintln!("App error: {}", e);
                                 }
@@ -3220,6 +3445,28 @@ pub async fn run(
         println!("Goodbye!");
     }
     Ok(())
+}
+
+/// Wait for the dev server daemon to fully stop (socket gone + port released).
+async fn wait_for_dev_server_stopped(listen_addr: &str) {
+    // Wait for the socket connection to fail (daemon process exited).
+    for _ in 0..40 {
+        if crate::dev_server_client::info().await.is_err() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    // Wait for the listen port to be released (OS TCP cleanup).
+    if let Some(port_str) = listen_addr.rsplit(':').next()
+        && let Ok(port) = port_str.parse::<u16>()
+    {
+        for _ in 0..20 {
+            if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
 }
 
 fn reserve_ephemeral_port() -> Result<(u16, TcpListener), Box<dyn std::error::Error>> {
@@ -3270,6 +3517,10 @@ fn parse_app_event_marker(v: &serde_json::Value) -> Option<DevEvent> {
             .and_then(|x| x.as_u64())
             .and_then(|pid| u32::try_from(pid).ok())
             .map(DevEvent::AppPid),
+        "exited" => v
+            .get("message")
+            .and_then(|x| x.as_str())
+            .map(|msg| DevEvent::AppProcessExited(msg.to_string())),
         "error" => v
             .get("message")
             .and_then(|x| x.as_str())
@@ -3293,6 +3544,11 @@ fn app_event_marker_payload(event: &DevEvent) -> Option<serde_json::Value> {
             "type": DEV_LOG_APP_EVENT_MARKER_TYPE,
             "event": "pid",
             "pid": pid,
+        })),
+        DevEvent::AppProcessExited(message) => Some(serde_json::json!({
+            "type": DEV_LOG_APP_EVENT_MARKER_TYPE,
+            "event": "exited",
+            "message": message,
         })),
         DevEvent::AppError(message) => Some(serde_json::json!({
             "type": DEV_LOG_APP_EVENT_MARKER_TYPE,
@@ -3688,6 +3944,7 @@ async fn run_attached_dev_client(
                                 DevEvent::AppLaunching
                                 | DevEvent::AppStarted
                                 | DevEvent::AppPid(_)
+                                | DevEvent::AppProcessExited(_)
                                 | DevEvent::LogsReady => {}
                             }
                         }
@@ -3999,6 +4256,161 @@ mod dev_lock_tests {
             other => panic!("unexpected event: {:?}", other),
         }
     }
+
+    #[tokio::test]
+    async fn child_exit_monitor_detects_nonzero_exit() {
+        // Spawn a process that exits with a non-zero code.
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 42")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        // Wait for the child to actually exit before checking.
+        let _ = child.wait().await;
+
+        let status = child.try_wait().unwrap();
+        assert!(status.is_some(), "child should have exited");
+        let status = status.unwrap();
+        assert!(!status.success());
+        assert_eq!(status.code(), Some(42));
+    }
+
+    #[tokio::test]
+    async fn child_exit_monitor_detects_clean_exit() {
+        let mut child = tokio::process::Command::new("true")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let _ = child.wait().await;
+
+        let status = child.try_wait().unwrap();
+        assert!(status.is_some(), "child should have exited");
+        assert!(status.unwrap().success());
+    }
+
+    #[tokio::test]
+    async fn child_exit_monitor_emits_process_exited_on_nonzero_exit() {
+        // Verify the full monitoring flow: spawn an exiting child, put it
+        // in a child_state mutex, poll with try_wait(), and assert the right
+        // DevEvent is produced.
+        let child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 1")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let child_state = std::sync::Arc::new(tokio::sync::Mutex::new(Some(child)));
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+        let (_log_tx, mut _log_rx) = mpsc::channel::<ScopedLog>(32);
+        let log_store_path = std::env::temp_dir().join("test_exit_monitor.jsonl");
+
+        let cs = child_state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let mut lock = cs.lock().await;
+                let Some(ref mut child) = *lock else {
+                    continue;
+                };
+                let Ok(Some(status)) = child.try_wait() else {
+                    continue;
+                };
+                lock.take();
+                drop(lock);
+
+                let code_str = status
+                    .code()
+                    .map(|c| format!("exit code {c}"))
+                    .unwrap_or_else(|| "killed by signal".to_string());
+                emit_persisted_app_event(
+                    &event_tx,
+                    &log_store_path,
+                    DevEvent::AppProcessExited(format!("app exited ({code_str})")),
+                )
+                .await;
+                break;
+            }
+        });
+
+        let event = timeout(Duration::from_secs(5), event_rx.recv())
+            .await
+            .expect("should detect exit within timeout")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::AppProcessExited(msg) => {
+                assert!(msg.contains("exit code 1"), "got: {msg}");
+            }
+            other => panic!("expected AppProcessExited, got: {:?}", other),
+        }
+
+        // child_state should be None after monitor clears it.
+        assert!(child_state.lock().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn child_exit_monitor_emits_process_exited_on_clean_exit() {
+        // Even exit code 0 is unexpected for a dev server app — it should
+        // keep running. The monitor treats all exits the same.
+        let child = tokio::process::Command::new("true")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let child_state = std::sync::Arc::new(tokio::sync::Mutex::new(Some(child)));
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+        let log_store_path = std::env::temp_dir().join("test_exit_monitor_clean.jsonl");
+
+        let cs = child_state.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                let mut lock = cs.lock().await;
+                let Some(ref mut child) = *lock else {
+                    continue;
+                };
+                let Ok(Some(status)) = child.try_wait() else {
+                    continue;
+                };
+                lock.take();
+                drop(lock);
+
+                let code_str = status
+                    .code()
+                    .map(|c| format!("exit code {c}"))
+                    .unwrap_or_else(|| "killed by signal".to_string());
+                emit_persisted_app_event(
+                    &event_tx,
+                    &log_store_path,
+                    DevEvent::AppProcessExited(format!("app exited ({code_str})")),
+                )
+                .await;
+                break;
+            }
+        });
+
+        let event = timeout(Duration::from_secs(5), event_rx.recv())
+            .await
+            .expect("should detect exit within timeout")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::AppProcessExited(msg) => {
+                assert!(msg.contains("exit code 0"), "got: {msg}");
+            }
+            other => panic!("expected AppProcessExited, got: {:?}", other),
+        }
+
+        assert!(child_state.lock().await.is_none());
+    }
 }
 
 async fn spawn_app_process(
@@ -4036,10 +4448,40 @@ async fn spawn_app_process(
     if let Some(stderr) = child.stderr.take() {
         let tx = log_tx.clone();
         let scope = scope.clone();
-        tokio::spawn(async move { read_child_lines(stderr, tx, scope, LogLevel::Warn).await });
+        tokio::spawn(async move { read_child_lines(stderr, tx, scope, LogLevel::Error).await });
     }
 
     Ok(child)
+}
+
+/// Wait for the app process to start accepting TCP connections on the given
+/// port, polling every 100ms.  Returns `Ok(())` when the port is reachable,
+/// or `Err(msg)` if the process exits before that.
+async fn wait_for_app_ready(
+    child: &mut tokio::process::Child,
+    port: u16,
+    timeout_secs: u64,
+) -> Result<(), String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
+    while std::time::Instant::now() < deadline {
+        // Fast path: did the process already exit?
+        if let Ok(Some(status)) = child.try_wait() {
+            let code = status
+                .code()
+                .map(|c| format!("exit code {c}"))
+                .unwrap_or_else(|| "signal".to_string());
+            return Err(format!("process exited during startup ({code})"));
+        }
+        // Try TCP connect.
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
+            return Ok(());
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    Err("timed out waiting for app to listen on port".to_string())
 }
 
 fn strip_ascii_case_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
@@ -4151,6 +4593,7 @@ pub enum DevEvent {
     AppLaunching,
     AppStarted,
     AppStopped,
+    AppProcessExited(String),
     AppPid(u32),
     AppError(String),
     LogsCleared,

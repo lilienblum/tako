@@ -1063,7 +1063,7 @@ fn request_host(req: &pingora_http::RequestHeader) -> &str {
 }
 
 fn path_looks_like_static_asset(path: &str) -> bool {
-    let final_segment = path.rsplit('/').next().unwrap_or("");
+    let final_segment = path.rsplit_once('/').map_or(path, |(_, segment)| segment);
     final_segment.contains('.') && !final_segment.ends_with('.')
 }
 

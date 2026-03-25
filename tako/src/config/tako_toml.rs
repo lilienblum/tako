@@ -26,6 +26,10 @@ pub struct Config {
     /// App preset reference (e.g. "tanstack-start"). Provides `main` and `assets` defaults.
     pub preset: Option<String>,
 
+    /// Custom dev command override (e.g. `["vite", "dev"]`).
+    #[serde(default)]
+    pub dev: Vec<String>,
+
     /// Runtime entrypoint override relative to project root
     pub main: Option<String>,
 

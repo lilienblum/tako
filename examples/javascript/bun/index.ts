@@ -1,6 +1,6 @@
 const WIDLCARD_SUFFIX = process.env.WIDLCARD_SUFFIX!;
 
-export default async function fetch(req: Request) {
+export default function fetch(req: Request) {
   const url = new URL(req.url);
   const tenant = getTenantFromHostname(url.hostname);
   const pid = process.pid;

@@ -161,6 +161,7 @@ fn status_dot(status: &str) -> (&'static str, &'static str) {
             ("\x1b[38;2;234;211;156m", "●")
         }
         "stopped" => ("\x1b[2m", "○"),
+        "exited" => ("\x1b[38;2;232;163;160m", "●"),
         s if s.contains("error") => ("\x1b[38;2;232;163;160m", "●"),
         _ => ("\x1b[2m", "●"),
     }
@@ -1075,6 +1076,21 @@ pub async fn run_dev_output(
                     DevEvent::AppPid(pid) => {
                         app_pid = Some(Pid::from(pid as usize));
                         fs.pid = Some(pid as usize);
+                        fs.refresh(
+                            &mut footer,
+                            &app_name,
+                            &adapter_name,
+                            &hosts,
+                            port,
+                            app_port,
+                        );
+                    }
+                    DevEvent::AppProcessExited(_) => {
+                        app_pid = None;
+                        fs.cpu = None;
+                        fs.mem_bytes = None;
+                        fs.pid = None;
+                        fs.status = "exited".to_string();
                         fs.refresh(
                             &mut footer,
                             &app_name,

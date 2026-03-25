@@ -3,6 +3,10 @@
 # runtime = "bun"
 # preset = "tanstack-start"
 
+[vite]
+dev = ["vite", "dev"]
+
 [tanstack-start]
 main = "@tanstack/react-start/server-entry"
 assets = ["dist/client"]
+dev = ["vite", "dev"]

@@ -148,7 +148,7 @@ pub enum Response {
 impl Response {
     pub fn ok(data: impl Serialize) -> Self {
         Self::Ok {
-            data: serde_json::to_value(data).unwrap_or(serde_json::Value::Null),
+            data: serde_json::to_value(data).expect("Response::ok data must serialize"),
         }
     }
 
@@ -486,6 +486,23 @@ mod tests {
         let response = Response::ok(serde_json::json!({"name": "test"}));
         assert!(response.is_ok());
         assert!(response.data().is_some());
+    }
+
+    struct FailingSerialize;
+
+    impl serde::Serialize for FailingSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer,
+        {
+            Err(serde::ser::Error::custom("boom"))
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Response::ok data must serialize")]
+    fn test_response_ok_panics_when_serialization_fails() {
+        let _ = Response::ok(FailingSerialize);
     }
 
     #[test]

@@ -596,7 +596,7 @@ async fn resolve_log_server_names(
             {
                 *servers = ServersToml::load()?;
                 if servers.len() == 1 {
-                    let only = servers.names().into_iter().next().unwrap_or("<server>");
+                    let only = servers.names()[0];
                     return Ok(vec![only.to_string()]);
                 }
             }

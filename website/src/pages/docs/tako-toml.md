@@ -64,6 +64,16 @@ If neither `tako.toml`, manifest main, nor the preset provides a `main`, deploy 
 
 During deploy, Tako verifies this resolved path exists in the post-build app directory and fails if it is missing.
 
+### `dev`
+
+Optional dev command override for `tako dev`. When set, this takes priority over preset and runtime defaults.
+
+```toml
+dev = ["vite", "dev"]
+```
+
+If omitted, `tako dev` checks the preset for a `dev` command, then falls back to the runtime default (JS runtimes use the SDK entrypoint with `main`, Go uses `go run .`).
+
 ### `runtime`
 
 Optional runtime adapter override. Controls which base preset is used when `preset` is not set.

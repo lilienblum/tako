@@ -148,7 +148,7 @@ fn read_package_manager_field(project_dir: &Path) -> Option<PackageManager> {
 fn resolve_pm(ctx: &PluginContext, default: PackageManager) -> PackageManager {
     // Explicit override from tako.toml or manifest (may include version like "pnpm@9.1.0")
     if let Some(pm_str) = ctx.package_manager {
-        let name = pm_str.split('@').next().unwrap_or(pm_str);
+        let name = pm_str.split_once('@').map_or(pm_str, |(name, _)| name);
         match name {
             "bun" => return PackageManager::Bun,
             "npm" => return PackageManager::Npm,
@@ -236,14 +236,39 @@ fn pm_build_command(pm: &PackageManager) -> String {
     }
 }
 
-fn pm_dev_command(pm: &PackageManager) -> Vec<String> {
-    match pm {
-        PackageManager::Deno => vec!["deno".to_string(), "task".to_string(), "dev".to_string()],
-        _ => {
-            let id = pm.id();
-            vec![id.to_string(), "run".to_string(), "dev".to_string()]
-        }
-    }
+/// Default dev command for JS runtimes: run through the SDK entrypoint,
+/// same as production but locally. Framework presets (vite, tanstack-start)
+/// override this with their own dev server.
+fn js_dev_command_bun() -> Vec<String> {
+    vec![
+        "bun".to_string(),
+        "run".to_string(),
+        "node_modules/tako.sh/dist/entrypoints/bun.mjs".to_string(),
+        "{main}".to_string(),
+    ]
+}
+
+fn js_dev_command_node() -> Vec<String> {
+    vec![
+        "node".to_string(),
+        "--experimental-strip-types".to_string(),
+        "node_modules/tako.sh/dist/entrypoints/node.mjs".to_string(),
+        "{main}".to_string(),
+    ]
+}
+
+fn js_dev_command_deno() -> Vec<String> {
+    vec![
+        "deno".to_string(),
+        "run".to_string(),
+        "--allow-net".to_string(),
+        "--allow-env".to_string(),
+        "--allow-read".to_string(),
+        "--allow-write".to_string(),
+        "--node-modules-dir=auto".to_string(),
+        "node_modules/tako.sh/dist/entrypoints/deno.mjs".to_string(),
+        "{main}".to_string(),
+    ]
 }
 
 fn build_package_manager_def(pm: &PackageManager) -> PackageManagerDef {
@@ -356,7 +381,7 @@ impl BunPlugin {
             },
             preset: PresetDef {
                 main: Some("src/index.ts".to_string()),
-                dev: pm_dev_command(pm),
+                dev: js_dev_command_bun(),
                 watch: vec![],
                 start: vec![
                     "{bin}".to_string(),
@@ -416,7 +441,7 @@ impl NodePlugin {
             },
             preset: PresetDef {
                 main: Some("index.js".to_string()),
-                dev: pm_dev_command(pm),
+                dev: js_dev_command_node(),
                 watch: vec![
                     "**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx", "**/*.mts", "**/*.mjs",
                 ]
@@ -491,7 +516,7 @@ impl DenoPlugin {
             },
             preset: PresetDef {
                 main: Some("main.ts".to_string()),
-                dev: vec!["deno".to_string(), "task".to_string(), "dev".to_string()],
+                dev: js_dev_command_deno(),
                 watch: vec![],
                 start: vec![
                     "{bin}".to_string(),

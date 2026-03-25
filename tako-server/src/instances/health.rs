@@ -29,8 +29,8 @@ impl Default for HealthConfig {
     fn default() -> Self {
         Self {
             check_interval: crate::defaults::HEALTH_CHECK_INTERVAL,
-            unhealthy_threshold: 2, // 2 failures = unhealthy
-            dead_threshold: 5,      // 5 failures = dead
+            unhealthy_threshold: 1, // 1 failure = unhealthy
+            dead_threshold: 1,      // 1 failure = dead (restart immediately)
             probe_timeout: crate::defaults::HEALTH_PROBE_TIMEOUT,
             max_probe_concurrency: 16,
         }
@@ -114,6 +114,27 @@ impl HealthChecker {
             current_state,
             InstanceState::Starting | InstanceState::Draining | InstanceState::Stopped
         ) {
+            return;
+        }
+
+        // Fast path: detect process exit immediately via try_wait() instead
+        // of waiting for the HTTP probe to time out.
+        if !instance.is_alive().await {
+            let instance_key = format!("{}:{}", app.name(), instance.id);
+            self.failure_counts.remove(&instance_key);
+            instance.set_state(InstanceState::Stopped);
+            tracing::error!(
+                app = %app.name(),
+                instance = %instance.id,
+                "Instance process exited"
+            );
+            let _ = self
+                .event_tx
+                .send(HealthEvent::Dead {
+                    app: app.name(),
+                    instance_id: instance.id.clone(),
+                })
+                .await;
             return;
         }
 
@@ -365,8 +386,8 @@ mod tests {
             config.check_interval,
             crate::defaults::HEALTH_CHECK_INTERVAL
         );
-        assert_eq!(config.unhealthy_threshold, 2);
-        assert_eq!(config.dead_threshold, 5);
+        assert_eq!(config.unhealthy_threshold, 1);
+        assert_eq!(config.dead_threshold, 1);
         assert_eq!(config.probe_timeout, crate::defaults::HEALTH_PROBE_TIMEOUT);
         assert_eq!(config.max_probe_concurrency, 16);
     }
@@ -556,5 +577,78 @@ mod tests {
         let healthy =
             probe_instance_health(&instance, "tako", "/status", Duration::from_millis(200)).await;
         assert!(healthy);
+    }
+
+    #[tokio::test]
+    async fn test_check_instance_detects_process_exit() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let config = HealthConfig::default();
+        let checker = HealthChecker::new(config, tx);
+
+        let (app_tx, _app_rx) = mpsc::channel(16);
+        let app_config = AppConfig {
+            name: "test-app".to_string(),
+            ..Default::default()
+        };
+        let app = Arc::new(App::new(app_config, app_tx));
+        let instance = app.allocate_instance();
+
+        // Spawn a process that exits immediately.
+        let child = tokio::process::Command::new("true")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        instance.set_process(child);
+        instance.set_state(InstanceState::Healthy);
+
+        // Wait for the process to actually exit.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        checker.check_instance(&app, &instance).await;
+
+        // Should emit Dead event (process exited).
+        let event = rx.try_recv().expect("should emit event");
+        assert!(matches!(event, HealthEvent::Dead { .. }));
+        assert_eq!(instance.state(), InstanceState::Stopped);
+    }
+
+    #[tokio::test]
+    async fn test_single_probe_failure_triggers_dead() {
+        let (tx, mut rx) = mpsc::channel(16);
+        let config = HealthConfig::default();
+        let checker = HealthChecker::new(config, tx);
+
+        let (app_tx, _app_rx) = mpsc::channel(16);
+        let app_config = AppConfig {
+            name: "test-app".to_string(),
+            ..Default::default()
+        };
+        let app = Arc::new(App::new(app_config, app_tx));
+        let instance = app.allocate_instance();
+
+        // Set instance as Healthy with a port nobody is listening on.
+        instance.set_port(19999);
+        instance.set_state(InstanceState::Healthy);
+
+        // Spawn a long-running process so is_alive() returns true, forcing
+        // the probe path (which will fail because nothing listens on 19999).
+        let child = tokio::process::Command::new("sleep")
+            .arg("60")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        instance.set_process(child);
+
+        checker.check_instance(&app, &instance).await;
+
+        // With threshold=1, a single probe failure should emit Dead.
+        let event = rx.try_recv().expect("should emit event");
+        assert!(matches!(event, HealthEvent::Dead { .. }));
+        assert_eq!(instance.state(), InstanceState::Stopped);
+
+        // Clean up.
+        let _ = instance.kill().await;
     }
 }
