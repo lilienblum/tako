@@ -156,6 +156,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Add E2E bin to PATH
+        run: echo "${{ github.workspace }}/.e2e-bin" >> $GITHUB_PATH
+
       - name: Run CLI tests
         env:
           TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
@@ -165,7 +168,6 @@ jobs:
         env:
           TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
           TAKO_DEV_E2E: "1"
-          PATH: ${{ github.workspace }}/.e2e-bin:${{ env.PATH }}
         run: cd e2e/cli && sudo -E bun test tests/dev.test.ts
 
   cli-macos:
@@ -194,6 +196,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Add E2E bin to PATH
+        run: echo "${{ github.workspace }}/.e2e-bin" >> $GITHUB_PATH
+
       - name: Run CLI tests
         env:
           TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
@@ -203,7 +208,6 @@ jobs:
         env:
           TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
           TAKO_DEV_E2E: "1"
-          PATH: ${{ github.workspace }}/.e2e-bin:${{ env.PATH }}
         run: cd e2e/cli && bun test tests/dev.test.ts
 
   links:
