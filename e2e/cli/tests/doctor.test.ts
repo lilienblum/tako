@@ -197,6 +197,7 @@ describe("tako doctor --ci", () => {
 
     expect(exitCode).toBe(0);
     const raw = term.rawOutput();
+    // eslint-disable-next-line no-control-regex
     expect(raw).not.toMatch(/\x1b\[38;2;\d+;\d+;\d+m/);
   });
 });

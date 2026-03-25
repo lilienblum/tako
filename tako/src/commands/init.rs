@@ -432,17 +432,17 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
     });
 
     // Generate tako.toml
-    let template = generate_template(
-        app_name.trim(),
-        main_entry.as_deref().map(str::trim),
-        &sanitize_route(&production_route),
-        Some(adapter.id()),
-        runtime_version.as_deref(),
-        pm_for_toml.as_deref(),
-        selected_preset_for_toml.as_deref(),
-        &assets,
-        &excludes,
-    );
+    let template = generate_template(&TemplateParams {
+        app_name: app_name.trim(),
+        main: main_entry.as_deref().map(str::trim),
+        production_route: &sanitize_route(&production_route),
+        runtime: Some(adapter.id()),
+        runtime_version: runtime_version.as_deref(),
+        package_manager: pm_for_toml.as_deref(),
+        preset_ref: selected_preset_for_toml.as_deref(),
+        assets: &assets,
+        excludes: &excludes,
+    });
 
     fs::write(&tako_toml_path, template)?;
     ensure_project_gitignore_tracks_secrets(&project_dir)?;
@@ -584,17 +584,17 @@ fn run_non_interactive(
         *pm_id != default_pm
     });
 
-    let template = generate_template(
-        app_name.trim(),
-        main.as_deref().map(str::trim),
-        &sanitize_route(&production_route),
-        Some(adapter.id()),
-        runtime_version.as_deref(),
-        pm_for_toml.as_deref(),
-        None,
-        &[],
-        &[],
-    );
+    let template = generate_template(&TemplateParams {
+        app_name: app_name.trim(),
+        main: main.as_deref().map(str::trim),
+        production_route: &sanitize_route(&production_route),
+        runtime: Some(adapter.id()),
+        runtime_version: runtime_version.as_deref(),
+        package_manager: pm_for_toml.as_deref(),
+        preset_ref: None,
+        assets: &[],
+        excludes: &[],
+    });
 
     fs::write(tako_toml_path, template)?;
     ensure_project_gitignore_tracks_secrets(project_dir)?;
@@ -950,17 +950,30 @@ fn sdk_install_command(runtime: BuildAdapter, project_dir: &Path) -> Option<Stri
     Some(add_cmd.replace("{package}", "tako.sh"))
 }
 
-fn generate_template(
-    app_name: &str,
-    main: Option<&str>,
-    production_route: &str,
-    runtime: Option<&str>,
-    runtime_version: Option<&str>,
-    package_manager: Option<&str>,
-    preset_ref: Option<&str>,
-    assets: &[String],
-    excludes: &[String],
-) -> String {
+struct TemplateParams<'a> {
+    app_name: &'a str,
+    main: Option<&'a str>,
+    production_route: &'a str,
+    runtime: Option<&'a str>,
+    runtime_version: Option<&'a str>,
+    package_manager: Option<&'a str>,
+    preset_ref: Option<&'a str>,
+    assets: &'a [String],
+    excludes: &'a [String],
+}
+
+fn generate_template(params: &TemplateParams<'_>) -> String {
+    let TemplateParams {
+        app_name,
+        main,
+        production_route,
+        runtime,
+        runtime_version,
+        package_manager,
+        preset_ref,
+        assets,
+        excludes,
+    } = params;
     let main_line = if let Some(main) = main {
         format!(
             "# Required: runtime entrypoint used by `tako dev` and `tako deploy` (relative to project root).\nmain = \"{}\"",
@@ -1092,26 +1105,26 @@ route = "{production_route}"
 #[cfg(test)]
 mod tests {
     use super::{
-        build_preset_selection_options, ensure_project_gitignore_tracks_secrets, generate_template,
-        infer_default_main_entrypoint, normalize_group_preset_definitions, preset_default_main,
-        resolve_adapter, sdk_install_command,
+        TemplateParams, build_preset_selection_options, ensure_project_gitignore_tracks_secrets,
+        generate_template, infer_default_main_entrypoint, normalize_group_preset_definitions,
+        preset_default_main, resolve_adapter, sdk_install_command,
     };
     use crate::build::{BuildAdapter, PresetDefinition};
     use tempfile::TempDir;
 
     #[test]
     fn init_template_keeps_only_minimal_options_uncommented() {
-        let rendered = generate_template(
-            "demo-app",
-            Some("server/index.mjs"),
-            "demo-app.example.com",
-            Some("bun"),
-            None,
-            None,
-            None,
-            &[],
-            &[],
-        );
+        let rendered = generate_template(&TemplateParams {
+            app_name: "demo-app",
+            main: Some("server/index.mjs"),
+            production_route: "demo-app.example.com",
+            runtime: Some("bun"),
+            runtime_version: None,
+            package_manager: None,
+            preset_ref: None,
+            assets: &[],
+            excludes: &[],
+        });
 
         assert!(
             rendered
@@ -1185,17 +1198,17 @@ mod tests {
 
     #[test]
     fn init_template_includes_reference_link_and_option_examples() {
-        let rendered = generate_template(
-            "demo-app",
-            Some("server/index.mjs"),
-            "demo-app.example.com",
-            Some("bun"),
-            None,
-            None,
-            None,
-            &[],
-            &[],
-        );
+        let rendered = generate_template(&TemplateParams {
+            app_name: "demo-app",
+            main: Some("server/index.mjs"),
+            production_route: "demo-app.example.com",
+            runtime: Some("bun"),
+            runtime_version: None,
+            package_manager: None,
+            preset_ref: None,
+            assets: &[],
+            excludes: &[],
+        });
 
         assert!(
             rendered.contains("https://tako.sh/docs/tako-toml"),
@@ -1302,118 +1315,118 @@ mod tests {
 
     #[test]
     fn init_template_can_omit_main_when_preset_provides_default() {
-        let rendered = generate_template(
-            "demo-app",
-            None,
-            "demo-app.example.com",
-            Some("bun"),
-            None,
-            None,
-            None,
-            &[],
-            &[],
-        );
+        let rendered = generate_template(&TemplateParams {
+            app_name: "demo-app",
+            main: None,
+            production_route: "demo-app.example.com",
+            runtime: Some("bun"),
+            runtime_version: None,
+            package_manager: None,
+            preset_ref: None,
+            assets: &[],
+            excludes: &[],
+        });
         assert!(rendered.contains("# Entrypoint comes from the selected preset default `main`."));
         assert!(!rendered.contains("\nmain = \""));
     }
 
     #[test]
     fn init_template_uses_prompted_production_route() {
-        let rendered = generate_template(
-            "demo-app",
-            Some("server/index.mjs"),
-            "api.demo-app.com",
-            Some("bun"),
-            None,
-            None,
-            None,
-            &[],
-            &[],
-        );
+        let rendered = generate_template(&TemplateParams {
+            app_name: "demo-app",
+            main: Some("server/index.mjs"),
+            production_route: "api.demo-app.com",
+            runtime: Some("bun"),
+            runtime_version: None,
+            package_manager: None,
+            preset_ref: None,
+            assets: &[],
+            excludes: &[],
+        });
         assert!(rendered.contains("[envs.production]\nroute = \"api.demo-app.com\""));
         assert!(!rendered.contains("[envs.production]\nroute = \"demo-app.example.com\""));
     }
 
     #[test]
     fn init_template_can_leave_preset_unset() {
-        let rendered = generate_template(
-            "demo-app",
-            None,
-            "demo-app.example.com",
-            Some("node"),
-            None,
-            None,
-            None,
-            &[],
-            &[],
-        );
+        let rendered = generate_template(&TemplateParams {
+            app_name: "demo-app",
+            main: None,
+            production_route: "demo-app.example.com",
+            runtime: Some("node"),
+            runtime_version: None,
+            package_manager: None,
+            preset_ref: None,
+            assets: &[],
+            excludes: &[],
+        });
         assert!(rendered.contains("runtime = \"node\""));
         assert!(rendered.contains("# preset = \"my-node-preset\""));
     }
 
     #[test]
     fn init_template_writes_selected_build_adapter() {
-        let rendered = generate_template(
-            "demo-app",
-            None,
-            "demo-app.example.com",
-            Some("bun"),
-            None,
-            None,
-            None,
-            &[],
-            &[],
-        );
+        let rendered = generate_template(&TemplateParams {
+            app_name: "demo-app",
+            main: None,
+            production_route: "demo-app.example.com",
+            runtime: Some("bun"),
+            runtime_version: None,
+            package_manager: None,
+            preset_ref: None,
+            assets: &[],
+            excludes: &[],
+        });
         assert!(rendered.contains("runtime = \"bun\""));
     }
 
     #[test]
     fn init_template_writes_runtime_local_preset_reference() {
-        let rendered = generate_template(
-            "demo-app",
-            None,
-            "demo-app.example.com",
-            Some("bun"),
-            None,
-            None,
-            Some("tanstack-start"),
-            &[],
-            &[],
-        );
+        let rendered = generate_template(&TemplateParams {
+            app_name: "demo-app",
+            main: None,
+            production_route: "demo-app.example.com",
+            runtime: Some("bun"),
+            runtime_version: None,
+            package_manager: None,
+            preset_ref: Some("tanstack-start"),
+            assets: &[],
+            excludes: &[],
+        });
         assert!(rendered.contains("preset = \"tanstack-start\""));
         assert!(!rendered.contains("preset = \"js/tanstack-start\""));
     }
 
     #[test]
     fn init_template_pins_runtime_version_when_provided() {
-        let rendered = generate_template(
-            "demo-app",
-            None,
-            "demo-app.example.com",
-            Some("bun"),
-            Some("1.2.3"),
-            None,
-            None,
-            &[],
-            &[],
-        );
+        let rendered = generate_template(&TemplateParams {
+            app_name: "demo-app",
+            main: None,
+            production_route: "demo-app.example.com",
+            runtime: Some("bun"),
+            runtime_version: Some("1.2.3"),
+            package_manager: None,
+            preset_ref: None,
+            assets: &[],
+            excludes: &[],
+        });
         assert!(rendered.contains("runtime_version = \"1.2.3\""));
         assert!(!rendered.contains("# runtime_version"));
     }
 
     #[test]
     fn init_template_comments_runtime_version_when_absent() {
-        let rendered = generate_template(
-            "demo-app",
-            None,
-            "demo-app.example.com",
-            Some("bun"),
-            None,
-            None,
-            None,
-            &[],
-            &[],
-        );
+        let rendered = generate_template(&TemplateParams {
+            app_name: "demo-app",
+            main: None,
+            production_route: "demo-app.example.com",
+            runtime: Some("bun"),
+            runtime_version: None,
+            package_manager: None,
+            preset_ref: None,
+            assets: &[],
+            excludes: &[],
+        });
         assert!(rendered.contains("# runtime_version = \"1.0.0\""));
         assert!(!rendered.contains("\nruntime_version = \""));
     }

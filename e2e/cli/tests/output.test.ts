@@ -151,8 +151,10 @@ describe("--ci vs normal mode", () => {
     expect(ci.screen).toContain("No servers configured");
 
     // Normal mode raw output should have RGB escape sequences
+    // eslint-disable-next-line no-control-regex
     expect(normal.term.rawOutput()).toMatch(/\x1b\[38;2;\d+;\d+;\d+m/);
     // CI mode should NOT have RGB escape sequences
+    // eslint-disable-next-line no-control-regex
     expect(ci.term.rawOutput()).not.toMatch(/\x1b\[38;2;\d+;\d+;\d+m/);
   });
 });
