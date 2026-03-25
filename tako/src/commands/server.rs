@@ -2059,25 +2059,22 @@ pub async fn prompt_dns_setup(ssh: &SshClient) -> Result<DnsConfig, Box<dyn std:
             provider,
         ));
         output::muted("See https://go-acme.github.io/lego/dns/ for provider docs.");
-        output::muted("Enter variables as KEY=VALUE, one per line. Empty line to finish.");
+        output::muted("Enter variable name, then value. Empty name to finish.");
 
         loop {
-            let line = output::TextField::new("ENV_VAR=value")
+            let key = output::TextField::new("Variable name")
                 .optional()
                 .prompt()?;
-            let line = line.trim().to_string();
-            if line.is_empty() {
+            let key = key.trim().to_string();
+            if key.is_empty() {
                 break;
             }
-            if let Some((key, value)) = line.split_once('=') {
-                credentials.push((key.trim().to_string(), value.trim().to_string()));
-            } else {
-                output::warning(&format!("Invalid format '{}' — expected KEY=VALUE", line));
-            }
+            let value = output::password_field(&format!("{key} value"))?;
+            credentials.push((key, value));
         }
     } else {
         for (var_name, description) in known_vars {
-            let value = output::text_field(description, None)?;
+            let value = output::password_field(description)?;
             credentials.push((var_name.to_string(), value));
         }
     }
