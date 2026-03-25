@@ -738,7 +738,7 @@ fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::er
         return Ok(());
     }
 
-    if !crate::output::is_interactive() {
+    if !crate::output::is_interactive() && !crate::output::is_root() {
         return Err(format!(
             "local DNS resolver is not configured at {TAKO_RESOLVER_FILE}; run `tako dev` interactively once to install it"
         )

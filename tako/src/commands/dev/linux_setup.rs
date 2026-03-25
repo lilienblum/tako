@@ -440,7 +440,7 @@ pub(crate) fn ensure_installed() -> Result<(), Box<dyn std::error::Error>> {
         _ => {}
     }
 
-    if !crate::output::is_interactive() {
+    if !crate::output::is_interactive() && !crate::output::is_root() {
         return Err(
             "Linux port redirect is not configured; run `tako dev` interactively once to set it up"
                 .into(),

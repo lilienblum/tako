@@ -217,6 +217,17 @@ pub fn is_ci() -> bool {
     CI.load(Ordering::Relaxed)
 }
 
+/// True when running as root (euid 0), meaning sudo prompts are unnecessary.
+#[cfg(unix)]
+pub fn is_root() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(not(unix))]
+pub fn is_root() -> bool {
+    false
+}
+
 /// True when pretty output should render (normal interactive mode).
 /// False in verbose or CI mode, where tracing handles all output.
 pub fn is_pretty() -> bool {

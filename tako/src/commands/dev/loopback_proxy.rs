@@ -469,7 +469,7 @@ pub(crate) fn ensure_installed() -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
-    if !crate::output::is_interactive() {
+    if !crate::output::is_interactive() && !crate::output::is_root() {
         return Err(
             "local loopback proxy is not configured; run `tako dev` interactively once to install it"
                 .into(),
