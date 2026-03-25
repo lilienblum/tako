@@ -156,6 +156,9 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Build SDK
+        run: bun run --filter 'tako.sh' build
+
       - name: Add E2E bin to PATH
         run: echo "${{ github.workspace }}/.e2e-bin" >> $GITHUB_PATH
 
@@ -195,6 +198,9 @@ jobs:
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
+
+      - name: Build SDK
+        run: bun run --filter 'tako.sh' build
 
       - name: Add E2E bin to PATH
         run: echo "${{ github.workspace }}/.e2e-bin" >> $GITHUB_PATH
