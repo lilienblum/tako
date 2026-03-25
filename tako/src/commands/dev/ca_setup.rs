@@ -5,6 +5,17 @@
 use crate::dev::{LocalCA, LocalCAStore};
 use crate::output;
 
+/// Returns true when running as root (uid 0), meaning sudo prompts are unnecessary.
+#[cfg(unix)]
+fn is_root() -> bool {
+    unsafe { libc::geteuid() == 0 }
+}
+
+#[cfg(not(unix))]
+fn is_root() -> bool {
+    false
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CaSource {
     Existing,
@@ -54,7 +65,7 @@ pub async fn setup_local_ca() -> Result<LocalCA, Box<dyn std::error::Error>> {
     let ca_trusted = store.is_ca_trusted();
     let plan = plan_ca_setup(ca_exists, ca_trusted);
 
-    if plan.install_trust && !output::is_interactive() {
+    if plan.install_trust && !output::is_interactive() && !is_root() {
         return Err(
             "local CA is not trusted; run `tako dev` interactively once to install it".into(),
         );
