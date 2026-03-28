@@ -1,8 +1,8 @@
 use std::fmt::Display;
 use std::future::Future;
 use std::io::IsTerminal;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use console::Term;
@@ -14,6 +14,19 @@ use tracing_subscriber::registry::LookupSpan;
 static VERBOSE: AtomicBool = AtomicBool::new(false);
 static CI: AtomicBool = AtomicBool::new(false);
 static DRY_RUN: AtomicBool = AtomicBool::new(false);
+
+/// Active PhaseSpinner's ProgressBar. When set, all output routes through
+/// `pb.println()` so the spinner stays on the last line.
+static PHASE_PB: Mutex<Option<ProgressBar>> = Mutex::new(None);
+
+/// Print a line to stderr, routing through the active PhaseSpinner if one exists.
+fn emit(line: &str) {
+    if let Some(pb) = PHASE_PB.lock().unwrap().as_ref() {
+        pb.println(line);
+    } else {
+        eprintln!("{line}");
+    }
+}
 
 // Brand palette
 #[allow(dead_code)]
@@ -429,13 +442,17 @@ pub fn heading_no_gap(title: &str) {
 
 pub fn info(message: &str) {
     if is_pretty() {
-        eprintln!("{}", brand_fg(message));
+        emit(&format!("{}", brand_fg(message)));
     }
 }
 
 pub fn bullet(message: &str) {
     if is_pretty() {
-        eprintln!("  {} {}", bold(&brand_secondary("•")), brand_fg(message));
+        emit(&format!(
+            "  {} {}",
+            bold(&brand_secondary("•")),
+            brand_fg(message)
+        ));
     }
 }
 
@@ -457,33 +474,41 @@ fn format_warning_bullet_line(message: &str) -> String {
 
 pub fn success(message: &str) {
     if is_pretty() {
-        eprintln!("{} {}", brand_success("✓"), brand_fg(message));
+        emit(&format!("{} {}", brand_success("✓"), brand_fg(message)));
     }
 }
 
 pub fn warning(message: &str) {
     if is_pretty() {
-        eprintln!("{} {}", bold(&brand_warning("!")), brand_fg(message));
+        emit(&format!(
+            "{} {}",
+            bold(&brand_warning("!")),
+            brand_fg(message)
+        ));
     }
 }
 
 #[allow(dead_code)]
 pub fn warning_full(message: &str) {
     if is_pretty() {
-        eprintln!("{}", format_warning_full_line(message));
+        emit(&format_warning_full_line(message));
     }
 }
 
 #[allow(dead_code)]
 pub fn warning_bullet(message: &str) {
     if is_pretty() {
-        eprintln!("{}", format_warning_bullet_line(message));
+        emit(&format_warning_bullet_line(message));
     }
 }
 
 pub fn error(message: &str) {
     if is_pretty() {
-        eprintln!("{} {}", bold(&brand_error("✗")), brand_fg(message));
+        emit(&format!(
+            "{} {}",
+            bold(&brand_error("✗")),
+            brand_fg(message)
+        ));
     }
 }
 
@@ -495,14 +520,14 @@ pub fn error_stderr(message: &str) {
 /// Print a dry-run skip notice: "⏭ {message} (dry run)"
 pub fn dry_run_skip(message: &str) {
     if is_pretty() {
-        eprintln!(
+        emit(&format!(
             "{} {} {}",
             brand_muted("⏭"),
             brand_fg(message),
             brand_muted("(dry run)")
-        );
+        ));
     } else if is_ci() {
-        eprintln!("{}", format_dry_run_skip_plain(message));
+        emit(&format_dry_run_skip_plain(message));
     } else {
         tracing::info!("dry-run skip: {}", message);
     }
@@ -514,7 +539,7 @@ fn format_dry_run_skip_plain(message: &str) -> String {
 
 pub fn muted(message: &str) {
     if is_pretty() {
-        eprintln!("{}", brand_muted(message));
+        emit(&format!("{}", brand_muted(message)));
     }
 }
 
@@ -522,7 +547,7 @@ pub fn muted(message: &str) {
 /// Use for actionable guidance like "Run X to do Y" where the command is strong()'d.
 pub fn hint(message: &str) {
     if is_pretty() {
-        eprintln!("{}", brand_dim(message));
+        emit(&format!("{}", brand_dim(message)));
     } else {
         tracing::info!("{}", message);
     }
@@ -582,7 +607,7 @@ fn phase_spinner_style_indented() -> ProgressStyle {
 fn print_ok(success_msg: &str) {
     if is_pretty() {
         let check = brand_success("✓");
-        eprintln!("{check} {}", brand_fg(success_msg));
+        emit(&format!("{check} {}", brand_fg(success_msg)));
     } else {
         tracing::info!("{}", success_msg);
     }
@@ -591,7 +616,7 @@ fn print_ok(success_msg: &str) {
 fn print_err(loading: &str) {
     if is_pretty() {
         let x = bold(&brand_error("✗"));
-        eprintln!("{x} {loading}");
+        emit(&format!("{x} {loading}"));
     } else {
         tracing::error!("{}", loading);
     }
@@ -600,7 +625,7 @@ fn print_err(loading: &str) {
 fn print_err_with_detail(loading: &str, detail: &dyn Display) {
     if is_pretty() {
         let x = bold(&brand_error("✗"));
-        eprintln!("{x} {loading}: {detail}");
+        emit(&format!("{x} {loading}: {detail}"));
     } else {
         tracing::error!("{}: {}", loading, detail);
     }
@@ -646,25 +671,45 @@ fn finish_spinner_ok(pb: &ProgressBar, success_msg: &str, elapsed: Duration) {
     show_cursor();
     let check = brand_success("✓");
     let time = muted_elapsed(elapsed);
-    if time.is_empty() {
-        eprintln!("{check} {}", brand_fg(success_msg));
+    let line = if time.is_empty() {
+        format!("{check} {}", brand_fg(success_msg))
     } else {
-        eprintln!("{check} {} {time}", brand_fg(success_msg));
-    }
+        format!("{check} {} {time}", brand_fg(success_msg))
+    };
+    emit(&line);
 }
 
 fn finish_spinner_err(pb: &ProgressBar, loading: &str) {
     pb.finish_and_clear();
     show_cursor();
     let x = bold(&brand_error("✗"));
-    eprintln!("{x} {loading}");
+    emit(&format!("{x} {loading}"));
 }
 
 fn finish_spinner_err_with_detail(pb: &ProgressBar, loading: &str, detail: &dyn Display) {
     pb.finish_and_clear();
     show_cursor();
     let x = bold(&brand_error("✗"));
-    eprintln!("{x} {loading}: {detail}");
+    emit(&format!("{x} {loading}: {detail}"));
+}
+
+/// Run work silently — no spinner, no success output. Errors still print.
+/// Used for preflight checks where only failures matter.
+pub fn with_spinner_silent<T, E: Display, F>(loading: &str, work: F) -> Result<T, E>
+where
+    F: FnOnce() -> Result<T, E>,
+{
+    tracing::debug!("{}", loading);
+    let result = work();
+    if let Err(ref e) = result {
+        if is_pretty() {
+            let x = bold(&brand_error("✗"));
+            emit(&format!("{x} {loading}: {e}"));
+        } else {
+            tracing::error!("{}: {}", loading, e);
+        }
+    }
+    result
 }
 
 /// Spinner that shows only if work takes >= 1s, then clears on completion.
@@ -699,6 +744,17 @@ where
 
     if !is_interactive() {
         return work();
+    }
+
+    // When a PhaseSpinner is active, run work silently — the phase spinner
+    // already shows progress. Errors still emit so failures are visible.
+    if PHASE_PB.lock().unwrap().is_some() {
+        let result = work();
+        if let Err(_) = &result {
+            let x = bold(&brand_error("✗"));
+            emit(&format!("{x} {loading}"));
+        }
+        return result;
     }
 
     let start = Instant::now();
@@ -782,6 +838,17 @@ where
 
     if !is_interactive() {
         return work.await;
+    }
+
+    // When a PhaseSpinner is active, run work silently — the phase spinner
+    // already shows progress. Errors still emit so failures are visible.
+    if PHASE_PB.lock().unwrap().is_some() {
+        let result = work.await;
+        if let Err(e) = &result {
+            let x = bold(&brand_error("✗"));
+            emit(&format!("{x} {error_label}: {e}"));
+        }
+        return result;
     }
 
     let start = Instant::now();
@@ -957,6 +1024,11 @@ impl PhaseSpinner {
             })
         });
 
+        // Register the active phase spinner so all output routes through it.
+        if let Some(ref pb) = pb {
+            *PHASE_PB.lock().unwrap() = Some(pb.clone());
+        }
+
         Self {
             pb,
             start: Instant::now(),
@@ -972,6 +1044,7 @@ impl PhaseSpinner {
 
     pub fn finish(mut self, success_msg: &str) {
         self.abort_elapsed_task();
+        self.clear_global();
         if self.verbose {
             // In verbose mode the start message already persists — no result line needed.
         } else if let Some(ref pb) = self.pb {
@@ -982,6 +1055,7 @@ impl PhaseSpinner {
 
     pub fn finish_err(mut self, loading: &str, detail: &str) {
         self.abort_elapsed_task();
+        self.clear_global();
         if self.verbose {
             tracing::error!("{}: {}", loading, detail);
         } else if let Some(ref pb) = self.pb {
@@ -993,6 +1067,7 @@ impl PhaseSpinner {
     /// Finish indented spinner with success: `  ✓ message (elapsed)`
     pub fn finish_ok_indented(mut self, success_msg: &str) {
         self.abort_elapsed_task();
+        self.clear_global();
         if self.verbose {
             // In verbose mode the start message already persists — no result line needed.
         } else if let Some(ref pb) = self.pb {
@@ -1012,6 +1087,7 @@ impl PhaseSpinner {
     /// Finish indented spinner with error: `  ✗ message`
     pub fn finish_err_indented(mut self, detail: &str) {
         self.abort_elapsed_task();
+        self.clear_global();
         if self.verbose {
             tracing::error!("{}", detail);
         } else if let Some(ref pb) = self.pb {
@@ -1028,11 +1104,16 @@ impl PhaseSpinner {
             handle.abort();
         }
     }
+
+    fn clear_global(&self) {
+        *PHASE_PB.lock().unwrap() = None;
+    }
 }
 
 impl Drop for PhaseSpinner {
     fn drop(&mut self) {
         self.abort_elapsed_task();
+        self.clear_global();
         if !self.finished
             && let Some(ref pb) = self.pb
         {
@@ -1132,7 +1213,11 @@ impl TransferProgress {
     pub fn new(loading: &str, success: &str, total: u64) -> Self {
         let start = Instant::now();
         let label = format!("{loading}…");
-        let pb = if is_pretty() && is_interactive() {
+        // When a PhaseSpinner is active, skip creating our own spinner bar —
+        // the finish() method will print above the phase spinner via emit().
+        let pb = if PHASE_PB.lock().unwrap().is_some() {
+            None
+        } else if is_pretty() && is_interactive() {
             let pb = ProgressBar::new_spinner();
             pb.set_style(spinner_style());
             pb.set_message(format!("{label}\n{INDENT}{}", render_gradient_bar(0.0)));
@@ -1190,28 +1275,33 @@ impl TransferProgress {
         {
             return;
         }
+        let check = brand_success("✓");
+        let elapsed = self.start.elapsed();
+        let mut details = Vec::new();
+        if self.total > 0 {
+            details.push(format_size(self.total));
+        }
+        let time = format_elapsed_inline(elapsed, false);
+        if !time.is_empty() {
+            details.push(time);
+        }
+        let line = if details.is_empty() {
+            format!("{check} {}", brand_fg(&self.success_msg))
+        } else {
+            format!(
+                "{check} {} {}",
+                brand_fg(&self.success_msg),
+                brand_muted(format!("({})", details.join(", ")))
+            )
+        };
+
         if let Some(ref pb) = self.pb {
             pb.finish_and_clear();
             show_cursor();
-            let check = brand_success("✓");
-            let elapsed = self.start.elapsed();
-            let mut details = Vec::new();
-            if self.total > 0 {
-                details.push(format_size(self.total));
-            }
-            let time = format_elapsed_inline(elapsed, false);
-            if !time.is_empty() {
-                details.push(time);
-            }
-            if details.is_empty() {
-                eprintln!("{check} {}", brand_fg(&self.success_msg));
-            } else {
-                eprintln!(
-                    "{check} {} {}",
-                    brand_fg(&self.success_msg),
-                    brand_muted(format!("({})", details.join(", ")))
-                );
-            }
+            emit(&line);
+        } else if is_pretty() {
+            // No own spinner (phase spinner was active) — emit above it.
+            emit(&line);
         } else {
             tracing::info!("{}", &self.success_msg);
         }

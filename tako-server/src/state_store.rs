@@ -320,8 +320,6 @@ impl SqliteStateStore {
              PRAGMA temp_store = MEMORY;
              PRAGMA wal_autocheckpoint = 1000;
              PRAGMA journal_size_limit = 67108864;
-             PRAGMA cache_size = -20000;
-             PRAGMA mmap_size = 134217728;
              PRAGMA trusted_schema = OFF;",
         )
         .map_err(StateStoreError::from)?;

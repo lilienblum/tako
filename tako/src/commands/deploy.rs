@@ -154,9 +154,8 @@ async fn run_async(
     let project_dir = context.project_dir;
     let source_root = source_bundle_root(&project_dir);
 
-    let validation = output::with_spinner(
+    let validation = output::with_spinner_silent(
         "Validating configuration",
-        "Validated",
         || -> Result<ValidationResult, String> {
             let _t = output::timed("Configuration validation");
             let tako_config =
@@ -216,7 +215,7 @@ async fn run_async(
     }
 
     let _bun_lockfile_checked = if should_run_bun_lockfile_preflight(preflight_runtime_adapter) {
-        output::with_spinner("Checking Bun lockfile", "Bun lockfile valid", || {
+        output::with_spinner_silent("Checking Bun lockfile", || {
             let _t = output::timed("Bun lockfile check");
             run_bun_lockfile_preflight(&source_root)
         })
@@ -389,7 +388,7 @@ async fn run_async(
             let all_have_dns = checks.iter().all(|c| c.dns_provider.is_some());
 
             if all_have_dns {
-                output::success("All servers support wildcard domains");
+                tracing::debug!("All servers support wildcard domains");
             } else {
                 // Get DNS config: from a server that has it, or prompt once.
                 let dns_config = if let Some(donor_name) = has_dns {
@@ -448,12 +447,7 @@ async fn run_async(
                 }
             }
         } else {
-            // No wildcard routes — just report servers are ready.
-            if total == 1 {
-                output::success(&format!("{} is ready", output::strong(&server_names[0]),));
-            } else {
-                output::success(&format!("{} servers ready", total));
-            }
+            tracing::debug!("Server preflight complete ({total} server(s))");
         }
     }
 
@@ -630,7 +624,6 @@ async fn run_async(
         })
         .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
 
-    output::bullet(&format_source_archive_created_message());
     tracing::debug!(
         "Source archive created: {} ({})",
         format_path_relative_to(&project_dir, &source_archive_path),
@@ -1149,10 +1142,6 @@ fn format_runtime_probe_success(target_label: Option<&str>) -> String {
         Some(label) => format!("Runtime version resolved for {}", label),
         None => "Runtime version resolved".to_string(),
     }
-}
-
-fn format_source_archive_created_message() -> String {
-    "Source archive created".to_string()
 }
 
 fn format_build_artifact_message(target_label: Option<&str>) -> String {
@@ -2271,7 +2260,7 @@ async fn build_target_artifacts(
                 run_local_build(&workspace, &tako_config.build, custom_stages, &extra_envs)?;
             }
             save_runtime_version_to_manifest(&workspace, &runtime_version)?;
-            output::bullet(&format_build_completed_message(display_target_label));
+            tracing::debug!("{}", format_build_completed_message(display_target_label));
 
             let prepare_label = format_prepare_artifact_message(display_target_label);
             let prepare_success = format_prepare_artifact_success(display_target_label);
@@ -2304,9 +2293,10 @@ async fn build_target_artifacts(
         })();
         let artifact_size = build_result?;
 
-        output::bullet(&format_artifact_ready_message_for_output(
-            display_target_label,
-        ));
+        tracing::debug!(
+            "{}",
+            format_artifact_ready_message_for_output(display_target_label,)
+        );
         tracing::debug!(
             "{}",
             format_artifact_ready_message(
@@ -4380,14 +4370,6 @@ route = "app.example.com"
         assert_eq!(
             format_build_stages_summary_for_output(&summary, Some("linux-x86_64-glibc")),
             Some("Build stages for linux-x86_64-glibc: stage 1 (preset) -> stage 2".to_string())
-        );
-    }
-
-    #[test]
-    fn source_archive_message_is_compact() {
-        assert_eq!(
-            format_source_archive_created_message(),
-            "Source archive created"
         );
     }
 
