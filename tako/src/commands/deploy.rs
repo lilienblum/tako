@@ -66,6 +66,15 @@ struct DeployArchiveManifest {
     commit_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     git_dirty: Option<bool>,
+    /// Path from the archive root to the app directory (where tako.toml lives).
+    /// Empty string means the app is at the archive root (single-app projects).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    app_dir: String,
+    /// Path from the archive root to the directory where deps should be installed.
+    /// This is the runtime project root (where the lockfile lives).
+    /// Empty string means install at the archive root.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    install_dir: String,
 }
 
 struct ValidationResult {
@@ -152,8 +161,6 @@ async fn run_async(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let context = project_context::resolve_existing(config_path)?;
     let project_dir = context.project_dir;
-    let source_root = source_bundle_root(&project_dir);
-
     let validation = output::with_spinner_silent(
         "Validating configuration",
         || -> Result<ValidationResult, String> {
@@ -209,6 +216,8 @@ async fn run_async(
     let preflight_runtime_adapter =
         resolve_effective_build_adapter(&eff_app_dir, &tako_config, &preflight_preset_ref)
             .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+    let source_root = source_bundle_root(&project_dir, preflight_runtime_adapter.id());
 
     if preflight_runtime_adapter.preset_group() == PresetGroup::Js {
         let _ = js::write_types(&project_dir);
@@ -348,34 +357,38 @@ async fn run_async(
             );
         }
 
-        let total = server_names.len();
-        let spinner_msg = if total == 1 {
-            format!("Checking {}", &server_names[0])
+        let loading_msg = if server_names.len() == 1 {
+            format!("Connecting to {}…", &server_names[0])
         } else {
-            format!("Checking {} servers", total)
+            format!("Connecting to {} servers…", server_names.len())
         };
-        let spinner = output::TrackedSpinner::start(&format!("{spinner_msg}…"));
+        let success_msg = if server_names.len() == 1 {
+            format!("Connected to {}", &server_names[0])
+        } else {
+            format!("Connected to {} servers", server_names.len())
+        };
+        let checks = output::with_spinner_async(&loading_msg, &success_msg, async {
+            let mut checks: Vec<ServerCheck> = Vec::new();
+            while let Some(result) = check_set.join_next().await {
+                let check = result
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
 
-        let mut checks: Vec<ServerCheck> = Vec::new();
-        while let Some(result) = check_set.join_next().await {
-            let check = result
-                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?
-                .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
+                // Fail fast: server is upgrading
+                if check.mode == tako_core::UpgradeMode::Upgrading {
+                    return Err(format!(
+                        "{} is currently upgrading. Retry after the upgrade completes.",
+                        check.name,
+                    )
+                    .into());
+                }
 
-            // Fail fast: server is upgrading
-            if check.mode == tako_core::UpgradeMode::Upgrading {
-                spinner.finish();
-                return Err(format!(
-                    "{} is currently upgrading. Retry after the upgrade completes.",
-                    check.name,
-                )
-                .into());
+                checks.push(check);
             }
-
-            checks.push(check);
-        }
-
-        spinner.finish();
+            Ok::<Vec<ServerCheck>, Box<dyn std::error::Error>>(checks)
+        })
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error> { e })?;
 
         // Wildcard DNS check
         let wildcard_routes: Vec<_> = routes.iter().filter(|r| r.starts_with("*.")).collect();
@@ -447,7 +460,10 @@ async fn run_async(
                 }
             }
         } else {
-            tracing::debug!("Server preflight complete ({total} server(s))");
+            tracing::debug!(
+                "Server preflight complete ({} server(s))",
+                server_names.len()
+            );
         }
     }
 
@@ -543,16 +559,12 @@ async fn run_async(
     };
     apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter, Some(&plugin_ctx))
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::bullet(&format!(
-        "Build preset: {}",
-        output::strong(&resolved_preset.preset_ref)
-    ));
     tracing::debug!(
         "Build preset: {} @ {}",
         resolved_preset.preset_ref,
         shorten_commit(&resolved_preset.commit)
     );
-    output::bullet(&format_runtime_summary(&build_preset.name, None));
+    tracing::debug!("{}", format_runtime_summary(&build_preset.name, None));
     let runtime_tool = runtime_adapter.id().to_string();
 
     let manifest_main = resolve_deploy_main(
@@ -568,15 +580,29 @@ async fn run_async(
     );
 
     let env_idle_timeout = tako_config.get_idle_timeout(&env);
-    // Resolve package manager for the manifest. Use tako.toml override, then
-    // the versioned `packageManager` field from package.json (e.g. "pnpm@9.1.0"),
-    // then lockfile detection.
+
+    // Compute app_dir and install_dir (paths relative to archive root).
+    let app_dir = project_dir
+        .strip_prefix(&source_root)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let runtime_proj_root =
+        tako_runtime::find_runtime_project_root(runtime_adapter.id(), &project_dir);
+    let install_dir = runtime_proj_root
+        .strip_prefix(&source_root)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    // Resolve package manager: tako.toml → packageManager field → lockfile at app dir → lockfile at runtime project root.
     let deploy_pm = tako_config
         .package_manager
         .clone()
         .or_else(|| tako_runtime::read_package_manager_spec(&eff_app_dir))
         .or_else(|| {
             tako_runtime::detect_package_manager(&eff_app_dir).map(|pm| pm.id().to_string())
+        })
+        .or_else(|| {
+            tako_runtime::detect_package_manager(&runtime_proj_root).map(|pm| pm.id().to_string())
         });
 
     let manifest = build_deploy_archive_manifest(
@@ -592,6 +618,8 @@ async fn run_async(
         tako_config.get_merged_vars(&env),
         HashMap::new(),
         secrets.get_env(&env),
+        app_dir,
+        install_dir,
     );
     let deploy_secrets = decrypt_deploy_secrets(&app_name, &env, &secrets)?;
 
@@ -643,7 +671,7 @@ async fn run_async(
     }
     let server_targets = resolve_deploy_server_targets(&servers, &server_names)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    output::bullet(&format_servers_summary(&server_names));
+    tracing::debug!("{}", format_servers_summary(&server_names));
     let use_unified_js_target_process = should_use_unified_js_target_process(&runtime_tool);
     if let Some(server_targets_summary) =
         format_server_targets_summary(&server_targets, use_unified_js_target_process)
@@ -675,11 +703,9 @@ async fn run_async(
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     drop(_build_phase_timer);
-    _phase.finish("Build complete");
+    _phase.finish("Built");
 
     // ===== Deploy =====
-    let _phase = output::PhaseSpinner::start("Deploying…");
-    let _deploy_phase_timer = output::timed("Deploy phase");
 
     let secrets_hash = tako_core::compute_secrets_hash(&deploy_secrets);
     let deployment_app_name = tako_core::deployment_app_id(&app_name, &env);
@@ -865,9 +891,7 @@ async fn run_async(
     }
 
     // ===== Summary =====
-    drop(_deploy_phase_timer);
     if errors.is_empty() {
-        _phase.finish("Deploy complete");
         if output::is_pretty() {
             eprintln!();
             eprintln!("  {}  {}", output::brand_muted("Revision"), version);
@@ -887,12 +911,6 @@ async fn run_async(
 
         Ok(())
     } else {
-        let first_err = errors
-            .first()
-            .map(|s| s.as_str())
-            .unwrap_or("unknown error");
-        _phase.finish_err("Deploying", first_err);
-
         Err(format_partial_failure_error(errors.len()).into())
     }
 }
@@ -1160,8 +1178,8 @@ fn format_build_artifact_success(target_label: Option<&str>) -> String {
 
 fn format_build_completed_message(target_label: Option<&str>) -> String {
     match target_label {
-        Some(label) => format!("Build completed for {}", label),
-        None => "Build completed".to_string(),
+        Some(label) => format!("Built for {}", label),
+        None => "Built".to_string(),
     }
 }
 
@@ -1332,10 +1350,10 @@ fn git_repo_root(project_dir: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(value))
 }
 
-fn source_bundle_root(project_dir: &Path) -> PathBuf {
+fn source_bundle_root(project_dir: &Path, runtime_id: &str) -> PathBuf {
     match git_repo_root(project_dir) {
         Some(root) if project_dir.starts_with(&root) => root,
-        _ => project_dir.to_path_buf(),
+        _ => tako_runtime::find_runtime_project_root(runtime_id, project_dir),
     }
 }
 
@@ -1481,6 +1499,8 @@ fn build_deploy_archive_manifest(
     app_env_vars: HashMap<String, String>,
     runtime_env_vars: HashMap<String, String>,
     env_secrets: Option<&HashMap<String, String>>,
+    app_dir: String,
+    install_dir: String,
 ) -> DeployArchiveManifest {
     let mut secret_names = env_secrets
         .map(|map| map.keys().cloned().collect::<Vec<_>>())
@@ -1505,6 +1525,8 @@ fn build_deploy_archive_manifest(
         package_manager,
         commit_message,
         git_dirty,
+        app_dir,
+        install_dir,
     }
 }
 
@@ -2105,7 +2127,7 @@ fn persist_cached_artifact(
 #[allow(clippy::too_many_arguments)]
 async fn build_target_artifacts(
     project_dir: &Path,
-    _source_root: &Path,
+    source_root: &Path,
     tako_config: &TakoToml,
     cache_dir: &Path,
     _build_workspace_root: &Path,
@@ -2139,15 +2161,16 @@ async fn build_target_artifacts(
         {
             tracing::debug!("{}", stage_summary_message);
         }
-        // Create workdir: copy project dir (respecting .gitignore), symlink node_modules.
-        // The workdir is rooted at the project dir (where tako.toml lives), not the git root.
+        // Create workdir: copy the archive root (git root or runtime project root) respecting
+        // .gitignore, then symlink node_modules. The workdir mirrors the full archive root so
+        // workspace-relative references (e.g. bun workspace:*) resolve correctly on the server.
         let workdir = project_dir.join(".tako/workdir");
         {
             let _t = output::timed("Workdir setup");
-            crate::build::create_workdir(project_dir, &workdir)
+            crate::build::create_workdir(source_root, &workdir)
                 .map_err(|e| format!("Failed to create workdir: {e}"))?;
             if runtime_adapter.preset_group() == PresetGroup::Js {
-                crate::build::symlink_node_modules(project_dir, &workdir)
+                crate::build::symlink_node_modules(source_root, &workdir)
                     .map_err(|e| format!("Failed to symlink node_modules: {e}"))?;
             }
         }
@@ -2872,14 +2895,14 @@ async fn deploy_to_server(
     let _server_deploy_timer = output::timed("Server deploy");
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
-    run_deploy_step("Connecting", "Connected", use_spinner, ssh.connect()).await?;
+    run_deploy_step("Connecting", "Connected", false, ssh.connect()).await?;
     let archive_size_bytes = std::fs::metadata(archive_path)?.len();
     tracing::debug!("Archive size: {}", format_size(archive_size_bytes));
 
     run_deploy_step(
         "Checking remote disk space",
         "Disk space OK",
-        use_spinner,
+        false,
         ensure_remote_disk_space(&ssh, archive_size_bytes),
     )
     .await?;
@@ -2890,7 +2913,7 @@ async fn deploy_to_server(
     let result = async {
         // Check if tako-server is installed.
         let installed =
-            run_deploy_step("Checking tako-server", "tako-server found", use_spinner, ssh.is_tako_installed())
+            run_deploy_step("Checking tako-server", "tako-server found", false, ssh.is_tako_installed())
                 .await?;
         if !installed {
             return Err(
@@ -2903,13 +2926,13 @@ async fn deploy_to_server(
         run_deploy_step(
             "Checking tako-server status",
             "tako-server running",
-            use_spinner,
+            false,
             ensure_tako_running(&mut ssh),
         )
         .await?;
 
         // Route conflict validation (best-effort against current tako-server state)
-        let existing = run_deploy_step("Checking route conflicts", "No route conflicts", use_spinner, async {
+        let existing = run_deploy_step("Checking route conflicts", "No route conflicts", false, async {
             parse_existing_routes_response(ssh.tako_routes().await?)
                 .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
         })
@@ -2919,7 +2942,7 @@ async fn deploy_to_server(
             .map_err(|e| format!("Route conflict: {}", e))?;
 
         // Create directories.
-        run_deploy_step("Creating directories", "Directories created", use_spinner, async {
+        run_deploy_step("Creating directories", "Directories created", false, async {
             ssh.exec_checked(&format!(
                 "mkdir -p {} {}",
                 release_dir, config.shared_dir()
@@ -2938,7 +2961,7 @@ async fn deploy_to_server(
             if use_spinner {
                 let tp = std::sync::Arc::new(output::TransferProgress::new(
                     "Uploading",
-                    "Upload complete",
+                    "Uploaded",
                     archive_size_bytes,
                 ));
                 let tp2 = tp.clone();
@@ -2960,9 +2983,8 @@ async fn deploy_to_server(
 
         // Extract archive and symlink shared dirs.
         if !release_dir_preexisted {
-            tracing::debug!("Extracting and configuring release…");
-            let extract_timer = output::timed("Release extraction");
-            run_deploy_step("Extracting and configuring release", "Release configured", use_spinner, async {
+            run_deploy_step("Preparing…", "Prepared", use_spinner, async {
+                tracing::debug!("Extracting and configuring release…");
                 let extract_cmd = build_remote_extract_archive_command(&release_dir, &remote_archive);
                 let shared_link_cmd = format!(
                     "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
@@ -2975,7 +2997,6 @@ async fn deploy_to_server(
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             })
             .await?;
-            drop(extract_timer);
         }
         tracing::debug!("{}", format_deploy_main_message(
             &config.main,
@@ -2983,52 +3004,45 @@ async fn deploy_to_server(
             config.use_unified_target_process,
         ));
 
-        // Check if server already has up-to-date secrets by comparing hashes.
-        // If hashes match, skip sending secrets (server keeps existing ones).
-        let deploy_secrets = match query_remote_secrets_hash(&ssh, &config.app_name).await {
-            Some(remote_hash) if remote_hash == config.secrets_hash => None,
-            _ => Some(config.env_vars.clone()),
-        };
+        run_deploy_step("Releasing…", "Released", use_spinner, async {
+            // Check if server already has up-to-date secrets by comparing hashes.
+            // If hashes match, skip sending secrets (server keeps existing ones).
+            let deploy_secrets = match query_remote_secrets_hash(&ssh, &config.app_name).await {
+                Some(remote_hash) if remote_hash == config.secrets_hash => None,
+                _ => Some(config.env_vars.clone()),
+            };
 
-        // Send deploy command to tako-server.
-        let cmd = Command::Deploy {
-            app: config.app_name.clone(),
-            version: config.version.clone(),
-            path: release_dir.clone(),
-            routes: config.routes.clone(),
-            secrets: deploy_secrets,
-        };
-        let json = serde_json::to_string(&cmd)?;
-        let response =
-            run_deploy_step("Notifying tako-server", "tako-server notified", use_spinner, ssh.tako_command(&json))
-                .await?;
+            let cmd = Command::Deploy {
+                app: config.app_name.clone(),
+                version: config.version.clone(),
+                path: release_dir.clone(),
+                routes: config.routes.clone(),
+                secrets: deploy_secrets,
+            };
+            let json = serde_json::to_string(&cmd)
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+            let response = ssh.tako_command(&json).await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
-        // Parse response.
-        if deploy_response_has_error(&response) {
-            return Err(format!("tako-server error: {}", response).into());
-        }
+            if deploy_response_has_error(&response) {
+                return Err(format!("tako-server error: {}", response).into());
+            }
 
-        // Update current symlink only after tako-server accepted the deploy command.
-        run_deploy_step(
-            "Updating current symlink",
-            "Current symlink updated",
-            use_spinner,
-            ssh.symlink(&release_dir, &config.current_link()),
-        )
-        .await?;
+            // Update current symlink only after tako-server accepted the deploy command.
+            ssh.symlink(&release_dir, &config.current_link()).await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
-        // Clean up old releases (keep last 30 days).
-        let releases_dir = format!("{}/releases", config.remote_base);
-        let cleanup_cmd = format!(
-            "find {} -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {{}} \\;",
-            releases_dir
-        );
-        run_deploy_step(
-            "Cleaning old releases",
-            "Old releases cleaned",
-            use_spinner,
-            ssh.exec(&cleanup_cmd),
-        )
+            // Clean up old releases (keep last 30 days).
+            let releases_dir = format!("{}/releases", config.remote_base);
+            let cleanup_cmd = format!(
+                "find {} -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {{}} \\;",
+                releases_dir
+            );
+            ssh.exec(&cleanup_cmd).await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+        })
         .await?;
 
         Ok(())
@@ -3884,7 +3898,7 @@ route = "app.example.com"
     fn artifact_progress_helpers_render_build_and_packaging_steps() {
         assert_eq!(
             format_build_completed_message(Some("linux-aarch64-musl")),
-            "Build completed for linux-aarch64-musl"
+            "Built for linux-aarch64-musl"
         );
         assert_eq!(
             format_prepare_artifact_message(Some("linux-aarch64-musl")),
@@ -3895,7 +3909,7 @@ route = "app.example.com"
     #[test]
     fn artifact_progress_helpers_render_shared_messages_without_target_label() {
         assert_eq!(format_build_artifact_message(None), "Building artifact");
-        assert_eq!(format_build_completed_message(None), "Build completed");
+        assert_eq!(format_build_completed_message(None), "Built");
         assert_eq!(format_prepare_artifact_message(None), "Preparing artifact");
     }
 
@@ -3967,6 +3981,8 @@ route = "app.example.com"
             HashMap::new(),
             HashMap::new(),
             None,
+            String::new(),
+            String::new(),
         );
         assert_eq!(manifest.idle_timeout, 300);
         assert_eq!(
@@ -4108,11 +4124,23 @@ route = "app.example.com"
     }
 
     #[test]
-    fn source_bundle_root_falls_back_to_project_dir_without_git() {
+    fn source_bundle_root_falls_back_to_runtime_project_root_without_git() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().join("app");
         std::fs::create_dir_all(&project_dir).unwrap();
-        assert_eq!(source_bundle_root(&project_dir), project_dir);
+        // No lockfile anywhere → falls back to project_dir itself
+        assert_eq!(source_bundle_root(&project_dir, "bun"), project_dir);
+    }
+
+    #[test]
+    fn source_bundle_root_walks_up_to_lockfile_without_git() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("monorepo");
+        let project_dir = root.join("apps/web");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        std::fs::write(root.join("bun.lock"), "").unwrap();
+        // No git, but lockfile is at the monorepo root → returns lockfile root
+        assert_eq!(source_bundle_root(&project_dir, "bun"), root);
     }
 
     #[test]
@@ -4666,6 +4694,8 @@ route = "app.example.com"
             app_env_vars,
             runtime_env_vars,
             Some(&secrets),
+            String::new(),
+            String::new(),
         );
 
         assert_eq!(manifest.app_name, "my-app");

@@ -10,7 +10,23 @@ pub use cache::RuntimeCache;
 pub use download::{DownloadManager, resolve_latest_version};
 pub use fetch::{OFFICIAL_BRANCH, official_repo};
 pub use plugin::{PluginContext, RuntimePlugin, plugin_for_id, runtime_def_for};
-pub use plugins::javascript::{detect_package_manager, read_package_manager_spec};
+pub use plugins::javascript::{
+    detect_package_manager, find_js_project_root, read_package_manager_spec,
+};
+
+/// Find the project root for the given runtime, starting from `project_dir`.
+///
+/// For JS runtimes (bun/node/deno): walks up to find the lockfile root.
+/// For other runtimes: returns `project_dir` unchanged.
+pub fn find_runtime_project_root(
+    runtime_id: &str,
+    project_dir: &std::path::Path,
+) -> std::path::PathBuf {
+    match runtime_id {
+        "bun" | "node" | "deno" => plugins::javascript::find_js_project_root(project_dir),
+        _ => project_dir.to_path_buf(),
+    }
+}
 pub use registry::{load_runtime, parse_runtime};
 pub use types::{
     DownloadDef, EntrypointDef, EnvsDef, ExtractDef, ManifestMainDef, PackageManagerDef, PresetDef,

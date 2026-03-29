@@ -12,6 +12,12 @@ pub(crate) struct ReleaseManifest {
     pub runtime_version: Option<String>,
     #[serde(default)]
     pub package_manager: Option<String>,
+    /// Path from the archive root to the app directory. Empty = archive root.
+    #[serde(default)]
+    pub app_dir: String,
+    /// Path from the archive root to where deps should be installed (lockfile dir). Empty = archive root.
+    #[serde(default)]
+    pub install_dir: String,
 }
 
 pub(crate) fn load_release_manifest(release_dir: &Path) -> Result<ReleaseManifest, String> {
@@ -68,11 +74,13 @@ pub(crate) fn command_from_manifest(
         ));
     }
 
+    let app_dir = release_dir.join(&manifest.app_dir);
+    let install_dir = release_dir.join(&manifest.install_dir);
     let ctx = manifest
         .package_manager
         .as_ref()
         .map(|pm| tako_runtime::PluginContext {
-            project_dir: release_dir,
+            project_dir: &app_dir,
             package_manager: Some(pm.as_str()),
         });
     let def = tako_runtime::runtime_def_for(&manifest.runtime, ctx.as_ref()).ok_or_else(|| {
@@ -86,7 +94,7 @@ pub(crate) fn command_from_manifest(
     let bin = runtime_bin
         .map(str::to_string)
         .unwrap_or_else(|| manifest.runtime.clone());
-    let resolved_main = resolve_main_path(release_dir, &manifest.main);
+    let resolved_main = resolve_main_path(&app_dir, &manifest.main);
 
     let cmd: Vec<String> = def
         .server
@@ -95,7 +103,10 @@ pub(crate) fn command_from_manifest(
         .map(|arg| match arg.as_str() {
             "{bin}" => bin.clone(),
             "{main}" => resolved_main.clone(),
-            other => other.to_string(),
+            // Resolve node_modules-relative paths to absolute using the install dir
+            // (workspace root where deps are hoisted). Falls back to the literal arg
+            // if the file doesn't exist yet (e.g. in tests).
+            other => resolve_node_modules_path(&install_dir, other),
         })
         .collect();
 
@@ -113,12 +124,25 @@ pub fn command_for_release_dir(release_dir: &Path) -> Result<Vec<String>, String
 /// Resolve the main entrypoint for the launch command.
 /// - If the file exists on disk, return the absolute path.
 /// - Otherwise pass through as-is (bare module specifier).
-fn resolve_main_path(release_dir: &Path, main: &str) -> String {
-    let candidate = release_dir.join(main);
+fn resolve_main_path(base_dir: &Path, main: &str) -> String {
+    let candidate = base_dir.join(main);
     if candidate.is_file() {
         return candidate.to_string_lossy().to_string();
     }
     main.to_string()
+}
+
+/// Resolve a `node_modules/...` launch arg to an absolute path using the install dir.
+/// The install dir is the workspace root where deps are hoisted after `bun install`.
+/// Falls back to the literal arg if the file doesn't exist (e.g. before install or in tests).
+fn resolve_node_modules_path(install_dir: &Path, arg: &str) -> String {
+    if arg.starts_with("node_modules/") {
+        let candidate = install_dir.join(arg);
+        if candidate.is_file() {
+            return candidate.to_string_lossy().to_string();
+        }
+    }
+    arg.to_string()
 }
 
 #[cfg(test)]

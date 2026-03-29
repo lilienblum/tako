@@ -1801,7 +1801,7 @@ async fn run_server_upgrade(
 
         // Get new version
         let version = ssh.tako_version().await.ok().flatten();
-        tracing::debug!("Upgrade complete (version: {version:?})");
+        tracing::debug!("Upgraded (version: {version:?})");
         Ok(version)
     }
     .await;

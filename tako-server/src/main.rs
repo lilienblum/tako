@@ -1519,11 +1519,13 @@ fn apply_release_runtime_to_config(
     release_path: PathBuf,
     runtime_bin: Option<&str>,
 ) -> Result<(), String> {
-    config.path = release_path;
-    let manifest = load_release_manifest(&config.path)?;
-    config.command = command_from_manifest(&manifest, &config.path, runtime_bin)?;
+    let manifest = load_release_manifest(&release_path)?;
+    config.command = command_from_manifest(&manifest, &release_path, runtime_bin)?;
     config.env_vars = manifest.env_vars;
     config.idle_timeout = Duration::from_secs(u64::from(manifest.idle_timeout));
+    // Process CWD = app subdirectory within the release (where tako.toml lives).
+    // For standalone apps app_dir is empty, so this equals release_path.
+    config.path = release_path.join(&manifest.app_dir);
     Ok(())
 }
 
@@ -1687,19 +1689,23 @@ async fn prepare_release_runtime(
     }
 
     // Run production dependency install using the runtime plugin.
+    // - project_dir: the app subdirectory (for package.json / PM detection)
+    // - install_dir: where the lockfile lives (workspace root); install runs from here
+    let app_dir = release_dir.join(&manifest.app_dir);
+    let install_dir = release_dir.join(&manifest.install_dir);
     let ctx = tako_runtime::PluginContext {
-        project_dir: release_dir,
+        project_dir: &app_dir,
         package_manager: manifest.package_manager.as_deref(),
     };
     if let Some(def) = tako_runtime::runtime_def_for(runtime, Some(&ctx))
         && let Some(install_cmd) = &def.package_manager.install
     {
-        tracing::info!(runtime = %runtime, "Running production install: {}", install_cmd);
+        tracing::info!(runtime = %runtime, install_dir = %install_dir.display(), "Running production install: {}", install_cmd);
         let install_path = install_env.get("PATH").cloned().unwrap_or_default();
         let prefixed_cmd = format!("export PATH=\"{install_path}\"; {install_cmd}");
         let output = std::process::Command::new("sh")
             .args(["-c", &prefixed_cmd])
-            .current_dir(release_dir)
+            .current_dir(&install_dir)
             .envs(&install_env)
             .output()
             .map_err(|e| format!("Failed to run production install: {e}"))?;

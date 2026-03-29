@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::plugin::{PluginContext, RuntimePlugin};
 use crate::types::{
@@ -94,6 +94,33 @@ pub fn read_package_manager_spec(project_dir: &Path) -> Option<String> {
     let content = std::fs::read_to_string(pkg_path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
     json.get("packageManager")?.as_str().map(str::to_string)
+}
+
+/// Walk up from `project_dir` to find the JS workspace/project root.
+///
+/// Returns the nearest ancestor directory (inclusive) that contains a lockfile.
+/// Falls back to `project_dir` if no lockfile is found anywhere in the tree.
+pub fn find_js_project_root(project_dir: &Path) -> PathBuf {
+    let lockfile_names = [
+        "bun.lock",
+        "bun.lockb",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "package-lock.json",
+        "deno.lock",
+    ];
+    let mut current = project_dir;
+    loop {
+        for name in &lockfile_names {
+            if current.join(name).is_file() {
+                return current.to_path_buf();
+            }
+        }
+        match current.parent() {
+            Some(parent) => current = parent,
+            None => return project_dir.to_path_buf(),
+        }
+    }
 }
 
 /// Detect the package manager for a JavaScript project.
@@ -668,6 +695,44 @@ mod tests {
     fn detect_pm_returns_none_when_no_signals() {
         let tmp = tempfile::TempDir::new().unwrap();
         assert_eq!(detect_package_manager(tmp.path()), None);
+    }
+
+    #[test]
+    fn find_js_project_root_returns_project_dir_when_lockfile_present() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("bun.lock"), "").unwrap();
+        assert_eq!(find_js_project_root(tmp.path()), tmp.path());
+    }
+
+    #[test]
+    fn find_js_project_root_walks_up_to_lockfile() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("monorepo");
+        let app_dir = root.join("apps/web");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(root.join("bun.lock"), "").unwrap();
+        assert_eq!(find_js_project_root(&app_dir), root);
+    }
+
+    #[test]
+    fn find_js_project_root_falls_back_to_project_dir_when_no_lockfile() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let app_dir = tmp.path().join("app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        assert_eq!(find_js_project_root(&app_dir), app_dir);
+    }
+
+    #[test]
+    fn find_js_project_root_finds_nearest_not_highest_lockfile() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let root = tmp.path().join("root");
+        let sub = root.join("sub");
+        let app_dir = sub.join("app");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(root.join("bun.lock"), "").unwrap();
+        std::fs::write(sub.join("bun.lock"), "").unwrap();
+        // Finds the nearest (innermost) lockfile ancestor
+        assert_eq!(find_js_project_root(&app_dir), sub);
     }
 
     #[test]

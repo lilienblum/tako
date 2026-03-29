@@ -442,7 +442,7 @@ async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn st
     let mut file = std::fs::File::create(dest)?;
     let mut downloaded = 0u64;
 
-    let tp = output::TransferProgress::new("Downloading", "Download complete", total);
+    let tp = output::TransferProgress::new("Downloading", "Downloaded", total);
 
     while let Some(chunk) = resp.chunk().await? {
         file.write_all(&chunk)?;

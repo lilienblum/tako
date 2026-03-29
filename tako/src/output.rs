@@ -442,7 +442,7 @@ pub fn heading_no_gap(title: &str) {
 
 pub fn info(message: &str) {
     if is_pretty() {
-        emit(&format!("{}", brand_fg(message)));
+        emit(&brand_fg(message).to_string());
     }
 }
 
@@ -474,7 +474,7 @@ fn format_warning_bullet_line(message: &str) -> String {
 
 pub fn success(message: &str) {
     if is_pretty() {
-        emit(&format!("{} {}", brand_success("✓"), brand_fg(message)));
+        emit(&format!("{} {}", brand_success("✔"), brand_fg(message)));
     }
 }
 
@@ -506,7 +506,7 @@ pub fn error(message: &str) {
     if is_pretty() {
         emit(&format!(
             "{} {}",
-            bold(&brand_error("✗")),
+            bold(&brand_error("✘")),
             brand_fg(message)
         ));
     }
@@ -514,7 +514,7 @@ pub fn error(message: &str) {
 
 /// Always prints — used for fatal errors in main.rs.
 pub fn error_stderr(message: &str) {
-    eprintln!("{} {}", bold(&brand_error("✗")), brand_fg(message));
+    eprintln!("{} {}", bold(&brand_error("✘")), brand_fg(message));
 }
 
 /// Print a dry-run skip notice: "⏭ {message} (dry run)"
@@ -539,7 +539,7 @@ fn format_dry_run_skip_plain(message: &str) -> String {
 
 pub fn muted(message: &str) {
     if is_pretty() {
-        emit(&format!("{}", brand_muted(message)));
+        emit(&brand_muted(message).to_string());
     }
 }
 
@@ -547,7 +547,7 @@ pub fn muted(message: &str) {
 /// Use for actionable guidance like "Run X to do Y" where the command is strong()'d.
 pub fn hint(message: &str) {
     if is_pretty() {
-        emit(&format!("{}", brand_dim(message)));
+        emit(&brand_dim(message).to_string());
     } else {
         tracing::info!("{}", message);
     }
@@ -606,7 +606,7 @@ fn phase_spinner_style_indented() -> ProgressStyle {
 /// Print a spinner result without elapsed (fast path — spinner was never shown).
 fn print_ok(success_msg: &str) {
     if is_pretty() {
-        let check = brand_success("✓");
+        let check = brand_success("✔");
         emit(&format!("{check} {}", brand_fg(success_msg)));
     } else {
         tracing::info!("{}", success_msg);
@@ -615,7 +615,7 @@ fn print_ok(success_msg: &str) {
 
 fn print_err(loading: &str) {
     if is_pretty() {
-        let x = bold(&brand_error("✗"));
+        let x = bold(&brand_error("✘"));
         emit(&format!("{x} {loading}"));
     } else {
         tracing::error!("{}", loading);
@@ -624,7 +624,7 @@ fn print_err(loading: &str) {
 
 fn print_err_with_detail(loading: &str, detail: &dyn Display) {
     if is_pretty() {
-        let x = bold(&brand_error("✗"));
+        let x = bold(&brand_error("✘"));
         emit(&format!("{x} {loading}: {detail}"));
     } else {
         tracing::error!("{}: {}", loading, detail);
@@ -669,7 +669,7 @@ fn suppress_echo(suppress: bool) {
 fn finish_spinner_ok(pb: &ProgressBar, success_msg: &str, elapsed: Duration) {
     pb.finish_and_clear();
     show_cursor();
-    let check = brand_success("✓");
+    let check = brand_success("✔");
     let time = muted_elapsed(elapsed);
     let line = if time.is_empty() {
         format!("{check} {}", brand_fg(success_msg))
@@ -682,14 +682,14 @@ fn finish_spinner_ok(pb: &ProgressBar, success_msg: &str, elapsed: Duration) {
 fn finish_spinner_err(pb: &ProgressBar, loading: &str) {
     pb.finish_and_clear();
     show_cursor();
-    let x = bold(&brand_error("✗"));
+    let x = bold(&brand_error("✘"));
     emit(&format!("{x} {loading}"));
 }
 
 fn finish_spinner_err_with_detail(pb: &ProgressBar, loading: &str, detail: &dyn Display) {
     pb.finish_and_clear();
     show_cursor();
-    let x = bold(&brand_error("✗"));
+    let x = bold(&brand_error("✘"));
     emit(&format!("{x} {loading}: {detail}"));
 }
 
@@ -703,7 +703,7 @@ where
     let result = work();
     if let Err(ref e) = result {
         if is_pretty() {
-            let x = bold(&brand_error("✗"));
+            let x = bold(&brand_error("✘"));
             emit(&format!("{x} {loading}: {e}"));
         } else {
             tracing::error!("{}: {}", loading, e);
@@ -715,7 +715,7 @@ where
 /// Spinner that shows only if work takes >= 1s, then clears on completion.
 ///
 /// - Fast (<1s):  prints result directly, no spinner, no elapsed
-/// - Slow (≥1s):  `⠋ {loading}...` → `{success} (elapsed)` or `✗ {loading} failed`
+/// - Slow (≥1s):  `⠋ {loading}...` → `{success} (elapsed)` or `✘ {loading} failed`
 ///
 /// In verbose mode: prints start/end log lines instead of spinner.
 pub fn with_spinner<T, E, F>(loading: &str, success: &str, work: F) -> Result<T, E>
@@ -750,8 +750,8 @@ where
     // already shows progress. Errors still emit so failures are visible.
     if PHASE_PB.lock().unwrap().is_some() {
         let result = work();
-        if let Err(_) = &result {
-            let x = bold(&brand_error("✗"));
+        if result.is_err() {
+            let x = bold(&brand_error("✘"));
             emit(&format!("{x} {loading}"));
         }
         return result;
@@ -845,7 +845,7 @@ where
     if PHASE_PB.lock().unwrap().is_some() {
         let result = work.await;
         if let Err(e) = &result {
-            let x = bold(&brand_error("✗"));
+            let x = bold(&brand_error("✘"));
             emit(&format!("{x} {error_label}: {e}"));
         }
         return result;
@@ -1053,18 +1053,7 @@ impl PhaseSpinner {
         self.finished = true;
     }
 
-    pub fn finish_err(mut self, loading: &str, detail: &str) {
-        self.abort_elapsed_task();
-        self.clear_global();
-        if self.verbose {
-            tracing::error!("{}: {}", loading, detail);
-        } else if let Some(ref pb) = self.pb {
-            finish_spinner_err_with_detail(pb, loading, &detail);
-        }
-        self.finished = true;
-    }
-
-    /// Finish indented spinner with success: `  ✓ message (elapsed)`
+    /// Finish indented spinner with success: `  ✔ message (elapsed)`
     pub fn finish_ok_indented(mut self, success_msg: &str) {
         self.abort_elapsed_task();
         self.clear_global();
@@ -1073,7 +1062,7 @@ impl PhaseSpinner {
         } else if let Some(ref pb) = self.pb {
             pb.finish_and_clear();
             show_cursor();
-            let check = brand_success("✓");
+            let check = brand_success("✔");
             let time = muted_elapsed(self.start.elapsed());
             if time.is_empty() {
                 eprintln!("{INDENT}{check} {}", brand_fg(success_msg));
@@ -1084,7 +1073,7 @@ impl PhaseSpinner {
         self.finished = true;
     }
 
-    /// Finish indented spinner with error: `  ✗ message`
+    /// Finish indented spinner with error: `  ✘ message`
     pub fn finish_err_indented(mut self, detail: &str) {
         self.abort_elapsed_task();
         self.clear_global();
@@ -1093,7 +1082,7 @@ impl PhaseSpinner {
         } else if let Some(ref pb) = self.pb {
             pb.finish_and_clear();
             show_cursor();
-            let x = bold(&brand_error("✗"));
+            let x = bold(&brand_error("✘"));
             eprintln!("{INDENT}{x} {}", brand_error(detail));
         }
         self.finished = true;
@@ -1192,7 +1181,7 @@ const BAR_WIDTH: usize = 24;
 /// On completion the spinner line becomes a checkbox and the bar stays filled:
 ///
 /// ```text
-/// ✓ Download complete (3.2s)
+/// ✔ Download complete (3.2s)
 ///   ████████████████████████
 /// ```
 pub struct TransferProgress {
@@ -1208,7 +1197,7 @@ impl TransferProgress {
     /// Create a new transfer progress bar.
     ///
     /// - `loading` — verb phrase shown while in progress, e.g. `"Downloading"`
-    /// - `success` — message shown on finish, e.g. `"Download complete"`
+    /// - `success` — message shown on finish, e.g. `"Downloaded"`
     /// - `total` — total byte count (0 if unknown)
     pub fn new(loading: &str, success: &str, total: u64) -> Self {
         let start = Instant::now();
@@ -1264,7 +1253,7 @@ impl TransferProgress {
         }
     }
 
-    /// Finish with success — shows `✓ <success_msg> (<size>, <time>)`.
+    /// Finish with success — shows `✔ <success_msg> (<size>, <time>)`.
     ///
     /// In pretty mode the progress bar is cleared so only the single summary
     /// line remains in scrollback.
@@ -1275,15 +1264,15 @@ impl TransferProgress {
         {
             return;
         }
-        let check = brand_success("✓");
+        let check = brand_success("✔");
         let elapsed = self.start.elapsed();
         let mut details = Vec::new();
-        if self.total > 0 {
-            details.push(format_size(self.total));
-        }
         let time = format_elapsed_inline(elapsed, false);
         if !time.is_empty() {
             details.push(time);
+        }
+        if self.total > 0 {
+            details.push(format_size(self.total));
         }
         let line = if details.is_empty() {
             format!("{check} {}", brand_fg(&self.success_msg))
@@ -2607,7 +2596,7 @@ mod tests {
     #[test]
     fn transfer_progress_in_non_tty() {
         // Non-interactive: creates TransferProgress without a progress bar
-        let tp = TransferProgress::new("Downloading", "Download complete", 1024);
+        let tp = TransferProgress::new("Downloading", "Downloaded", 1024);
         tp.set_position(512);
         tp.finish();
     }

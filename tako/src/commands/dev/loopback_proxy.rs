@@ -482,7 +482,7 @@ pub(crate) fn ensure_installed() -> Result<(), Box<dyn std::error::Error>> {
         LoopbackProxyRepairPlan::None => unreachable!(),
     };
     let success = match current_plan {
-        LoopbackProxyRepairPlan::InstallOrUpdate => "Setup complete",
+        LoopbackProxyRepairPlan::InstallOrUpdate => "Set up",
         LoopbackProxyRepairPlan::ReloadService => "Ready",
         LoopbackProxyRepairPlan::None => unreachable!(),
     };
