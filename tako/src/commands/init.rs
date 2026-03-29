@@ -616,21 +616,10 @@ fn ensure_project_gitignore_tracks_secrets(project_dir: &Path) -> std::io::Resul
     let gitignore_root =
         find_git_repo_root(project_dir).unwrap_or_else(|| project_dir.to_path_buf());
     let gitignore_path = gitignore_root.join(".gitignore");
-    let relative_project_dir = project_dir
-        .strip_prefix(&gitignore_root)
-        .unwrap_or(project_dir);
-    let tracked_dir = if relative_project_dir.as_os_str().is_empty() {
-        ".tako".to_string()
-    } else {
-        format!(
-            "{}/.tako",
-            relative_project_dir.to_string_lossy().replace('\\', "/")
-        )
-    };
     let rules = [
-        format!("!{tracked_dir}/"),
-        format!("{tracked_dir}/*"),
-        format!("!{tracked_dir}/secrets.json"),
+        "# tako: ignore runtime artifacts, keep secrets".to_string(),
+        "**/.tako/*".to_string(),
+        "!**/.tako/secrets.json".to_string(),
     ];
 
     let mut content = if gitignore_path.exists() {
@@ -1461,9 +1450,8 @@ mod tests {
 
         let gitignore = std::fs::read_to_string(repo_root.join(".gitignore")).unwrap();
         assert!(
-            gitignore
-                .contains("!apps/web/.tako/\napps/web/.tako/*\n!apps/web/.tako/secrets.json\n"),
-            "expected repo root .gitignore to track nested app secrets file: {gitignore}"
+            gitignore.contains("**/.tako/*\n!**/.tako/secrets.json\n"),
+            "expected repo root .gitignore to contain global tako rules: {gitignore}"
         );
         assert!(
             !project_dir.join(".gitignore").exists(),
@@ -1480,9 +1468,9 @@ mod tests {
         ensure_project_gitignore_tracks_secrets(&project_dir).unwrap();
 
         let gitignore = std::fs::read_to_string(project_dir.join(".gitignore")).unwrap();
-        assert_eq!(
-            gitignore, "!.tako/\n.tako/*\n!.tako/secrets.json\n",
-            "expected project-local .gitignore when no repo root is found"
+        assert!(
+            gitignore.contains("**/.tako/*\n!**/.tako/secrets.json\n"),
+            "expected project-local .gitignore when no repo root is found: {gitignore}"
         );
     }
 
@@ -1496,7 +1484,7 @@ mod tests {
 
         let gitignore = std::fs::read_to_string(project_dir.join(".gitignore")).unwrap();
         assert_eq!(
-            gitignore.matches("!.tako/secrets.json").count(),
+            gitignore.matches("!**/.tako/secrets.json").count(),
             1,
             "expected secrets tracking rule to remain deduplicated"
         );
