@@ -93,6 +93,7 @@ impl<'a> TextField<'a> {
         self
     }
 
+    // CodeQL[rust/hard-coded-cryptographic-value]: bool flag for input masking, not a credential
     pub fn password(mut self) -> Self {
         self.password = true;
         self.trimmed = false;

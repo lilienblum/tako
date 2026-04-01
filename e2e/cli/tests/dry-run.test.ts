@@ -158,7 +158,7 @@ describe("deploy --dry-run", () => {
   test("skip markers are colored in dry-run", async () => {
     await setupProject({ servers: { prod: { host: "10.0.0.1" } } });
 
-    const { term, screen } = await run(["--dry-run", "deploy", "--env", "production"], {
+    const { screen } = await run(["--dry-run", "deploy", "--env", "production"], {
       cwd: tempDir,
       env: { HOME: tempDir, TAKO_HOME: takoHome },
     });

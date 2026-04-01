@@ -85,6 +85,8 @@ impl BuildExecutor {
         let output = Command::new("git")
             .args(["rev-parse", "--short", "HEAD"])
             .current_dir(&self.cwd)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
             .output()
             .map_err(|e| BuildError::GitError(e.to_string()))?;
 
@@ -102,6 +104,8 @@ impl BuildExecutor {
         let output = Command::new("git")
             .args(["status", "--porcelain"])
             .current_dir(&self.cwd)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
             .output()
             .map_err(|e| BuildError::GitError(e.to_string()))?;
 
