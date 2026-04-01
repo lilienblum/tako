@@ -8,23 +8,23 @@
       "e2e/cli"
     ],
     "catalog": {
-      "@tanstack/react-router": "^1.168.2",
-      "@tanstack/react-start": "^1.167.3",
+      "@tanstack/react-router": "^1.168.10",
+      "@tanstack/react-start": "^1.167.16",
       "@types/react": "^19.0.8",
       "@types/react-dom": "^19.0.3",
       "@vitejs/plugin-react": "^6.0.1",
       "react": "^19.0.0",
       "react-dom": "^19.0.0",
-      "vite": "^8.0.1"
+      "vite": "^8.0.3"
     },
     "catalogs": {
       "dev": {
         "@tsconfig/strictest": "^2.0.0",
         "@types/bun": "^1.3.11",
         "@types/node": "^25.5.0",
-        "astro": "^6.0.8",
-        "wrangler": "^4.76.0",
-        "typescript": "^5"
+        "astro": "^6.1.2",
+        "wrangler": "^4.79.0",
+        "typescript": "^6.0.2"
       }
     }
   },
@@ -35,8 +35,8 @@
     "lint:fix": "oxlint -c .oxlintrc.json --fix"
   },
   "devDependencies": {
-    "oxfmt": "0.41.0",
-    "oxlint": "^1.56.0",
-    "oxlint-tsgolint": "^0.17.1"
+    "oxfmt": "0.43.0",
+    "oxlint": "^1.58.0",
+    "oxlint-tsgolint": "^0.17.4"
   }
 }

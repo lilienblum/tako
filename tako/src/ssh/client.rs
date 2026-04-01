@@ -270,9 +270,14 @@ impl SshClient {
                 SshError::Authentication(format!("ssh-agent identities failed: {e}"))
             })?;
 
-            for key in keys {
+            for identity in keys {
                 match handle
-                    .authenticate_publickey_with(Self::ssh_user(), key.clone(), None, &mut agent)
+                    .authenticate_publickey_with(
+                        Self::ssh_user(),
+                        identity.public_key().into_owned(),
+                        None,
+                        &mut agent,
+                    )
                     .await
                 {
                     Ok(result) if result.success() => return Ok(true),

@@ -13,7 +13,7 @@
   "dependencies": {
     "astro": "catalog:dev",
     "lucide-astro": "^0.556.0",
-    "mermaid": "^11"
+    "mermaid": "^11.14.0"
   },
   "devDependencies": {
     "@tsconfig/strictest": "catalog:dev",

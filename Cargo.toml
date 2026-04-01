@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["tako-core", "tako-socket", "tako-runtime", "tako", "tako-server"]
+exclude = [".agents"]
 
 [workspace.package]
 edition = "2024"
