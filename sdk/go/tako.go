@@ -150,6 +150,13 @@ func Listener() (net.Listener, error) {
 	if err != nil {
 		return nil, fmt.Errorf("tako: failed to listen on %s: %w", addr, err)
 	}
+
+	// Signal readiness to tako-server with the actual port the app bound to.
+	// The server watches stdout for this line during startup.
+	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+		fmt.Fprintf(os.Stdout, "TAKO:READY:%d\n", tcpAddr.Port)
+	}
+
 	return ln, nil
 }
 

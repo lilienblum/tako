@@ -267,7 +267,7 @@ impl E2EEnvironment {
             .join("releases")
             .join(version);
         fs::create_dir_all(&app_dir).unwrap();
-        fs::create_dir_all(app_dir.join("node_modules/tako.sh/src/entrypoints")).unwrap();
+        fs::create_dir_all(app_dir.join("node_modules/tako.sh/dist/entrypoints")).unwrap();
 
         fs::write(
             app_dir.join("package.json"),
@@ -278,8 +278,8 @@ impl E2EEnvironment {
         )
         .unwrap();
         fs::write(
-            app_dir.join("node_modules/tako.sh/src/entrypoints/bun.ts"),
-            "export default {};",
+            app_dir.join("node_modules/tako.sh/dist/entrypoints/bun.mjs"),
+            "await import(process.argv[2]);",
         )
         .unwrap();
         fs::write(

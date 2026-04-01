@@ -2,6 +2,7 @@ package tako
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -169,6 +170,49 @@ func TestFullProtocol(t *testing.T) {
 	body, _ := io.ReadAll(resp3.Body)
 	if !strings.Contains(string(body), "hello") {
 		t.Errorf("body = %q, want to contain %q", string(body), "hello")
+	}
+}
+
+func TestListenerEmitsReadySignal(t *testing.T) {
+	configOnce = syncOnce()
+	origArgs := os.Args
+	os.Args = []string{"test"}
+	origPort := os.Getenv("PORT")
+	os.Setenv("PORT", "0")
+	defer func() {
+		os.Args = origArgs
+		setOrUnset("PORT", origPort)
+	}()
+
+	// Capture stdout to verify the TAKO:READY signal.
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+
+	ln, err := Listener()
+	if err != nil {
+		os.Stdout = origStdout
+		t.Fatalf("Listener() error: %v", err)
+	}
+	defer ln.Close()
+
+	w.Close()
+	os.Stdout = origStdout
+
+	out, _ := io.ReadAll(r)
+	line := strings.TrimSpace(string(out))
+
+	if !strings.HasPrefix(line, "TAKO:READY:") {
+		t.Fatalf("expected TAKO:READY:<port>, got %q", line)
+	}
+
+	portStr := strings.TrimPrefix(line, "TAKO:READY:")
+	tcpAddr := ln.Addr().(*net.TCPAddr)
+	if portStr != fmt.Sprintf("%d", tcpAddr.Port) {
+		t.Errorf("ready signal port = %s, listener port = %d", portStr, tcpAddr.Port)
 	}
 }
 

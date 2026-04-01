@@ -326,15 +326,15 @@ Bun.serve({{
 
 pub fn write_bun_app(app_dir: &Path, body: &str) {
     fs::create_dir_all(app_dir.join("src")).unwrap();
-    fs::create_dir_all(app_dir.join("node_modules/tako.sh/src/entrypoints")).unwrap();
+    fs::create_dir_all(app_dir.join("node_modules/tako.sh/dist/entrypoints")).unwrap();
     fs::write(
         app_dir.join("package.json"),
         r#"{"name":"test-app","scripts":{"dev":"bun src/index.ts"}}"#,
     )
     .unwrap();
     fs::write(
-        app_dir.join("node_modules/tako.sh/src/entrypoints/bun.ts"),
-        "export default {};",
+        app_dir.join("node_modules/tako.sh/dist/entrypoints/bun.mjs"),
+        "await import(process.argv[2]);",
     )
     .unwrap();
     fs::write(

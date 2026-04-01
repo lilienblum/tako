@@ -484,9 +484,9 @@ mod tests {
         let archive = temp.path().join("out.tar.zst");
         let dest = temp.path().join("dest");
 
-        fs::create_dir_all(source.join("node_modules/tako.sh/src/entrypoints")).unwrap();
+        fs::create_dir_all(source.join("node_modules/tako.sh/dist/entrypoints")).unwrap();
         fs::write(
-            source.join("node_modules/tako.sh/src/entrypoints/bun.ts"),
+            source.join("node_modules/tako.sh/dist/entrypoints/bun.mjs"),
             "export {}",
         )
         .unwrap();
@@ -495,7 +495,7 @@ mod tests {
 
         BuildExecutor::extract_archive(&archive, &dest).unwrap();
         assert!(
-            dest.join("node_modules/tako.sh/src/entrypoints/bun.ts")
+            dest.join("node_modules/tako.sh/dist/entrypoints/bun.mjs")
                 .exists()
         );
     }
