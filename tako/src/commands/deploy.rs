@@ -3008,6 +3008,7 @@ async fn build_target_artifacts(
                 task_tree.mark_build_step_running(&tree_target_label, "package-artifact");
                 if let Err(error) = package_target_artifact(
                     &workspace,
+                    &app_dir_in_workspace,
                     asset_roots,
                     include_patterns,
                     exclude_patterns,
@@ -3033,6 +3034,7 @@ async fn build_target_artifacts(
                     let _t = output::timed("Artifact packaging");
                     package_target_artifact(
                         &workspace,
+                        &app_dir_in_workspace,
                         asset_roots,
                         include_patterns,
                         exclude_patterns,
@@ -3046,6 +3048,7 @@ async fn build_target_artifacts(
                 let _t = output::timed("Artifact packaging");
                 package_target_artifact(
                     &workspace,
+                    &app_dir_in_workspace,
                     asset_roots,
                     include_patterns,
                     exclude_patterns,
@@ -3381,13 +3384,14 @@ fn merge_assets_locally(workspace_root: &Path, asset_roots: &[String]) -> Result
 
 fn package_target_artifact(
     workspace: &Path,
+    app_dir: &Path,
     asset_roots: &[String],
     include_patterns: &[String],
     exclude_patterns: &[String],
     cache_paths: &ArtifactCachePaths,
     target_label: &str,
 ) -> Result<u64, String> {
-    merge_assets_locally(workspace, asset_roots)?;
+    merge_assets_locally(app_dir, asset_roots)?;
 
     let artifact_temp_path = artifact_cache_temp_path(&cache_paths.artifact_path)?;
     let artifact_size = crate::build::create_workdir_archive(
@@ -5946,6 +5950,7 @@ route = "app.example.com"
         let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
             &workspace,
+            &workspace,
             &[],
             &["**/*".to_string()],
             &[],
@@ -5975,6 +5980,7 @@ route = "app.example.com"
         let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
             &workspace,
+            &workspace,
             &[],
             &["**/*".to_string()],
             &[],
@@ -6001,6 +6007,7 @@ route = "app.example.com"
         std::fs::create_dir_all(&cache_dir).unwrap();
         let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
+            &workspace,
             &workspace,
             &[],
             &["**/*".to_string()],
@@ -6040,6 +6047,7 @@ route = "app.example.com"
         std::fs::create_dir_all(&cache_dir).unwrap();
         let cache_paths = artifact_cache_paths(&cache_dir, "v1", Some("linux-aarch64-musl"));
         let archive_size = package_target_artifact(
+            &workspace,
             &workspace,
             &[],
             &["**/*".to_string()],
