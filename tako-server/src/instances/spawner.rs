@@ -448,6 +448,8 @@ async fn probe_endpoint_tcp(
     Ok(http_response_is_internal_success(&response, internal_token))
 }
 
+const MAX_HEALTH_RESPONSE_BYTES: usize = 4096;
+
 async fn read_http_response_headers(
     socket: &mut tokio::net::TcpStream,
     io_timeout: Duration,
@@ -468,6 +470,9 @@ async fn read_http_response_headers(
         }
 
         response.extend_from_slice(&chunk[..bytes_read]);
+        if response.len() > MAX_HEALTH_RESPONSE_BYTES {
+            return Ok(None);
+        }
         if response.windows(4).any(|window| window == b"\r\n\r\n") {
             break;
         }
