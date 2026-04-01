@@ -7,90 +7,97 @@ current: presets
 
 # Presets
 
-Presets provide metadata defaults -- specifically `main` (entrypoint) and `assets` (static asset directories) -- so you can deploy framework apps without extra config. Presets are metadata-only: they do not contain build, install, start, or dev commands.
+Presets provide metadata defaults for deploying framework apps without extra configuration. A preset can define a default entrypoint (`main`), static asset directories (`assets`), and a custom dev command (`dev`). Presets are metadata-only -- they never contain build commands, install commands, or start commands.
 
-Every app uses a preset. If you do not set one explicitly, Tako picks the **base preset** for your detected runtime.
+Every app uses a preset. If you do not set one explicitly, Tako uses the base adapter for your detected runtime.
 
-## Base presets
+## Base runtime adapters
 
-Tako ships with four built-in runtime base presets: `bun`, `node`, `deno`, and `go`. These are compiled into the CLI -- they are never loaded from files on disk.
+Tako ships with four built-in base adapters: `bun`, `node`, `deno`, and `go`. These are compiled into the CLI and serve as the default when no framework preset is selected.
 
-Each base preset defines a default entrypoint for its runtime:
+Each base adapter defines a default entrypoint:
 
-| Field  | Bun            | Node       | Deno      | Go    |
-| ------ | -------------- | ---------- | --------- | ----- |
-| `main` | `src/index.ts` | `index.js` | `main.ts` | `app` |
+| Adapter | Default `main` |
+| ------- | -------------- |
+| `bun`   | `src/index.ts` |
+| `node`  | `index.js`     |
+| `deno`  | `main.ts`      |
+| `go`    | `app`          |
 
-## Official presets
+Base adapters are not the same as presets. They are runtime plugins (`tako-runtime/src/plugins/`) that handle runtime behavior: install commands, launch arguments, entrypoint resolution, and package manager detection. Presets sit on top of adapters and only add metadata.
 
-Official presets provide framework-specific `main` and `assets` defaults on top of a base preset. For example, `tanstack-start` knows the right entrypoint and asset directory for TanStack Start apps.
+## Built-in presets
 
-Set a preset in `tako.toml`:
+Tako includes official framework presets that provide the right `main`, `assets`, and `dev` values for supported frameworks.
 
-```toml
-runtime = "bun"
-preset = "tanstack-start"
-```
-
-The `runtime` field selects which base preset to layer underneath. The `preset` field names the framework preset to apply on top. You do not need to namespace the preset -- just use the short name.
-
-Namespaced syntax like `js/tanstack-start` is not supported in `tako.toml`. Choose your runtime with the `runtime` field and keep `preset` as a plain alias.
-
-### How official presets are resolved
-
-When you deploy or run dev, Tako fetches the official preset definition from the `master` branch of the presets repository. If the fetch fails, preset resolution fails and the deploy is aborted.
-
-For base runtime aliases (`bun`, `node`, `deno`, `go`), if their section is missing from the fetched family manifest, Tako falls back to its embedded defaults. Framework presets like `tanstack-start` do not have this fallback -- they must be found in the fetched manifest.
-
-After resolution, Tako writes the resolved preset metadata to `.tako/build.lock.json` with `preset_ref`, `repo`, `path`, and `commit` fields. This file is used for cache-key inputs and visibility into what was resolved.
-
-### Pinning a preset version
-
-By default, unpinned presets fetch from `master` on every resolve. To lock a preset to a specific commit, append `@<commit-hash>`:
+### tanstack-start
 
 ```toml
-preset = "tanstack-start@a1b2c3d"
-```
-
-This guarantees reproducible builds regardless of upstream preset changes.
-
-## Preset TOML format
-
-Preset definitions are TOML sections within a family file. Presets are metadata-only -- they define defaults for entrypoint and assets, nothing else.
-
-### Supported fields
-
-- **`name`** (optional) -- Display name. Defaults to the TOML section name.
-- **`main`** (optional) -- Default app entrypoint. If your `tako.toml` sets `main`, it takes precedence.
-- **`assets`** (optional) -- List of directories to merge into `public/` after build.
-- **`dev`** (optional) -- Custom dev command for `tako dev`. Framework presets use this to run their own dev server (e.g. `vite dev`) instead of the SDK entrypoint.
-
-Presets do **not** contain build commands, install commands, or start commands. All build configuration belongs in your app's `tako.toml` under `[build]` or `[[build_stages]]`.
-
-### Example preset definition
-
-```toml
-[vite]
-dev = ["vite", "dev"]
-
 [tanstack-start]
 main = "@tanstack/react-start/server-entry"
 assets = ["dist/client"]
 dev = ["vite", "dev"]
 ```
 
-The `vite` preset tells `tako dev` to run `vite dev` instead of the SDK entrypoint. The `tanstack-start` preset provides the right entrypoint and asset directory, plus uses `vite dev` for development. Build commands are configured in your `tako.toml`.
+Provides the TanStack Start server entry module as the entrypoint, marks `dist/client` as the asset directory to merge into `public/` after build, and uses `vite dev` for local development.
 
-## Preset family files
+### vite
 
-Official preset definitions are organized by language: `presets/<language>/<language>.toml`. Currently there are two family files:
+```toml
+[vite]
+dev = ["vite", "dev"]
+```
+
+For projects using Vite as their dev server. This preset only sets the dev command -- it does not define `main` or `assets`, so those come from your `tako.toml` or the base adapter.
+
+## Setting a preset
+
+Set a preset in `tako.toml` with the `preset` field:
+
+```toml
+runtime = "bun"
+preset = "tanstack-start"
+```
+
+The `runtime` field selects which base adapter to use. The `preset` field names the framework preset to layer on top. Use the short name only -- namespaced syntax like `js/tanstack-start` is rejected. `github:` references are also not supported.
+
+If you omit `preset`, Tako uses the base adapter for your runtime with no framework-specific metadata.
+
+## Preset fields
+
+Each preset definition supports these fields:
+
+- **`name`** (optional) -- Display name. Falls back to the TOML section name.
+- **`main`** (optional) -- Default app entrypoint. Your `tako.toml` `main` takes precedence if set.
+- **`assets`** (optional) -- List of directories to merge into `public/` after build.
+- **`dev`** (optional) -- Custom dev command for `tako dev`. Framework presets use this to run their own dev server (e.g. `vite dev`) instead of the SDK entrypoint.
+
+Presets do **not** contain build commands, install commands, or start commands. All build configuration belongs in your `tako.toml` under `[build]` or `[[build_stages]]`. All runtime behavior (install, launch, entrypoint resolution) lives in runtime plugins.
+
+## How presets merge with tako.toml
+
+Presets provide defaults. Your `tako.toml` settings always take precedence.
+
+**Entrypoint (`main`):** Resolution order is: `main` in `tako.toml` > `main` in `package.json` > preset `main`. For JS runtimes, when the preset `main` is an index file like `index.ts` or `src/index.ts`, Tako checks whether the file exists in your project before using the preset value. If no source provides `main`, deploy and dev fail with guidance.
+
+**Assets:** Preset `assets` are combined with your top-level `assets` in `tako.toml` (deduplicated). Assets are merged into `public/` after the build, with later entries overwriting earlier ones.
+
+**Dev command:** `tako dev` resolves the dev command with this priority:
+
+1. `dev` in `tako.toml` (user override, e.g. `dev = ["custom", "cmd"]`)
+2. Preset `dev` command (e.g. the vite preset uses `vite dev`)
+3. Runtime default: JS runtimes run through the SDK entrypoint, Go uses `go run .`
+
+## Preset definition files
+
+Official preset definitions are organized by language in family files at `presets/<language>/<language>.toml`. For example:
 
 ```
 presets/javascript/javascript.toml
 presets/go/go.toml
 ```
 
-Each file contains framework presets for that language as TOML sections. Each section name is the preset alias:
+Each file contains framework presets as TOML sections, where each section name is the preset alias:
 
 ```toml
 # presets/javascript/javascript.toml
@@ -104,47 +111,39 @@ assets = ["dist/client"]
 dev = ["vite", "dev"]
 ```
 
-During `tako init`, Tako fetches the family manifest to show you available presets for your detected runtime. If no family presets are available after fetch, init skips preset selection and uses the base preset.
+## Preset resolution
 
-## How preset config merges with tako.toml
+When you deploy or run `tako dev`, Tako resolves your preset alias into actual metadata.
 
-Presets provide defaults for `main` and `assets`. Your `tako.toml` settings take precedence where applicable.
+**Unpinned aliases** (e.g. `preset = "tanstack-start"`) are fetched from the `master` branch of the presets repository on every resolve. If the fetch fails, preset resolution fails and the operation is aborted.
 
-### Merge rules
+**Base runtime aliases** (`bun`, `node`, `deno`, `go`) have a fallback: if their section is missing from the fetched family manifest, Tako uses its embedded defaults. Framework presets like `tanstack-start` do not have this fallback -- they must be found in the fetched manifest.
 
-**Entrypoint (`main`):** If `main` is set in `tako.toml`, it wins. Otherwise the preset's `main` is used. For JS runtimes, when the preset `main` is an index file like `index.ts` or `src/index.ts`, Tako tries to find the file in your project first, checking `index.<ext>` then `src/index.<ext>`. If neither `tako.toml` nor the preset provides `main`, the deploy fails with guidance.
+### Pinning a preset version
 
-**Assets:** Preset `assets` are combined with your top-level `assets` in `tako.toml` (deduplicated). Assets are merged into `public/` after the build, with later entries overwriting earlier ones.
-
-**Dev command:** Presets do not define dev commands. Tako always uses the runtime-default dev script:
-
-- Bun: `bun run dev`
-- Node: `npm run dev`
-- Deno: `deno task dev`
-- Go: `go run .`
-
-## Build execution
-
-Build commands are configured entirely in your `tako.toml` -- presets do not define build steps. Use `[build]` for a single-stage build or `[[build_stages]]` for multi-stage pipelines:
+To lock a preset to a specific commit and guarantee reproducible builds, append `@<commit-hash>`:
 
 ```toml
-# Single-stage build
-[build]
-run = "vinxi build"
-install = "bun install"
+preset = "tanstack-start@a1b2c3d"
 ```
 
-```toml
-# Multi-stage build
-[[build_stages]]
-name = "frontend"
-cwd = "frontend"
-install = "bun install"
-run = "bun run build"
+Pinned presets fetch from that exact commit instead of `master`, so upstream changes never affect your builds.
 
-[[build_stages]]
-name = "backend"
-run = "bun run build:server"
-```
+### build.lock.json
 
-At runtime on the server, the package manager's production install command runs for dependency setup.
+After resolving a preset, Tako writes the resolved metadata to `.tako/build.lock.json` with these fields:
+
+- `preset_ref` -- the preset alias as specified
+- `repo` -- source repository
+- `path` -- path to the family manifest file
+- `commit` -- resolved commit hash
+
+This file provides visibility into what was resolved and is used as an input to the artifact cache key.
+
+## Presets during tako init
+
+When you run `tako init` interactively, Tako fetches the runtime-family preset manifest (e.g. `presets/javascript/javascript.toml`) and shows a selector with the available presets for your detected runtime. While loading, it displays `Fetching presets...`.
+
+- If no family presets are available after fetch, init skips preset selection and uses the base adapter.
+- When a non-base preset is selected, init writes `preset` to `tako.toml`. For base adapters and the "custom preset reference" option, `preset` is left commented out.
+- For `main`, init checks whether the adapter can infer an entrypoint. If the inferred `main` differs from the preset default, it is written to `tako.toml`. If they match (or the preset provides a default and no inference is available), `main` is omitted. Init only prompts for `main` when neither inference nor preset default is available.

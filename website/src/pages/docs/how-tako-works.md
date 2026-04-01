@@ -25,8 +25,8 @@ Tako is made up of three parts that work together:
 
 Everything in Tako falls into one of two paths:
 
-- **Management path** -- CLI commands that change state: `tako deploy`, `tako scale`, `tako secrets set`, `tako servers add`. These talk to `tako-server` over a Unix socket.
-- **Traffic path** -- Real HTTP/HTTPS requests from users flowing through the proxy to your app instances over per-instance private TCP endpoints. This is pure Pingora performance.
+- **Management path** -- CLI commands that change state: `tako deploy`, `tako scale`, `tako secrets set`, `tako servers add`. These talk to `tako-server` over a Unix socket via SSH.
+- **Traffic path** -- Real HTTP/HTTPS requests from users flowing through the proxy to your app instances over per-instance private TCP endpoints on loopback. This is pure Pingora performance.
 
 This separation keeps things predictable. Commands change your deployment state. The proxy serves traffic.
 
@@ -46,11 +46,41 @@ Here is what happens under the hood:
 3. One local instance of your app starts immediately.
 4. HTTPS is set up using a local Certificate Authority -- no browser security warnings once the CA is trusted.
 
-The daemon supports multiple apps simultaneously, each on its own `*.tako.test` subdomain. On macOS, Tako installs a loopback proxy so your app is available on standard ports (443/80) without `sudo`.
+The daemon supports multiple apps simultaneously, each on its own `*.tako.test` subdomain. On macOS, Tako installs a loopback proxy so your app is available on standard ports (443/80) without `sudo`. On Linux, Tako uses iptables redirect rules to achieve the same portless URLs.
 
 Your app stays running while you work. If you press `b`, it backgrounds to the daemon and the CLI exits -- your app keeps serving. Run `tako dev` again to reattach. Press `Ctrl+c` to stop the app entirely.
 
 After 10 minutes with no attached CLI client, the daemon idles the app process. The next HTTP request wakes it back up automatically.
+
+### Variants
+
+You can run DNS variants of your app with `--variant`:
+
+```
+tako dev --variant admin
+# Live at https://my-app-admin.tako.test
+```
+
+This is useful for running multiple configurations of the same app side by side.
+
+### Dev Command Resolution
+
+`tako dev` resolves the command to run your app in this order:
+
+1. `dev` in `tako.toml` (your override, e.g. `dev = ["custom", "cmd"]`)
+2. Preset `dev` command (e.g. the vite preset uses `vite dev`)
+3. Runtime default: JS runtimes run through the SDK entrypoint, Go uses `go run .`
+
+JS dev uses the same SDK entrypoint as production -- the SDK wraps your `export default function fetch()` into a proper HTTP server.
+
+### Config Watching
+
+`tako dev` watches your `tako.toml` and automatically:
+
+- Restarts the app when effective dev environment variables change
+- Updates dev routing when `[envs.development].route(s)` changes
+
+Source hot-reload is runtime-driven (e.g. Bun's built-in watch mode); Tako does not watch source files for auto-restart.
 
 ## Deploying to Production
 
@@ -64,7 +94,7 @@ This builds your app locally, uploads the artifact to your server(s), and perfor
 
 ### 1. Validate and Prepare
 
-Tako validates the selected config file, resolves your app name, checks that secrets are in order, and verifies server connectivity.
+Tako validates the selected config file, resolves your app name, checks that secrets are in order, and verifies server connectivity. It also confirms that each target server has valid architecture and libc metadata (captured when you first added the server).
 
 ### 2. Build Locally
 
@@ -72,6 +102,8 @@ Your app is always built on your machine, never on the server. Tako:
 
 - Copies your project into a clean workdir (respecting `.gitignore`), symlinks `node_modules/` from the original tree (JS runtimes only)
 - Runs your build commands (`[build]` or `[[build_stages]]`)
+- Merges configured asset directories into `public/`
+- Verifies the resolved entrypoint file exists in the built workspace
 - Packages the result into a deploy artifact (excluding `node_modules/` -- for JS runtimes, the server installs its own production dependencies; Go deploys a self-contained binary with no production install step)
 - Caches artifacts locally so unchanged builds are instant on subsequent deploys
 
@@ -79,13 +111,16 @@ Your app is always built on your machine, never on the server. Tako:
 
 For each target server (in parallel):
 
-- Acquires a deploy lock to prevent concurrent deploys
+- Checks free disk space under `/opt/tako` before uploading
 - Uploads and extracts the target artifact
 - Syncs secrets only if they have changed (compares hashes)
 - Sends the deploy command to `tako-server`
+- `tako-server` acquires its per-app in-memory deploy lock
 - Runs runtime prep (production dependency install via the runtime's package manager)
-- Performs a rolling update of app instances
-- Releases the lock and cleans up old releases
+- Performs a first start or rolling update of app instances
+- Updates `current` symlink and cleans up releases older than 30 days
+
+If a deploy fails after creating a release directory, Tako automatically cleans up the partial release.
 
 ### Version Naming
 
@@ -102,10 +137,10 @@ Deploy versions are derived from your git state:
 When a request hits your server, `tako-server` routes it like this:
 
 1. The request arrives on port 80 or 443.
-2. HTTP requests are redirected to HTTPS (except ACME challenges).
+2. HTTP requests are redirected to HTTPS (`307`) except ACME challenges.
 3. The router matches the `Host` header and path against deployed app routes.
 4. The most specific match wins -- exact hostnames beat wildcards, longer paths beat shorter ones.
-5. For paths with a file extension, Tako serves static files directly from the app's `public/` directory when present.
+5. For paths with a file extension, Tako serves static files directly from the app's `public/` directory when present. For path-prefixed routes (e.g. `example.com/app/*`), the prefix is stripped when looking up the file.
 6. Otherwise, the request is proxied to a healthy app instance via round-robin load balancing.
 7. If nothing matches, the request gets a `404`.
 
@@ -125,18 +160,22 @@ routes = [
 
 Multiple apps can run on the same server with different routes. Route conflicts are detected at deploy time.
 
+### Per-IP Rate Limiting
+
+Tako limits each client IP to a maximum of 2048 concurrent connections. Requests beyond this limit receive a `429` response. Maximum request body size is 128 MiB.
+
 ## Health Checks and Instance Lifecycle
 
 Tako actively monitors every app instance with HTTP health probes:
 
 - **Probe interval**: every 1 second
-- **Probe request**: `GET /status` with `Host: tako` header
-- **Transport**: the instance's private TCP endpoint
-- **Unhealthy**: 2 consecutive failures removes the instance from load balancing
-- **Dead**: 5 consecutive failures kills the instance process
+- **Probe request**: `GET /status` with `Host: tako` header and `X-Tako-Internal-Token` header
+- **Transport**: the instance's private TCP endpoint on loopback
+- **Process exit detection**: before each probe, Tako checks if the process has exited and immediately marks it dead if so
+- **Failure threshold**: 1 failure marks the instance dead and triggers replacement. Once an instance passes its first health check, any single probe failure means something is genuinely wrong.
 - **Recovery**: a single successful probe restores the instance to healthy
 
-The `tako.sh` SDK implements this health endpoint automatically -- you do not need to add it yourself.
+The `tako.sh` SDK implements this health endpoint automatically -- you do not need to add it yourself. The SDK also echoes the internal token header for authentication.
 
 ## Scaling
 
@@ -148,18 +187,19 @@ tako scale 0                    # Scale to zero (on-demand mode)
 tako scale 2 --server la        # 2 instances on the "la" server only
 ```
 
-The desired count persists across deploys, rollbacks, and server restarts.
+The desired count persists across deploys, rollbacks, and server restarts. You can also use `tako scale` outside a project directory with `--app` and `--env` flags.
 
 ### Scale-to-Zero (On-Demand Mode)
 
-When desired instances is `0`, Tako enters on-demand mode:
+When desired instances is `0`, Tako enters on-demand mode. This is the default for new deployments:
 
 - After a deploy, one warm instance runs so traffic is served immediately.
 - After the idle timeout (default: 5 minutes), the instance shuts down.
-- The next request triggers a cold start -- Tako spins up an instance and holds the request until it is healthy (up to 30 seconds).
-- While a cold start is in progress, additional requests queue up (up to 100 by default).
+- The next request triggers a cold start -- Tako spins up an instance and holds the request until it is healthy (up to 30 seconds). If no healthy instance is ready before timeout, the proxy returns `504 App startup timed out`.
+- If cold start setup fails before readiness, the proxy returns `502 App failed to start`.
+- While a cold start is in progress, additional requests queue up (up to 100 by default). If the queue is full, the proxy returns `503 App startup queue is full` with a `Retry-After: 1` header.
 
-This is the default for new deployments, keeping costs low for apps with intermittent traffic.
+Scaling to zero keeps costs low for apps with intermittent traffic.
 
 ## Rolling Updates
 
@@ -175,41 +215,72 @@ When you deploy a new version, Tako replaces instances one at a time with zero d
 
 If a new instance fails its health check, Tako automatically rolls back: it kills the new instance, keeps the old ones running, and reports the failure.
 
+When the desired instance count is `0`, rolling deploy still starts one warm instance for the new version so traffic is served immediately after deploy.
+
+### Deploy Lock
+
+Each app environment on a server can only have one deploy running at a time. If a second deploy is attempted for the same app while one is already in progress, it fails immediately with a retry message. Restarting `tako-server` clears the lock -- there is no manual cleanup needed.
+
 ## TLS and Certificates
 
 In production, Tako handles TLS automatically:
 
 - **ACME (Let's Encrypt)** issues and renews certificates for your app's domains.
 - **SNI-based selection** picks the right certificate during the TLS handshake.
-- **Automatic renewal** happens 30 days before expiry with zero downtime.
+- **Automatic renewal** happens 30 days before expiry with zero downtime. Renewal checks run every 12 hours.
 - **HTTP-01 challenges** are handled transparently on port 80.
-- **Fallback certificate**: if no certificate exists yet for a hostname, Tako serves a self-signed default so HTTPS still completes.
+- **DNS-01 challenges** are supported for wildcard certificates via the `lego` ACME client. When wildcard routes are deployed and no DNS provider is configured, deploy prompts interactively for provider credentials.
+- **Fallback certificate**: if no certificate exists yet for a hostname, Tako serves a self-signed default so HTTPS still completes and routing can return normal HTTP status codes.
+- **Private/local hostnames** (like `localhost`, `*.local`, `*.test`): Tako skips ACME and generates a self-signed certificate during deploy.
 
-For local development, the dev daemon uses its own local CA with certificates generated on-the-fly for each `*.tako.test` domain.
+For local development, the dev daemon uses its own local CA:
 
-### Edge Proxy Caching
+- Root CA generated once on first run, private key stored in system keychain
+- Leaf certificates generated on-the-fly for each app domain
+- On first run, Tako installs the root CA into the system trust store (may prompt for your password)
+- No browser security warnings once the CA is trusted
+- Public CA cert available at `{TAKO_HOME}/ca/ca.crt` (useful for `NODE_EXTRA_CA_CERTS`)
+
+## Edge Proxy Caching
 
 The proxy includes a built-in response cache for `GET` and `HEAD` requests:
 
-- Cache follows your app's `Cache-Control` and `Expires` headers -- no implicit TTL is added.
+- Cache follows your app's `Cache-Control` and `Expires` headers -- no implicit TTL is added. Responses without explicit cache directives are not stored.
 - Cache keys are scoped by host + URI.
 - Storage is in-memory LRU with a 256 MiB total limit and 8 MiB per response.
 - WebSocket upgrades bypass the cache.
 
 ## Communication Protocol
 
-The CLI and `tako-server` communicate over a Unix socket at `/var/run/tako/tako.sock` using JSON messages. Key commands include:
+The CLI and `tako-server` communicate over a Unix socket at `/var/run/tako/tako.sock` using JSON messages. The socket uses a symlink-based path: the active server creates a PID-specific socket and atomically updates the `tako.sock` symlink, so clients always connect to the current process.
 
-| Command    | Purpose                                               |
-| ---------- | ----------------------------------------------------- |
-| `hello`    | Protocol negotiation and capability discovery         |
-| `deploy`   | Deploy a new version with routes and optional secrets |
-| `scale`    | Change desired instance count                         |
-| `delete`   | Remove an app's state and routes                      |
-| `rollback` | Roll back to a previous release                       |
-| `routes`   | List current route mappings                           |
+### Protocol Commands
 
-App instances do not connect to this management socket. Instead, `tako-server` manages their lifecycle directly (spawn, health check, stop) and proxies HTTP traffic to each instance's private TCP endpoint.
+| Command            | Purpose                                                      |
+| ------------------ | ------------------------------------------------------------ |
+| `hello`            | Protocol negotiation and capability discovery                |
+| `deploy`           | Deploy a new version with routes and optional secrets        |
+| `scale`            | Change desired instance count                                |
+| `delete`           | Remove an app's state and routes                             |
+| `rollback`         | Roll back to a previous release                              |
+| `routes`           | List current route mappings                                  |
+| `stop`             | Stop a running app                                           |
+| `status`           | Get status of a specific app                                 |
+| `list`             | List all deployed apps with their status                     |
+| `update_secrets`   | Update secrets for a deployed app (triggers rolling restart) |
+| `list_releases`    | Return release/build history for an app                      |
+| `get_secrets_hash` | Get the SHA-256 hash of an app's current secrets             |
+| `server_info`      | Return server runtime config and upgrade mode                |
+| `enter_upgrading`  | Acquire the durable upgrade lock (rejects mutating commands) |
+| `exit_upgrading`   | Release the durable upgrade lock                             |
+
+App instances do not connect to this management socket. Instead, `tako-server` manages their lifecycle directly (spawn, health check, stop) and proxies HTTP traffic to each instance's private TCP endpoint on loopback.
+
+### Instance Transport
+
+Deployed app instances bind to `127.0.0.1` on an OS-assigned port (`PORT=0`, `HOST=127.0.0.1`). The SDK signals readiness to `tako-server` by printing a `TAKO:READY:<port>` line on stdout once listening. The server then routes traffic and health probes to that loopback endpoint.
+
+Secrets are passed to instances via file descriptor 3 at spawn time -- the server writes JSON-serialized secrets to a pipe, and the child process reads fd 3 before any user code runs. Secrets never touch disk as plaintext.
 
 ## Server Filesystem Layout
 
@@ -217,10 +288,11 @@ On each deployment server, Tako organizes files under `/opt/tako/`:
 
 ```
 /opt/tako/
-  config.json              # Server-level config
-  tako.db                  # Persisted app state
+  config.json              # Server-level config (name, DNS provider)
+  tako.db                  # Persisted app state (SQLite)
   runtimes/{tool}/{version}/  # Downloaded runtime binaries
-  certs/{domain}/          # TLS certificates
+  acme/credentials.json    # DNS provider credentials
+  certs/{domain}/          # TLS certificates (fullchain.pem, privkey.pem)
   apps/{app}/{env}/
     current -> releases/{version}   # Active release symlink
     releases/{version}/             # Release files + app.json
@@ -229,17 +301,25 @@ On each deployment server, Tako organizes files under `/opt/tako/`:
 
 Each app + environment combination gets its own directory, so you can run `my-app/production` and `my-app/staging` on the same server without conflicts.
 
+Runtime binaries are downloaded directly from upstream releases by `tako-server` using download specs in runtime plugins (no external version manager needed). Binaries are cached and verified with SHA-256 checksums.
+
 ## Monitoring
 
-Tako-server exposes Prometheus metrics at `http://127.0.0.1:9898/` (localhost only):
+Tako-server exposes Prometheus metrics at `http://127.0.0.1:9898/` (localhost only, configurable with `--metrics-port`):
 
-- Request counts by status class (2xx/3xx/4xx/5xx)
-- Request latency distribution
-- Active connections
-- Cold start count and duration
-- Instance health and running instance count
+| Metric                               | Type      | Description                        |
+| ------------------------------------ | --------- | ---------------------------------- |
+| `tako_http_requests_total`           | Counter   | Proxied requests by status class   |
+| `tako_http_request_duration_seconds` | Histogram | Request latency distribution       |
+| `tako_http_active_connections`       | Gauge     | Currently active connections       |
+| `tako_cold_starts_total`             | Counter   | Cold starts triggered              |
+| `tako_cold_start_duration_seconds`   | Histogram | Cold start duration distribution   |
+| `tako_instance_health`               | Gauge     | Instance health (1=healthy, 0=not) |
+| `tako_instances_running`             | Gauge     | Number of running instances        |
 
-All metrics carry `server` and `app` labels. Scrape with Prometheus, Grafana Cloud, Datadog, or any compatible platform.
+All metrics carry `server` and `app` labels. Only proxied requests are measured -- ACME challenges, static asset responses, and unmatched 404s are excluded.
+
+Scrape with Prometheus, Grafana Cloud, Datadog, or any compatible platform. For remote scraping, expose port 9898 on a private network interface (e.g. via Tailscale or WireGuard).
 
 ## What to Read Next
 

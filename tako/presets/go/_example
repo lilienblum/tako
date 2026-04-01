@@ -1,0 +1,10 @@
+# Preset family definitions.
+# Each section defines a named preset for this language.
+# Presets provide main entrypoint, assets, and dev command defaults for specific frameworks.
+# Use in tako.toml as: preset = "my-preset" (with runtime = "go").
+# See go.toml for current preset definitions.
+
+# [my-preset]
+# main = "cmd/server"                      # Default main entrypoint for this framework.
+# assets = ["static"]                      # Static asset dirs merged into deploy artifact.
+# dev = ["air"]                            # Custom dev command (overrides runtime default).

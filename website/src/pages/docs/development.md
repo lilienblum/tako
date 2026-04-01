@@ -28,6 +28,17 @@ tako -c path/to/project/preview dev
 
 The app name is resolved from the top-level `name` in the selected config file, or from the sanitized parent directory name if `name` is not set. This name determines your local URL: `https://{app}.tako.test/`.
 
+### DNS variants
+
+Use `--variant` (alias `--var`) to run a DNS variant of the app. This gives you a separate hostname without changing the app name:
+
+```bash
+tako dev --variant foo
+# → https://myapp-foo.tako.test/
+```
+
+This is useful for running multiple branches or configurations of the same app side by side.
+
 ## The dev daemon
 
 `tako-dev-server` runs as a background process and handles multiple apps simultaneously. It persists app registrations in a SQLite database at `{TAKO_HOME}/dev-server.db`, so your routing state survives restarts.
@@ -42,6 +53,10 @@ The daemon:
 Installed CLI distributions include `tako` and `tako-dev-server` (on macOS, also `tako-loopback-proxy`). When running from a source checkout, `tako dev` prefers repo-local debug/release builds of these helpers.
 
 If the daemon binary is missing, `tako dev` reports a build hint (source checkout) or reinstall hint (installed CLI).
+
+If daemon startup fails, `tako dev` reports the last lines from `{TAKO_HOME}/dev-server.log`. The CLI waits up to ~15 seconds for the daemon socket after spawn before reporting startup failure.
+
+The daemon performs an upfront bind-availability check for its HTTPS listen address and exits immediately with an explicit error when that address is unavailable.
 
 ## App lifecycle
 
@@ -151,6 +166,10 @@ Tako also installs a boot-time `launchd` helper that ensures the `127.77.0.1` lo
 
 The loopback proxy is socket-activated: it may exit after a long idle window, and `launchd` reactivates it on the next incoming request.
 
+If the loopback proxy later appears inactive, `tako dev` explains that it is reloading or reinstalling the launchd helper before prompting for sudo.
+
+After applying or repairing the loopback proxy, Tako retries loopback 80/443 reachability and fails startup if those endpoints remain unreachable.
+
 After setup, your dev URLs look like:
 
 ```
@@ -177,6 +196,44 @@ On platforms without the loopback proxy or port redirect, the URL includes the p
 ```
 https://my-app.tako.test:47831/
 ```
+
+## Dev routes
+
+By default, `tako dev` registers `{app}.tako.test` as the route for your app.
+
+You can configure custom dev routes in `tako.toml`:
+
+```toml
+[envs.development]
+route = "my-app.tako.test"
+# or multiple routes:
+# routes = ["my-app.tako.test", "api.my-app.tako.test"]
+```
+
+Dev routes have a few constraints:
+
+- Routes must be `{app}.tako.test` or a subdomain of it.
+- Wildcard host entries are ignored in dev routing (exact hostnames only).
+- If configured routes contain no exact hostnames, `tako dev` fails with an error.
+
+## App startup command
+
+`tako dev` resolves the dev command with this priority:
+
+1. **`dev` in `tako.toml`** -- user override (e.g. `dev = ["custom", "cmd"]`)
+2. **Preset dev command** -- framework presets like `tanstack-start` and `vite` use `vite dev`
+3. **Runtime default** -- JS runtimes run your app through the Tako SDK entrypoint, same as production. Go uses `go run .`.
+
+For JS apps, this means your `export default function fetch()` or `export default { fetch }` is automatically wrapped into an HTTP server by the SDK -- no `dev` script in `package.json` needed.
+
+### Process monitoring
+
+`tako dev` monitors the app process by polling `try_wait()` every 500ms to detect exits:
+
+- If the app exits unexpectedly, the status changes to **exited** and the exit code is logged.
+- The route goes idle (proxy stops forwarding).
+- On the next HTTP request, the app is automatically restarted.
+- Before marking the app as "running", `tako dev` waits for the app to accept TCP connections on its port -- preventing 502 errors during startup.
 
 ## Development environment variables
 
@@ -215,8 +272,6 @@ Source-level hot reload is **runtime-driven**. Tako does not watch your source f
 - Bun's built-in watch mode
 - Vite's HMR
 - Any framework dev server with its own file watching
-
-For Go apps, Tako watches for file changes (`**/*.go`, `go.mod`, `go.sum`) and restarts the app process automatically.
 
 Tako's role is to keep the HTTPS proxy and DNS routing stable while the runtime handles reloading.
 
@@ -287,43 +342,6 @@ tako dev | grep error
 
 - If dev environment variables change (from `[vars]`, `[vars.development]`, or `[envs.development]`), the app process is restarted automatically.
 - If `[envs.development]` routes change, Tako re-registers routes with the daemon without restarting the app.
-
-## Dev routes
-
-By default, `tako dev` registers `{app}.tako.test` as the route for your app.
-
-You can configure custom dev routes in `tako.toml`:
-
-```toml
-[envs.development]
-route = "my-app.tako.test"
-# or multiple routes:
-# routes = ["my-app.tako.test", "api.my-app.tako.test"]
-```
-
-Dev routes have a few constraints:
-
-- Routes must be `{app}.tako.test` or a subdomain of it.
-- Wildcard host entries are ignored in dev routing (exact hostnames only).
-- If configured routes contain no exact hostnames, `tako dev` fails with an error.
-
-## App startup command
-
-`tako dev` resolves the dev command with this priority:
-
-1. **`dev` in `tako.toml`** — user override (e.g. `dev = ["custom", "cmd"]`)
-2. **Preset dev command** — framework presets like `vite` and `tanstack-start` use `vite dev`
-3. **Runtime default** — JS runtimes (bun, node, deno) run your app through the Tako SDK entrypoint, same as production. Go uses `go run .`.
-
-For JS apps, this means your `export default function fetch()` or `export default { fetch }` is automatically wrapped into an HTTP server by the SDK — no `dev` script in `package.json` needed.
-
-### Process monitoring
-
-`tako dev` monitors the app process and detects crashes:
-
-- If the app exits unexpectedly, the status changes to **exited** and the exit code is logged.
-- On the next HTTP request, the app is automatically restarted.
-- Before marking the app as "running", `tako dev` waits for the app to accept TCP connections on its port — preventing 502 errors during startup.
 
 ## Diagnostics with tako doctor
 

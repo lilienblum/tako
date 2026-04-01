@@ -19,25 +19,29 @@ tako [--version] [-v|--verbose] [--ci] [--dry-run] [-c|--config <CONFIG>] <comma
 
 These flags work with any command.
 
-`--version` prints the current version and exits. Stable builds print a semver string (e.g. `0.3.1`). Canary builds print `canary-<sha7>`.
+`--version` prints the current version and exits. Stable builds print a semver string (e.g. `0.3.1`). Canary builds print `<semver>-canary-<sha7>`.
 
 `-v`, `--verbose` switches to verbose output -- an append-only execution transcript with timestamps, log levels, and technical detail like file paths and per-host transport context.
 
-`--ci` produces deterministic, non-interactive output. Colors, spinners, and interactive prompts are all disabled. If a required prompt value is missing, the command fails with an actionable error suggesting CLI flags or config. Combine with `--verbose` for detailed transcript output in CI/CD pipelines.
+`--ci` produces deterministic, non-interactive output. Colors, spinners, and interactive prompts are disabled, and output stays transcript-style. If a required prompt value is missing, the command fails with an actionable error suggesting CLI flags or config. Combine with `--verbose` for detailed transcript output in CI/CD pipelines.
 
-`--dry-run` shows what a command would do without performing any side effects. SSH connections, file uploads, config writes, and remote commands are all skipped. Each skipped action is printed as `⏭ ... (dry run)`. Supported by: `deploy`, `servers add`, `servers rm`, `delete`.
+`--dry-run` shows what a command would do without performing any side effects. SSH connections, file uploads, config writes, and remote commands are all skipped. Each skipped action is printed as `⏭ ... (dry run)`. Production deploy confirmation is auto-skipped. Supported by: `deploy`, `servers add`, `servers rm`, `delete`.
 
-`-c`, `--config <CONFIG>` selects an explicit app config file instead of `./tako.toml`. If the path does not end with `.toml`, Tako appends it automatically. App-scoped commands treat that file's parent directory as the project directory, and omitting `.toml` is the recommended shorthand.
+`-c`, `--config <CONFIG>` selects an explicit app config file instead of `./tako.toml`. If the path does not end with `.toml`, Tako appends it automatically. App-scoped commands treat that file's parent directory as the project directory. Omitting `.toml` is the recommended shorthand.
 
 ## Output Modes
 
-Tako has three output modes you can mix and match:
+Tako has four output modes you can mix and match:
 
-**Normal** (default) -- concise, user-focused output with spinners for long-running steps in interactive terminals.
+**Normal** (default) -- concise interactive output. Commands that already know their plan may render a persistent task tree that shows waiting work up front (`○` with `...` labels), updates running rows in place, keeps completed rows visible, may place a reporter-specific error line underneath a failed task row, can mark remaining incomplete work as `Aborted` after a fatal failure, and may separate top-level sections with blank lines for readability.
 
-**Verbose** (`--verbose`) -- append-only transcript. Each line is formatted as `HH:MM:SS LEVEL message`. Spinners degrade to log lines, and DEBUG-level messages are shown.
+**Verbose** (`--verbose`) -- append-only transcript. Each line is formatted as `HH:MM:SS LEVEL message`. Only prints work as it starts or finishes; upcoming tasks are not pre-rendered. DEBUG-level messages are shown.
 
-**CI** (`--ci`) -- plain text, no ANSI colors, no spinners, no interactive prompts. Pair with `--verbose` for maximum detail without formatting or timestamps.
+**CI** (`--ci`) -- plain text, no ANSI colors, no spinners, no interactive prompts. Stays transcript-style and emits only current work plus final results.
+
+**CI + Verbose** (`--ci --verbose`) -- detailed append-only transcript with no colors or timestamps.
+
+On `Ctrl+C`, Tako clears any active prompt or spinner it controls, leaves one blank line, prints `Operation cancelled`, and exits with code `130`.
 
 All status, progress, and log output goes to stderr. Only actual command results (URLs, machine-readable data) go to stdout.
 
@@ -67,16 +71,16 @@ Init walks you through setting up your project. It prompts for:
 - **App name** -- defaults to the selected config file's parent directory name, sanitized for DNS compatibility.
 - **Production route** -- the hostname your app will be served at (defaults to `{name}.example.com`).
 - **Runtime** -- detects your runtime automatically (Bun, Node, Deno, Go) and lets you confirm or override.
-- **Preset** -- fetches available presets for your runtime and lets you pick one, or use the base runtime preset.
+- **Preset** -- fetches available presets for your runtime and lets you pick one, or use the base runtime preset. When "custom preset reference" is selected, `preset` is left commented/unset.
 - **Main entrypoint** -- only prompted when neither adapter inference nor the chosen preset provides a default.
 
-The generated `tako.toml` leaves only essential options uncommented (`name`, `runtime`, `runtime_version`, `route`) with all other options included as commented examples. `runtime_version` is pinned from the locally-installed runtime version.
+The generated `tako.toml` leaves only essential options uncommented (`name`, `runtime`, `runtime_version`, `route`) with all other options included as commented examples. `runtime_version` is pinned from the locally-installed runtime version. A non-base `preset` is uncommented only when one is selected.
 
 After generating `tako.toml`, init installs the `tako.sh` SDK package using the selected runtime's built-in package-manager command (for example `bun add tako.sh` for Bun, `npm install tako.sh` for Node, `go get tako.sh` for Go).
 
 Init also updates `.gitignore` so `.tako/*` is ignored while `.tako/secrets.json` remains trackable. When the project lives inside a git repo, the repo-root `.gitignore` is updated; otherwise a local `.gitignore` is used.
 
-If the selected config file already exists in an interactive terminal, init asks for overwrite confirmation. In non-interactive mode, it silently skips.
+If the selected config file already exists in an interactive terminal, init asks for overwrite confirmation. In non-interactive mode, it leaves the file untouched and prints `Operation cancelled`.
 
 The full "Detected" diagnostics summary is only shown when `--verbose` is active.
 
@@ -87,18 +91,22 @@ The full "Detected" diagnostics summary is only shown when `--verbose` is active
 Start or attach to a local development session.
 
 ```bash
-tako dev [--name <NAME>]
+tako dev [--variant <VARIANT>]
 ```
 
-| Flag            | Description                                                                                    |
-| --------------- | ---------------------------------------------------------------------------------------------- |
-| `--name <NAME>` | Override the app name (defaults to config `name` or the selected config parent directory name) |
+| Flag                  | Description                                                                         |
+| --------------------- | ----------------------------------------------------------------------------------- |
+| `--variant <VARIANT>` | Run a DNS variant of the app (e.g. `--variant foo` serves at `myapp-foo.tako.test`) |
+
+Alias for `--variant`: `--var`
 
 `tako dev` is a client that connects to the `tako-dev-server` daemon. It registers the selected config file, starts your app, and streams logs directly to your terminal.
 
 On first run, Tako sets up a local Certificate Authority and HTTPS infrastructure so your app is available at `https://{app}.tako.test/`. On macOS, a loopback proxy is installed so your app is served on the default HTTPS port (443) without needing to specify a port. On Linux, iptables redirect rules achieve the same result without an extra proxy binary.
 
 When `[envs.development]` defines custom routes in `tako.toml`, those routes are used instead of the default. Dev routes must be `{app}.tako.test` or a subdomain of it.
+
+The app starts immediately when `tako dev` starts (1 local instance) and transitions to idle after 10 minutes of no attached CLI clients. After an idle transition, the next HTTP request triggers wake-on-request. Running `tako dev` again with the same config attaches to the existing session.
 
 **Interactive keyboard shortcuts:**
 
@@ -111,6 +119,14 @@ When `[envs.development]` defines custom routes in `tako.toml`, those routes are
 When stdout is not a terminal (piped or redirected), output falls back to plain text with no color or raw mode.
 
 `tako dev` watches `tako.toml` for changes and automatically restarts when environment variables change or updates routing when dev routes change. Source hot-reload is runtime-driven (e.g. Bun's built-in watch mode).
+
+```bash
+# Start dev session
+tako dev
+
+# Start a variant
+tako dev --variant staging
+```
 
 ### `tako dev stop`
 
@@ -145,12 +161,10 @@ Print local dev environment diagnostics and exit.
 tako doctor
 ```
 
-Reports on the dev daemon, local DNS, and listener status. Platform-specific sections:
+Reports on the dev daemon, local DNS, and listener status. If the dev daemon is not running, doctor reports that and hints to start `tako dev`. Platform-specific sections:
 
 - **macOS:** Loopback proxy install status, boot-helper load status, dedicated loopback alias, launchd load status, TCP reachability on `127.77.0.1:443` and `:80`.
 - **Linux:** Port redirect status (loopback alias and iptables rules), TCP reachability on `127.77.0.1:443` and `:80`.
-
-If the dev daemon is not running, doctor reports that and hints to start `tako dev`.
 
 ---
 
@@ -173,21 +187,41 @@ In interactive terminals, deploying to `production` requires confirmation unless
 
 **What deploy does:**
 
-1. Validates configuration and secrets
-2. Sets up a clean workdir from your project (respecting `.gitignore`)
-3. Resolves preset metadata and runs your build commands
-4. Packages the deploy artifact (excluding `node_modules/` for JS projects)
-5. Uploads the artifact to all servers in the target environment
-6. Server installs production dependencies (JS runtimes) or runs the binary directly (Go), and performs a rolling update
-7. Cleans up releases older than 30 days
+1. Validates configuration, secrets, and server target metadata
+2. Resolves source bundle root (git root when available; otherwise app directory)
+3. Sets up a clean workdir from your project (respecting `.gitignore`)
+4. Resolves preset metadata and runs your build commands
+5. Verifies the resolved runtime `main` file exists in the build workspace
+6. Packages the deploy artifact (excluding `node_modules/` for JS projects)
+7. Checks disk space on target servers before uploading
+8. Uploads the artifact to all servers in the target environment
+9. Server installs production dependencies (JS runtimes) or runs the binary directly (Go), and performs a rolling update
+10. Cleans up releases older than 30 days
 
 Deploy resolves app identity from `name` in the selected config file, falling back to the sanitized selected config parent directory name.
 
-**Server auto-selection:** If you're deploying to `production` and `[envs.production].servers` is empty, Tako will auto-select your only server or prompt you to pick one when you have multiple servers configured.
+**Server auto-selection:** If you're deploying to `production` and `[envs.production].servers` is empty, Tako will auto-select your only server or prompt you to pick one when you have multiple servers configured. The selection is persisted to `tako.toml`.
 
 **Failure handling:** If some servers fail while others succeed, deploy continues and reports failures at the end. Failed deploys automatically roll back on the affected server and clean up partial release directories.
 
 **Upstream transport:** Deploy always uses per-instance private TCP upstreams. The deployed app should listen on the provided `PORT`.
+
+**Version naming:**
+
+- Clean git tree: `{commit_hash}` (e.g., `abc1234`)
+- Dirty working tree: `{commit_hash}_{content_hash}` (first 8 chars each)
+- No git commit/repo: `nogit_{content_hash}` (first 8 chars)
+
+```bash
+# Deploy to production
+tako deploy
+
+# Deploy to staging
+tako deploy --env staging
+
+# Deploy without confirmation
+tako deploy --yes
+```
 
 ---
 
@@ -209,7 +243,7 @@ Aliases: `tako rm`, `tako remove`, `tako undeploy`, `tako destroy`
 
 Delete removes exactly one deployment target, not every server in an environment. In interactive mode, when additional information is needed, Tako shows deployed targets and lets you pick. In non-interactive mode, `--yes`, `--env`, and `--server` are all required.
 
-The `development` environment is reserved for `tako dev` and cannot be used with delete.
+The `development` environment is reserved for `tako dev` and cannot be used with delete. Delete is idempotent for absent app state (safe to re-run for cleanup).
 
 ```bash
 # Interactive: pick from deployed targets
@@ -242,6 +276,8 @@ When `--server` is omitted, `--env` is required and Tako scales every server in 
 
 The desired instance count is stored on each server and persists across deploys, rollbacks, and restarts.
 
+Setting instances to `0` enables on-demand scale-to-zero with cold starts on the next request. Scaling down drains in-flight requests before stopping excess instances.
+
 ```bash
 # Keep 2 warm instances on every production server
 tako scale 2 --env production
@@ -251,9 +287,10 @@ tako scale 3 --server lax --env staging
 
 # Scale from outside project config context
 tako scale 2 --app my-api --env production
-```
 
-Setting instances to `0` enables on-demand scale-to-zero with cold starts on the next request.
+# Scale to zero (on-demand cold start)
+tako scale 0 --env production
+```
 
 ---
 
@@ -306,13 +343,13 @@ tako releases ls [--env <ENV>]
 | ------------- | ----------------------------------------------- |
 | `--env <ENV>` | Environment to query (defaults to `production`) |
 
+Alias: `tako releases list`
+
 Output is sorted newest-first. Each release shows:
 
 - Release/build id and deployed timestamp (with a relative hint like `{3h ago}` for recent deploys)
 - Commit message and cleanliness marker (`[clean]`, `[dirty]`, or `[unknown]`)
 - `[current]` marks the active release
-
-Alias: `tako releases list`
 
 ```bash
 tako releases ls
@@ -333,7 +370,7 @@ tako releases rollback <RELEASE_ID> [--env <ENV>] [-y|--yes]
 | `--env <ENV>`  | Environment to roll back (defaults to `production`) |
 | `-y`, `--yes`  | Skip confirmation prompt                            |
 
-Rollback reuses current routes, env vars, secrets, and scaling config. It switches the runtime to the target release and performs a standard rolling update. In interactive terminals, rolling back `production` requires confirmation unless `--yes` is provided.
+Rollback reuses current routes, env vars, secrets, and scaling config. It switches the runtime to the target release and performs a standard rolling update. In interactive terminals, rolling back `production` requires confirmation unless `--yes` is provided. Partial failures are reported per server; successful servers remain rolled back.
 
 ```bash
 tako releases rollback abc1234 --env production --yes
@@ -361,7 +398,7 @@ tako servers add [HOST] [--name <NAME>] [--description <TEXT>] [--port <PORT>] [
 | `--port <PORT>`        | SSH port (default: `22`)                            |
 | `--no-test`            | Skip SSH connection test and target detection       |
 
-Without arguments, Tako launches an interactive setup wizard that guides you through host, name, description, and port configuration.
+Without arguments, Tako launches an interactive setup wizard that guides you through host, name, description, and port configuration. The wizard supports `Tab` autocomplete suggestions from existing servers and CLI history.
 
 By default, Tako tests the SSH connection (as user `tako`), verifies the host key against `~/.ssh/known_hosts`, and detects server target metadata (`arch`, `libc`) for deploy target matching. Use `--no-test` to skip these checks.
 
@@ -406,6 +443,20 @@ Alias: `tako servers list`
 
 Displays a table of server name, host, port, and optional description. If no servers are configured, shows a hint to run `tako servers add`.
 
+### `tako servers status`
+
+Show global deployment status across all configured servers.
+
+```bash
+tako servers status
+```
+
+Alias: `tako servers info`
+
+Prints a snapshot of every server and its deployed apps, including instance counts, build ids, and deploy timestamps. Does not require `tako.toml` and can run from any directory.
+
+If no servers are configured interactively, offers to run the add-server wizard. If no deployed apps are found, reports that explicitly.
+
 ### `tako servers restart`
 
 Restart `tako-server` on a remote host.
@@ -422,15 +473,15 @@ Restarts the entire `tako-server` process, which causes brief downtime for all a
 
 ### `tako servers upgrade`
 
-Upgrade `tako-server` on a remote host with zero-downtime reload.
+Upgrade `tako-server` on one or all configured remote servers with zero-downtime reload.
 
 ```bash
-tako servers upgrade <NAME> [--canary|--stable]
+tako servers upgrade [SERVER_NAME] [--canary|--stable]
 ```
 
 | Argument/Flag | Description                                            |
 | ------------- | ------------------------------------------------------ |
-| `<NAME>`      | Server name                                            |
+| `SERVER_NAME` | Server name (omit to upgrade all configured servers)   |
 | `--canary`    | Install canary prerelease build                        |
 | `--stable`    | Install stable build and set default channel to stable |
 
@@ -441,7 +492,13 @@ Upgrade verifies the signed `tako-server-sha256s.txt` release manifest, enforces
 Custom `TAKO_DOWNLOAD_BASE_URL` overrides must use `https://`. For local testbeds, an explicit `TAKO_ALLOW_INSECURE_DOWNLOAD_BASE=1` override is required before a non-HTTPS base is accepted.
 
 ```bash
+# Upgrade all servers
+tako servers upgrade
+
+# Upgrade a specific server
 tako servers upgrade production
+
+# Upgrade to canary
 tako servers upgrade staging --canary
 ```
 
@@ -463,20 +520,6 @@ Alias: `tako servers uninstall`
 Connects via SSH and removes everything Tako installed on the server: services (systemd and OpenRC), binaries, data directory (`/opt/tako/`), socket directories, and service configuration files. After the remote teardown, removes the server from your local config.
 
 Requires root privileges on the server (root login or sudo-capable user).
-
-### `tako servers status`
-
-Show global deployment status across all configured servers.
-
-```bash
-tako servers status
-```
-
-Alias: `tako servers info`
-
-Prints a snapshot of every server and its deployed apps, including instance counts, build ids, and deploy timestamps. Does not require `tako.toml` and can run from any directory.
-
-If no servers are configured interactively, offers to run the add-server wizard. If no deployed apps are found, reports that explicitly.
 
 ---
 
@@ -517,7 +560,7 @@ Remove a secret.
 tako secrets rm <NAME> [--env <ENV>] [--sync]
 ```
 
-Aliases: `tako secrets remove`, `tako secrets delete`, `tako secrets del`
+Aliases: `tako secrets remove`, `tako secrets delete`
 
 | Argument/Flag | Description                                                                        |
 | ------------- | ---------------------------------------------------------------------------------- |
@@ -563,19 +606,19 @@ tako secrets sync
 tako secrets sync --env production
 ```
 
-### `tako secrets key import`
+### `tako secrets key derive`
 
-Import an encryption key from masked terminal input.
+Derive an encryption key from a passphrase (for sharing with teammates).
 
 ```bash
-tako secrets key import [--env <ENV>]
+tako secrets key derive [--env <ENV>]
 ```
 
 | Flag          | Description                                   |
 | ------------- | --------------------------------------------- |
 | `--env <ENV>` | Target environment (defaults to `production`) |
 
-Writes the key to `keys/{env}`. Use this to share encryption keys with teammates.
+Writes the key to `keys/{env}`.
 
 ### `tako secrets key export`
 
@@ -657,6 +700,30 @@ If nothing exists to remove, reports that and exits.
 
 ---
 
+## `tako typegen`
+
+Generate typed secret accessors for the current project.
+
+```bash
+tako typegen
+```
+
+Generates `tako.d.ts` for JavaScript/TypeScript projects and `tako_secrets.go` for Go projects, providing typed access to your Tako-managed secrets.
+
+---
+
+## `tako version`
+
+Show version information.
+
+```bash
+tako version
+```
+
+Same as `--version` flag. Stable builds print a semver string; canary builds print `<semver>-canary-<sha7>`.
+
+---
+
 ## `tako help`
 
 Show all available commands with brief descriptions.
@@ -687,16 +754,18 @@ Running `tako` with no arguments also prints help.
 | `tako servers add`             | Add a server                              |
 | `tako servers rm`              | Remove a server                           |
 | `tako servers ls`              | List servers                              |
-| `tako servers restart <NAME>`  | Restart tako-server                       |
-| `tako servers upgrade <NAME>`  | Upgrade tako-server                       |
-| `tako servers implode [NAME]`  | Remove tako-server and all data           |
 | `tako servers status`          | Show deployment status                    |
+| `tako servers restart <NAME>`  | Restart tako-server                       |
+| `tako servers upgrade [NAME]`  | Upgrade tako-server                       |
+| `tako servers implode [NAME]`  | Remove tako-server and all data           |
 | `tako secrets set <NAME>`      | Set a secret                              |
 | `tako secrets rm <NAME>`       | Remove a secret                           |
 | `tako secrets ls`              | List secrets                              |
 | `tako secrets sync`            | Sync secrets to servers                   |
-| `tako secrets key import`      | Import encryption key                     |
+| `tako secrets key derive`      | Derive encryption key from passphrase     |
 | `tako secrets key export`      | Export encryption key                     |
 | `tako upgrade`                 | Upgrade the CLI                           |
 | `tako implode`                 | Remove Tako CLI and all local data        |
+| `tako typegen`                 | Generate typed secret accessors           |
+| `tako version`                 | Show version                              |
 | `tako help`                    | Show help                                 |

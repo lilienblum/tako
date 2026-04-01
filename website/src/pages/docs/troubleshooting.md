@@ -24,7 +24,7 @@ This usually tells you whether the issue is local (your machine), remote (one se
 
 ### `--verbose`
 
-Adding `-v` or `--verbose` to any Tako command switches output to an append-only execution transcript with timestamps and log levels. Each line is formatted as `HH:MM:SS LEVEL message`. Spinners are replaced with log lines, and DEBUG-level messages are included. This is the single best tool for understanding what Tako is doing under the hood.
+Adding `-v` or `--verbose` to any Tako command switches output to an append-only execution transcript with timestamps and log levels. Each line is formatted as `HH:MM:SS LEVEL message`. It only prints work as it starts or finishes, and DEBUG-level messages are included. This is the single best tool for understanding what Tako is doing under the hood.
 
 ```bash
 tako deploy --verbose
@@ -33,7 +33,7 @@ tako dev --verbose
 
 ### `--ci`
 
-The `--ci` flag produces deterministic, non-interactive output with no colors, spinners, or prompts. If a required prompt value is missing, the command fails with an actionable error message suggesting CLI flags or config to set. Combined with `--verbose`, it stays append-only but still omits colors and timestamps:
+The `--ci` flag produces deterministic, non-interactive output with no colors or prompts. It stays transcript-style and only emits current work plus final results. If a required prompt value is missing, the command fails with an actionable error message suggesting CLI flags or config to set. Combined with `--verbose`, it stays append-only but still omits colors and timestamps:
 
 ```bash
 tako deploy --ci --verbose
@@ -60,6 +60,17 @@ If the dev daemon is not running, doctor reports `status: not running` with a hi
    - macOS / Linux: `https://{app}.tako.test/`
    - Other platforms: `https://{app}.tako.test:47831/`
 
+### Dev daemon not starting
+
+If `tako dev` fails to start the daemon:
+
+- **Socket timeout:** `tako dev` waits up to ~15 seconds for the daemon socket after spawn. If this times out, check `{TAKO_HOME}/dev-server.log` for startup errors.
+- **Port conflict:** The daemon checks that port 47831 is available before starting. If the port is in use, the daemon exits immediately with an explicit error. Stop whatever is using that port and retry.
+- **Missing binary:** If no `tako-dev-server` binary is found:
+  - Source checkout: build it with `cargo build -p tako --bin tako-dev-server`
+  - Installed CLI: reinstall with `curl -fsSL https://tako.sh/install.sh | sh`
+- **Startup failure details:** When daemon startup fails, `tako dev` reports the last lines from `{TAKO_HOME}/dev-server.log`.
+
 ### Local URL does not load
 
 Make sure `tako dev` is currently running. If it is, run `tako doctor` and check for preflight failures.
@@ -68,7 +79,7 @@ On macOS, verify that `/etc/resolver/tako.test` exists and points to `127.0.0.1:
 
 ### Local CA and HTTPS
 
-Tako generates a root CA on first run and stores the private key in the system keychain. Leaf certificates are generated on-the-fly for each app domain.
+Tako generates a root CA on first run and stores the private key in the system keychain (scoped per `{TAKO_HOME}`). Leaf certificates are generated on-the-fly for each app domain.
 
 - The public CA cert is at `{TAKO_HOME}/ca/ca.crt` (useful for `NODE_EXTRA_CA_CERTS`).
 - On first run, `tako dev` installs the root CA into the system trust store and may prompt for your password. It explains why elevated access is needed before prompting.
@@ -118,23 +129,44 @@ If DNS resolution fails for `*.tako.test`:
 
 Routes for `[envs.development]` must be `{app}.tako.test` or a subdomain of it. Dev routing matches exact hostnames only; wildcard host entries are ignored. If your configured dev routes contain no exact hostnames, `tako dev` fails with an invalid route error.
 
+### App crashing or restarting in dev
+
+`tako dev` polls `try_wait()` every 500ms to detect when the app process exits. On exit, the route goes idle (proxy stops forwarding) and the next HTTP request triggers a restart (wake-on-request). If your app is crashing repeatedly, check the dev log output for runtime errors or missing dependencies.
+
+Idle shutdown is suppressed while there are in-flight requests, so crashes during active traffic indicate an app-level issue rather than a Tako timeout.
+
 ### HTTPS listen port conflict
 
 The dev daemon performs an upfront bind-availability check for port 47831 and exits immediately with an explicit error if the port is already in use. Check for other processes using that port and stop them before running `tako dev`.
 
 ## Deploy Issues
 
-### Deploy lock left behind
+### Build failures
 
-**Symptom:** Deploy fails immediately with a message about an existing lock.
+**Symptom:** Deploy fails during artifact build before upload.
 
-**Fix:** A previous deploy crashed mid-flight and left a lock directory behind. Remove it manually on the affected server:
+Things to check:
 
-```
-/opt/tako/apps/{app}/{env}/.deploy_lock
-```
+- **Preset resolution:** Make sure your `preset` value is a runtime-local alias (like `tanstack-start`), not a namespaced alias (like `js/tanstack-start`, which is rejected). `github:` refs are also not supported.
+- **Build commands:** Check your `[build].run` or `[[build_stages]]` entries. These two are mutually exclusive -- you cannot have both. Combining `[build].include`/`[build].exclude` with `[[build_stages]]` is also an error.
+- **Working directory:** If using `cwd` in `[build]` or `[[build_stages]]`, make sure the path is relative and does not escape the project root.
+- **Preset fetch:** Unpinned official aliases are fetched from `master` on each resolve. If fetch fails, resolution fails. Runtime base aliases (`bun`, `node`, `deno`, `go`) fall back to embedded defaults when missing from fetched family manifests.
 
-The lock is an atomic `mkdir` on the server. It prevents concurrent deploys of the same app/environment on the same server. Normally it is released at the end of deploy, but if the process crashes, it must be removed by hand.
+### Deploy entrypoint missing after build
+
+**Symptom:** Deploy fails during artifact preparation saying the deploy entrypoint (`main`) was not found after build.
+
+**Fix:** Make sure your build output creates the file specified by `main` (from `tako.toml` or the preset). For JS runtimes with preset `main` set to `index.<ext>` or `src/index.<ext>` (where ext is `ts`, `tsx`, `js`, or `jsx`), Tako checks `index.<ext>` first, then `src/index.<ext>`.
+
+If neither `tako.toml main`, manifest main (e.g. `package.json` `main`), nor preset `main` is set, deploy fails with guidance.
+
+### Concurrent deploy already in progress
+
+**Symptom:** Deploy fails immediately with `Deploy already in progress for app ... Please wait and try again.`
+
+**Fix:** Another deploy for the same app/environment is still running on that server. Wait for it to finish, or check current state with `tako servers status` and retry.
+
+`tako-server` uses an in-memory per-app lock for deploys. No `.deploy_lock` directory is written to disk. If `tako-server` restarted mid-deploy, the in-flight deploy fails and a retry does not require manual lock cleanup.
 
 ### Low disk space
 
@@ -146,22 +178,27 @@ The lock is an atomic `mkdir` on the server. It prevents concurrent deploys of t
 
 If a deploy fails after creating a new release directory on the server, Tako automatically removes that partial release directory before returning the error. You should not need to clean up partial releases manually.
 
-### Build failures
+### Missing server target metadata
 
-**Symptom:** Deploy fails during artifact build before upload.
+Deploy requires valid `arch` and `libc` metadata for each server in `config.toml`. If a server was added with `--no-test`, this metadata may be missing.
 
-Things to check:
+**Fix:** Remove the server with `tako servers rm` and re-add it with `tako servers add` (without `--no-test`) to capture target metadata via SSH.
 
-- **Preset resolution:** Make sure your `preset` value is a runtime-local alias (like `tanstack-start`), not a namespaced alias (like `js/tanstack-start`, which is rejected). `github:` refs are also not supported.
-- **Build commands:** Check your `[build].run` or `[[build_stages]]` entries. These two are mutually exclusive -- you cannot have both.
-- **Working directory:** If using `cwd` in `[build]` or `[[build_stages]]`, make sure the path is relative and does not escape the project root.
-- **Preset fetch:** Unpinned official aliases are fetched from `master` on each resolve. If fetch fails, resolution fails. Runtime base aliases (`bun`, `node`, `deno`, `go`) fall back to embedded defaults when missing from fetched family manifests. Presets are fetched from `presets/<language>/<language>.toml`.
+### SSH host key verification failed
 
-### Deploy entrypoint missing after build
+**Symptom:** Server commands fail with a host key verification error.
 
-**Symptom:** Deploy fails during artifact preparation saying the deploy entrypoint (`main`) was not found after build.
+**Fix:** Verify the host fingerprint out-of-band, then add or update the entry in `~/.ssh/known_hosts` for that host and port.
 
-**Fix:** Make sure your build output creates the file specified by `main` (from `tako.toml` or the preset). For JS runtimes with preset `main` set to `index.<ext>` or `src/index.<ext>` (where ext is `ts`, `tsx`, `js`, or `jsx`), Tako checks `index.<ext>` first, then `src/index.<ext>`.
+### Network interruption during deploy
+
+Deploy runs against all servers in parallel. If some servers succeed while others fail due to network issues, Tako reports the partial failure at the end. You can safely retry the deploy, as it is idempotent for servers that already succeeded and the server rejects a second concurrent deploy command for the same app/environment.
+
+### Dependency install failed on server
+
+**Symptom:** Server responds with `Invalid app release: ... dependency install failed ...`.
+
+**Fix:** Make sure your release dependencies are resolvable in production and that your lockfile (if present) matches the packaged dependency specs. The server runs the runtime's package manager production install command on the deployed release (e.g. `bun install --production --frozen-lockfile` for Bun, `npm ci --omit=dev` for npm).
 
 ### Artifact cache issues
 
@@ -171,32 +208,20 @@ Things to check:
 
 **Fix:** If cache behavior is unexpected, remove the local cache directory `.tako/artifacts/` and redeploy.
 
-### Network interruption during deploy
+### Deploy pre-validation for secrets
 
-Deploy runs against all servers in parallel. If some servers succeed while others fail due to network issues, Tako reports the partial failure at the end. You can safely retry the deploy, as it is idempotent for servers that already succeeded (the deploy lock prevents double-deploy on the same server).
-
-### Missing server target metadata
-
-Deploy requires valid `arch` and `libc` metadata for each server in `config.toml`. If a server was added with `--no-test`, this metadata may be missing.
-
-**Fix:** Remove the server with `tako servers rm` and re-add it with `tako servers add` (without `--no-test`) to capture target metadata via SSH.
-
-### Dependency install failed on server
-
-**Symptom:** Server responds with `Invalid app release: ... dependency install failed ...`.
-
-**Fix:** Make sure your release dependencies are resolvable in production and that your lockfile (if present) matches the packaged dependency specs. The server runs the runtime's package manager production install command on the deployed release (e.g. `bun install --production --frozen-lockfile` for Bun, `npm ci --omit=dev` for npm).
+Deploy fails if the target environment is missing secret keys that are used by other environments. Deploy warns (but does not fail) if the target environment has extra secret keys not present in other environments.
 
 ## Health Checks and Rolling Updates
 
 ### How health checks work
 
-Tako-server probes each instance by sending `GET /status` with `Host: tako` over the instance's private TCP endpoint. The request includes the per-instance internal token header, and the SDK implements and echoes that contract automatically.
+Tako-server probes each instance by sending `GET /status` with `Host: tako` over the instance's private TCP endpoint. The request includes the per-instance internal token header (`X-Tako-Internal-Token`), and the SDK implements and echoes that contract automatically.
 
 - **Probe interval:** 1 second
-- **Unhealthy threshold:** 2 consecutive failures removes the instance from the load balancer
-- **Dead threshold:** 5 consecutive failures kills the instance process
-- **Recovery:** A single successful probe resets the failure count and restores the instance to healthy
+- **Process exit fast path:** Before each probe, `try_wait()` checks if the process has exited. If so, the instance is immediately marked dead without waiting for the probe timeout.
+- **Failure threshold:** 1 failure marks the instance dead and triggers replacement. After the first successful probe confirms the app is healthy, any single probe failure means something is genuinely wrong.
+- **Recovery:** A single successful probe resets the failure count and restores the instance to healthy.
 
 ### Rolling update failures
 
@@ -212,7 +237,40 @@ When the desired instance count is `0` (scale-to-zero mode), a deploy still star
 
 ### Process crash recovery
 
-If an app process crashes, Tako detects it through health checks (within a few seconds) and handles it based on the app's desired instance count and scaling configuration. On-demand apps with desired instances `0` will cold-start when the next request arrives.
+If an app process crashes, Tako detects it through `try_wait()` before the next health probe and immediately marks the instance dead. Replacement behavior depends on the app's desired instance count and scaling configuration. On-demand apps with desired instances `0` will cold-start when the next request arrives.
+
+## Config Issues
+
+### tako.toml parse errors
+
+If `tako.toml` has syntax errors, commands that require it fail with guidance. Common issues:
+
+- Using both `[build].run` and `[[build_stages]]` (mutually exclusive).
+- Using `[build].include`/`[build].exclude` alongside `[[build_stages]]`.
+- Using both `route` and `routes` in the same `[envs.*]` block.
+- Putting env vars directly inside `[envs.*]` (they belong in `[vars]` / `[vars.*]`).
+- Namespaced preset aliases like `js/tanstack-start` (use runtime-local `tanstack-start` with top-level `runtime` instead).
+- Empty route lists for non-development environments.
+
+### config.toml corrupted
+
+If your global `config.toml` (stored in the platform config directory) is corrupted, Tako shows a parse error with line number context. You can fix the file manually or delete it and re-add your servers with `tako servers add`.
+
+### .tako/ directory deleted
+
+The `.tako/` directory is auto-recreated on next deploy. No manual action needed.
+
+### secrets.json deleted
+
+If `.tako/secrets.json` is deleted, Tako shows a warning and prompts you to restore secrets before deploying. Secrets are the source of truth locally; they are synced to servers during deploy or via `tako secrets sync`.
+
+### Route validation errors
+
+- Routes must include a hostname (path-only routes like `"/api/*"` are invalid).
+- Exact path routes normalize trailing slashes (`example.com/api` and `example.com/api/` are equivalent).
+- Development routes must be `{app}.tako.test` or a subdomain of it.
+- Wildcard host entries are ignored in dev routing (exact hostnames only).
+- Each non-development environment must define `route` or `routes`.
 
 ## Server Installation Issues
 
@@ -228,11 +286,43 @@ If an app process crashes, Tako detects it through health checks (within a few s
 
 **Fix:** Run on a host with active systemd or OpenRC. For build/image workflows where init is not active, rerun with `TAKO_RESTART_SERVICE=0` to refresh the binary/users without starting the service.
 
-### SSH host key verification failed
+## Server Runtime Issues
 
-**Symptom:** Server commands fail with a host key verification error.
+### Server upgrade stuck in upgrading mode
 
-**Fix:** Verify the host fingerprint out-of-band, then add or update the entry in `~/.ssh/known_hosts` for that host and port.
+During `tako servers upgrade`, the server enters an internal `upgrading` mode that temporarily rejects mutating management commands (`deploy`, `stop`, `delete`, `update-secrets`). Upgrade mode uses a durable single-owner lock in SQLite.
+
+- If failure happens before the reload signal, the CLI performs best-effort cleanup and exits upgrade mode.
+- If the reload was sent but the socket did not become ready within the timeout, the CLI warns that upgrade mode may remain enabled until the primary recovers.
+- If the server is stuck in upgrading mode, check that the `tako-server` process is running and healthy. A process restart clears transient state, and the durable upgrade lock can be released once the primary socket becomes responsive.
+
+## TLS and Certificate Issues
+
+### HTTPS 502 or TLS handshake failure
+
+If no certificate matches an SNI hostname yet, Tako serves a fallback self-signed default certificate so the TLS handshake can still complete and routing can return normal HTTP status codes. Unmatched hosts or routes return `404`.
+
+Check cert files on the host under `/opt/tako/certs/default/fullchain.pem` and `privkey.pem`. For private or local hostnames (like `localhost`, `*.localhost`, single-label hosts, or reserved suffixes like `*.local`, `*.test`), Tako skips ACME and generates a self-signed certificate during deploy. If route certs are missing, re-run deploy to regenerate them.
+
+### Wildcard certificates
+
+Routing supports wildcard hosts (like `*.example.com`). Wildcard certificates are issued automatically via DNS-01 challenges when a DNS provider is configured. When wildcard routes are deployed and no DNS provider is configured, deploy prompts interactively for provider credentials. Credentials are stored on the server at `/opt/tako/dns-credentials.env` and the provider name is persisted in `/opt/tako/config.json`.
+
+## Secrets Issues
+
+### Missing encryption key
+
+Secrets are encrypted per-environment using keys stored at `keys/{env}`. If a key file is missing when you try to set a secret, Tako creates it automatically for `tako secrets set`. To share keys between team members, use `tako secrets key export` and `tako secrets key import`.
+
+### Deleted secrets file
+
+If `.tako/secrets.json` is deleted, Tako shows a warning and prompts you to restore secrets before deploying. Secrets are the source of truth locally; they are synced to servers during deploy or via `tako secrets sync`.
+
+### Secrets sync
+
+`tako secrets sync` pushes local secrets to all servers in the target environment. If `--env` is not specified, it syncs all environments. Secrets are sent to `tako-server`, which stores them encrypted in its SQLite state database and triggers a rolling restart so fresh instances receive updated secrets via fd 3.
+
+Environments with no mapped servers are skipped with a warning.
 
 ## Routing Issues
 
@@ -252,38 +342,6 @@ For path-prefixed routes (like `example.com/app/*`), make sure your asset files 
 
 **Fix:** For dynamic or user-specific responses, send `Cache-Control: no-store` (or stricter private/no-cache directives) from your app.
 
-## TLS and Certificate Issues
-
-### HTTPS 502 or TLS handshake failure
-
-If no certificate matches an SNI hostname yet, Tako serves a fallback self-signed default certificate. Unmatched hosts or routes can still return `404`.
-
-Check cert files on the host under `/opt/tako/certs/default/fullchain.pem` and `privkey.pem`. If route certs are missing for deployed private or local hosts, re-run deploy to regenerate self-signed route certs under `/opt/tako/certs/<route-host>/`.
-
-### Wildcard certificates
-
-Routing supports wildcard hosts (like `*.example.com`), but automated ACME issuance currently uses HTTP-01, which does not support wildcard certificates. Wildcard certs must be provisioned manually and placed in `/opt/tako/certs/{domain}/`.
-
-## Secrets Issues
-
-### Missing encryption key
-
-Secrets are encrypted per-environment using keys stored at `keys/{env}`. If a key file is missing when you try to read or set a secret, Tako creates it automatically for `tako secrets set`. To share keys between team members, use `tako secrets key export` and `tako secrets key import`.
-
-### Deleted secrets file
-
-If `.tako/secrets.json` is deleted, Tako shows a warning and prompts you to restore secrets before deploying. Secrets are the source of truth locally; they are synced to servers during deploy or via `tako secrets sync`.
-
-### Secrets sync
-
-`tako secrets sync` pushes local secrets to all servers in the target environment. If `--env` is not specified, it syncs all environments. Secrets are sent to `tako-server`, which stores them encrypted in its SQLite state database and triggers a rolling restart so fresh instances receive updated secrets via fd 3.
-
-Environments with no mapped servers are skipped with a warning.
-
-### Deploy pre-validation for secrets
-
-Deploy fails if the target environment is missing secret keys that are used by other environments. Deploy warns (but does not fail) if the target environment has extra secret keys not present in other environments.
-
 ## Prometheus Metrics
 
 ### Metrics endpoint not responding
@@ -296,6 +354,53 @@ Deploy fails if the target environment is missing secret keys that are used by o
 - Check if `--metrics-port 0` was set (this disables metrics entirely).
 - Make sure you are scraping from localhost; the endpoint is not publicly accessible.
 - The default port is 9898.
+
+## Recovery Paths
+
+### tako doctor
+
+Run `tako doctor` from any directory for a local diagnostic report. It checks dev daemon status, DNS resolution, and platform-specific networking (loopback proxy on macOS, iptables on Linux). Doctor exits successfully even when the daemon is not running, so it is always safe to run.
+
+### tako releases rollback
+
+Roll back to a previously deployed release:
+
+```bash
+tako releases rollback {release-id} --env production
+```
+
+Rollback reuses the current app routes, env vars, secrets, and scaling config, then switches the runtime path and version to the target release and runs the standard rolling-update flow. Partial failures are reported per server; successful servers remain rolled back.
+
+### tako implode
+
+Remove the local Tako CLI and all local data:
+
+```bash
+tako implode
+```
+
+This removes config directories, data directories, CLI binaries (`tako`, `tako-dev-server`, `tako-loopback-proxy`), and platform-specific system-level items (launchd services on macOS, systemd services on Linux, CA certificates, loopback aliases). It asks for confirmation before proceeding.
+
+### tako servers implode
+
+Remove tako-server and all data from a remote server:
+
+```bash
+tako servers implode {server-name}
+```
+
+This stops and disables services, removes binaries, data (`/opt/tako/`), and sockets (`/var/run/tako/`), then removes the server from your local `config.toml`. Requires confirmation unless `-y` is passed.
+
+### Re-adding servers for target metadata
+
+If deploy fails because a server is missing `arch`/`libc` metadata (common when the server was added with `--no-test`):
+
+```bash
+tako servers rm {name}
+tako servers add {host} --name {name}
+```
+
+The re-add with SSH checks captures the target metadata automatically.
 
 ## Config and State Recovery
 
@@ -326,7 +431,6 @@ When debugging, these files are often helpful:
 - `/var/run/tako/tako.sock` -- management socket (symlink to active server socket)
 - `/opt/tako/apps/{app}/{env}/current` -- symlink to current release
 - `/opt/tako/apps/{app}/{env}/releases/{version}/` -- release files
-- `/opt/tako/apps/{app}/{env}/.deploy_lock` -- deploy lock directory
 - `/opt/tako/certs/{domain}/` -- TLS certificates
 
 ## Gathering an Escalation Bundle
