@@ -1398,7 +1398,7 @@ This requires OpenSSL (not rustls) for callback support.
 - Automatic renewal 30 days before expiry
 - HTTP-01 challenge (port 80)
 - Zero-downtime renewal
-- DNS-01 challenges are supported for wildcard certificates via the `lego` ACME client. When wildcard routes are deployed and no DNS provider is configured, deploy prompts interactively for provider credentials. Credentials are stored on the server at `/opt/tako/dns-credentials.env` and the provider name is persisted in `/opt/tako/config.json`.
+- DNS-01 challenges are supported for wildcard certificates via the [`lego`](https://go-acme.github.io/lego/) ACME client, which must be [installed on the server](https://go-acme.github.io/lego/installation/). When wildcard routes are deployed and no DNS provider is configured, deploy prompts interactively for provider credentials. Credentials are stored on the server at `/opt/tako/dns-credentials.env` and the provider name is persisted in `/opt/tako/config.json`.
 
 ### Wildcard Certificate Handling
 

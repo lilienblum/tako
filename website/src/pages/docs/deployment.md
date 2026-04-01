@@ -468,7 +468,7 @@ Routing supports wildcard hosts (e.g., `*.example.com`). For TLS:
 - Wildcard certificates are issued automatically via DNS-01 challenges when a DNS provider is configured
 - When wildcard routes are deployed and no DNS provider is configured, deploy prompts interactively for provider credentials
 - Credentials are stored on the server at `/opt/tako/dns-credentials.env` and the provider name is persisted in `/opt/tako/config.json`
-- DNS-01 challenges are handled via the `lego` ACME client
+- DNS-01 challenges are handled via the [`lego`](https://go-acme.github.io/lego/) ACME client, which must be [installed on the server](https://go-acme.github.io/lego/installation/)
 
 ### SNI-based selection
 

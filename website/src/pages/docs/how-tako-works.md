@@ -229,7 +229,7 @@ In production, Tako handles TLS automatically:
 - **SNI-based selection** picks the right certificate during the TLS handshake.
 - **Automatic renewal** happens 30 days before expiry with zero downtime. Renewal checks run every 12 hours.
 - **HTTP-01 challenges** are handled transparently on port 80.
-- **DNS-01 challenges** are supported for wildcard certificates via the `lego` ACME client. When wildcard routes are deployed and no DNS provider is configured, deploy prompts interactively for provider credentials.
+- **DNS-01 challenges** are supported for wildcard certificates via the [`lego`](https://go-acme.github.io/lego/) ACME client, which must be [installed on the server](https://go-acme.github.io/lego/installation/). When wildcard routes are deployed and no DNS provider is configured, deploy prompts interactively for provider credentials.
 - **Fallback certificate**: if no certificate exists yet for a hostname, Tako serves a self-signed default so HTTPS still completes and routing can return normal HTTP status codes.
 - **Private/local hostnames** (like `localhost`, `*.local`, `*.test`): Tako skips ACME and generates a self-signed certificate during deploy.
 

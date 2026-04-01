@@ -480,7 +480,7 @@ impl AcmeClient {
         let output = cmd
             .output()
             .await
-            .map_err(|e| AcmeError::LegoDns01Failed(format!("Failed to execute lego: {}", e)))?;
+            .map_err(|e| AcmeError::LegoDns01Failed(format!("Failed to execute lego (install from https://go-acme.github.io/lego/installation/): {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
