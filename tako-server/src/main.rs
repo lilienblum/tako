@@ -2789,6 +2789,53 @@ mod tests {
     }
 
     #[test]
+    fn extract_zstd_archive_rejects_path_traversal() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("malicious.tar.zst");
+        let dest = temp.path().join("dest");
+
+        // Build a tar with a `../escape.txt` entry by writing raw header bytes,
+        // bypassing the builder's own path validation.
+        let file = std::fs::File::create(&archive_path).unwrap();
+        let mut encoder = zstd::stream::write::Encoder::new(file, 3).unwrap();
+        {
+            use std::io::Write;
+            let mut header = tar::Header::new_gnu();
+            let payload = b"pwned";
+            header.set_size(payload.len() as u64);
+            header.set_mode(0o644);
+            header.set_entry_type(tar::EntryType::Regular);
+            // Write path directly into the header name field
+            let path = b"../escape.txt";
+            let bytes = header.as_mut_bytes();
+            bytes[..path.len()].copy_from_slice(path);
+            header.set_cksum();
+
+            encoder.write_all(header.as_bytes()).unwrap();
+            encoder.write_all(payload).unwrap();
+            // Pad to 512-byte boundary
+            let padding = 512 - (payload.len() % 512);
+            if padding < 512 {
+                encoder.write_all(&vec![0u8; padding]).unwrap();
+            }
+            // Two zero blocks to end archive
+            encoder.write_all(&[0u8; 1024]).unwrap();
+        }
+        encoder.finish().unwrap();
+
+        // tar crate silently skips entries with `..` (returns Ok)
+        extract_zstd_archive(&archive_path, &dest).unwrap();
+        assert!(
+            !temp.path().join("escape.txt").exists(),
+            "path traversal: file escaped dest"
+        );
+        assert!(
+            !dest.join("escape.txt").exists(),
+            "path traversal: file should be skipped entirely"
+        );
+    }
+
+    #[test]
     fn run_extract_archive_mode_requires_destination_flag() {
         let args = super::Args::try_parse_from([
             "tako-server",
