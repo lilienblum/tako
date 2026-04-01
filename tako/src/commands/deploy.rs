@@ -2802,6 +2802,10 @@ async fn build_target_artifacts(
             }
         }
         let workspace = workdir.clone();
+        let app_dir_in_workspace = match project_dir.strip_prefix(source_root) {
+            Ok(rel) if !rel.as_os_str().is_empty() => workspace.join(rel),
+            _ => workspace.clone(),
+        };
 
         // Write app.json at the workdir root (project dir = archive root).
         {
@@ -2959,9 +2963,13 @@ async fn build_target_artifacts(
             let build_success = format_build_artifact_success(display_target_label);
             if let Some(task_tree) = &task_tree {
                 task_tree.mark_build_step_running(&tree_target_label, "build-artifact");
-                if let Err(error) =
-                    run_local_build(&workspace, &tako_config.build, custom_stages, &extra_envs)
-                {
+                if let Err(error) = run_local_build(
+                    &workspace,
+                    &app_dir_in_workspace,
+                    &tako_config.build,
+                    custom_stages,
+                    &extra_envs,
+                ) {
                     task_tree.fail_build_step(&tree_target_label, "build-artifact", error.clone());
                     task_tree.fail_build_target(&tree_target_label, error.clone());
                     task_tree.warn_pending_build_children(&tree_target_label, "Skipped");
@@ -2972,12 +2980,24 @@ async fn build_target_artifacts(
                 output::with_spinner(&build_label, &build_success, || {
                     tracing::debug!("Building target {}…", build_target_label);
                     let _t = output::timed("Target build");
-                    run_local_build(&workspace, &tako_config.build, custom_stages, &extra_envs)
+                    run_local_build(
+                        &workspace,
+                        &app_dir_in_workspace,
+                        &tako_config.build,
+                        custom_stages,
+                        &extra_envs,
+                    )
                 })?;
             } else {
                 output::bullet(&build_label);
                 let _t = output::timed("Target build");
-                run_local_build(&workspace, &tako_config.build, custom_stages, &extra_envs)?;
+                run_local_build(
+                    &workspace,
+                    &app_dir_in_workspace,
+                    &tako_config.build,
+                    custom_stages,
+                    &extra_envs,
+                )?;
             }
             save_runtime_version_to_manifest(&workspace, &runtime_version)?;
             tracing::debug!("{}", format_build_completed_message(display_target_label));
@@ -3073,6 +3093,7 @@ async fn build_target_artifacts(
 
 fn run_local_build(
     workspace: &Path,
+    app_dir: &Path,
     build_config: &crate::config::BuildConfig,
     custom_stages: &[BuildStage],
     extra_envs: &[(&str, &str)],
@@ -3085,7 +3106,7 @@ fn run_local_build(
     }
     // Resolve the working directory for build commands.
     // `build.cwd` is relative to the workspace root (source root).
-    // Default: the app directory (current behavior).
+    // Default: the app directory within the workspace.
     let build_run_dir = match build_config.cwd.as_deref() {
         Some(cwd) if !cwd.is_empty() && cwd != "." => {
             let dir = workspace.join(cwd);
@@ -3098,7 +3119,7 @@ fn run_local_build(
             dir
         }
         Some(_) => workspace.to_path_buf(), // "." means workspace root
-        None => workspace.to_path_buf(),    // default: app directory
+        None => app_dir.to_path_buf(),
     };
 
     let has_build_run = build_config
@@ -5760,7 +5781,7 @@ route = "app.example.com"
             },
         ];
 
-        run_local_build(&workspace, &Default::default(), &stages, &[]).unwrap();
+        run_local_build(&workspace, &workspace, &Default::default(), &stages, &[]).unwrap();
         let order = std::fs::read_to_string(workspace.join("order.log")).unwrap();
         assert_eq!(order, "stage-1-run\nstage-2-install\nstage-2-run\n");
     }
@@ -5793,9 +5814,26 @@ route = "app.example.com"
             include: Vec::new(),
         }];
 
-        let err = run_local_build(&workspace, &Default::default(), &stages, &[]).unwrap_err();
+        let err =
+            run_local_build(&workspace, &workspace, &Default::default(), &stages, &[]).unwrap_err();
         assert!(err.contains("stage 1"));
         assert!(err.contains("working directory"));
+    }
+
+    #[test]
+    fn run_local_build_defaults_cwd_to_app_dir() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/myapp");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        let build_config = crate::config::BuildConfig {
+            run: Some("touch marker.txt".to_string()),
+            ..Default::default()
+        };
+        run_local_build(&workspace, &app_dir, &build_config, &[], &[]).unwrap();
+        // marker.txt should be created in app_dir, not workspace root
+        assert!(app_dir.join("marker.txt").exists());
+        assert!(!workspace.join("marker.txt").exists());
     }
 
     #[test]
