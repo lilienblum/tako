@@ -417,20 +417,23 @@ CFG
   cat "$DEPLOY_LOG"
 
   CURRENT_LINK=$(resolve_current_release_link "$server" || true)
-  APP_RELEASE_DIR="$CURRENT_LINK/$FIXTURE_REL"
 
   if [[ -z "$CURRENT_LINK" ]]; then
     echo "Failed to resolve deployed release symlink on $server" >&2
     exit 1
   fi
 
-  if ! ssh_exec "$server" "test -d '$APP_RELEASE_DIR'" >/dev/null 2>&1; then
-    APP_RELEASE_DIR="$CURRENT_LINK"
+  if ! ssh_exec "$server" "test -f '$CURRENT_LINK/app.json'" >/dev/null 2>&1; then
+    echo "Missing app.json under $CURRENT_LINK on $server" >&2
+    exit 1
   fi
 
-  if ! ssh_exec "$server" "test -f '$APP_RELEASE_DIR/app.json'" >/dev/null 2>&1; then
-    echo "Missing app.json under $APP_RELEASE_DIR on $server" >&2
-    exit 1
+  # Read app_dir from the manifest to find the actual app directory
+  MANIFEST_APP_DIR=$(ssh_exec "$server" "cat '$CURRENT_LINK/app.json'" | jq -r '.app_dir // empty')
+  if [[ -n "$MANIFEST_APP_DIR" ]]; then
+    APP_RELEASE_DIR="$CURRENT_LINK/$MANIFEST_APP_DIR"
+  else
+    APP_RELEASE_DIR="$CURRENT_LINK"
   fi
 
   run_universal_http_checks "$server" "$ROUTE_HOST" "$APP_RELEASE_DIR"
