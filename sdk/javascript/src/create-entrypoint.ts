@@ -94,7 +94,9 @@ export function createEntrypoint() {
   }
 
   async function run(
-    startServer: (handleRequest: (request: Request) => Promise<Response>) => void,
+    startServer: (
+      handleRequest: (request: Request) => Promise<Response>,
+    ) => number | void | Promise<number | void>,
   ): Promise<void> {
     if (!parsed.main) {
       console.error("Usage: <runtime> entrypoint <main> [--instance <id>] [--version <ver>]");
@@ -149,8 +151,13 @@ export function createEntrypoint() {
       }
     };
 
-    startServer(handleRequest);
+    const actualPort = await startServer(handleRequest);
     currentStatus = "healthy";
+    // Signal readiness to tako-server with the actual port the app bound to.
+    // The server watches stdout for this line during startup.
+    if (actualPort != null) {
+      process.stdout.write(`TAKO:READY:${actualPort}\n`);
+    }
     console.log("Entrypoint initialized successfully");
   }
 

@@ -217,7 +217,7 @@ async fn rollback_release(
             false,
         )?;
         if !confirmed {
-            return Err("Rollback cancelled.".into());
+            return Err(output::operation_cancelled_error().into());
         }
     }
 
@@ -402,7 +402,7 @@ fn output_release_lines(release: &ReleaseInfo) {
     output::info(&format!(
         "{} {}",
         output::strong(&head),
-        output::brand_muted(&deployed)
+        output::theme_muted(&deployed)
     ));
     output::muted(&commit);
 }

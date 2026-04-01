@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::future::Future;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::app::require_app_name_from_config_path;
 use crate::build::{
@@ -14,19 +14,15 @@ use crate::commands::project_context;
 use crate::commands::server;
 use crate::config::{BuildStage, SecretsStore, ServerEntry, ServerTarget, ServersToml, TakoToml};
 use crate::output;
-use crate::ssh::{SshClient, SshConfig, SshError};
+use crate::ssh::{SshClient, SshConfig};
+#[cfg(test)]
+use crate::ui;
+use crate::ui::{TaskItemState, TaskState, TaskTreeSession, TreeNode, TreeTextTone};
 use crate::validation::{
     validate_full_config, validate_no_route_conflicts, validate_secrets_for_deployment,
 };
 use tako_core::{Command, Response};
 use tracing::Instrument;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum TakoServerStatus {
-    Ready,
-    Missing,
-    NotRunning,
-}
 
 /// Deployment configuration
 #[derive(Clone)]
@@ -48,6 +44,25 @@ struct ServerDeployTarget {
     server: ServerEntry,
     target_label: String,
     archive_path: PathBuf,
+}
+
+struct ServerCheck {
+    name: String,
+    mode: tako_core::UpgradeMode,
+    dns_provider: Option<String>,
+}
+
+struct PreflightPhaseResult {
+    checks: Vec<ServerCheck>,
+    elapsed: Duration,
+}
+
+struct BuildPhaseResult {
+    version: String,
+    manifest_main: String,
+    deploy_secrets: HashMap<String, String>,
+    use_unified_target_process: bool,
+    artifacts_by_target: HashMap<String, PathBuf>,
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
@@ -85,7 +100,7 @@ struct ValidationResult {
     warnings: Vec<String>,
 }
 
-const ARTIFACT_CACHE_SCHEMA_VERSION: u32 = 4;
+const ARTIFACT_CACHE_SCHEMA_VERSION: u32 = 0;
 const LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS: usize = 90;
 const LOCAL_BUILD_WORKSPACE_RELATIVE_DIR: &str = ".tako/tmp/workspaces";
 const RUNTIME_VERSION_OUTPUT_FILE: &str = ".tako-runtime-version";
@@ -127,6 +142,491 @@ struct LocalArtifactCacheCleanupSummary {
 impl LocalArtifactCacheCleanupSummary {
     fn total_removed(self) -> usize {
         self.removed_target_artifacts + self.removed_target_metadata
+    }
+}
+
+#[derive(Debug, Clone)]
+struct DeployTaskTreeState {
+    builds: Vec<TaskItemState>,
+    deploys: Vec<TaskItemState>,
+    summary_line: Option<(String, TreeTextTone)>,
+}
+
+#[derive(Clone)]
+struct DeployTaskTreeController {
+    state: Arc<Mutex<DeployTaskTreeState>>,
+    session: Option<TaskTreeSession>,
+}
+
+#[derive(Clone, Copy)]
+enum DeployCompletionKind {
+    Succeeded,
+    Cancelled,
+    Failed,
+}
+
+impl DeployTaskTreeController {
+    fn new(server_names: &[String], build_groups: &[ArtifactBuildGroup]) -> Self {
+        let state = DeployTaskTreeState {
+            builds: build_groups
+                .iter()
+                .map(|group| {
+                    let label = format_build_plan_target_label(group);
+                    TaskItemState::pending(build_target_task_id(&label), label.clone())
+                        .with_children(vec![
+                            TaskItemState::pending(
+                                build_task_step_id(&label, "probe-runtime"),
+                                "Probe runtime",
+                            ),
+                            TaskItemState::pending(
+                                build_task_step_id(&label, "build-artifact"),
+                                "Build artifact",
+                            ),
+                            TaskItemState::pending(
+                                build_task_step_id(&label, "package-artifact"),
+                                "Package artifact",
+                            ),
+                        ])
+                })
+                .collect(),
+            deploys: server_names
+                .iter()
+                .map(|server_name| {
+                    TaskItemState::pending(deploy_target_task_id(server_name), server_name.clone())
+                        .with_children(vec![
+                            TaskItemState::pending(
+                                deploy_task_step_id(server_name, "connecting"),
+                                "Connecting",
+                            ),
+                            TaskItemState::pending(
+                                deploy_task_step_id(server_name, "uploading"),
+                                "Uploading",
+                            ),
+                            TaskItemState::pending(
+                                deploy_task_step_id(server_name, "preparing"),
+                                "Preparing",
+                            ),
+                            TaskItemState::pending(
+                                deploy_task_step_id(server_name, "starting"),
+                                "Starting",
+                            ),
+                        ])
+                })
+                .collect(),
+            summary_line: None,
+        };
+        let tree = build_deploy_tree(&state);
+        let session = should_use_deploy_task_tree().then(|| TaskTreeSession::new(tree));
+        Self {
+            state: Arc::new(Mutex::new(state)),
+            session,
+        }
+    }
+
+    fn pause(&self) {
+        if let Some(session) = &self.session {
+            session.pause();
+        }
+    }
+
+    fn resume(&self) {
+        if let Some(session) = &self.session {
+            session.resume();
+        }
+    }
+
+    fn fail_preflight_check(&self, server_name: &str, detail: impl Into<String>) {
+        let msg = detail.into();
+        self.fail_deploy_step(server_name, "connecting", msg.clone());
+        self.rename_deploy_step(server_name, "connecting", "Connection failed");
+        self.fail_deploy_target_without_detail(server_name);
+        self.warn_pending_deploy_children(server_name, "Skipped");
+    }
+
+    fn mark_build_step_running(&self, target_label: &str, step: &str) {
+        self.mark_running_by_id(&build_target_task_id(target_label));
+        self.mark_running_by_id(&build_task_step_id(target_label, step));
+    }
+
+    fn succeed_build_step(&self, target_label: &str, step: &str, detail: Option<String>) {
+        self.complete_by_id(
+            &build_task_step_id(target_label, step),
+            detail,
+            DeployCompletionKind::Succeeded,
+        );
+    }
+
+    fn warn_build_step(&self, target_label: &str, step: &str, detail: impl Into<String>) {
+        self.complete_by_id(
+            &build_task_step_id(target_label, step),
+            Some(detail.into()),
+            DeployCompletionKind::Cancelled,
+        );
+    }
+
+    fn fail_build_step(&self, target_label: &str, step: &str, detail: impl Into<String>) {
+        self.complete_by_id(
+            &build_task_step_id(target_label, step),
+            Some(detail.into()),
+            DeployCompletionKind::Failed,
+        );
+    }
+
+    fn append_cached_artifact_step(&self, target_label: &str, detail: Option<String>) {
+        let parent_id = build_target_task_id(target_label);
+        let child_id = build_task_step_id(target_label, "use-cached-artifact");
+        let mut state = self.state.lock().unwrap();
+        let parent = find_task_mut(&mut state.builds, &parent_id)
+            .unwrap_or_else(|| panic!("missing build task {parent_id}"));
+        if parent.find(&child_id).is_none() {
+            let mut child = TaskItemState::pending(child_id.clone(), "Use cached artifact");
+            if let Some(detail) = &detail {
+                child = child.with_detail(detail.clone());
+            }
+            parent.append_child(child);
+        }
+        self.refresh_locked(&state);
+        drop(state);
+        self.succeed_build_step(target_label, "use-cached-artifact", detail);
+    }
+
+    fn succeed_build_target(&self, target_label: &str, detail: Option<String>) {
+        self.complete_by_id(
+            &build_target_task_id(target_label),
+            detail,
+            DeployCompletionKind::Succeeded,
+        );
+    }
+
+    fn mark_build_target_running(&self, target_label: &str) {
+        self.mark_running_by_id(&build_target_task_id(target_label));
+    }
+
+    fn fail_build_target(&self, target_label: &str, detail: impl Into<String>) {
+        self.complete_by_id(
+            &build_target_task_id(target_label),
+            Some(detail.into()),
+            DeployCompletionKind::Failed,
+        );
+    }
+
+    fn warn_pending_build_children(&self, target_label: &str, reason: &str) {
+        self.warn_pending_children(&build_target_task_id(target_label), reason);
+    }
+
+    fn mark_deploy_step_running(&self, server_name: &str, step: &str) {
+        self.mark_running_by_id(&deploy_target_task_id(server_name));
+        self.mark_running_by_id(&deploy_task_step_id(server_name, step));
+    }
+
+    fn update_deploy_step_progress(
+        &self,
+        server_name: &str,
+        step: &str,
+        detail: String,
+        progress: f64,
+    ) {
+        self.update_by_id(&deploy_task_step_id(server_name, step), |task| {
+            task.detail = Some(detail);
+            task.progress = Some(progress);
+        });
+    }
+
+    fn succeed_deploy_step(&self, server_name: &str, step: &str, detail: Option<String>) {
+        self.complete_by_id(
+            &deploy_task_step_id(server_name, step),
+            detail,
+            DeployCompletionKind::Succeeded,
+        );
+    }
+
+    fn warn_deploy_step(&self, server_name: &str, step: &str, detail: impl Into<String>) {
+        self.complete_by_id(
+            &deploy_task_step_id(server_name, step),
+            Some(detail.into()),
+            DeployCompletionKind::Cancelled,
+        );
+    }
+
+    fn fail_deploy_step(&self, server_name: &str, step: &str, detail: impl Into<String>) {
+        self.complete_by_id(
+            &deploy_task_step_id(server_name, step),
+            Some(detail.into()),
+            DeployCompletionKind::Failed,
+        );
+    }
+
+    fn rename_deploy_step(&self, server_name: &str, step: &str, new_label: &str) {
+        self.update_by_id(&deploy_task_step_id(server_name, step), |task| {
+            task.label = new_label.to_string();
+        });
+    }
+
+    fn succeed_deploy_target(&self, server_name: &str, detail: Option<String>) {
+        self.complete_by_id(
+            &deploy_target_task_id(server_name),
+            detail,
+            DeployCompletionKind::Succeeded,
+        );
+    }
+
+    fn fail_deploy_target_without_detail(&self, server_name: &str) {
+        self.complete_by_id(
+            &deploy_target_task_id(server_name),
+            None,
+            DeployCompletionKind::Failed,
+        );
+    }
+
+    fn warn_pending_deploy_children(&self, server_name: &str, reason: &str) {
+        self.warn_pending_children(&deploy_target_task_id(server_name), reason);
+    }
+
+    fn abort_incomplete(&self, reason: &str) {
+        let mut state = self.state.lock().unwrap();
+        abort_incomplete_tasks(&mut state.builds, reason);
+        abort_incomplete_tasks(&mut state.deploys, reason);
+        self.refresh_locked(&state);
+    }
+
+    fn set_error_summary(&self, summary: String) {
+        let mut state = self.state.lock().unwrap();
+        state.summary_line = Some((summary, TreeTextTone::Error));
+        self.refresh_locked(&state);
+    }
+
+    #[cfg(test)]
+    fn snapshot(&self) -> DeployTaskTreeState {
+        self.state.lock().unwrap().clone()
+    }
+
+    fn mark_running_by_id(&self, id: &str) {
+        self.update_by_id(id, |task| {
+            if matches!(task.state, TaskState::Pending) {
+                task.state = TaskState::Running {
+                    started_at: Instant::now(),
+                };
+                task.detail = None;
+            }
+        });
+    }
+
+    fn complete_by_id(&self, id: &str, detail: Option<String>, kind: DeployCompletionKind) {
+        self.update_by_id(id, |task| {
+            let elapsed = match task.state {
+                TaskState::Running { started_at } => Some(started_at.elapsed()),
+                _ => None,
+            };
+            task.state = match kind {
+                DeployCompletionKind::Succeeded => TaskState::Succeeded { elapsed },
+                DeployCompletionKind::Cancelled => TaskState::Cancelled { elapsed },
+                DeployCompletionKind::Failed => TaskState::Failed { elapsed },
+            };
+            task.detail = detail;
+            task.progress = None;
+        });
+    }
+
+    fn warn_pending_children(&self, parent_id: &str, reason: &str) {
+        let mut state = self.state.lock().unwrap();
+        let parent = find_task_mut_in_state(&mut state, parent_id)
+            .unwrap_or_else(|| panic!("missing parent task {parent_id}"));
+        warn_pending_children(parent, reason);
+        self.refresh_locked(&state);
+    }
+
+    fn update_by_id<F>(&self, id: &str, update: F)
+    where
+        F: FnOnce(&mut TaskItemState),
+    {
+        let mut state = self.state.lock().unwrap();
+        let task =
+            find_task_mut_in_state(&mut state, id).unwrap_or_else(|| panic!("missing task {id}"));
+        update(task);
+        self.refresh_locked(&state);
+    }
+
+    fn refresh_locked(&self, state: &DeployTaskTreeState) {
+        if let Some(session) = &self.session {
+            session.set_tree(build_deploy_tree(state));
+        }
+    }
+}
+
+fn should_use_deploy_task_tree() -> bool {
+    output::is_pretty() && output::is_interactive()
+}
+
+fn abort_incomplete_tasks(tasks: &mut [TaskItemState], reason: &str) {
+    for task in tasks {
+        abort_incomplete_task(task, reason);
+    }
+}
+
+fn abort_incomplete_task(task: &mut TaskItemState, reason: &str) {
+    for child in &mut task.children {
+        abort_incomplete_task(child, reason);
+    }
+
+    let elapsed = match task.state {
+        TaskState::Running { started_at } => Some(started_at.elapsed()),
+        _ => None,
+    };
+
+    match task.state {
+        TaskState::Pending | TaskState::Running { .. } => {
+            task.state = TaskState::Cancelled { elapsed };
+        }
+        TaskState::Succeeded { .. } | TaskState::Failed { .. } | TaskState::Cancelled { .. } => {}
+    }
+}
+
+fn build_target_task_id(target_label: &str) -> String {
+    format!("build:{target_label}")
+}
+
+fn build_task_step_id(target_label: &str, step: &str) -> String {
+    format!("build:{target_label}:{step}")
+}
+
+fn deploy_target_task_id(server_name: &str) -> String {
+    format!("deploy:{server_name}")
+}
+
+fn deploy_task_step_id(server_name: &str, step: &str) -> String {
+    format!("deploy:{server_name}:{step}")
+}
+
+/// Build the render tree from deploy state. This replaces the old UiNode-based
+/// `build_deploy_task_tree_root`. Controllers call this via `refresh_locked()`.
+fn build_deploy_tree(state: &DeployTaskTreeState) -> Vec<TreeNode> {
+    let mut tree = Vec::new();
+    let has_deploys = !state.deploys.is_empty();
+
+    // Build reporter
+    match state.builds.as_slice() {
+        [] => {}
+        [build] => {
+            let label = if matches!(build.state, TaskState::Succeeded { .. }) {
+                "Built"
+            } else {
+                "Building"
+            };
+            tree.push(TreeNode::AccentTask(TaskItemState {
+                id: build.id.clone(),
+                label: label.to_string(),
+                state: build.state.clone(),
+                detail: build.detail.clone(),
+                progress: None,
+                children: vec![],
+            }));
+            if has_deploys {
+                tree.push(TreeNode::Spacer);
+            }
+        }
+        builds => {
+            let group_state = aggregate_group_state(builds);
+            tree.push(TreeNode::Task(TaskItemState {
+                id: "build-group".into(),
+                label: "Building".into(),
+                state: group_state,
+                detail: None,
+                progress: None,
+                children: builds
+                    .iter()
+                    .map(|b| TaskItemState {
+                        id: b.id.clone(),
+                        label: b.label.clone(),
+                        state: b.state.clone(),
+                        detail: b.detail.clone(),
+                        progress: None,
+                        children: vec![],
+                    })
+                    .collect(),
+            }));
+            if has_deploys {
+                tree.push(TreeNode::Spacer);
+            }
+        }
+    }
+
+    // Deploy groups
+    for (index, deploy) in state.deploys.iter().enumerate() {
+        let label = match &deploy.state {
+            TaskState::Succeeded { .. } => format!("Deployed to {}", deploy.label),
+            TaskState::Failed { .. } => format!("Deploy to {} failed", deploy.label),
+            _ => format!("Deploying to {}", deploy.label),
+        };
+        tree.push(TreeNode::Task(TaskItemState {
+            id: deploy.id.clone(),
+            label,
+            state: deploy.state.clone(),
+            detail: deploy.detail.clone(),
+            progress: None,
+            children: deploy.children.clone(),
+        }));
+        if index + 1 < state.deploys.len() {
+            tree.push(TreeNode::Spacer);
+        }
+    }
+
+    if let Some((summary, tone)) = &state.summary_line {
+        if !tree.is_empty() && !matches!(tree.last(), Some(TreeNode::Spacer)) {
+            tree.push(TreeNode::Spacer);
+        }
+        tree.push(TreeNode::Text {
+            text: summary.clone(),
+            tone: tone.clone(),
+        });
+    }
+
+    tree
+}
+
+fn aggregate_group_state(tasks: &[TaskItemState]) -> TaskState {
+    if let Some(started_at) = tasks.iter().find_map(|task| match &task.state {
+        TaskState::Running { started_at } => Some(*started_at),
+        _ => None,
+    }) {
+        return TaskState::Running { started_at };
+    }
+
+    if tasks
+        .iter()
+        .any(|task| matches!(task.state, TaskState::Failed { .. }))
+    {
+        return TaskState::Failed { elapsed: None };
+    }
+
+    let all_succeeded = tasks
+        .iter()
+        .all(|task| matches!(task.state, TaskState::Succeeded { .. }));
+
+    if all_succeeded {
+        TaskState::Succeeded { elapsed: None }
+    } else {
+        TaskState::Pending
+    }
+}
+
+fn find_task_mut<'a>(tasks: &'a mut [TaskItemState], id: &str) -> Option<&'a mut TaskItemState> {
+    tasks.iter_mut().find_map(|task| task.find_mut(id))
+}
+
+fn find_task_mut_in_state<'a>(
+    state: &'a mut DeployTaskTreeState,
+    id: &str,
+) -> Option<&'a mut TaskItemState> {
+    find_task_mut(&mut state.builds, id).or_else(|| find_task_mut(&mut state.deploys, id))
+}
+
+fn warn_pending_children(parent: &mut TaskItemState, reason: &str) {
+    for child in &mut parent.children {
+        if matches!(child.state, TaskState::Pending) {
+            child.state = TaskState::Cancelled { elapsed: None };
+            child.detail = Some(reason.to_string());
+        }
+        warn_pending_children(child, reason);
     }
 }
 
@@ -233,10 +733,6 @@ async fn run_async(
         false
     };
 
-    if requested_env.is_none() {
-        output::warning(&format!("Using {} environment", output::accent(&env)));
-    }
-
     // Skip confirmation if the user explicitly passed --env production (they
     // already know which environment they're targeting).
     let env_was_explicit = requested_env.is_some();
@@ -255,455 +751,162 @@ async fn run_async(
     let routes = required_env_routes(&tako_config, &env)
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
+    let server_names = if output::is_dry_run() {
+        resolve_deploy_server_names(&tako_config, &servers, &env)
+            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
+    } else {
+        resolve_deploy_server_names_with_setup(
+            &tako_config,
+            &mut servers,
+            &env,
+            &context.config_path,
+        )
+        .await
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
+    };
+
+    for server_name in &server_names {
+        if !servers.contains(server_name) {
+            return Err(format_server_not_found_error(server_name).into());
+        }
+    }
+
+    let server_targets = resolve_deploy_server_targets(&servers, &server_names)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    tracing::debug!("{}", format_servers_summary(&server_names));
+
+    let use_unified_js_target_process =
+        should_use_unified_js_target_process(preflight_runtime_adapter.id());
+    if let Some(server_targets_summary) =
+        format_server_targets_summary(&server_targets, use_unified_js_target_process)
+    {
+        tracing::debug!("{}", server_targets_summary);
+    }
+    let build_groups = build_artifact_target_groups(&server_targets, use_unified_js_target_process);
+
+    let deploy_task_tree = should_use_deploy_task_tree()
+        .then(|| DeployTaskTreeController::new(&server_names, &build_groups));
+
+    if let (Some(task_tree), Some(first_build_group)) = (&deploy_task_tree, build_groups.first()) {
+        task_tree.mark_build_target_running(&format_build_plan_target_label(first_build_group));
+    }
+
     if output::is_dry_run() {
-        let server_names = resolve_deploy_server_names(&tako_config, &servers, &env)
-            .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-        output::dry_run_skip("Server preflight checks");
+        output::dry_run_skip("Server checks");
         output::dry_run_skip("Build");
         for name in &server_names {
             output::dry_run_skip(&format!("Deploy to {}", output::strong(name)));
         }
         if output::is_pretty() {
             eprintln!();
-            eprintln!(
-                "  {}  {}",
-                output::brand_muted("App"),
-                output::strong(&app_name)
-            );
-            for (index, route) in routes.iter().enumerate() {
-                if index == 0 {
-                    eprintln!("  {}  https://{}", output::brand_muted("URL"), route);
-                } else {
-                    eprintln!("            https://{}", route);
-                }
-            }
-        } else {
-            tracing::info!("App: {app_name}");
-            for route in &routes {
-                tracing::info!("URL: https://{route}");
-            }
         }
+        print_deploy_summary("App", &app_name, &routes);
         return Ok(());
     }
 
-    let server_names = resolve_deploy_server_names_with_setup(
-        &tako_config,
-        &mut servers,
-        &env,
-        &context.config_path,
-    )
-    .await
-    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    // Preflight: check all servers in parallel — verify they're reachable,
-    // not upgrading, and (if wildcard routes) have DNS provider configured.
-    {
-        let _preflight_check_timer = output::timed("Server reachability preflight");
-        use crate::commands::server::{apply_dns_config, fetch_dns_config, prompt_dns_setup};
+    let use_per_server_spinners = deploy_task_tree.is_none()
+        && should_use_per_server_spinners(server_names.len(), output::is_interactive());
 
-        struct ServerCheck {
-            name: String,
-            mode: tako_core::UpgradeMode,
-            dns_provider: Option<String>,
-        }
+    let preflight_deploy_app_name = tako_core::deployment_app_id(&app_name, &env);
+    let mut preflight_handle = tokio::spawn(run_server_preflight_checks(
+        server_names.clone(),
+        servers.clone(),
+        preflight_deploy_app_name,
+        routes.clone(),
+        deploy_task_tree.clone(),
+    ));
+    let mut build_handle = tokio::spawn(prepare_build_phase(
+        project_dir.clone(),
+        source_root.clone(),
+        eff_app_dir.clone(),
+        app_name.clone(),
+        env.clone(),
+        tako_config.clone(),
+        secrets.clone(),
+        preflight_preset_ref.clone(),
+        preflight_runtime_adapter,
+        server_targets.clone(),
+        build_groups.clone(),
+        deploy_task_tree.clone(),
+    ));
 
-        let mut check_set = tokio::task::JoinSet::new();
-        for server_name in &server_names {
-            let server = servers
-                .get(server_name)
-                .ok_or_else(|| format!("Server '{}' not found in servers.toml", server_name))?;
-            let name = server_name.clone();
-            let ssh_config = SshConfig::from_server(&server.host, server.port);
-            let span = output::scope(&name);
-            check_set.spawn(
-                async move {
-                    tracing::debug!("Preflight check…");
-                    let _t = output::timed("Preflight check");
-                    let mut ssh = SshClient::new(ssh_config);
-                    ssh.connect().await?;
-                    let info = ssh.tako_server_info().await?;
+    let mut preflight_result: Option<Result<PreflightPhaseResult, String>> = None;
+    let mut build_result: Option<BuildPhaseResult> = None;
 
-                    let mut mode = info.mode;
-
-                    // If server is stuck in upgrading mode, try to clear it.
-                    // This handles Ctrl+C / crash during a previous upgrade.
-                    if mode == tako_core::UpgradeMode::Upgrading {
-                        // Reset the state via SQLite directly (the upgrade lock's
-                        // owner may be unknown, and ExitUpgrading requires it).
-                        let reset_cmd = SshClient::run_with_root_or_sudo(
-                            "sqlite3 /opt/tako/tako.db \
-                         \"UPDATE server_state SET server_mode = 'normal' WHERE id = 1; \
-                          DELETE FROM upgrade_lock WHERE id = 1;\"",
-                        );
-                        if ssh.exec_checked(&reset_cmd).await.is_ok() {
-                            // Restart to pick up the cleared state
-                            let _ = ssh.tako_restart().await;
-                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                            // Re-check
-                            if let Ok(new_info) = ssh.tako_server_info().await {
-                                mode = new_info.mode;
-                            }
+    while preflight_result.is_none() || build_result.is_none() {
+        tokio::select! {
+            result = &mut preflight_handle, if preflight_result.is_none() => {
+                let result = result
+                    .map_err(|e| format!("Server checks task failed: {}", e))
+                    .and_then(|result| result);
+                match result {
+                    Ok(preflight) => {
+                        if deploy_task_tree.is_none() {
+                            output::success_with_elapsed(
+                                &format_preflight_complete_message(&server_names),
+                                preflight.elapsed,
+                            );
                         }
+                        preflight_result = Some(Ok(preflight));
                     }
-
-                    let _ = ssh.disconnect().await;
-
-                    Ok::<_, crate::ssh::SshError>(ServerCheck {
-                        name,
-                        mode,
-                        dns_provider: info.dns_provider,
-                    })
-                }
-                .instrument(span),
-            );
-        }
-
-        let loading_msg = if server_names.len() == 1 {
-            format!("Connecting to {}…", &server_names[0])
-        } else {
-            format!("Connecting to {} servers…", server_names.len())
-        };
-        let success_msg = if server_names.len() == 1 {
-            format!("Connected to {}", &server_names[0])
-        } else {
-            format!("Connected to {} servers", server_names.len())
-        };
-        let checks = output::with_spinner_async(&loading_msg, &success_msg, async {
-            let mut checks: Vec<ServerCheck> = Vec::new();
-            while let Some(result) = check_set.join_next().await {
-                let check = result
-                    .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?
-                    .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
-
-                // Fail fast: server is upgrading
-                if check.mode == tako_core::UpgradeMode::Upgrading {
-                    return Err(format!(
-                        "{} is currently upgrading. Retry after the upgrade completes.",
-                        check.name,
-                    )
-                    .into());
-                }
-
-                checks.push(check);
-            }
-            Ok::<Vec<ServerCheck>, Box<dyn std::error::Error>>(checks)
-        })
-        .await
-        .map_err(|e| -> Box<dyn std::error::Error> { e })?;
-
-        // Wildcard DNS check
-        let wildcard_routes: Vec<_> = routes.iter().filter(|r| r.starts_with("*.")).collect();
-        if !wildcard_routes.is_empty() {
-            let has_dns: Option<&str> = checks
-                .iter()
-                .find(|c| c.dns_provider.is_some())
-                .map(|c| c.name.as_str());
-
-            let all_have_dns = checks.iter().all(|c| c.dns_provider.is_some());
-
-            if all_have_dns {
-                tracing::debug!("All servers support wildcard domains");
-            } else {
-                // Get DNS config: from a server that has it, or prompt once.
-                let dns_config = if let Some(donor_name) = has_dns {
-                    let donor = servers.get(donor_name).unwrap();
-                    let donor_ssh_config = SshConfig::from_server(&donor.host, donor.port);
-                    let mut donor_ssh = SshClient::new(donor_ssh_config);
-                    donor_ssh
-                        .connect()
-                        .await
-                        .map_err(|e| -> Box<dyn std::error::Error> {
-                            format!("Failed to connect to {}: {}", donor_name, e).into()
-                        })?;
-                    let config = fetch_dns_config(&donor_ssh)
-                        .await?
-                        .ok_or_else(|| format!("Could not read DNS config from {}", donor_name))?;
-                    let _ = donor_ssh.disconnect().await;
-                    config
-                } else {
-                    let wildcard_list = wildcard_routes
-                        .iter()
-                        .map(|r| format!("`{}`", r))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    output::warning(&format!(
-                        "Wildcard route {} requires DNS challenge support.",
-                        wildcard_list,
-                    ));
-                    let first = &server_names[0];
-                    let first_server = servers.get(first).unwrap();
-                    let first_ssh_config =
-                        SshConfig::from_server(&first_server.host, first_server.port);
-                    let mut first_ssh = SshClient::new(first_ssh_config);
-                    first_ssh
-                        .connect()
-                        .await
-                        .map_err(|e| -> Box<dyn std::error::Error> {
-                            format!("Failed to connect to {}: {}", first, e).into()
-                        })?;
-                    let config = prompt_dns_setup(&first_ssh).await?;
-                    let _ = first_ssh.disconnect().await;
-                    config
-                };
-
-                // Apply the same config to all servers to ensure consistency.
-                for server_name in &server_names {
-                    let server = servers.get(server_name).unwrap();
-                    let ssh_config = SshConfig::from_server(&server.host, server.port);
-                    let mut ssh = SshClient::new(ssh_config);
-                    ssh.connect()
-                        .await
-                        .map_err(|e| -> Box<dyn std::error::Error> {
-                            format!("Failed to connect to {}: {}", server_name, e).into()
-                        })?;
-                    apply_dns_config(&ssh, server_name, &dns_config).await?;
-                    let _ = ssh.disconnect().await;
+                    Err(error) => {
+                        if let Some(task_tree) = &deploy_task_tree {
+                            task_tree.abort_incomplete("Aborted");
+                            if build_result.is_none() {
+                                build_handle.abort();
+                            }
+                            return Err(output::silent_exit_error().into());
+                        }
+                        if build_result.is_none() {
+                            build_handle.abort();
+                        }
+                        return Err(error.into());
+                    }
                 }
             }
-        } else {
-            tracing::debug!(
-                "Server preflight complete ({} server(s))",
-                server_names.len()
-            );
+            result = &mut build_handle, if build_result.is_none() => {
+                let result = result
+                    .map_err(|e| format!("Build task failed: {}", e))
+                    .and_then(|result| result);
+                match result {
+                    Ok(build) => build_result = Some(build),
+                    Err(error) => {
+                        if let Some(task_tree) = &deploy_task_tree {
+                            task_tree.abort_incomplete("Aborted");
+                            if preflight_result.is_none() {
+                                preflight_handle.abort();
+                            }
+                            return Err(output::silent_exit_error().into());
+                        }
+                        if preflight_result.is_none() {
+                            preflight_handle.abort();
+                        }
+                        return Err(error.into());
+                    }
+                }
+            }
         }
     }
 
-    let use_per_server_spinners =
-        should_use_per_server_spinners(server_names.len(), output::is_interactive());
-
-    let primary_target_and_server = if server_names.len() == 1 {
-        let target_name = server_names[0].as_str();
-        servers.get(target_name).map(|entry| (target_name, entry))
-    } else {
-        None
-    };
-    if output::is_verbose() {
-        for line in format_deploy_overview_lines(
-            &app_name,
-            &env,
-            server_names.len(),
-            primary_target_and_server,
-        ) {
-            output::info(&line);
-        }
-    } else if server_names.len() > 1 {
-        output::info(&format!(
-            "Deploying to {} servers",
-            output::strong(&server_names.len().to_string())
-        ));
-    }
-
-    // ===== Build =====
-    let _phase = output::PhaseSpinner::start("Building…");
-    let _build_phase_timer = output::timed("Build phase");
-
-    let executor = BuildExecutor::new(&project_dir);
-    let cache = BuildCache::new(project_dir.join(".tako/artifacts"));
-    cache
-        .init()
-        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
-    match cleanup_local_artifact_cache(
-        cache.cache_dir(),
-        LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS,
-    ) {
-        Ok(summary) if summary.total_removed() > 0 => {
-            tracing::debug!(
-                "Local artifact cache cleanup: removed {} old artifact(s), {} stale metadata file(s)",
-                summary.removed_target_artifacts,
-                summary.removed_target_metadata
-            );
-        }
-        Ok(_) => {}
-        Err(error) => output::warning(&format!("Local artifact cache cleanup skipped: {}", error)),
-    }
-    let build_workspace_root = project_dir.join(LOCAL_BUILD_WORKSPACE_RELATIVE_DIR);
-    match cleanup_local_build_workspaces(&build_workspace_root) {
-        Ok(removed) if removed > 0 => {
-            tracing::debug!(
-                "Local build workspace cleanup: removed {} workspace(s)",
-                removed
-            );
-        }
-        Ok(_) => {}
-        Err(error) => output::warning(&format!("Local build workspace cleanup skipped: {}", error)),
-    }
-
-    // Generate version string
-    let (version, _source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)?;
-    let git_commit_message = resolve_git_commit_message(&source_root);
-    let git_dirty = executor.is_git_dirty().ok();
-    tracing::debug!("Version: {}", version);
-
-    let preset_ref = resolve_build_preset_ref(&eff_app_dir, &tako_config)
+    let preflight = preflight_result
+        .unwrap()
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    tracing::debug!("Resolving preset ref: {}…", preset_ref);
-    let runtime_adapter = resolve_effective_build_adapter(&eff_app_dir, &tako_config, &preset_ref)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    let (mut build_preset, resolved_preset) = {
-        let _t = output::timed("Preset resolution");
-        output::with_spinner_async(
-            "Resolving build preset",
-            "Build preset resolved",
-            load_build_preset(&eff_app_dir, &preset_ref),
-        )
-        .await
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?
-    };
-    tracing::debug!(
-        "Resolved preset: {} (commit {})",
-        resolved_preset.preset_ref,
-        shorten_commit(&resolved_preset.commit)
-    );
-    let plugin_ctx = tako_runtime::PluginContext {
-        project_dir: &eff_app_dir,
-        package_manager: tako_config.package_manager.as_deref(),
-    };
-    apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter, Some(&plugin_ctx))
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    tracing::debug!(
-        "Build preset: {} @ {}",
-        resolved_preset.preset_ref,
-        shorten_commit(&resolved_preset.commit)
-    );
-    tracing::debug!("{}", format_runtime_summary(&build_preset.name, None));
-    let runtime_tool = runtime_adapter.id().to_string();
-
-    let manifest_main = resolve_deploy_main(
-        &eff_app_dir,
-        runtime_adapter,
-        &tako_config,
-        build_preset.main.as_deref(),
+    ensure_wildcard_dns_support(
+        &server_names,
+        &servers,
+        &routes,
+        &preflight.checks,
+        deploy_task_tree.as_ref(),
     )
-    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    tracing::debug!(
-        "{}",
-        format_entry_point_summary(&eff_app_dir.join(&manifest_main),)
-    );
+    .await?;
 
-    let env_idle_timeout = tako_config.get_idle_timeout(&env);
-
-    // Compute app_dir and install_dir (paths relative to archive root).
-    let app_dir = project_dir
-        .strip_prefix(&source_root)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let runtime_proj_root =
-        tako_runtime::find_runtime_project_root(runtime_adapter.id(), &project_dir);
-    let install_dir = runtime_proj_root
-        .strip_prefix(&source_root)
-        .map(|p| p.to_string_lossy().to_string())
-        .unwrap_or_default();
-
-    // Resolve package manager: tako.toml → packageManager field → lockfile at app dir → lockfile at runtime project root.
-    let deploy_pm = tako_config
-        .package_manager
-        .clone()
-        .or_else(|| tako_runtime::read_package_manager_spec(&eff_app_dir))
-        .or_else(|| {
-            tako_runtime::detect_package_manager(&eff_app_dir).map(|pm| pm.id().to_string())
-        })
-        .or_else(|| {
-            tako_runtime::detect_package_manager(&runtime_proj_root).map(|pm| pm.id().to_string())
-        });
-
-    let manifest = build_deploy_archive_manifest(
-        &app_name,
-        &env,
-        &version,
-        runtime_adapter.id(),
-        &manifest_main,
-        env_idle_timeout,
-        deploy_pm,
-        git_commit_message.clone(),
-        git_dirty,
-        tako_config.get_merged_vars(&env),
-        HashMap::new(),
-        secrets.get_env(&env),
-        app_dir,
-        install_dir,
-    );
-    let deploy_secrets = decrypt_deploy_secrets(&app_name, &env, &secrets)?;
-
-    // Create source archive used as input for target-specific builds.
-    // The source archive is ephemeral (placed in .tako/tmp/) and also
-    // serves as a build lock — its existence means a build is in progress.
-    let source_archive_dir = project_dir.join(".tako/tmp");
-    std::fs::create_dir_all(&source_archive_dir)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.to_string().into() })?;
-    let source_archive_path = source_archive_dir.join("source.tar.zst");
-    let app_json_bytes = serde_json::to_vec_pretty(&manifest)
-        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
-    let app_manifest_archive_path = DEPLOY_ARCHIVE_MANIFEST_FILE.to_string();
-    let source_archive_size =
-        output::with_spinner("Creating source archive", "Source archive created", || {
-            tracing::debug!("Archiving source from {}…", source_root.display());
-            let _t = output::timed("Source archive creation");
-            let size = executor.create_source_archive_with_extra_files(
-                &source_root,
-                &source_archive_path,
-                &[(
-                    app_manifest_archive_path.as_str(),
-                    app_json_bytes.as_slice(),
-                )],
-            );
-            if let Ok(bytes) = &size {
-                tracing::debug!("Source archive size: {}", format_size(*bytes));
-            }
-            size
-        })
-        .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
-
-    tracing::debug!(
-        "Source archive created: {} ({})",
-        format_path_relative_to(&project_dir, &source_archive_path),
-        format_size(source_archive_size),
-    );
-
-    let include_patterns = build_artifact_include_patterns(&tako_config);
-    let exclude_patterns = build_artifact_exclude_patterns(&build_preset, &tako_config);
-    let asset_roots = build_asset_roots(&build_preset, &tako_config)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-
-    // Check all servers exist
-    for server_name in &server_names {
-        if !servers.contains(server_name) {
-            return Err(format_server_not_found_error(server_name).into());
-        }
-    }
-    let server_targets = resolve_deploy_server_targets(&servers, &server_names)
-        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    tracing::debug!("{}", format_servers_summary(&server_names));
-    let use_unified_js_target_process = should_use_unified_js_target_process(&runtime_tool);
-    if let Some(server_targets_summary) =
-        format_server_targets_summary(&server_targets, use_unified_js_target_process)
-    {
-        tracing::debug!("{}", server_targets_summary);
-    }
-
-    let artifacts_by_target = build_target_artifacts(
-        &project_dir,
-        &source_root,
-        &tako_config,
-        cache.cache_dir(),
-        &build_workspace_root,
-        &source_archive_path,
-        &app_json_bytes,
-        &version,
-        &runtime_tool,
-        use_unified_js_target_process,
-        &manifest_main,
-        &server_targets,
-        &build_preset,
-        &tako_config.build_stages,
-        &include_patterns,
-        &exclude_patterns,
-        &asset_roots,
-        tako_config.runtime_version.as_deref(),
-    )
-    .await
-    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-
-    drop(_build_phase_timer);
-    _phase.finish("Built");
+    let BuildPhaseResult {
+        version,
+        manifest_main,
+        deploy_secrets,
+        use_unified_target_process: use_unified_js_target_process,
+        artifacts_by_target,
+    } = build_result.expect("build result should be present");
 
     // ===== Deploy =====
 
@@ -745,78 +948,8 @@ async fn run_async(
             archive_path: archive_path.clone(),
         });
     }
-    if targets.len() > 1 {
+    if deploy_task_tree.is_none() && targets.len() > 1 {
         output::info(&format_parallel_deploy_step(targets.len()));
-    }
-
-    // ===== tako-server preflight =====
-    let mut missing_servers: Vec<String> = Vec::new();
-    let mut not_running_servers: Vec<String> = Vec::new();
-
-    tracing::debug!(
-        "Starting tako-server preflight for {} target(s)…",
-        targets.len()
-    );
-    let _preflight_timer = output::timed("tako-server preflight");
-    let mut preflight_handles = Vec::new();
-    for target in &targets {
-        let server_name = target.name.clone();
-        let server = target.server.clone();
-        let span = output::scope(&server_name);
-        preflight_handles.push(tokio::spawn(
-            async move {
-                let status = check_tako_server(&server).await;
-                (server_name, status)
-            }
-            .instrument(span),
-        ));
-    }
-
-    let preflight_results = if output::is_interactive() && preflight_handles.len() > 1 {
-        output::with_spinner_async_simple(
-            &format!(
-                "Checking remote servers ({} targets)",
-                preflight_handles.len()
-            ),
-            async {
-                let mut results = Vec::new();
-                for handle in preflight_handles {
-                    results.push(handle.await);
-                }
-                results
-            },
-        )
-        .await
-    } else {
-        let mut results = Vec::new();
-        for handle in preflight_handles {
-            results.push(handle.await);
-        }
-        results
-    };
-    drop(_preflight_timer);
-
-    for result in preflight_results {
-        let (server_name, status) =
-            result.map_err(|e| format!("tako-server preflight task panic: {e}"))?;
-        match status {
-            Ok(TakoServerStatus::Ready) => {
-                tracing::debug!("{server_name} preflight: ready");
-            }
-            Ok(TakoServerStatus::Missing) => missing_servers.push(server_name),
-            Ok(TakoServerStatus::NotRunning) => not_running_servers.push(server_name),
-            Err(e) => {
-                return Err(format!("Failed to check tako-server on '{server_name}': {e}").into());
-            }
-        }
-    }
-
-    if !not_running_servers.is_empty() {
-        return Err(format_tako_not_running_error(&not_running_servers).into());
-    }
-
-    if !missing_servers.is_empty() {
-        return Err(format_tako_missing_error(&missing_servers).into());
     }
 
     // Spawn parallel deploy tasks
@@ -828,15 +961,18 @@ async fn run_async(
         let archive_path = target.archive_path.clone();
         let deploy_config = deploy_config.clone();
         let use_spinner = use_per_server_spinners;
+        let task_tree = deploy_task_tree.clone();
         let span = output::scope(&server_name);
         let handle = tokio::spawn(
             async move {
                 let result = deploy_to_server(
                     &deploy_config,
+                    &server_name,
                     &server,
                     &archive_path,
                     &target_label,
                     use_spinner,
+                    task_tree,
                 )
                 .await;
                 (server_name, server, result)
@@ -849,37 +985,46 @@ async fn run_async(
     // Collect results
     let mut errors = Vec::new();
 
-    let deploy_results =
-        if output::is_interactive() && !use_per_server_spinners && handles.len() > 1 {
-            output::with_spinner_async_simple(&format_parallel_deploy_step(handles.len()), async {
-                let mut results = Vec::new();
-                for handle in handles {
-                    results.push(handle.await);
-                }
-                results
-            })
-            .await
-        } else {
+    let deploy_results = if deploy_task_tree.is_none()
+        && output::is_interactive()
+        && !use_per_server_spinners
+        && handles.len() > 1
+    {
+        output::with_spinner_async_simple(&format_parallel_deploy_step(handles.len()), async {
             let mut results = Vec::new();
             for handle in handles {
                 results.push(handle.await);
             }
             results
-        };
+        })
+        .await
+    } else {
+        let mut results = Vec::new();
+        for handle in handles {
+            results.push(handle.await);
+        }
+        results
+    };
 
     for result in deploy_results {
         match result {
             Ok((server_name, server, result)) => match result {
                 Ok(()) => {
                     tracing::debug!("{server_name} deploy succeeded");
-                    output::bullet(&format_server_deploy_success(&server_name, &server));
+                    if deploy_task_tree.is_none() {
+                        output::bullet(&format_server_deploy_success(&server_name, &server));
+                    }
                 }
                 Err(e) => {
-                    output::error(&format_server_deploy_failure(
-                        &server_name,
-                        &server,
-                        &e.to_string(),
-                    ));
+                    // When using per-server spinners (single interactive server), the step
+                    // spinner already printed the error detail. Skip the duplicate.
+                    if deploy_task_tree.is_none() && !use_per_server_spinners {
+                        output::error(&format_server_deploy_failure(
+                            &server_name,
+                            &server,
+                            &e.to_string(),
+                        ));
+                    }
                     errors.push(format!("{}: {}", server_name, e));
                 }
             },
@@ -892,25 +1037,26 @@ async fn run_async(
 
     // ===== Summary =====
     if errors.is_empty() {
-        if output::is_pretty() {
+        if output::is_pretty() && deploy_task_tree.is_none() {
             eprintln!();
-            eprintln!("  {}  {}", output::brand_muted("Revision"), version);
-            for (index, route) in routes.iter().enumerate() {
-                if index == 0 {
-                    eprintln!("  {}       https://{}", output::brand_muted("URL"), route);
-                } else {
-                    eprintln!("            https://{}", route);
-                }
-            }
-        } else {
-            tracing::info!("Revision: {version}");
-            for route in &routes {
-                tracing::info!("URL: https://{route}");
-            }
         }
+        print_deploy_summary("Revision", &version, &routes);
 
         Ok(())
     } else {
+        let succeeded = targets.len() - errors.len();
+        let total = targets.len();
+        if output::is_pretty() {
+            if let Some(task_tree) = &deploy_task_tree {
+                task_tree.set_error_summary(format!("Deployed to {succeeded}/{total} servers"));
+            } else {
+                eprintln!(
+                    "{}",
+                    output::theme_error(format!("{succeeded}/{total} servers deployed"))
+                );
+            }
+            return Err(output::silent_exit_error().into());
+        }
         Err(format_partial_failure_error(errors.len()).into())
     }
 }
@@ -961,10 +1107,10 @@ fn format_production_deploy_confirm_prompt() -> String {
 }
 
 fn format_production_deploy_confirm_hint() -> String {
-    output::brand_muted("Pass --yes/-y to skip this prompt.")
+    output::theme_muted("Pass --yes/-y to skip this prompt.")
 }
 
-fn confirm_production_deploy(env: &str, assume_yes: bool) -> Result<(), String> {
+fn confirm_production_deploy(env: &str, assume_yes: bool) -> std::io::Result<()> {
     if !should_confirm_production_deploy(env, assume_yes, output::is_interactive()) {
         return Ok(());
     }
@@ -979,11 +1125,11 @@ fn confirm_production_deploy(env: &str, assume_yes: bool) -> Result<(), String> 
         Some(&hint),
         false,
     )
-    .map_err(|e| format!("Failed to read confirmation: {}", e))?;
+    .map_err(|e| std::io::Error::new(e.kind(), format!("Failed to read confirmation: {e}")))?;
     if confirmed {
         Ok(())
     } else {
-        Err("Deployment cancelled.".to_string())
+        Err(output::operation_cancelled_error())
     }
 }
 
@@ -1077,58 +1223,75 @@ fn format_prepare_deploy_section(env: &str) -> String {
     format!("Preparing deployment for {}", output::strong(env))
 }
 
+#[cfg(test)]
 fn format_deploy_overview_lines(
     app_name: &str,
-    env: &str,
+    _env: &str,
     target_count: usize,
     primary_target_and_server: Option<(&str, &ServerEntry)>,
 ) -> Vec<String> {
-    let mut rows = vec![format!("{:<10}: {}", "App", app_name)];
-
+    let mut lines = vec![format!("App       : {app_name}")];
     match primary_target_and_server {
         Some((target_name, server)) => {
-            rows.push(format!("{:<10}: {}", "Target", target_name));
-            rows.push(format!(
-                "{:<10}: tako@{}:{}",
-                "Host", server.host, server.port
-            ));
+            lines.push(format!("Target    : {target_name}"));
+            lines.push(format!("Host      : tako@{}:{}", server.host, server.port));
         }
         None => {
-            let target_label = if target_count == 1 {
+            let label = if target_count == 1 {
                 "1 server".to_string()
             } else {
                 format!("{target_count} servers")
             };
-            rows.push(format!("{:<10}: {}", "Target", target_label));
+            lines.push(format!("Target    : {label}"));
         }
     }
-
-    format_box_lines(&format!("Deploy ({})", env), &rows)
+    lines
 }
 
-fn format_box_lines(title: &str, rows: &[String]) -> Vec<String> {
-    let top_prefix = format!("─ {} ", title);
-    let max_row_width = rows
-        .iter()
-        .map(|row| row.chars().count())
-        .max()
-        .unwrap_or(0);
-    let inner_width = std::cmp::max(max_row_width + 2, top_prefix.chars().count());
-    let row_width = inner_width.saturating_sub(2);
+fn format_build_plan_target_label(group: &ArtifactBuildGroup) -> String {
+    group
+        .display_target_label
+        .as_deref()
+        .unwrap_or("shared target")
+        .to_string()
+}
 
-    let mut lines = Vec::with_capacity(rows.len() + 2);
-    lines.push(format!(
-        "┌{}{}┐",
-        top_prefix,
-        "─".repeat(inner_width.saturating_sub(top_prefix.chars().count()))
-    ));
-
-    for row in rows {
-        lines.push(format!("│ {:<row_width$} │", row, row_width = row_width));
+fn format_preflight_complete_message(server_names: &[String]) -> String {
+    if server_names.len() == 1 {
+        format!("Checked {}", server_names[0])
+    } else {
+        format!("Checked {} servers", server_names.len())
     }
+}
 
-    lines.push(format!("└{}┘", "─".repeat(inner_width)));
+fn format_deploy_summary_lines(
+    primary_label: &str,
+    primary_value: &str,
+    routes: &[String],
+) -> Vec<String> {
+    let mut lines = vec![format!("{primary_label:<10} {primary_value}")];
+    if let Some((first_route, remaining_routes)) = routes.split_first() {
+        lines.push(format!("{:<10} {}", "URL", format_route_url(first_route)));
+        for route in remaining_routes {
+            lines.push(format!("{:<10} {}", "", format_route_url(route)));
+        }
+    }
     lines
+}
+
+fn print_deploy_summary(primary_label: &str, primary_value: &str, routes: &[String]) {
+    let lines = format_deploy_summary_lines(primary_label, primary_value, routes);
+    for line in lines {
+        if output::is_pretty() {
+            output::info(&line);
+        } else {
+            tracing::info!("{}", line);
+        }
+    }
+}
+
+fn format_route_url(route: &str) -> String {
+    format!("https://{route}")
 }
 
 fn format_build_stages_summary_for_output(
@@ -1262,6 +1425,10 @@ fn format_server_deploy_failure(name: &str, entry: &ServerEntry, error: &str) ->
     format!("{}: {}", format_server_deploy_target(name, entry), error)
 }
 
+fn format_deploy_step_failure(step: &str, error: &str) -> String {
+    format!("{step} failed: {error}")
+}
+
 fn format_server_mapping_option(name: &str, entry: &ServerEntry) -> String {
     match entry.description.as_deref().map(str::trim) {
         Some(description) if !description.is_empty() => {
@@ -1311,20 +1478,6 @@ fn format_server_not_found_error(server_name: &str) -> String {
     format!(
         "Server '{}' not found in config.toml [[servers]]. Run 'tako servers add --name {} <host>'.",
         server_name, server_name
-    )
-}
-
-fn format_tako_not_running_error(server_names: &[String]) -> String {
-    format!(
-        "tako-server is installed but not running on: {} (start it as root, then re-run deploy)",
-        server_names.join(", ")
-    )
-}
-
-fn format_tako_missing_error(server_names: &[String]) -> String {
-    format!(
-        "tako-server is not installed on: {} (install it as root; see scripts/install-tako-server.sh)",
-        server_names.join(", ")
     )
 }
 
@@ -1668,7 +1821,478 @@ fn shorten_commit(commit: &str) -> &str {
     &commit[..commit.len().min(12)]
 }
 
+async fn run_server_preflight_checks(
+    server_names: Vec<String>,
+    servers: ServersToml,
+    deploy_app_name: String,
+    routes: Vec<String>,
+    task_tree: Option<DeployTaskTreeController>,
+) -> Result<PreflightPhaseResult, String> {
+    let start = Instant::now();
+    let mut check_set = tokio::task::JoinSet::new();
+
+    for server_name in &server_names {
+        let server = servers
+            .get(server_name)
+            .ok_or_else(|| format!("Server '{}' not found in servers.toml", server_name))?;
+        let name = server_name.clone();
+        let task_tree_for_task = task_tree.clone();
+        let check_name = name.clone();
+        let ssh_config = SshConfig::from_server(&server.host, server.port);
+        let check_deploy_app_name = deploy_app_name.clone();
+        let check_routes = routes.clone();
+        let span = output::scope(&name);
+        check_set.spawn(
+            async move {
+                let result = async {
+                    tracing::debug!("Preflight check…");
+                    let _t = output::timed("Preflight check");
+                    let mut ssh = SshClient::new(ssh_config);
+                    ssh.connect().await?;
+                    let info = ssh.tako_server_info().await?;
+
+                    let mut mode = info.mode;
+
+                    if mode == tako_core::UpgradeMode::Upgrading {
+                        let reset_cmd = SshClient::run_with_root_or_sudo(
+                            "sqlite3 /opt/tako/tako.db \
+                         \"UPDATE server_state SET server_mode = 'normal' WHERE id = 1; \
+                          DELETE FROM upgrade_lock WHERE id = 1;\"",
+                        );
+                        if ssh.exec_checked(&reset_cmd).await.is_ok() {
+                            let _ = ssh.tako_restart().await;
+                            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                            if let Ok(new_info) = ssh.tako_server_info().await {
+                                mode = new_info.mode;
+                            }
+                        }
+                    }
+
+                    // Disk space check
+                    ensure_remote_disk_space(&ssh)
+                        .await
+                        .map_err(|e| crate::ssh::SshError::Connection(e.to_string()))?;
+
+                    // Route conflict check
+                    let existing = parse_existing_routes_response(ssh.tako_routes().await?)
+                        .map_err(|e| crate::ssh::SshError::Connection(e.to_string()))?;
+                    validate_no_route_conflicts(&existing, &check_deploy_app_name, &check_routes)
+                        .map_err(|e| {
+                        crate::ssh::SshError::Connection(format!("Route conflict: {}", e))
+                    })?;
+
+                    let _ = ssh.disconnect().await;
+
+                    Ok::<_, crate::ssh::SshError>(ServerCheck {
+                        name,
+                        mode,
+                        dns_provider: info.dns_provider,
+                    })
+                }
+                .await;
+                if let Err(error) = &result
+                    && let Some(task_tree) = &task_tree_for_task
+                {
+                    task_tree.fail_preflight_check(&check_name, error.to_string());
+                }
+                result
+            }
+            .instrument(span),
+        );
+    }
+
+    let mut checks = Vec::new();
+    while let Some(result) = check_set.join_next().await {
+        let check = result
+            .map_err(|e| e.to_string())?
+            .map_err(|e| e.to_string())?;
+
+        if check.mode == tako_core::UpgradeMode::Upgrading {
+            if let Some(task_tree) = &task_tree {
+                task_tree.fail_preflight_check(&check.name, "Server is currently upgrading");
+            }
+            return Err(format!(
+                "{} is currently upgrading. Retry after the upgrade completes.",
+                check.name,
+            ));
+        }
+
+        checks.push(check);
+    }
+
+    Ok(PreflightPhaseResult {
+        checks,
+        elapsed: start.elapsed(),
+    })
+}
+
+async fn ensure_wildcard_dns_support(
+    server_names: &[String],
+    servers: &ServersToml,
+    routes: &[String],
+    checks: &[ServerCheck],
+    task_tree: Option<&DeployTaskTreeController>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::commands::server::{apply_dns_config, fetch_dns_config, prompt_dns_setup};
+
+    let wildcard_routes: Vec<_> = routes.iter().filter(|r| r.starts_with("*.")).collect();
+    if wildcard_routes.is_empty() {
+        tracing::debug!(
+            "Server preflight complete ({} server(s))",
+            server_names.len()
+        );
+        return Ok(());
+    }
+
+    let has_dns: Option<&str> = checks
+        .iter()
+        .find(|c| c.dns_provider.is_some())
+        .map(|c| c.name.as_str());
+
+    let all_have_dns = checks.iter().all(|c| c.dns_provider.is_some());
+
+    if all_have_dns {
+        tracing::debug!("All servers support wildcard domains");
+        return Ok(());
+    }
+
+    let dns_config = if let Some(donor_name) = has_dns {
+        let donor = servers.get(donor_name).unwrap();
+        let donor_ssh_config = SshConfig::from_server(&donor.host, donor.port);
+        let mut donor_ssh = SshClient::new(donor_ssh_config);
+        donor_ssh
+            .connect()
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("Failed to connect to {}: {}", donor_name, e).into()
+            })?;
+        let config = fetch_dns_config(&donor_ssh)
+            .await?
+            .ok_or_else(|| format!("Could not read DNS config from {}", donor_name))?;
+        let _ = donor_ssh.disconnect().await;
+        config
+    } else {
+        if let Some(task_tree) = task_tree {
+            task_tree.pause();
+        }
+        let result = async {
+            let wildcard_list = wildcard_routes
+                .iter()
+                .map(|r| format!("`{}`", r))
+                .collect::<Vec<_>>()
+                .join(", ");
+            output::warning(&format!(
+                "Wildcard route {} requires DNS challenge support.",
+                wildcard_list,
+            ));
+            let first = &server_names[0];
+            let first_server = servers.get(first).unwrap();
+            let first_ssh_config = SshConfig::from_server(&first_server.host, first_server.port);
+            let mut first_ssh = SshClient::new(first_ssh_config);
+            first_ssh
+                .connect()
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error> {
+                    format!("Failed to connect to {}: {}", first, e).into()
+                })?;
+            let config = prompt_dns_setup(&first_ssh).await?;
+            let _ = first_ssh.disconnect().await;
+            Ok::<_, Box<dyn std::error::Error>>(config)
+        }
+        .await;
+        if let Some(task_tree) = task_tree {
+            task_tree.resume();
+        }
+        result?
+    };
+
+    for server_name in server_names {
+        let server = servers.get(server_name).unwrap();
+        let ssh_config = SshConfig::from_server(&server.host, server.port);
+        let mut ssh = SshClient::new(ssh_config);
+        ssh.connect()
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error> {
+                format!("Failed to connect to {}: {}", server_name, e).into()
+            })?;
+        apply_dns_config(&ssh, server_name, &dns_config).await?;
+        let _ = ssh.disconnect().await;
+    }
+
+    Ok(())
+}
+
+async fn prepare_build_phase(
+    project_dir: PathBuf,
+    source_root: PathBuf,
+    eff_app_dir: PathBuf,
+    app_name: String,
+    env: String,
+    tako_config: TakoToml,
+    secrets: SecretsStore,
+    preset_ref: String,
+    runtime_adapter: BuildAdapter,
+    server_targets: Vec<(String, ServerTarget)>,
+    build_groups: Vec<ArtifactBuildGroup>,
+    task_tree: Option<DeployTaskTreeController>,
+) -> Result<BuildPhaseResult, String> {
+    let phase = if task_tree.is_none() {
+        Some(output::PhaseSpinner::start("Building…"))
+    } else {
+        None
+    };
+    let build_phase_timer = output::timed("Build phase");
+
+    let executor = BuildExecutor::new(&project_dir);
+    let cache = BuildCache::new(project_dir.join(".tako/artifacts"));
+    cache.init().map_err(|e| e.to_string())?;
+    match cleanup_local_artifact_cache(
+        cache.cache_dir(),
+        LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS,
+    ) {
+        Ok(summary) if summary.total_removed() > 0 => {
+            tracing::debug!(
+                "Local artifact cache cleanup: removed {} old artifact(s), {} stale metadata file(s)",
+                summary.removed_target_artifacts,
+                summary.removed_target_metadata
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            if task_tree.is_none() {
+                output::warning(&format!("Local artifact cache cleanup skipped: {}", error));
+            } else {
+                tracing::warn!("Local artifact cache cleanup skipped: {}", error);
+            }
+        }
+    }
+    let build_workspace_root = project_dir.join(LOCAL_BUILD_WORKSPACE_RELATIVE_DIR);
+    match cleanup_local_build_workspaces(&build_workspace_root) {
+        Ok(removed) if removed > 0 => {
+            tracing::debug!(
+                "Local build workspace cleanup: removed {} workspace(s)",
+                removed
+            );
+        }
+        Ok(_) => {}
+        Err(error) => {
+            if task_tree.is_none() {
+                output::warning(&format!("Local build workspace cleanup skipped: {}", error));
+            } else {
+                tracing::warn!("Local build workspace cleanup skipped: {}", error);
+            }
+        }
+    }
+
+    let (version, _source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)
+        .map_err(|e| e.to_string())?;
+    let git_commit_message = resolve_git_commit_message(&source_root);
+    let git_dirty = executor.is_git_dirty().ok();
+    tracing::debug!("Version: {}", version);
+    tracing::debug!("Resolving preset ref: {}…", preset_ref);
+
+    let (mut build_preset, resolved_preset) = {
+        let _t = output::timed("Preset resolution");
+        if task_tree.is_none() {
+            output::with_spinner_async(
+                "Resolving build preset",
+                "Build preset resolved",
+                load_build_preset(&eff_app_dir, &preset_ref),
+            )
+            .await
+            .map_err(|e| e.to_string())?
+        } else {
+            load_build_preset(&eff_app_dir, &preset_ref)
+                .await
+                .map_err(|e| e.to_string())?
+        }
+    };
+    tracing::debug!(
+        "Resolved preset: {} (commit {})",
+        resolved_preset.preset_ref,
+        shorten_commit(&resolved_preset.commit)
+    );
+
+    let plugin_ctx = tako_runtime::PluginContext {
+        project_dir: &eff_app_dir,
+        package_manager: tako_config.package_manager.as_deref(),
+    };
+    apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter, Some(&plugin_ctx))
+        .map_err(|e| e.to_string())?;
+    tracing::debug!(
+        "Build preset: {} @ {}",
+        resolved_preset.preset_ref,
+        shorten_commit(&resolved_preset.commit)
+    );
+    tracing::debug!("{}", format_runtime_summary(&build_preset.name, None));
+    let runtime_tool = runtime_adapter.id().to_string();
+
+    let manifest_main = resolve_deploy_main(
+        &eff_app_dir,
+        runtime_adapter,
+        &tako_config,
+        build_preset.main.as_deref(),
+    )?;
+    tracing::debug!(
+        "{}",
+        format_entry_point_summary(&eff_app_dir.join(&manifest_main),)
+    );
+
+    let env_idle_timeout = tako_config.get_idle_timeout(&env);
+    let app_dir = project_dir
+        .strip_prefix(&source_root)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    let runtime_proj_root =
+        tako_runtime::find_runtime_project_root(runtime_adapter.id(), &project_dir);
+    let install_dir = runtime_proj_root
+        .strip_prefix(&source_root)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let deploy_pm = tako_config
+        .package_manager
+        .clone()
+        .or_else(|| tako_runtime::read_package_manager_spec(&eff_app_dir))
+        .or_else(|| {
+            tako_runtime::detect_package_manager(&eff_app_dir).map(|pm| pm.id().to_string())
+        })
+        .or_else(|| {
+            tako_runtime::detect_package_manager(&runtime_proj_root).map(|pm| pm.id().to_string())
+        });
+
+    let manifest = build_deploy_archive_manifest(
+        &app_name,
+        &env,
+        &version,
+        runtime_adapter.id(),
+        &manifest_main,
+        env_idle_timeout,
+        deploy_pm,
+        git_commit_message.clone(),
+        git_dirty,
+        tako_config.get_merged_vars(&env),
+        HashMap::new(),
+        secrets.get_env(&env),
+        app_dir,
+        install_dir,
+    );
+    let deploy_secrets =
+        decrypt_deploy_secrets(&app_name, &env, &secrets).map_err(|e| e.to_string())?;
+
+    let source_archive_dir = project_dir.join(".tako/tmp");
+    std::fs::create_dir_all(&source_archive_dir).map_err(|e| e.to_string())?;
+    let source_archive_path = source_archive_dir.join("source.tar.zst");
+    let app_json_bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
+    let app_manifest_archive_path = DEPLOY_ARCHIVE_MANIFEST_FILE.to_string();
+    let source_archive_size = if task_tree.is_none() {
+        output::with_spinner("Creating source archive", "Source archive created", || {
+            tracing::debug!("Archiving source from {}…", source_root.display());
+            let _t = output::timed("Source archive creation");
+            let size = executor.create_source_archive_with_extra_files(
+                &source_root,
+                &source_archive_path,
+                &[(
+                    app_manifest_archive_path.as_str(),
+                    app_json_bytes.as_slice(),
+                )],
+            );
+            if let Ok(bytes) = &size {
+                tracing::debug!("Source archive size: {}", format_size(*bytes));
+            }
+            size
+        })
+        .map_err(|e| e.to_string())?
+    } else {
+        tracing::debug!("Archiving source from {}…", source_root.display());
+        let _t = output::timed("Source archive creation");
+        let size = executor.create_source_archive_with_extra_files(
+            &source_root,
+            &source_archive_path,
+            &[(
+                app_manifest_archive_path.as_str(),
+                app_json_bytes.as_slice(),
+            )],
+        );
+        if let Ok(bytes) = &size {
+            tracing::debug!("Source archive size: {}", format_size(*bytes));
+        }
+        size.map_err(|e| e.to_string())?
+    };
+
+    tracing::debug!(
+        "Source archive created: {} ({})",
+        format_path_relative_to(&project_dir, &source_archive_path),
+        format_size(source_archive_size),
+    );
+
+    let include_patterns = build_artifact_include_patterns(&tako_config);
+    let exclude_patterns = build_artifact_exclude_patterns(&build_preset, &tako_config);
+    let asset_roots = build_asset_roots(&build_preset, &tako_config)?;
+
+    if let Some(server_targets_summary) = format_server_targets_summary(
+        &server_targets,
+        should_use_unified_js_target_process(&runtime_tool),
+    ) {
+        tracing::debug!("{}", server_targets_summary);
+    }
+
+    let artifacts_by_target = build_target_artifacts(
+        &project_dir,
+        &source_root,
+        &tako_config,
+        cache.cache_dir(),
+        &build_workspace_root,
+        &source_archive_path,
+        &app_json_bytes,
+        &version,
+        &runtime_tool,
+        &manifest_main,
+        &build_groups,
+        &tako_config.build_stages,
+        &include_patterns,
+        &exclude_patterns,
+        &asset_roots,
+        tako_config.runtime_version.as_deref(),
+        task_tree.clone(),
+    )
+    .await?;
+
+    drop(build_phase_timer);
+    if let Some(phase) = phase {
+        phase.finish("Built");
+    }
+
+    Ok(BuildPhaseResult {
+        version,
+        manifest_main,
+        deploy_secrets,
+        use_unified_target_process: should_use_unified_js_target_process(&runtime_tool),
+        artifacts_by_target,
+    })
+}
+
 fn build_artifact_include_patterns(config: &TakoToml) -> Vec<String> {
+    // When using build stages, collect includes from each stage (relative to its cwd).
+    if !config.build_stages.is_empty() {
+        let mut patterns = Vec::new();
+        for stage in &config.build_stages {
+            for include in &stage.include {
+                match &stage.cwd {
+                    Some(cwd) if !cwd.is_empty() && cwd != "." => {
+                        patterns.push(format!("{}/{}", cwd.trim_end_matches('/'), include));
+                    }
+                    _ => {
+                        patterns.push(include.clone());
+                    }
+                }
+            }
+        }
+        if patterns.is_empty() {
+            return vec!["**/*".to_string()];
+        }
+        return patterns;
+    }
     if !config.build.include.is_empty() {
         return config.build.include.clone();
     }
@@ -1684,6 +2308,9 @@ fn should_report_artifact_include_patterns(include_patterns: &[String]) -> bool 
 }
 
 fn build_artifact_exclude_patterns(_preset: &BuildPreset, config: &TakoToml) -> Vec<String> {
+    if !config.build_stages.is_empty() {
+        return Vec::new();
+    }
     config.build.exclude.clone()
 }
 
@@ -2135,26 +2762,26 @@ async fn build_target_artifacts(
     app_manifest_bytes: &[u8],
     version: &str,
     runtime_tool: &str,
-    use_unified_target_process: bool,
     _main: &str,
-    server_targets: &[(String, ServerTarget)],
-    _preset: &BuildPreset,
+    target_groups: &[ArtifactBuildGroup],
     custom_stages: &[BuildStage],
     include_patterns: &[String],
     exclude_patterns: &[String],
     asset_roots: &[String],
     pinned_runtime_version: Option<&str>,
+    task_tree: Option<DeployTaskTreeController>,
 ) -> Result<HashMap<String, PathBuf>, String> {
-    let target_groups = build_artifact_target_groups(server_targets, use_unified_target_process);
     let has_multiple_targets = target_groups.len() > 1;
     let mut artifacts = HashMap::new();
     let runtime_adapter = BuildAdapter::from_id(runtime_tool).unwrap_or(BuildAdapter::Unknown);
 
-    for target_group in target_groups {
+    for target_group in target_groups.iter().cloned() {
         let build_target_label = target_group.build_target_label;
         let cache_target_label = target_group.cache_target_label;
         let display_target_label = target_group.display_target_label.as_deref();
-        let use_local_build_spinners = should_use_local_build_spinners(output::is_interactive());
+        let tree_target_label = display_target_label.unwrap_or("shared target").to_string();
+        let use_local_build_spinners =
+            task_tree.is_none() && should_use_local_build_spinners(output::is_interactive());
         let stage_summary = summarize_build_stages(custom_stages);
         if let Some(stage_summary_message) =
             format_build_stages_summary_for_output(&stage_summary, display_target_label)
@@ -2186,7 +2813,44 @@ async fn build_target_artifacts(
         let runtime_probe_success = format_runtime_probe_success(display_target_label);
         let runtime_version = if let Some(pinned) = pinned_runtime_version {
             tracing::debug!("Using pinned runtime version {} from tako.toml", pinned);
+            if let Some(task_tree) = &task_tree {
+                task_tree.warn_build_step(
+                    &tree_target_label,
+                    "probe-runtime",
+                    format!("Pinned: {pinned}"),
+                );
+            }
             pinned.to_string()
+        } else if task_tree.is_some() {
+            if let Some(task_tree) = &task_tree {
+                task_tree.mark_build_step_running(&tree_target_label, "probe-runtime");
+            }
+            let version_result =
+                resolve_runtime_version_from_workspace_quiet(&workspace, runtime_tool);
+            match version_result {
+                Ok(version) => {
+                    if let Some(task_tree) = &task_tree {
+                        task_tree.succeed_build_step(
+                            &tree_target_label,
+                            "probe-runtime",
+                            Some(version.clone()),
+                        );
+                    }
+                    version
+                }
+                Err(error) => {
+                    if let Some(task_tree) = &task_tree {
+                        task_tree.fail_build_step(
+                            &tree_target_label,
+                            "probe-runtime",
+                            error.clone(),
+                        );
+                        task_tree.fail_build_target(&tree_target_label, error.clone());
+                        task_tree.warn_pending_build_children(&tree_target_label, "Skipped");
+                    }
+                    return Err(error);
+                }
+            }
         } else if use_local_build_spinners {
             output::with_spinner(&runtime_probe_label, &runtime_probe_success, || {
                 tracing::debug!(
@@ -2224,9 +2888,24 @@ async fn build_target_artifacts(
                     format_path_relative_to(project_dir, &cached.path),
                     format_size(cached.size_bytes)
                 );
-                output::bullet(&format_artifact_cache_hit_message_for_output(
-                    display_target_label,
-                ));
+                if let Some(task_tree) = &task_tree {
+                    task_tree.warn_build_step(&tree_target_label, "build-artifact", "Skipped");
+                    task_tree.warn_build_step(&tree_target_label, "package-artifact", "Skipped");
+                    task_tree.append_cached_artifact_step(
+                        &tree_target_label,
+                        Some(format_size(cached.size_bytes)),
+                    );
+                    task_tree.succeed_build_target(
+                        &tree_target_label,
+                        Some(format!("{} (cached)", format_size(cached.size_bytes))),
+                    );
+                } else if has_multiple_targets {
+                    output::bullet(&format_build_completed_message(display_target_label));
+                } else {
+                    output::bullet(&format_artifact_cache_hit_message_for_output(
+                        display_target_label,
+                    ));
+                }
                 for target_label in &target_group.target_labels {
                     artifacts.insert(target_label.clone(), cached.path.clone());
                 }
@@ -2236,10 +2915,17 @@ async fn build_target_artifacts(
                 tracing::debug!("Artifact cache miss, building from source");
             }
             Err(error) => {
-                output::warning(&format_artifact_cache_invalid_message(
-                    display_target_label,
-                    &error,
-                ));
+                if task_tree.is_none() {
+                    output::warning(&format_artifact_cache_invalid_message(
+                        display_target_label,
+                        &error,
+                    ));
+                } else {
+                    tracing::warn!(
+                        "{}",
+                        format_artifact_cache_invalid_message(display_target_label, &error)
+                    );
+                }
                 remove_cached_artifact_files(&cache_paths);
             }
         }
@@ -2271,7 +2957,18 @@ async fn build_target_artifacts(
         let build_result = (|| -> Result<u64, String> {
             let build_label = format_build_artifact_message(display_target_label);
             let build_success = format_build_artifact_success(display_target_label);
-            if use_local_build_spinners {
+            if let Some(task_tree) = &task_tree {
+                task_tree.mark_build_step_running(&tree_target_label, "build-artifact");
+                if let Err(error) =
+                    run_local_build(&workspace, &tako_config.build, custom_stages, &extra_envs)
+                {
+                    task_tree.fail_build_step(&tree_target_label, "build-artifact", error.clone());
+                    task_tree.fail_build_target(&tree_target_label, error.clone());
+                    task_tree.warn_pending_build_children(&tree_target_label, "Skipped");
+                    return Err(error);
+                }
+                task_tree.succeed_build_step(&tree_target_label, "build-artifact", None);
+            } else if use_local_build_spinners {
                 output::with_spinner(&build_label, &build_success, || {
                     tracing::debug!("Building target {}…", build_target_label);
                     let _t = output::timed("Target build");
@@ -2287,7 +2984,30 @@ async fn build_target_artifacts(
 
             let prepare_label = format_prepare_artifact_message(display_target_label);
             let prepare_success = format_prepare_artifact_success(display_target_label);
-            if use_local_build_spinners {
+            if let Some(task_tree) = &task_tree {
+                task_tree.mark_build_step_running(&tree_target_label, "package-artifact");
+                if let Err(error) = package_target_artifact(
+                    &workspace,
+                    asset_roots,
+                    include_patterns,
+                    exclude_patterns,
+                    &cache_paths,
+                    &build_target_label,
+                ) {
+                    task_tree.fail_build_step(
+                        &tree_target_label,
+                        "package-artifact",
+                        error.clone(),
+                    );
+                    task_tree.fail_build_target(&tree_target_label, error.clone());
+                    return Err(error);
+                }
+                Ok(cache_paths
+                    .artifact_path
+                    .metadata()
+                    .map_err(|e| format!("Failed to read artifact metadata: {e}"))?
+                    .len())
+            } else if use_local_build_spinners {
                 output::with_spinner(&prepare_label, &prepare_success, || {
                     tracing::debug!("Packaging artifact for {}…", build_target_label);
                     let _t = output::timed("Artifact packaging");
@@ -2316,6 +3036,15 @@ async fn build_target_artifacts(
         })();
         let artifact_size = build_result?;
 
+        if let Some(task_tree) = &task_tree {
+            task_tree.succeed_build_step(
+                &tree_target_label,
+                "package-artifact",
+                Some(format_size(artifact_size)),
+            );
+            task_tree.succeed_build_target(&tree_target_label, Some(format_size(artifact_size)));
+        }
+
         tracing::debug!(
             "{}",
             format_artifact_ready_message_for_output(display_target_label,)
@@ -2330,6 +3059,9 @@ async fn build_target_artifacts(
         );
         for target_label in &target_group.target_labels {
             artifacts.insert(target_label.clone(), cache_paths.artifact_path.clone());
+        }
+        if task_tree.is_none() && has_multiple_targets {
+            output::bullet(&format_build_completed_message(display_target_label));
         }
 
         // Clean up workdir after packaging.
@@ -2532,6 +3264,21 @@ fn resolve_runtime_version_from_workspace(
     workspace: &Path,
     runtime_tool: &str,
 ) -> Result<String, String> {
+    resolve_runtime_version_from_workspace_impl(workspace, runtime_tool, true)
+}
+
+fn resolve_runtime_version_from_workspace_quiet(
+    workspace: &Path,
+    runtime_tool: &str,
+) -> Result<String, String> {
+    resolve_runtime_version_from_workspace_impl(workspace, runtime_tool, false)
+}
+
+fn resolve_runtime_version_from_workspace_impl(
+    workspace: &Path,
+    runtime_tool: &str,
+    emit_warning: bool,
+) -> Result<String, String> {
     if !workspace.is_dir() {
         return Err(format!(
             "App directory '{}' does not exist inside build workspace",
@@ -2541,7 +3288,7 @@ fn resolve_runtime_version_from_workspace(
 
     #[cfg(test)]
     {
-        let _ = (workspace, runtime_tool);
+        let _ = (workspace, runtime_tool, emit_warning);
         Ok("latest".to_string())
     }
 
@@ -2559,15 +3306,19 @@ fn resolve_runtime_version_from_workspace(
                 if let Some(version) = extract_semver_from_version_output(&stdout) {
                     return Ok(version);
                 }
-                output::warning(&format!(
-                    "Could not detect {runtime_tool} version. To pin a version, set runtime_version in tako.toml"
-                ));
+                if emit_warning {
+                    output::warning(&format!(
+                        "Could not detect {runtime_tool} version. To pin a version, set runtime_version in tako.toml"
+                    ));
+                }
                 Ok("latest".to_string())
             }
             _ => {
-                output::warning(&format!(
-                    "Could not detect {runtime_tool} version. To pin a version, set runtime_version in tako.toml"
-                ));
+                if emit_warning {
+                    output::warning(&format!(
+                        "Could not detect {runtime_tool} version. To pin a version, set runtime_version in tako.toml"
+                    ));
+                }
                 Ok("latest".to_string())
             }
         }
@@ -2700,6 +3451,19 @@ fn parse_existing_routes_response(
     }
 }
 
+fn extract_server_error_message(response: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(response)
+        .ok()
+        .and_then(|v| v["message"].as_str().map(String::from))
+        .map(|message| {
+            message
+                .strip_prefix("Deploy failed: ")
+                .unwrap_or(&message)
+                .to_string()
+        })
+        .unwrap_or_else(|| response.to_string())
+}
+
 fn deploy_response_has_error(response: &str) -> bool {
     serde_json::from_str::<serde_json::Value>(response)
         .ok()
@@ -2713,16 +3477,10 @@ fn deploy_response_has_error(response: &str) -> bool {
 }
 
 const DEPLOY_DISK_CHECK_PATH: &str = "/opt/tako";
-const DEPLOY_DISK_SPACE_MULTIPLIER: u64 = 3;
-const DEPLOY_DISK_SPACE_HEADROOM_BYTES: u64 = 64 * 1024 * 1024;
+/// Fixed minimum free disk space required on the remote server.
+const DEPLOY_MIN_FREE_DISK_BYTES: u64 = 256 * 1024 * 1024;
 
 use crate::shell::shell_single_quote;
-
-fn required_remote_free_bytes(archive_size_bytes: u64) -> u64 {
-    archive_size_bytes
-        .saturating_mul(DEPLOY_DISK_SPACE_MULTIPLIER)
-        .saturating_add(DEPLOY_DISK_SPACE_HEADROOM_BYTES)
-}
 
 fn parse_df_available_kb(stdout: &str) -> Result<u64, String> {
     let line = stdout
@@ -2734,30 +3492,13 @@ fn parse_df_available_kb(stdout: &str) -> Result<u64, String> {
         .map_err(|_| format!("unexpected df output: '{line}'"))
 }
 
-fn format_insufficient_disk_space_error(
-    required_bytes: u64,
-    available_bytes: u64,
-    archive_size_bytes: u64,
-) -> String {
-    format!(
-        "Insufficient disk space under {}. Archive size: {}. Required free space: {}. Available free space: {}. Free space under {} and retry deploy.",
-        DEPLOY_DISK_CHECK_PATH,
-        format_size(archive_size_bytes),
-        format_size(required_bytes),
-        format_size(available_bytes),
-        DEPLOY_DISK_CHECK_PATH
-    )
-}
-
 fn cleanup_partial_release_command(release_dir: &str) -> String {
     format!("rm -rf {}", shell_single_quote(release_dir))
 }
 
 async fn ensure_remote_disk_space(
     ssh: &SshClient,
-    archive_size_bytes: u64,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let required_bytes = required_remote_free_bytes(archive_size_bytes);
     let cmd = format!(
         "df -Pk {} | awk 'NR==2 {{print $4}}'",
         shell_single_quote(DEPLOY_DISK_CHECK_PATH)
@@ -2775,11 +3516,12 @@ async fn ensure_remote_disk_space(
     let available_kb = parse_df_available_kb(&output.stdout)
         .map_err(|e| format!("Failed to parse free disk space: {}", e))?;
     let available_bytes = available_kb.saturating_mul(1024);
-    if available_bytes < required_bytes {
-        return Err(format_insufficient_disk_space_error(
-            required_bytes,
-            available_bytes,
-            archive_size_bytes,
+    if available_bytes < DEPLOY_MIN_FREE_DISK_BYTES {
+        return Err(format!(
+            "Insufficient disk space under {}. Required: at least {}. Available: {}.",
+            DEPLOY_DISK_CHECK_PATH,
+            format_size(DEPLOY_MIN_FREE_DISK_BYTES),
+            format_size(available_bytes),
         )
         .into());
     }
@@ -2803,6 +3545,22 @@ async fn remote_directory_exists(
         .into());
     }
     Ok(output.stdout.trim() == "yes")
+}
+
+async fn connect_and_prepare_remote_release_dir(
+    ssh: &mut SshClient,
+    release_dir: &str,
+    shared_dir: &str,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    ssh.connect().await?;
+
+    let release_dir_preexisted = remote_directory_exists(ssh, release_dir).await?;
+    if !release_dir_preexisted {
+        ssh.exec_checked(&format!("mkdir -p {} {}", release_dir, shared_dir))
+            .await?;
+    }
+
+    Ok(release_dir_preexisted)
 }
 
 async fn cleanup_partial_release(
@@ -2834,12 +3592,97 @@ where
     E: Send + std::fmt::Display + Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     if use_spinner {
-        output::with_spinner_async(loading, success, work)
+        let error_label = format!("{} failed", loading.trim_end_matches('…'));
+        output::with_spinner_async_err(loading, success, &error_label, work)
             .await
             .map_err(Into::into)
     } else {
         tracing::debug!("{}", loading);
         work.await.map_err(Into::into)
+    }
+}
+
+async fn run_task_tree_deploy_step<T, E, Fut>(
+    task_tree: &DeployTaskTreeController,
+    server_name: &str,
+    step: &str,
+    work: Fut,
+) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
+where
+    Fut: Future<Output = Result<T, E>> + Send,
+    T: Send,
+    E: Send + std::fmt::Display + Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    run_task_tree_deploy_step_with_detail(task_tree, server_name, step, None, work).await
+}
+
+async fn run_task_tree_deploy_step_with_detail<T, E, Fut>(
+    task_tree: &DeployTaskTreeController,
+    server_name: &str,
+    step: &str,
+    success_detail: Option<String>,
+    work: Fut,
+) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
+where
+    Fut: Future<Output = Result<T, E>> + Send,
+    T: Send,
+    E: Send + std::fmt::Display + Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    run_task_tree_deploy_step_with_detail_and_error_cleanup(
+        task_tree,
+        server_name,
+        step,
+        success_detail,
+        work,
+        || async {},
+    )
+    .await
+}
+
+async fn run_task_tree_deploy_step_with_detail_and_error_cleanup<T, E, Fut, Cleanup, CleanupFut>(
+    task_tree: &DeployTaskTreeController,
+    server_name: &str,
+    step: &str,
+    success_detail: Option<String>,
+    work: Fut,
+    cleanup_on_error: Cleanup,
+) -> Result<T, Box<dyn std::error::Error + Send + Sync>>
+where
+    Fut: Future<Output = Result<T, E>> + Send,
+    T: Send,
+    E: Send + std::fmt::Display + Into<Box<dyn std::error::Error + Send + Sync>>,
+    Cleanup: FnOnce() -> CleanupFut + Send,
+    CleanupFut: Future<Output = ()> + Send,
+{
+    task_tree.mark_deploy_step_running(server_name, step);
+    match work.await {
+        Ok(value) => {
+            let success_label = match step {
+                "connecting" => "Connected",
+                "uploading" => "Uploaded",
+                "preparing" => "Prepared",
+                _ => step,
+            };
+            task_tree.rename_deploy_step(server_name, step, success_label);
+            task_tree.succeed_deploy_step(server_name, step, success_detail);
+            Ok(value)
+        }
+        Err(error) => {
+            let message = error.to_string();
+            cleanup_on_error().await;
+            task_tree.fail_deploy_step(server_name, step, message.clone());
+            let failed_label = match step {
+                "connecting" => "Connection failed",
+                "uploading" => "Upload failed",
+                "preparing" => "Prepare failed",
+                "starting" => "Start failed",
+                _ => step,
+            };
+            task_tree.rename_deploy_step(server_name, step, failed_label);
+            task_tree.fail_deploy_target_without_detail(server_name);
+            task_tree.warn_pending_deploy_children(server_name, "Skipped");
+            Err(error.into())
+        }
     }
 }
 
@@ -2886,164 +3729,289 @@ fn build_remote_extract_archive_command(release_dir: &str, remote_archive: &str)
 /// Deploy to a single server
 async fn deploy_to_server(
     config: &DeployConfig,
+    server_name: &str,
     server: &ServerEntry,
     archive_path: &Path,
     target_label: &str,
     use_spinner: bool,
+    task_tree: Option<DeployTaskTreeController>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::debug!("Deploying (target: {target_label}, port: {})…", server.port);
     let _server_deploy_timer = output::timed("Server deploy");
     let ssh_config = SshConfig::from_server(&server.host, server.port);
     let mut ssh = SshClient::new(ssh_config);
-    run_deploy_step("Connecting", "Connected", false, ssh.connect()).await?;
+    let release_dir = config.release_dir();
+    // SSH connect + directory setup all happen under the "Connecting" step
+    // so that "Uploading" can start immediately with the progress bar.
+    let release_dir_preexisted = if let Some(task_tree) = &task_tree {
+        run_task_tree_deploy_step(
+            task_tree,
+            server_name,
+            "connecting",
+            connect_and_prepare_remote_release_dir(&mut ssh, &release_dir, &config.shared_dir()),
+        )
+        .await?
+    } else {
+        run_deploy_step(
+            "Connecting",
+            "Connected",
+            use_spinner,
+            connect_and_prepare_remote_release_dir(&mut ssh, &release_dir, &config.shared_dir()),
+        )
+        .await?
+    };
     let archive_size_bytes = std::fs::metadata(archive_path)?.len();
     tracing::debug!("Archive size: {}", format_size(archive_size_bytes));
-
-    run_deploy_step(
-        "Checking remote disk space",
-        "Disk space OK",
-        false,
-        ensure_remote_disk_space(&ssh, archive_size_bytes),
-    )
-    .await?;
-
-    let release_dir = config.release_dir();
-    let release_dir_preexisted = remote_directory_exists(&ssh, &release_dir).await?;
+    let mut cleaned_partial_release = false;
 
     let result = async {
-        // Check if tako-server is installed.
-        let installed =
-            run_deploy_step("Checking tako-server", "tako-server found", false, ssh.is_tako_installed())
-                .await?;
-        if !installed {
-            return Err(
-                "tako-server is not installed on this server. Install it as root (see scripts/install-tako-server.sh)."
-                    .into(),
-            );
-        }
-
-        // Ensure the service is running before socket commands.
-        run_deploy_step(
-            "Checking tako-server status",
-            "tako-server running",
-            false,
-            ensure_tako_running(&mut ssh),
-        )
-        .await?;
-
-        // Route conflict validation (best-effort against current tako-server state)
-        let existing = run_deploy_step("Checking route conflicts", "No route conflicts", false, async {
-            parse_existing_routes_response(ssh.tako_routes().await?)
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e.into() })
-        })
-        .await?;
-
-        validate_no_route_conflicts(&existing, &config.app_name, &config.routes)
-            .map_err(|e| format!("Route conflict: {}", e))?;
-
-        // Create directories.
-        run_deploy_step("Creating directories", "Directories created", false, async {
-            ssh.exec_checked(&format!(
-                "mkdir -p {} {}",
-                release_dir, config.shared_dir()
-            )).await?;
-            Ok::<(), SshError>(())
-        })
-        .await?;
-
         // Upload artifact (skip if release dir already has it from a previous deploy).
         let remote_archive = remote_release_archive_path(&release_dir);
         if release_dir_preexisted {
             tracing::debug!("Release dir already exists, skipping upload");
+            if let Some(task_tree) = &task_tree {
+                task_tree.warn_deploy_step(server_name, "uploading", "cached");
+            }
         } else {
             tracing::debug!("Uploading artifact ({})…", format_size(archive_size_bytes));
             let upload_timer = output::timed("Artifact upload");
-            if use_spinner {
-                let tp = std::sync::Arc::new(output::TransferProgress::new(
-                    "Uploading",
-                    "Uploaded",
-                    archive_size_bytes,
-                ));
-                let tp2 = tp.clone();
-                ssh.upload_with_progress(
-                    archive_path,
-                    &remote_archive,
-                    Some(Box::new(move |done, _total| tp2.set_position(done))),
+            if let Some(task_tree) = &task_tree {
+                let total_size = archive_size_bytes;
+                let tt = task_tree.clone();
+                let sn = server_name.to_string();
+                let upload_started_at = Instant::now();
+                run_task_tree_deploy_step_with_detail(
+                    task_tree,
+                    server_name,
+                    "uploading",
+                    Some(format_size(archive_size_bytes)),
+                    async {
+                        ssh.upload_with_progress(
+                            archive_path,
+                            &remote_archive,
+                            Some(Box::new(move |done, _total| {
+                                let fraction = if total_size > 0 {
+                                    done as f64 / total_size as f64
+                                } else {
+                                    0.0
+                                };
+                                tt.update_deploy_step_progress(
+                                    &sn,
+                                    "uploading",
+                                    output::format_transfer_compact_detail(
+                                        done,
+                                        total_size,
+                                        upload_started_at.elapsed(),
+                                    ),
+                                    fraction,
+                                );
+                            })),
+                        )
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
+                    },
                 )
                 .await
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-                tp.finish();
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    format_deploy_step_failure("Uploading", &e.to_string()).into()
+                })?;
             } else {
-                ssh.upload(archive_path, &remote_archive)
-                    .await
-                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                let upload_result: Result<(), Box<dyn std::error::Error + Send + Sync>> =
+                    if use_spinner {
+                        let tp = std::sync::Arc::new(output::TransferProgress::new(
+                            "Uploading",
+                            "Uploaded",
+                            archive_size_bytes,
+                        ));
+                        let tp2 = tp.clone();
+                        ssh.upload_with_progress(
+                            archive_path,
+                            &remote_archive,
+                            Some(Box::new(move |done, _total| tp2.set_position(done))),
+                        )
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                        tp.finish();
+                        Ok(())
+                    } else {
+                        ssh.upload(archive_path, &remote_archive).await.map_err(
+                            |e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) },
+                        )
+                    };
+                upload_result.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    format_deploy_step_failure("Uploading", &e.to_string()).into()
+                })?;
             }
             drop(upload_timer);
         }
 
         // Extract archive and symlink shared dirs.
         if !release_dir_preexisted {
-            run_deploy_step("Preparing…", "Prepared", use_spinner, async {
-                tracing::debug!("Extracting and configuring release…");
-                let extract_cmd = build_remote_extract_archive_command(&release_dir, &remote_archive);
-                let shared_link_cmd = format!(
-                    "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
-                    config.shared_dir(),
-                    config.shared_dir(),
-                    release_dir
+            if let Some(task_tree) = &task_tree {
+                run_task_tree_deploy_step(task_tree, server_name, "preparing", async {
+                    tracing::debug!("Extracting and configuring release…");
+                    let extract_cmd =
+                        build_remote_extract_archive_command(&release_dir, &remote_archive);
+                    let shared_link_cmd = format!(
+                        "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
+                        config.shared_dir(),
+                        config.shared_dir(),
+                        release_dir
+                    );
+                    let combined_cmd = format!("{} && {}", extract_cmd, shared_link_cmd);
+                    ssh.exec_checked(&combined_cmd).await?;
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                })
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    format_deploy_step_failure("Preparing", &e.to_string()).into()
+                })?;
+            } else {
+                run_deploy_step("Preparing…", "Prepared", use_spinner, async {
+                    tracing::debug!("Extracting and configuring release…");
+                    let extract_cmd =
+                        build_remote_extract_archive_command(&release_dir, &remote_archive);
+                    let shared_link_cmd = format!(
+                        "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
+                        config.shared_dir(),
+                        config.shared_dir(),
+                        release_dir
+                    );
+                    let combined_cmd = format!("{} && {}", extract_cmd, shared_link_cmd);
+                    ssh.exec_checked(&combined_cmd).await?;
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                })
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                    format_deploy_step_failure("Preparing", &e.to_string()).into()
+                })?;
+            }
+        } else if let Some(task_tree) = &task_tree {
+            task_tree.warn_deploy_step(server_name, "preparing", "Skipped");
+        }
+        tracing::debug!(
+            "{}",
+            format_deploy_main_message(
+                &config.main,
+                target_label,
+                config.use_unified_target_process,
+            )
+        );
+
+        let start_result = if let Some(task_tree) = &task_tree {
+            run_task_tree_deploy_step_with_detail_and_error_cleanup(
+                task_tree,
+                server_name,
+                "starting",
+                None,
+                async {
+                    // Check if server already has up-to-date secrets by comparing hashes.
+                    // If hashes match, skip sending secrets (server keeps existing ones).
+                    let deploy_secrets =
+                        match query_remote_secrets_hash(&ssh, &config.app_name).await {
+                            Some(remote_hash) if remote_hash == config.secrets_hash => None,
+                            _ => Some(config.env_vars.clone()),
+                        };
+
+                    let cmd = Command::Deploy {
+                        app: config.app_name.clone(),
+                        version: config.version.clone(),
+                        path: release_dir.clone(),
+                        routes: config.routes.clone(),
+                        secrets: deploy_secrets,
+                    };
+                    let json = serde_json::to_string(&cmd)
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                    let response = ssh
+                        .tako_command(&json)
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+                    if deploy_response_has_error(&response) {
+                        return Err(extract_server_error_message(&response).into());
+                    }
+
+                    ssh.symlink(&release_dir, &config.current_link())
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+                    let releases_dir = format!("{}/releases", config.remote_base);
+                    let cleanup_cmd = format!(
+                        "find {} -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {{}} \\;",
+                        releases_dir
+                    );
+                    ssh.exec(&cleanup_cmd)
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+                    Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
+                },
+                || {
+                    cleaned_partial_release = true;
+                    async {
+                        if !release_dir_preexisted
+                            && let Err(e) = cleanup_partial_release(&ssh, &release_dir).await
+                        {
+                            tracing::warn!(
+                                "Failed to cleanup partial release directory {release_dir}: {e}"
+                            );
+                        }
+                    }
+                },
+            )
+            .await
+        } else {
+            run_deploy_step("Starting…", "Started", use_spinner, async {
+                // Check if server already has up-to-date secrets by comparing hashes.
+                // If hashes match, skip sending secrets (server keeps existing ones).
+                let deploy_secrets = match query_remote_secrets_hash(&ssh, &config.app_name).await {
+                    Some(remote_hash) if remote_hash == config.secrets_hash => None,
+                    _ => Some(config.env_vars.clone()),
+                };
+
+                let cmd = Command::Deploy {
+                    app: config.app_name.clone(),
+                    version: config.version.clone(),
+                    path: release_dir.clone(),
+                    routes: config.routes.clone(),
+                    secrets: deploy_secrets,
+                };
+                let json = serde_json::to_string(&cmd)
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                let response = ssh
+                    .tako_command(&json)
+                    .await
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+                if deploy_response_has_error(&response) {
+                    return Err(extract_server_error_message(&response).into());
+                }
+
+                // Update current symlink only after tako-server accepted the deploy command.
+                ssh.symlink(&release_dir, &config.current_link())
+                    .await
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+                // Clean up old releases (keep last 30 days).
+                let releases_dir = format!("{}/releases", config.remote_base);
+                let cleanup_cmd = format!(
+                    "find {} -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {{}} \\;",
+                    releases_dir
                 );
-                let combined_cmd = format!("{} && {}", extract_cmd, shared_link_cmd);
-                ssh.exec_checked(&combined_cmd).await?;
+                ssh.exec(&cleanup_cmd)
+                    .await
+                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             })
-            .await?;
+            .await
+        };
+        start_result.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+            format_deploy_step_failure("Starting", &e.to_string()).into()
+        })?;
+        if let Some(task_tree) = &task_tree {
+            task_tree.succeed_deploy_target(server_name, None);
         }
-        tracing::debug!("{}", format_deploy_main_message(
-            &config.main,
-            target_label,
-            config.use_unified_target_process,
-        ));
-
-        run_deploy_step("Releasing…", "Released", use_spinner, async {
-            // Check if server already has up-to-date secrets by comparing hashes.
-            // If hashes match, skip sending secrets (server keeps existing ones).
-            let deploy_secrets = match query_remote_secrets_hash(&ssh, &config.app_name).await {
-                Some(remote_hash) if remote_hash == config.secrets_hash => None,
-                _ => Some(config.env_vars.clone()),
-            };
-
-            let cmd = Command::Deploy {
-                app: config.app_name.clone(),
-                version: config.version.clone(),
-                path: release_dir.clone(),
-                routes: config.routes.clone(),
-                secrets: deploy_secrets,
-            };
-            let json = serde_json::to_string(&cmd)
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-            let response = ssh.tako_command(&json).await
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-
-            if deploy_response_has_error(&response) {
-                return Err(format!("tako-server error: {}", response).into());
-            }
-
-            // Update current symlink only after tako-server accepted the deploy command.
-            ssh.symlink(&release_dir, &config.current_link()).await
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-
-            // Clean up old releases (keep last 30 days).
-            let releases_dir = format!("{}/releases", config.remote_base);
-            let cleanup_cmd = format!(
-                "find {} -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {{}} \\;",
-                releases_dir
-            );
-            ssh.exec(&cleanup_cmd).await
-                .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-
-            Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
-        })
-        .await?;
 
         Ok(())
     }
@@ -3051,6 +4019,7 @@ async fn deploy_to_server(
 
     if result.is_err()
         && !release_dir_preexisted
+        && !cleaned_partial_release
         && let Err(e) = cleanup_partial_release(&ssh, &release_dir).await
     {
         tracing::warn!("Failed to cleanup partial release directory {release_dir}: {e}");
@@ -3079,74 +4048,6 @@ async fn query_remote_secrets_hash(ssh: &SshClient, app_name: &str) -> Option<St
         .and_then(|d| d.get("hash"))
         .and_then(|h| h.as_str())
         .map(|s| s.to_string())
-}
-
-async fn check_tako_server(
-    server: &ServerEntry,
-) -> Result<TakoServerStatus, Box<dyn std::error::Error + Send + Sync>> {
-    let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
-
-    let installed = ssh.is_tako_installed().await?;
-    if !installed {
-        let _ = ssh.disconnect().await;
-        return Ok(TakoServerStatus::Missing);
-    }
-
-    let running = is_tako_service_running(&ssh).await?;
-    let _ = ssh.disconnect().await;
-    Ok(if running {
-        TakoServerStatus::Ready
-    } else {
-        TakoServerStatus::NotRunning
-    })
-}
-
-async fn is_tako_service_running(
-    ssh: &SshClient,
-) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    let status = ssh
-        .tako_status()
-        .await
-        .unwrap_or_else(|_| String::from("unknown"));
-    if let Some(running) = interpret_tako_service_status(&status) {
-        return Ok(running);
-    }
-
-    // Non-systemd/non-OpenRC hosts or restrictive sudo policies can report "unknown".
-    // Fall back to checking for a live process.
-    let out = ssh.exec(&tako_process_probe_command()).await?;
-    Ok(out.stdout.trim() == "yes")
-}
-
-fn tako_process_probe_command() -> String {
-    // BusyBox `pgrep -x` can miss full-path command names (`/usr/local/bin/tako-server`).
-    // Use `-f` with an anchored pattern to match both bare and full-path invocations.
-    "pgrep -f '(^|/)tako-server([[:space:]]|$)' >/dev/null 2>&1 && echo yes || echo no".to_string()
-}
-
-fn interpret_tako_service_status(status: &str) -> Option<bool> {
-    let normalized = status.trim();
-    if normalized == "active" {
-        return Some(true);
-    }
-    if normalized == "unknown" {
-        return None;
-    }
-    Some(false)
-}
-
-async fn ensure_tako_running(
-    ssh: &mut SshClient,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    if is_tako_service_running(ssh).await? {
-        return Ok(());
-    }
-
-    Err(format!(
-        "tako-server is installed but not running. Start the service (e.g. `{}`), then retry.",
-        crate::ssh::SshClient::tako_start_hint()
-    )
-    .into())
 }
 
 /// Alias for the shared size formatter.
@@ -3333,14 +4234,6 @@ mod tests {
 
         let err = resolve_deploy_environment(Some("development"), &config).unwrap_err();
         assert!(err.contains("reserved for local development"));
-    }
-
-    #[test]
-    fn interpret_tako_service_status_handles_known_values() {
-        assert_eq!(interpret_tako_service_status("active"), Some(true));
-        assert_eq!(interpret_tako_service_status("unknown"), None);
-        assert_eq!(interpret_tako_service_status("inactive"), Some(false));
-        assert_eq!(interpret_tako_service_status("failed"), Some(false));
     }
 
     #[test]
@@ -3859,27 +4752,476 @@ route = "app.example.com"
         };
         let lines =
             format_deploy_overview_lines("bun", "production", 1, Some(("testbed", &server)));
-        assert_eq!(lines.len(), 5);
-        assert!(lines[0].starts_with("┌─ Deploy (production)"));
-        assert!(lines[1].contains("App"));
-        assert!(lines[1].contains("bun"));
-        assert!(lines[2].contains("Target"));
-        assert!(lines[2].contains("testbed"));
-        assert!(lines[3].contains("Host"));
-        assert!(lines[3].contains("tako@localhost:2222"));
-        assert!(lines[4].starts_with("└"));
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("App") && lines[0].contains("bun"));
+        assert!(lines[1].contains("Target") && lines[1].contains("testbed"));
+        assert!(lines[2].contains("Host") && lines[2].contains("tako@localhost:2222"));
     }
 
     #[test]
     fn deploy_overview_lines_include_server_count_for_multi_target() {
         let lines = format_deploy_overview_lines("bun", "staging", 3, None);
-        assert_eq!(lines.len(), 4);
-        assert!(lines[0].starts_with("┌─ Deploy (staging)"));
-        assert!(lines[1].contains("App"));
-        assert!(lines[1].contains("bun"));
-        assert!(lines[2].contains("Target"));
-        assert!(lines[2].contains("3 servers"));
-        assert!(lines[3].starts_with("└"));
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains("App") && lines[0].contains("bun"));
+        assert!(lines[1].contains("Target") && lines[1].contains("3 servers"));
+    }
+
+    #[test]
+    fn deploy_summary_lines_keep_urls_literal_and_contiguous() {
+        let lines = format_deploy_summary_lines(
+            "Revision",
+            "20260330",
+            &[
+                "app.tako.test".to_string(),
+                "app.tako.test/bun".to_string(),
+                "*.app.tako.test".to_string(),
+            ],
+        );
+
+        assert_eq!(
+            lines,
+            vec![
+                "Revision   20260330".to_string(),
+                "URL        https://app.tako.test".to_string(),
+                "           https://app.tako.test/bun".to_string(),
+                "           https://*.app.tako.test".to_string(),
+            ]
+        );
+    }
+
+    fn sample_shared_build_group() -> ArtifactBuildGroup {
+        ArtifactBuildGroup {
+            build_target_label: "linux-aarch64-musl".to_string(),
+            cache_target_label: UNIFIED_JS_CACHE_TARGET_LABEL.to_string(),
+            target_labels: vec!["linux-aarch64-musl".to_string()],
+            display_target_label: None,
+        }
+    }
+
+    fn sample_multi_build_groups() -> Vec<ArtifactBuildGroup> {
+        vec![
+            ArtifactBuildGroup {
+                build_target_label: "linux-aarch64-musl".to_string(),
+                cache_target_label: "linux-aarch64-musl".to_string(),
+                target_labels: vec!["linux-aarch64-musl".to_string()],
+                display_target_label: Some("linux-aarch64-musl".to_string()),
+            },
+            ArtifactBuildGroup {
+                build_target_label: "linux-x86_64-glibc".to_string(),
+                cache_target_label: "linux-x86_64-glibc".to_string(),
+                target_labels: vec!["linux-x86_64-glibc".to_string()],
+                display_target_label: Some("linux-x86_64-glibc".to_string()),
+            },
+        ]
+    }
+
+    #[test]
+    fn deploy_task_tree_initial_lines_include_known_future_work() {
+        let controller = DeployTaskTreeController::new(
+            &["tako-demo".to_string()],
+            &[sample_shared_build_group()],
+        );
+        let snapshot = controller.snapshot();
+        let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
+
+        assert_eq!(
+            lines,
+            vec![
+                "○ Building...".to_string(),
+                String::new(),
+                "○ Deploying to tako-demo...".to_string(),
+                "  ○ Connecting...".to_string(),
+                "  ○ Uploading...".to_string(),
+                "  ○ Preparing...".to_string(),
+                "  ○ Starting...".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn deploy_task_tree_initial_lines_include_multi_target_builds_and_multi_server_children() {
+        let controller = DeployTaskTreeController::new(
+            &["prod-a".to_string(), "prod-b".to_string()],
+            &sample_multi_build_groups(),
+        );
+        let snapshot = controller.snapshot();
+        let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
+
+        // No top-level Connecting — it's a child of each deploy group
+        assert!(!lines.iter().any(|line| line == "○ Connecting..."));
+        assert!(lines.iter().any(|line| line == "○ Building..."));
+        assert!(lines.iter().any(|line| line == "  ○ linux-aarch64-musl..."));
+        assert!(lines.iter().any(|line| line == "  ○ linux-x86_64-glibc..."));
+        assert!(lines.iter().any(|line| line == "○ Deploying to prod-a..."));
+        assert!(lines.iter().any(|line| line == "○ Deploying to prod-b..."));
+        // Each deploy group has Connecting + Uploading + Preparing + Starting
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("○ Connecting..."))
+                .count(),
+            2
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("○ Uploading..."))
+                .count(),
+            2
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("○ Preparing..."))
+                .count(),
+            2
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.contains("○ Starting..."))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn deploy_task_tree_marks_build_as_running_before_build_steps_start() {
+        let controller = DeployTaskTreeController::new(
+            &["tako-demo".to_string()],
+            &[sample_shared_build_group()],
+        );
+
+        controller.mark_build_target_running("shared target");
+
+        let snapshot = controller.snapshot();
+        let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
+
+        assert!(lines.iter().any(|line| line.starts_with("✶ Building")));
+        let build = snapshot
+            .builds
+            .iter()
+            .find(|task| task.label == "shared target")
+            .unwrap();
+        assert!(matches!(build.state, TaskState::Running { .. }));
+        assert!(
+            build
+                .children
+                .iter()
+                .all(|child| matches!(child.state, TaskState::Pending))
+        );
+    }
+
+    #[test]
+    fn deploy_task_tree_cache_hit_appends_completed_cached_artifact_step() {
+        let controller =
+            DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
+
+        controller.succeed_build_step("shared target", "probe-runtime", Some("bun 1.2.3".into()));
+        controller.warn_build_step("shared target", "build-artifact", "Skipped");
+        controller.warn_build_step("shared target", "package-artifact", "Skipped");
+        controller.append_cached_artifact_step("shared target", Some("72 MB".to_string()));
+        controller.succeed_build_target("shared target", Some("72 MB (cached)".to_string()));
+
+        let snapshot = controller.snapshot();
+        let cached_step = snapshot
+            .builds
+            .iter()
+            .find_map(|task| task.find(&build_task_step_id("shared target", "use-cached-artifact")))
+            .unwrap();
+        assert!(matches!(cached_step.state, TaskState::Succeeded { .. }));
+        let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
+        // The "Built" line should include the detail (e.g. "Cached 72 MB")
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.starts_with("✔ Built") && line.contains("72 MB (cached)")),
+            "built line should show detail: {lines:?}"
+        );
+        let built_index = lines
+            .iter()
+            .position(|line| line.starts_with("✔ Built"))
+            .unwrap();
+        assert_eq!(lines.get(built_index + 1), Some(&String::new()));
+        assert_eq!(
+            lines.get(built_index + 2),
+            Some(&"○ Deploying to prod-a...".to_string())
+        );
+        assert_eq!(lines.last(), Some(&"  ○ Starting...".to_string()));
+    }
+
+    #[test]
+    fn deploy_task_tree_can_show_parallel_running_rows() {
+        let controller = DeployTaskTreeController::new(
+            &["prod-a".to_string(), "prod-b".to_string()],
+            &[sample_shared_build_group()],
+        );
+
+        controller.mark_deploy_step_running("prod-a", "uploading");
+        controller.mark_deploy_step_running("prod-b", "uploading");
+
+        let snapshot = controller.snapshot();
+        let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("✶ Deploying to prod-"))
+                .count(),
+            2
+        );
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.starts_with("  ✶ Uploading"))
+                .count(),
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn deploy_task_tree_marks_connecting_running_before_connected() {
+        let controller =
+            DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
+        let worker_controller = controller.clone();
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+
+        let handle = tokio::spawn(async move {
+            run_task_tree_deploy_step(&worker_controller, "prod-a", "connecting", async move {
+                rx.await.expect("test signal should arrive");
+                Ok::<(), String>(())
+            })
+            .await
+            .expect("connecting step should succeed");
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                let snapshot = controller.snapshot();
+                let deploy_target = snapshot
+                    .deploys
+                    .iter()
+                    .find(|task| task.id == deploy_target_task_id("prod-a"))
+                    .expect("deploy target should exist");
+                let connecting = deploy_target
+                    .find(&deploy_task_step_id("prod-a", "connecting"))
+                    .expect("connecting step should exist");
+                if matches!(deploy_target.state, TaskState::Running { .. })
+                    && matches!(connecting.state, TaskState::Running { .. })
+                {
+                    assert_eq!(connecting.label, "Connecting");
+                    return;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("connecting step should enter running state");
+
+        tx.send(()).expect("worker should still be waiting");
+        handle.await.expect("worker should finish cleanly");
+
+        let snapshot = controller.snapshot();
+        let deploy_target = snapshot
+            .deploys
+            .iter()
+            .find(|task| task.id == deploy_target_task_id("prod-a"))
+            .expect("deploy target should exist");
+        let connecting = deploy_target
+            .find(&deploy_task_step_id("prod-a", "connecting"))
+            .expect("connecting step should exist");
+        assert_eq!(connecting.label, "Connected");
+        assert!(matches!(connecting.state, TaskState::Succeeded { .. }));
+    }
+
+    #[test]
+    fn deploy_task_tree_shows_connection_errors_under_deploy_group() {
+        let controller =
+            DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
+
+        controller.fail_preflight_check("prod-a", "SSH protocol error");
+
+        let snapshot = controller.snapshot();
+        let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
+
+        // Connection failure is under the deploy group
+        assert!(lines.iter().any(|line| line == "✘ Deploy to prod-a failed"));
+        assert!(lines.iter().any(|line| line == "  ✘ Connection failed"));
+        assert!(!lines.iter().any(|line| line == "  SSH protocol error"));
+        assert!(lines.iter().any(|line| line == "    SSH protocol error"));
+    }
+
+    #[test]
+    fn deploy_task_tree_connection_failure_aborts_remaining_deploy_children() {
+        let controller =
+            DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
+
+        controller.fail_preflight_check("prod-a", "SSH protocol error");
+
+        let snapshot = controller.snapshot();
+        let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
+
+        assert!(lines.iter().any(|line| line == "  ✘ Connection failed"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("⊘ Uploading") && line.contains("Skipped"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("⊘ Preparing") && line.contains("Skipped"))
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("⊘ Starting") && line.contains("Skipped"))
+        );
+    }
+
+    #[tokio::test]
+    async fn deploy_task_tree_step_failure_attaches_detail_to_child_row() {
+        let controller =
+            DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
+
+        let err = run_task_tree_deploy_step(&controller, "prod-a", "starting", async {
+            Err::<(), String>("Warm instance startup failed".to_string())
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err.to_string(), "Warm instance startup failed");
+
+        let lines = ui::render_plain_lines(&build_deploy_tree(&controller.snapshot()));
+        assert!(lines.iter().any(|line| line == "✘ Deploy to prod-a failed"));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line == "  Warm instance startup failed")
+        );
+        assert!(lines.iter().any(|line| line == "  ✘ Start failed"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "    Warm instance startup failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn deploy_task_tree_defers_failed_start_state_until_cleanup_finishes() {
+        let controller =
+            DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
+        let (cleanup_started_tx, cleanup_started_rx) = tokio::sync::oneshot::channel();
+        let (cleanup_finish_tx, cleanup_finish_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let task = tokio::spawn({
+            let controller = controller.clone();
+            async move {
+                run_task_tree_deploy_step_with_detail_and_error_cleanup(
+                    &controller,
+                    "prod-a",
+                    "starting",
+                    None,
+                    async { Err::<(), String>("Warm instance startup failed".to_string()) },
+                    move || async move {
+                        let _ = cleanup_started_tx.send(());
+                        let _ = cleanup_finish_rx.await;
+                    },
+                )
+                .await
+                .unwrap_err()
+            }
+        });
+
+        cleanup_started_rx.await.unwrap();
+
+        let lines = ui::render_plain_lines(&build_deploy_tree(&controller.snapshot()));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.ends_with("Deploying to prod-a…"))
+        );
+        assert!(lines.iter().any(|line| line.contains("Starting…")));
+        assert!(!lines.iter().any(|line| line == "  ✘ Start failed"));
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line == "    Warm instance startup failed")
+        );
+
+        let _ = cleanup_finish_tx.send(());
+        let err = task.await.unwrap();
+        assert_eq!(err.to_string(), "Warm instance startup failed");
+
+        let lines = ui::render_plain_lines(&build_deploy_tree(&controller.snapshot()));
+        assert!(lines.iter().any(|line| line == "✘ Deploy to prod-a failed"));
+        assert!(lines.iter().any(|line| line == "  ✘ Start failed"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "    Warm instance startup failed")
+        );
+    }
+
+    #[test]
+    fn deploy_task_tree_can_append_error_summary_line() {
+        let controller =
+            DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
+        controller.fail_preflight_check("prod-a", "SSH protocol error");
+        controller.set_error_summary("Deployed to 0/1 servers".to_string());
+
+        let lines = ui::render_plain_lines(&build_deploy_tree(&controller.snapshot()));
+        assert_eq!(
+            lines.get(lines.len().saturating_sub(2)),
+            Some(&String::new())
+        );
+        assert_eq!(lines.last(), Some(&"Deployed to 0/1 servers".to_string()));
+    }
+
+    #[test]
+    fn deploy_task_tree_build_failure_aborts_deploy_work() {
+        let controller =
+            DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
+
+        controller.mark_deploy_step_running("prod-a", "connecting");
+        controller.fail_build_step("shared target", "build-artifact", "Local build failed");
+        controller.fail_build_target("shared target", "Local build failed");
+        controller.warn_pending_build_children("shared target", "Skipped");
+        controller.abort_incomplete("Aborted");
+
+        let snapshot = controller.snapshot();
+        let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
+
+        assert!(lines.iter().any(|line| line == "✘ Building"));
+        assert!(lines.iter().any(|line| line == "  Local build failed"));
+        // Connecting was running, gets cancelled by abort
+        assert!(lines.iter().any(|line| line == "  ⊘ Connecting…"));
+        assert!(lines.iter().any(|line| line == "  ⊘ Uploading…"));
+        assert!(lines.iter().any(|line| line == "  ⊘ Preparing…"));
+        assert!(lines.iter().any(|line| line == "  ⊘ Starting…"));
+    }
+
+    #[test]
+    fn deploy_task_tree_omits_startup_summary_lines() {
+        let controller =
+            DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
+        let snapshot = controller.snapshot();
+        let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
+
+        assert!(!lines.iter().any(|line| line.contains("https://")));
+        assert!(!lines.iter().any(|line| line.contains("App")));
+        assert!(!lines.iter().any(|line| line.contains("Env")));
+    }
+
+    #[test]
+    fn deploy_summary_lines_support_non_url_primary_field() {
+        let lines = format_deploy_summary_lines("App", "bun", &["app.tako.test".to_string()]);
+
+        assert_eq!(
+            lines,
+            vec![
+                "App        bun".to_string(),
+                "URL        https://app.tako.test".to_string(),
+            ]
+        );
     }
 
     #[test]
@@ -3918,14 +5260,6 @@ route = "app.example.com"
         assert!(should_use_per_server_spinners(1, true));
         assert!(!should_use_per_server_spinners(2, true));
         assert!(!should_use_per_server_spinners(1, false));
-    }
-
-    #[test]
-    fn tako_process_probe_command_uses_busybox_safe_pgrep_f_pattern() {
-        let cmd = tako_process_probe_command();
-        assert!(cmd.contains("pgrep -f"));
-        assert!(cmd.contains("(^|/)tako-server([[:space:]]|$)"));
-        assert!(!cmd.contains("pgrep -x"));
     }
 
     #[test]
@@ -4055,6 +5389,16 @@ route = "app.example.com"
     }
 
     #[test]
+    fn extract_server_error_message_strips_leading_deploy_failed_prefix() {
+        let response =
+            r#"{"status":"error","message":"Deploy failed: Warm instance startup failed"}"#;
+        assert_eq!(
+            extract_server_error_message(response),
+            "Warm instance startup failed"
+        );
+    }
+
+    #[test]
     fn deploy_error_message_helpers_include_expected_text() {
         let no_servers = format_no_servers_for_env_error("production");
         assert!(no_servers.contains("No servers configured for environment 'production'"));
@@ -4066,27 +5410,8 @@ route = "app.example.com"
         let missing_server = format_server_not_found_error("prod");
         assert!(missing_server.contains("Server 'prod' not found"));
 
-        let not_running = format_tako_not_running_error(&["a".to_string(), "b".to_string()]);
-        assert!(not_running.contains("a, b"));
-        assert!(not_running.contains("not running"));
-
-        let missing = format_tako_missing_error(&["x".to_string()]);
-        assert!(missing.contains("not installed"));
-        assert!(missing.contains("x"));
-
         let partial = format_partial_failure_error(2);
         assert_eq!(partial, "2 server(s) failed");
-    }
-
-    #[test]
-    fn required_remote_free_bytes_adds_unpack_multiplier_and_headroom() {
-        let archive_size = 10 * 1024 * 1024;
-        let required = required_remote_free_bytes(archive_size);
-        assert_eq!(
-            required,
-            archive_size.saturating_mul(3) + DEPLOY_DISK_SPACE_HEADROOM_BYTES
-        );
-        assert!(required > archive_size);
     }
 
     #[test]
@@ -4103,16 +5428,8 @@ route = "app.example.com"
     }
 
     #[test]
-    fn format_insufficient_disk_space_error_includes_required_available_and_archive() {
-        let msg = format_insufficient_disk_space_error(
-            15 * 1024 * 1024,
-            8 * 1024 * 1024,
-            3 * 1024 * 1024,
-        );
-        assert!(msg.contains("Insufficient disk space under /opt/tako"));
-        assert!(msg.contains("Archive size"));
-        assert!(msg.contains("Required free space"));
-        assert!(msg.contains("Available free space"));
+    fn deploy_min_free_disk_is_256mb() {
+        assert_eq!(DEPLOY_MIN_FREE_DISK_BYTES, 256 * 1024 * 1024);
     }
 
     #[test]
@@ -4317,6 +5634,64 @@ route = "app.example.com"
     }
 
     #[test]
+    fn build_artifact_include_patterns_collects_from_stages_with_cwd() {
+        let mut config = TakoToml::default();
+        config.build_stages = vec![
+            crate::config::BuildStage {
+                name: Some("rust".to_string()),
+                cwd: Some("rust-service".to_string()),
+                install: None,
+                run: "cargo build --release".to_string(),
+                include: vec!["target/release/my-service".to_string()],
+            },
+            crate::config::BuildStage {
+                name: Some("frontend".to_string()),
+                cwd: Some("apps/web".to_string()),
+                install: None,
+                run: "bun run build".to_string(),
+                include: vec!["dist/**".to_string(), "package.json".to_string()],
+            },
+        ];
+        let includes = build_artifact_include_patterns(&config);
+        assert_eq!(
+            includes,
+            vec![
+                "rust-service/target/release/my-service".to_string(),
+                "apps/web/dist/**".to_string(),
+                "apps/web/package.json".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn build_artifact_include_patterns_stage_without_cwd() {
+        let mut config = TakoToml::default();
+        config.build_stages = vec![crate::config::BuildStage {
+            name: None,
+            cwd: None,
+            install: None,
+            run: "bun run build".to_string(),
+            include: vec!["dist/**".to_string()],
+        }];
+        let includes = build_artifact_include_patterns(&config);
+        assert_eq!(includes, vec!["dist/**".to_string()]);
+    }
+
+    #[test]
+    fn build_artifact_include_patterns_stages_without_include_defaults_to_all() {
+        let mut config = TakoToml::default();
+        config.build_stages = vec![crate::config::BuildStage {
+            name: None,
+            cwd: None,
+            install: None,
+            run: "bun run build".to_string(),
+            include: Vec::new(),
+        }];
+        let includes = build_artifact_include_patterns(&config);
+        assert_eq!(includes, vec!["**/*".to_string()]);
+    }
+
+    #[test]
     fn should_report_artifact_include_patterns_hides_default_wildcard() {
         assert!(!should_report_artifact_include_patterns(&[
             "**/*".to_string()
@@ -4342,12 +5717,14 @@ route = "app.example.com"
                 cwd: None,
                 install: None,
                 run: "bun run build".to_string(),
+                include: Vec::new(),
             },
             crate::config::BuildStage {
                 name: Some("frontend-assets".to_string()),
                 cwd: Some("frontend".to_string()),
                 install: None,
                 run: "bun run build".to_string(),
+                include: Vec::new(),
             },
         ];
         assert_eq!(
@@ -4370,6 +5747,7 @@ route = "app.example.com"
                 cwd: None,
                 install: None,
                 run: "printf 'stage-1-run\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string(),
+                include: Vec::new(),
             },
             crate::config::BuildStage {
                 name: Some("frontend-assets".to_string()),
@@ -4378,6 +5756,7 @@ route = "app.example.com"
                     "printf 'stage-2-install\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string(),
                 ),
                 run: "printf 'stage-2-run\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string(),
+                include: Vec::new(),
             },
         ];
 
@@ -4411,6 +5790,7 @@ route = "app.example.com"
             cwd: Some("frontend".to_string()),
             install: None,
             run: "true".to_string(),
+            include: Vec::new(),
         }];
 
         let err = run_local_build(&workspace, &Default::default(), &stages, &[]).unwrap_err();

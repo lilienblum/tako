@@ -110,7 +110,7 @@ async fn run_async(
         let description = format_delete_confirm_hint(&target.app, &target.server_name);
         let confirmed = output::confirm_with_description(&prompt, Some(&description), false)?;
         if !confirmed {
-            return Err("Delete cancelled.".into());
+            return Err(output::operation_cancelled_error().into());
         }
     }
 

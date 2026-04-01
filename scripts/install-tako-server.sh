@@ -445,69 +445,6 @@ install_sqlite_runtime() {
   fi
 }
 
-install_namespace_runtime() {
-  missing=0
-  need_cmd ip || missing=1
-  need_cmd iptables || missing=1
-  need_cmd sysctl || missing=1
-  if [ "$missing" -eq 0 ]; then
-    return
-  fi
-
-  if need_cmd apt-get; then
-    apt-get update -y
-    pkgs=""
-    need_cmd ip || pkgs="$pkgs iproute2"
-    need_cmd iptables || pkgs="$pkgs iptables"
-    need_cmd sysctl || pkgs="$pkgs procps"
-    # shellcheck disable=SC2086
-    apt-get install -y $pkgs
-  elif need_cmd dnf; then
-    pkgs=""
-    need_cmd ip || pkgs="$pkgs iproute"
-    need_cmd iptables || pkgs="$pkgs iptables"
-    need_cmd sysctl || pkgs="$pkgs procps-ng"
-    # shellcheck disable=SC2086
-    dnf install -y $pkgs
-  elif need_cmd yum; then
-    pkgs=""
-    need_cmd ip || pkgs="$pkgs iproute"
-    need_cmd iptables || pkgs="$pkgs iptables"
-    need_cmd sysctl || pkgs="$pkgs procps-ng"
-    # shellcheck disable=SC2086
-    yum install -y $pkgs
-  elif need_cmd pacman; then
-    pkgs=""
-    need_cmd ip || pkgs="$pkgs iproute2"
-    need_cmd iptables || pkgs="$pkgs iptables"
-    need_cmd sysctl || pkgs="$pkgs procps-ng"
-    # shellcheck disable=SC2086
-    pacman -Sy --noconfirm $pkgs
-  elif need_cmd apk; then
-    pkgs=""
-    need_cmd ip || pkgs="$pkgs iproute2"
-    need_cmd iptables || pkgs="$pkgs iptables"
-    need_cmd sysctl || pkgs="$pkgs procps"
-    # shellcheck disable=SC2086
-    apk add --no-cache $pkgs
-  elif need_cmd zypper; then
-    pkgs=""
-    need_cmd ip || pkgs="$pkgs iproute2"
-    need_cmd iptables || pkgs="$pkgs iptables"
-    need_cmd sysctl || pkgs="$pkgs procps"
-    # shellcheck disable=SC2086
-    zypper --non-interactive install $pkgs
-  else
-    echo "error: unsupported package manager; install iproute/iproute2, iptables, and sysctl/procps manually" >&2
-    exit 1
-  fi
-
-  if ! need_cmd ip || ! need_cmd iptables || ! need_cmd sysctl; then
-    echo "error: missing required namespace networking tools after install (need: ip, iptables, sysctl)" >&2
-    exit 1
-  fi
-}
-
 tako_home_dir() {
   _home=""
   if need_cmd getent; then
@@ -636,7 +573,6 @@ if ! need_cmd which; then
 fi
 ensure_nc
 install_sqlite_runtime
-install_namespace_runtime
 
 arch="$(uname -m)"
 case "$arch" in
@@ -944,10 +880,10 @@ EOF
   chmod 0755 /etc/init.d/tako-server
 }
 
-install_systemd_worker_unit() {
-  cat > /etc/systemd/system/tako-server-worker.service <<EOF
+install_systemd_standby_unit() {
+  cat > /etc/systemd/system/tako-server-standby.service <<EOF
 [Unit]
-Description=Tako Server Worker
+Description=Tako Server Standby
 After=network.target
 
 [Service]
@@ -959,7 +895,7 @@ NoNewPrivileges=true
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=/usr/local/bin/tako-server --worker --socket $TAKO_SOCKET --data-dir $TAKO_HOME --instance-port-offset 1000
+ExecStart=/usr/local/bin/tako-server --standby --socket $TAKO_SOCKET --data-dir $TAKO_HOME --instance-port-offset 1000
 Restart=always
 RestartSec=1
 KillMode=mixed
@@ -974,7 +910,7 @@ EOF
 
 if [ "$SERVICE_MANAGER" = "systemd" ]; then
   install_systemd_service_unit
-  install_systemd_worker_unit
+  install_systemd_standby_unit
 elif [ "$SERVICE_MANAGER" = "openrc" ]; then
   install_openrc_service_script
 fi

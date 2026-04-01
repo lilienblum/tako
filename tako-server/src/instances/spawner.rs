@@ -2,26 +2,27 @@
 
 use super::{
     App, AppConfig, INTERNAL_TOKEN_ENV, INTERNAL_TOKEN_HEADER, Instance, InstanceError,
-    InstanceEvent, InstanceState, UpstreamManager,
+    InstanceEvent, InstanceState,
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
+
+const READY_PREFIX: &str = "TAKO:READY:";
 
 /// Spawns and monitors app instances
 pub struct Spawner {
     /// UID/GID of the `tako-app` user for process isolation when running privileged (Unix only)
     #[cfg(unix)]
     app_user: Option<(u32, u32)>,
-    upstreams: UpstreamManager,
-    server_exe: Option<PathBuf>,
 }
 
 impl Spawner {
@@ -29,8 +30,6 @@ impl Spawner {
         Self {
             #[cfg(unix)]
             app_user: resolve_app_user(),
-            upstreams: UpstreamManager::new(),
-            server_exe: std::env::current_exe().ok(),
         }
     }
 }
@@ -73,30 +72,13 @@ impl Spawner {
             "Spawning instance"
         );
 
-        if instance.endpoint().is_none() {
-            instance.set_upstream(self.upstreams.prepare(&instance.id)?);
-        }
-
         let env = build_instance_env(&config, &instance);
         let extra_args = build_instance_args(&instance);
 
         let app_user = self.app_user;
 
-        let child = match spawn_child_process(
-            &config,
-            &env,
-            &extra_args,
-            app_user,
-            instance.namespace_path().as_deref(),
-            self.server_exe.as_deref(),
-            &config.secrets,
-        ) {
-            Ok(child) => child,
-            Err(error) => {
-                instance.cleanup_upstream();
-                return Err(error.into());
-            }
-        };
+        let child = spawn_child_process(&config, &env, &extra_args, app_user, &config.secrets)
+            .map_err(InstanceError::from)?;
 
         instance.set_process(child);
         instance.set_state(InstanceState::Starting);
@@ -110,21 +92,8 @@ impl Spawner {
             })
             .await;
 
-        // Wait for ready (secrets are already available via fd 3)
-        let health_check_path = config.health_check_path.clone();
-        let health_host = config.health_check_host.clone();
-
-        match timeout(
-            config.startup_timeout,
-            self.wait_for_ready(
-                &health_check_path,
-                &health_host,
-                Duration::from_secs(5),
-                instance.clone(),
-            ),
-        )
-        .await
-        {
+        // Wait for the SDK to signal readiness via stdout (TAKO:READY:<port>).
+        match timeout(config.startup_timeout, wait_for_ready(instance.clone())).await {
             Ok(Ok(())) => {
                 instance.set_state(InstanceState::Healthy);
 
@@ -159,46 +128,6 @@ impl Spawner {
                 instance.set_state(InstanceState::Unhealthy);
                 let _ = instance.kill().await;
                 Err(InstanceError::StartupTimeout)
-            }
-        }
-    }
-
-    /// Wait for instance to become ready
-    async fn wait_for_ready(
-        &self,
-        health_path: &str,
-        health_host: &str,
-        probe_timeout: Duration,
-        instance: Arc<Instance>,
-    ) -> Result<(), InstanceError> {
-        let mut interval = tokio::time::interval(Duration::from_millis(100));
-        let mut attempts = 0;
-
-        loop {
-            interval.tick().await;
-
-            // Check if process is still alive
-            if !instance.is_alive().await {
-                let detail = startup_exit_detail(instance.clone()).await;
-                return Err(InstanceError::HealthCheckFailed(detail));
-            }
-
-            // Try health check
-            if self
-                .probe_health(&instance, health_path, health_host, probe_timeout)
-                .await
-            {
-                instance.set_state(InstanceState::Ready);
-                return Ok(());
-            }
-            tracing::debug!(attempt = attempts, "Health check failed");
-
-            attempts += 1;
-            if attempts > 300 {
-                // 30 seconds with 100ms intervals
-                return Err(InstanceError::HealthCheckFailed(
-                    "Too many failed health checks".to_string(),
-                ));
             }
         }
     }
@@ -246,19 +175,86 @@ impl Spawner {
     }
 }
 
+/// Wait for the SDK to signal readiness via a `TAKO:READY:<port>` line on stdout.
+/// Sets the instance upstream once the port is learned.
+async fn wait_for_ready(instance: Arc<Instance>) -> Result<(), InstanceError> {
+    let stdout = instance
+        .take_stdout()
+        .ok_or_else(|| InstanceError::HealthCheckFailed("no stdout pipe available".to_string()))?;
+    let mut lines = tokio::io::BufReader::new(stdout).lines();
+    let mut startup_output = Vec::new();
+
+    loop {
+        tokio::select! {
+            line = lines.next_line() => {
+                match line {
+                    Ok(Some(line)) => {
+                        if let Some(port_str) = line.strip_prefix(READY_PREFIX) {
+                            let port: u16 = port_str.trim().parse().map_err(|_| {
+                                InstanceError::HealthCheckFailed(
+                                    format!("invalid port in readiness signal: {line}"),
+                                )
+                            })?;
+                            instance.set_port(port);
+                            instance.set_state(InstanceState::Ready);
+                            // Spawn a drain task for remaining stdout
+                            instance.drain_remaining_stdout(lines);
+                            return Ok(());
+                        }
+                        startup_output.push(line);
+                    }
+                    Ok(None) => {
+                        // stdout closed — process exited
+                        let detail = if startup_output.is_empty() {
+                            startup_exit_detail(instance).await
+                        } else {
+                            format!(
+                                "Process exited during startup: {}",
+                                startup_output.join("\n"),
+                            )
+                        };
+                        return Err(InstanceError::HealthCheckFailed(detail));
+                    }
+                    Err(error) => {
+                        return Err(InstanceError::HealthCheckFailed(
+                            format!("failed to read stdout: {error}"),
+                        ));
+                    }
+                }
+            }
+            _ = check_process_alive(&instance) => {
+                let detail = if startup_output.is_empty() {
+                    startup_exit_detail(instance).await
+                } else {
+                    format!(
+                        "Process exited during startup: {}",
+                        startup_output.join("\n"),
+                    )
+                };
+                return Err(InstanceError::HealthCheckFailed(detail));
+            }
+        }
+    }
+}
+
+/// Resolves when the instance process is no longer alive.
+async fn check_process_alive(instance: &Instance) {
+    let mut interval = tokio::time::interval(Duration::from_millis(100));
+    loop {
+        interval.tick().await;
+        if !instance.is_alive().await {
+            return;
+        }
+    }
+}
+
 fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String, String> {
     let mut env = config.env_vars.clone();
 
-    let port = instance
-        .port()
-        .expect("instances must have an upstream endpoint before spawn");
-    env.insert("PORT".to_string(), port.to_string());
-    env.insert(
-        "HOST".to_string(),
-        instance
-            .bind_host()
-            .expect("instances must have an upstream bind host before spawn"),
-    );
+    // PORT=0 tells the SDK to bind to an OS-assigned port and report it back
+    // via the TAKO:READY:<port> stdout protocol.
+    env.insert("PORT".to_string(), "0".to_string());
+    env.insert("HOST".to_string(), "127.0.0.1".to_string());
     env.insert(
         INTERNAL_TOKEN_ENV.to_string(),
         instance.internal_token().to_string(),
@@ -328,41 +324,24 @@ fn create_secrets_pipe(secrets: &HashMap<String, String>) -> std::io::Result<Own
     Ok(read_end)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn build_child_command(
     config: &AppConfig,
     env: &HashMap<String, String>,
     extra_args: &[String],
     app_user: Option<(u32, u32)>,
     use_app_user: bool,
-    namespace_path: Option<&Path>,
-    server_exe: Option<&Path>,
     secrets_fd: Option<RawFd>,
 ) -> std::io::Result<Command> {
     // Resolve the binary using the app's env PATH (not the server's PATH).
     let binary = resolve_binary_from_env(&config.command[0], env);
-    let mut child_cmd = if let Some(namespace_path) = namespace_path {
-        build_namespaced_child_command(
-            server_exe,
-            namespace_path,
-            &binary,
-            &config.command[1..],
-            extra_args,
-            app_user,
-            use_app_user,
-        )?
-    } else {
-        let mut child_cmd = Command::new(&binary);
-        child_cmd.args(&config.command[1..]).args(extra_args);
+    let mut child_cmd = Command::new(&binary);
+    child_cmd.args(&config.command[1..]).args(extra_args);
 
-        #[cfg(unix)]
-        if use_app_user && let Some((uid, gid)) = app_user {
-            child_cmd.uid(uid);
-            child_cmd.gid(gid);
-        }
-
-        child_cmd
-    };
+    #[cfg(unix)]
+    if use_app_user && let Some((uid, gid)) = app_user {
+        child_cmd.uid(uid);
+        child_cmd.gid(gid);
+    }
 
     child_cmd
         .current_dir(&config.path)
@@ -396,45 +375,6 @@ fn build_child_command(
     Ok(child_cmd)
 }
 
-fn build_namespaced_child_command(
-    server_exe: Option<&Path>,
-    namespace_path: &Path,
-    binary: &str,
-    command_args: &[String],
-    extra_args: &[String],
-    app_user: Option<(u32, u32)>,
-    use_app_user: bool,
-) -> std::io::Result<Command> {
-    let Some(server_exe) = server_exe else {
-        return Err(std::io::Error::other(
-            "failed to resolve tako-server path for namespace execution",
-        ));
-    };
-
-    let mut child_cmd = Command::new(server_exe);
-    child_cmd
-        .arg("--exec-in-netns")
-        .arg("--netns")
-        .arg(namespace_path)
-        .arg("--binary")
-        .arg(binary);
-
-    if use_app_user && let Some((uid, gid)) = app_user {
-        child_cmd.arg("--uid").arg(uid.to_string());
-        child_cmd.arg("--gid").arg(gid.to_string());
-    }
-
-    child_cmd.arg("--");
-    for arg in command_args {
-        child_cmd.arg(arg);
-    }
-    for arg in extra_args {
-        child_cmd.arg(arg);
-    }
-
-    Ok(child_cmd)
-}
-
 fn should_retry_spawn_without_app_user(
     error: &std::io::Error,
     app_user: Option<(u32, u32)>,
@@ -442,19 +382,11 @@ fn should_retry_spawn_without_app_user(
     app_user.is_some() && error.kind() == std::io::ErrorKind::PermissionDenied
 }
 
-fn reserve_loopback_tcp_port() -> std::io::Result<(u16, std::net::TcpListener)> {
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
-    let port = listener.local_addr()?.port();
-    Ok((port, listener))
-}
-
 fn spawn_child_process(
     config: &AppConfig,
     env: &HashMap<String, String>,
     extra_args: &[String],
     app_user: Option<(u32, u32)>,
-    namespace_path: Option<&Path>,
-    server_exe: Option<&Path>,
     secrets: &HashMap<String, String>,
 ) -> std::io::Result<tokio::process::Child> {
     // Create a pipe with secrets JSON for the child to read on fd 3.
@@ -470,16 +402,7 @@ fn spawn_child_process(
     #[cfg(not(unix))]
     let raw_fd = None;
 
-    let mut child_cmd = build_child_command(
-        config,
-        env,
-        extra_args,
-        app_user,
-        true,
-        namespace_path,
-        server_exe,
-        raw_fd,
-    )?;
+    let mut child_cmd = build_child_command(config, env, extra_args, app_user, true, raw_fd)?;
     match child_cmd.spawn() {
         Ok(child) => Ok(child),
         Err(error) if should_retry_spawn_without_app_user(&error, app_user) => {
@@ -488,16 +411,8 @@ fn spawn_child_process(
                 "Failed to switch to tako-app user; retrying spawn as service user"
             );
             // Pipe is still valid — fork either failed or the child exited before reading.
-            let mut fallback = build_child_command(
-                config,
-                env,
-                extra_args,
-                app_user,
-                false,
-                namespace_path,
-                server_exe,
-                raw_fd,
-            )?;
+            let mut fallback =
+                build_child_command(config, env, extra_args, app_user, false, raw_fd)?;
             fallback.spawn()
         }
         Err(error) => Err(error),
@@ -768,7 +683,7 @@ mod tests {
     }
 
     #[test]
-    fn build_instance_env_sets_port_host_and_internal_token() {
+    fn build_instance_env_sets_port_zero_and_host_loopback() {
         let (instance_tx, _instance_rx) = mpsc::channel(4);
         let app = App::new(
             AppConfig {
@@ -778,10 +693,9 @@ mod tests {
             instance_tx,
         );
         let instance = app.allocate_instance();
-        instance.set_port(48_123);
 
         let env = build_instance_env(&app.config.read().clone(), &instance);
-        assert_eq!(env.get("PORT").map(String::as_str), Some("48123"));
+        assert_eq!(env.get("PORT").map(String::as_str), Some("0"));
         assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
         assert_eq!(
             env.get(INTERNAL_TOKEN_ENV).map(String::as_str),
@@ -790,7 +704,7 @@ mod tests {
     }
 
     #[test]
-    fn build_instance_env_overwrites_user_host_with_runtime_bind_host() {
+    fn build_instance_env_overwrites_user_host_with_loopback() {
         let (instance_tx, _instance_rx) = mpsc::channel(4);
         let app = App::new(
             AppConfig {
@@ -801,7 +715,6 @@ mod tests {
             instance_tx,
         );
         let instance = app.allocate_instance();
-        instance.set_port(48_123);
 
         let env = build_instance_env(&app.config.read().clone(), &instance);
         assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
@@ -819,7 +732,6 @@ mod tests {
             instance_tx,
         );
         let instance = app.allocate_instance();
-        instance.set_port(48_123);
 
         let args = build_instance_args(&instance);
         assert!(!args.contains(&"--socket".to_string()));

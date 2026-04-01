@@ -202,7 +202,7 @@ async fn remove_secret(
         )?;
 
         if !confirm {
-            output::warning("Cancelled.");
+            output::operation_cancelled();
             return Ok(());
         }
 
@@ -223,7 +223,7 @@ async fn remove_secret(
         )?;
 
         if !confirm {
-            output::warning("Cancelled.");
+            output::operation_cancelled();
             return Ok(());
         }
 

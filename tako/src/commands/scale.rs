@@ -109,9 +109,9 @@ async fn run_async(
                     "{server_name}: {} instance(s)",
                     scale_result.instances
                 ));
-                if scale_result.worker_limited {
+                if scale_result.standby_limited {
                     output::warning(&format!(
-                        "{server_name}: worker mode limited scale to {} instance(s)",
+                        "{server_name}: standby mode limited scale to {} instance(s)",
                         scale_result.instances
                     ));
                 }
@@ -245,7 +245,7 @@ fn resolve_scale_server_names(
 #[derive(Debug)]
 struct ScaleResult {
     instances: u8,
-    worker_limited: bool,
+    standby_limited: bool,
 }
 
 async fn scale_server(
@@ -275,15 +275,15 @@ async fn scale_server(
                     .and_then(|value| value.as_u64())
                     .and_then(|value| u8::try_from(value).ok())
                     .unwrap_or(instances),
-                worker_limited: data
-                    .get("worker_limited")
+                standby_limited: data
+                    .get("standby_limited")
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false),
             };
             tracing::debug!(
-                "Scale response: {} instance(s), worker_limited={}",
+                "Scale response: {} instance(s), standby_limited={}",
                 result.instances,
-                result.worker_limited
+                result.standby_limited
             );
             Ok(result)
         }

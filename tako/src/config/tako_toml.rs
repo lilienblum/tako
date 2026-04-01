@@ -100,6 +100,11 @@ pub struct BuildStage {
 
     /// Required stage command.
     pub run: String,
+
+    /// File globs to include in the deploy artifact, relative to this stage's `cwd`.
+    /// Stages without `include` are intermediate (contribute nothing to the artifact).
+    #[serde(default)]
+    pub include: Vec<String>,
 }
 
 /// Environment configuration from [envs.*]
@@ -305,7 +310,7 @@ impl Config {
         for exclude in &self.build.exclude {
             validate_build_glob(exclude, "build.exclude")?;
         }
-        // Mutual exclusion: build.run (non-empty) and build_stages cannot both be set
+        // Mutual exclusion: [build] and [[build_stages]] cannot both be set
         let has_build_run = self
             .build
             .run
@@ -317,8 +322,19 @@ impl Config {
                     .to_string(),
             ));
         }
+        if !self.build_stages.is_empty()
+            && (!self.build.include.is_empty() || !self.build.exclude.is_empty())
+        {
+            return Err(ConfigError::Validation(
+                "Cannot use [build] include/exclude with [[build_stages]]; use per-stage include instead."
+                    .to_string(),
+            ));
+        }
         for (index, stage) in self.build_stages.iter().enumerate() {
             validate_build_stage(stage, index)?;
+            for include in &stage.include {
+                validate_build_glob(include, &format!("build_stages[{index}].include"))?;
+            }
         }
 
         // Validate each environment
@@ -643,7 +659,7 @@ fn parse_build_stages(raw: &toml::Value) -> Result<Vec<BuildStage>> {
         };
 
         for key in stage_table.keys() {
-            if !matches!(key.as_str(), "name" | "cwd" | "install" | "run") {
+            if !matches!(key.as_str(), "name" | "cwd" | "install" | "run" | "include") {
                 return Err(ConfigError::Validation(format!(
                     "Unknown key 'build_stages[{index}].{key}'"
                 )));
@@ -654,12 +670,15 @@ fn parse_build_stages(raw: &toml::Value) -> Result<Vec<BuildStage>> {
         let cwd = parse_build_stage_optional_string(stage_table, index, "cwd")?;
         let install = parse_build_stage_optional_string(stage_table, index, "install")?;
         let run = parse_build_stage_required_string(stage_table, index, "run")?;
+        let include =
+            parse_build_stage_string_array(stage_table, index, "include")?.unwrap_or_default();
 
         parsed.push(BuildStage {
             name,
             cwd,
             install,
             run,
+            include,
         });
     }
 
@@ -710,6 +729,31 @@ fn parse_build_stage_required_string(
         )));
     }
     Ok(trimmed.to_string())
+}
+
+fn parse_build_stage_string_array(
+    stage_table: &toml::value::Table,
+    index: usize,
+    key: &str,
+) -> Result<Option<Vec<String>>> {
+    let Some(value) = stage_table.get(key) else {
+        return Ok(None);
+    };
+    let Some(arr) = value.as_array() else {
+        return Err(ConfigError::Validation(format!(
+            "'build_stages[{index}].{key}' must be an array of strings"
+        )));
+    };
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let Some(s) = item.as_str() else {
+            return Err(ConfigError::Validation(format!(
+                "'build_stages[{index}].{key}' must be an array of strings"
+            )));
+        };
+        out.push(s.to_string());
+    }
+    Ok(Some(out))
 }
 
 fn parse_string_array(raw: &toml::Value, key: &str) -> Result<Option<Vec<String>>> {
@@ -1062,6 +1106,7 @@ run = "bun run build"
         assert_eq!(config.build_stages[0].cwd, None);
         assert_eq!(config.build_stages[0].install, None);
         assert_eq!(config.build_stages[0].run, "bun run build");
+        assert!(config.build_stages[0].include.is_empty());
         assert_eq!(
             config.build_stages[1],
             BuildStage {
@@ -1069,8 +1114,91 @@ run = "bun run build"
                 cwd: Some("frontend".to_string()),
                 install: Some("bun install".to_string()),
                 run: "bun run build".to_string(),
+                include: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn test_parse_build_stages_with_include() {
+        let toml = r#"
+[[build_stages]]
+name = "rust-service"
+cwd = "rust-service"
+run = "cargo build --release"
+include = ["target/release/my-service"]
+
+[[build_stages]]
+name = "frontend"
+cwd = "apps/web"
+install = "bun install"
+run = "bun run build"
+include = ["dist/**", "package.json"]
+"#;
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(config.build_stages.len(), 2);
+        assert_eq!(
+            config.build_stages[0].include,
+            vec!["target/release/my-service".to_string()]
+        );
+        assert_eq!(
+            config.build_stages[1].include,
+            vec!["dist/**".to_string(), "package.json".to_string()]
+        );
+    }
+
+    #[test]
+    fn test_build_stages_include_rejects_absolute_paths() {
+        let toml = r#"
+[[build_stages]]
+run = "cargo build"
+include = ["/tmp/out/**"]
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("build_stages[0].include entry '/tmp/out/**' must be relative")
+        );
+    }
+
+    #[test]
+    fn test_build_stages_include_rejects_parent_traversal() {
+        let toml = r#"
+[[build_stages]]
+run = "cargo build"
+include = ["../secret/**"]
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("build_stages[0].include entry '../secret/**' must not contain '..'")
+        );
+    }
+
+    #[test]
+    fn test_build_include_mutually_exclusive_with_stages() {
+        let toml = r#"
+[build]
+include = ["dist/**"]
+
+[[build_stages]]
+run = "bun run build"
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("per-stage include"));
+    }
+
+    #[test]
+    fn test_build_exclude_mutually_exclusive_with_stages() {
+        let toml = r#"
+[build]
+exclude = ["**/*.map"]
+
+[[build_stages]]
+run = "bun run build"
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(err.to_string().contains("per-stage include"));
     }
 
     #[test]

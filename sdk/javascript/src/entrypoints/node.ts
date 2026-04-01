@@ -63,26 +63,32 @@ async function writeResponse(webResponse: Response, res: ServerResponse): Promis
   });
 }
 
-void run((handleRequest) => {
-  const server = createServer(async (req, res) => {
-    try {
-      const request = incomingMessageToRequest(req);
-      const response = await handleRequest(request);
-      await writeResponse(response, res);
-    } catch (err) {
-      console.error("Error handling request:", err);
-      if (!res.headersSent) {
-        res.writeHead(500, { "Content-Type": "application/json" });
-      }
-      res.end(JSON.stringify({ error: "Internal Server Error" }));
-    }
-  });
+void run(
+  (handleRequest) =>
+    new Promise<number>((resolve) => {
+      const server = createServer(async (req, res) => {
+        try {
+          const request = incomingMessageToRequest(req);
+          const response = await handleRequest(request);
+          await writeResponse(response, res);
+        } catch (err) {
+          console.error("Error handling request:", err);
+          if (!res.headersSent) {
+            res.writeHead(500, { "Content-Type": "application/json" });
+          }
+          res.end(JSON.stringify({ error: "Internal Server Error" }));
+        }
+      });
 
-  server.listen(port, host, () => {
-    console.log(`Application listening on http://${host}:${port}`);
-  });
+      server.listen(port, host, () => {
+        const addr = server.address();
+        const actualPort = typeof addr === "object" && addr ? addr.port : port;
+        console.log(`Application listening on http://${host}:${actualPort}`);
+        resolve(actualPort);
+      });
 
-  process.on("SIGTERM", () => {
-    setDraining();
-  });
-});
+      process.on("SIGTERM", () => {
+        setDraining();
+      });
+    }),
+);

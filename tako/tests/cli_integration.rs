@@ -408,6 +408,46 @@ mod init {
     }
 
     #[test]
+    fn test_init_existing_config_in_non_interactive_mode_reports_cancellation() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().to_path_buf();
+
+        fs::write(
+            project_dir.join("package.json"),
+            r#"{"name": "existing-config-app", "version": "1.0.0"}"#,
+        )
+        .unwrap();
+        fs::write(
+            project_dir.join("index.ts"),
+            r#"export default { fetch() { return new Response("ok"); } };"#,
+        )
+        .unwrap();
+
+        let existing = "name = \"existing\"\n";
+        let config_path = project_dir.join("tako.toml");
+        fs::write(&config_path, existing).unwrap();
+
+        let output = run_tako(&["init"], &project_dir);
+
+        assert!(
+            output.status.success(),
+            "tako init should exit successfully when overwrite is cancelled: {}",
+            stderr_str(&output)
+        );
+
+        let stderr = stderr_str(&output);
+        assert!(
+            stderr.contains("Operation cancelled"),
+            "expected shared cancellation message: {stderr}"
+        );
+        assert_eq!(
+            fs::read_to_string(config_path).unwrap(),
+            existing,
+            "existing config should remain unchanged"
+        );
+    }
+
+    #[test]
     fn test_init_with_bun_detection() {
         let temp = TempDir::new().unwrap();
         let project_dir = temp.path().to_path_buf();
@@ -743,6 +783,70 @@ mod server_commands {
                 || stderr.contains("provide a server name"),
             "expected helpful error for non-interactive rm without name: {}",
             stderr
+        );
+    }
+
+    #[test]
+    fn servers_rm_named_non_interactive_uses_operation_cancelled_message() {
+        let temp = TempDir::new().unwrap();
+        let project_dir = temp.path().join("project");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let home = temp.path().join("home");
+        let tako_home = temp.path().join("tako-home");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&tako_home).unwrap();
+
+        let add = run_tako_with_env(
+            &[
+                "servers",
+                "add",
+                "10.0.0.4",
+                "--name",
+                "prod-2",
+                "--no-test",
+            ],
+            &project_dir,
+            &home,
+            &tako_home,
+        );
+        assert!(
+            add.status.success(),
+            "add should succeed: {}{}",
+            stdout_str(&add),
+            stderr_str(&add)
+        );
+
+        let rm = run_tako_with_env(
+            &["servers", "rm", "prod-2"],
+            &project_dir,
+            &home,
+            &tako_home,
+        );
+        assert!(
+            rm.status.success(),
+            "rm cancellation should preserve current success behavior: {}{}",
+            stdout_str(&rm),
+            stderr_str(&rm)
+        );
+
+        let stderr = stderr_str(&rm);
+        assert!(
+            stderr.contains("Operation cancelled"),
+            "expected shared cancellation message: {stderr}"
+        );
+
+        let ls = run_tako_with_env(&["servers", "ls"], &project_dir, &home, &tako_home);
+        assert!(
+            ls.status.success(),
+            "servers ls should succeed after cancellation: {}{}",
+            stdout_str(&ls),
+            stderr_str(&ls)
+        );
+        let servers_output = stderr_str(&ls);
+        assert!(
+            servers_output.contains("prod-2"),
+            "server should remain after cancellation: {servers_output}"
         );
     }
 
@@ -1875,6 +1979,10 @@ mod implode_commands {
         assert!(
             stderr.contains(&tako_home.display().to_string()),
             "expected TAKO_HOME in target list, got: {stderr}"
+        );
+        assert!(
+            stderr.contains("Operation cancelled"),
+            "expected shared cancellation message, got: {stderr}"
         );
         // Confirmation defaulted to no — nothing should be removed
         assert!(

@@ -4,6 +4,7 @@ mod dev_server_client;
 mod output;
 mod paths;
 pub mod shell;
+mod ui;
 
 // Internal modules (moved from tako-core)
 pub mod app;
@@ -28,6 +29,26 @@ fn main() {
     crate::output::set_ci(cli.ci);
     crate::output::set_dry_run(cli.dry_run);
 
+    // Hide cursor for the entire process lifetime when running in interactive
+    // pretty mode. Individual prompts (text fields) temporarily show it while
+    // the user is typing. The Ctrl-C handler and exit paths restore it.
+    if crate::output::is_pretty() && crate::output::is_interactive() {
+        crate::output::set_cursor_globally_hidden();
+    }
+
+    ctrlc::set_handler(|| {
+        crate::output::restore_cursor();
+        crate::output::clear_interrupt_output();
+        let handled_in_ui = crate::ui::interrupt_with_message(crate::output::OPERATION_CANCELLED);
+        let finalized_ui = crate::ui::finalize_active_session();
+        if !handled_in_ui && !finalized_ui {
+            crate::ui::cleanup_on_interrupt();
+            crate::output::operation_cancelled();
+        }
+        std::process::exit(130);
+    })
+    .expect("failed to install Ctrl-C handler");
+
     // Tracing subscriber: only installed in verbose/CI mode.
     // In normal mode, tracing calls are no-ops (no subscriber).
     if cli.verbose || cli.ci {
@@ -48,13 +69,22 @@ fn main() {
 
     // Run the command
     if let Err(e) = cli.run() {
-        // Ctrl+C / ESC — exit silently
-        if let Some(io_err) = e.downcast_ref::<std::io::Error>()
-            && io_err.kind() == std::io::ErrorKind::Interrupted
-        {
+        crate::output::restore_cursor();
+        if crate::output::is_operation_cancelled_error(e.as_ref()) {
+            let handled_in_ui =
+                crate::ui::interrupt_with_message(crate::output::OPERATION_CANCELLED);
+            let finalized_ui = crate::ui::finalize_active_session();
+            if !handled_in_ui && !finalized_ui {
+                crate::output::operation_cancelled();
+            }
             std::process::exit(130);
         }
-        crate::output::error_stderr(&e.to_string());
+        let _ = crate::ui::finalize_active_session();
+        if !crate::output::is_silent_exit_error(e.as_ref()) {
+            crate::output::error_stderr(&e.to_string());
+        }
         std::process::exit(1);
     }
+
+    crate::output::restore_cursor();
 }

@@ -43,17 +43,7 @@ use crate::tls::{
 };
 use clap::Parser;
 use std::collections::HashMap;
-#[cfg(target_os = "linux")]
-use std::ffi::OsString;
-#[cfg(target_os = "linux")]
-use std::io;
-#[cfg(target_os = "linux")]
-use std::os::fd::AsRawFd;
-#[cfg(target_os = "linux")]
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "linux")]
-use std::process::Command as StdCommand;
 use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 use std::time::Duration;
@@ -85,117 +75,6 @@ fn server_version() -> &'static str {
     &VERSION
 }
 
-fn maybe_run_exec_in_netns_mode() -> Result<bool, Box<dyn std::error::Error>> {
-    #[cfg(target_os = "linux")]
-    {
-        let mut args = std::env::args_os();
-        let _ = args.next();
-        let Some(first) = args.next() else {
-            return Ok(false);
-        };
-        if first != "--exec-in-netns" {
-            return Ok(false);
-        }
-        run_exec_in_netns_mode(args)?;
-        return Ok(true);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        Ok(false)
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn run_exec_in_netns_mode(
-    mut args: impl Iterator<Item = OsString>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let mut netns_path = None;
-    let mut binary = None;
-    let mut uid = None;
-    let mut gid = None;
-    let mut passthrough = false;
-    let mut binary_args = Vec::new();
-
-    while let Some(arg) = args.next() {
-        if passthrough {
-            binary_args.push(arg);
-            continue;
-        }
-        match arg.to_string_lossy().as_ref() {
-            "--netns" => netns_path = Some(PathBuf::from(next_required_arg(&mut args, "--netns")?)),
-            "--binary" => binary = Some(next_required_arg(&mut args, "--binary")?),
-            "--uid" => {
-                uid = Some(parse_u32_arg(
-                    next_required_arg(&mut args, "--uid")?,
-                    "--uid",
-                )?)
-            }
-            "--gid" => {
-                gid = Some(parse_u32_arg(
-                    next_required_arg(&mut args, "--gid")?,
-                    "--gid",
-                )?)
-            }
-            "--" => passthrough = true,
-            other => {
-                return Err(format!("unknown --exec-in-netns argument: {other}").into());
-            }
-        }
-    }
-
-    let netns_path = netns_path.ok_or_else(|| "missing --netns for --exec-in-netns".to_string())?;
-    let binary = binary.ok_or_else(|| "missing --binary for --exec-in-netns".to_string())?;
-
-    let namespace = std::fs::File::open(&netns_path)
-        .map_err(|error| format!("open namespace {}: {error}", netns_path.display()))?;
-    // SAFETY: setns is called with a valid file descriptor for a Linux network namespace.
-    let setns_result = unsafe { libc::setns(namespace.as_raw_fd(), libc::CLONE_NEWNET) };
-    if setns_result != 0 {
-        return Err(io::Error::last_os_error().into());
-    }
-
-    if uid.is_some() || gid.is_some() {
-        // SAFETY: clearing supplementary groups before setgid/setuid is required when
-        // dropping privileges from a privileged helper process.
-        if unsafe { libc::setgroups(0, std::ptr::null()) } != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-    }
-    if let Some(gid) = gid {
-        // SAFETY: setgid is safe to call with the requested target gid.
-        if unsafe { libc::setgid(gid) } != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-    }
-    if let Some(uid) = uid {
-        // SAFETY: setuid is safe to call with the requested target uid.
-        if unsafe { libc::setuid(uid) } != 0 {
-            return Err(io::Error::last_os_error().into());
-        }
-    }
-
-    let error = StdCommand::new(binary).args(binary_args).exec();
-    Err(Box::new(error))
-}
-
-#[cfg(target_os = "linux")]
-fn next_required_arg(
-    args: &mut impl Iterator<Item = OsString>,
-    flag: &str,
-) -> Result<OsString, Box<dyn std::error::Error>> {
-    args.next()
-        .ok_or_else(|| format!("missing value for {flag}").into())
-}
-
-#[cfg(target_os = "linux")]
-fn parse_u32_arg(value: OsString, flag: &str) -> Result<u32, Box<dyn std::error::Error>> {
-    value
-        .to_string_lossy()
-        .parse::<u32>()
-        .map_err(|error| format!("invalid {flag} value: {error}").into())
-}
-
 /// Tako Server - Application runtime and proxy
 #[derive(Parser)]
 #[command(name = "tako-server")]
@@ -218,10 +97,6 @@ pub struct Args {
     #[arg(long)]
     pub acme_staging: bool,
 
-    /// ACME contact email for Let's Encrypt
-    #[arg(long)]
-    pub acme_email: Option<String>,
-
     /// Data directory for apps and certificates
     #[arg(long)]
     pub data_dir: Option<String>,
@@ -234,12 +109,12 @@ pub struct Args {
     #[arg(long, default_value_t = 12)]
     pub renewal_interval_hours: u64,
 
-    /// Run as a worker: serve traffic with minimal scaling (max 1 instance
+    /// Run as a hot standby: serve traffic with minimal scaling (max 1 instance
     /// per app), skip management socket and ACME. Monitors the primary
     /// server's socket — promotes to full mode if primary is unavailable,
     /// shuts down gracefully when primary comes back.
     #[arg(long)]
-    pub worker: bool,
+    pub standby: bool,
 
     /// Prometheus metrics port (default: 9898, set to 0 to disable)
     #[arg(long, default_value_t = 9898)]
@@ -263,10 +138,9 @@ pub struct ServerRuntimeConfig {
     https_port: u16,
     no_acme: bool,
     acme_staging: bool,
-    acme_email: Option<String>,
     renewal_interval_hours: u64,
     dns_provider: Option<String>,
-    worker: bool,
+    standby: bool,
     metrics_port: Option<u16>,
     server_name: Option<String>,
 }
@@ -281,10 +155,9 @@ impl ServerRuntimeConfig {
             https_port: 443,
             no_acme: false,
             acme_staging: false,
-            acme_email: None,
             renewal_interval_hours: 12,
             dns_provider: None,
-            worker: false,
+            standby: false,
             metrics_port: Some(9898),
             server_name: None,
         }
@@ -300,10 +173,10 @@ impl ServerRuntimeConfig {
             https_port: self.https_port,
             no_acme: self.no_acme,
             acme_staging: self.acme_staging,
-            acme_email: self.acme_email.clone(),
+            acme_email: None,
             renewal_interval_hours: self.renewal_interval_hours,
             dns_provider: self.dns_provider.clone(),
-            worker: self.worker,
+            standby: self.standby,
             metrics_port: self.metrics_port,
             server_name: self.server_name.clone(),
         }
@@ -515,8 +388,8 @@ impl ServerState {
             let app_name = config.deployment_id();
             let routes = persisted.routes.clone();
 
-            // In worker mode, cap scaling to 1 instance to minimize resources.
-            if self.runtime.worker && config.min_instances > 1 {
+            // In standby mode, cap scaling to 1 instance to minimize resources.
+            if self.runtime.standby && config.min_instances > 1 {
                 config.min_instances = 1;
                 config.max_instances = config.max_instances.max(1);
             }
@@ -1002,7 +875,7 @@ impl ServerState {
         };
 
         let previous_config = app.config.read().clone();
-        let effective_instances = if self.runtime.worker {
+        let effective_instances = if self.runtime.standby {
             requested_instances.min(1)
         } else {
             requested_instances
@@ -1085,7 +958,7 @@ impl ServerState {
             "app": app_name,
             "instances": effective_instances,
             "requested_instances": requested_instances,
-            "worker_limited": self.runtime.worker && effective_instances != requested_instances
+            "standby_limited": self.runtime.standby && effective_instances != requested_instances
         }))
     }
 
@@ -1944,6 +1817,8 @@ struct ServerConfigFile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     server_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    acme_email: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     dns: Option<ServerConfigDns>,
 }
 
@@ -1997,10 +1872,6 @@ fn sd_notify_ready() {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if maybe_run_exec_in_netns_mode()? {
-        return Ok(());
-    }
-
     install_rustls_crypto_provider();
 
     // Initialize tracing with a non-blocking writer so log I/O never stalls
@@ -2051,11 +1922,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "/var/lib/tako".to_string()
     });
 
-    let worker = args.worker;
+    let standby = args.standby;
 
     tracing::info!("Tako Server v{}", env!("CARGO_PKG_VERSION"));
-    if worker {
-        tracing::info!("Mode: worker");
+    if standby {
+        tracing::info!("Mode: standby");
     }
     tracing::info!("Socket: {}", socket);
     tracing::info!("HTTP port: {}", args.port);
@@ -2097,8 +1968,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Bind management socket EARLY — before any potentially slow init (ACME, SQLite).
     // This ensures the new process takes over the symlink within milliseconds of
     // starting, so `tako servers upgrade` never times out waiting for the socket.
-    // In worker mode, skip binding — let the primary own the socket.
-    let (_socket_server, socket_listener) = if worker {
+    // In standby mode, skip binding — let the primary own the socket.
+    let (_socket_server, socket_listener) = if standby {
         (None, None)
     } else {
         let server = SocketServer::new(&socket);
@@ -2116,10 +1987,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Always created so the proxy can serve challenge responses and tests can inject tokens.
     let challenge_tokens: ChallengeTokens = Arc::new(parking_lot::RwLock::new(HashMap::new()));
 
-    // Create ACME client if enabled (skip in worker mode)
-    let acme_client = if args.no_acme || worker {
-        if worker {
-            tracing::info!("ACME disabled (worker mode)");
+    // Create ACME client if enabled (skip in standby mode)
+    let acme_client = if args.no_acme || standby {
+        if standby {
+            tracing::info!("ACME disabled (standby mode)");
         } else {
             tracing::info!("ACME disabled, using manual certificate management");
         }
@@ -2127,7 +1998,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         let acme_config = AcmeConfig {
             staging: args.acme_staging,
-            email: args.acme_email.clone(),
+            email: server_config.acme_email.clone(),
             account_dir: acme_dir,
             dns_provider: config_dns_provider.clone(),
             data_dir: data_dir.clone(),
@@ -2169,10 +2040,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         https_port: args.tls_port,
         no_acme: args.no_acme,
         acme_staging: args.acme_staging,
-        acme_email: args.acme_email.clone(),
         renewal_interval_hours: args.renewal_interval_hours,
         dns_provider: config_dns_provider.clone(),
-        worker,
+        standby,
         metrics_port: if args.metrics_port == 0 {
             None
         } else {
@@ -2315,7 +2185,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Start management socket accept loop (listener was bound early, before ACME/SQLite init).
-    // In worker mode, no socket is bound — the primary owns it.
+    // In standby mode, no socket is bound — the primary owns it.
     if let Some(socket_listener) = socket_listener {
         let socket_state = state.clone();
         rt.spawn(async move {
@@ -2330,15 +2200,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    // In worker mode, monitor the primary's management socket.
+    // In standby mode, monitor the primary's management socket.
     // - If primary goes down: promote to full mode (bind socket, init ACME).
     // - If primary comes back (after we promoted): gracefully shut down.
-    if worker {
+    if standby {
         let socket_path = socket.clone();
         let promote_state = state.clone();
         let promote_cert_manager = cert_manager.clone();
         let promote_args_acme_staging = args.acme_staging;
-        let promote_args_acme_email = args.acme_email.clone();
+        let promote_acme_email = server_config.acme_email.clone();
         let promote_dns_provider = config_dns_provider;
         let promote_args_no_acme = args.no_acme;
         let promote_renewal_hours = args.renewal_interval_hours;
@@ -2360,7 +2230,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     PrimaryStatus::Alive => {
                         if promoted {
                             // Primary came back — we should shut down gracefully.
-                            tracing::info!("Primary server is back — worker shutting down");
+                            tracing::info!("Primary server is back — standby shutting down");
                             #[cfg(unix)]
                             unsafe {
                                 libc::kill(libc::getpid(), libc::SIGTERM);
@@ -2384,7 +2254,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         );
 
                         if consecutive_failures >= FAILURE_THRESHOLD && !promoted {
-                            tracing::info!("Promoting worker to full mode");
+                            tracing::info!("Promoting standby to full mode");
 
                             let server = SocketServer::new(&socket_path);
                             match server.bind() {
@@ -2420,7 +2290,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 let acme_dir = promote_data_dir.join("acme");
                                 let acme_config = AcmeConfig {
                                     staging: promote_args_acme_staging,
-                                    email: promote_args_acme_email.clone(),
+                                    email: promote_acme_email.clone(),
                                     account_dir: acme_dir,
                                     dns_provider: promote_dns_provider.clone(),
                                     data_dir: promote_data_dir.clone(),
@@ -2451,7 +2321,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             promoted = true;
                             consecutive_failures = 0;
                             tracing::info!(
-                                "Promotion complete — worker now running as full server"
+                                "Promotion complete — standby now running as full server"
                             );
                         }
                     }
@@ -3441,10 +3311,9 @@ mod tests {
             https_port: 8443,
             no_acme: true,
             acme_staging: false,
-            acme_email: Some("ops@example.com".to_string()),
             renewal_interval_hours: 24,
             dns_provider: None,
-            worker: false,
+            standby: false,
             metrics_port: Some(9898),
             server_name: Some("test-server".to_string()),
         };

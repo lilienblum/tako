@@ -122,12 +122,13 @@ pub struct ServerRuntimeInfo {
     pub https_port: u16,
     pub no_acme: bool,
     pub acme_staging: bool,
+    #[serde(default)]
     pub acme_email: Option<String>,
     pub renewal_interval_hours: u64,
     #[serde(default)]
     pub dns_provider: Option<String>,
-    #[serde(default)]
-    pub worker: bool,
+    #[serde(default, alias = "worker")]
+    pub standby: bool,
     #[serde(default)]
     pub metrics_port: Option<u16>,
     #[serde(default)]
@@ -634,7 +635,7 @@ mod tests {
             acme_email: None,
             renewal_interval_hours: 12,
             dns_provider: None,
-            worker: false,
+            standby: false,
             metrics_port: Some(9898),
             server_name: Some("la".to_string()),
         };

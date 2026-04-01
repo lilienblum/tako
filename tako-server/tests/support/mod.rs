@@ -151,7 +151,6 @@ impl TestServer {
             &tls_port.to_string(),
             "--no-acme",
         ])
-        .env("TAKO_UNSAFE_HOST_UPSTREAM", "1")
         .env("RUST_LOG", "warn")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())

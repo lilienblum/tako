@@ -247,7 +247,6 @@ fn spawn_test_server(
         .arg("--no-acme")
         .arg("--metrics-port")
         .arg("0")
-        .env("TAKO_UNSAFE_HOST_UPSTREAM", "1")
         .env("RUST_LOG", "warn")
         .stdin(Stdio::null())
         .stdout(Stdio::inherit())

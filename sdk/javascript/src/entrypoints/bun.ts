@@ -9,8 +9,9 @@ const { run, host, port, setDraining } = createEntrypoint();
 
 if (import.meta.main) {
   void run((handleRequest) => {
-    Bun.serve({ hostname: host, port, fetch: handleRequest });
-    console.log(`Application listening on http://${host}:${port}`);
+    const server = Bun.serve({ hostname: host, port, fetch: handleRequest });
+    console.log(`Application listening on http://${host}:${server.port}`);
+    return server.port;
   });
 
   process.on("SIGTERM", () => {

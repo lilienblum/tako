@@ -11,6 +11,8 @@ use crate::config::TakoToml;
 use crate::output;
 
 pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
+    output::logo_header();
+    let cwd = std::env::current_dir()?;
     let context = crate::commands::project_context::resolve(config_path)?;
     let project_dir = context.project_dir;
     let mut tako_toml_path = context.config_path;
@@ -25,12 +27,13 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
     // Check if config already exists — prompt to overwrite or use a different name
     if existing.is_some() {
         if !output::is_interactive() {
+            output::operation_cancelled();
             return Ok(());
         }
         if !output::confirm(
             &format!(
                 "Configuration file {} already exists. Overwrite?",
-                output::strong(&tako_toml_path.display().to_string())
+                output::strong(&display_config_path_for_prompt(&tako_toml_path, &cwd))
             ),
             false,
         )? {
@@ -200,6 +203,7 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
             }
             // Step 2: Build preset + compute derived state
             2 => {
+                let mut prompted_for_preset = false;
                 let group_presets = match &group_presets_cache {
                     Some((cached, presets)) if *cached == adapter => presets.clone(),
                     _ => {
@@ -232,6 +236,7 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
                     ) {
                         Ok(sp) => {
                             selected_preset = sp;
+                            prompted_for_preset = true;
                         }
                         Err(e) if output::is_wizard_back(&e) => {
                             if let Some(prev) = step_history.pop() {
@@ -254,7 +259,7 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
                     .and_then(|preset| preset_default_main(preset, adapter, &group_presets));
                 let inferred_main = adapter.infer_main_entrypoint(&project_dir);
 
-                step_history.push(2);
+                push_history_if_interactive(&mut step_history, 2, prompted_for_preset);
 
                 if is_custom {
                     wizard.set_visible("Entrypoint", true);
@@ -317,13 +322,25 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
                     .as_ref()
                     .map(|c| c.assets.clone())
                     .unwrap_or_default();
-                let prev_assets = if !assets.is_empty() {
+                let prev = if !assets.is_empty() {
                     &assets
                 } else {
                     &existing_assets
                 };
-                match prompt_assets(&mut wizard, prev_assets) {
-                    Ok(collected) => {
+                let default = if prev.is_empty() {
+                    None
+                } else {
+                    Some(prev.join(", "))
+                };
+                let mut builder = output::TextField::new("Assets")
+                    .optional()
+                    .with_hint("Comma-separated asset directories. Leave empty for none.");
+                if let Some(ref d) = default {
+                    builder = builder.with_default(d);
+                }
+                match wizard.text_field(builder) {
+                    Ok(value) => {
+                        let collected = parse_csv_list(&value);
                         if !collected.is_empty() {
                             wizard.set("Assets", &collected.join(", "));
                         }
@@ -347,13 +364,25 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
                     .as_ref()
                     .map(|c| c.build.exclude.clone())
                     .unwrap_or_default();
-                let prev_excludes = if !excludes.is_empty() {
+                let prev = if !excludes.is_empty() {
                     &excludes
                 } else {
                     &existing_excludes
                 };
-                match prompt_excludes(&mut wizard, prev_excludes) {
-                    Ok(collected) => {
+                let default = if prev.is_empty() {
+                    None
+                } else {
+                    Some(prev.join(", "))
+                };
+                let mut builder = output::TextField::new("Exclude")
+                    .optional()
+                    .with_hint("Comma-separated exclude patterns. Leave empty for none.");
+                if let Some(ref d) = default {
+                    builder = builder.with_default(d);
+                }
+                match wizard.text_field(builder) {
+                    Ok(value) => {
+                        let collected = parse_csv_list(&value);
                         if !collected.is_empty() {
                             wizard.set("Exclude", &collected.join(", "));
                         }
@@ -539,6 +568,15 @@ fn resolve_adapter(detected_adapter: BuildAdapter, existing: Option<&TakoToml>) 
     }
 }
 
+fn parse_csv_list(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
 fn run_non_interactive(
     project_dir: &Path,
     tako_toml_path: &Path,
@@ -651,6 +689,17 @@ fn ensure_project_gitignore_tracks_secrets(project_dir: &Path) -> std::io::Resul
     Ok(())
 }
 
+fn display_config_path_for_prompt(config_path: &Path, cwd: &Path) -> String {
+    let canonical_cwd = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+
+    config_path
+        .strip_prefix(&canonical_cwd)
+        .ok()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| config_path.display().to_string())
+}
+
 fn find_git_repo_root(project_dir: &Path) -> Option<std::path::PathBuf> {
     project_dir
         .ancestors()
@@ -731,21 +780,10 @@ fn fetch_group_presets_for_adapter(
     let runtime = tokio::runtime::Runtime::new().map_err(|e| {
         std::io::Error::other(format!("Failed to initialize preset fetch runtime: {e}"))
     })?;
-    let _t = output::timed("Fetch presets");
-    let fetched = output::with_spinner_simple("Fetching presets", || {
-        runtime.block_on(load_available_group_preset_definitions(group))
-    });
 
-    match fetched {
+    match runtime.block_on(load_available_group_preset_definitions(group)) {
         Ok(presets) => Ok(normalize_group_preset_definitions(adapter, presets)),
-        Err(err) => {
-            output::warning(&format!(
-                "Failed to fetch presets ({}). Using {} base preset.",
-                err,
-                adapter.default_preset()
-            ));
-            Ok(Vec::new())
-        }
+        Err(_) => Ok(Vec::new()),
     }
 }
 
@@ -774,6 +812,12 @@ fn normalize_group_preset_definitions(
     normalized
 }
 
+fn push_history_if_interactive(step_history: &mut Vec<usize>, step: usize, interactive: bool) {
+    if interactive {
+        step_history.push(step);
+    }
+}
+
 fn build_preset_selection_options(
     _adapter: BuildAdapter,
     group_presets: &[String],
@@ -789,102 +833,6 @@ fn build_preset_selection_options(
     options.push(("custom".to_string(), None));
 
     Some(options)
-}
-
-fn prompt_assets(
-    _wizard: &mut output::Wizard,
-    existing: &[String],
-) -> std::io::Result<Vec<String>> {
-    let mut assets = Vec::new();
-    for existing_asset in existing.iter() {
-        match output::TextField::new("Asset directory")
-            .optional()
-            .with_default(existing_asset)
-            .prompt()
-        {
-            Ok(value) => {
-                if value.is_empty() {
-                    return Ok(assets);
-                }
-                assets.push(value);
-            }
-            Err(e) if output::is_wizard_back(&e) => {
-                if assets.is_empty() {
-                    return Err(e);
-                }
-                return Ok(assets);
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    loop {
-        match output::TextField::new("Asset directory")
-            .optional()
-            .prompt()
-        {
-            Ok(value) => {
-                if value.is_empty() {
-                    return Ok(assets);
-                }
-                assets.push(value);
-            }
-            Err(e) if output::is_wizard_back(&e) => {
-                if assets.is_empty() {
-                    return Err(e);
-                }
-                return Ok(assets);
-            }
-            Err(e) => return Err(e),
-        }
-    }
-}
-
-fn prompt_excludes(
-    _wizard: &mut output::Wizard,
-    existing: &[String],
-) -> std::io::Result<Vec<String>> {
-    let mut excludes = Vec::new();
-    for existing_exclude in existing.iter() {
-        match output::TextField::new("Exclude pattern")
-            .optional()
-            .with_default(existing_exclude)
-            .prompt()
-        {
-            Ok(value) => {
-                if value.is_empty() {
-                    return Ok(excludes);
-                }
-                excludes.push(value);
-            }
-            Err(e) if output::is_wizard_back(&e) => {
-                if excludes.is_empty() {
-                    return Err(e);
-                }
-                return Ok(excludes);
-            }
-            Err(e) => return Err(e),
-        }
-    }
-    loop {
-        match output::TextField::new("Exclude pattern")
-            .optional()
-            .prompt()
-        {
-            Ok(value) => {
-                if value.is_empty() {
-                    return Ok(excludes);
-                }
-                excludes.push(value);
-            }
-            Err(e) if output::is_wizard_back(&e) => {
-                if excludes.is_empty() {
-                    return Err(e);
-                }
-                return Ok(excludes);
-            }
-            Err(e) => return Err(e),
-        }
-    }
 }
 
 /// Detect the locally-installed version of a runtime by running `<tool> --version`.
@@ -1094,9 +1042,10 @@ route = "{production_route}"
 #[cfg(test)]
 mod tests {
     use super::{
-        TemplateParams, build_preset_selection_options, ensure_project_gitignore_tracks_secrets,
-        generate_template, infer_default_main_entrypoint, normalize_group_preset_definitions,
-        preset_default_main, resolve_adapter, sdk_install_command,
+        TemplateParams, build_preset_selection_options, display_config_path_for_prompt,
+        ensure_project_gitignore_tracks_secrets, generate_template, infer_default_main_entrypoint,
+        normalize_group_preset_definitions, parse_csv_list, preset_default_main,
+        push_history_if_interactive, resolve_adapter, sdk_install_command,
     };
     use crate::build::{BuildAdapter, PresetDefinition};
     use tempfile::TempDir;
@@ -1421,6 +1370,51 @@ mod tests {
     }
 
     #[test]
+    fn display_config_path_for_prompt_uses_path_relative_to_current_directory() {
+        let temp = TempDir::new().unwrap();
+        let cwd = std::fs::canonicalize(temp.path()).unwrap();
+        let config_path = cwd.join("tako.toml");
+        std::fs::write(&config_path, "name = \"demo\"\n").unwrap();
+
+        assert_eq!(
+            display_config_path_for_prompt(&config_path, &cwd),
+            "tako.toml"
+        );
+    }
+
+    #[test]
+    fn display_config_path_for_prompt_keeps_subdirectory_when_relative_to_current_directory() {
+        let temp = TempDir::new().unwrap();
+        let cwd = std::fs::canonicalize(temp.path()).unwrap();
+        let project_dir = cwd.join("apps/web");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let config_path = project_dir.join("preview.toml");
+        std::fs::write(&config_path, "name = \"demo\"\n").unwrap();
+
+        assert_eq!(
+            display_config_path_for_prompt(&config_path, &cwd),
+            "apps/web/preview.toml"
+        );
+    }
+
+    #[test]
+    fn display_config_path_for_prompt_falls_back_to_absolute_path_outside_current_directory() {
+        let temp = TempDir::new().unwrap();
+        let cwd = std::fs::canonicalize(temp.path()).unwrap();
+
+        let outside = TempDir::new().unwrap();
+        let config_path = std::fs::canonicalize(outside.path())
+            .unwrap()
+            .join("preview.toml");
+        std::fs::write(&config_path, "name = \"demo\"\n").unwrap();
+
+        assert_eq!(
+            display_config_path_for_prompt(&config_path, &cwd),
+            config_path.display().to_string()
+        );
+    }
+
+    #[test]
     fn sdk_install_command_uses_runtime_package_manager() {
         let tmp = tempfile::TempDir::new().unwrap();
         assert_eq!(
@@ -1579,6 +1573,32 @@ mod tests {
             ("next-start".to_string(), Some("next-start".to_string()))
         );
         assert_eq!(options[2], ("custom".to_string(), None));
+    }
+
+    #[test]
+    fn push_history_if_interactive_records_prompted_steps() {
+        let mut step_history = vec![0, 1];
+        push_history_if_interactive(&mut step_history, 2, true);
+        assert_eq!(step_history, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn push_history_if_interactive_skips_auto_derived_steps() {
+        let mut step_history = vec![0, 1];
+        push_history_if_interactive(&mut step_history, 2, false);
+        assert_eq!(step_history, vec![0, 1]);
+    }
+
+    #[test]
+    fn parse_csv_list_trims_items_and_drops_empty_segments() {
+        assert_eq!(
+            parse_csv_list(" public, .output/public ,, static "),
+            vec![
+                "public".to_string(),
+                ".output/public".to_string(),
+                "static".to_string()
+            ]
+        );
     }
 
     #[test]

@@ -109,7 +109,7 @@ async fn stream_logs(
     output::info(&format!(
         "Streaming logs for {} {}",
         output::strong(app_name),
-        output::brand_muted("(Ctrl+c to stop)")
+        output::theme_muted("(Ctrl+c to stop)")
     ));
 
     let writer: Arc<Mutex<Box<dyn Write + Send>>> =

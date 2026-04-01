@@ -20,9 +20,6 @@ use tokio::sync::mpsc;
 
 use super::{DevEvent, LogLevel, ScopedLog};
 
-const VERSION: &str = env!("CARGO_PKG_VERSION");
-const CANARY_SHA: Option<&str> = option_env!("TAKO_CANARY_SHA");
-
 const METRICS_REFRESH_SECS: u64 = 2;
 
 const RESET: &str = "\x1b[0m";
@@ -31,19 +28,6 @@ const DIM: &str = "\x1b[2m";
 const BORDER: &str = "\x1b[2;38;2;79;107;122m";
 // Accent for panel header text (22 = normal intensity, cancels inherited dim).
 const PRIMARY: &str = "\x1b[22;38;2;125;196;228m";
-
-// 3-row compact "tako.sh" logo.
-const LOGO_ROWS: [&str; 3] = [
-    "▀█▀ ▄▀█ █ █ █▀█   █▀ █ █",
-    " █  █▀█ █▀▄ █ █   ▀█ █▀█",
-    " ▀  ▀ ▀ ▀ ▀ ▀▀▀ ▀ ▀▀ ▀ ▀",
-];
-
-// Gradient endpoints: primary coral → secondary teal (applied per-character).
-const LOGO_COLOR_START: (u8, u8, u8) = (232, 135, 131); // #E88783
-const LOGO_COLOR_END: (u8, u8, u8) = (155, 196, 182); // #9BC4B6
-
-const INDENT: &str = "  ";
 
 // Below this column width the panel columns are stacked vertically.
 const STACKED_THRESHOLD: usize = 76;
@@ -80,16 +64,6 @@ pub enum DevOutputExit {
 
 fn ansi_rgb(r: u8, g: u8, b: u8) -> String {
     format!("\x1b[38;2;{r};{g};{b}m")
-}
-
-fn build_version_string() -> String {
-    match CANARY_SHA {
-        Some(sha) if !sha.trim().is_empty() => {
-            let short = &sha[..sha.len().min(7)];
-            format!("{VERSION}-canary-{short}")
-        }
-        _ => VERSION.to_owned(),
-    }
 }
 
 fn terminal_cols() -> usize {
@@ -287,34 +261,7 @@ fn detect_worktree(dir: &std::path::Path) -> Option<String> {
 
 /// Compact logo with left-to-right gradient. Version shown next to first row.
 pub fn format_header() -> String {
-    let version_str = format!("v{}", build_version_string());
-    let char_count = LOGO_ROWS[0].chars().count();
-    let mut lines = Vec::new();
-    for (i, row) in LOGO_ROWS.iter().enumerate() {
-        let mut buf = String::from(INDENT);
-        for (j, ch) in row.chars().enumerate() {
-            let t = if char_count <= 1 {
-                0.0
-            } else {
-                j as f64 / (char_count - 1) as f64
-            };
-            let r = lerp_u8(LOGO_COLOR_START.0, LOGO_COLOR_END.0, t);
-            let g = lerp_u8(LOGO_COLOR_START.1, LOGO_COLOR_END.1, t);
-            let b = lerp_u8(LOGO_COLOR_START.2, LOGO_COLOR_END.2, t);
-            buf.push_str(&ansi_rgb(r, g, b));
-            buf.push(ch);
-        }
-        buf.push_str(RESET);
-        if i == 0 {
-            buf.push_str(&format!("  {DIM}{version_str}{RESET}"));
-        }
-        lines.push(buf);
-    }
-    lines.join("\n")
-}
-
-fn lerp_u8(a: u8, b: u8, t: f64) -> u8 {
-    (a as f64 + (b as f64 - a as f64) * t).round() as u8
+    crate::output::format_logo_header()
 }
 
 /// Bordered panel that adapts its layout to the terminal width.
@@ -1188,6 +1135,7 @@ pub async fn run_dev_output(
 mod tests {
     use super::super::LogLevel;
     use super::*;
+    use crate::output::LOGO_ROWS;
     use console::strip_ansi_codes;
 
     #[test]
@@ -1245,20 +1193,12 @@ mod tests {
     }
 
     #[test]
-    fn format_header_has_per_char_gradient() {
+    fn format_header_has_all_logo_rows() {
         let h = format_header();
         assert_eq!(h.lines().count(), LOGO_ROWS.len());
-        // The gradient uses different colors — check the first row
-        // contains ANSI RGB escapes from both ends of the gradient.
-        let first = h.lines().next().unwrap();
-        assert!(first.contains(&format!(
-            "\x1b[38;2;{};{};{}m",
-            LOGO_COLOR_START.0, LOGO_COLOR_START.1, LOGO_COLOR_START.2
-        )));
-        assert!(first.contains(&format!(
-            "\x1b[38;2;{};{};{}m",
-            LOGO_COLOR_END.0, LOGO_COLOR_END.1, LOGO_COLOR_END.2
-        )));
+        for (line, row) in h.lines().zip(LOGO_ROWS.iter()) {
+            assert!(line.contains(row));
+        }
     }
 
     #[test]

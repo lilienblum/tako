@@ -159,7 +159,6 @@ impl E2EEnvironment {
             .arg("--tls-port")
             .arg(https_port.to_string())
             .arg("--no-acme")
-            .env("TAKO_UNSAFE_HOST_UPSTREAM", "1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());

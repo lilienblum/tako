@@ -44,11 +44,12 @@ async function setupProject(
   await writeFile(join(tempDir, "index.ts"), "export default {}");
 
   // Create config.toml in TAKO_HOME (server inventory uses [[servers]] array)
+  // Each server entry includes arch/libc target metadata (required by deploy).
   if (serverNames.length > 0) {
     await mkdir(takoHome, { recursive: true });
     let configToml = "";
     for (const [name, entry] of Object.entries(serverEntries)) {
-      configToml += `[[servers]]\nname = "${name}"\nhost = "${entry.host}"\nport = ${entry.port ?? 22}\n\n`;
+      configToml += `[[servers]]\nname = "${name}"\nhost = "${entry.host}"\nport = ${entry.port ?? 22}\narch = "x86_64"\nlibc = "glibc"\n\n`;
     }
     await writeFile(join(takoHome, "config.toml"), configToml);
   }
@@ -67,18 +68,17 @@ describe("--dry-run appears in help", () => {
 });
 
 describe("deploy --dry-run", () => {
-  test("shows environment warning when env is auto-resolved", async () => {
+  test("shows app summary when env is auto-resolved", async () => {
     await setupProject({ servers: { prod: { host: "10.0.0.1" } } });
 
-    // Without --env, the CLI auto-resolves to production and shows a warning
+    // Without --env, the CLI auto-resolves to production
     const { screen, exitCode } = await run(["--dry-run", "deploy"], {
       cwd: tempDir,
       env: { HOME: tempDir, TAKO_HOME: takoHome },
     });
 
     expect(exitCode).toBe(0);
-    expect(screen).toContain("!");
-    expect(screen).toContain("production");
+    expect(screen).toContain("dry-run-app");
   });
 
   test("shows skip markers with ⏭ icon", async () => {
@@ -102,7 +102,7 @@ describe("deploy --dry-run", () => {
       env: { HOME: tempDir, TAKO_HOME: takoHome },
     });
 
-    expect(screen).toContain("Server preflight");
+    expect(screen).toContain("Server checks");
     expect(screen).toContain("Build");
     expect(screen).toContain("Deploy to");
     expect(screen).toContain("prod");
@@ -152,34 +152,20 @@ describe("deploy --dry-run", () => {
 
     // Should still fail validation — no servers
     expect(exitCode).toBe(1);
-    expect(screen).toContain("✗");
+    expect(screen).toContain("✘");
   });
 
-  test("environment warning ! is colored", async () => {
+  test("skip markers are colored in dry-run", async () => {
     await setupProject({ servers: { prod: { host: "10.0.0.1" } } });
 
-    // Without --env to trigger warning
-    const { term, screen } = await run(["--dry-run", "deploy"], {
+    const { term, screen } = await run(["--dry-run", "deploy", "--env", "production"], {
       cwd: tempDir,
       env: { HOME: tempDir, TAKO_HOME: takoHome },
     });
 
-    expect(screen).toContain("!");
-    expect(screen).toContain("Using");
-    expect(screen).toContain("production");
-
-    const warnRow = findRowContaining(term, "!");
-    expect(warnRow).not.toBeNull();
-
-    if (warnRow !== null) {
-      const warnCol = findCharInRow(term, warnRow, "!");
-      if (warnCol !== null) {
-        const cell = term.cell(warnRow, warnCol);
-        expect(cell).not.toBeNull();
-        // Warning ! uses RGB color
-        expect(cell!.isFgRGB).toBe(true);
-      }
-    }
+    // Dry-run shows skip markers and the deploy summary
+    expect(screen).toContain("⏭");
+    expect(screen).toContain("dry-run-app");
   });
 
   test("multi-server deploy shows each server in skip output", async () => {

@@ -172,9 +172,9 @@ enum CardColor {
 
 fn colorize(text: &str, color: Option<CardColor>) -> String {
     match color {
-        Some(CardColor::Success) => output::brand_success(text),
-        Some(CardColor::Warning) => output::brand_warning(text),
-        Some(CardColor::Error) => output::brand_error(text),
+        Some(CardColor::Success) => output::theme_success(text),
+        Some(CardColor::Warning) => output::theme_warning(text),
+        Some(CardColor::Error) => output::theme_error(text),
         None => text.to_string(),
     }
 }
@@ -367,10 +367,10 @@ fn render_global_status(
                     } => {
                         let colored_value = colorize(value, *color);
                         let padded = format!("{:<width$}", label, width = max_label);
-                        eprintln!("{indent}{}  {colored_value}", output::brand_muted(&padded),);
+                        eprintln!("{indent}{}  {colored_value}", output::theme_muted(&padded),);
                     }
                     CardEntry::Section { label, children } => {
-                        eprintln!("{indent}{}", output::brand_muted(label));
+                        eprintln!("{indent}{}", output::theme_muted(label));
 
                         for (ci, (child_label, child_value, child_color)) in
                             children.iter().enumerate()
@@ -388,8 +388,8 @@ fn render_global_status(
                                 );
                                 eprintln!(
                                     "{indent}  {} {}  {colored_value}",
-                                    output::brand_muted(branch),
-                                    output::brand_muted(&padded),
+                                    output::theme_muted(branch),
+                                    output::theme_muted(&padded),
                                 );
                             } else {
                                 // Top-level child: └ prefix, or spaces if label is blank (continuation)
@@ -397,8 +397,8 @@ fn render_global_status(
                                 let padded = format!("{:<width$}", child_label, width = max_label);
                                 eprintln!(
                                     "{indent}{} {}  {colored_value}",
-                                    output::brand_muted(branch),
-                                    output::brand_muted(&padded),
+                                    output::theme_muted(branch),
+                                    output::theme_muted(&padded),
                                 );
                             }
                         }

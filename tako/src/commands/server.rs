@@ -189,7 +189,7 @@ pub async fn prompt_to_add_server(
 
     let should_add = output::confirm("Add a server now?", true)?;
     if !should_add {
-        output::warning("Cancelled.");
+        output::operation_cancelled();
         return Ok(None);
     }
 
@@ -596,7 +596,7 @@ pub async fn add_server(
         )?;
 
         if !confirm {
-            output::warning("Cancelled");
+            output::operation_cancelled();
             return Ok(None);
         }
 
@@ -820,7 +820,7 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
         let confirm = output::confirm(&format!("Remove {}?", output::strong(name)), false)?;
 
         if !confirm {
-            output::warning("Cancelled");
+            output::operation_cancelled();
             return Ok(());
         }
 
@@ -882,7 +882,7 @@ async fn remove_server(name: Option<&str>) -> Result<(), Box<dyn std::error::Err
                         return Ok(());
                     }
                     Ok(false) => {
-                        output::warning("Cancelled");
+                        output::operation_cancelled();
                         return Ok(());
                     }
                     Err(e) if output::is_wizard_back(&e) => {
@@ -934,7 +934,7 @@ async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
             .as_deref()
             .filter(|d| !d.trim().is_empty())
         {
-            output::bullet(&format!("{} {desc}", output::brand_muted("Description")));
+            output::bullet(&format!("{} {desc}", output::theme_muted("Description")));
         }
     }
     Ok(())
@@ -1523,7 +1523,6 @@ async fn upgrade_servers(
     }
 
     let pb = if interactive {
-        output::hide_cursor();
         let pb = indicatif::ProgressBar::new_spinner();
         pb.set_style(output::phase_spinner_style());
         let msg = if total == 1 {
@@ -1556,9 +1555,6 @@ async fn upgrade_servers(
                 if let Some(ref pb) = pb {
                     pb.finish_and_clear();
                 }
-                if interactive {
-                    output::show_cursor();
-                }
                 return Err(e.to_string().into());
             }
         };
@@ -1582,10 +1578,6 @@ async fn upgrade_servers(
     if let Some(ref pb) = pb {
         pb.finish_and_clear();
     }
-    if interactive {
-        output::show_cursor();
-    }
-
     // Sort to match input order.
     checks.sort_by(|a, b| {
         let pos_a = names
@@ -2080,7 +2072,7 @@ pub async fn prompt_dns_setup(ssh: &SshClient) -> Result<DnsConfig, Box<dyn std:
     }
 
     if credentials.is_empty() {
-        return Err("No credentials provided. DNS provider setup cancelled.".into());
+        return Err(output::operation_cancelled_error().into());
     }
 
     // Quick credential validation via provider API before touching the server.

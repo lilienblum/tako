@@ -37,7 +37,7 @@ async fn run_async(assume_yes: bool) -> Result<(), Box<dyn std::error::Error>> {
     if !assume_yes {
         let confirmed = output::confirm("Remove Tako and all local data?", false)?;
         if !confirmed {
-            output::warning("Cancelled");
+            output::operation_cancelled();
             return Ok(());
         }
     }
@@ -571,7 +571,7 @@ pub async fn implode_server(
         output::strong(server_name),
     ));
     eprintln!();
-    output::muted("  Services:  tako-server, tako-server-worker");
+    output::muted("  Services:  tako-server, tako-server-standby");
     output::muted(
         "  Binaries:  /usr/local/bin/tako-server, tako-server-service, tako-server-install-refresh",
     );
@@ -589,7 +589,7 @@ pub async fn implode_server(
             false,
         )?;
         if !confirmed {
-            output::warning("Cancelled");
+            output::operation_cancelled();
             return Ok(());
         }
     }
@@ -625,23 +625,23 @@ fn build_server_implode_script() -> String {
     [
         // Stop services
         "if command -v systemctl >/dev/null 2>&1; then",
-        "  systemctl stop tako-server tako-server-worker 2>/dev/null || true",
-        "  systemctl disable tako-server tako-server-worker 2>/dev/null || true",
+        "  systemctl stop tako-server tako-server-standby 2>/dev/null || true",
+        "  systemctl disable tako-server tako-server-standby 2>/dev/null || true",
         "fi",
         "if command -v rc-service >/dev/null 2>&1; then",
         "  rc-service tako-server stop 2>/dev/null || true",
-        "  rc-service tako-server-worker stop 2>/dev/null || true",
+        "  rc-service tako-server-standby stop 2>/dev/null || true",
         "  rc-update del tako-server 2>/dev/null || true",
-        "  rc-update del tako-server-worker 2>/dev/null || true",
+        "  rc-update del tako-server-standby 2>/dev/null || true",
         "fi",
         // Remove systemd service files and drop-ins
         "rm -f /etc/systemd/system/tako-server.service",
-        "rm -f /etc/systemd/system/tako-server-worker.service",
+        "rm -f /etc/systemd/system/tako-server-standby.service",
         "rm -rf /etc/systemd/system/tako-server.service.d",
         "if command -v systemctl >/dev/null 2>&1; then systemctl daemon-reload 2>/dev/null || true; fi",
         // Remove OpenRC service files
         "rm -f /etc/init.d/tako-server",
-        "rm -f /etc/init.d/tako-server-worker",
+        "rm -f /etc/init.d/tako-server-standby",
         // Remove binaries
         "rm -f /usr/local/bin/tako-server",
         "rm -f /usr/local/bin/tako-server-service",
@@ -744,10 +744,10 @@ mod tests {
     fn server_implode_script_removes_service_files() {
         let script = build_server_implode_script();
         assert!(script.contains("rm -f /etc/systemd/system/tako-server.service"));
-        assert!(script.contains("rm -f /etc/systemd/system/tako-server-worker.service"));
+        assert!(script.contains("rm -f /etc/systemd/system/tako-server-standby.service"));
         assert!(script.contains("rm -rf /etc/systemd/system/tako-server.service.d"));
         assert!(script.contains("rm -f /etc/init.d/tako-server"));
-        assert!(script.contains("rm -f /etc/init.d/tako-server-worker"));
+        assert!(script.contains("rm -f /etc/init.d/tako-server-standby"));
         assert!(script.contains("systemctl daemon-reload"));
     }
 

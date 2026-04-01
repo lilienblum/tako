@@ -1,11 +1,13 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
 
 use crate::config::{UpgradeChannel, resolve_upgrade_channel};
 use crate::output;
+use crate::ui::{TaskItemState, TaskState, TaskTreeSession, TreeNode};
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CANARY_SHA: Option<&str> = option_env!("TAKO_CANARY_SHA");
@@ -39,6 +41,223 @@ enum UpdateCheck {
     Available { tag: String, version: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpgradeTaskId {
+    CheckForUpdates,
+    DownloadArchive,
+    VerifySha256,
+    ExtractArchive,
+    InstallBinaries,
+    UpgradeViaHomebrew,
+    UpgradeViaCargo,
+}
+
+#[derive(Debug, Clone)]
+struct UpgradeTaskTreeState {
+    tasks: Vec<TaskItemState>,
+}
+
+#[derive(Clone)]
+struct UpgradeTaskTreeController {
+    state: Arc<Mutex<UpgradeTaskTreeState>>,
+    session: Option<TaskTreeSession>,
+}
+
+impl CliUpgradeMethod {
+    #[allow(dead_code)]
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Installer => "Installer",
+            Self::Homebrew => "Homebrew",
+            Self::Cargo => "Cargo",
+        }
+    }
+}
+
+impl UpgradeChannel {
+    #[allow(dead_code)]
+    fn display_name(self) -> &'static str {
+        match self {
+            Self::Stable => "Stable",
+            Self::Canary => "Canary",
+        }
+    }
+}
+
+impl UpgradeTaskId {
+    fn key(self) -> &'static str {
+        match self {
+            Self::CheckForUpdates => "check-for-updates",
+            Self::DownloadArchive => "download-archive",
+            Self::VerifySha256 => "verify-sha256",
+            Self::ExtractArchive => "extract-archive",
+            Self::InstallBinaries => "install-binaries",
+            Self::UpgradeViaHomebrew => "upgrade-via-homebrew",
+            Self::UpgradeViaCargo => "upgrade-via-cargo",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::CheckForUpdates => "Check for updates",
+            Self::DownloadArchive => "Download archive",
+            Self::VerifySha256 => "Verify SHA256",
+            Self::ExtractArchive => "Extract archive",
+            Self::InstallBinaries => "Install binaries",
+            Self::UpgradeViaHomebrew => "Upgrade via Homebrew",
+            Self::UpgradeViaCargo => "Upgrade via cargo",
+        }
+    }
+}
+
+impl UpgradeTaskTreeController {
+    fn new(channel: UpgradeChannel, method: CliUpgradeMethod) -> Self {
+        let state = UpgradeTaskTreeState {
+            tasks: build_upgrade_tasks(channel, method),
+        };
+        let tree = build_upgrade_tree(&state);
+        let session = should_use_upgrade_task_tree().then(|| TaskTreeSession::new(tree));
+        Self {
+            state: Arc::new(Mutex::new(state)),
+            session,
+        }
+    }
+
+    fn mark_running(&self, id: UpgradeTaskId) {
+        self.update(id, |task| {
+            task.state = TaskState::Running {
+                started_at: std::time::Instant::now(),
+            };
+            task.detail = None;
+        });
+    }
+
+    fn succeed(&self, id: UpgradeTaskId, detail: Option<String>) {
+        self.complete(id, detail, CompletionKind::Succeeded);
+    }
+
+    fn warn(&self, id: UpgradeTaskId, detail: Option<String>) {
+        self.complete(id, detail, CompletionKind::Cancelled);
+    }
+
+    fn fail(&self, id: UpgradeTaskId, detail: Option<String>) {
+        self.complete(id, detail, CompletionKind::Failed);
+    }
+
+    fn skip_pending(&self, reason: &str) {
+        let mut guard = self.state.lock().unwrap();
+        for task in &mut guard.tasks {
+            if matches!(task.state, TaskState::Pending) {
+                task.state = TaskState::Cancelled { elapsed: None };
+                task.detail = Some(reason.to_string());
+            }
+        }
+        self.refresh_locked(&guard);
+    }
+
+    #[cfg(test)]
+    fn snapshot(&self) -> UpgradeTaskTreeState {
+        self.state.lock().unwrap().clone()
+    }
+
+    fn update<F>(&self, id: UpgradeTaskId, update: F)
+    where
+        F: FnOnce(&mut TaskItemState),
+    {
+        let mut guard = self.state.lock().unwrap();
+        let task = guard
+            .tasks
+            .iter_mut()
+            .find_map(|task| task.find_mut(id.key()))
+            .unwrap_or_else(|| panic!("missing upgrade task {}", id.key()));
+        update(task);
+        self.refresh_locked(&guard);
+    }
+
+    fn complete(&self, id: UpgradeTaskId, detail: Option<String>, kind: CompletionKind) {
+        self.update(id, |task| {
+            let elapsed = match task.state {
+                TaskState::Running { started_at } => Some(started_at.elapsed()),
+                _ => None,
+            };
+            task.state = match kind {
+                CompletionKind::Succeeded => TaskState::Succeeded { elapsed },
+                CompletionKind::Cancelled => TaskState::Cancelled { elapsed },
+                CompletionKind::Failed => TaskState::Failed { elapsed },
+            };
+            task.detail = detail;
+        });
+    }
+
+    fn refresh_locked(&self, state: &UpgradeTaskTreeState) {
+        if let Some(session) = &self.session {
+            session.set_tree(build_upgrade_tree(state));
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CompletionKind {
+    Succeeded,
+    Cancelled,
+    Failed,
+}
+
+fn build_upgrade_tasks(_channel: UpgradeChannel, method: CliUpgradeMethod) -> Vec<TaskItemState> {
+    match method {
+        CliUpgradeMethod::Installer => {
+            vec![
+                TaskItemState::pending(
+                    UpgradeTaskId::CheckForUpdates.key(),
+                    UpgradeTaskId::CheckForUpdates.label(),
+                ),
+                TaskItemState::pending(
+                    UpgradeTaskId::DownloadArchive.key(),
+                    UpgradeTaskId::DownloadArchive.label(),
+                ),
+                TaskItemState::pending(
+                    UpgradeTaskId::VerifySha256.key(),
+                    UpgradeTaskId::VerifySha256.label(),
+                ),
+                TaskItemState::pending(
+                    UpgradeTaskId::ExtractArchive.key(),
+                    UpgradeTaskId::ExtractArchive.label(),
+                ),
+                TaskItemState::pending(
+                    UpgradeTaskId::InstallBinaries.key(),
+                    UpgradeTaskId::InstallBinaries.label(),
+                ),
+            ]
+        }
+        CliUpgradeMethod::Homebrew => vec![TaskItemState::pending(
+            UpgradeTaskId::UpgradeViaHomebrew.key(),
+            UpgradeTaskId::UpgradeViaHomebrew.label(),
+        )],
+        CliUpgradeMethod::Cargo => vec![TaskItemState::pending(
+            UpgradeTaskId::UpgradeViaCargo.key(),
+            UpgradeTaskId::UpgradeViaCargo.label(),
+        )],
+    }
+}
+
+fn build_upgrade_tree(state: &UpgradeTaskTreeState) -> Vec<TreeNode> {
+    // Render tasks as a flat list (no summary rows in the live tree —
+    // those are printed separately before the session starts).
+    state
+        .tasks
+        .iter()
+        .map(|task| TreeNode::Task(task.clone()))
+        .collect()
+}
+
+fn should_use_upgrade_task_tree() -> bool {
+    should_use_upgrade_task_tree_for_mode(output::is_pretty(), output::is_interactive())
+}
+
+fn should_use_upgrade_task_tree_for_mode(pretty: bool, interactive: bool) -> bool {
+    pretty && interactive
+}
+
 // ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
@@ -49,7 +268,7 @@ pub fn run(canary: bool, stable: bool) -> Result<(), Box<dyn std::error::Error>>
     if channel == UpgradeChannel::Canary {
         output::muted("You're on canary channel");
         let ver = current_version();
-        output::info(&format!("Your current version: {}", output::strong(&ver)));
+        output::info(&format!("Current version: {}", output::strong(&ver)));
         tracing::info!("Current version: {ver}");
     }
 
@@ -78,6 +297,10 @@ async fn run_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn std::error::
         detect_cli_upgrade_method_runtime()
     };
 
+    if should_use_upgrade_task_tree() {
+        return run_upgrade_with_task_tree(channel, method).await;
+    }
+
     match method {
         CliUpgradeMethod::Installer => run_installer_upgrade(channel).await,
         CliUpgradeMethod::Homebrew => run_brew_upgrade(),
@@ -85,9 +308,224 @@ async fn run_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn std::error::
     }
 }
 
+async fn run_upgrade_with_task_tree(
+    channel: UpgradeChannel,
+    method: CliUpgradeMethod,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let controller = UpgradeTaskTreeController::new(channel, method);
+
+    match method {
+        CliUpgradeMethod::Installer => run_installer_upgrade_pretty(channel, &controller).await,
+        CliUpgradeMethod::Homebrew => {
+            run_local_upgrade_pretty(&controller, UpgradeTaskId::UpgradeViaHomebrew, || {
+                run_local_upgrade_command("brew", &["upgrade", "tako"])
+            })
+        }
+        CliUpgradeMethod::Cargo => {
+            run_local_upgrade_pretty(&controller, UpgradeTaskId::UpgradeViaCargo, || {
+                run_local_upgrade_command("cargo", &["install", "tako", "--locked"])
+            })
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Installer upgrade (version check + progress bar download)
 // ---------------------------------------------------------------------------
+
+async fn run_installer_upgrade_pretty(
+    channel: UpgradeChannel,
+    controller: &UpgradeTaskTreeController,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (os, arch) = detect_platform()?;
+    let install_dir = resolve_install_dir();
+
+    if channel == UpgradeChannel::Canary {
+        return run_canary_upgrade_pretty(os, arch, &install_dir, controller).await;
+    }
+
+    controller.mark_running(UpgradeTaskId::CheckForUpdates);
+    match check_for_updates_inner(channel).await {
+        Ok(UpdateCheck::AlreadyCurrent) => {
+            controller.succeed(
+                UpgradeTaskId::CheckForUpdates,
+                Some("Already current".to_string()),
+            );
+            controller.skip_pending("Skipped");
+            return Ok(());
+        }
+        Ok(UpdateCheck::Available { tag, version }) => {
+            controller.succeed(UpgradeTaskId::CheckForUpdates, Some(version.clone()));
+            let url = tarball_url_for_tag(&tag, os, arch);
+            download_and_install_pretty(&url, &install_dir, controller, Some(version)).await?;
+            return Ok(());
+        }
+        Err(error) => {
+            tracing::warn!("Could not check for updates: {error}");
+            controller.warn(
+                UpgradeTaskId::CheckForUpdates,
+                Some("Fallback to latest release".to_string()),
+            );
+        }
+    }
+
+    let tag = fetch_latest_stable_tag()
+        .await
+        .map_err(|e| format!("Failed to resolve latest release: {e}"))?;
+    let url = tarball_url_for_tag(&tag, os, arch);
+    download_and_install_pretty(&url, &install_dir, controller, None).await
+}
+
+async fn run_canary_upgrade_pretty(
+    os: &str,
+    arch: &str,
+    install_dir: &Path,
+    controller: &UpgradeTaskTreeController,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let local_version = current_version();
+    controller.mark_running(UpgradeTaskId::CheckForUpdates);
+
+    match fetch_canary_version().await {
+        Ok(remote_version) => {
+            if remote_version == local_version {
+                controller.succeed(
+                    UpgradeTaskId::CheckForUpdates,
+                    Some("Already current".to_string()),
+                );
+                controller.skip_pending("Skipped");
+                return Ok(());
+            }
+
+            controller.succeed(UpgradeTaskId::CheckForUpdates, Some(remote_version.clone()));
+            let url = tarball_url_for_tag("canary-latest", os, arch);
+            download_and_install_pretty(&url, install_dir, controller, Some(remote_version)).await
+        }
+        Err(error) => {
+            controller.fail(UpgradeTaskId::CheckForUpdates, Some(error.to_string()));
+            Err(error)
+        }
+    }
+}
+
+fn run_local_upgrade_pretty<F>(
+    controller: &UpgradeTaskTreeController,
+    task_id: UpgradeTaskId,
+    work: F,
+) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    controller.mark_running(task_id);
+    match work() {
+        Ok(()) => {
+            controller.succeed(task_id, None);
+            Ok(())
+        }
+        Err(error) => {
+            controller.fail(task_id, Some(error.clone()));
+            Err(error.into())
+        }
+    }
+}
+
+async fn download_and_install_pretty(
+    url: &str,
+    install_dir: &Path,
+    controller: &UpgradeTaskTreeController,
+    install_detail: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let tmp_base = std::env::temp_dir();
+    let tmp_dir = tmp_base.join(format!("tako-upgrade-{}", std::process::id()));
+    std::fs::create_dir_all(&tmp_dir)?;
+
+    let result =
+        download_and_install_pretty_inner(url, install_dir, &tmp_dir, controller, install_detail)
+            .await;
+
+    let _ = std::fs::remove_dir_all(&tmp_dir);
+    result
+}
+
+async fn download_and_install_pretty_inner(
+    url: &str,
+    install_dir: &Path,
+    tmp_dir: &Path,
+    controller: &UpgradeTaskTreeController,
+    install_detail: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let archive_path = tmp_dir.join("tako.tar.gz");
+
+    run_upgrade_task_step(controller, UpgradeTaskId::DownloadArchive, None, async {
+        download_without_progress(url, &archive_path)
+            .await
+            .map_err(|error| error.to_string())
+    })
+    .await?;
+
+    let sha_url = format!("{url}.sha256");
+    run_upgrade_task_step(controller, UpgradeTaskId::VerifySha256, None, async {
+        let expected = fetch_sha256(&sha_url)
+            .await
+            .map_err(|e| format!("SHA256 checksum unavailable for {sha_url}: {e}"))?;
+        verify_sha256(&archive_path, &expected)?;
+        Ok::<(), String>(())
+    })
+    .await?;
+
+    let extract_dir = tmp_dir.join("extract");
+    run_upgrade_task_step(controller, UpgradeTaskId::ExtractArchive, None, async {
+        std::fs::create_dir_all(&extract_dir)
+            .map_err(|e| format!("failed to create extract directory: {e}"))?;
+        extract_tarball(&archive_path, &extract_dir)?;
+        Ok::<(), String>(())
+    })
+    .await?;
+
+    run_upgrade_task_step(
+        controller,
+        UpgradeTaskId::InstallBinaries,
+        install_detail,
+        async {
+            let new_tako = find_binary(&extract_dir, "tako")
+                .ok_or_else(|| "archive did not contain a tako binary".to_string())?;
+            let new_dev_server = find_binary(&extract_dir, "tako-dev-server")
+                .ok_or_else(|| "archive did not contain a tako-dev-server binary".to_string())?;
+            let new_loopback_proxy =
+                find_binary(&extract_dir, "tako-loopback-proxy").ok_or_else(|| {
+                    "archive did not contain a tako-loopback-proxy binary".to_string()
+                })?;
+            std::fs::create_dir_all(install_dir)
+                .map_err(|e| format!("failed to create install dir: {e}"))?;
+            install_binary(&new_tako, install_dir, "tako")?;
+            install_binary(&new_dev_server, install_dir, "tako-dev-server")?;
+            install_binary(&new_loopback_proxy, install_dir, "tako-loopback-proxy")?;
+            Ok::<(), String>(())
+        },
+    )
+    .await
+}
+
+async fn run_upgrade_task_step<T, Fut>(
+    controller: &UpgradeTaskTreeController,
+    task_id: UpgradeTaskId,
+    success_detail: Option<String>,
+    work: Fut,
+) -> Result<T, Box<dyn std::error::Error>>
+where
+    Fut: std::future::Future<Output = Result<T, String>>,
+{
+    controller.mark_running(task_id);
+    match work.await {
+        Ok(value) => {
+            controller.succeed(task_id, success_detail);
+            Ok(value)
+        }
+        Err(error) => {
+            controller.fail(task_id, Some(error.to_string()));
+            Err(error.into())
+        }
+    }
+}
 
 async fn run_installer_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn std::error::Error>> {
     let (os, arch) = detect_platform()?;
@@ -419,6 +857,21 @@ async fn download_and_install_inner(
 }
 
 async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    download_archive(url, dest, true).await
+}
+
+async fn download_without_progress(
+    url: &str,
+    dest: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    download_archive(url, dest, false).await
+}
+
+async fn download_archive(
+    url: &str,
+    dest: &Path,
+    show_progress: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     tracing::debug!("Downloading {}…", url);
     let _t = output::timed("Download release archive");
     let client = reqwest::Client::new();
@@ -442,15 +895,20 @@ async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn st
     let mut file = std::fs::File::create(dest)?;
     let mut downloaded = 0u64;
 
-    let tp = output::TransferProgress::new("Downloading", "Downloaded", total);
+    let transfer_progress =
+        show_progress.then(|| output::TransferProgress::new("Downloading", "Downloaded", total));
 
     while let Some(chunk) = resp.chunk().await? {
         file.write_all(&chunk)?;
         downloaded += chunk.len() as u64;
-        tp.set_position(downloaded);
+        if let Some(tp) = &transfer_progress {
+            tp.set_position(downloaded);
+        }
     }
 
-    tp.finish();
+    if let Some(tp) = transfer_progress {
+        tp.finish();
+    }
     tracing::debug!("Downloaded {} bytes to {}", downloaded, dest.display());
     Ok(())
 }
@@ -796,5 +1254,155 @@ mod tests {
             brew_formula_installed: false,
         };
         assert_eq!(detect_cli_upgrade_method(&ctx), CliUpgradeMethod::Installer);
+    }
+
+    #[test]
+    fn upgrade_task_tree_requires_pretty_interactive_mode() {
+        assert!(should_use_upgrade_task_tree_for_mode(true, true));
+        assert!(!should_use_upgrade_task_tree_for_mode(true, false));
+        assert!(!should_use_upgrade_task_tree_for_mode(false, true));
+    }
+
+    #[test]
+    fn stable_installer_task_tree_happy_path_marks_each_step_complete() {
+        let controller =
+            UpgradeTaskTreeController::new(UpgradeChannel::Stable, CliUpgradeMethod::Installer);
+
+        controller.mark_running(UpgradeTaskId::CheckForUpdates);
+        controller.succeed(UpgradeTaskId::CheckForUpdates, Some("1.2.3".to_string()));
+        controller.mark_running(UpgradeTaskId::DownloadArchive);
+        controller.succeed(UpgradeTaskId::DownloadArchive, None);
+        controller.mark_running(UpgradeTaskId::VerifySha256);
+        controller.succeed(UpgradeTaskId::VerifySha256, None);
+        controller.mark_running(UpgradeTaskId::ExtractArchive);
+        controller.succeed(UpgradeTaskId::ExtractArchive, None);
+        controller.mark_running(UpgradeTaskId::InstallBinaries);
+        controller.succeed(UpgradeTaskId::InstallBinaries, Some("1.2.3".to_string()));
+
+        let snapshot = controller.snapshot();
+        assert_eq!(snapshot.tasks.len(), 5);
+        assert!(
+            snapshot
+                .tasks
+                .iter()
+                .all(|task| matches!(task.state, TaskState::Succeeded { .. }))
+        );
+        assert_eq!(
+            snapshot
+                .tasks
+                .iter()
+                .find(|task| task.id == UpgradeTaskId::InstallBinaries.key())
+                .and_then(|task| task.detail.clone())
+                .as_deref(),
+            Some("1.2.3")
+        );
+    }
+
+    #[test]
+    fn stable_installer_task_tree_fallback_marks_update_check_warning() {
+        let controller =
+            UpgradeTaskTreeController::new(UpgradeChannel::Stable, CliUpgradeMethod::Installer);
+
+        controller.warn(
+            UpgradeTaskId::CheckForUpdates,
+            Some("Fallback to latest release".to_string()),
+        );
+        controller.mark_running(UpgradeTaskId::DownloadArchive);
+        controller.succeed(UpgradeTaskId::DownloadArchive, None);
+        controller.mark_running(UpgradeTaskId::VerifySha256);
+        controller.succeed(UpgradeTaskId::VerifySha256, None);
+        controller.mark_running(UpgradeTaskId::ExtractArchive);
+        controller.succeed(UpgradeTaskId::ExtractArchive, None);
+        controller.mark_running(UpgradeTaskId::InstallBinaries);
+        controller.succeed(UpgradeTaskId::InstallBinaries, None);
+
+        let snapshot = controller.snapshot();
+        let check = snapshot
+            .tasks
+            .iter()
+            .find(|task| task.id == UpgradeTaskId::CheckForUpdates.key())
+            .unwrap();
+        assert!(matches!(check.state, TaskState::Cancelled { .. }));
+        assert_eq!(check.detail.as_deref(), Some("Fallback to latest release"));
+        assert!(
+            snapshot.tasks[1..]
+                .iter()
+                .all(|task| matches!(task.state, TaskState::Succeeded { .. }))
+        );
+    }
+
+    #[test]
+    fn canary_task_tree_already_current_skips_remaining_steps() {
+        let controller =
+            UpgradeTaskTreeController::new(UpgradeChannel::Canary, CliUpgradeMethod::Installer);
+
+        controller.succeed(
+            UpgradeTaskId::CheckForUpdates,
+            Some("Already current".to_string()),
+        );
+        controller.skip_pending("Skipped");
+
+        let snapshot = controller.snapshot();
+        let check = snapshot
+            .tasks
+            .iter()
+            .find(|task| task.id == UpgradeTaskId::CheckForUpdates.key())
+            .unwrap();
+        assert!(matches!(check.state, TaskState::Succeeded { .. }));
+        assert!(
+            snapshot.tasks[1..]
+                .iter()
+                .all(|task| matches!(task.state, TaskState::Cancelled { .. }))
+        );
+        assert!(
+            snapshot.tasks[1..]
+                .iter()
+                .all(|task| task.detail.as_deref() == Some("Skipped"))
+        );
+    }
+
+    #[test]
+    fn canary_task_tree_upgrade_path_keeps_full_sequence_visible() {
+        let controller =
+            UpgradeTaskTreeController::new(UpgradeChannel::Canary, CliUpgradeMethod::Installer);
+
+        controller.succeed(
+            UpgradeTaskId::CheckForUpdates,
+            Some("canary-abcdef0".to_string()),
+        );
+        controller.mark_running(UpgradeTaskId::DownloadArchive);
+        controller.succeed(UpgradeTaskId::DownloadArchive, None);
+        controller.mark_running(UpgradeTaskId::VerifySha256);
+        controller.succeed(UpgradeTaskId::VerifySha256, None);
+        controller.mark_running(UpgradeTaskId::ExtractArchive);
+        controller.succeed(UpgradeTaskId::ExtractArchive, None);
+        controller.mark_running(UpgradeTaskId::InstallBinaries);
+        controller.succeed(
+            UpgradeTaskId::InstallBinaries,
+            Some("canary-abcdef0".to_string()),
+        );
+
+        let snapshot = controller.snapshot();
+        assert_eq!(snapshot.tasks.len(), 5);
+        assert!(
+            snapshot
+                .tasks
+                .iter()
+                .all(|task| !matches!(task.state, TaskState::Pending))
+        );
+    }
+
+    #[test]
+    fn homebrew_and_cargo_task_trees_use_single_method_task() {
+        let homebrew =
+            UpgradeTaskTreeController::new(UpgradeChannel::Stable, CliUpgradeMethod::Homebrew)
+                .snapshot();
+        assert_eq!(homebrew.tasks.len(), 1);
+        assert_eq!(homebrew.tasks[0].label, "Upgrade via Homebrew");
+
+        let cargo = UpgradeTaskTreeController::new(UpgradeChannel::Stable, CliUpgradeMethod::Cargo)
+            .snapshot();
+        assert_eq!(cargo.tasks.len(), 1);
+        assert_eq!(cargo.tasks[0].label, "Upgrade via cargo");
     }
 }

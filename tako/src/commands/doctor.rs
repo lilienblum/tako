@@ -68,7 +68,7 @@ fn row(buf: &mut Vec<String>, label: &str, value: &str, width: usize) {
 }
 
 fn hint(buf: &mut Vec<String>, text: &str) {
-    buf.push(format!("    {}", output::brand_muted(text)));
+    buf.push(format!("    {}", output::theme_muted(text)));
 }
 
 fn hinted_row(buf: &mut Vec<String>, label: &str, value: &str, width: usize, text: &str) {
@@ -78,18 +78,18 @@ fn hinted_row(buf: &mut Vec<String>, label: &str, value: &str, width: usize, tex
 
 fn format_bool_status(enabled: bool) -> String {
     if enabled {
-        output::brand_success("enabled")
+        output::theme_success("enabled")
     } else {
-        output::brand_warning("disabled")
+        output::theme_warning("disabled")
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 fn format_active_status(ok: bool, ok_label: &str, fail_label: &str) -> String {
     if ok {
-        output::brand_success(ok_label)
+        output::theme_success(ok_label)
     } else {
-        output::brand_error(fail_label)
+        output::theme_error(fail_label)
     }
 }
 
@@ -204,10 +204,10 @@ fn format_certificate(buf: &mut Vec<String>, status: &CaStatus) {
     heading(buf, "Local CA");
     let w = label_width(&["Status"]);
     let value = match status {
-        CaStatus::Error(e) => output::brand_error(format!("error: {e}")),
-        CaStatus::NotCreated => output::brand_warning("not created"),
-        CaStatus::Trusted => output::brand_success("trusted"),
-        CaStatus::Untrusted => output::brand_warning("untrusted"),
+        CaStatus::Error(e) => output::theme_error(format!("error: {e}")),
+        CaStatus::NotCreated => output::theme_warning("not created"),
+        CaStatus::Trusted => output::theme_success("trusted"),
+        CaStatus::Untrusted => output::theme_warning("untrusted"),
     };
     hinted_row(
         buf,
@@ -233,9 +233,9 @@ fn format_dev_server(
         Err(e) => {
             let message = e.to_string();
             let status = if is_dev_server_unavailable_error_message(&message) {
-                output::brand_warning("not running")
+                output::theme_warning("not running")
             } else {
-                output::brand_error(format!("error: {e}"))
+                output::theme_error(format!("error: {e}"))
             };
             hinted_row(
                 buf,
@@ -382,12 +382,12 @@ fn format_apps(buf: &mut Vec<String>, apps: &[crate::dev_server_client::ListedAp
         };
         let pid_str = a
             .pid
-            .map(|p| format!("  {}", output::brand_muted(format!("pid {p}"))))
+            .map(|p| format!("  {}", output::theme_muted(format!("pid {p}"))))
             .unwrap_or_default();
         buf.push(format!(
             "  {}  {}  port {}{}",
             output::strong(&a.app_name),
-            output::brand_muted(&hosts),
+            output::theme_muted(&hosts),
             a.upstream_port,
             pid_str,
         ));
@@ -422,7 +422,7 @@ fn format_local_dns(
                 &format!(
                     "{} {} {}",
                     TAKO_RESOLVER_FILE,
-                    output::brand_muted("→"),
+                    output::theme_muted("→"),
                     format_args!("{nameserver}:{port}")
                 ),
                 dns_w,
@@ -436,9 +436,9 @@ fn format_local_dns(
                 &format!(
                     "{} {} {} {}",
                     TAKO_RESOLVER_FILE,
-                    output::brand_muted("→"),
+                    output::theme_muted("→"),
                     format_args!("{nameserver}:{port}"),
-                    output::brand_warning(format!("(expected 127.0.0.1:{})", macos.local_dns_port))
+                    output::theme_warning(format!("(expected 127.0.0.1:{})", macos.local_dns_port))
                 ),
                 dns_w,
                 "Resolver file that should direct *.tako.test lookups to the local DNS server",
@@ -451,8 +451,8 @@ fn format_local_dns(
                 &format!(
                     "{} {} {}",
                     TAKO_RESOLVER_FILE,
-                    output::brand_muted("→"),
-                    output::brand_warning("missing")
+                    output::theme_muted("→"),
+                    output::theme_warning("missing")
                 ),
                 dns_w,
                 "Resolver file that should direct *.tako.test lookups to the local DNS server",
@@ -466,7 +466,7 @@ fn format_local_dns(
                 hinted_row(
                     buf,
                     host,
-                    &format!("{} {}", output::brand_muted("→"), ip),
+                    &format!("{} {}", output::theme_muted("→"), ip),
                     dns_w,
                     "Current system DNS answer for this app hostname",
                 );
@@ -477,9 +477,9 @@ fn format_local_dns(
                     host,
                     &format!(
                         "{} {} {}",
-                        output::brand_muted("→"),
+                        output::theme_muted("→"),
                         ip,
-                        output::brand_warning(format!("(expected {})", macos.advertised_ip))
+                        output::theme_warning(format!("(expected {})", macos.advertised_ip))
                     ),
                     dns_w,
                     "Current system DNS answer for this app hostname",
@@ -491,8 +491,8 @@ fn format_local_dns(
                     host,
                     &format!(
                         "{} {}",
-                        output::brand_muted("→"),
-                        output::brand_warning("no answer")
+                        output::theme_muted("→"),
+                        output::theme_warning("no answer")
                     ),
                     dns_w,
                     "Current system DNS answer for this app hostname",
@@ -611,9 +611,9 @@ fn format_linux_dns(
     let dns_w = label_width(&dns_labels);
 
     let resolved_status = if linux.status.dns_configured {
-        output::brand_success("configured")
+        output::theme_success("configured")
     } else {
-        output::brand_warning("not configured")
+        output::theme_warning("not configured")
     };
     hinted_row(
         buf,
@@ -629,7 +629,7 @@ fn format_linux_dns(
                 hinted_row(
                     buf,
                     host,
-                    &format!("{} {}", output::brand_muted("→"), ip),
+                    &format!("{} {}", output::theme_muted("→"), ip),
                     dns_w,
                     "Current system DNS answer for this app hostname",
                 );
@@ -640,9 +640,9 @@ fn format_linux_dns(
                     host,
                     &format!(
                         "{} {} {}",
-                        output::brand_muted("→"),
+                        output::theme_muted("→"),
                         ip,
-                        output::brand_warning(format!("(expected {})", linux.advertised_ip))
+                        output::theme_warning(format!("(expected {})", linux.advertised_ip))
                     ),
                     dns_w,
                     "Current system DNS answer for this app hostname",
@@ -654,8 +654,8 @@ fn format_linux_dns(
                     host,
                     &format!(
                         "{} {}",
-                        output::brand_muted("→"),
-                        output::brand_warning("no answer")
+                        output::theme_muted("→"),
+                        output::theme_warning("no answer")
                     ),
                     dns_w,
                     "Current system DNS answer for this app hostname",
