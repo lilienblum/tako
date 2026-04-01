@@ -1,6 +1,11 @@
 {
   "version": 1,
   "skills": {
+    "ratatui-tui": {
+      "source": "blacktop/dotfiles",
+      "sourceType": "github",
+      "computedHash": "89154e16a0455f9f1fbc299c5a6e0f290eb5a55fcf063bbff3113e953277085a"
+    },
     "rust-async-patterns": {
       "source": "wshobson/agents",
       "sourceType": "github",

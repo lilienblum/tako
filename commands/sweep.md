@@ -8,7 +8,7 @@ Analyze the codebase for issues across all categories:
 
 - Security (injection, auth, secrets, supply chain, trust boundaries)
 - Performance (hot paths, blocking I/O, unnecessary allocations, algorithmic complexity)
-- Code quality (dead code, redundant logic, error handling gaps, inconsistencies)
+- Code quality (dead code, redundant logic, error handling gaps, inconsistencies, overengineering)
 - Configuration & operational (misconfigs, missing limits, unsafe defaults)
 
 **Method:**
@@ -62,6 +62,7 @@ If no P0/P1 issues remain:
 ## Rules
 
 - Evidence only — no speculative warnings.
+- Flag overengineering: abstractions with a single implementation, indirection that doesn't pay for itself, configurability nobody uses, error handling for impossible states, solving problems that aren't real yet. Simple code that does the job beats clever code that anticipates hypotheticals.
 - Fewer high-confidence findings over many weak ones.
 - Don't report best practices unless the code demonstrably violates them in a way that matters.
 - Suspicious-but-unprovable items go in a short "Blind spots" list at the end, not in findings.

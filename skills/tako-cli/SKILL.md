@@ -2,7 +2,8 @@
 name: tako-cli
 description: >-
   Tako CLI commands: init, dev, deploy, secrets, typegen, scale, logs,
-  rollback, servers, doctor.
+  rollback, servers, doctor. Includes output design patterns for interactive
+  and plain modes.
 type: framework
 library: tako.sh
 library_version: "0.0.1"
@@ -24,7 +25,7 @@ Initialize a new Tako project. Auto-detects runtime (Go, Bun, Node, Deno) from p
 tako init
 ```
 
-Creates `tako.toml`, installs the SDK (`go get tako.sh` or `npm install tako.sh`), and prompts for app name and production route.
+Runs a wizard that prompts for app name, runtime, build preset, entrypoint, assets path, and production route. Creates `tako.toml` and installs the SDK (`go get tako.sh` or `npm install tako.sh`).
 
 ### `tako doctor`
 
@@ -76,11 +77,11 @@ List all secret names.
 
 ### `tako secrets sync [--env <name>]`
 
-Sync secrets to servers. Automatically resolves which servers to sync to based on environment configuration.
+Sync secrets to servers.
 
 ### `tako secrets key derive [--env <name>]`
 
-Derive a key from a passphrase (for sharing with teammates).
+Derive a key from a passphrase.
 
 ### `tako secrets key export [--env <name>]`
 
@@ -95,11 +96,6 @@ Generate typed secret accessors from `.tako/secrets.json`.
 ```bash
 tako typegen
 ```
-
-- **Go**: generates `tako_secrets.go` with a typed `Secrets` struct
-- **JavaScript/TypeScript**: generates `tako.d.ts` with typed declarations
-
-Run after adding or removing secrets. Commit the generated file.
 
 ## Deployment
 
@@ -119,7 +115,7 @@ Delete a deployed app. Aliases: `rm`, `remove`, `undeploy`, `destroy`.
 
 ### `tako scale <instances> [--env <env>] [--server <name>]`
 
-Change instance count for a deployed app.
+Change instance count.
 
 ```bash
 tako scale 3
@@ -140,7 +136,7 @@ Rollback to a previous release.
 
 ### `tako logs [--env <env>] [--tail] [--days N]`
 
-View remote logs. Stream with `--tail` or fetch historical logs.
+View remote logs.
 
 ```bash
 tako logs --tail
@@ -163,7 +159,7 @@ Show status of all servers and deployed apps.
 
 ### `tako servers rm [<name>]`
 
-Remove a server. Alias: `delete`.
+Remove a server.
 
 ### `tako servers upgrade [<name>] [--canary|--stable]`
 
@@ -177,7 +173,7 @@ Show CLI version.
 
 ### `tako upgrade [--canary|--stable]`
 
-Upgrade the Tako CLI itself.
+Upgrade the Tako CLI.
 
 ### `tako implode [--yes]`
 
@@ -187,7 +183,86 @@ Uninstall Tako and remove all local data.
 
 | Flag               | Purpose                                           |
 | ------------------ | ------------------------------------------------- |
-| `--verbose` / `-v` | Verbose output                                    |
-| `--ci`             | Non-interactive, deterministic output             |
+| `--verbose` / `-v` | Verbose output (tracing log lines)                |
+| `--ci`             | Non-interactive, deterministic output (no colors) |
 | `--dry-run`        | Show what would happen without side effects       |
 | `--config` / `-c`  | Use explicit config file instead of `./tako.toml` |
+
+## Output Design
+
+### Two modes
+
+- **Interactive** (`is_pretty() && is_interactive()`): spinners, colors, diamond prompts, padding.
+- **Plain** (`--verbose` or `--ci`): tracing log lines, no colors, no spinners.
+
+### Interactive padding
+
+In interactive mode, plain text lines (`info`, `muted`, `hint`, `section`, `heading`) are indented 2 spaces so they align with symbol-prefixed lines (`✔`/`✘`/`⠋` already occupy 2 chars).
+
+### Elapsed times
+
+No parentheses: `3s`, `1m10s`, `3s, 72 MB` (comma-separated when combined with size).
+
+### Prompts — diamond style
+
+```
+◆ App name                   ← accent filled diamond + accent label (active)
+› myapp_                     ← accent chevron on the input line
+  Hint text here             ← optional muted hint under the input
+
+◇ App name                   ← completed: muted outlined diamond + muted label
+› myapp                      ← completed: muted chevron stays with the value
+```
+
+- Active: `◆` filled diamond, accent color label, accent `›` on the input line.
+- Completed (inactive): `◇` outlined diamond, muted label, no border, no hint.
+- `select()` and `confirm()` use the same diamond style for their summary lines.
+
+### Spinners
+
+```
+⠋ Building…  3s              ← PhaseSpinner (major operation)
+✔ Build complete  5s         ← success (double space before time)
+```
+
+### Grouped spinner
+
+```
+⠋ Building services  10s
+  ✔ server1  7s
+  ⠋ server2  3s
+  ·  server3               ← pending, muted
+```
+
+Use `GroupedSpinner::new(parent, &["server1", "server2", "server3"])`.
+
+### Step flow (linear phases)
+
+```
+⠋ Pushing images  3s
+·  Applying migrations       ← pre-rendered pending, muted (pretty only)
+·  Health checks
+```
+
+Use `StepFlow::new(&["Pushing images", "Applying migrations", "Health checks"])`.
+Call `advance()` to complete each step and `finish()` when done.
+
+### Progress bar
+
+Single line with elapsed time first, then block bar, percentage, and transferred amount:
+
+```
+⠋ Uploading…  42s  ████████████░░░░  72%  (84 KB/116 MB)
+✔ Uploaded  42s, 116 MB
+```
+
+### Error block
+
+Red left border + fixed-width dimmed-red background, capped at 72 chars:
+
+```
+│ Cannot find module './queue-handler' Did you mean './queue-manager'?
+```
+
+Use `output::error_block(message)` for inline/validation errors.
+Use `output::error(message)` for the standard `✘ message` format.
