@@ -194,17 +194,18 @@ fn split_route(route: &str) -> (&str, Option<&str>) {
 }
 
 fn hostname_matches(pattern: &str, hostname: &str) -> bool {
+    // RFC 7230 §2.7.1: host is case-insensitive
     if let Some(suffix) = pattern.strip_prefix("*.") {
         // *.example.com should not match example.com
-        if hostname == suffix {
+        if hostname.eq_ignore_ascii_case(suffix) {
             return false;
         }
-        // Check hostname ends with ".{suffix}" without allocating a String
+        // Check hostname ends with ".{suffix}" without allocating
         hostname.len() > suffix.len()
             && hostname.as_bytes()[hostname.len() - suffix.len() - 1] == b'.'
-            && hostname.ends_with(suffix)
+            && hostname[hostname.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
     } else {
-        pattern == hostname
+        pattern.eq_ignore_ascii_case(hostname)
     }
 }
 
@@ -439,6 +440,48 @@ mod tests {
         // *.example.com should not match otherexample.com
         assert!(!hostname_matches("*.example.com", "otherexample.com"));
         assert!(!hostname_matches("*.example.com", "fakeexample.com"));
+    }
+
+    #[test]
+    fn test_hostname_matching_is_case_insensitive() {
+        // RFC 7230 §2.7.1: host is case-insensitive
+        assert!(hostname_matches("api.example.com", "API.Example.Com"));
+        assert!(hostname_matches("API.EXAMPLE.COM", "api.example.com"));
+        assert!(hostname_matches("Api.Example.Com", "api.example.com"));
+
+        // Wildcard patterns are also case-insensitive
+        assert!(hostname_matches("*.example.com", "API.Example.Com"));
+        assert!(hostname_matches("*.EXAMPLE.COM", "api.example.com"));
+
+        // Wildcard apex exclusion still works with mixed case
+        assert!(!hostname_matches("*.example.com", "Example.Com"));
+        assert!(!hostname_matches("*.EXAMPLE.COM", "example.com"));
+    }
+
+    #[test]
+    fn test_case_insensitive_routing_end_to_end() {
+        let routes = vec![
+            route("api", "api.example.com"),
+            route("catchall", "*.example.com"),
+        ];
+        assert_eq!(
+            select_app_for_request(&routes, "API.Example.Com", "/"),
+            Some("api".to_string())
+        );
+        assert_eq!(
+            select_app_for_request(&routes, "Blog.Example.Com", "/"),
+            Some("catchall".to_string())
+        );
+
+        let c = compiled(&routes);
+        assert_eq!(
+            select_app_for_request_compiled(&c, "API.EXAMPLE.COM", "/"),
+            Some("api".to_string())
+        );
+        assert_eq!(
+            select_app_for_request_compiled(&c, "BLOG.EXAMPLE.COM", "/"),
+            Some("catchall".to_string())
+        );
     }
 
     // ===========================================
