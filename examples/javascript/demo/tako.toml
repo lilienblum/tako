@@ -1,4 +1,4 @@
-name = "bun-example"
+name = "demo"
 runtime = "bun"
 
 [[build_stages]]
@@ -7,10 +7,10 @@ run = "bun run build"
 cwd = "../../../sdk/javascript"
 
 [vars.development]
-WIDLCARD_SUFFIX = ".bun-example.tako.test"
+WIDLCARD_SUFFIX = ".tako-demo.tako.test"
 
 [vars.production]
-WIDLCARD_SUFFIX = ".bun.tako.sh"
+WIDLCARD_SUFFIX = ".demo.tako.sh"
 
 [envs.development]
 routes = ["tako-demo.test/foobar", "*.tako-demo.tako.test"]
@@ -18,8 +18,3 @@ routes = ["tako-demo.test/foobar", "*.tako-demo.tako.test"]
 [envs.production]
 routes = ["demo.tako.sh/foobar", "*.demo.tako.sh"]
 servers = ["tako-demo"]
-
-[envs.staging]
-routes = ["tako-testbed.orb.local/bun", "*.bun.tako-testbed.orb.local"]
-servers = ["testbed"]
-idle_timeout = 300

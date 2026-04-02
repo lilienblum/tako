@@ -439,6 +439,8 @@ impl AcmeClient {
         let lego_dir = self.config.data_dir.join("lego");
         std::fs::create_dir_all(&lego_dir)?;
 
+        let lego_bin = ensure_lego_installed(&self.config.data_dir).await?;
+
         // Determine whether to `run` (first time) or `renew` (cert already exists).
         // lego stores certs under <path>/certificates/<domain>.crt
         let lego_cert_path = lego_dir
@@ -450,7 +452,7 @@ impl AcmeClient {
             "run"
         };
 
-        let mut cmd = tokio::process::Command::new("lego");
+        let mut cmd = tokio::process::Command::new(&lego_bin);
         cmd.arg("--dns")
             .arg(provider)
             .arg("--domains")
@@ -483,7 +485,7 @@ impl AcmeClient {
         let output = cmd
             .output()
             .await
-            .map_err(|e| AcmeError::LegoDns01Failed(format!("Failed to execute lego (install from https://go-acme.github.io/lego/installation/): {}", e)))?;
+            .map_err(|e| AcmeError::LegoDns01Failed(format!("Failed to execute lego: {}", e)))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -595,6 +597,93 @@ impl AcmeClient {
     pub fn config(&self) -> &AcmeConfig {
         &self.config
     }
+}
+
+const LEGO_VERSION: &str = "4.22.2";
+
+/// Ensure lego is available, downloading it if necessary.
+/// Returns the path to the lego binary.
+async fn ensure_lego_installed(data_dir: &std::path::Path) -> Result<PathBuf, AcmeError> {
+    let lego_bin = data_dir.join("bin").join("lego");
+
+    if lego_bin.exists() {
+        return Ok(lego_bin);
+    }
+
+    // Check if lego is in PATH
+    if let Ok(output) = tokio::process::Command::new("lego")
+        .arg("--version")
+        .output()
+        .await
+        && output.status.success() {
+            return Ok(PathBuf::from("lego"));
+        }
+
+    tracing::info!("lego not found, downloading v{LEGO_VERSION}");
+
+    let arch = match std::env::consts::ARCH {
+        "x86_64" => "amd64",
+        "aarch64" => "arm64",
+        other => {
+            return Err(AcmeError::LegoDns01Failed(format!(
+                "Unsupported architecture for lego auto-install: {other}"
+            )));
+        }
+    };
+
+    let url = format!(
+        "https://github.com/go-acme/lego/releases/download/v{LEGO_VERSION}/lego_v{LEGO_VERSION}_linux_{arch}.tar.gz"
+    );
+
+    let bin_dir = data_dir.join("bin");
+    std::fs::create_dir_all(&bin_dir)?;
+
+    let tmp_tar = bin_dir.join("lego.tar.gz");
+
+    let output = tokio::process::Command::new("curl")
+        .args(["-sfL", "-o"])
+        .arg(&tmp_tar)
+        .arg(&url)
+        .output()
+        .await
+        .map_err(|e| AcmeError::LegoDns01Failed(format!("Failed to download lego: {e}")))?;
+
+    if !output.status.success() {
+        let _ = std::fs::remove_file(&tmp_tar);
+        return Err(AcmeError::LegoDns01Failed(format!(
+            "Failed to download lego from {url}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let output = tokio::process::Command::new("tar")
+        .args(["xzf"])
+        .arg(&tmp_tar)
+        .arg("-C")
+        .arg(&bin_dir)
+        .arg("lego")
+        .output()
+        .await
+        .map_err(|e| AcmeError::LegoDns01Failed(format!("Failed to extract lego: {e}")))?;
+
+    let _ = std::fs::remove_file(&tmp_tar);
+
+    if !output.status.success() {
+        return Err(AcmeError::LegoDns01Failed(format!(
+            "Failed to extract lego: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&lego_bin, std::fs::Permissions::from_mode(0o755))?;
+    }
+
+    tracing::info!(path = %lego_bin.display(), "lego installed successfully");
+
+    Ok(lego_bin)
 }
 
 /// Parse certificate expiry from PEM data
