@@ -1,33 +1,37 @@
-name: Publish SDK canary
+name: Publish SDK
 
 on:
   workflow_run:
     workflows: [CI]
     types: [completed]
     branches: [master]
-
-permissions:
-  contents: read
+  release:
+    types: [created]
 
 jobs:
   canary:
     name: Publish canary
-    if: github.event.workflow_run.conclusion == 'success'
+    if: github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment: release
+    permissions:
+      contents: write
+      id-token: write
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-          fetch-depth: 2
+          fetch-depth: 100
 
       - name: Check for SDK changes
         id: changes
         run: |
-          if ! git diff --name-only HEAD~1 -- sdk/javascript/ | grep -q .; then
-            echo "No SDK changes, skipping"
-            echo "skip=true" >> "$GITHUB_OUTPUT"
+          if git fetch origin tag sdk-js-canary --no-tags 2>/dev/null; then
+            if ! git diff --name-only sdk-js-canary -- sdk/javascript/ | grep -q .; then
+              echo "No SDK changes since sdk-js-canary, skipping"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
       - name: Setup Node
@@ -51,4 +55,45 @@ jobs:
           npm pkg set version="$version"
           bun install
           bun run build
-          npm publish --tag canary
+          npm publish --tag canary --provenance --access public
+
+      - name: Update sdk-js-canary tag
+        if: steps.changes.outputs.skip != 'true'
+        run: |
+          git tag -f sdk-js-canary
+          git push -f origin sdk-js-canary
+
+  release:
+    name: Publish release
+    if: github.event_name == 'release' && startsWith(github.event.release.tag_name, 'sdk-js-v')
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Build and publish
+        run: |
+          cd sdk/javascript
+          bun install
+          bun run build
+          npm publish --provenance --access public
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release edit "${{ github.event.release.tag_name }}" --draft=false

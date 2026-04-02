@@ -177,6 +177,19 @@ mod tests {
     use tokio::time::sleep;
 
     #[test]
+    fn test_parse_prepare_release_command() {
+        let json = r#"{"command": "prepare_release", "app": "my-app", "path": "/var/lib/tako/my-app/releases/1.0.0"}"#;
+        let cmd: Command = serde_json::from_str(json).unwrap();
+        match cmd {
+            Command::PrepareRelease { app, path } => {
+                assert_eq!(app, "my-app");
+                assert!(path.contains("releases"));
+            }
+            _ => panic!("Expected PrepareRelease command"),
+        }
+    }
+
+    #[test]
     fn test_parse_deploy_command() {
         let json = r#"{"command": "deploy", "app": "my-app", "version": "1.0.0", "path": "/var/lib/tako/my-app/releases/1.0.0", "routes": ["api.example.com", "example.com/api/*"]}"#;
         let cmd: Command = serde_json::from_str(json).unwrap();

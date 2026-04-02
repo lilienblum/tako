@@ -34,6 +34,11 @@ pub enum Command {
     /// Query protocol version and supported capabilities.
     Hello { protocol_version: u32 },
 
+    /// Download runtime and install production dependencies for a release.
+    /// Called before `Deploy` so that the deploy step only does app registration
+    /// and instance startup, keeping it fast.
+    PrepareRelease { app: String, path: String },
+
     /// Deploy a new version of an app
     Deploy {
         app: String,
@@ -316,6 +321,24 @@ mod tests {
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("status"));
         assert!(json.contains("my-app"));
+    }
+
+    #[test]
+    fn test_prepare_release_command_roundtrip() {
+        let cmd = Command::PrepareRelease {
+            app: "my-app".to_string(),
+            path: "/opt/tako/apps/my-app/releases/v1".to_string(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""command":"prepare_release""#));
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Command::PrepareRelease { app, path } => {
+                assert_eq!(app, "my-app");
+                assert_eq!(path, "/opt/tako/apps/my-app/releases/v1");
+            }
+            _ => panic!("Expected PrepareRelease command"),
+        }
     }
 
     #[test]

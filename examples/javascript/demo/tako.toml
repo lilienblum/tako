@@ -1,20 +1,22 @@
 name = "bun-example"
 runtime = "bun"
 
+[[build_stages]]
+name = "sdk"
+run = "bun run build"
+cwd = "../../../sdk/javascript"
+
 [vars.development]
 WIDLCARD_SUFFIX = ".bun-example.tako.test"
 
 [vars.production]
 WIDLCARD_SUFFIX = ".bun.tako.sh"
 
-[vars.staging]
-WIDLCARD_SUFFIX = ".bun.tako-testbed.orb.local"
-
 [envs.development]
-routes = ["some-app.tako.test/bun", "*.bun-example.tako.test"]
+routes = ["tako-demo.test/foobar", "*.tako-demo.tako.test"]
 
 [envs.production]
-routes = ["demo.tako.sh/bun", "*.bun.tako.sh"]
+routes = ["demo.tako.sh/foobar", "*.demo.tako.sh"]
 servers = ["tako-demo"]
 
 [envs.staging]

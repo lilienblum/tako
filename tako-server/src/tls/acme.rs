@@ -436,8 +436,6 @@ impl AcmeClient {
             .as_deref()
             .ok_or(AcmeError::NoDnsProvider)?;
 
-        let email = self.config.email.as_deref().unwrap_or("admin@example.com");
-
         let lego_dir = self.config.data_dir.join("lego");
         std::fs::create_dir_all(&lego_dir)?;
 
@@ -458,10 +456,15 @@ impl AcmeClient {
             .arg("--domains")
             .arg(domain)
             .arg("--path")
-            .arg(&lego_dir)
-            .arg("--email")
-            .arg(email)
-            .arg("--accept-tos");
+            .arg(&lego_dir);
+
+        // --email is optional in lego v4.30+; for older versions pass a space to bypass
+        // the empty check (Let's Encrypt accepts registration without a contact email)
+        if let Some(email) = self.config.email.as_deref() {
+            cmd.arg("--email").arg(email);
+        }
+
+        cmd.arg("--accept-tos");
 
         if self.config.staging {
             cmd.arg("--server")
@@ -858,6 +861,27 @@ mod tests {
         // dns_provider is None by default, so wildcard should fail with NoDnsProvider
         let result = acme.request_certificate("*.example.com").await;
         assert!(matches!(result, Err(AcmeError::NoDnsProvider)));
+    }
+
+    #[tokio::test]
+    async fn test_wildcard_without_email_still_attempts_lego() {
+        let temp = TempDir::new().unwrap();
+        let cert_config = CertManagerConfig {
+            cert_dir: temp.path().join("certs"),
+            ..Default::default()
+        };
+        let cert_manager = Arc::new(CertManager::new(cert_config));
+        let acme_config = AcmeConfig {
+            dns_provider: Some("cloudflare".to_string()),
+            email: None,
+            account_dir: temp.path().join("acme"),
+            data_dir: temp.path().join("data"),
+            ..Default::default()
+        };
+        let acme = AcmeClient::new(acme_config, cert_manager);
+        // Should attempt lego (and fail because it's not installed), not error on missing email
+        let result = acme.request_certificate("*.example.com").await;
+        assert!(matches!(result, Err(AcmeError::LegoDns01Failed(_))));
     }
 
     #[test]

@@ -106,6 +106,7 @@ impl TaskItemState {
 
 #[derive(Debug, Clone)]
 pub enum TreeTextTone {
+    Accent,
     Error,
 }
 
@@ -463,6 +464,7 @@ fn render_tree_to_lines(tree: &[TreeNode], frame_index: usize) -> Vec<Line<'stat
             }
             TreeNode::Text { text, tone } => {
                 let style = match tone {
+                    TreeTextTone::Accent => Style::new().fg(COLOR_ACCENT),
                     TreeTextTone::Error => Style::new().fg(COLOR_ERROR),
                 };
                 lines.push(Line::from(vec![Span::styled(text.clone(), style)]));

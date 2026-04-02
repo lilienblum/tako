@@ -6,7 +6,7 @@ Sample applications for running Tako end-to-end.
 
 ### JavaScript
 
-- `javascript/bun/`: minimal Bun fetch-handler app integrated with `tako.sh`.
+- `javascript/demo/`: minimal Bun fetch-handler app integrated with `tako.sh`.
 - `javascript/tanstack-start/`: TanStack Start `start-basic`-style app with `tako.sh/vite` server-entry wrapping.
 
 ### Go
@@ -21,7 +21,7 @@ Sample applications for running Tako end-to-end.
 From repository root:
 
 ```bash
-just tako examples/javascript/bun dev
+just tako examples/javascript/demo dev
 just tako examples/go/basic dev
 ```
 

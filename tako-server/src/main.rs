@@ -476,6 +476,12 @@ impl ServerState {
 
                 Response::ok(data)
             }
+            Command::PrepareRelease { app, path } => {
+                if let Err(msg) = validate_app_name(&app) {
+                    return Response::error(msg);
+                }
+                self.prepare_release(&app, &path).await
+            }
             Command::Deploy {
                 app,
                 version,
@@ -610,6 +616,28 @@ impl ServerState {
         }
     }
 
+    async fn prepare_release(&self, app_name: &str, path: &str) -> Response {
+        let release_path =
+            match validate_release_path_for_app(&self.runtime.data_dir, app_name, path) {
+                Ok(value) => value,
+                Err(msg) => return Response::error(msg),
+            };
+
+        let env_vars = match env_vars_from_release_dir(&release_path) {
+            Ok(vars) => vars,
+            Err(error) => return Response::error(format!("Invalid app release: {}", error)),
+        };
+
+        let secrets = self.state_store.get_secrets(app_name).unwrap_or_default();
+        let mut release_env = env_vars;
+        release_env.extend(secrets);
+
+        match prepare_release_runtime(&release_path, &release_env, &self.runtime.data_dir).await {
+            Ok(_) => Response::ok(serde_json::json!({ "status": "prepared" })),
+            Err(error) => Response::error(format!("Release preparation failed: {error}")),
+        }
+    }
+
     async fn deploy_app(
         &self,
         app_name: &str,
@@ -668,16 +696,11 @@ impl ServerState {
         let mut release_env = env_vars.clone();
         release_env.extend(secrets.clone());
 
-        let runtime_bin_path = match prepare_release_runtime(
-            &release_path,
-            &release_env,
-            &self.runtime.data_dir,
-        )
-        .await
-        {
-            Ok(bin) => bin,
-            Err(error) => return Response::error(format!("Invalid app release: {}", error)),
-        };
+        let runtime_bin_path =
+            match resolve_release_runtime_bin(&release_path, &self.runtime.data_dir).await {
+                Ok(bin) => bin,
+                Err(error) => return Response::error(format!("Invalid app release: {}", error)),
+            };
 
         // Allow tako-app (in tako group) to read the release directory
         #[cfg(unix)]
@@ -1507,6 +1530,8 @@ async fn run_release_install_command(
     ))
 }
 
+/// Full release preparation: download runtime, install production dependencies.
+/// Called via the `PrepareRelease` command during the CLI "Preparing" step.
 async fn prepare_release_runtime(
     release_dir: &Path,
     env: &HashMap<String, String>,
@@ -1591,6 +1616,32 @@ async fn prepare_release_runtime(
             ));
         }
     }
+
+    Ok(runtime_bin)
+}
+
+/// Lightweight runtime binary path resolution. Returns the cached binary path
+/// without downloading or running install — expects `prepare_release_runtime`
+/// to have been called first.
+async fn resolve_release_runtime_bin(
+    release_dir: &Path,
+    data_dir: &Path,
+) -> Result<Option<String>, String> {
+    let manifest = load_release_manifest(release_dir)?;
+    let runtime = &manifest.runtime;
+    if runtime.trim().is_empty() {
+        return Err(format!(
+            "deploy manifest {} has empty runtime field",
+            release_dir.join("app.json").display()
+        ));
+    }
+
+    let runtime_bin = version_manager::install_and_resolve(
+        runtime,
+        manifest.runtime_version.as_deref(),
+        data_dir,
+    )
+    .await;
 
     Ok(runtime_bin)
 }

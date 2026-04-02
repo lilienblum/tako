@@ -68,4 +68,4 @@ bun test
 ## Related Docs
 
 - `../../website/src/pages/docs/quickstart.md`
-- `../../examples/javascript/bun/README.md`
+- `../../examples/javascript/demo/README.md`

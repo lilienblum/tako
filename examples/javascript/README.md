@@ -4,7 +4,7 @@ JavaScript runtime examples for Tako.
 
 ## Available
 
-- `bun/`: Bun app example using the `tako.sh` SDK wrapper.
+- `demo/`: Minimal Bun app example using the `tako.sh` SDK wrapper.
 - `tanstack-start/`: TanStack Start app based on `TanStack/router` `start-basic`, with `tako.sh/vite` server-entry wrapping.
 
 ## Run
@@ -12,7 +12,7 @@ JavaScript runtime examples for Tako.
 From repository root:
 
 ```bash
-just tako examples/javascript/bun dev
+just tako examples/javascript/demo dev
 ```
 
 Run TanStack Start directly from the example directory:

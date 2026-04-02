@@ -320,19 +320,25 @@ pub fn create_workdir_archive(
             continue;
         }
 
-        if let Some(include_matcher) = &includes
-            && !include_matcher
-                .matched_path_or_any_parents(relative_path, false)
-                .is_ignore()
-        {
-            continue;
-        }
-        if let Some(exclude_matcher) = &excludes
-            && exclude_matcher
-                .matched_path_or_any_parents(relative_path, false)
-                .is_ignore()
-        {
-            continue;
+        // Always include the deploy manifest (app.json) regardless of
+        // include/exclude patterns — the server needs it to start the app.
+        let is_deploy_manifest = relative_path == Path::new("app.json");
+
+        if !is_deploy_manifest {
+            if let Some(include_matcher) = &includes
+                && !include_matcher
+                    .matched_path_or_any_parents(relative_path, false)
+                    .is_ignore()
+            {
+                continue;
+            }
+            if let Some(exclude_matcher) = &excludes
+                && exclude_matcher
+                    .matched_path_or_any_parents(relative_path, false)
+                    .is_ignore()
+            {
+                continue;
+            }
         }
 
         files.push((path.to_path_buf(), relative_path.to_path_buf()));
@@ -374,11 +380,31 @@ fn should_workdir_force_exclude(relative_path: &Path) -> bool {
     for component in relative_path.components() {
         if let Component::Normal(name) = component {
             match name.to_str() {
-                Some(".git") | Some(".tako") | Some("node_modules") => return true,
+                // Version control & project meta
+                Some(".git") | Some(".tako") => return true,
+                // Dependencies & package caches
+                Some("node_modules")
+                | Some(".npm")
+                | Some(".pnp.cjs")
+                | Some(".pnp.loader.mjs") => return true,
+                // Build & lint caches
+                Some(".turbo")
+                | Some(".cache")
+                | Some(".parcel-cache")
+                | Some(".eslintcache")
+                | Some(".stylelintcache") => return true,
+                // Test coverage
+                Some("coverage") | Some(".nyc_output") => return true,
+                // Secrets
                 Some(name) if name.starts_with(".env") => return true,
                 _ => {}
             }
         }
+    }
+    if let Some(ext) = relative_path.extension().and_then(|e| e.to_str())
+        && matches!(ext, "log" | "tsbuildinfo" | "pid" | "lcov")
+    {
+        return true;
     }
     false
 }
@@ -497,6 +523,35 @@ mod tests {
         assert!(
             dest.join("node_modules/tako.sh/dist/entrypoints/bun.mjs")
                 .exists()
+        );
+    }
+
+    #[test]
+    fn workdir_archive_always_includes_app_json() {
+        let temp = TempDir::new().unwrap();
+        let workdir = temp.path().join("workdir");
+        let archive = temp.path().join("out.tar.zst");
+        let dest = temp.path().join("dest");
+
+        fs::create_dir_all(workdir.join("dist")).unwrap();
+        fs::write(workdir.join("dist/index.js"), "ok").unwrap();
+        fs::write(workdir.join("app.json"), r#"{"main":"index.ts"}"#).unwrap();
+        fs::write(workdir.join("README.md"), "readme").unwrap();
+
+        create_workdir_archive(&workdir, &archive, &[String::from("dist/**")], &[]).unwrap();
+
+        BuildExecutor::extract_archive(&archive, &dest).unwrap();
+        assert!(
+            dest.join("dist/index.js").exists(),
+            "included file should be present"
+        );
+        assert!(
+            dest.join("app.json").exists(),
+            "app.json must always be included"
+        );
+        assert!(
+            !dest.join("README.md").exists(),
+            "non-included file should be absent"
         );
     }
 

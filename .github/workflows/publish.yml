@@ -430,36 +430,3 @@ jobs:
           tag="${{ github.event.release.tag_name }}"
           gh release upload "$tag" dist/* --clobber
           gh release edit "$tag" --draft=false
-
-  # Build and publish SDK to npm.
-  publish-sdk:
-    name: Publish SDK
-    if: startsWith(github.event.release.tag_name, 'sdk-js-v')
-    runs-on: ubuntu-latest
-    environment: release
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          ref: ${{ github.event.release.tag_name }}
-
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-
-      - name: Build and publish
-        run: |
-          cd sdk/javascript
-          bun install
-          bun run build
-          npm publish
-
-      - name: Publish release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-        run: gh release edit "${{ github.event.release.tag_name }}" --draft=false

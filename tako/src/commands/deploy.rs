@@ -149,6 +149,7 @@ impl LocalArtifactCacheCleanupSummary {
 struct DeployTaskTreeState {
     builds: Vec<TaskItemState>,
     deploys: Vec<TaskItemState>,
+    success_lines: Vec<String>,
     summary_line: Option<(String, TreeTextTone)>,
 }
 
@@ -213,6 +214,7 @@ impl DeployTaskTreeController {
                         ])
                 })
                 .collect(),
+            success_lines: Vec::new(),
             summary_line: None,
         };
         let tree = build_deploy_tree(&state);
@@ -386,6 +388,12 @@ impl DeployTaskTreeController {
         let mut state = self.state.lock().unwrap();
         abort_incomplete_tasks(&mut state.builds, reason);
         abort_incomplete_tasks(&mut state.deploys, reason);
+        self.refresh_locked(&state);
+    }
+
+    fn set_success_summary(&self, version: &str, routes: &[String]) {
+        let mut state = self.state.lock().unwrap();
+        state.success_lines = format_deploy_summary_lines("Revision", version, routes);
         self.refresh_locked(&state);
     }
 
@@ -567,6 +575,18 @@ fn build_deploy_tree(state: &DeployTaskTreeState) -> Vec<TreeNode> {
         }));
         if index + 1 < state.deploys.len() {
             tree.push(TreeNode::Spacer);
+        }
+    }
+
+    if !state.success_lines.is_empty() {
+        if !tree.is_empty() && !matches!(tree.last(), Some(TreeNode::Spacer)) {
+            tree.push(TreeNode::Spacer);
+        }
+        for line in &state.success_lines {
+            tree.push(TreeNode::Text {
+                text: line.clone(),
+                tone: TreeTextTone::Accent,
+            });
         }
     }
 
@@ -1037,10 +1057,14 @@ async fn run_async(
 
     // ===== Summary =====
     if errors.is_empty() {
-        if output::is_pretty() && deploy_task_tree.is_none() {
-            eprintln!();
+        if let Some(task_tree) = &deploy_task_tree {
+            task_tree.set_success_summary(&version, &routes);
+        } else {
+            if output::is_pretty() {
+                eprintln!();
+            }
+            print_deploy_summary("Revision", &version, &routes);
         }
-        print_deploy_summary("Revision", &version, &routes);
 
         Ok(())
     } else {
@@ -2273,25 +2297,11 @@ async fn prepare_build_phase(
 }
 
 fn build_artifact_include_patterns(config: &TakoToml) -> Vec<String> {
-    // When using build stages, collect includes from each stage (relative to its cwd).
+    // Stage `include` patterns are additive — they specify build outputs to
+    // keep alongside the app's own files, not an exclusive filter.  The workdir
+    // is already gitignore-filtered, so we include everything.
     if !config.build_stages.is_empty() {
-        let mut patterns = Vec::new();
-        for stage in &config.build_stages {
-            for include in &stage.include {
-                match &stage.cwd {
-                    Some(cwd) if !cwd.is_empty() && cwd != "." => {
-                        patterns.push(format!("{}/{}", cwd.trim_end_matches('/'), include));
-                    }
-                    _ => {
-                        patterns.push(include.clone());
-                    }
-                }
-            }
-        }
-        if patterns.is_empty() {
-            return vec!["**/*".to_string()];
-        }
-        return patterns;
+        return vec!["**/*".to_string()];
     }
     if !config.build.include.is_empty() {
         return config.build.include.clone();
@@ -2309,7 +2319,20 @@ fn should_report_artifact_include_patterns(include_patterns: &[String]) -> bool 
 
 fn build_artifact_exclude_patterns(_preset: &BuildPreset, config: &TakoToml) -> Vec<String> {
     if !config.build_stages.is_empty() {
-        return Vec::new();
+        let mut patterns = Vec::new();
+        for stage in &config.build_stages {
+            for exclude in &stage.exclude {
+                match &stage.cwd {
+                    Some(cwd) if !cwd.is_empty() && cwd != "." => {
+                        patterns.push(format!("{}/{}", cwd.trim_end_matches('/'), exclude));
+                    }
+                    _ => {
+                        patterns.push(exclude.clone());
+                    }
+                }
+            }
+        }
+        return patterns;
     }
     config.build.exclude.clone()
 }
@@ -2788,10 +2811,10 @@ async fn build_target_artifacts(
         {
             tracing::debug!("{}", stage_summary_message);
         }
-        // Create workdir: copy the archive root (git root or runtime project root) respecting
-        // .gitignore, then symlink node_modules. The workdir mirrors the full archive root so
-        // workspace-relative references (e.g. bun workspace:*) resolve correctly on the server.
+        // Clean workdir from any previous build, then create a fresh copy of the source tree
+        // respecting .gitignore. Symlink node_modules so workspace references resolve.
         let workdir = project_dir.join(".tako/workdir");
+        crate::build::cleanup_workdir(&workdir);
         {
             let _t = output::timed("Workdir setup");
             crate::build::create_workdir(source_root, &workdir)
@@ -2966,6 +2989,8 @@ async fn build_target_artifacts(
                 if let Err(error) = run_local_build(
                     &workspace,
                     &app_dir_in_workspace,
+                    source_root,
+                    project_dir,
                     &tako_config.build,
                     custom_stages,
                     &extra_envs,
@@ -2983,6 +3008,8 @@ async fn build_target_artifacts(
                     run_local_build(
                         &workspace,
                         &app_dir_in_workspace,
+                        source_root,
+                        project_dir,
                         &tako_config.build,
                         custom_stages,
                         &extra_envs,
@@ -2994,6 +3021,8 @@ async fn build_target_artifacts(
                 run_local_build(
                     &workspace,
                     &app_dir_in_workspace,
+                    source_root,
+                    project_dir,
                     &tako_config.build,
                     custom_stages,
                     &extra_envs,
@@ -3097,6 +3126,8 @@ async fn build_target_artifacts(
 fn run_local_build(
     workspace: &Path,
     app_dir: &Path,
+    original_source_root: &Path,
+    original_app_dir: &Path,
     build_config: &crate::config::BuildConfig,
     custom_stages: &[BuildStage],
     extra_envs: &[(&str, &str)],
@@ -3156,9 +3187,7 @@ fn run_local_build(
             let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
             let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
             let detail = if stderr.is_empty() { stdout } else { stderr };
-            Err(format!(
-                "Local {stage_label} {phase} command failed: {detail}"
-            ))
+            Err(format!("{stage_label} {phase} command failed: {detail}"))
         };
 
     // Run [build].install then [build].run if configured (simple build mode).
@@ -3184,6 +3213,8 @@ fn run_local_build(
     for stage in custom_stages {
         let stage_label = format_stage_label(stage_number, stage.name.as_deref());
         let stage_cwd = resolve_stage_working_dir_for_local_build(
+            original_source_root,
+            original_app_dir,
             workspace,
             stage.cwd.as_deref(),
             &stage_label,
@@ -3200,7 +3231,7 @@ fn run_local_build(
         }
         let run_command = stage.run.trim();
         if run_command.is_empty() {
-            return Err(format!("Local {stage_label} run command is empty"));
+            return Err(format!("{stage_label} run command is empty"));
         }
         tracing::debug!("Running {stage_label}: {run_command}…");
         let _t = output::timed(&stage_label);
@@ -3214,8 +3245,8 @@ fn run_local_build(
 
 fn format_stage_label(stage_number: usize, stage_name: Option<&str>) -> String {
     match stage_name.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(name) => format!("stage {stage_number} ({name})"),
-        None => format!("stage {stage_number}"),
+        Some(name) => format!("Stage '{name}'"),
+        None => format!("Stage {stage_number}"),
     }
 }
 
@@ -3230,22 +3261,55 @@ fn summarize_build_stages(custom_stages: &[BuildStage]) -> Vec<String> {
 }
 
 fn resolve_stage_working_dir_for_local_build(
-    app_dir: &Path,
+    original_source_root: &Path,
+    original_app_dir: &Path,
+    workspace: &Path,
     working_dir: Option<&str>,
     stage_label: &str,
 ) -> Result<PathBuf, String> {
     let Some(working_dir) = working_dir.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(app_dir.to_path_buf());
+        let relative_app = original_app_dir
+            .strip_prefix(original_source_root)
+            .unwrap_or(Path::new(""));
+        return Ok(workspace.join(relative_app));
     };
-    let stage_dir = app_dir.join(working_dir);
-    if !stage_dir.is_dir() {
+    // Check escape: normalize the path from source root through app dir to stage cwd.
+    let relative_app = original_app_dir
+        .strip_prefix(original_source_root)
+        .unwrap_or(Path::new(""));
+    let full_relative = relative_app.join(working_dir);
+    let mut depth: i32 = 0;
+    for component in full_relative.components() {
+        match component {
+            std::path::Component::ParentDir => depth -= 1,
+            std::path::Component::Normal(_) => depth += 1,
+            _ => {}
+        }
+        if depth < 0 {
+            return Err(format!(
+                "{stage_label} working directory '{working_dir}' must not escape the project root",
+            ));
+        }
+    }
+    // Resolve against original app dir to validate existence.
+    let resolved = original_app_dir.join(working_dir);
+    if !resolved.is_dir() {
         return Err(format!(
-            "Local {stage_label} working directory '{}' was not found at '{}'",
-            working_dir,
-            stage_dir.display()
+            "{stage_label} working directory '{working_dir}' not found",
         ));
     }
-    Ok(stage_dir)
+    // Map into workdir via canonicalized relative path.
+    let canonical = resolved
+        .canonicalize()
+        .map_err(|_| format!("{stage_label} working directory '{working_dir}' not found"))?;
+    let canonical_root = original_source_root.canonicalize().map_err(|e| {
+        format!(
+            "Failed to resolve source root '{}': {e}",
+            original_source_root.display()
+        )
+    })?;
+    let relative = canonical.strip_prefix(&canonical_root).unwrap();
+    Ok(workspace.join(relative))
 }
 
 /// Save the resolved runtime version into the deploy manifest (`app.json`).
@@ -3885,6 +3949,22 @@ async fn deploy_to_server(
                     );
                     let combined_cmd = format!("{} && {}", extract_cmd, shared_link_cmd);
                     ssh.exec_checked(&combined_cmd).await?;
+
+                    // Download runtime and install production dependencies on the server.
+                    let prepare_cmd = Command::PrepareRelease {
+                        app: config.app_name.clone(),
+                        path: release_dir.clone(),
+                    };
+                    let json = serde_json::to_string(&prepare_cmd)
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                    let response = ssh
+                        .tako_command(&json)
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                    if deploy_response_has_error(&response) {
+                        return Err(extract_server_error_message(&response).into());
+                    }
+
                     Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
                 })
                 .await
@@ -3904,6 +3984,22 @@ async fn deploy_to_server(
                     );
                     let combined_cmd = format!("{} && {}", extract_cmd, shared_link_cmd);
                     ssh.exec_checked(&combined_cmd).await?;
+
+                    // Download runtime and install production dependencies on the server.
+                    let prepare_cmd = Command::PrepareRelease {
+                        app: config.app_name.clone(),
+                        path: release_dir.clone(),
+                    };
+                    let json = serde_json::to_string(&prepare_cmd)
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                    let response = ssh
+                        .tako_command(&json)
+                        .await
+                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+                    if deploy_response_has_error(&response) {
+                        return Err(extract_server_error_message(&response).into());
+                    }
+
                     Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
                 })
                 .await
@@ -3923,6 +4019,12 @@ async fn deploy_to_server(
             )
         );
 
+        // Resolve secrets before the starting step to keep it fast.
+        let deploy_secrets = match query_remote_secrets_hash(&ssh, &config.app_name).await {
+            Some(remote_hash) if remote_hash == config.secrets_hash => None,
+            _ => Some(config.env_vars.clone()),
+        };
+
         let start_result = if let Some(task_tree) = &task_tree {
             run_task_tree_deploy_step_with_detail_and_error_cleanup(
                 task_tree,
@@ -3930,14 +4032,6 @@ async fn deploy_to_server(
                 "starting",
                 None,
                 async {
-                    // Check if server already has up-to-date secrets by comparing hashes.
-                    // If hashes match, skip sending secrets (server keeps existing ones).
-                    let deploy_secrets =
-                        match query_remote_secrets_hash(&ssh, &config.app_name).await {
-                            Some(remote_hash) if remote_hash == config.secrets_hash => None,
-                            _ => Some(config.env_vars.clone()),
-                        };
-
                     let cmd = Command::Deploy {
                         app: config.app_name.clone(),
                         version: config.version.clone(),
@@ -3955,19 +4049,6 @@ async fn deploy_to_server(
                     if deploy_response_has_error(&response) {
                         return Err(extract_server_error_message(&response).into());
                     }
-
-                    ssh.symlink(&release_dir, &config.current_link())
-                        .await
-                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-
-                    let releases_dir = format!("{}/releases", config.remote_base);
-                    let cleanup_cmd = format!(
-                        "find {} -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {{}} \\;",
-                        releases_dir
-                    );
-                    ssh.exec(&cleanup_cmd)
-                        .await
-                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
 
                     Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
                 },
@@ -3987,13 +4068,6 @@ async fn deploy_to_server(
             .await
         } else {
             run_deploy_step("Starting…", "Started", use_spinner, async {
-                // Check if server already has up-to-date secrets by comparing hashes.
-                // If hashes match, skip sending secrets (server keeps existing ones).
-                let deploy_secrets = match query_remote_secrets_hash(&ssh, &config.app_name).await {
-                    Some(remote_hash) if remote_hash == config.secrets_hash => None,
-                    _ => Some(config.env_vars.clone()),
-                };
-
                 let cmd = Command::Deploy {
                     app: config.app_name.clone(),
                     version: config.version.clone(),
@@ -4012,21 +4086,6 @@ async fn deploy_to_server(
                     return Err(extract_server_error_message(&response).into());
                 }
 
-                // Update current symlink only after tako-server accepted the deploy command.
-                ssh.symlink(&release_dir, &config.current_link())
-                    .await
-                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-
-                // Clean up old releases (keep last 30 days).
-                let releases_dir = format!("{}/releases", config.remote_base);
-                let cleanup_cmd = format!(
-                    "find {} -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {{}} \\;",
-                    releases_dir
-                );
-                ssh.exec(&cleanup_cmd)
-                    .await
-                    .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
-
                 Ok::<(), Box<dyn std::error::Error + Send + Sync>>(())
             })
             .await
@@ -4034,6 +4093,21 @@ async fn deploy_to_server(
         start_result.map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
             format_deploy_step_failure("Starting", &e.to_string()).into()
         })?;
+
+        // Post-deploy housekeeping (not timed as part of "Starting").
+        ssh.symlink(&release_dir, &config.current_link())
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })?;
+
+        let releases_dir = format!("{}/releases", config.remote_base);
+        let cleanup_cmd = format!(
+            "find {} -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {{}} \\;",
+            releases_dir
+        );
+        if let Err(e) = ssh.exec(&cleanup_cmd).await {
+            tracing::warn!("Failed to clean up old releases: {e}");
+        }
+
         if let Some(task_tree) = &task_tree {
             task_tree.succeed_deploy_target(server_name, None);
         }
@@ -5187,6 +5261,29 @@ route = "app.example.com"
     }
 
     #[test]
+    fn deploy_task_tree_success_summary_appends_revision_and_urls() {
+        let controller =
+            DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
+        controller.set_success_summary(
+            "20260330",
+            &["app.tako.test".to_string(), "*.app.tako.test".to_string()],
+        );
+
+        let lines = ui::render_plain_lines(&build_deploy_tree(&controller.snapshot()));
+        assert!(lines.iter().any(|line| line == "Revision   20260330"));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "URL        https://app.tako.test")
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "           https://*.app.tako.test")
+        );
+    }
+
+    #[test]
     fn deploy_task_tree_can_append_error_summary_line() {
         let controller =
             DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
@@ -5659,7 +5756,7 @@ route = "app.example.com"
     }
 
     #[test]
-    fn build_artifact_include_patterns_collects_from_stages_with_cwd() {
+    fn build_artifact_include_patterns_stages_include_everything() {
         let mut config = TakoToml::default();
         config.build_stages = vec![
             crate::config::BuildStage {
@@ -5667,53 +5764,44 @@ route = "app.example.com"
                 cwd: Some("rust-service".to_string()),
                 install: None,
                 run: "cargo build --release".to_string(),
-                include: vec!["target/release/my-service".to_string()],
+                exclude: Vec::new(),
             },
             crate::config::BuildStage {
                 name: Some("frontend".to_string()),
                 cwd: Some("apps/web".to_string()),
                 install: None,
                 run: "bun run build".to_string(),
-                include: vec!["dist/**".to_string(), "package.json".to_string()],
+                exclude: vec!["**/*.map".to_string()],
             },
         ];
         let includes = build_artifact_include_patterns(&config);
-        assert_eq!(
-            includes,
-            vec![
-                "rust-service/target/release/my-service".to_string(),
-                "apps/web/dist/**".to_string(),
-                "apps/web/package.json".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn build_artifact_include_patterns_stage_without_cwd() {
-        let mut config = TakoToml::default();
-        config.build_stages = vec![crate::config::BuildStage {
-            name: None,
-            cwd: None,
-            install: None,
-            run: "bun run build".to_string(),
-            include: vec!["dist/**".to_string()],
-        }];
-        let includes = build_artifact_include_patterns(&config);
-        assert_eq!(includes, vec!["dist/**".to_string()]);
-    }
-
-    #[test]
-    fn build_artifact_include_patterns_stages_without_include_defaults_to_all() {
-        let mut config = TakoToml::default();
-        config.build_stages = vec![crate::config::BuildStage {
-            name: None,
-            cwd: None,
-            install: None,
-            run: "bun run build".to_string(),
-            include: Vec::new(),
-        }];
-        let includes = build_artifact_include_patterns(&config);
         assert_eq!(includes, vec!["**/*".to_string()]);
+    }
+
+    #[test]
+    fn build_artifact_exclude_patterns_collects_from_stages() {
+        let mut config = TakoToml::default();
+        config.build_stages = vec![
+            crate::config::BuildStage {
+                name: None,
+                cwd: Some("apps/web".to_string()),
+                install: None,
+                run: "bun run build".to_string(),
+                exclude: vec!["**/*.map".to_string()],
+            },
+            crate::config::BuildStage {
+                name: None,
+                cwd: None,
+                install: None,
+                run: "bun run build".to_string(),
+                exclude: vec!["tmp/**".to_string()],
+            },
+        ];
+        let excludes = build_artifact_exclude_patterns(&BuildPreset::default(), &config);
+        assert_eq!(
+            excludes,
+            vec!["apps/web/**/*.map".to_string(), "tmp/**".to_string(),]
+        );
     }
 
     #[test]
@@ -5742,22 +5830,19 @@ route = "app.example.com"
                 cwd: None,
                 install: None,
                 run: "bun run build".to_string(),
-                include: Vec::new(),
+                exclude: Vec::new(),
             },
             crate::config::BuildStage {
                 name: Some("frontend-assets".to_string()),
                 cwd: Some("frontend".to_string()),
                 install: None,
                 run: "bun run build".to_string(),
-                include: Vec::new(),
+                exclude: Vec::new(),
             },
         ];
         assert_eq!(
             summarize_build_stages(&custom),
-            vec![
-                "stage 1".to_string(),
-                "stage 2 (frontend-assets)".to_string(),
-            ]
+            vec!["Stage 1".to_string(), "Stage 'frontend-assets'".to_string(),]
         );
     }
 
@@ -5772,7 +5857,7 @@ route = "app.example.com"
                 cwd: None,
                 install: None,
                 run: "printf 'stage-1-run\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string(),
-                include: Vec::new(),
+                exclude: Vec::new(),
             },
             crate::config::BuildStage {
                 name: Some("frontend-assets".to_string()),
@@ -5781,11 +5866,20 @@ route = "app.example.com"
                     "printf 'stage-2-install\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string(),
                 ),
                 run: "printf 'stage-2-run\\n' >> \"$TAKO_APP_DIR/order.log\"".to_string(),
-                include: Vec::new(),
+                exclude: Vec::new(),
             },
         ];
 
-        run_local_build(&workspace, &workspace, &Default::default(), &stages, &[]).unwrap();
+        run_local_build(
+            &workspace,
+            &workspace,
+            &workspace,
+            &workspace,
+            &Default::default(),
+            &stages,
+            &[],
+        )
+        .unwrap();
         let order = std::fs::read_to_string(workspace.join("order.log")).unwrap();
         assert_eq!(order, "stage-1-run\nstage-2-install\nstage-2-run\n");
     }
@@ -5798,10 +5892,10 @@ route = "app.example.com"
 
     #[test]
     fn build_stage_summary_output_is_shown_when_non_empty() {
-        let summary = vec!["stage 1 (preset)".to_string(), "stage 2".to_string()];
+        let summary = vec!["Stage 'preset'".to_string(), "Stage 2".to_string()];
         assert_eq!(
             format_build_stages_summary_for_output(&summary, Some("linux-x86_64-glibc")),
-            Some("Build stages for linux-x86_64-glibc: stage 1 (preset) -> stage 2".to_string())
+            Some("Build stages for linux-x86_64-glibc: Stage 'preset' -> Stage 2".to_string())
         );
     }
 
@@ -5815,12 +5909,20 @@ route = "app.example.com"
             cwd: Some("frontend".to_string()),
             install: None,
             run: "true".to_string(),
-            include: Vec::new(),
+            exclude: Vec::new(),
         }];
 
-        let err =
-            run_local_build(&workspace, &workspace, &Default::default(), &stages, &[]).unwrap_err();
-        assert!(err.contains("stage 1"));
+        let err = run_local_build(
+            &workspace,
+            &workspace,
+            &workspace,
+            &workspace,
+            &Default::default(),
+            &stages,
+            &[],
+        )
+        .unwrap_err();
+        assert!(err.contains("Stage 1"));
         assert!(err.contains("working directory"));
     }
 
@@ -5834,10 +5936,73 @@ route = "app.example.com"
             run: Some("touch marker.txt".to_string()),
             ..Default::default()
         };
-        run_local_build(&workspace, &app_dir, &build_config, &[], &[]).unwrap();
+        run_local_build(
+            &workspace,
+            &app_dir,
+            &workspace,
+            &app_dir,
+            &build_config,
+            &[],
+            &[],
+        )
+        .unwrap();
         // marker.txt should be created in app_dir, not workspace root
         assert!(app_dir.join("marker.txt").exists());
         assert!(!workspace.join("marker.txt").exists());
+    }
+
+    #[test]
+    fn run_local_build_stage_cwd_relative_to_app_dir() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/myapp");
+        let sdk_dir = workspace.join("sdk");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::create_dir_all(&sdk_dir).unwrap();
+        let stages = vec![crate::config::BuildStage {
+            name: Some("sdk".to_string()),
+            cwd: Some("../../sdk".to_string()),
+            install: None,
+            run: "touch built.txt".to_string(),
+            exclude: Vec::new(),
+        }];
+        run_local_build(
+            &workspace,
+            &app_dir,
+            &workspace,
+            &app_dir,
+            &Default::default(),
+            &stages,
+            &[],
+        )
+        .unwrap();
+        assert!(sdk_dir.join("built.txt").exists());
+    }
+
+    #[test]
+    fn run_local_build_stage_cwd_rejects_workspace_escape() {
+        let temp = TempDir::new().unwrap();
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/myapp");
+        std::fs::create_dir_all(&app_dir).unwrap();
+        let stages = vec![crate::config::BuildStage {
+            name: None,
+            cwd: Some("../../../outside".to_string()),
+            install: None,
+            run: "true".to_string(),
+            exclude: Vec::new(),
+        }];
+        let err = run_local_build(
+            &workspace,
+            &app_dir,
+            &workspace,
+            &app_dir,
+            &Default::default(),
+            &stages,
+            &[],
+        )
+        .unwrap_err();
+        assert!(err.contains("must not escape the project root"));
     }
 
     #[test]

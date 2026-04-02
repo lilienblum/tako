@@ -101,10 +101,9 @@ pub struct BuildStage {
     /// Required stage command.
     pub run: String,
 
-    /// File globs to include in the deploy artifact, relative to this stage's `cwd`.
-    /// Stages without `include` are intermediate (contribute nothing to the artifact).
+    /// File globs to exclude from the deploy artifact.
     #[serde(default)]
-    pub include: Vec<String>,
+    pub exclude: Vec<String>,
 }
 
 /// Environment configuration from [envs.*]
@@ -326,14 +325,14 @@ impl Config {
             && (!self.build.include.is_empty() || !self.build.exclude.is_empty())
         {
             return Err(ConfigError::Validation(
-                "Cannot use [build] include/exclude with [[build_stages]]; use per-stage include instead."
+                "Cannot use [build] include/exclude with [[build_stages]]; use per-stage exclude instead."
                     .to_string(),
             ));
         }
         for (index, stage) in self.build_stages.iter().enumerate() {
             validate_build_stage(stage, index)?;
-            for include in &stage.include {
-                validate_build_glob(include, &format!("build_stages[{index}].include"))?;
+            for exclude in &stage.exclude {
+                validate_build_glob(exclude, &format!("build_stages[{index}].exclude"))?;
             }
         }
 
@@ -659,7 +658,7 @@ fn parse_build_stages(raw: &toml::Value) -> Result<Vec<BuildStage>> {
         };
 
         for key in stage_table.keys() {
-            if !matches!(key.as_str(), "name" | "cwd" | "install" | "run" | "include") {
+            if !matches!(key.as_str(), "name" | "cwd" | "install" | "run" | "exclude") {
                 return Err(ConfigError::Validation(format!(
                     "Unknown key 'build_stages[{index}].{key}'"
                 )));
@@ -670,15 +669,15 @@ fn parse_build_stages(raw: &toml::Value) -> Result<Vec<BuildStage>> {
         let cwd = parse_build_stage_optional_string(stage_table, index, "cwd")?;
         let install = parse_build_stage_optional_string(stage_table, index, "install")?;
         let run = parse_build_stage_required_string(stage_table, index, "run")?;
-        let include =
-            parse_build_stage_string_array(stage_table, index, "include")?.unwrap_or_default();
+        let exclude =
+            parse_build_stage_string_array(stage_table, index, "exclude")?.unwrap_or_default();
 
         parsed.push(BuildStage {
             name,
             cwd,
             install,
             run,
-            include,
+            exclude,
         });
     }
 
@@ -882,21 +881,8 @@ fn validate_build_stage_cwd(cwd: &str, index: usize) -> Result<()> {
             "'build_stages[{index}].cwd' must be relative"
         )));
     }
-    // Allow ".." for monorepo traversal, but guard against escaping the workspace root.
-    // After normalizing, the resolved path must not start with ".." (i.e., escape the root).
-    let mut depth: i32 = 0;
-    for component in path.components() {
-        match component {
-            Component::ParentDir => depth -= 1,
-            Component::Normal(_) => depth += 1,
-            _ => {}
-        }
-        if depth < 0 {
-            return Err(ConfigError::Validation(format!(
-                "'build_stages[{index}].cwd' must not escape the project root"
-            )));
-        }
-    }
+    // Allow ".." for monorepo traversal. The workspace-root escape guard runs at deploy
+    // time when the actual workspace root is known (see resolve_stage_working_dir_for_local_build).
     Ok(())
 }
 
@@ -1106,7 +1092,7 @@ run = "bun run build"
         assert_eq!(config.build_stages[0].cwd, None);
         assert_eq!(config.build_stages[0].install, None);
         assert_eq!(config.build_stages[0].run, "bun run build");
-        assert!(config.build_stages[0].include.is_empty());
+        assert!(config.build_stages[0].exclude.is_empty());
         assert_eq!(
             config.build_stages[1],
             BuildStage {
@@ -1114,64 +1100,64 @@ run = "bun run build"
                 cwd: Some("frontend".to_string()),
                 install: Some("bun install".to_string()),
                 run: "bun run build".to_string(),
-                include: Vec::new(),
+                exclude: Vec::new(),
             }
         );
     }
 
     #[test]
-    fn test_parse_build_stages_with_include() {
+    fn test_parse_build_stages_with_exclude() {
         let toml = r#"
 [[build_stages]]
 name = "rust-service"
 cwd = "rust-service"
 run = "cargo build --release"
-include = ["target/release/my-service"]
+exclude = ["target/debug/**"]
 
 [[build_stages]]
 name = "frontend"
 cwd = "apps/web"
 install = "bun install"
 run = "bun run build"
-include = ["dist/**", "package.json"]
+exclude = ["**/*.map", "node_modules/**"]
 "#;
         let config = Config::parse(toml).unwrap();
         assert_eq!(config.build_stages.len(), 2);
         assert_eq!(
-            config.build_stages[0].include,
-            vec!["target/release/my-service".to_string()]
+            config.build_stages[0].exclude,
+            vec!["target/debug/**".to_string()]
         );
         assert_eq!(
-            config.build_stages[1].include,
-            vec!["dist/**".to_string(), "package.json".to_string()]
+            config.build_stages[1].exclude,
+            vec!["**/*.map".to_string(), "node_modules/**".to_string()]
         );
     }
 
     #[test]
-    fn test_build_stages_include_rejects_absolute_paths() {
+    fn test_build_stages_exclude_rejects_absolute_paths() {
         let toml = r#"
 [[build_stages]]
 run = "cargo build"
-include = ["/tmp/out/**"]
+exclude = ["/tmp/out/**"]
 "#;
         let err = Config::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("build_stages[0].include entry '/tmp/out/**' must be relative")
+                .contains("build_stages[0].exclude entry '/tmp/out/**' must be relative")
         );
     }
 
     #[test]
-    fn test_build_stages_include_rejects_parent_traversal() {
+    fn test_build_stages_exclude_rejects_parent_traversal() {
         let toml = r#"
 [[build_stages]]
 run = "cargo build"
-include = ["../secret/**"]
+exclude = ["../secret/**"]
 "#;
         let err = Config::parse(toml).unwrap_err();
         assert!(
             err.to_string()
-                .contains("build_stages[0].include entry '../secret/**' must not contain '..'")
+                .contains("build_stages[0].exclude entry '../secret/**' must not contain '..'")
         );
     }
 
@@ -1185,7 +1171,7 @@ include = ["dist/**"]
 run = "bun run build"
 "#;
         let err = Config::parse(toml).unwrap_err();
-        assert!(err.to_string().contains("per-stage include"));
+        assert!(err.to_string().contains("per-stage exclude"));
     }
 
     #[test]
@@ -1198,7 +1184,7 @@ exclude = ["**/*.map"]
 run = "bun run build"
 "#;
         let err = Config::parse(toml).unwrap_err();
-        assert!(err.to_string().contains("per-stage include"));
+        assert!(err.to_string().contains("per-stage exclude"));
     }
 
     #[test]
@@ -1692,14 +1678,19 @@ run = "bun run build"
     }
 
     #[test]
-    fn test_validate_build_stage_cwd_rejects_escaping_root() {
+    fn test_validate_build_stage_cwd_allows_parent_traversal() {
+        // Parse-time validation allows ".." — escape check happens at deploy time
+        // when the workspace root is known.
         let toml = r#"
 [[build_stages]]
-cwd = "../outside"
+cwd = "../../sdk/javascript"
 run = "bun run build"
 "#;
-        let err = Config::parse(toml).unwrap_err();
-        assert!(err.to_string().contains("must not escape the project root"));
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(
+            config.build_stages[0].cwd,
+            Some("../../sdk/javascript".to_string())
+        );
     }
 
     #[test]
