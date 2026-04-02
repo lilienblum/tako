@@ -219,38 +219,6 @@ impl TaskTreeSession {
         }
     }
 
-    pub fn pause(&self) {
-        if !self.shared.enabled {
-            return;
-        }
-        let mut state = self.shared.state.lock().unwrap();
-        if state.paused {
-            return;
-        }
-        state.paused = true;
-        drop(state);
-
-        if let Ok(mut term_guard) = self.shared.terminal.lock()
-            && let Some(term) = term_guard.as_mut()
-        {
-            let _ = term.clear();
-        }
-    }
-
-    pub fn resume(&self) {
-        if !self.shared.enabled {
-            return;
-        }
-        {
-            let mut state = self.shared.state.lock().unwrap();
-            if !state.paused {
-                return;
-            }
-            state.paused = false;
-        }
-        self.draw_now();
-    }
-
     /// Explicitly finalize this session: stop the tick thread and render the
     /// final tree output. Subsequent drops become no-ops. Call this before the
     /// function returns so the output appears *before* the shell prompt.

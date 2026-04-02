@@ -673,6 +673,20 @@ Remove tako-server and all data from a remote server.
 
 Alias: `tako servers uninstall`.
 
+### tako servers setup-wildcard [--env ENV]
+
+Configure DNS-01 wildcard certificate support on all servers.
+
+1. Loads all configured servers (or servers for `--env` if specified).
+2. Runs an interactive wizard prompting for DNS provider and credentials.
+3. Verifies credentials locally against the provider API.
+4. Applies the configuration to all servers in parallel:
+   - Writes credentials to `/opt/tako/dns-credentials.env` (mode 0600)
+   - Merges `dns.provider` into `/opt/tako/config.json`
+   - Writes a systemd drop-in to inject the env file and restarts `tako-server`
+   - Polls `tako-server` to confirm the provider is active
+5. `tako-server` downloads and installs lego on-demand when issuing wildcard certificates.
+
 ### tako implode [-y|--yes]
 
 Remove the local Tako CLI and all local data.
@@ -1103,7 +1117,7 @@ Reference scripts in this repo:
 ```
 
 - `server_name` — identity label for Prometheus metrics (defaults to hostname if absent).
-- `dns.provider` — DNS provider for Let's Encrypt DNS-01 wildcard challenges (configured interactively during deploy when wildcard routes are detected).
+- `dns.provider` — DNS provider for Let's Encrypt DNS-01 wildcard challenges (configured via `tako servers setup-wildcard`).
 - Written by the installer (server name) and CLI (DNS config). Read by `tako-server` at startup.
 
 ### Zero-Downtime Operation
@@ -1398,7 +1412,7 @@ This requires OpenSSL (not rustls) for callback support.
 - Automatic renewal 30 days before expiry
 - HTTP-01 challenge (port 80)
 - Zero-downtime renewal
-- DNS-01 challenges are supported for wildcard certificates via the [`lego`](https://go-acme.github.io/lego/) ACME client, which must be [installed on the server](https://go-acme.github.io/lego/installation/). When wildcard routes are deployed and no DNS provider is configured, deploy prompts interactively for provider credentials. Credentials are stored on the server at `/opt/tako/dns-credentials.env` and the provider name is persisted in `/opt/tako/config.json`.
+- DNS-01 challenges are supported for wildcard certificates via the [`lego`](https://go-acme.github.io/lego/) ACME client, which `tako-server` downloads and installs on-demand. Credentials are stored on the server at `/opt/tako/dns-credentials.env` and the provider name is persisted in `/opt/tako/config.json`. Run `tako servers setup-wildcard` to configure DNS credentials before deploying wildcard routes.
 
 ### Wildcard Certificate Handling
 
@@ -1406,7 +1420,7 @@ Routing supports wildcard hosts (e.g. `*.example.com`). For TLS:
 
 - Wildcard certificates are issued automatically via DNS-01 challenges when a DNS provider is configured
 - Wildcard certificates are used when present in cert storage
-- If no DNS provider is configured when wildcard routes are deployed, deploy prompts interactively for provider setup
+- If no DNS provider is configured when wildcard routes are deployed, deploy fails with an error directing the user to run `tako servers setup-wildcard`
 
 ### Certificate Storage
 

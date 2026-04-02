@@ -230,18 +230,6 @@ impl DeployTaskTreeController {
         }
     }
 
-    fn pause(&self) {
-        if let Some(session) = &self.session {
-            session.pause();
-        }
-    }
-
-    fn resume(&self) {
-        if let Some(session) = &self.session {
-            session.resume();
-        }
-    }
-
     fn fail_preflight_check(&self, server_name: &str, detail: impl Into<String>) {
         let msg = detail.into();
         self.fail_deploy_step(server_name, "connecting", msg.clone());
@@ -934,14 +922,7 @@ async fn run_async(
         .unwrap()
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     let mut preflight_ssh_clients = preflight.ssh_clients;
-    ensure_wildcard_dns_support(
-        &server_names,
-        &servers,
-        &routes,
-        &preflight.checks,
-        deploy_task_tree.as_ref(),
-    )
-    .await?;
+    check_wildcard_dns_support(&routes, &preflight.checks)?;
 
     let BuildPhaseResult {
         version,
@@ -2014,100 +1995,37 @@ async fn run_server_preflight_checks(
     })
 }
 
-async fn ensure_wildcard_dns_support(
-    server_names: &[String],
-    servers: &ServersToml,
+fn check_wildcard_dns_support(
     routes: &[String],
     checks: &[ServerCheck],
-    task_tree: Option<&DeployTaskTreeController>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    use crate::commands::server::{apply_dns_config, fetch_dns_config, prompt_dns_setup};
-
     let wildcard_routes: Vec<_> = routes.iter().filter(|r| r.starts_with("*.")).collect();
     if wildcard_routes.is_empty() {
-        tracing::debug!(
-            "Server preflight complete ({} server(s))",
-            server_names.len()
-        );
         return Ok(());
     }
 
-    let has_dns: Option<&str> = checks
-        .iter()
-        .find(|c| c.dns_provider.is_some())
-        .map(|c| c.name.as_str());
-
-    let all_have_dns = checks.iter().all(|c| c.dns_provider.is_some());
-
-    if all_have_dns {
+    if checks.iter().all(|c| c.dns_provider.is_some()) {
         tracing::debug!("All servers support wildcard domains");
         return Ok(());
     }
 
-    let dns_config = if let Some(donor_name) = has_dns {
-        let donor = servers.get(donor_name).unwrap();
-        let donor_ssh_config = SshConfig::from_server(&donor.host, donor.port);
-        let mut donor_ssh = SshClient::new(donor_ssh_config);
-        donor_ssh
-            .connect()
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error> {
-                format!("Failed to connect to {}: {}", donor_name, e).into()
-            })?;
-        let config = fetch_dns_config(&donor_ssh)
-            .await?
-            .ok_or_else(|| format!("Could not read DNS config from {}", donor_name))?;
-        let _ = donor_ssh.disconnect().await;
-        config
-    } else {
-        if let Some(task_tree) = task_tree {
-            task_tree.pause();
-        }
-        let result = async {
-            let wildcard_list = wildcard_routes
-                .iter()
-                .map(|r| format!("`{}`", r))
-                .collect::<Vec<_>>()
-                .join(", ");
-            output::warning(&format!(
-                "Wildcard route {} requires DNS challenge support.",
-                wildcard_list,
-            ));
-            let first = &server_names[0];
-            let first_server = servers.get(first).unwrap();
-            let first_ssh_config = SshConfig::from_server(&first_server.host, first_server.port);
-            let mut first_ssh = SshClient::new(first_ssh_config);
-            first_ssh
-                .connect()
-                .await
-                .map_err(|e| -> Box<dyn std::error::Error> {
-                    format!("Failed to connect to {}: {}", first, e).into()
-                })?;
-            let config = prompt_dns_setup(&first_ssh).await?;
-            let _ = first_ssh.disconnect().await;
-            Ok::<_, Box<dyn std::error::Error>>(config)
-        }
-        .await;
-        if let Some(task_tree) = task_tree {
-            task_tree.resume();
-        }
-        result?
-    };
+    let missing: Vec<_> = checks
+        .iter()
+        .filter(|c| c.dns_provider.is_none())
+        .map(|c| c.name.as_str())
+        .collect();
+    let route_list = wildcard_routes
+        .iter()
+        .map(|r| r.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
 
-    for server_name in server_names {
-        let server = servers.get(server_name).unwrap();
-        let ssh_config = SshConfig::from_server(&server.host, server.port);
-        let mut ssh = SshClient::new(ssh_config);
-        ssh.connect()
-            .await
-            .map_err(|e| -> Box<dyn std::error::Error> {
-                format!("Failed to connect to {}: {}", server_name, e).into()
-            })?;
-        apply_dns_config(&ssh, server_name, &dns_config).await?;
-        let _ = ssh.disconnect().await;
-    }
-
-    Ok(())
+    Err(format!(
+        "Server(s) {} need DNS-01 for wildcard route(s) {route_list}\n\
+         Run `tako servers setup-wildcard` to configure DNS credentials.",
+        missing.join(", "),
+    )
+    .into())
 }
 
 async fn prepare_build_phase(
@@ -5655,6 +5573,52 @@ route = "app.example.com"
 
         let partial = format_partial_failure_error(2);
         assert_eq!(partial, "2 server(s) failed");
+    }
+
+    #[test]
+    fn check_wildcard_dns_support_passes_without_wildcards() {
+        let routes = vec!["api.example.com".to_string()];
+        let checks = vec![ServerCheck {
+            name: "prod-1".to_string(),
+            mode: tako_core::UpgradeMode::Normal,
+            dns_provider: None,
+        }];
+        assert!(check_wildcard_dns_support(&routes, &checks).is_ok());
+    }
+
+    #[test]
+    fn check_wildcard_dns_support_passes_when_all_have_dns() {
+        let routes = vec!["*.example.com".to_string()];
+        let checks = vec![ServerCheck {
+            name: "prod-1".to_string(),
+            mode: tako_core::UpgradeMode::Normal,
+            dns_provider: Some("cloudflare".to_string()),
+        }];
+        assert!(check_wildcard_dns_support(&routes, &checks).is_ok());
+    }
+
+    #[test]
+    fn check_wildcard_dns_support_fails_when_server_lacks_dns() {
+        let routes = vec!["*.example.com".to_string()];
+        let checks = vec![
+            ServerCheck {
+                name: "prod-1".to_string(),
+                mode: tako_core::UpgradeMode::Normal,
+                dns_provider: Some("cloudflare".to_string()),
+            },
+            ServerCheck {
+                name: "prod-2".to_string(),
+                mode: tako_core::UpgradeMode::Normal,
+                dns_provider: None,
+            },
+        ];
+        let err = check_wildcard_dns_support(&routes, &checks).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("prod-2"), "should name the server: {msg}");
+        assert!(
+            msg.contains("setup-wildcard"),
+            "should suggest the command: {msg}"
+        );
     }
 
     #[test]

@@ -599,7 +599,16 @@ impl AcmeClient {
     }
 }
 
-const LEGO_VERSION: &str = "4.22.2";
+const LEGO_VERSION: &str = "4.33.0";
+
+/// Expected SHA-256 checksums for lego archives, keyed by Go architecture.
+fn lego_expected_sha256(go_arch: &str) -> Option<&'static str> {
+    match go_arch {
+        "amd64" => Some("ad9774e26038bfc48ebafd4430e6412b7fc09ab91809f7f4841a49043ef37aee"),
+        "arm64" => Some("83603dbf45f9a18b66cbd3c943a192888d6e6b2c181b72610694abd199253c3d"),
+        _ => None,
+    }
+}
 
 /// Ensure lego is available, downloading it if necessary.
 /// Returns the path to the lego binary.
@@ -622,7 +631,7 @@ async fn ensure_lego_installed(data_dir: &std::path::Path) -> Result<PathBuf, Ac
 
     tracing::info!("lego not found, downloading v{LEGO_VERSION}");
 
-    let arch = match std::env::consts::ARCH {
+    let go_arch = match std::env::consts::ARCH {
         "x86_64" => "amd64",
         "aarch64" => "arm64",
         other => {
@@ -632,8 +641,11 @@ async fn ensure_lego_installed(data_dir: &std::path::Path) -> Result<PathBuf, Ac
         }
     };
 
+    let expected_sha256 = lego_expected_sha256(go_arch)
+        .ok_or_else(|| AcmeError::LegoDns01Failed(format!("No checksum for lego on {go_arch}")))?;
+
     let url = format!(
-        "https://github.com/go-acme/lego/releases/download/v{LEGO_VERSION}/lego_v{LEGO_VERSION}_linux_{arch}.tar.gz"
+        "https://github.com/go-acme/lego/releases/download/v{LEGO_VERSION}/lego_v{LEGO_VERSION}_linux_{go_arch}.tar.gz"
     );
 
     let bin_dir = data_dir.join("bin");
@@ -655,6 +667,21 @@ async fn ensure_lego_installed(data_dir: &std::path::Path) -> Result<PathBuf, Ac
             "Failed to download lego from {url}: {}",
             String::from_utf8_lossy(&output.stderr)
         )));
+    }
+
+    // Verify SHA-256 checksum
+    {
+        use sha2::Digest;
+        let data = std::fs::read(&tmp_tar).map_err(|e| {
+            AcmeError::LegoDns01Failed(format!("Failed to read downloaded archive: {e}"))
+        })?;
+        let actual = hex::encode(sha2::Sha256::digest(&data));
+        if actual != expected_sha256 {
+            let _ = std::fs::remove_file(&tmp_tar);
+            return Err(AcmeError::LegoDns01Failed(format!(
+                "SHA-256 mismatch for lego archive: expected {expected_sha256}, got {actual}"
+            )));
+        }
     }
 
     let output = tokio::process::Command::new("tar")

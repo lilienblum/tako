@@ -80,6 +80,13 @@ pub enum ServerCommands {
     /// Show global deployment status across configured servers
     #[command(visible_alias = "info")]
     Status,
+
+    /// Configure DNS-01 wildcard certificate support
+    SetupWildcard {
+        /// Target environment
+        #[arg(long, short)]
+        env: Option<String>,
+    },
 }
 
 pub fn run(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>> {
@@ -130,6 +137,7 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
         } => upgrade_servers(name.as_deref(), canary, stable).await,
         ServerCommands::Implode { name, yes } => implode_server_cmd(name.as_deref(), yes).await,
         ServerCommands::Status => crate::commands::status::run().await,
+        ServerCommands::SetupWildcard { env } => setup_wildcard(env.as_deref()).await,
     }
 }
 
@@ -1226,11 +1234,6 @@ async fn fetch_release_bytes(url: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("failed to read response body from {url}: {e}"))
 }
 
-async fn fetch_release_text(url: &str) -> Result<String, String> {
-    let bytes = fetch_release_bytes(url).await?;
-    String::from_utf8(bytes).map_err(|e| format!("response from {url} was not valid UTF-8: {e}"))
-}
-
 async fn resolve_verified_server_release_asset(
     channel: UpgradeChannel,
     tag: Option<&str>,
@@ -1823,7 +1826,6 @@ async fn run_server_upgrade(
 
 const SERVER_CONFIG_JSON: &str = "/opt/tako/config.json";
 const DNS_CREDENTIALS_ENV: &str = "/opt/tako/dns-credentials.env";
-const LEGO_VERSION: &str = "4.21.0";
 
 /// Return a shell command to quickly verify credentials for a provider, if
 /// supported. The command should exit 0 on success, non-zero on failure.
@@ -1911,109 +1913,14 @@ fn dns_provider_env_vars(provider: &str) -> &'static [(&'static str, &'static st
     }
 }
 
-fn lego_download_url(arch: &str) -> String {
-    let archive_name = lego_archive_name(arch);
-    format!(
-        "https://github.com/go-acme/lego/releases/download/v{version}/{archive_name}",
-        version = LEGO_VERSION,
-    )
+struct DnsConfig {
+    provider: String,
+    credentials_env: String, // KEY=VALUE\n content
 }
 
-fn lego_archive_name(arch: &str) -> String {
-    let go_arch = match arch {
-        "aarch64" | "arm64" => "arm64",
-        _ => "amd64",
-    };
-    format!(
-        "lego_v{version}_linux_{arch}.tar.gz",
-        version = LEGO_VERSION,
-        arch = go_arch,
-    )
-}
-
-fn lego_checksums_url() -> String {
-    format!(
-        "https://github.com/go-acme/lego/releases/download/v{version}/lego_{version}_checksums.txt",
-        version = LEGO_VERSION,
-    )
-}
-
-async fn resolve_verified_lego_release_asset(arch: &str) -> Result<VerifiedReleaseAsset, String> {
-    let archive_name = lego_archive_name(arch);
-    let checksum_text = fetch_release_text(&lego_checksums_url()).await?;
-    let expected_sha256 = parse_sha256_manifest_value(&checksum_text, &archive_name)?;
-    Ok(VerifiedReleaseAsset {
-        download_url: lego_download_url(arch),
-        expected_sha256,
-    })
-}
-
-fn install_lego_command(arch: &str, expected_sha256: &str) -> String {
-    let url = lego_download_url(arch);
-    let sha_check = verify_downloaded_sha256_script("\"$archive\"", expected_sha256);
-    format!(
-        "set -e; \
-         if command -v lego >/dev/null 2>&1 && lego --version 2>&1 | grep -q '{version}'; then \
-           echo 'lego {version} already installed'; \
-         else \
-           tmp=$(mktemp -d); \
-           archive=\"$tmp/lego.tar.gz\"; \
-           curl -fsSL '{url}' -o \"$archive\"; \
-           {sha_check}; \
-           tar -xzf \"$archive\" -C \"$tmp\" lego; \
-           install -m 0755 \"$tmp/lego\" /usr/local/bin/lego; \
-           rm -rf \"$tmp\"; \
-           echo 'lego {version} installed'; \
-         fi",
-        version = LEGO_VERSION,
-        url = url,
-    )
-}
-
-/// DNS provider + credentials pair, used to copy config between servers.
-pub struct DnsConfig {
-    pub provider: String,
-    pub credentials_env: String, // KEY=VALUE\n content
-}
-
-/// Read DNS provider config and credentials from a server that already has them.
-pub async fn fetch_dns_config(
-    ssh: &SshClient,
-) -> Result<Option<DnsConfig>, Box<dyn std::error::Error>> {
-    let config_json = ssh
-        .exec(&format!("cat {} 2>/dev/null || true", SERVER_CONFIG_JSON))
-        .await?
-        .stdout
-        .trim()
-        .to_string();
-    let provider = if !config_json.is_empty() {
-        serde_json::from_str::<serde_json::Value>(&config_json)
-            .ok()
-            .and_then(|v| v.get("dns")?.get("provider")?.as_str().map(String::from))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
-    if provider.is_empty() {
-        return Ok(None);
-    }
-    let creds_cmd = SshClient::run_with_root_or_sudo(&format!(
-        "cat {} 2>/dev/null || true",
-        DNS_CREDENTIALS_ENV,
-    ));
-    let credentials_env = ssh.exec(&creds_cmd).await?.stdout.trim().to_string();
-    if credentials_env.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(DnsConfig {
-        provider,
-        credentials_env: format!("{}\n", credentials_env),
-    }))
-}
-
-/// Interactively prompt for DNS provider and credentials, verify them, and
-/// return the config. Does not write anything to the server yet.
-pub async fn prompt_dns_setup(ssh: &SshClient) -> Result<DnsConfig, Box<dyn std::error::Error>> {
+/// Interactively prompt for DNS provider and credentials, verify them locally,
+/// and return the config. Does not write anything to any server.
+async fn prompt_dns_setup() -> Result<DnsConfig, Box<dyn std::error::Error>> {
     // Select DNS provider
     let provider_options = vec![
         ("cloudflare".to_string(), "cloudflare"),
@@ -2075,20 +1982,32 @@ pub async fn prompt_dns_setup(ssh: &SshClient) -> Result<DnsConfig, Box<dyn std:
         return Err(output::operation_cancelled_error().into());
     }
 
-    // Quick credential validation via provider API before touching the server.
+    // Quick credential validation via provider API (runs locally).
     if let Some(verify_cmd) = credential_verify_command(&provider, &credentials) {
         tracing::debug!("Verifying credentials for DNS provider {provider}…");
         let _t = output::timed(&format!("DNS credential verification ({provider})"));
+        let verify_future = async {
+            let out = tokio::process::Command::new("sh")
+                .args(["-c", &verify_cmd])
+                .output()
+                .await
+                .map_err(|e| -> Box<dyn std::error::Error> {
+                    format!("Failed to run credential verification: {e}").into()
+                })?;
+            if !out.status.success() {
+                return Err::<(), Box<dyn std::error::Error>>(
+                    "Credentials invalid. Check your API token and try again.".into(),
+                );
+            }
+            Ok(())
+        };
         output::with_spinner_async_err(
             "Verifying credentials",
             "Credentials valid",
             "Verifying credentials",
-            ssh.exec_checked(&verify_cmd),
+            verify_future,
         )
-        .await
-        .map_err(|_| -> Box<dyn std::error::Error> {
-            "Credentials invalid. Check your API token and try again.".into()
-        })?;
+        .await?;
     }
 
     let mut env_content = String::new();
@@ -2102,10 +2021,69 @@ pub async fn prompt_dns_setup(ssh: &SshClient) -> Result<DnsConfig, Box<dyn std:
     })
 }
 
-/// Apply a DNS config to a server: install lego, write credentials, configure
-/// systemd, and reload tako-server. The server must already be connected.
+async fn setup_wildcard(env: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    use crate::config::ServersToml;
+    use crate::ssh::SshConfig;
+
+    let servers = ServersToml::load()?;
+    if servers.is_empty() {
+        return Err("No servers configured. Run `tako servers add` first.".into());
+    }
+
+    let env_name = env.unwrap_or("production");
+    let server_names: Vec<String> = servers.names().into_iter().map(String::from).collect();
+
+    if server_names.is_empty() {
+        return Err(format!("No servers found for environment '{env_name}'.").into());
+    }
+
+    let dns_config = prompt_dns_setup().await?;
+
+    let mut handles = Vec::new();
+    for name in &server_names {
+        let server = servers.get(name).unwrap();
+        let ssh_config = SshConfig::from_server(&server.host, server.port);
+        let name = name.clone();
+        let config = DnsConfig {
+            provider: dns_config.provider.clone(),
+            credentials_env: dns_config.credentials_env.clone(),
+        };
+        handles.push(tokio::spawn(async move {
+            let mut ssh = SshClient::new(ssh_config);
+            ssh.connect()
+                .await
+                .map_err(|e| format!("Failed to connect to {name}: {e}"))?;
+            apply_dns_config(&ssh, &name, &config)
+                .await
+                .map_err(|e| format!("{e}"))?;
+            let _ = ssh.disconnect().await;
+            Ok::<_, String>(())
+        }));
+    }
+
+    let mut errors = Vec::new();
+    for handle in handles {
+        if let Err(e) = handle.await.unwrap() {
+            errors.push(e);
+        }
+    }
+
+    if !errors.is_empty() {
+        return Err(errors.join("\n").into());
+    }
+
+    output::success(&format!(
+        "DNS-01 wildcard support configured on {} server(s)",
+        server_names.len(),
+    ));
+
+    Ok(())
+}
+
+/// Apply a DNS config to a server: write credentials, configure systemd, and
+/// reload tako-server. The server installs lego on-demand when it needs it.
 /// All intermediate output is suppressed — shows a single spinner line.
-pub async fn apply_dns_config(
+async fn apply_dns_config(
     ssh: &SshClient,
     name: &str,
     config: &DnsConfig,
@@ -2126,31 +2104,10 @@ async fn apply_dns_config_inner(
     config: &DnsConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let provider = &config.provider;
-    let _scope = output::scope(name).entered();
-    tracing::debug!("Configuring DNS provider {provider}…");
-
-    // Detect server architecture for lego download
-    let _t = output::timed("Arch detection");
-    let arch_output = ssh.exec("uname -m").await?;
-    drop(_t);
-    let arch = arch_output.stdout.trim();
-    let arch = match arch {
-        "x86_64" | "amd64" => "x86_64",
-        "aarch64" | "arm64" => "aarch64",
-        other => return Err(format!("Unsupported server architecture: {}", other).into()),
-    };
-    tracing::debug!("Server architecture: {arch}");
-
-    // Install lego binary
-    let _t = output::timed("Lego install");
-    let verified_lego = resolve_verified_lego_release_asset(arch)
-        .await
-        .map_err(|e| format!("Failed to verify lego release metadata: {e}"))?;
-    let install_cmd = install_lego_command(arch, &verified_lego.expected_sha256);
-    let install_cmd = SshClient::run_with_root_or_sudo(&install_cmd);
-    ssh.exec_checked(&install_cmd).await?;
-    drop(_t);
-    tracing::debug!("Lego binary installed");
+    {
+        let _scope = output::scope(name).entered();
+        tracing::debug!("Configuring DNS provider {provider}…");
+    }
 
     // Write credentials env file
     let _t = output::timed("Credentials write");
@@ -2277,39 +2234,6 @@ mod tests {
     fn dns_provider_env_vars_returns_empty_for_unknown() {
         let vars = dns_provider_env_vars("some-obscure-provider");
         assert!(vars.is_empty());
-    }
-
-    #[test]
-    fn lego_download_url_uses_correct_arch() {
-        let url = lego_download_url("x86_64");
-        assert!(url.contains("amd64"));
-        assert!(url.contains(LEGO_VERSION));
-
-        let url = lego_download_url("aarch64");
-        assert!(url.contains("arm64"));
-    }
-
-    #[test]
-    fn install_lego_command_checks_existing_version() {
-        let cmd = install_lego_command(
-            "x86_64",
-            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-        );
-        assert!(cmd.contains("lego --version"));
-        assert!(cmd.contains(LEGO_VERSION));
-        assert!(cmd.contains("/usr/local/bin/lego"));
-        assert!(cmd.contains("sha256 mismatch"));
-    }
-
-    #[test]
-    fn lego_checksums_url_uses_release_checksums_asset() {
-        assert_eq!(
-            lego_checksums_url(),
-            format!(
-                "https://github.com/go-acme/lego/releases/download/v{version}/lego_{version}_checksums.txt",
-                version = LEGO_VERSION
-            )
-        );
     }
 
     #[test]

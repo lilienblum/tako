@@ -78,7 +78,7 @@ For optional customization, `tako-server` reads `/opt/tako/config.json`:
 ```
 
 - `server_name` -- identity label for Prometheus metrics (defaults to hostname if absent).
-- `dns.provider` -- DNS provider for Let's Encrypt DNS-01 wildcard challenges (configured interactively during deploy when wildcard routes are detected).
+- `dns.provider` -- DNS provider for Let's Encrypt DNS-01 wildcard challenges (configured via `tako servers setup-wildcard`).
 
 This file is written by the installer (server name) and CLI (DNS config), and read by `tako-server` at startup.
 
@@ -466,9 +466,9 @@ If no certificate exists yet for an incoming SNI hostname, Tako serves a fallbac
 Routing supports wildcard hosts (e.g., `*.example.com`). For TLS:
 
 - Wildcard certificates are issued automatically via DNS-01 challenges when a DNS provider is configured
-- When wildcard routes are deployed and no DNS provider is configured, deploy prompts interactively for provider credentials
+- If no DNS provider is configured when wildcard routes are deployed, deploy fails with an error directing you to run `tako servers setup-wildcard`
 - Credentials are stored on the server at `/opt/tako/dns-credentials.env` and the provider name is persisted in `/opt/tako/config.json`
-- DNS-01 challenges are handled via the [`lego`](https://go-acme.github.io/lego/) ACME client, which must be [installed on the server](https://go-acme.github.io/lego/installation/)
+- DNS-01 challenges are handled via the [`lego`](https://go-acme.github.io/lego/) ACME client, which `tako-server` downloads and installs on-demand
 
 ### SNI-based selection
 

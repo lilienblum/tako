@@ -521,6 +521,22 @@ Connects via SSH and removes everything Tako installed on the server: services (
 
 Requires root privileges on the server (root login or sudo-capable user).
 
+### `tako servers setup-wildcard`
+
+Configure DNS-01 wildcard certificate support on all servers.
+
+```bash
+tako servers setup-wildcard [--env ENV]
+```
+
+| Argument/Flag | Description                                  |
+| ------------- | -------------------------------------------- |
+| `--env`, `-e` | Target environment (defaults to all servers) |
+
+Runs an interactive wizard to collect DNS provider credentials, verifies them locally, then applies the configuration to all servers in parallel. After setup, `tako-server` will automatically download and use `lego` for DNS-01 challenges when wildcard certificates are needed.
+
+Deploy will fail if wildcard routes are configured but DNS credentials have not been set up. Run this command before deploying apps with wildcard routes.
+
 ---
 
 ## `tako secrets`
@@ -758,6 +774,7 @@ Running `tako` with no arguments also prints help.
 | `tako servers restart <NAME>`  | Restart tako-server                       |
 | `tako servers upgrade [NAME]`  | Upgrade tako-server                       |
 | `tako servers implode [NAME]`  | Remove tako-server and all data           |
+| `tako servers setup-wildcard`  | Configure DNS-01 wildcard support         |
 | `tako secrets set <NAME>`      | Set a secret                              |
 | `tako secrets rm <NAME>`       | Remove a secret                           |
 | `tako secrets ls`              | List secrets                              |

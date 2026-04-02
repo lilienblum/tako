@@ -210,6 +210,29 @@ mod tests {
     }
 
     #[test]
+    fn servers_setup_wildcard_parses_without_env() {
+        let cli = Cli::try_parse_from(["tako", "servers", "setup-wildcard"]).unwrap();
+        let Commands::Servers(server::ServerCommands::SetupWildcard { env }) =
+            cli.command.expect("command")
+        else {
+            panic!("expected Servers::SetupWildcard");
+        };
+        assert_eq!(env, None);
+    }
+
+    #[test]
+    fn servers_setup_wildcard_parses_with_env() {
+        let cli =
+            Cli::try_parse_from(["tako", "servers", "setup-wildcard", "--env", "staging"]).unwrap();
+        let Commands::Servers(server::ServerCommands::SetupWildcard { env }) =
+            cli.command.expect("command")
+        else {
+            panic!("expected Servers::SetupWildcard");
+        };
+        assert_eq!(env, Some("staging".to_string()));
+    }
+
+    #[test]
     fn servers_upgrade_parses_without_name() {
         let cli = Cli::try_parse_from(["tako", "servers", "upgrade"]).unwrap();
         let Commands::Servers(server::ServerCommands::Upgrade {
