@@ -136,7 +136,7 @@ async fn stream_logs(
                 let mut ssh = SshClient::connect_to(&host, port).await?;
 
                 let log_cmd = format!(
-                    "tail -f /opt/tako/apps/{app}/logs/current.log 2>/dev/null \
+                    "tail -F /opt/tako/apps/{app}/logs/current.log 2>/dev/null \
                  || sudo journalctl -u tako-server -f --no-pager -o cat 2>/dev/null \
                  | grep --line-buffered '\"app\":\"{app}\"' \
                  || echo 'No logs available'",
@@ -539,6 +539,10 @@ fn extract_timestamp(line: &str) -> &str {
             return &line[start..start + end];
         }
     }
+    // App log format: "2026-04-03T12:00:00.000Z [out] [inst-1] ..."
+    if line.len() >= 24 && line.as_bytes()[4] == b'-' && line.as_bytes()[10] == b'T' {
+        return &line[..24];
+    }
     "\x7f" // sort unparseable lines last
 }
 
@@ -676,6 +680,12 @@ mod tests {
         let line =
             r#"{"timestamp":"2026-03-10T12:34:56.789Z","level":"INFO","fields":{"message":"hi"}}"#;
         assert_eq!(extract_timestamp(line), "2026-03-10T12:34:56.789Z");
+    }
+
+    #[test]
+    fn extract_timestamp_from_app_log() {
+        let line = "2026-04-03T12:00:00.000Z [out] [inst-1] hello world";
+        assert_eq!(extract_timestamp(line), "2026-04-03T12:00:00.000Z");
     }
 
     #[test]

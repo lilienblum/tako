@@ -222,10 +222,6 @@ impl AppLogWriter {
 
     async fn rotate(&mut self) {
         let _ = self.file.flush().await;
-        drop(std::mem::replace(
-            &mut self.file,
-            tokio::fs::File::from_std(std::fs::File::open("/dev/null").unwrap()),
-        ));
 
         // Atomic rename on same filesystem.
         let _ = std::fs::rename(&self.current_path, &self.previous_path);
@@ -237,6 +233,8 @@ impl AppLogWriter {
             }
             Err(e) => {
                 tracing::warn!(error = %e, "Failed to reopen log file after rotation");
+                // Keep writing to the old (now renamed) file rather than losing logs.
+                // Next rotation attempt will try again.
             }
         }
     }
