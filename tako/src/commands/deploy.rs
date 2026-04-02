@@ -17,7 +17,9 @@ use crate::output;
 use crate::ssh::{SshClient, SshConfig};
 #[cfg(test)]
 use crate::ui;
-use crate::ui::{TaskItemState, TaskState, TaskTreeSession, TreeNode, TreeTextTone};
+use crate::ui::{
+    SUMMARY_INDENT, TaskItemState, TaskState, TaskTreeSession, TreeNode, TreeTextTone,
+};
 use crate::validation::{
     validate_full_config, validate_no_route_conflicts, validate_secrets_for_deployment,
 };
@@ -54,6 +56,9 @@ struct ServerCheck {
 
 struct PreflightPhaseResult {
     checks: Vec<ServerCheck>,
+    /// Pre-established SSH connections, keyed by server name.
+    /// Kept alive from preflight so deploy can reuse them without reconnecting.
+    ssh_clients: HashMap<String, SshClient>,
     elapsed: Duration,
 }
 
@@ -149,7 +154,7 @@ impl LocalArtifactCacheCleanupSummary {
 struct DeployTaskTreeState {
     builds: Vec<TaskItemState>,
     deploys: Vec<TaskItemState>,
-    success_lines: Vec<String>,
+    success_lines: Vec<SummaryLine>,
     summary_line: Option<(String, TreeTextTone)>,
 }
 
@@ -197,7 +202,7 @@ impl DeployTaskTreeController {
                         .with_children(vec![
                             TaskItemState::pending(
                                 deploy_task_step_id(server_name, "connecting"),
-                                "Connecting",
+                                "Preflight",
                             ),
                             TaskItemState::pending(
                                 deploy_task_step_id(server_name, "uploading"),
@@ -240,9 +245,9 @@ impl DeployTaskTreeController {
     fn fail_preflight_check(&self, server_name: &str, detail: impl Into<String>) {
         let msg = detail.into();
         self.fail_deploy_step(server_name, "connecting", msg.clone());
-        self.rename_deploy_step(server_name, "connecting", "Connection failed");
+        self.rename_deploy_step(server_name, "connecting", "Preflight failed");
         self.fail_deploy_target_without_detail(server_name);
-        self.warn_pending_deploy_children(server_name, "Skipped");
+        self.warn_pending_deploy_children(server_name, "skipped");
     }
 
     fn mark_build_step_running(&self, target_label: &str, step: &str) {
@@ -393,7 +398,7 @@ impl DeployTaskTreeController {
 
     fn set_success_summary(&self, version: &str, routes: &[String]) {
         let mut state = self.state.lock().unwrap();
-        state.success_lines = format_deploy_summary_lines("Revision", version, routes);
+        state.success_lines = format_deploy_summary_lines("Release", version, routes);
         self.refresh_locked(&state);
     }
 
@@ -401,6 +406,12 @@ impl DeployTaskTreeController {
         let mut state = self.state.lock().unwrap();
         state.summary_line = Some((summary, TreeTextTone::Error));
         self.refresh_locked(&state);
+    }
+
+    fn finalize(&self) {
+        if let Some(session) = &self.session {
+            session.finalize();
+        }
     }
 
     #[cfg(test)]
@@ -582,10 +593,21 @@ fn build_deploy_tree(state: &DeployTaskTreeState) -> Vec<TreeNode> {
         if !tree.is_empty() && !matches!(tree.last(), Some(TreeNode::Spacer)) {
             tree.push(TreeNode::Spacer);
         }
+        let max_label_width = state
+            .success_lines
+            .iter()
+            .map(|l| l.label.len())
+            .max()
+            .unwrap_or(0);
         for line in &state.success_lines {
-            tree.push(TreeNode::Text {
-                text: line.clone(),
-                tone: TreeTextTone::Accent,
+            let padded_label = if line.label.is_empty() {
+                " ".repeat(max_label_width)
+            } else {
+                format!("{:<width$}", line.label, width = max_label_width)
+            };
+            tree.push(TreeNode::LabeledText {
+                label: format!("{}{}", SUMMARY_INDENT, padded_label),
+                value: line.value.clone(),
             });
         }
     }
@@ -911,6 +933,7 @@ async fn run_async(
     let preflight = preflight_result
         .unwrap()
         .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    let mut preflight_ssh_clients = preflight.ssh_clients;
     ensure_wildcard_dns_support(
         &server_names,
         &servers,
@@ -982,6 +1005,7 @@ async fn run_async(
         let deploy_config = deploy_config.clone();
         let use_spinner = use_per_server_spinners;
         let task_tree = deploy_task_tree.clone();
+        let preconnected_ssh = preflight_ssh_clients.remove(&server_name);
         let span = output::scope(&server_name);
         let handle = tokio::spawn(
             async move {
@@ -993,6 +1017,7 @@ async fn run_async(
                     &target_label,
                     use_spinner,
                     task_tree,
+                    preconnected_ssh,
                 )
                 .await;
                 (server_name, server, result)
@@ -1059,11 +1084,12 @@ async fn run_async(
     if errors.is_empty() {
         if let Some(task_tree) = &deploy_task_tree {
             task_tree.set_success_summary(&version, &routes);
+            task_tree.finalize();
         } else {
             if output::is_pretty() {
                 eprintln!();
             }
-            print_deploy_summary("Revision", &version, &routes);
+            print_deploy_summary("Release", &version, &routes);
         }
 
         Ok(())
@@ -1073,6 +1099,7 @@ async fn run_async(
         if output::is_pretty() {
             if let Some(task_tree) = &deploy_task_tree {
                 task_tree.set_error_summary(format!("Deployed to {succeeded}/{total} servers"));
+                task_tree.finalize();
             } else {
                 eprintln!(
                     "{}",
@@ -1288,16 +1315,33 @@ fn format_preflight_complete_message(server_names: &[String]) -> String {
     }
 }
 
+/// A label + value pair for the deploy summary. The label is rendered in accent
+/// color and the value in the default (normal) color.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SummaryLine {
+    label: String,
+    value: String,
+}
+
 fn format_deploy_summary_lines(
     primary_label: &str,
     primary_value: &str,
     routes: &[String],
-) -> Vec<String> {
-    let mut lines = vec![format!("{primary_label:<10} {primary_value}")];
+) -> Vec<SummaryLine> {
+    let mut lines = vec![SummaryLine {
+        label: primary_label.to_string(),
+        value: primary_value.to_string(),
+    }];
     if let Some((first_route, remaining_routes)) = routes.split_first() {
-        lines.push(format!("{:<10} {}", "URL", format_route_url(first_route)));
+        lines.push(SummaryLine {
+            label: "Routes".to_string(),
+            value: format_route_url(first_route),
+        });
         for route in remaining_routes {
-            lines.push(format!("{:<10} {}", "", format_route_url(route)));
+            lines.push(SummaryLine {
+                label: String::new(),
+                value: format_route_url(route),
+            });
         }
     }
     lines
@@ -1305,11 +1349,14 @@ fn format_deploy_summary_lines(
 
 fn print_deploy_summary(primary_label: &str, primary_value: &str, routes: &[String]) {
     let lines = format_deploy_summary_lines(primary_label, primary_value, routes);
+    let max_label_width = lines.iter().map(|l| l.label.len()).max().unwrap_or(0);
     for line in lines {
+        let padded_label = format!("{:<width$}", line.label, width = max_label_width);
+        let formatted = format!("{} {}", padded_label, line.value);
         if output::is_pretty() {
-            output::info(&line);
+            output::info(&formatted);
         } else {
-            tracing::info!("{}", line);
+            tracing::info!("{}", formatted);
         }
     }
 }
@@ -1871,6 +1918,13 @@ async fn run_server_preflight_checks(
                 let result = async {
                     tracing::debug!("Preflight check…");
                     let _t = output::timed("Preflight check");
+
+                    // Mark "Preflight" as running in the task tree — this runs
+                    // concurrently with the build phase so the user sees progress.
+                    if let Some(task_tree) = &task_tree_for_task {
+                        task_tree.mark_deploy_step_running(&name, "connecting");
+                    }
+
                     let mut ssh = SshClient::new(ssh_config);
                     ssh.connect().await?;
                     let info = ssh.tako_server_info().await?;
@@ -1905,13 +1959,20 @@ async fn run_server_preflight_checks(
                         crate::ssh::SshError::Connection(format!("Route conflict: {}", e))
                     })?;
 
-                    let _ = ssh.disconnect().await;
+                    // Mark "Preflight" as succeeded — connection stays open for
+                    // the deploy phase to reuse.
+                    if let Some(task_tree) = &task_tree_for_task {
+                        task_tree.succeed_deploy_step(&name, "connecting", None);
+                    }
 
-                    Ok::<_, crate::ssh::SshError>(ServerCheck {
-                        name,
-                        mode,
-                        dns_provider: info.dns_provider,
-                    })
+                    Ok::<_, crate::ssh::SshError>((
+                        ServerCheck {
+                            name,
+                            mode,
+                            dns_provider: info.dns_provider,
+                        },
+                        ssh,
+                    ))
                 }
                 .await;
                 if let Err(error) = &result
@@ -1926,8 +1987,9 @@ async fn run_server_preflight_checks(
     }
 
     let mut checks = Vec::new();
+    let mut ssh_clients = HashMap::new();
     while let Some(result) = check_set.join_next().await {
-        let check = result
+        let (check, ssh) = result
             .map_err(|e| e.to_string())?
             .map_err(|e| e.to_string())?;
 
@@ -1941,11 +2003,13 @@ async fn run_server_preflight_checks(
             ));
         }
 
+        ssh_clients.insert(check.name.clone(), ssh);
         checks.push(check);
     }
 
     Ok(PreflightPhaseResult {
         checks,
+        ssh_clients,
         elapsed: start.elapsed(),
     })
 }
@@ -2873,7 +2937,7 @@ async fn build_target_artifacts(
                             error.clone(),
                         );
                         task_tree.fail_build_target(&tree_target_label, error.clone());
-                        task_tree.warn_pending_build_children(&tree_target_label, "Skipped");
+                        task_tree.warn_pending_build_children(&tree_target_label, "skipped");
                     }
                     return Err(error);
                 }
@@ -2916,8 +2980,8 @@ async fn build_target_artifacts(
                     format_size(cached.size_bytes)
                 );
                 if let Some(task_tree) = &task_tree {
-                    task_tree.warn_build_step(&tree_target_label, "build-artifact", "Skipped");
-                    task_tree.warn_build_step(&tree_target_label, "package-artifact", "Skipped");
+                    task_tree.warn_build_step(&tree_target_label, "build-artifact", "skipped");
+                    task_tree.warn_build_step(&tree_target_label, "package-artifact", "skipped");
                     task_tree.append_cached_artifact_step(
                         &tree_target_label,
                         Some(format_size(cached.size_bytes)),
@@ -2997,7 +3061,7 @@ async fn build_target_artifacts(
                 ) {
                     task_tree.fail_build_step(&tree_target_label, "build-artifact", error.clone());
                     task_tree.fail_build_target(&tree_target_label, error.clone());
-                    task_tree.warn_pending_build_children(&tree_target_label, "Skipped");
+                    task_tree.warn_pending_build_children(&tree_target_label, "skipped");
                     return Err(error);
                 }
                 task_tree.succeed_build_step(&tree_target_label, "build-artifact", None);
@@ -3642,7 +3706,15 @@ async fn connect_and_prepare_remote_release_dir(
     shared_dir: &str,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     ssh.connect().await?;
+    prepare_remote_release_dir(ssh, release_dir, shared_dir).await
+}
 
+/// Prepare the remote release directory on an already-connected SSH session.
+async fn prepare_remote_release_dir(
+    ssh: &SshClient,
+    release_dir: &str,
+    shared_dir: &str,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let release_dir_preexisted = remote_directory_exists(ssh, release_dir).await?;
     if !release_dir_preexisted {
         ssh.exec_checked(&format!("mkdir -p {} {}", release_dir, shared_dir))
@@ -3747,9 +3819,10 @@ where
     match work.await {
         Ok(value) => {
             let success_label = match step {
-                "connecting" => "Connected",
+                "connecting" => "Preflight",
                 "uploading" => "Uploaded",
                 "preparing" => "Prepared",
+                "starting" => "Started",
                 _ => step,
             };
             task_tree.rename_deploy_step(server_name, step, success_label);
@@ -3761,7 +3834,7 @@ where
             cleanup_on_error().await;
             task_tree.fail_deploy_step(server_name, step, message.clone());
             let failed_label = match step {
-                "connecting" => "Connection failed",
+                "connecting" => "Preflight failed",
                 "uploading" => "Upload failed",
                 "preparing" => "Prepare failed",
                 "starting" => "Start failed",
@@ -3769,7 +3842,7 @@ where
             };
             task_tree.rename_deploy_step(server_name, step, failed_label);
             task_tree.fail_deploy_target_without_detail(server_name);
-            task_tree.warn_pending_deploy_children(server_name, "Skipped");
+            task_tree.warn_pending_deploy_children(server_name, "skipped");
             Err(error.into())
         }
     }
@@ -3815,7 +3888,13 @@ fn build_remote_extract_archive_command(release_dir: &str, remote_archive: &str)
     )
 }
 
-/// Deploy to a single server
+/// Deploy to a single server.
+///
+/// If `preconnected_ssh` is provided (from the preflight phase), the existing
+/// connection is reused and the "Preflight" task-tree step is skipped (it was
+/// already marked complete during preflight).  Otherwise a fresh SSH connection
+/// is established here.
+#[allow(clippy::too_many_arguments)]
 async fn deploy_to_server(
     config: &DeployConfig,
     server_name: &str,
@@ -3824,30 +3903,49 @@ async fn deploy_to_server(
     target_label: &str,
     use_spinner: bool,
     task_tree: Option<DeployTaskTreeController>,
+    preconnected_ssh: Option<SshClient>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     tracing::debug!("Deploying (target: {target_label}, port: {})…", server.port);
     let _server_deploy_timer = output::timed("Server deploy");
-    let ssh_config = SshConfig::from_server(&server.host, server.port);
-    let mut ssh = SshClient::new(ssh_config);
     let release_dir = config.release_dir();
-    // SSH connect + directory setup all happen under the "Connecting" step
-    // so that "Uploading" can start immediately with the progress bar.
-    let release_dir_preexisted = if let Some(task_tree) = &task_tree {
-        run_task_tree_deploy_step(
-            task_tree,
-            server_name,
-            "connecting",
-            connect_and_prepare_remote_release_dir(&mut ssh, &release_dir, &config.shared_dir()),
-        )
-        .await?
+
+    let (mut ssh, release_dir_preexisted) = if let Some(ssh) = preconnected_ssh {
+        // Reuse connection from preflight — "Preflight" is already done.
+        // Just prepare the remote release directory.
+        let preexisted = prepare_remote_release_dir(&ssh, &release_dir, &config.shared_dir())
+            .await
+            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { e })?;
+        (ssh, preexisted)
     } else {
-        run_deploy_step(
-            "Connecting",
-            "Connected",
-            use_spinner,
-            connect_and_prepare_remote_release_dir(&mut ssh, &release_dir, &config.shared_dir()),
-        )
-        .await?
+        // No pre-connected client — connect now.
+        let ssh_config = SshConfig::from_server(&server.host, server.port);
+        let mut ssh = SshClient::new(ssh_config);
+        let preexisted = if let Some(task_tree) = &task_tree {
+            run_task_tree_deploy_step(
+                task_tree,
+                server_name,
+                "connecting",
+                connect_and_prepare_remote_release_dir(
+                    &mut ssh,
+                    &release_dir,
+                    &config.shared_dir(),
+                ),
+            )
+            .await?
+        } else {
+            run_deploy_step(
+                "Preflight",
+                "Preflight",
+                use_spinner,
+                connect_and_prepare_remote_release_dir(
+                    &mut ssh,
+                    &release_dir,
+                    &config.shared_dir(),
+                ),
+            )
+            .await?
+        };
+        (ssh, preexisted)
     };
     let archive_size_bytes = std::fs::metadata(archive_path)?.len();
     tracing::debug!("Archive size: {}", format_size(archive_size_bytes));
@@ -3873,7 +3971,7 @@ async fn deploy_to_server(
                     task_tree,
                     server_name,
                     "uploading",
-                    Some(format_size(archive_size_bytes)),
+                    None,
                     async {
                         ssh.upload_with_progress(
                             archive_path,
@@ -4008,7 +4106,7 @@ async fn deploy_to_server(
                 })?;
             }
         } else if let Some(task_tree) = &task_tree {
-            task_tree.warn_deploy_step(server_name, "preparing", "Skipped");
+            task_tree.warn_deploy_step(server_name, "preparing", "skipped");
         }
         tracing::debug!(
             "{}",
@@ -4868,7 +4966,7 @@ route = "app.example.com"
     #[test]
     fn deploy_summary_lines_keep_urls_literal_and_contiguous() {
         let lines = format_deploy_summary_lines(
-            "Revision",
+            "Release",
             "20260330",
             &[
                 "app.tako.test".to_string(),
@@ -4880,10 +4978,22 @@ route = "app.example.com"
         assert_eq!(
             lines,
             vec![
-                "Revision   20260330".to_string(),
-                "URL        https://app.tako.test".to_string(),
-                "           https://app.tako.test/bun".to_string(),
-                "           https://*.app.tako.test".to_string(),
+                SummaryLine {
+                    label: "Release".to_string(),
+                    value: "20260330".to_string(),
+                },
+                SummaryLine {
+                    label: "Routes".to_string(),
+                    value: "https://app.tako.test".to_string(),
+                },
+                SummaryLine {
+                    label: String::new(),
+                    value: "https://app.tako.test/bun".to_string(),
+                },
+                SummaryLine {
+                    label: String::new(),
+                    value: "https://*.app.tako.test".to_string(),
+                },
             ]
         );
     }
@@ -4929,7 +5039,7 @@ route = "app.example.com"
                 "○ Building...".to_string(),
                 String::new(),
                 "○ Deploying to tako-demo...".to_string(),
-                "  ○ Connecting...".to_string(),
+                "  ○ Preflight...".to_string(),
                 "  ○ Uploading...".to_string(),
                 "  ○ Preparing...".to_string(),
                 "  ○ Starting...".to_string(),
@@ -4946,18 +5056,18 @@ route = "app.example.com"
         let snapshot = controller.snapshot();
         let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
 
-        // No top-level Connecting — it's a child of each deploy group
-        assert!(!lines.iter().any(|line| line == "○ Connecting..."));
+        // No top-level Preflight — it's a child of each deploy group
+        assert!(!lines.iter().any(|line| line == "○ Preflight..."));
         assert!(lines.iter().any(|line| line == "○ Building..."));
         assert!(lines.iter().any(|line| line == "  ○ linux-aarch64-musl..."));
         assert!(lines.iter().any(|line| line == "  ○ linux-x86_64-glibc..."));
         assert!(lines.iter().any(|line| line == "○ Deploying to prod-a..."));
         assert!(lines.iter().any(|line| line == "○ Deploying to prod-b..."));
-        // Each deploy group has Connecting + Uploading + Preparing + Starting
+        // Each deploy group has Preflight + Uploading + Preparing + Starting
         assert_eq!(
             lines
                 .iter()
-                .filter(|line| line.contains("○ Connecting..."))
+                .filter(|line| line.contains("○ Preflight..."))
                 .count(),
             2
         );
@@ -5017,8 +5127,8 @@ route = "app.example.com"
             DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
 
         controller.succeed_build_step("shared target", "probe-runtime", Some("bun 1.2.3".into()));
-        controller.warn_build_step("shared target", "build-artifact", "Skipped");
-        controller.warn_build_step("shared target", "package-artifact", "Skipped");
+        controller.warn_build_step("shared target", "build-artifact", "skipped");
+        controller.warn_build_step("shared target", "package-artifact", "skipped");
         controller.append_cached_artifact_step("shared target", Some("72 MB".to_string()));
         controller.succeed_build_target("shared target", Some("72 MB (cached)".to_string()));
 
@@ -5078,7 +5188,7 @@ route = "app.example.com"
     }
 
     #[tokio::test]
-    async fn deploy_task_tree_marks_connecting_running_before_connected() {
+    async fn deploy_task_tree_marks_preflight_running_before_complete() {
         let controller =
             DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
         let worker_controller = controller.clone();
@@ -5090,7 +5200,7 @@ route = "app.example.com"
                 Ok::<(), String>(())
             })
             .await
-            .expect("connecting step should succeed");
+            .expect("preflight step should succeed");
         });
 
         tokio::time::timeout(Duration::from_secs(1), async {
@@ -5101,20 +5211,20 @@ route = "app.example.com"
                     .iter()
                     .find(|task| task.id == deploy_target_task_id("prod-a"))
                     .expect("deploy target should exist");
-                let connecting = deploy_target
+                let preflight = deploy_target
                     .find(&deploy_task_step_id("prod-a", "connecting"))
-                    .expect("connecting step should exist");
+                    .expect("preflight step should exist");
                 if matches!(deploy_target.state, TaskState::Running { .. })
-                    && matches!(connecting.state, TaskState::Running { .. })
+                    && matches!(preflight.state, TaskState::Running { .. })
                 {
-                    assert_eq!(connecting.label, "Connecting");
+                    assert_eq!(preflight.label, "Preflight");
                     return;
                 }
                 tokio::task::yield_now().await;
             }
         })
         .await
-        .expect("connecting step should enter running state");
+        .expect("preflight step should enter running state");
 
         tx.send(()).expect("worker should still be waiting");
         handle.await.expect("worker should finish cleanly");
@@ -5125,15 +5235,15 @@ route = "app.example.com"
             .iter()
             .find(|task| task.id == deploy_target_task_id("prod-a"))
             .expect("deploy target should exist");
-        let connecting = deploy_target
+        let preflight = deploy_target
             .find(&deploy_task_step_id("prod-a", "connecting"))
-            .expect("connecting step should exist");
-        assert_eq!(connecting.label, "Connected");
-        assert!(matches!(connecting.state, TaskState::Succeeded { .. }));
+            .expect("preflight step should exist");
+        assert_eq!(preflight.label, "Preflight");
+        assert!(matches!(preflight.state, TaskState::Succeeded { .. }));
     }
 
     #[test]
-    fn deploy_task_tree_shows_connection_errors_under_deploy_group() {
+    fn deploy_task_tree_shows_preflight_errors_under_deploy_group() {
         let controller =
             DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
 
@@ -5142,15 +5252,15 @@ route = "app.example.com"
         let snapshot = controller.snapshot();
         let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
 
-        // Connection failure is under the deploy group
+        // Preflight failure is under the deploy group
         assert!(lines.iter().any(|line| line == "✘ Deploy to prod-a failed"));
-        assert!(lines.iter().any(|line| line == "  ✘ Connection failed"));
+        assert!(lines.iter().any(|line| line == "  ✘ Preflight failed"));
         assert!(!lines.iter().any(|line| line == "  SSH protocol error"));
         assert!(lines.iter().any(|line| line == "    SSH protocol error"));
     }
 
     #[test]
-    fn deploy_task_tree_connection_failure_aborts_remaining_deploy_children() {
+    fn deploy_task_tree_preflight_failure_aborts_remaining_deploy_children() {
         let controller =
             DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
 
@@ -5159,21 +5269,21 @@ route = "app.example.com"
         let snapshot = controller.snapshot();
         let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
 
-        assert!(lines.iter().any(|line| line == "  ✘ Connection failed"));
+        assert!(lines.iter().any(|line| line == "  ✘ Preflight failed"));
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("⊘ Uploading") && line.contains("Skipped"))
+                .any(|line| line.contains("⏭ Uploading") && line.contains("skipped"))
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("⊘ Preparing") && line.contains("Skipped"))
+                .any(|line| line.contains("⏭ Preparing") && line.contains("skipped"))
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line.contains("⊘ Starting") && line.contains("Skipped"))
+                .any(|line| line.contains("⏭ Starting") && line.contains("skipped"))
         );
     }
 
@@ -5261,7 +5371,7 @@ route = "app.example.com"
     }
 
     #[test]
-    fn deploy_task_tree_success_summary_appends_revision_and_urls() {
+    fn deploy_task_tree_success_summary_appends_release_and_routes() {
         let controller =
             DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
         controller.set_success_summary(
@@ -5270,16 +5380,21 @@ route = "app.example.com"
         );
 
         let lines = ui::render_plain_lines(&build_deploy_tree(&controller.snapshot()));
-        assert!(lines.iter().any(|line| line == "Revision   20260330"));
         assert!(
-            lines
-                .iter()
-                .any(|line| line == "URL        https://app.tako.test")
+            lines.iter().any(|line| line == "  Release 20260330"),
+            "expected '  Release 20260330' in {lines:?}"
         );
         assert!(
             lines
                 .iter()
-                .any(|line| line == "           https://*.app.tako.test")
+                .any(|line| line == "  Routes  https://app.tako.test"),
+            "expected '  Routes  https://app.tako.test' in {lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "          https://*.app.tako.test"),
+            "expected continuation route in {lines:?}"
         );
     }
 
@@ -5306,7 +5421,7 @@ route = "app.example.com"
         controller.mark_deploy_step_running("prod-a", "connecting");
         controller.fail_build_step("shared target", "build-artifact", "Local build failed");
         controller.fail_build_target("shared target", "Local build failed");
-        controller.warn_pending_build_children("shared target", "Skipped");
+        controller.warn_pending_build_children("shared target", "skipped");
         controller.abort_incomplete("Aborted");
 
         let snapshot = controller.snapshot();
@@ -5314,11 +5429,11 @@ route = "app.example.com"
 
         assert!(lines.iter().any(|line| line == "✘ Building"));
         assert!(lines.iter().any(|line| line == "  Local build failed"));
-        // Connecting was running, gets cancelled by abort
-        assert!(lines.iter().any(|line| line == "  ⊘ Connecting…"));
-        assert!(lines.iter().any(|line| line == "  ⊘ Uploading…"));
-        assert!(lines.iter().any(|line| line == "  ⊘ Preparing…"));
-        assert!(lines.iter().any(|line| line == "  ⊘ Starting…"));
+        // Preflight was running, gets cancelled by abort
+        assert!(lines.iter().any(|line| line == "  ⏭ Preflight…"));
+        assert!(lines.iter().any(|line| line == "  ⏭ Uploading…"));
+        assert!(lines.iter().any(|line| line == "  ⏭ Preparing…"));
+        assert!(lines.iter().any(|line| line == "  ⏭ Starting…"));
     }
 
     #[test]
@@ -5340,8 +5455,14 @@ route = "app.example.com"
         assert_eq!(
             lines,
             vec![
-                "App        bun".to_string(),
-                "URL        https://app.tako.test".to_string(),
+                SummaryLine {
+                    label: "App".to_string(),
+                    value: "bun".to_string(),
+                },
+                SummaryLine {
+                    label: "Routes".to_string(),
+                    value: "https://app.tako.test".to_string(),
+                },
             ]
         );
     }

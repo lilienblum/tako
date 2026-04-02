@@ -13,6 +13,8 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 use crate::output;
 
 const TASK_INDENT: &str = "  ";
+/// Indent for summary lines below the task tree (matches TASK_INDENT).
+pub const SUMMARY_INDENT: &str = TASK_INDENT;
 const TASK_SPINNER_TICKS: &[&str] = &["✶", "✸", "✹", "✺", "✹", "✷"];
 const LIVE_RENDER_INTERVAL: Duration = Duration::from_millis(80);
 
@@ -106,7 +108,6 @@ impl TaskItemState {
 
 #[derive(Debug, Clone)]
 pub enum TreeTextTone {
-    Accent,
     Error,
 }
 
@@ -118,6 +119,8 @@ pub enum TreeNode {
     AccentTask(TaskItemState),
     /// A non-task text row.
     Text { text: String, tone: TreeTextTone },
+    /// Label (accent) + value (normal) on one line, with a space between.
+    LabeledText { label: String, value: String },
     /// Blank spacer line.
     Spacer,
 }
@@ -134,6 +137,7 @@ pub struct TaskTreeSession {
 struct SessionShared {
     enabled: bool,
     stop: AtomicBool,
+    finalized: AtomicBool,
     state: Mutex<SessionState>,
     tick_thread: Mutex<Option<thread::JoinHandle<()>>>,
     terminal: Mutex<Option<RatatuiTerminal>>,
@@ -158,6 +162,7 @@ impl TaskTreeSession {
         let shared = Arc::new(SessionShared {
             enabled,
             stop: AtomicBool::new(false),
+            finalized: AtomicBool::new(false),
             state: Mutex::new(SessionState {
                 tree,
                 paused: false,
@@ -246,6 +251,16 @@ impl TaskTreeSession {
         self.draw_now();
     }
 
+    /// Explicitly finalize this session: stop the tick thread and render the
+    /// final tree output. Subsequent drops become no-ops. Call this before the
+    /// function returns so the output appears *before* the shell prompt.
+    pub fn finalize(&self) {
+        if self.shared.finalized.swap(true, Ordering::Relaxed) {
+            return;
+        }
+        finalize_shared_session(&self.shared);
+    }
+
     fn draw_now(&self) {
         if !self.shared.enabled {
             return;
@@ -257,6 +272,9 @@ impl TaskTreeSession {
 impl Drop for TaskTreeSession {
     fn drop(&mut self) {
         if Arc::strong_count(&self.shared) != 1 {
+            return;
+        }
+        if self.shared.finalized.load(Ordering::Relaxed) {
             return;
         }
         finalize_shared_session(&self.shared);
@@ -439,7 +457,7 @@ fn tree_node_has_running(node: &TreeNode) -> bool {
             matches!(task.state, TaskState::Running { .. })
                 || task.children.iter().any(task_item_has_running)
         }
-        TreeNode::Text { .. } => false,
+        TreeNode::Text { .. } | TreeNode::LabeledText { .. } => false,
         TreeNode::Spacer => false,
     }
 }
@@ -464,10 +482,20 @@ fn render_tree_to_lines(tree: &[TreeNode], frame_index: usize) -> Vec<Line<'stat
             }
             TreeNode::Text { text, tone } => {
                 let style = match tone {
-                    TreeTextTone::Accent => Style::new().fg(COLOR_ACCENT),
                     TreeTextTone::Error => Style::new().fg(COLOR_ERROR),
                 };
                 lines.push(Line::from(vec![Span::styled(text.clone(), style)]));
+            }
+            TreeNode::LabeledText { label, value } => {
+                let mut spans = Vec::new();
+                if !label.is_empty() {
+                    spans.push(Span::styled(
+                        format!("{} ", label),
+                        Style::new().fg(COLOR_ACCENT),
+                    ));
+                }
+                spans.push(Span::raw(value.clone()));
+                lines.push(Line::from(spans));
             }
             TreeNode::Spacer => {
                 lines.push(Line::raw(""));
@@ -536,7 +564,7 @@ fn task_icon(state: &TaskState, frame_index: usize) -> &'static str {
         TaskState::Running { .. } => TASK_SPINNER_TICKS[frame_index % TASK_SPINNER_TICKS.len()],
         TaskState::Succeeded { .. } => "✔",
         TaskState::Failed { .. } => "✘",
-        TaskState::Cancelled { .. } => "⊘",
+        TaskState::Cancelled { .. } => "⏭",
     }
 }
 
@@ -655,6 +683,13 @@ pub fn render_plain_lines(tree: &[TreeNode]) -> Vec<String> {
             TreeNode::Text { text, .. } => {
                 lines.push(text.clone());
             }
+            TreeNode::LabeledText { label, value } => {
+                if label.is_empty() {
+                    lines.push(value.clone());
+                } else {
+                    lines.push(format!("{label} {value}"));
+                }
+            }
             TreeNode::Spacer => {
                 lines.push(String::new());
             }
@@ -737,7 +772,7 @@ mod tests {
                     id: "c".into(),
                     label: "prod-c".into(),
                     state: TaskState::Cancelled { elapsed: None },
-                    detail: Some("Skipped".into()),
+                    detail: Some("skipped".into()),
                     progress: None,
                     children: vec![],
                 },
@@ -749,7 +784,7 @@ mod tests {
         assert_eq!(lines[1], "  ✔ prod-a 2.0s");
         assert_eq!(lines[2], "  ✘ prod-b 1.0s");
         assert_eq!(lines[3], "    boom");
-        assert_eq!(lines[4], "  ⊘ prod-c… Skipped");
+        assert_eq!(lines[4], "  ⏭ prod-c… skipped");
     }
 
     #[test]
@@ -829,9 +864,9 @@ mod tests {
 
         let lines = render_plain_lines(&tree);
         // Parent and running child should be cancelled
-        assert!(lines[0].starts_with("⊘ Deploying…"));
+        assert!(lines[0].starts_with("⏭ Deploying…"));
         assert!(lines[1].starts_with("  ✔ Connected"));
-        assert!(lines[2].starts_with("  ⊘ Starting…"));
+        assert!(lines[2].starts_with("  ⏭ Starting…"));
         assert_eq!(lines[3], "");
         assert_eq!(lines[4], "Operation cancelled");
     }
