@@ -227,6 +227,8 @@ impl Backend {
 mod tests {
     use super::*;
     use crate::instances::AppConfig;
+    use crate::instances::logger::noop_log_handle;
+    use std::path::PathBuf;
     use tokio::sync::mpsc;
 
     fn create_test_app() -> Arc<App> {
@@ -235,7 +237,7 @@ mod tests {
             name: "test-app".to_string(),
             ..Default::default()
         };
-        Arc::new(App::new(config, tx))
+        Arc::new(App::new(config, tx, noop_log_handle()))
     }
 
     #[test]
@@ -312,9 +314,9 @@ mod tests {
         assert!(lb.get_instance().is_none());
     }
 
-    #[test]
-    fn test_global_load_balancer() {
-        let manager = Arc::new(AppManager::new());
+    #[tokio::test]
+    async fn test_global_load_balancer() {
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = LoadBalancer::new(manager.clone());
 
         let config = AppConfig {
@@ -337,9 +339,9 @@ mod tests {
         assert_eq!(backend.endpoint(), None);
     }
 
-    #[test]
-    fn test_global_load_balancer_returns_tcp_backend_when_port_is_bound() {
-        let manager = Arc::new(AppManager::new());
+    #[tokio::test]
+    async fn test_global_load_balancer_returns_tcp_backend_when_port_is_bound() {
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = LoadBalancer::new(manager.clone());
 
         let app = manager.register_app(AppConfig {
@@ -362,9 +364,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_global_load_balancer_keeps_backend_when_port_is_not_bound_yet() {
-        let manager = Arc::new(AppManager::new());
+    #[tokio::test]
+    async fn test_global_load_balancer_keeps_backend_when_port_is_not_bound_yet() {
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = LoadBalancer::new(manager.clone());
 
         let app = manager.register_app(AppConfig {
@@ -383,11 +385,11 @@ mod tests {
         assert_eq!(backend.endpoint(), None);
     }
 
-    #[test]
-    fn perf_smoke_get_backend_hot_path() {
+    #[tokio::test]
+    async fn perf_smoke_get_backend_hot_path() {
         use std::time::{Duration, Instant};
 
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = LoadBalancer::new(manager.clone());
 
         let app = manager.register_app(AppConfig {

@@ -274,7 +274,7 @@ impl ServerState {
         challenge_tokens: ChallengeTokens,
         runtime: ServerRuntimeConfig,
     ) -> Result<Self, StateStoreError> {
-        let app_manager = Arc::new(AppManager::new());
+        let app_manager = Arc::new(AppManager::new(data_dir.clone()));
         let load_balancer = Arc::new(LoadBalancer::new(app_manager.clone()));
         let device_key = load_or_create_device_key(&data_dir.join("secret.key"))?;
         let state_store = Arc::new(SqliteStateStore::new(data_dir.join("tako.db"), device_key));

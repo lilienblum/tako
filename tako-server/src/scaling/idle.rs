@@ -188,6 +188,7 @@ impl Default for IdleTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instances::logger::noop_log_handle;
     use tokio::sync::mpsc;
 
     #[test]
@@ -256,7 +257,7 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let monitor = IdleMonitor::new(IdleConfig::default(), tx);
 
-        let instance = Instance::new("test-1".to_string(), "v1".to_string());
+        let instance = Instance::new("test-1".to_string(), "v1".to_string(), noop_log_handle());
         instance.set_state(InstanceState::Healthy);
 
         // Can't stop if at min_instances

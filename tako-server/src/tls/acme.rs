@@ -615,9 +615,10 @@ async fn ensure_lego_installed(data_dir: &std::path::Path) -> Result<PathBuf, Ac
         .arg("--version")
         .output()
         .await
-        && output.status.success() {
-            return Ok(PathBuf::from("lego"));
-        }
+        && output.status.success()
+    {
+        return Ok(PathBuf::from("lego"));
+    }
 
     tracing::info!("lego not found, downloading v{LEGO_VERSION}");
 

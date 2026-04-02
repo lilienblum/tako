@@ -368,6 +368,7 @@ fn http_response_is_internal_success(response: &str, expected_token: &str) -> bo
 mod tests {
     use super::*;
     use crate::instances::AppConfig;
+    use crate::instances::logger::noop_log_handle;
     use tokio::sync::mpsc;
 
     fn create_test_app() -> Arc<App> {
@@ -376,7 +377,7 @@ mod tests {
             name: "test-app".to_string(),
             ..Default::default()
         };
-        Arc::new(App::new(config, tx))
+        Arc::new(App::new(config, tx, noop_log_handle()))
     }
 
     #[test]
@@ -486,7 +487,7 @@ mod tests {
             min_instances: 1,
             ..Default::default()
         };
-        let app = App::new(config, tx);
+        let app = App::new(config, tx, noop_log_handle());
         let instance = app.allocate_instance();
         instance.set_port(port);
         let token = instance.internal_token().to_string();
@@ -535,7 +536,7 @@ mod tests {
             min_instances: 1,
             ..Default::default()
         };
-        let app = App::new(config, tx);
+        let app = App::new(config, tx, noop_log_handle());
         let instance = app.allocate_instance();
         instance.set_port(port);
         let token = instance.internal_token().to_string();
@@ -590,7 +591,7 @@ mod tests {
             name: "test-app".to_string(),
             ..Default::default()
         };
-        let app = Arc::new(App::new(app_config, app_tx));
+        let app = Arc::new(App::new(app_config, app_tx, noop_log_handle()));
         let instance = app.allocate_instance();
 
         // Spawn a process that exits immediately.
@@ -624,7 +625,7 @@ mod tests {
             name: "test-app".to_string(),
             ..Default::default()
         };
-        let app = Arc::new(App::new(app_config, app_tx));
+        let app = Arc::new(App::new(app_config, app_tx, noop_log_handle()));
         let instance = app.allocate_instance();
 
         // Set instance as Healthy with a port nobody is listening on.

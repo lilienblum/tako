@@ -567,6 +567,7 @@ impl Default for Spawner {
 #[cfg(test)]
 mod tests {
     use super::super::AppConfig;
+    use super::super::logger::noop_log_handle;
     use super::*;
     use tokio::sync::mpsc;
 
@@ -648,6 +649,7 @@ mod tests {
                 ..Default::default()
             },
             instance_tx,
+            noop_log_handle(),
         );
         let instance = app.allocate_instance();
         instance.set_port(48_123);
@@ -677,6 +679,7 @@ mod tests {
                 ..Default::default()
             },
             instance_tx,
+            noop_log_handle(),
         );
         let instance = app.allocate_instance();
 
@@ -696,6 +699,7 @@ mod tests {
                 ..Default::default()
             },
             instance_tx,
+            noop_log_handle(),
         );
         let instance = app.allocate_instance();
 
@@ -718,6 +722,7 @@ mod tests {
                 ..Default::default()
             },
             instance_tx,
+            noop_log_handle(),
         );
         let instance = app.allocate_instance();
 
@@ -735,6 +740,7 @@ mod tests {
                 ..Default::default()
             },
             instance_tx,
+            noop_log_handle(),
         );
         let instance = app.allocate_instance();
 
@@ -787,7 +793,7 @@ mod tests {
             health_check_host: "tako".to_string(),
             ..Default::default()
         };
-        let app = App::new(config, instance_tx);
+        let app = App::new(config, instance_tx, noop_log_handle());
         let instance = app.allocate_instance();
         instance.set_port(port);
         let token_field = instance.internal_token().to_string();
@@ -814,7 +820,7 @@ mod tests {
             health_check_host: "tako".to_string(),
             ..Default::default()
         };
-        let app = App::new(config, instance_tx);
+        let app = App::new(config, instance_tx, noop_log_handle());
         let instance = app.allocate_instance();
         instance.set_port(port);
         let token = instance.internal_token().to_string();
@@ -863,7 +869,7 @@ mod tests {
             health_check_host: "tako".to_string(),
             ..Default::default()
         };
-        let app = App::new(config, instance_tx);
+        let app = App::new(config, instance_tx, noop_log_handle());
         let instance = app.allocate_instance();
         instance.set_port(port);
         let token = instance.internal_token().to_string();

@@ -136,9 +136,9 @@ async fn stream_logs(
                 let mut ssh = SshClient::connect_to(&host, port).await?;
 
                 let log_cmd = format!(
-                    "sudo journalctl -u tako-server -f --no-pager -o cat 2>/dev/null \
+                    "tail -f /opt/tako/apps/{app}/logs/current.log 2>/dev/null \
+                 || sudo journalctl -u tako-server -f --no-pager -o cat 2>/dev/null \
                  | grep --line-buffered '\"app\":\"{app}\"' \
-                 || tail -f /opt/tako/apps/{app}/shared/logs/*.log 2>/dev/null \
                  || echo 'No logs available'",
                     app = app_name
                 );
@@ -222,11 +222,12 @@ async fn fetch_logs(
             let _t = output::timed("Fetch logs");
             let mut ssh = SshClient::connect_to(&host, port).await?;
 
+            // Read app log files (primary) and server logs about this app (supplementary).
             // Pipe through zstd if available on the server; falls back to raw output.
             let log_cmd = format!(
-                "{{ sudo journalctl -u tako-server --since '{days} days ago' --no-pager -o cat 2>/dev/null \
-                 | grep '\"app\":\"{app}\"' \
-                 || cat /opt/tako/apps/{app}/shared/logs/*.log 2>/dev/null; \
+                "{{ cat /opt/tako/apps/{app}/logs/previous.log /opt/tako/apps/{app}/logs/current.log 2>/dev/null; \
+                 sudo journalctl -u tako-server --since '{days} days ago' --no-pager -o cat 2>/dev/null \
+                 | grep '\"app\":\"{app}\"'; \
                  }} | if command -v zstd >/dev/null 2>&1; then zstd -c; else cat; fi",
                 app = app_name,
                 days = days

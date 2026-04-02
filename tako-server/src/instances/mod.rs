@@ -3,11 +3,13 @@
 //! Manages app instances - spawning, health checking, and cleanup.
 
 mod health;
+pub mod logger;
 mod network;
 mod rolling;
 mod spawner;
 
 pub use health::*;
+pub use logger::{AppLogHandle, LogStream, log_pipe, spawn_app_logger};
 pub use network::*;
 pub use rolling::*;
 pub use spawner::*;
@@ -23,18 +25,6 @@ use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::process::Child;
 use tokio::sync::mpsc;
-
-/// Read and discard all output from a pipe until EOF.
-/// Keeps the OS pipe buffer drained so the child process never blocks on write.
-async fn drain_pipe<R: tokio::io::AsyncRead + Unpin>(mut pipe: R) {
-    let mut buf = [0u8; 8192];
-    loop {
-        match tokio::io::AsyncReadExt::read(&mut pipe, &mut buf).await {
-            Ok(0) | Err(_) => break,
-            Ok(_) => {}
-        }
-    }
-}
 
 fn now_unix_millis() -> u64 {
     SystemTime::now()
@@ -146,10 +136,13 @@ pub struct Instance {
     last_request_ms: AtomicU64,
     /// Last health-check heartbeat time as millis since UNIX_EPOCH
     last_heartbeat_ms: AtomicU64,
+
+    /// Log handle for forwarding stdout/stderr to the app log writer.
+    log_handle: AppLogHandle,
 }
 
 impl Instance {
-    pub fn new(id: String, build_version: String) -> Self {
+    pub fn new(id: String, build_version: String, log_handle: AppLogHandle) -> Self {
         Self {
             id,
             build_version,
@@ -163,6 +156,7 @@ impl Instance {
             in_flight: AtomicU64::new(0),
             last_request_ms: AtomicU64::new(now_unix_millis()),
             last_heartbeat_ms: AtomicU64::new(now_unix_millis()),
+            log_handle,
         }
     }
 
@@ -297,36 +291,45 @@ impl Instance {
         process.as_mut().and_then(|child| child.stdout.take())
     }
 
-    /// Drain remaining stdout lines (after readiness) and stderr.
+    /// Drain remaining stdout lines (after readiness) and stderr,
+    /// forwarding output to the app logger.
     pub fn drain_remaining_stdout<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
         &self,
         lines: tokio::io::Lines<tokio::io::BufReader<R>>,
     ) {
-        // Drain remaining buffered stdout lines
+        let lh = self.log_handle.clone();
+        let id = self.id.clone();
+        // Forward remaining buffered stdout lines
         tokio::spawn(async move {
             let reader = lines.into_inner();
-            drain_pipe(reader).await;
+            log_pipe(reader, lh, id, LogStream::Stdout).await;
         });
-        // Drain stderr
+        // Forward stderr
         let mut process = self.process.write();
         if let Some(ref mut child) = *process
             && let Some(stderr) = child.stderr.take()
         {
-            tokio::spawn(drain_pipe(stderr));
+            let lh2 = self.log_handle.clone();
+            let id2 = self.id.clone();
+            tokio::spawn(log_pipe(stderr, lh2, id2, LogStream::Stderr));
         }
     }
 
-    /// Start draining stdout/stderr pipes so the OS pipe buffer never fills.
+    /// Start forwarding stdout/stderr to the app logger.
     /// Called after the instance becomes healthy — before this point, the pipes
     /// are kept readable for startup_exit_detail error reporting.
     pub fn drain_pipes(&self) {
         let mut process = self.process.write();
         if let Some(ref mut child) = *process {
             if let Some(stdout) = child.stdout.take() {
-                tokio::spawn(drain_pipe(stdout));
+                let lh = self.log_handle.clone();
+                let id = self.id.clone();
+                tokio::spawn(log_pipe(stdout, lh, id, LogStream::Stdout));
             }
             if let Some(stderr) = child.stderr.take() {
-                tokio::spawn(drain_pipe(stderr));
+                let lh = self.log_handle.clone();
+                let id = self.id.clone();
+                tokio::spawn(log_pipe(stderr, lh, id, LogStream::Stderr));
             }
         }
     }
@@ -361,6 +364,8 @@ pub struct App {
     last_error: RwLock<Option<String>>,
     /// Channel to notify about instance changes
     instance_tx: mpsc::Sender<InstanceEvent>,
+    /// Shared log handle for all instances of this app
+    log_handle: AppLogHandle,
 }
 
 /// Events for instance lifecycle
@@ -373,13 +378,18 @@ pub enum InstanceEvent {
 }
 
 impl App {
-    pub fn new(config: AppConfig, instance_tx: mpsc::Sender<InstanceEvent>) -> Self {
+    pub fn new(
+        config: AppConfig,
+        instance_tx: mpsc::Sender<InstanceEvent>,
+        log_handle: AppLogHandle,
+    ) -> Self {
         Self {
             config: RwLock::new(config),
             instances: DashMap::new(),
             state: RwLock::new(AppState::Stopped),
             last_error: RwLock::new(None),
             instance_tx,
+            log_handle,
         }
     }
 
@@ -465,7 +475,11 @@ impl App {
     pub fn allocate_instance(&self) -> Arc<Instance> {
         let id = generate_instance_id();
         let config = self.config.read();
-        let instance = Arc::new(Instance::new(id.clone(), config.version.clone()));
+        let instance = Arc::new(Instance::new(
+            id.clone(),
+            config.version.clone(),
+            self.log_handle.clone(),
+        ));
         self.instances.insert(id, instance.clone());
         instance
     }
@@ -491,16 +505,19 @@ pub struct AppManager {
     event_tx: mpsc::Sender<InstanceEvent>,
     /// Event channel receiver (for the manager loop)
     event_rx: RwLock<Option<mpsc::Receiver<InstanceEvent>>>,
+    /// Server data directory (for app log paths)
+    data_dir: PathBuf,
 }
 
 impl AppManager {
-    pub fn new() -> Self {
+    pub fn new(data_dir: PathBuf) -> Self {
         let (tx, rx) = mpsc::channel(1024);
         Self {
             apps: DashMap::new(),
             spawner: Arc::new(Spawner::new()),
             event_tx: tx,
             event_rx: RwLock::new(Some(rx)),
+            data_dir,
         }
     }
 
@@ -512,7 +529,9 @@ impl AppManager {
     /// Register a new app
     pub fn register_app(&self, config: AppConfig) -> Arc<App> {
         let name = config.deployment_id();
-        let app = Arc::new(App::new(config, self.event_tx.clone()));
+        let log_dir = self.data_dir.join("apps").join(&name).join("logs");
+        let log_handle = spawn_app_logger(&name, log_dir);
+        let app = Arc::new(App::new(config, self.event_tx.clone(), log_handle));
         self.apps.insert(name, app.clone());
         app
     }
@@ -573,12 +592,6 @@ impl AppManager {
     }
 }
 
-impl Default for AppManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 /// Errors that can occur during instance management
 #[derive(Debug, thiserror::Error)]
 pub enum InstanceError {
@@ -597,11 +610,12 @@ pub enum InstanceError {
 
 #[cfg(test)]
 mod tests {
+    use super::logger::noop_log_handle;
     use super::*;
 
     #[test]
     fn test_instance_state_transitions() {
-        let instance = Instance::new("test-1".to_string(), "v1".to_string());
+        let instance = Instance::new("test-1".to_string(), "v1".to_string(), noop_log_handle());
         assert_eq!(instance.state(), InstanceState::Starting);
 
         instance.set_state(InstanceState::Ready);
@@ -613,7 +627,7 @@ mod tests {
 
     #[test]
     fn test_instance_request_tracking() {
-        let instance = Instance::new("test-1".to_string(), "v1".to_string());
+        let instance = Instance::new("test-1".to_string(), "v1".to_string(), noop_log_handle());
         assert_eq!(instance.requests_total(), 0);
 
         instance.request_started();
@@ -634,7 +648,7 @@ mod tests {
             version: "v1".to_string(),
             ..Default::default()
         };
-        let app = App::new(config, tx);
+        let app = App::new(config, tx, noop_log_handle());
 
         let i1 = app.allocate_instance();
         assert!(!i1.id.is_empty());
@@ -655,7 +669,7 @@ mod tests {
             version: "v1".to_string(),
             ..Default::default()
         };
-        let app = App::new(config, tx);
+        let app = App::new(config, tx, noop_log_handle());
 
         let v1_instance = app.allocate_instance();
         assert_eq!(v1_instance.build_version(), "v1");
@@ -670,7 +684,7 @@ mod tests {
 
     #[test]
     fn test_instance_internal_token_is_stable() {
-        let instance = Instance::new("test-1".to_string(), "v1".to_string());
+        let instance = Instance::new("test-1".to_string(), "v1".to_string(), noop_log_handle());
         let token = instance.internal_token().to_string();
         assert!(!token.is_empty());
         assert_eq!(instance.internal_token(), token);
@@ -678,15 +692,15 @@ mod tests {
 
     #[test]
     fn test_instance_port_round_trips() {
-        let instance = Instance::new("test-1".to_string(), "v1".to_string());
+        let instance = Instance::new("test-1".to_string(), "v1".to_string(), noop_log_handle());
         assert_eq!(instance.port(), None);
         instance.set_port(48_123);
         assert_eq!(instance.port(), Some(48_123));
     }
 
-    #[test]
-    fn test_app_manager_register() {
-        let manager = AppManager::new();
+    #[tokio::test]
+    async fn test_app_manager_register() {
+        let manager = AppManager::new(PathBuf::from("/tmp/tako-test"));
 
         let config = AppConfig {
             name: "my-app".to_string(),
@@ -712,7 +726,7 @@ mod tests {
             name: "test-app".to_string(),
             ..Default::default()
         };
-        let app = App::new(config, tx);
+        let app = App::new(config, tx, noop_log_handle());
 
         let i1 = app.allocate_instance();
         let i2 = app.allocate_instance();
@@ -729,7 +743,7 @@ mod tests {
     #[test]
     fn app_last_error_roundtrip() {
         let (tx, _rx) = mpsc::channel(1);
-        let app = App::new(AppConfig::default(), tx);
+        let app = App::new(AppConfig::default(), tx, noop_log_handle());
         assert_eq!(app.last_error(), None);
 
         app.set_last_error("boom");

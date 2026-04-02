@@ -1443,12 +1443,13 @@ mod tests {
     use crate::socket::InstanceState;
     use parking_lot::RwLock;
     use std::collections::HashMap;
+    use std::path::PathBuf;
     use std::time::Duration;
     use tempfile::TempDir;
 
     #[test]
     fn test_tako_proxy_creation() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager));
         let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
         let cold_start = Arc::new(ColdStartManager::new(
@@ -1465,7 +1466,7 @@ mod tests {
 
     #[test]
     fn test_tako_proxy_with_acme() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager));
         let tokens: ChallengeTokens = Arc::new(RwLock::new(HashMap::new()));
 
@@ -1805,7 +1806,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_backend_waits_for_ready_on_on_demand_apps() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager.clone()));
         let app = manager.register_app(AppConfig {
             name: "test-app".to_string(),
@@ -1839,7 +1840,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_backend_returns_startup_timeout_after_wait_timeout() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager.clone()));
         let app = manager.register_app(AppConfig {
             name: "test-app".to_string(),
@@ -1864,7 +1865,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_backend_returns_startup_failed_when_cold_start_fails() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager.clone()));
         let app = manager.register_app(AppConfig {
             name: "test-app".to_string(),
@@ -1894,7 +1895,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_backend_returns_queue_full_when_cold_start_queue_is_full() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager.clone()));
         let app = manager.register_app(AppConfig {
             name: "test-app".to_string(),
@@ -1933,7 +1934,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_backend_returns_unavailable_for_non_on_demand_apps_without_backend() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager.clone()));
         let app = manager.register_app(AppConfig {
             name: "test-app".to_string(),
@@ -1953,7 +1954,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_backend_returns_app_missing_when_app_not_registered() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager));
 
         let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
@@ -1966,7 +1967,7 @@ mod tests {
 
     #[tokio::test]
     async fn load_balancer_cleanup_removes_stale_routes_for_app() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager));
         let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
         {
@@ -1989,7 +1990,7 @@ mod tests {
 
     #[test]
     fn static_server_for_app_reuses_cached_server_for_same_root() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager));
         let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
         let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig::default()));
@@ -2004,7 +2005,7 @@ mod tests {
 
     #[test]
     fn static_server_for_app_replaces_cached_server_when_root_changes() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager));
         let routes = Arc::new(tokio::sync::RwLock::new(RouteTable::default()));
         let cold_start = Arc::new(ColdStartManager::new(ColdStartConfig::default()));
@@ -2020,7 +2021,7 @@ mod tests {
 
     #[test]
     fn test_proxy_builder() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager));
         let temp = TempDir::new().unwrap();
 
@@ -2038,7 +2039,7 @@ mod tests {
 
     #[test]
     fn test_proxy_builder_with_acme() {
-        let manager = Arc::new(AppManager::new());
+        let manager = Arc::new(AppManager::new(PathBuf::from("/tmp/tako-test")));
         let lb = Arc::new(LoadBalancer::new(manager));
         let tokens: ChallengeTokens = Arc::new(RwLock::new(HashMap::new()));
 

@@ -255,6 +255,7 @@ impl RollingUpdater {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::instances::logger::noop_log_handle;
     use tokio::sync::mpsc;
 
     fn create_test_app(name: &str) -> Arc<App> {
@@ -264,7 +265,7 @@ mod tests {
             min_instances: 1,
             ..Default::default()
         };
-        Arc::new(App::new(config, tx))
+        Arc::new(App::new(config, tx, noop_log_handle()))
     }
 
     #[test]
