@@ -296,12 +296,12 @@ async fn download_bytes_limited(url: &str, max_bytes: u64) -> Result<Vec<u8>, St
         ));
     }
 
-    if let Some(len) = response.content_length() {
-        if len > max_bytes {
-            return Err(format!(
-                "download too large: {len} bytes exceeds limit of {max_bytes} bytes for {url}"
-            ));
-        }
+    if let Some(len) = response.content_length()
+        && len > max_bytes
+    {
+        return Err(format!(
+            "download too large: {len} bytes exceeds limit of {max_bytes} bytes for {url}"
+        ));
     }
 
     let bytes = response

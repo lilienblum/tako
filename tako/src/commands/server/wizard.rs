@@ -1,0 +1,639 @@
+use crate::output;
+use tracing::Instrument;
+
+pub async fn prompt_to_add_server(
+    reason: &str,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    if !output::is_interactive() {
+        return Ok(None);
+    }
+
+    output::warning(reason);
+
+    let should_add = output::confirm("Add a server now?", true)?;
+    if !should_add {
+        output::operation_cancelled();
+        return Ok(None);
+    }
+
+    run_add_server_wizard(None, None, 22, true).await
+}
+
+fn append_unique_suggestions(target: &mut Vec<String>, source: &[String]) {
+    for value in source {
+        push_unique_suggestion(target, value.clone());
+    }
+}
+
+fn push_unique_suggestion(values: &mut Vec<String>, value: String) {
+    if value.is_empty() {
+        return;
+    }
+    if values.iter().any(|existing| existing == &value) {
+        return;
+    }
+    values.push(value);
+}
+
+struct WizardConnectionResult {
+    target: crate::config::ServerTarget,
+    version: Option<String>,
+    installed: bool,
+    server_name: Option<String>,
+}
+
+pub(super) async fn run_add_server_wizard(
+    initial_name: Option<&str>,
+    initial_description: Option<&str>,
+    initial_port: u16,
+    default_test_ssh: bool,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    use crate::config::{CliHistoryToml, ServersToml};
+
+    if !output::is_interactive() {
+        return Err(
+            "Interactive server setup requires a terminal. Run: tako servers add <host>".into(),
+        );
+    }
+
+    let existing_servers = ServersToml::load()?;
+    let suggestion_history = CliHistoryToml::load().unwrap_or_default();
+
+    let host_suggestions = suggestion_history.server_host_suggestions();
+    let mut name_suggestions = suggestion_history.server_name_suggestions();
+    let mut port_suggestions = suggestion_history.server_port_suggestions();
+    let mut host_suggestions = host_suggestions;
+
+    // Collect existing hosts/names for filtering placeholders
+    let existing_hosts: Vec<String> = existing_servers
+        .names()
+        .iter()
+        .filter_map(|n| existing_servers.get(n).map(|s| s.host.clone()))
+        .collect();
+
+    for server_name in existing_servers.names() {
+        if let Some(server) = existing_servers.get(server_name) {
+            push_unique_suggestion(&mut host_suggestions, server.host.clone());
+            push_unique_suggestion(&mut name_suggestions, server_name.to_string());
+            push_unique_suggestion(&mut port_suggestions, server.port.to_string());
+        }
+    }
+
+    push_unique_suggestion(&mut port_suggestions, String::from("22"));
+    push_unique_suggestion(&mut port_suggestions, initial_port.to_string());
+
+    if let Some(initial_name) = initial_name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        push_unique_suggestion(&mut name_suggestions, initial_name.to_string());
+    }
+
+    // Placeholder: most recent history entry not already in servers
+    let host_placeholder = host_suggestions
+        .iter()
+        .find(|h| !existing_hosts.contains(h))
+        .cloned();
+
+    // --- Wizard 1: Connection details ---
+    let mut conn_wizard =
+        output::Wizard::new().with_fields(&[("Server IP or hostname", false), ("SSH port", false)]);
+    let mut step = 0usize;
+    let mut host = String::new();
+    let mut port: u16 = initial_port;
+
+    loop {
+        match step {
+            0 => {
+                let mut builder =
+                    output::TextField::new("Server IP or hostname").suggestions(&host_suggestions);
+                if !host.is_empty() {
+                    builder = builder.with_default(&host);
+                } else if let Some(ref ph) = host_placeholder {
+                    builder = builder.with_placeholder(ph);
+                }
+                match conn_wizard.text_field(builder) {
+                    Ok(v) => {
+                        let v = v.trim().to_string();
+                        if v.is_empty() {
+                            return Err("Server host cannot be empty".into());
+                        }
+                        host = v;
+                        step = 1;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => return Ok(None),
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            1 => {
+                let port_str = port.to_string();
+                let mut port_prompt_suggestions =
+                    suggestion_history.server_port_suggestions_for(&host, "");
+                for server_name in existing_servers.names() {
+                    if let Some(server) = existing_servers.get(server_name)
+                        && server.host == host
+                    {
+                        push_unique_suggestion(
+                            &mut port_prompt_suggestions,
+                            server.port.to_string(),
+                        );
+                    }
+                }
+                append_unique_suggestions(&mut port_prompt_suggestions, &port_suggestions);
+                match conn_wizard.text_field(
+                    output::TextField::new("SSH port")
+                        .with_default(&port_str)
+                        .suggestions(&port_prompt_suggestions),
+                ) {
+                    Ok(v) => match v.trim().parse::<u16>() {
+                        Ok(p) => {
+                            port = p;
+                            break;
+                        }
+                        Err(_) => {
+                            output::warning(&format!("Invalid SSH port '{}'", v.trim()));
+                            conn_wizard.undo_last();
+                        }
+                    },
+                    Err(e) if output::is_wizard_back(&e) => step = 0,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            _ => break,
+        }
+    }
+
+    // --- SSH connection test ---
+    let mut remote_server_name: Option<String> = None;
+    let mut detected_target: Option<crate::config::ServerTarget> = None;
+
+    if default_test_ssh {
+        use crate::ssh::{SshClient, SshConfig};
+
+        let ssh_config = SshConfig::from_server(&host, port);
+        let mut ssh = SshClient::new(ssh_config);
+
+        let host_span = output::scope(&host);
+        let _t = output::timed("SSH connected");
+        let result: Result<WizardConnectionResult, String> = output::with_spinner_async_err(
+            "Connecting",
+            "Connection successful",
+            "Connection failed",
+            async {
+                tracing::debug!("Testing SSH connection to {host}:{port}…");
+                ssh.connect().await.map_err(|e| e.to_string())?;
+
+                let target = detect_server_target(&ssh)
+                    .await
+                    .map_err(|e| format!("Target detection failed: {e}"))?;
+                tracing::debug!("Detected target: {}", target.label());
+
+                let (installed, version, server_name_from_info) =
+                    match ssh.is_tako_installed().await {
+                        Ok(true) => {
+                            let ver = ssh.tako_version().await.ok().flatten();
+                            let sn = ssh
+                                .tako_server_info()
+                                .await
+                                .ok()
+                                .and_then(|info| info.server_name);
+                            (true, ver, sn)
+                        }
+                        Ok(false) => (false, None, None),
+                        Err(_) => (false, None, None),
+                    };
+
+                ssh.disconnect().await.map_err(|e| e.to_string())?;
+
+                Ok(WizardConnectionResult {
+                    target,
+                    version,
+                    installed,
+                    server_name: server_name_from_info,
+                })
+            }
+            .instrument(host_span),
+        )
+        .await;
+        drop(_t);
+
+        let _host_scope = output::scope(&host).entered();
+        match result {
+            Ok(info) => {
+                tracing::debug!("Target: {}", info.target.label());
+                if let Some(ref ver) = info.version {
+                    let ver = ver.strip_prefix("tako-server ").unwrap_or(ver);
+                    tracing::debug!("Server version: {ver}");
+                }
+                if !info.installed {
+                    output::warning("tako-server not installed");
+                    output::muted(
+                        "Install it on the server as root (see scripts/install-tako-server.sh), then re-run deploy.",
+                    );
+                }
+                remote_server_name = info.server_name;
+                detected_target = Some(info.target);
+            }
+            Err(e) => {
+                return Err(e.into());
+            }
+        }
+    }
+
+    if output::is_pretty() {
+        eprintln!();
+    }
+
+    // --- Wizard 2: Server identity ---
+    let mut id_wizard =
+        output::Wizard::new().with_fields(&[("Server name", false), ("Description", false)]);
+    let mut step = 0usize;
+    let mut name = String::new();
+    let mut description = String::new();
+
+    loop {
+        match step {
+            0 => {
+                let mut name_prompt_suggestions =
+                    suggestion_history.server_name_suggestions_for_host(&host);
+                for server_name in existing_servers.names() {
+                    if let Some(server) = existing_servers.get(server_name)
+                        && server.host == host
+                    {
+                        push_unique_suggestion(
+                            &mut name_prompt_suggestions,
+                            server_name.to_string(),
+                        );
+                    }
+                }
+                append_unique_suggestions(&mut name_prompt_suggestions, &name_suggestions);
+                push_unique_suggestion(&mut name_prompt_suggestions, host.clone());
+
+                let default_name = if !name.is_empty() {
+                    Some(name.as_str())
+                } else if let Some(n) = initial_name {
+                    Some(n)
+                } else if let Some(ref rsn) = remote_server_name {
+                    Some(rsn.as_str())
+                } else if let Some(n) = name_prompt_suggestions.first() {
+                    Some(n.as_str())
+                } else if !host.chars().next().is_some_and(|c| c.is_ascii_digit())
+                    && !host.contains(':')
+                {
+                    Some(host.as_str())
+                } else {
+                    None
+                };
+                match id_wizard.text_field(
+                    output::TextField::new("Server name")
+                        .default_opt(default_name)
+                        .suggestions(&name_prompt_suggestions),
+                ) {
+                    Ok(v) => {
+                        name = v.trim().to_string();
+                        step = 1;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => return Ok(None),
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            1 => {
+                let default_desc = if !description.is_empty() {
+                    Some(description.as_str())
+                } else {
+                    initial_description
+                };
+                match id_wizard.text_field(
+                    output::TextField::new("Description")
+                        .optional()
+                        .default_opt(default_desc),
+                ) {
+                    Ok(v) => {
+                        description = v.trim().to_string();
+                        break;
+                    }
+                    Err(e) if output::is_wizard_back(&e) => step = 0,
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            _ => break,
+        }
+    }
+
+    let name_ref = Some(name.as_str());
+    let description_ref = if description.is_empty() {
+        None
+    } else {
+        Some(description.as_str())
+    };
+
+    // SSH was already tested above; skip re-testing in add_server
+    add_server(
+        &host,
+        name_ref,
+        description_ref,
+        port,
+        true,
+        detected_target,
+    )
+    .await
+}
+
+pub async fn add_server(
+    host: &str,
+    name: Option<&str>,
+    description: Option<&str>,
+    port: u16,
+    no_test: bool,
+    pre_detected_target: Option<crate::config::ServerTarget>,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    use crate::config::{ServerEntry, ServerTarget, ServersToml};
+    use crate::ssh::{SshClient, SshConfig};
+
+    let mut servers = ServersToml::load()?;
+    let normalized_description = description.and_then(|d| {
+        let trimmed = d.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    });
+
+    let server_name = name
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or(
+            "Server name is required when adding with a host. Use --name <name>, or run 'tako servers add' to use the interactive wizard.",
+        )?
+        .to_string();
+
+    // Check if host already exists
+    if let Some(existing_name) = servers.find_by_host(host) {
+        let existing_name = existing_name.to_string();
+        let existing = servers
+            .get(&existing_name)
+            .cloned()
+            .ok_or_else(|| format!("Server '{}' vanished during lookup", existing_name))?;
+
+        if existing_name == server_name && existing.port == port {
+            if normalized_description.is_some()
+                && existing.description.as_deref() != normalized_description.as_deref()
+            {
+                servers.update(
+                    &existing_name,
+                    ServerEntry {
+                        host: existing.host,
+                        port: existing.port,
+                        description: normalized_description.clone(),
+                    },
+                )?;
+                servers.save()?;
+                output::success(&format!(
+                    "Updated description for server {} (tako@{}:{})",
+                    output::strong(&server_name),
+                    host,
+                    port
+                ));
+                record_server_history(host, &server_name, port);
+                return Ok(Some(server_name));
+            }
+
+            output::success(&format!(
+                "Server {} is already configured (tako@{}:{})",
+                output::strong(&server_name),
+                host,
+                port
+            ));
+            record_server_history(host, &server_name, port);
+            return Ok(Some(server_name));
+        }
+
+        let confirm = output::confirm(
+            &format!(
+                "Host {} already exists as {}. Override?",
+                output::strong(host),
+                output::strong(&existing_name)
+            ),
+            false,
+        )?;
+
+        if !confirm {
+            output::operation_cancelled();
+            return Ok(None);
+        }
+
+        servers.remove(&existing_name)?;
+    }
+
+    // Check if name already exists (with different host)
+    if servers.contains(&server_name) {
+        return Err(format!(
+            "Server name '{}' already exists. Use --name to specify a different name.",
+            server_name
+        )
+        .into());
+    }
+
+    struct ConnectionResult {
+        target: ServerTarget,
+        version: Option<String>,
+        installed: bool,
+    }
+
+    if output::is_dry_run() {
+        output::dry_run_skip(&format!(
+            "Add server {} (tako@{}:{})",
+            output::strong(&server_name),
+            host,
+            port
+        ));
+        return Ok(Some(server_name));
+    }
+
+    let mut detected_target: Option<ServerTarget> = pre_detected_target;
+    // Test SSH connection unless skipped or already tested
+    if !no_test && detected_target.is_none() {
+        let ssh_config = SshConfig::from_server(host, port);
+        let mut ssh = SshClient::new(ssh_config);
+
+        let result: Result<ConnectionResult, String> = output::with_spinner_async_err(
+            "Connecting",
+            "Connection successful",
+            "Connection failed",
+            async {
+                ssh.connect().await.map_err(|e| e.to_string())?;
+
+                let target = detect_server_target(&ssh)
+                    .await
+                    .map_err(|e| format!("Target detection failed: {e}"))?;
+
+                let (installed, version) = match ssh.is_tako_installed().await {
+                    Ok(true) => {
+                        let ver = ssh.tako_version().await.ok().flatten();
+                        (true, ver)
+                    }
+                    Ok(false) => (false, None),
+                    Err(_) => (false, None),
+                };
+
+                ssh.disconnect().await.map_err(|e| e.to_string())?;
+
+                Ok(ConnectionResult {
+                    target,
+                    version,
+                    installed,
+                })
+            },
+        )
+        .await;
+
+        {
+            let _host_scope = output::scope(host).entered();
+            match result {
+                Ok(info) => {
+                    tracing::debug!("Target: {}", info.target.label());
+                    if let Some(ref ver) = info.version {
+                        let ver = ver.strip_prefix("tako-server ").unwrap_or(ver);
+                        tracing::debug!("Server version: {ver}");
+                    }
+                    if !info.installed {
+                        output::warning("tako-server not installed");
+                        output::muted(
+                            "Install it on the server as root (see scripts/install-tako-server.sh), then re-run deploy.",
+                        );
+                    }
+                    detected_target = Some(info.target);
+                }
+                Err(e) => {
+                    return Err(e.into());
+                }
+            }
+        }
+    } else if detected_target.is_none() {
+        output::warning(
+            "Skipped SSH test. Target metadata was not detected; deploy will fail for this server until it is re-added with SSH checks enabled.",
+        );
+    }
+
+    // Add the server
+    let entry = ServerEntry {
+        host: host.to_string(),
+        port,
+        description: normalized_description.clone(),
+    };
+
+    servers.add(server_name.clone(), entry)?;
+    if let Some(target) = detected_target {
+        servers.set_target(&server_name, target)?;
+    }
+    servers.save()?;
+
+    output::success(&format!("Added server {}", output::strong(&server_name),));
+    record_server_history(host, &server_name, port);
+
+    Ok(Some(server_name))
+}
+
+const DETECT_LIBC_COMMAND: &str = "if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then echo musl; \
+elif command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -Eqi 'glibc|gnu libc|gnu c library'; then echo glibc; \
+elif command -v getconf >/dev/null 2>&1 && getconf GNU_LIBC_VERSION >/dev/null 2>&1; then echo glibc; \
+elif ls /lib/ld-musl-*.so.1 /usr/lib/ld-musl-*.so.1 >/dev/null 2>&1; then echo musl; \
+else echo unknown; fi";
+
+pub(super) async fn detect_server_target(
+    ssh: &crate::ssh::SshClient,
+) -> Result<crate::config::ServerTarget, String> {
+    let combined = format!(
+        "echo ARCH:$(uname -m 2>/dev/null || echo unknown); echo LIBC:$({})",
+        DETECT_LIBC_COMMAND
+    );
+    let output = ssh
+        .exec(&combined)
+        .await
+        .map_err(|e| format!("Failed to detect server target: {}", e))?;
+
+    let mut arch_str = String::new();
+    let mut libc_str = String::new();
+    for line in output.stdout.lines() {
+        let line = line.trim();
+        if let Some(val) = line.strip_prefix("ARCH:") {
+            arch_str = val.trim().to_string();
+        } else if let Some(val) = line.strip_prefix("LIBC:") {
+            libc_str = val.trim().to_string();
+        }
+    }
+
+    let arch = parse_detected_arch(&arch_str)?;
+    let libc = parse_detected_libc(&libc_str)?;
+
+    crate::config::ServerTarget::normalized(&arch, &libc)
+        .map_err(|e| format!("Unsupported target metadata: {}", e))
+}
+
+fn parse_detected_arch(stdout: &str) -> Result<String, String> {
+    let raw = stdout.lines().map(str::trim).find(|line| !line.is_empty());
+    let Some(raw_arch) = raw else {
+        return Err("Could not detect server architecture from `uname -m` output".to_string());
+    };
+
+    crate::config::ServerTarget::normalize_arch(raw_arch).ok_or_else(|| {
+        format!(
+            "Unsupported server architecture '{}'. Supported architectures: x86_64, aarch64.",
+            raw_arch
+        )
+    })
+}
+
+fn parse_detected_libc(stdout: &str) -> Result<String, String> {
+    let raw = stdout.lines().map(str::trim).find(|line| !line.is_empty());
+    let Some(raw_libc) = raw else {
+        return Err("Could not detect server libc".to_string());
+    };
+
+    crate::config::ServerTarget::normalize_libc(raw_libc).ok_or_else(|| {
+        format!(
+            "Unsupported server libc '{}'. Supported libc families: glibc, musl.",
+            raw_libc
+        )
+    })
+}
+
+fn record_server_history(host: &str, name: &str, port: u16) {
+    let mut history = crate::config::CliHistoryToml::load().unwrap_or_default();
+    history.record_server_prompt_values(host, name, port);
+    if let Err(e) = history.save() {
+        tracing::warn!("Could not save CLI history: {e}");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_detected_arch_normalizes_supported_aliases() {
+        assert_eq!(parse_detected_arch("x86_64\n").unwrap(), "x86_64");
+        assert_eq!(parse_detected_arch("amd64\n").unwrap(), "x86_64");
+        assert_eq!(parse_detected_arch("arm64\n").unwrap(), "aarch64");
+    }
+
+    #[test]
+    fn parse_detected_arch_rejects_unknown_values() {
+        let err = parse_detected_arch("sparc\n").unwrap_err();
+        assert!(err.contains("Unsupported server architecture"));
+    }
+
+    #[test]
+    fn parse_detected_libc_normalizes_supported_aliases() {
+        assert_eq!(parse_detected_libc("glibc\n").unwrap(), "glibc");
+        assert_eq!(parse_detected_libc("GNU libc\n").unwrap(), "glibc");
+        assert_eq!(parse_detected_libc("musl\n").unwrap(), "musl");
+    }
+
+    #[test]
+    fn parse_detected_libc_rejects_unknown_values() {
+        let err = parse_detected_libc("uclibc\n").unwrap_err();
+        assert!(err.contains("Unsupported server libc"));
+    }
+}
