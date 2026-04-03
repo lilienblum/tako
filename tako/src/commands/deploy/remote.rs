@@ -565,7 +565,7 @@ pub(super) async fn deploy_to_server(
         let releases_dir = format!("{}/releases", config.remote_base);
         let cleanup_cmd = format!(
             "find {} -mindepth 1 -maxdepth 1 -type d -mtime +30 -exec rm -rf {{}} \\;",
-            releases_dir
+            shell_single_quote(&releases_dir)
         );
         if let Err(e) = ssh.exec(&cleanup_cmd).await {
             tracing::warn!("Failed to clean up old releases: {e}");

@@ -44,7 +44,7 @@ use crate::tls::{
 use clap::Parser;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::{ExitStatus, Stdio};
+use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
 use tako_core::{
@@ -1493,44 +1493,6 @@ fn resolve_release_runtime(release_dir: &Path) -> Result<String, String> {
     runtime_from_release_dir(release_dir)
 }
 
-async fn run_release_install_command(
-    release_dir: &Path,
-    command: &str,
-    env: &HashMap<String, String>,
-) -> Result<(), String> {
-    let mut cmd = TokioCommand::new("sh");
-    cmd.args(["-c", command])
-        .current_dir(release_dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .envs(
-            env.iter()
-                .map(|(key, value)| (key.as_str(), value.as_str())),
-        );
-
-    #[cfg(unix)]
-    drop_privileges_if_root(&mut cmd);
-
-    let output = cmd.output().await.map_err(|e| {
-        format!(
-            "Failed to run release install command '{}' in {}: {}",
-            command,
-            release_dir.display(),
-            e
-        )
-    })?;
-
-    if output.status.success() {
-        return Ok(());
-    }
-    Err(format_process_failure(
-        "Release dependency install failed",
-        output.status,
-        &output.stdout,
-        &output.stderr,
-    ))
-}
-
 /// Full release preparation: download runtime, install production dependencies.
 /// Called via the `PrepareRelease` command during the CLI "Preparing" step.
 async fn prepare_release_runtime(
@@ -1590,9 +1552,9 @@ async fn prepare_release_runtime(
     // Run production dependency install using the runtime plugin.
     // - project_dir: the app subdirectory (for package.json / PM detection)
     // - install_dir: where the lockfile lives (workspace root); install runs from here
-    let app_dir = crate::app_command::safe_subdir(&release_dir, &manifest.app_dir)
+    let app_dir = crate::app_command::safe_subdir(release_dir, &manifest.app_dir)
         .map_err(|e| format!("Invalid app_dir in manifest: {e}"))?;
-    let install_dir = crate::app_command::safe_subdir(&release_dir, &manifest.install_dir)
+    let install_dir = crate::app_command::safe_subdir(release_dir, &manifest.install_dir)
         .map_err(|e| format!("Invalid install_dir in manifest: {e}"))?;
     let ctx = tako_runtime::PluginContext {
         project_dir: &app_dir,
@@ -1602,10 +1564,13 @@ async fn prepare_release_runtime(
         && let Some(install_cmd) = &def.package_manager.install
     {
         tracing::info!(runtime = %runtime, install_dir = %install_dir.display(), "Running production install: {}", install_cmd);
-        let output = tokio::process::Command::new("sh")
-            .args(["-c", install_cmd.as_str()])
+        let mut cmd = TokioCommand::new("sh");
+        cmd.args(["-c", install_cmd.as_str()])
             .current_dir(&install_dir)
-            .envs(&install_env)
+            .envs(&install_env);
+        #[cfg(unix)]
+        drop_privileges_if_root(&mut cmd);
+        let output = cmd
             .output()
             .await
             .map_err(|e| format!("Failed to run production install: {e}"))?;
