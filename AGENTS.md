@@ -25,12 +25,10 @@ Tako's protocol is v0: do not keep any legacy code, backward compatibility shims
    - `website/src/pages/docs/deployment.md`
    - `website/src/pages/docs/development.md`
 
-8. **Keep preset `_example` files in sync** - When changing the schema or fields of any TOML file under `presets/`, update the corresponding `_example` file in the same directory to match.
+8. **Runtime behavior lives in plugins** - Runtime definitions (install commands, launch args, entrypoint paths) are in `tako-runtime/src/plugins/`. Preset definitions live in `presets/`.
+   - `presets/{language}.toml` — family preset definitions (sections per preset)
 
-9. **Runtime behavior lives in plugins** - Runtime definitions (install commands, launch args, entrypoint paths) are in `tako-runtime/src/plugins/`. Preset definitions live in `presets/`.
-   - `presets/{language}/{language}.toml` — family preset definitions (sections per preset)
-
-10. **Never commit with known failures** - Do not commit when tests or pre-commit hooks are known to be failing. Fix the issues first. If fixing is impractical, get explicit user confirmation before committing.
+9. **Never commit with known failures** - Do not commit when tests or pre-commit hooks are known to be failing. Fix the issues first. If fixing is impractical, get explicit user confirmation before committing.
 
 ## Project Structure
 
@@ -146,7 +144,7 @@ Example: "Parse app name in `tako/src/app/name.rs:42`"
    - `website/src/pages/docs/cli.md`
    - `website/src/pages/docs/deployment.md`
    - `website/src/pages/docs/development.md`
-5. If preset definitions changed, update the relevant `presets/<language>/<language>.toml` file and ensure no old per-preset files are introduced.
+5. If preset definitions changed, update the relevant `presets/<language>.toml` file.
 6. If SDK exports, adapters, or usage patterns changed, update the agent skills in `sdk/javascript/skills/` to match.
 7. Update affected README.md files if setup/usage/run commands changed
 8. Close or update the related issue/task entry

@@ -40,6 +40,25 @@ pub fn tako_data_dir() -> Result<PathBuf, std::io::Error> {
     Ok(base.join("tako"))
 }
 
+/// Get Tako's cache directory (XDG-compliant).
+///
+/// - `TAKO_HOME` set → that directory (all-in-one).
+/// - Debug builds from source checkout → `{repo}/local-dev/.tako` (all-in-one).
+/// - Otherwise → `dirs::cache_dir()/tako` (e.g. `~/.cache/tako` on Linux,
+///   `~/Library/Caches/tako` on macOS).
+pub fn tako_cache_dir() -> Result<PathBuf, std::io::Error> {
+    if let Some(home) = tako_home_override() {
+        return Ok(home);
+    }
+    let base = dirs::cache_dir().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "Could not determine cache directory",
+        )
+    })?;
+    Ok(base.join("tako"))
+}
+
 /// Returns the override directory when `TAKO_HOME` is set or running from a
 /// debug source checkout. Returns `None` when the XDG split should be used.
 fn tako_home_override() -> Option<PathBuf> {
@@ -165,6 +184,22 @@ mod tests {
             std::env::set_var("TAKO_HOME", temp.path());
         }
         let got = tako_data_dir().unwrap();
+        match previous {
+            Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+            None => unsafe { std::env::remove_var("TAKO_HOME") },
+        }
+        assert_eq!(got, temp.path());
+    }
+
+    #[test]
+    fn tako_cache_dir_respects_env_override() {
+        let _lock = test_tako_home_env_lock();
+        let previous = std::env::var_os("TAKO_HOME");
+        let temp = TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("TAKO_HOME", temp.path());
+        }
+        let got = tako_cache_dir().unwrap();
         match previous {
             Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
             None => unsafe { std::env::remove_var("TAKO_HOME") },

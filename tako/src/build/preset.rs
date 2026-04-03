@@ -4,14 +4,15 @@ use std::path::{Path, PathBuf};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 
-use crate::build::adapter::{BuildAdapter, PresetGroup, builtin_base_preset_content_for_alias};
+use crate::build::adapter::{BuildAdapter, PresetGroup};
+use crate::build::preset_cache;
 
 pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const FALLBACK_OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const OFFICIAL_PRESET_BRANCH: &str = "master";
-const EMBEDDED_JS_GROUP_PRESETS_PATH: &str = "presets/javascript/javascript.toml";
-const EMBEDDED_GO_GROUP_PRESETS_PATH: &str = "presets/go/go.toml";
+const OFFICIAL_JS_GROUP_PRESETS_PATH: &str = "presets/javascript.toml";
+const OFFICIAL_GO_GROUP_PRESETS_PATH: &str = "presets/go.toml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -29,7 +30,7 @@ pub struct PresetDefinition {
 }
 
 /// App preset providing entrypoint and asset defaults.
-/// Loaded from `presets/<group>/<group>.toml` or embedded.
+/// Loaded from `presets/<group>.toml` (fetched from GitHub, cached locally).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppPreset {
     pub name: String,
@@ -249,74 +250,105 @@ pub async fn load_build_preset(
     };
     let path = official_alias_to_path(alias);
     let official_repo = official_preset_repo();
-    let fetch_result = if let Some(commit) = commit_override {
-        fetch_preset_content_by_commit(&official_repo, &path, &commit)
-            .await
-            .map(|content| (official_repo.clone(), commit, content))
+
+    let (repo, commit, content) = if let Some(commit) = commit_override {
+        resolve_by_commit(&official_repo, &path, &commit).await?
+    } else if let Ok(Some(locked)) = read_locked_preset(project_dir)
+        && locked.path == path
+        && locked.commit != "embedded"
+    {
+        resolve_by_commit(&locked.repo, &path, &locked.commit).await?
     } else {
-        fetch_preset_content_from_master_branch(&official_repo, &path)
-            .await
-            .map(|(resolved_commit, content)| (official_repo.clone(), resolved_commit, content))
+        resolve_by_branch(&official_repo, &path, OFFICIAL_PRESET_BRANCH).await?
     };
 
-    let (repo, commit, preset) = match fetch_result {
-        Ok((repo, commit, content)) => {
-            let preset = parse_resolved_preset_from_content(&parsed_ref, &path, &content)?;
-            (repo, commit, preset)
-        }
-        Err(fetch_error) => {
-            // Fall back to embedded content for known runtime aliases and group presets.
-            if BuildAdapter::from_id(alias).is_some() {
-                tracing::debug!(
-                    "Preset fetch failed, using embedded preset: {}",
-                    fetch_error
-                );
-                let preset = parse_embedded_runtime_base_preset(alias)?;
-                (official_repo.clone(), "embedded".to_string(), preset)
-            } else if let Some(embedded_path) = {
-                // Try the runtime's own group first, then fall back to JS for backward compat.
-                let adapter = BuildAdapter::from_id(alias);
-                let group = adapter
-                    .map(|a| a.preset_group())
-                    .unwrap_or(PresetGroup::Unknown);
-                official_group_manifest_path(group)
-                    .or_else(|| official_group_manifest_path(PresetGroup::Js))
-            } {
-                tracing::debug!(
-                    "Preset fetch failed, trying embedded group manifest: {}",
-                    fetch_error
-                );
-                let embedded_content = embedded_group_manifest_content(embedded_path);
-                match parse_resolved_preset_from_content(&parsed_ref, &path, &embedded_content) {
-                    Ok(preset) => (official_repo.clone(), "embedded".to_string(), preset),
-                    Err(_) => return Err(fetch_error),
-                }
-            } else {
-                return Err(fetch_error);
-            }
-        }
-    };
+    let preset = parse_resolved_preset_from_content(&parsed_ref, &path, &content)?;
     let resolved = ResolvedPresetSource {
         preset_ref: preset_ref.to_string(),
         repo,
         path,
         commit: commit.clone(),
     };
-    if commit != "embedded" {
-        write_locked_preset(project_dir, &resolved)?;
-    }
+    write_locked_preset(project_dir, &resolved)?;
     Ok((preset, resolved))
+}
+
+async fn resolve_by_commit(
+    repo: &str,
+    path: &str,
+    commit: &str,
+) -> Result<(String, String, String), String> {
+    // Try cache first
+    if let Some(content) = preset_cache::read_cached(repo, commit, path) {
+        return Ok((repo.to_string(), commit.to_string(), content));
+    }
+
+    // Fetch from GitHub
+    match fetch_preset_content_by_commit(repo, path, commit).await {
+        Ok(content) => {
+            let _ = preset_cache::write_cached(repo, commit, path, &content);
+            Ok((repo.to_string(), commit.to_string(), content))
+        }
+        Err(fetch_err) => {
+            // Stale fallback: any cached version of this path
+            if let Some((_stale_sha, content)) = preset_cache::find_any_cached(repo, path) {
+                tracing::warn!(
+                    "Preset fetch failed for commit {}, using stale cache: {}",
+                    commit,
+                    fetch_err
+                );
+                Ok((repo.to_string(), commit.to_string(), content))
+            } else {
+                Err(fetch_err)
+            }
+        }
+    }
+}
+
+async fn resolve_by_branch(
+    repo: &str,
+    path: &str,
+    branch: &str,
+) -> Result<(String, String, String), String> {
+    // Check freshness — if TTL hasn't expired, use cached content
+    if let Some(sha) = preset_cache::fresh_sha(repo, branch)
+        && let Some(content) = preset_cache::read_cached(repo, &sha, path) {
+            return Ok((repo.to_string(), sha, content));
+        }
+
+    // Fetch from GitHub to resolve current SHA
+    match fetch_preset_content_from_master_branch(repo, path).await {
+        Ok((sha, content)) => {
+            let _ = preset_cache::write_cached(repo, &sha, path, &content);
+            let _ = preset_cache::update_freshness(repo, branch, &sha);
+            Ok((repo.to_string(), sha, content))
+        }
+        Err(fetch_err) => {
+            // Stale fallback: last known SHA for this branch
+            if let Some(sha) = preset_cache::last_known_sha(repo, branch)
+                && let Some(content) = preset_cache::read_cached(repo, &sha, path) {
+                    tracing::warn!("Preset fetch failed, using stale cache: {}", fetch_err);
+                    return Ok((repo.to_string(), sha, content));
+                }
+            // Any cached version at all
+            if let Some((sha, content)) = preset_cache::find_any_cached(repo, path) {
+                tracing::warn!("Preset fetch failed, using stale cache: {}", fetch_err);
+                return Ok((repo.to_string(), sha, content));
+            }
+            Err(fetch_err)
+        }
+    }
 }
 
 fn official_alias_to_path(alias: &str) -> String {
     match alias.split_once('/') {
-        Some((group, _)) => format!("presets/{group}/{group}.toml"),
+        Some((group, _)) => format!("presets/{group}.toml"),
         None => {
             if let Some(adapter) = BuildAdapter::from_id(alias) {
                 let group = adapter.preset_group().id();
-                format!("presets/{group}/{group}.toml")
+                format!("presets/{group}.toml")
             } else {
-                format!("presets/{alias}/{alias}.toml")
+                format!("presets/{alias}.toml")
             }
         }
     }
@@ -324,19 +356,9 @@ fn official_alias_to_path(alias: &str) -> String {
 
 fn official_group_manifest_path(group: PresetGroup) -> Option<&'static str> {
     match group {
-        PresetGroup::Js => Some(EMBEDDED_JS_GROUP_PRESETS_PATH),
-        PresetGroup::Go => Some(EMBEDDED_GO_GROUP_PRESETS_PATH),
+        PresetGroup::Js => Some(OFFICIAL_JS_GROUP_PRESETS_PATH),
+        PresetGroup::Go => Some(OFFICIAL_GO_GROUP_PRESETS_PATH),
         PresetGroup::Unknown => None,
-    }
-}
-
-fn embedded_group_manifest_content(path: &str) -> String {
-    match path {
-        "presets/javascript/javascript.toml" => {
-            include_str!("../../presets/javascript/javascript.toml").to_string()
-        }
-        "presets/go/go.toml" => include_str!("../../presets/go/go.toml").to_string(),
-        _ => String::new(),
     }
 }
 
@@ -396,7 +418,8 @@ pub async fn load_available_group_preset_definitions(
     };
 
     let official_repo = official_preset_repo();
-    let (_commit, content) = fetch_preset_content_from_master_branch(&official_repo, path).await?;
+    let (_repo, _commit, content) =
+        resolve_by_branch(&official_repo, path, OFFICIAL_PRESET_BRANCH).await?;
     parse_group_manifest_preset_definitions(path, &content)
 }
 
@@ -408,7 +431,8 @@ pub async fn load_available_group_presets(group: PresetGroup) -> Result<Vec<Stri
         ));
     };
     let official_repo = official_preset_repo();
-    let (_commit, content) = fetch_preset_content_from_master_branch(&official_repo, path).await?;
+    let (_repo, _commit, content) =
+        resolve_by_branch(&official_repo, path, OFFICIAL_PRESET_BRANCH).await?;
     parse_group_manifest_preset_names(path, &content)
 }
 
@@ -433,29 +457,9 @@ fn parse_official_alias_preset_content(
         return parse_group_preset_content(path, content, preset_name);
     }
     if BuildAdapter::from_id(alias).is_some() {
-        return parse_group_preset_content(path, content, alias).or_else(|error| {
-            if error == missing_group_preset_error(alias, path) {
-                parse_embedded_runtime_base_preset(alias)
-            } else {
-                Err(error)
-            }
-        });
+        return parse_group_preset_content(path, content, alias);
     }
     parse_and_validate_preset(content, alias)
-}
-
-fn missing_group_preset_error(preset_name: &str, path: &str) -> String {
-    format!("Preset '{}' was not found in '{}'.", preset_name, path)
-}
-
-fn parse_embedded_runtime_base_preset(alias: &str) -> Result<BuildPreset, String> {
-    let content = builtin_base_preset_content_for_alias(alias).ok_or_else(|| {
-        format!(
-            "Missing built-in base preset content for runtime '{}'.",
-            alias
-        )
-    })?;
-    parse_and_validate_preset(&content, alias)
 }
 
 fn parse_group_preset_content(
@@ -566,7 +570,6 @@ fn infer_adapter_from_official_alias_name(alias: &str) -> BuildAdapter {
     BuildAdapter::from_id(group_or_name).unwrap_or(BuildAdapter::Unknown)
 }
 
-#[cfg(test)]
 fn read_locked_preset(project_dir: &Path) -> Result<Option<ResolvedPresetSource>, String> {
     let lock_path = project_dir.join(BUILD_LOCK_RELATIVE_PATH);
     if !lock_path.exists() {
@@ -668,7 +671,6 @@ pub fn lock_file_path(project_dir: &Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::build::adapter::builtin_base_preset_content_for_alias;
 
     fn parse_preset(raw: &str) -> Result<AppPreset, String> {
         parse_and_validate_preset(raw, "bun")
@@ -768,34 +770,25 @@ mod tests {
 
     #[test]
     fn official_alias_to_path_maps_group_layout() {
-        assert_eq!(
-            official_alias_to_path("bun"),
-            "presets/javascript/javascript.toml"
-        );
+        assert_eq!(official_alias_to_path("bun"), "presets/javascript.toml");
         assert_eq!(
             official_alias_to_path("javascript/tanstack-start"),
-            "presets/javascript/javascript.toml"
+            "presets/javascript.toml"
         );
-        assert_eq!(
-            official_alias_to_path("node"),
-            "presets/javascript/javascript.toml"
-        );
-        assert_eq!(
-            official_alias_to_path("deno"),
-            "presets/javascript/javascript.toml"
-        );
-        assert_eq!(official_alias_to_path("go"), "presets/go/go.toml");
+        assert_eq!(official_alias_to_path("node"), "presets/javascript.toml");
+        assert_eq!(official_alias_to_path("deno"), "presets/javascript.toml");
+        assert_eq!(official_alias_to_path("go"), "presets/go.toml");
     }
 
     #[test]
     fn official_group_manifest_path_supports_known_families() {
         assert_eq!(
             official_group_manifest_path(PresetGroup::Js),
-            Some("presets/javascript/javascript.toml")
+            Some("presets/javascript.toml")
         );
         assert_eq!(
             official_group_manifest_path(PresetGroup::Go),
-            Some("presets/go/go.toml")
+            Some("presets/go.toml")
         );
         assert_eq!(official_group_manifest_path(PresetGroup::Unknown), None);
     }
@@ -803,7 +796,7 @@ mod tests {
     #[test]
     fn parse_group_manifest_preset_names_collects_sorted_sections() {
         let names = parse_group_manifest_preset_names(
-            "presets/javascript/javascript.toml",
+            "presets/javascript.toml",
             r#"
 [zeta]
 main = "z.ts"
@@ -821,7 +814,7 @@ main = "a.ts"
     #[test]
     fn parse_group_manifest_preset_definitions_reads_optional_main() {
         let definitions = parse_group_manifest_preset_definitions(
-            "presets/javascript/javascript.toml",
+            "presets/javascript.toml",
             r#"
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
@@ -856,16 +849,7 @@ foo = "bar"
     }
 
     #[test]
-    fn embedded_bun_preset_parses() {
-        let content = builtin_base_preset_content_for_alias("bun").expect("embedded bun preset");
-        let preset = parse_and_validate_preset(&content, "bun").unwrap();
-        assert_eq!(preset.name, "bun");
-        // The embedded bun preset only provides main (and possibly assets).
-        assert!(preset.main.is_some());
-    }
-
-    #[test]
-    fn embedded_bun_tanstack_start_preset_parses() {
+    fn tanstack_start_preset_parses_from_group_manifest() {
         let content = r#"
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
@@ -873,7 +857,7 @@ assets = ["dist/client"]
 "#;
         let preset = parse_official_alias_preset_content(
             "javascript/tanstack-start",
-            "presets/javascript/javascript.toml",
+            "presets/javascript.toml",
             content,
         )
         .unwrap();
@@ -883,20 +867,14 @@ assets = ["dist/client"]
     }
 
     #[test]
-    fn runtime_alias_uses_embedded_base_when_missing_from_manifest() {
+    fn runtime_alias_errors_when_missing_from_manifest() {
         let content = r#"
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
 "#;
-        let preset = parse_official_alias_preset_content(
-            "bun",
-            "presets/javascript/javascript.toml",
-            content,
-        )
-        .expect("runtime alias should use built-in preset fallback");
-        assert_eq!(preset.name, "bun");
-        // Embedded base preset provides a default main for the bun runtime.
-        assert!(preset.main.is_some());
+        let err = parse_official_alias_preset_content("bun", "presets/javascript.toml", content)
+            .expect_err("runtime alias should error when not in manifest");
+        assert!(err.contains("Preset 'bun' was not found"));
     }
 
     #[test]
@@ -907,7 +885,7 @@ main = "dist/server/tako-entry.mjs"
 "#;
         let err = parse_official_alias_preset_content(
             "javascript/missing",
-            "presets/javascript/javascript.toml",
+            "presets/javascript.toml",
             content,
         )
         .expect_err("non-runtime group alias should still require manifest section");
@@ -1045,7 +1023,7 @@ assets = ["dist/client"]
         let resolved = ResolvedPresetSource {
             preset_ref: "bun".to_string(),
             repo: "tako-sh/presets".to_string(),
-            path: "presets/javascript/javascript.toml".to_string(),
+            path: "presets/javascript.toml".to_string(),
             commit: "abc123".to_string(),
         };
         write_locked_preset(temp.path(), &resolved).unwrap();
@@ -1060,7 +1038,7 @@ assets = ["dist/client"]
         let err = runtime
             .block_on(fetch_preset_content_from_master_branch(
                 "invalid-repo-slug",
-                "presets/javascript/javascript.toml",
+                "presets/javascript.toml",
             ))
             .unwrap_err();
         assert_eq!(err, "Failed to fetch preset");

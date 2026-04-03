@@ -126,7 +126,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
   - pinned runtime-local aliases: `tanstack-start@<commit-hash>`
 - namespaced preset aliases in `tako.toml` (for example `js/tanstack-start`) are rejected; choose runtime via top-level `runtime` and keep `preset` runtime-local.
 - `github:` preset references are not supported in `tako.toml`.
-- Preset definitions live in `presets/<language>/<language>.toml` (for example `presets/javascript/javascript.toml`), where each preset is a section (`[tanstack-start]`, etc.). Each section contains `name` (optional, fallback: section name), `main`, `assets`, and `dev` (custom dev command).
+- Preset definitions live in `presets/<language>.toml` (for example `presets/javascript.toml`), where each preset is a section (`[tanstack-start]`, etc.). Each section contains `name` (optional, fallback: section name), `main`, `assets`, and `dev` (custom dev command). Presets are fetched from GitHub on demand and cached locally; the first fetch requires network connectivity, subsequent uses work offline via the cache.
 - `tanstack-start` preset defaults `main = "@tanstack/react-start/server-entry"`, `assets = ["dist/client"]`, and `dev = ["vite", "dev"]`.
 - `vite` preset defaults `dev = ["vite", "dev"]` for projects using Vite as their dev server.
 - Runtime behavior (install commands, launch args, entrypoint resolution) lives in runtime plugins (`tako-runtime/src/plugins/`), not in presets.
@@ -347,7 +347,7 @@ Template behavior:
 - Prompts for required production route (`[envs.production].route`) with default `{name}.example.com`.
 - Detects adapter (`bun`, `node`, `deno`, `go`, fallback `unknown`) and prompts for runtime selection.
 - After generating `tako.toml`, init installs the `tako.sh` SDK package via the selected runtime's package-manager `add` command (for JS: `bun add tako.sh`, etc.; for Go: `go get tako.sh`).
-- In interactive mode, init fetches runtime-family preset names from official family manifest files (`presets/<language>/<language>.toml`) and shows `Fetching presets...` while loading.
+- In interactive mode, init fetches runtime-family preset names from official family manifest files (`presets/<language>.toml`) and shows `Fetching presets...` while loading.
 - For built-in base adapters, init defaults to:
   - Bun: `bun`
   - Node: `node`

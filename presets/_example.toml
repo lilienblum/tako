@@ -1,0 +1,14 @@
+# Example preset definition file.
+# Each file is a family manifest: presets/<language>.toml
+# Each TOML section defines a preset alias.
+#
+# Fields:
+#   name   - (optional) preset name; defaults to the section name
+#   main   - (optional) default entrypoint file or module specifier
+#   assets - (optional) array of static asset directories
+#   dev    - (optional) custom dev command (overrides runtime default)
+
+[my-framework]
+main = "dist/server/entry.mjs"
+assets = ["dist/client"]
+dev = ["vite", "dev"]

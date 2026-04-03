@@ -90,17 +90,17 @@ Presets provide defaults. Your `tako.toml` settings always take precedence.
 
 ## Preset definition files
 
-Official preset definitions are organized by language in family files at `presets/<language>/<language>.toml`. For example:
+Official preset definitions are organized by language in family files at `presets/<language>.toml`. For example:
 
 ```
-presets/javascript/javascript.toml
-presets/go/go.toml
+presets/javascript.toml
+presets/go.toml
 ```
 
 Each file contains framework presets as TOML sections, where each section name is the preset alias:
 
 ```toml
-# presets/javascript/javascript.toml
+# presets/javascript.toml
 
 [vite]
 dev = ["vite", "dev"]
@@ -113,11 +113,11 @@ dev = ["vite", "dev"]
 
 ## Preset resolution
 
-When you deploy or run `tako dev`, Tako resolves your preset alias into actual metadata.
+When you deploy or run `tako dev`, Tako resolves your preset alias into actual metadata. Presets are fetched from GitHub on demand and cached locally for offline use.
 
-**Unpinned aliases** (e.g. `preset = "tanstack-start"`) are fetched from the `master` branch of the presets repository on every resolve. If the fetch fails, preset resolution fails and the operation is aborted.
+**Unpinned aliases** (e.g. `preset = "tanstack-start"`) are fetched from the `master` branch of the presets repository and cached for 1 hour. After the cache expires, Tako re-fetches from GitHub. If the fetch fails, Tako falls back to previously cached content.
 
-**Base runtime aliases** (`bun`, `node`, `deno`, `go`) have a fallback: if their section is missing from the fetched family manifest, Tako uses its embedded defaults. Framework presets like `tanstack-start` do not have this fallback -- they must be found in the fetched manifest.
+**First run**: Requires network connectivity to fetch presets. After the initial fetch, presets work offline via the local cache.
 
 ### Pinning a preset version
 
@@ -142,7 +142,7 @@ This file provides visibility into what was resolved and is used as an input to 
 
 ## Presets during tako init
 
-When you run `tako init` interactively, Tako fetches the runtime-family preset manifest (e.g. `presets/javascript/javascript.toml`) and shows a selector with the available presets for your detected runtime. While loading, it displays `Fetching presets...`.
+When you run `tako init` interactively, Tako fetches the runtime-family preset manifest (e.g. `presets/javascript.toml`) and shows a selector with the available presets for your detected runtime. While loading, it displays `Fetching presets...`.
 
 - If no family presets are available after fetch, init skips preset selection and uses the base adapter.
 - When a non-base preset is selected, init writes `preset` to `tako.toml`. For base adapters and the "custom preset reference" option, `preset` is left commented out.
