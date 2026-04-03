@@ -1,5 +1,42 @@
 # Changelog
 
+## 0.1.0 (2026-04-03)
+
+
+### Features
+
+* **deploy:** add PrepareRelease step, improve build stages and deploy UX ([8891b9b](https://github.com/lilienblum/tako/commit/8891b9bc19aa1c0899ebadf39bf9762d1cae757f))
+* **deploy:** support monorepo workspace deploys ([8fc2b06](https://github.com/lilienblum/tako/commit/8fc2b06ad1908d59780bf2e219e690e5e7dd914d))
+* **dev:** add process exit monitoring and startup readiness check ([e8797f8](https://github.com/lilienblum/tako/commit/e8797f81339ef59259d437a3280dd759b384d760))
+* **repo:** restructure CLI output, add task tree UI, simplify server networking ([ab57a2e](https://github.com/lilienblum/tako/commit/ab57a2eb484b1ecca65f2f5fd6af4f188243379c))
+* **secrets:** pass secrets via fd 3 instead of POST /secrets endpoint ([22b02f7](https://github.com/lilienblum/tako/commit/22b02f7408f2cb556b7c5116a6e7411a3cf9ae24))
+* **server:** add `tako servers setup-wildcard`, consolidate lego to server ([c083134](https://github.com/lilienblum/tako/commit/c0831343c9e69969bd79f86962430163b209ae34))
+* **server:** add per-app log files with rotation and backpressure ([1f40951](https://github.com/lilienblum/tako/commit/1f409514e1a56ba32518743ce2ffad92c9afb6ec))
+* **server:** add server-side production install after artifact extraction ([467ed89](https://github.com/lilienblum/tako/commit/467ed898e4876c5b9217efd0c94edadd101cbe76))
+* **server:** auto-install lego for wildcard DNS-01 certificates ([02b2bac](https://github.com/lilienblum/tako/commit/02b2bacf5957cbb07a0bc694a1689ec5f64306bb))
+* **server:** switch app upstreams to private tcp ([1996d13](https://github.com/lilienblum/tako/commit/1996d13edcf2826fea9a7d4c1732b53b0e611b58))
+
+
+### Bug Fixes
+
+* **ci:** restore version field for release-please managed crates ([c24001e](https://github.com/lilienblum/tako/commit/c24001e015bdbd68af0f72611f6315281bac0fd6))
+* **ci:** update test fixtures for dist entrypoints and add Go SDK readiness signal ([1bac303](https://github.com/lilienblum/tako/commit/1bac3033d6397c203c6ed5518807718ecb8b486b))
+* **deploy:** copy from project dir not git root, remove app_subdir ([065f510](https://github.com/lilienblum/tako/commit/065f510c1cd904d71ac6a359512598da44593b1d))
+* remove await on sync handleTakoEndpoint and suppress clippy warning ([8f349f6](https://github.com/lilienblum/tako/commit/8f349f64133548b0d7049c523ca477c7a8f1fcd3))
+* **secrets:** prevent fd 3 read from blocking when not a Tako pipe ([241c671](https://github.com/lilienblum/tako/commit/241c67146680998ce3dd3b44cddaa8be1721adf5))
+* **security:** delete secrets when deleting an app ([178dbbb](https://github.com/lilienblum/tako/commit/178dbbb872831353b7679f4711081bbd598b658f))
+* **security:** drop root privileges for production install, quote shell paths ([f50e118](https://github.com/lilienblum/tako/commit/f50e1186dfaa8d15b4dbbd67ebc3bb6069411e48))
+* **security:** harden shell quoting and strip internal token header ([4f5af85](https://github.com/lilienblum/tako/commit/4f5af858df205a0de04f3f190c495f6528e124fe))
+* **security:** validate runtime version string against path traversal ([0bdbe26](https://github.com/lilienblum/tako/commit/0bdbe2678621e3b44ae9b590c8fa160e5e732203))
+* **server:** cap health check response buffer at 4 KB ([979f025](https://github.com/lilienblum/tako/commit/979f02508b262b873bdcf1c4db855be9f4e57e7e))
+* **server:** case-insensitive hostname matching per RFC 7230 ([847a42d](https://github.com/lilienblum/tako/commit/847a42da2d3f5a9c75b5fb966c0444598025fe31))
+* **server:** download package manager when it differs from runtime ([41eedb4](https://github.com/lilienblum/tako/commit/41eedb446045910e5736181d644a8194a3a419bf))
+* **server:** fix log rotation file handle, tail -F, and timestamp sorting ([740cc5d](https://github.com/lilienblum/tako/commit/740cc5dd5ade2ab50dabed8e3c5da0489e9b7825))
+* **server:** remove oversized sqlite cache_size and mmap_size pragmas ([7de7440](https://github.com/lilienblum/tako/commit/7de74408361a29a993bb40d053e68f685abe2c3a))
+* **server:** security hardening and dead code removal ([13fbd47](https://github.com/lilienblum/tako/commit/13fbd479659ed0eb5ccf706bb0da915175c6f0c6))
+* **sweep:** perf, security, quality fixes across server, runtime, SDK ([938959b](https://github.com/lilienblum/tako/commit/938959b8dd0c3c0879867c47cd32e3d665113c72))
+* **tls:** serve full certificate chain and auto-reload after ACME renewal ([441a6f0](https://github.com/lilienblum/tako/commit/441a6f00a70fbf2c3ff45f155f17e687bcb1d5d4))
+
 ## [0.1.0](https://github.com/lilienblum/tako/compare/tako-server-v0.0.1...tako-server-v0.1.0) (2026-04-03)
 
 ### Features
