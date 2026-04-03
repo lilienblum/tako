@@ -1,5 +1,36 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Join `base/subpath` and verify the result stays within `base`.
+/// Rejects `..` components and absolute subpaths.
+pub(crate) fn safe_subdir(base: &Path, subpath: &str) -> Result<PathBuf, String> {
+    if subpath.is_empty() {
+        return Ok(base.to_path_buf());
+    }
+    let joined = base.join(subpath);
+    // Lexical normalization: resolve away `.` and `..` without touching the filesystem.
+    let mut normalized = PathBuf::new();
+    for component in joined.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                if !normalized.pop() {
+                    return Err(format!(
+                        "manifest subpath '{}' escapes release directory",
+                        subpath
+                    ));
+                }
+            }
+            c => normalized.push(c.as_os_str()),
+        }
+    }
+    if !normalized.starts_with(base) {
+        return Err(format!(
+            "manifest subpath '{}' escapes release directory",
+            subpath
+        ));
+    }
+    Ok(normalized)
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct ReleaseManifest {
@@ -74,8 +105,8 @@ pub(crate) fn command_from_manifest(
         ));
     }
 
-    let app_dir = release_dir.join(&manifest.app_dir);
-    let install_dir = release_dir.join(&manifest.install_dir);
+    let app_dir = safe_subdir(release_dir, &manifest.app_dir)?;
+    let install_dir = safe_subdir(release_dir, &manifest.install_dir)?;
     let ctx = manifest
         .package_manager
         .as_ref()
@@ -370,5 +401,38 @@ mod tests {
         assert_eq!(cmd.len(), 1);
         // When binary doesn't exist on disk, main is passed through as-is
         assert_eq!(cmd[0], "my-server");
+    }
+
+    #[test]
+    fn safe_subdir_allows_normal_subpath() {
+        let base = Path::new("/opt/tako/apps/myapp/releases/v1");
+        let result = safe_subdir(base, "packages/web").unwrap();
+        assert_eq!(result, base.join("packages/web"));
+    }
+
+    #[test]
+    fn safe_subdir_allows_empty_subpath() {
+        let base = Path::new("/opt/tako/apps/myapp/releases/v1");
+        let result = safe_subdir(base, "").unwrap();
+        assert_eq!(result, base);
+    }
+
+    #[test]
+    fn safe_subdir_rejects_parent_escape() {
+        let base = Path::new("/opt/tako/apps/myapp/releases/v1");
+        assert!(safe_subdir(base, "../../etc/passwd").is_err());
+    }
+
+    #[test]
+    fn safe_subdir_rejects_absolute_path() {
+        let base = Path::new("/opt/tako/apps/myapp/releases/v1");
+        assert!(safe_subdir(base, "/etc/passwd").is_err());
+    }
+
+    #[test]
+    fn safe_subdir_allows_internal_dotdot_that_stays_within() {
+        let base = Path::new("/opt/tako/apps/myapp/releases/v1");
+        let result = safe_subdir(base, "packages/web/../api").unwrap();
+        assert_eq!(result, base.join("packages/api"));
     }
 }

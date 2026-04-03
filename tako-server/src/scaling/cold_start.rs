@@ -202,19 +202,6 @@ impl ColdStartManager {
     }
 }
 
-/// Result of trying to get an instance for a request
-#[derive(Debug)]
-pub enum InstanceResult {
-    /// Instance is available immediately
-    Available,
-    /// Need to wait for cold start
-    ColdStart,
-    /// App not found
-    NotFound,
-    /// Cold start failed
-    Failed,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

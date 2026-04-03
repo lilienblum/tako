@@ -1421,7 +1421,8 @@ fn apply_release_runtime_to_config(
     config.idle_timeout = Duration::from_secs(u64::from(manifest.idle_timeout));
     // Process CWD = app subdirectory within the release (where tako.toml lives).
     // For standalone apps app_dir is empty, so this equals release_path.
-    config.path = release_path.join(&manifest.app_dir);
+    config.path = crate::app_command::safe_subdir(&release_path, &manifest.app_dir)
+        .map_err(|e| format!("Invalid app_dir in manifest: {e}"))?;
     Ok(())
 }
 
@@ -1589,8 +1590,10 @@ async fn prepare_release_runtime(
     // Run production dependency install using the runtime plugin.
     // - project_dir: the app subdirectory (for package.json / PM detection)
     // - install_dir: where the lockfile lives (workspace root); install runs from here
-    let app_dir = release_dir.join(&manifest.app_dir);
-    let install_dir = release_dir.join(&manifest.install_dir);
+    let app_dir = crate::app_command::safe_subdir(&release_dir, &manifest.app_dir)
+        .map_err(|e| format!("Invalid app_dir in manifest: {e}"))?;
+    let install_dir = crate::app_command::safe_subdir(&release_dir, &manifest.install_dir)
+        .map_err(|e| format!("Invalid install_dir in manifest: {e}"))?;
     let ctx = tako_runtime::PluginContext {
         project_dir: &app_dir,
         package_manager: manifest.package_manager.as_deref(),
@@ -1599,10 +1602,8 @@ async fn prepare_release_runtime(
         && let Some(install_cmd) = &def.package_manager.install
     {
         tracing::info!(runtime = %runtime, install_dir = %install_dir.display(), "Running production install: {}", install_cmd);
-        let install_path = install_env.get("PATH").cloned().unwrap_or_default();
-        let prefixed_cmd = format!("export PATH=\"{install_path}\"; {install_cmd}");
         let output = tokio::process::Command::new("sh")
-            .args(["-c", &prefixed_cmd])
+            .args(["-c", install_cmd.as_str()])
             .current_dir(&install_dir)
             .envs(&install_env)
             .output()

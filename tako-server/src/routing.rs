@@ -122,10 +122,9 @@ pub fn select_route_for_request_compiled(
     None
 }
 
-/// Select the best matching app for a request.
-///
-/// Returns the app name if a route matches, otherwise None.
-pub fn select_app_for_request(routes: &[RouteEntry], host: &str, path: &str) -> Option<String> {
+/// Select the best matching app for a request (uncompiled reference implementation, tests only).
+#[cfg(test)]
+fn select_app_for_request(routes: &[RouteEntry], host: &str, path: &str) -> Option<String> {
     let mut best: Option<(&RouteEntry, (u8, usize, u8))> = None;
 
     for entry in routes {

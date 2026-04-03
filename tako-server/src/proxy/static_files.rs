@@ -5,10 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use parking_lot::RwLock;
 use thiserror::Error;
 
 /// Errors that can occur during static file serving
@@ -81,11 +79,6 @@ pub struct StaticFile {
 }
 
 impl StaticFile {
-    /// Read file contents
-    pub fn read_contents(&self) -> Result<Vec<u8>, StaticFileError> {
-        Ok(std::fs::read(&self.path)?)
-    }
-
     /// Check if file has been modified since the given time
     pub fn modified_since(&self, since: SystemTime) -> bool {
         self.last_modified > since
@@ -320,83 +313,6 @@ impl AppStaticServer {
     }
 }
 
-/// Global static file manager for all apps
-pub struct StaticFileManager {
-    /// Per-app static servers
-    servers: RwLock<HashMap<String, Arc<AppStaticServer>>>,
-    /// Default configuration
-    default_config: StaticConfig,
-}
-
-impl StaticFileManager {
-    pub fn new(default_config: StaticConfig) -> Self {
-        Self {
-            servers: RwLock::new(HashMap::new()),
-            default_config,
-        }
-    }
-
-    /// Register an app for static file serving
-    pub fn register_app(&self, app_name: &str, app_root: PathBuf) {
-        self.register_app_with_config(app_name, app_root, self.default_config.clone());
-    }
-
-    /// Register an app with custom configuration
-    pub fn register_app_with_config(
-        &self,
-        app_name: &str,
-        app_root: PathBuf,
-        config: StaticConfig,
-    ) {
-        let server = Arc::new(AppStaticServer::new(app_name.to_string(), app_root, config));
-        let mut servers = self.servers.write();
-        servers.insert(app_name.to_string(), server);
-    }
-
-    /// Unregister an app
-    pub fn unregister_app(&self, app_name: &str) {
-        let mut servers = self.servers.write();
-        servers.remove(app_name);
-    }
-
-    /// Try to resolve a static file for an app
-    pub fn resolve(
-        &self,
-        app_name: &str,
-        path: &str,
-    ) -> Option<Result<StaticFile, StaticFileError>> {
-        let servers = self.servers.read();
-        let server = servers.get(app_name)?;
-
-        if !server.is_available() {
-            return None;
-        }
-
-        Some(server.resolve(path))
-    }
-
-    /// Check if an app has static file serving enabled
-    pub fn has_static_files(&self, app_name: &str) -> bool {
-        let servers = self.servers.read();
-        servers
-            .get(app_name)
-            .map(|s| s.is_available())
-            .unwrap_or(false)
-    }
-
-    /// List all registered apps
-    pub fn list_apps(&self) -> Vec<String> {
-        let servers = self.servers.read();
-        servers.keys().cloned().collect()
-    }
-}
-
-impl Default for StaticFileManager {
-    fn default() -> Self {
-        Self::new(StaticConfig::default())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -525,19 +441,6 @@ mod tests {
     }
 
     #[test]
-    fn test_static_file_read_contents() {
-        let temp = TempDir::new().unwrap();
-        create_test_files(temp.path());
-
-        let config = StaticConfig::default();
-        let server = AppStaticServer::new("test".to_string(), temp.path().to_path_buf(), config);
-
-        let file = server.resolve("/index.html").unwrap();
-        let contents = file.read_contents().unwrap();
-        assert_eq!(contents, b"<html></html>");
-    }
-
-    #[test]
     fn test_etag_generation() {
         let temp = TempDir::new().unwrap();
         create_test_files(temp.path());
@@ -563,36 +466,6 @@ mod tests {
 
         let file = server.resolve("/index.html").unwrap();
         assert!(file.cache_control.contains("max-age=7200"));
-    }
-
-    #[test]
-    fn test_static_file_manager() {
-        let temp = TempDir::new().unwrap();
-        create_test_files(temp.path());
-
-        let manager = StaticFileManager::default();
-        manager.register_app("myapp", temp.path().to_path_buf());
-
-        assert!(manager.has_static_files("myapp"));
-        assert!(!manager.has_static_files("other"));
-
-        let result = manager.resolve("myapp", "/index.html");
-        assert!(result.is_some());
-        assert!(result.unwrap().is_ok());
-    }
-
-    #[test]
-    fn test_static_file_manager_unregister() {
-        let temp = TempDir::new().unwrap();
-        create_test_files(temp.path());
-
-        let manager = StaticFileManager::default();
-        manager.register_app("myapp", temp.path().to_path_buf());
-
-        assert!(manager.has_static_files("myapp"));
-
-        manager.unregister_app("myapp");
-        assert!(!manager.has_static_files("myapp"));
     }
 
     #[test]
@@ -625,22 +498,5 @@ mod tests {
         let server = AppStaticServer::new("test".to_string(), temp.path().to_path_buf(), config);
 
         assert!(!server.is_available());
-    }
-
-    #[test]
-    fn test_list_apps() {
-        let temp1 = TempDir::new().unwrap();
-        let temp2 = TempDir::new().unwrap();
-        create_test_files(temp1.path());
-        create_test_files(temp2.path());
-
-        let manager = StaticFileManager::default();
-        manager.register_app("app1", temp1.path().to_path_buf());
-        manager.register_app("app2", temp2.path().to_path_buf());
-
-        let apps = manager.list_apps();
-        assert_eq!(apps.len(), 2);
-        assert!(apps.contains(&"app1".to_string()));
-        assert!(apps.contains(&"app2".to_string()));
     }
 }

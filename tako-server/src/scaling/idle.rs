@@ -140,51 +140,6 @@ impl IdleMonitor {
     }
 }
 
-/// Tracks idle state for scaling decisions
-pub struct IdleTracker {
-    /// Per-app last activity time
-    last_activity: parking_lot::RwLock<std::collections::HashMap<String, std::time::Instant>>,
-}
-
-impl IdleTracker {
-    pub fn new() -> Self {
-        Self {
-            last_activity: parking_lot::RwLock::new(std::collections::HashMap::new()),
-        }
-    }
-
-    /// Record activity for an app
-    pub fn record_activity(&self, app_name: &str) {
-        let mut last_activity = self.last_activity.write();
-        last_activity.insert(app_name.to_string(), std::time::Instant::now());
-    }
-
-    /// Get time since last activity for an app
-    pub fn idle_time(&self, app_name: &str) -> Option<Duration> {
-        let last_activity = self.last_activity.read();
-        last_activity.get(app_name).map(|t| t.elapsed())
-    }
-
-    /// Check if an app is idle (no activity for given duration)
-    pub fn is_idle(&self, app_name: &str, timeout: Duration) -> bool {
-        self.idle_time(app_name)
-            .map(|t| t > timeout)
-            .unwrap_or(true) // Consider idle if no activity recorded
-    }
-
-    /// Clear tracking for an app
-    pub fn clear(&self, app_name: &str) {
-        let mut last_activity = self.last_activity.write();
-        last_activity.remove(app_name);
-    }
-}
-
-impl Default for IdleTracker {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -200,49 +155,6 @@ mod tests {
             assert_eq!(config.check_interval, Duration::from_secs(30));
         }
         assert_eq!(config.default_timeout, Duration::from_secs(300));
-    }
-
-    #[test]
-    fn test_idle_tracker_creation() {
-        let tracker = IdleTracker::new();
-        assert!(tracker.idle_time("my-app").is_none());
-    }
-
-    #[test]
-    fn test_idle_tracker_record_activity() {
-        let tracker = IdleTracker::new();
-
-        tracker.record_activity("my-app");
-        let idle_time = tracker.idle_time("my-app").unwrap();
-        assert!(idle_time < Duration::from_secs(1));
-    }
-
-    #[test]
-    fn test_idle_tracker_is_idle() {
-        let tracker = IdleTracker::new();
-
-        // No activity recorded, should be considered idle
-        assert!(tracker.is_idle("my-app", Duration::from_secs(1)));
-
-        // Record activity
-        tracker.record_activity("my-app");
-
-        // Should not be idle immediately
-        assert!(!tracker.is_idle("my-app", Duration::from_secs(60)));
-
-        // But would be idle with 0 timeout
-        assert!(tracker.is_idle("my-app", Duration::from_millis(0)));
-    }
-
-    #[test]
-    fn test_idle_tracker_clear() {
-        let tracker = IdleTracker::new();
-
-        tracker.record_activity("my-app");
-        assert!(tracker.idle_time("my-app").is_some());
-
-        tracker.clear("my-app");
-        assert!(tracker.idle_time("my-app").is_none());
     }
 
     #[tokio::test]
