@@ -1,6 +1,6 @@
 {
   "name": "tako.sh",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Official SDK for the Tako application platform",
   "keywords": [
     "bun",
