@@ -3,6 +3,7 @@ layout: ../../layouts/DocsLayout.astro
 title: Tako Docs - Intro
 heading: Intro
 current: intro
+description: "Tako is an opinionated development and deployment tool for self-hosted apps. Fast defaults for local HTTPS dev and remote deploys."
 ---
 
 # Intro

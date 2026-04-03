@@ -11,6 +11,8 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@astrojs/rss": "^4.0.18",
+    "@astrojs/sitemap": "^3.7.2",
     "astro": "catalog:dev",
     "lucide-astro": "^0.556.0",
     "mermaid": "^11.14.0"

@@ -5,12 +5,18 @@ import StarIcon from "lucide-astro/Star";
 export interface Props {
   title?: string;
   description?: string;
+  image?: string;
+  type?: string;
 }
 
 const {
   title = "Tako - Ship it like FTP",
   description = "Everything you need to run apps on your own hardware. Routes, logs, secrets, rolling deploys, local dev — one tool.",
+  image = "https://tako.sh/assets/og.png",
+  type = "website",
 } = Astro.props;
+
+const canonicalURL = new URL(Astro.url.pathname, Astro.site);
 ---
 <!doctype html>
 <html lang="en">
@@ -19,16 +25,21 @@ const {
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <meta property="og:type" content="website" />
+    <link rel="canonical" href={canonicalURL} />
+    <meta property="og:type" content={type} />
+    <meta property="og:site_name" content="Tako" />
+    <meta property="og:url" content={canonicalURL} />
     <meta property="og:title" content={title} />
     <meta property="og:description" content={description} />
-    <meta property="og:image" content="https://tako.sh/assets/og.png" />
+    <meta property="og:image" content={image} />
     <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@lilienblum" />
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
-    <meta name="twitter:image" content="https://tako.sh/assets/og.png" />
+    <meta name="twitter:image" content={image} />
     <meta name="theme-color" content="#E88783" />
     <link rel="icon" type="image/svg+xml" href="/assets/logo.svg" />
+    <link rel="alternate" type="application/rss+xml" title="Tako Blog" href="/rss.xml" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link

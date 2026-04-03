@@ -6,11 +6,13 @@ export interface Props {
   title: string;
   heading: string;
   current?: string;
+  description?: string;
   headingAnchors?: boolean;
   frontmatter?: {
     title?: string;
     heading?: string;
     current?: string;
+    description?: string;
     headingAnchors?: boolean;
   };
 }
@@ -19,6 +21,7 @@ const frontmatter = Astro.props.frontmatter ?? {};
 const title = Astro.props.title ?? frontmatter.title ?? "Tako Docs";
 const heading = Astro.props.heading ?? frontmatter.heading ?? "Docs";
 const current = Astro.props.current ?? frontmatter.current ?? "intro";
+const description = Astro.props.description ?? frontmatter.description ?? "Tako documentation — everything you need to run apps on your own hardware.";
 const headingAnchors = Astro.props.headingAnchors ?? frontmatter.headingAnchors ?? true;
 
 const docsNav = [
@@ -34,7 +37,7 @@ const docsNav = [
   { id: "troubleshooting", label: "Troubleshooting", href: "/docs/troubleshooting" },
 ];
 ---
-<BaseLayout title={title} description="Tako documentation - everything you need to run apps on your own hardware.">
+<BaseLayout title={title} description={description}>
   <section class="sheet" data-docs-sheet data-heading-anchors={headingAnchors ? "true" : "false"}>
     <div class="sheet-top">
       <div class="breadcrumb">

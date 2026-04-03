@@ -30,9 +30,12 @@ Create a new markdown file at `website/src/pages/blog/{slug}.md` with this front
 layout: ../../layouts/BlogPostLayout.astro
 title: "Post Title"
 date: "YYYY-MM-DD"
+description: "A concise 1-2 sentence summary for SEO meta tags and social previews. Should be compelling and specific — not generic."
 image: 9q15scNA
 ---
 ```
+
+The `description` field is **required** — it populates `<meta name="description">`, Open Graph, Twitter cards, and the blog listing page. Write it as a standalone sentence that makes sense in search results and social shares. Keep it under 160 characters.
 
 Hero images go in `website/public/assets/blog/` as `.webp` files. The `image` field is just the ID (no extension). Use `just blog::img` to convert and import from Downloads. Widescreen landscape format. `just blog::img` handles resizing and conversion.. The `image` field is optional — omit it if no image is available.
 
@@ -69,6 +72,7 @@ Format:
 layout: ../../layouts/BlogPostLayout.astro
 title: "Post Title"
 date: "YYYY-MM-DD"
+description: "SEO description here"
 image:
 ---
 

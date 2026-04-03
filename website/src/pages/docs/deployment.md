@@ -3,6 +3,7 @@ layout: ../../layouts/DocsLayout.astro
 title: "Tako Docs - Deployment"
 heading: Deployment
 current: deployment
+description: "Guide to deploying apps with Tako — server setup, running deploys, scaling, secrets management, and production operations."
 ---
 
 # Deployment

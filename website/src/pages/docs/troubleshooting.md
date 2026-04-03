@@ -3,6 +3,7 @@ layout: ../../layouts/DocsLayout.astro
 title: "Tako Docs - Troubleshooting"
 heading: Troubleshooting
 current: troubleshooting
+description: "Common Tako issues and how to resolve them — quick triage steps, TLS problems, deploy failures, and runtime errors."
 ---
 
 # Troubleshooting
