@@ -253,10 +253,20 @@ describe("tako init (interactive wizard)", () => {
     term.press("\r");
     await term.waitForText("Choose a runtime:", { timeout: 5000 });
     term.press("\r");
+    await term.waitFor(
+      (screen) => screen.includes("Choose a build preset:") || screen.includes("Production route"),
+      { timeout: 5000, label: "waitFor preset options or production route" },
+    );
+    if (term.screenText().includes("Choose a build preset:")) {
+      term.press("\r");
+    }
     await term.waitForText("Production route", { timeout: 5000 });
 
     term.press("\x1b");
-    await term.waitForText("Choose a runtime:", { timeout: 5000 });
+    await term.waitFor(
+      (screen) => screen.includes("Choose a build preset:") || screen.includes("Choose a runtime:"),
+      { timeout: 5000, label: "waitFor back to preset or runtime" },
+    );
     await term.waitFor(
       () => {
         const lines = term.screenText().split("\n");
