@@ -3635,8 +3635,12 @@ async fn prepare_remote_release_dir(
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
     let release_dir_preexisted = remote_directory_exists(ssh, release_dir).await?;
     if !release_dir_preexisted {
-        ssh.exec_checked(&format!("mkdir -p {} {}", release_dir, shared_dir))
-            .await?;
+        ssh.exec_checked(&format!(
+            "mkdir -p {} {}",
+            shell_single_quote(release_dir),
+            shell_single_quote(shared_dir)
+        ))
+        .await?;
     }
 
     Ok(release_dir_preexisted)
@@ -3957,11 +3961,11 @@ async fn deploy_to_server(
                     tracing::debug!("Extracting and configuring release…");
                     let extract_cmd =
                         build_remote_extract_archive_command(&release_dir, &remote_archive);
+                    let shared = shell_single_quote(&config.shared_dir());
+                    let rel = shell_single_quote(&release_dir);
                     let shared_link_cmd = format!(
                         "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
-                        config.shared_dir(),
-                        config.shared_dir(),
-                        release_dir
+                        shared, shared, rel
                     );
                     let combined_cmd = format!("{} && {}", extract_cmd, shared_link_cmd);
                     ssh.exec_checked(&combined_cmd).await?;
@@ -3992,11 +3996,11 @@ async fn deploy_to_server(
                     tracing::debug!("Extracting and configuring release…");
                     let extract_cmd =
                         build_remote_extract_archive_command(&release_dir, &remote_archive);
+                    let shared = shell_single_quote(&config.shared_dir());
+                    let rel = shell_single_quote(&release_dir);
                     let shared_link_cmd = format!(
                         "mkdir -p {}/logs && ln -sfn {}/logs {}/logs",
-                        config.shared_dir(),
-                        config.shared_dir(),
-                        release_dir
+                        shared, shared, rel
                     );
                     let combined_cmd = format!("{} && {}", extract_cmd, shared_link_cmd);
                     ssh.exec_checked(&combined_cmd).await?;

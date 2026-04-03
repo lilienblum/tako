@@ -34,6 +34,10 @@ impl RuntimeCache {
     }
 
     fn file_path(&self, id: &str) -> PathBuf {
+        assert!(
+            !id.contains('/') && !id.contains('\\') && !id.contains(".."),
+            "cache id must not contain path separators or '..' (got: {id})"
+        );
         self.cache_dir.join(format!("{id}.toml"))
     }
 }

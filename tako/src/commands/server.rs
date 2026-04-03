@@ -2111,9 +2111,9 @@ async fn apply_dns_config_inner(
 
     // Write credentials env file
     let _t = output::timed("Credentials write");
-    let escaped_content = config.credentials_env.replace('\'', "'\\''");
+    let escaped_content = crate::shell::shell_single_quote(&config.credentials_env);
     let write_creds_cmd = SshClient::run_with_root_or_sudo(&format!(
-        "printf '%s' '{}' > {} && chmod 0600 {} && chown tako:tako {}",
+        "printf '%s' {} > {} && chmod 0600 {} && chown tako:tako {}",
         escaped_content, DNS_CREDENTIALS_ENV, DNS_CREDENTIALS_ENV, DNS_CREDENTIALS_ENV,
     ));
     ssh.exec_checked(&write_creds_cmd).await?;

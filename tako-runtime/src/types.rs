@@ -121,21 +121,6 @@ pub struct EnvsDef {
     pub environments: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DockerCacheDef {
-    #[serde(default)]
-    pub volumes: Vec<DockerCacheVolume>,
-}
-
-#[allow(dead_code)]
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct DockerCacheVolume {
-    pub path: String,
-    #[serde(default)]
-    pub env_var: Option<String>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DownloadDef {
     #[serde(default)]

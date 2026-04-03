@@ -26,7 +26,11 @@ function readSecretsFromFd(): void {
     closeSync(3);
     try {
       const secrets = JSON.parse(data);
-      injectSecrets(secrets);
+      if (typeof secrets !== "object" || secrets === null || Array.isArray(secrets)) {
+        console.error("Tako: secrets on fd 3 must be a JSON object");
+        process.exit(1);
+      }
+      injectSecrets(Object.assign(Object.create(null), secrets));
     } catch {
       console.error("Tako: invalid secrets JSON on fd 3");
       process.exit(1);
@@ -129,7 +133,7 @@ export function createEntrypoint() {
 
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined) {
+      if (value !== undefined && key !== "TAKO_INTERNAL_TOKEN") {
         env[key] = value;
       }
     }

@@ -147,7 +147,11 @@ pub async fn resolve_latest_version(def: &RuntimeDef) -> Result<String, String> 
     let tag_prefix = source.tag_prefix.as_deref().unwrap_or("");
 
     let url = format!("https://api.github.com/repos/{repo}/releases/latest");
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(60))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
     let response = client
         .get(&url)
         .header("User-Agent", "tako-server")
@@ -263,7 +267,11 @@ fn extract_binary_name(def: &RuntimeDef) -> Option<&str> {
 }
 
 async fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .connect_timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
     let response = client
         .get(url)
         .header("User-Agent", "tako-server")
@@ -497,7 +505,9 @@ fn extract_tar_gz(
                 if let Some(parent) = link_path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
-                let _ = std::os::unix::fs::symlink(target.as_ref(), &link_path);
+                std::os::unix::fs::symlink(target.as_ref(), &link_path).map_err(|e| {
+                    format!("failed to create symlink {}: {e}", link_path.display())
+                })?;
             }
             continue;
         }

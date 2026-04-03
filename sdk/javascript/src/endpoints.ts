@@ -26,14 +26,6 @@ function normalizeHost(value: string | null): string | null {
   return host;
 }
 
-function requestHost(request: Request, url: URL): string | null {
-  const hostFromHeader = normalizeHost(request.headers.get("host"));
-  if (hostFromHeader) {
-    return hostFromHeader;
-  }
-  return normalizeHost(url.host);
-}
-
 function isInternalHost(host: string | null): boolean {
   if (!host) {
     return false;
@@ -88,14 +80,20 @@ function internalResponse(
  * Returns a Response for internal requests, or null for non-internal requests.
  */
 export function handleTakoEndpoint(request: Request, status: TakoStatus): Response | null {
-  const url = new URL(request.url);
-  const token = internalToken();
-  const host = requestHost(request, url);
-  const path = url.pathname;
+  // Fast path: check Host header before parsing the URL (avoids allocation for normal traffic)
+  const hostHeader = normalizeHost(request.headers.get("host"));
+  if (hostHeader && !isInternalHost(hostHeader)) {
+    return null;
+  }
 
+  const url = new URL(request.url);
+  const host = hostHeader || normalizeHost(url.host);
   if (!isInternalHost(host)) {
     return null;
   }
+
+  const token = internalToken();
+  const path = url.pathname;
   if (!token || request.headers.get(TAKO_INTERNAL_TOKEN_HEADER) !== token) {
     return new Response(JSON.stringify({ error: "Forbidden" }), {
       status: 403,

@@ -841,6 +841,10 @@ impl ProxyHttp for TakoProxy {
         // strip any client-supplied value to prevent spoofing.
         let _ = upstream_request.remove_header("Forwarded");
 
+        // Strip the internal token header so clients cannot spoof it to
+        // upstream apps (the SDK uses this header to gate /status).
+        let _ = upstream_request.remove_header("X-Tako-Internal-Token");
+
         // Track the request on the instance
         if let Some(ref backend) = ctx.backend
             && let Some(app) = self.lb.app_manager().get_app(&backend.app_name)
