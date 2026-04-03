@@ -312,6 +312,7 @@ jobs:
       - build-tako-server-aarch64-musl
     if: startsWith(github.event.release.tag_name, 'tako-server-v')
     runs-on: ubuntu-latest
+    environment: release
     steps:
       - name: Download all release artifacts
         uses: actions/download-artifact@v8
