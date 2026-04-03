@@ -1,16 +1,9 @@
 [workspace]
 resolver = "3"
 members = ["tako-core", "tako-socket", "tako-runtime", "tako", "tako-server"]
-exclude = [".agents"]
 
 [workspace.package]
 edition = "2024"
-authors = ["Dan Lilienblum <dlilienblum@gmail.com>"]
-description = "Tako is a modern application platform"
-license = "MIT"
-repository = "https://github.com/lilienblum/tako"
-keywords = ["server", "application-server", "platform", "runtime", "framework"]
-categories = ["network-programming", "web-programming", "development-tools"]
 
 [workspace.dependencies]
 async-trait = "0.1"

@@ -39,10 +39,6 @@ import CopyButton from "../components/CopyButton.astro";
       </div>
       <div class="command-actions">
         <a class="btn" href="/docs">read the docs</a>
-        <div class="command-selector" role="group" aria-label="Install command type">
-          <button class="command-mode is-active" data-install-mode="shell" type="button">shell</button>
-          <button class="command-mode" data-install-mode="cargo" type="button">cargo</button>
-        </div>
       </div>
     </div>
     <div class="hero-mobile-cta">
@@ -425,33 +421,6 @@ import CopyButton from "../components/CopyButton.astro";
     padding: 0 16px 16px;
   }
 
-  .command-selector {
-    display: inline-flex;
-    border: 2px solid rgba(47, 42, 68, 0.22);
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.78);
-    overflow: hidden;
-    margin-left: auto;
-  }
-
-  .command-mode {
-    border: 0;
-    background: transparent;
-    color: rgba(47, 42, 68, 0.72);
-    padding: 7px 12px;
-    font-family: "Nunito", sans-serif;
-    font-size: 14px;
-    font-weight: 700;
-    letter-spacing: 0.03em;
-    text-transform: lowercase;
-    cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
-  }
-
-  .command-mode.is-active {
-    background: rgba(232, 135, 131, 0.28);
-    color: rgba(47, 42, 68, 0.95);
-  }
 
   .btn {
     border: 1.5px solid rgba(232, 135, 131, 0.4);
@@ -475,7 +444,6 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   .btn:focus-visible,
-  .command-mode:focus-visible,
   .copy-inline:focus-visible {
     outline: 2px solid var(--primary);
     outline-offset: 2px;
@@ -922,7 +890,6 @@ import CopyButton from "../components/CopyButton.astro";
     .workflow-cmd,
     .btn,
     .copy-inline,
-    .command-mode,
     .cta-link { transition: none; }
   }
 
@@ -994,10 +961,6 @@ import CopyButton from "../components/CopyButton.astro";
       padding: 10px 20px;
     }
 
-    .command-mode {
-      padding: 12px 14px;
-    }
-
     .feature-list {
       grid-template-columns: 1fr;
       gap: 6px;
@@ -1062,19 +1025,14 @@ import CopyButton from "../components/CopyButton.astro";
 </style>
 
 <script type="module">
-  const installCommands = {
-    shell: "curl -fsSL https://tako.sh/install.sh | sh",
-    cargo: "cargo install tako",
-  };
+  const installCommand = "curl -fsSL https://tako.sh/install.sh | sh";
   const typedCmd = document.getElementById("typed-cmd");
   const copyBtn = document.getElementById("copy");
   const copyBtnLabel = copyBtn?.querySelector("[data-copy-label]");
-  const modeButtons = Array.from(document.querySelectorAll("[data-install-mode]"));
   const hanger = document.getElementById("mit-hanger");
   const pin = document.getElementById("mit-pin");
   const tag = document.getElementById("mit-tag");
 
-  let activeInstallMode = "shell";
   let typingTimeout = null;
 
   const setCopyButtonText = (text) => {
@@ -1121,36 +1079,11 @@ import CopyButton from "../components/CopyButton.astro";
     typingTimeout = window.setTimeout(writeChar, 620);
   };
 
-  const setInstallMode = (mode, animate) => {
-    if (!(mode in installCommands)) {
-      return;
-    }
-    activeInstallMode = mode;
-    for (const modeButton of modeButtons) {
-      if (!(modeButton instanceof HTMLElement)) {
-        continue;
-      }
-      const selected = modeButton.dataset.installMode === mode;
-      modeButton.classList.toggle("is-active", selected);
-      modeButton.setAttribute("aria-pressed", selected ? "true" : "false");
-    }
-    writeCommand(installCommands[mode], animate);
-    setCopyButtonCopied(false);
-    setCopyButtonText("copy install command");
-  };
-
-  setInstallMode("shell", true);
-
-  for (const modeButton of modeButtons) {
-    modeButton?.addEventListener("click", () => {
-      const mode = modeButton.dataset.installMode ?? "shell";
-      setInstallMode(mode, false);
-    });
-  }
+  writeCommand(installCommand, true);
 
   copyBtn?.addEventListener("click", async () => {
     try {
-      await navigator.clipboard.writeText(installCommands[activeInstallMode] ?? installCommands.shell);
+      await navigator.clipboard.writeText(installCommand);
       setCopyButtonCopied(true);
       setCopyButtonText("copied");
       setTimeout(() => {

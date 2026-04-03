@@ -106,7 +106,7 @@ On first run, Tako sets up a local Certificate Authority and HTTPS infrastructur
 
 When `[envs.development]` defines custom routes in `tako.toml`, those routes are used instead of the default. Dev routes must be `{app}.tako.test` or a subdomain of it.
 
-The app starts immediately when `tako dev` starts (1 local instance) and transitions to idle after 10 minutes of no attached CLI clients. After an idle transition, the next HTTP request triggers wake-on-request. Running `tako dev` again with the same config attaches to the existing session.
+The app starts immediately when `tako dev` starts (1 local instance) and transitions to idle after 30 minutes of no attached CLI clients. After an idle transition, the next HTTP request triggers wake-on-request. Running `tako dev` again with the same config attaches to the existing session.
 
 **Interactive keyboard shortcuts:**
 
@@ -672,7 +672,6 @@ Before running, upgrade prints the active channel (`You're on {channel} channel`
 Upgrade strategy is install-aware:
 
 - **Homebrew** installs use `brew upgrade tako`
-- **Cargo** installs use `cargo install tako --locked`
 - **Hosted installer** (default/fallback) downloads and runs `https://tako.sh/install.sh`
 
 `--canary` always uses the hosted installer path and pulls from the canary release channel.

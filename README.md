@@ -3,8 +3,6 @@
 <img src="website/public/assets/og.svg" alt="Tako logo" />
 
 [![npm: tako.sh](https://img.shields.io/npm/v/tako.sh?label=npm%3A%20tako.sh&color=9BC4B6)](https://www.npmjs.com/package/tako.sh)
-[![crate: tako](https://img.shields.io/crates/v/tako?label=crate%3A%20tako&color=E88783)](https://crates.io/crates/tako)
-[![crate: tako-server](https://img.shields.io/crates/v/tako-server?label=crate%3A%20tako-server&color=E88783)](https://crates.io/crates/tako-server)
 
 Ship apps to your own servers without turning deployment into a part-time job.
 
@@ -14,12 +12,6 @@ Tako gives you the "upload files, refresh, done" feeling with modern guardrails 
 
 ```bash
 curl -fsSL https://tako.sh/install.sh | sh
-```
-
-Or with Cargo:
-
-```bash
-cargo install tako
 ```
 
 Verify:

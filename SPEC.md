@@ -44,12 +44,14 @@ different config file and treats that file's parent directory as the project dir
 The config file's parent directory is the app directory (there is no separate `app_dir` field).
 
 ```toml
-name = "my-app"           # Optional but recommended stable identity used by deploy/dev
-main = "server/index.mjs" # Optional override; required only when preset does not define `main`
-runtime = "bun"           # Optional override; defaults to detected adapter
-runtime_version = "1.2.3" # Optional pinned version; auto-detected if omitted
-preset = "tanstack-start" # Optional app preset; provides `main` and `assets` defaults
-assets = ["dist/client"]  # Optional asset directories for deploy artifact
+name = "my-app"              # Optional but recommended stable identity used by deploy/dev
+main = "server/index.mjs"   # Optional override; required only when preset does not define `main`
+runtime = "bun"              # Optional override; defaults to detected adapter
+runtime_version = "1.2.3"   # Optional pinned version; auto-detected if omitted
+package_manager = "bun"      # Optional override; auto-detected from package.json or lockfiles
+preset = "tanstack-start"   # Optional app preset; provides `main` and `assets` defaults
+dev = ["vite", "dev"]        # Optional custom dev command override
+assets = ["dist/client"]     # Optional asset directories for deploy artifact
 
 [build]
 run = "vinxi build"       # Build command
@@ -62,7 +64,7 @@ install = "bun install"   # Optional pre-build install command
 # cwd = "packages/ui"
 # install = "bun install"
 # run = "bun run build"
-# include = ["dist/**"]
+# exclude = ["**/*.map"]
 
 [vars]
 TAKO_APP_LOG_LEVEL = "info"        # Base variables (all environments)
@@ -99,7 +101,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 
 1. `[vars]` - base
 2. `[vars.{environment}]` - environment-specific
-3. Auto-set by Tako during deploy: `TAKO_ENV={environment}`, `TAKO_BUILD={version}`, plus runtime env vars (for Bun: `NODE_ENV`, `BUN_ENV`)
+3. Auto-set by Tako during deploy: `TAKO_ENV={environment}`, `TAKO_BUILD={version}`, plus runtime env vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
 
 **Build/deploy behavior:**
 
@@ -115,7 +117,9 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - If neither `tako.toml main`, manifest main, nor preset `main` is set, deploy/dev fail with guidance.
 - Top-level `runtime` is optional; when set to `bun`, `node`, `deno`, or `go`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
 - Top-level `runtime_version` is optional; when set (e.g. `"1.2.3"`), deploy uses it directly instead of auto-detecting with `<runtime> --version`. `tako init` pins the locally-installed version by default.
+- Top-level `package_manager` is optional; when set (e.g. `"npm"`, `"pnpm"`, `"yarn"`, `"bun"`), it overrides auto-detection from `package.json` `packageManager` field or lockfiles.
 - Top-level `preset` is optional. Presets are metadata-only (`name`, `main`, `assets`) providing entrypoint and asset defaults. They do not contain build, install, start, or dev commands.
+- Top-level `dev` is optional; when set (e.g. `["vite", "dev"]`), it overrides both preset and runtime default dev commands for `tako dev`.
 - Top-level `assets` is optional; lists asset directories to include in the deploy artifact (e.g. `["dist/client"]`). Asset roots are preset `assets` plus top-level `assets` (deduplicated).
 - `preset` supports:
   - runtime-local aliases: `tanstack-start` (resolved under selected runtime, e.g. `runtime = "bun"`)
@@ -141,13 +145,13 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Unpinned official preset aliases are fetched from the `master` branch on each resolve; if fetch fails, preset resolution fails.
 - Deploy sends app vars + runtime vars to `tako-server` in the `deploy` command payload (non-secret env vars in `app.json`); secrets are sent separately and stored encrypted in SQLite. `tako-server` passes secrets to instances via fd 3 (file descriptor 3) at spawn time — the server writes secrets as JSON to a pipe and the child process reads fd 3 before any user code runs.
 - `[build]` section has `run` (build command), `install` (optional pre-build install command), `cwd` (optional working directory relative to project root), plus `include`/`exclude` for artifact filtering.
-- `[build]` and `[[build_stages]]` are mutually exclusive: having both `build.run` and `[[build_stages]]` is an error. `[build].include`/`[build].exclude` cannot be used alongside `[[build_stages]]`.
+- `[build]` and `[[build_stages]]` are mutually exclusive: having both `build.run` and `[[build_stages]]` is an error. `[build].include`/`[build].exclude` cannot be used alongside `[[build_stages]]`; use per-stage `exclude` instead.
 - App-level custom build stages can be declared in `tako.toml` under `[[build_stages]]` (top-level array):
   - `name` (optional display label)
   - `cwd` (optional, relative to app root; `..` is allowed for monorepo traversal but guarded against escaping the workspace root)
   - `install` (optional command run before `run`)
-  - `include` (optional array of file globs relative to the stage's `cwd`; stages without `include` are intermediate and contribute nothing to the artifact)
   - `run` (required command)
+  - `exclude` (optional array of file globs to exclude from the deploy artifact)
 - Build uses a workdir approach: copies the project from source root (respecting `.gitignore`), symlinks `node_modules/` directories from the original tree, runs build commands, then archives the result without `node_modules/`.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Deploy always force-excludes `.git/`, `.tako/`, `.env*`, and `node_modules/` from the deploy archive. Additional exclusions come from `[build].exclude` and `.gitignore`.
@@ -220,16 +224,22 @@ Per-environment encrypted secrets (JSON format, AES-256-GCM encryption):
 ```json
 {
   "production": {
-    "DATABASE_URL": "encrypted_value",
-    "API_KEY": "encrypted_value"
+    "salt": "base64_encoded_argon2id_salt",
+    "secrets": {
+      "DATABASE_URL": "encrypted_value",
+      "API_KEY": "encrypted_value"
+    }
   },
   "staging": {
-    "DATABASE_URL": "encrypted_value_different"
+    "salt": "base64_encoded_argon2id_salt",
+    "secrets": {
+      "DATABASE_URL": "encrypted_value_different"
+    }
   }
 }
 ```
 
-Secret names are plaintext; values encrypted.
+Each environment has a `salt` (base64-encoded Argon2id salt for key derivation) and a `secrets` map. Secret names are plaintext; values encrypted with AES-256-GCM.
 
 `tako init` ensures the app's `.tako/` directory stays ignored while `.tako/secrets.json` remains trackable:
 
@@ -259,14 +269,6 @@ Install canary CLI artifacts directly:
 ```bash
 curl -fsSL https://tako.sh/install-canary.sh | sh
 ```
-
-Install from crates.io:
-
-```bash
-cargo install tako
-```
-
-`cargo install tako` also installs `tako`, `tako-dev-server`, and `tako-loopback-proxy` (macOS only) from the same package/version.
 
 Upgrade local CLI:
 
@@ -335,7 +337,7 @@ Template behavior:
   - top-level `preset` only when a non-base preset is selected (for base adapter presets and custom mode, it remains commented/unset)
 - Updates `.gitignore` so the app's `.tako/*` stays ignored while `.tako/secrets.json` remains trackable (repo-root `.gitignore` when inside git, app-local `.gitignore` otherwise)
 - Includes commented examples/explanations for all supported `tako.toml` options:
-  - `name`, `main`, top-level `runtime`/`preset`/`assets`, `[build]` (`run`, `install`, `include`, `exclude`), and `[[build_stages]]` (with per-stage `include`)
+  - `name`, `main`, top-level `runtime`/`preset`/`assets`/`dev`, `[build]` (`run`, `install`, `include`, `exclude`), and `[[build_stages]]` (with per-stage `exclude`)
   - `[vars]`
   - `[vars.<env>]`
   - `[envs.<env>]` route declarations (`route`/`routes`), server membership (`servers`), and idle scaling policy (`idle_timeout`)
@@ -383,7 +385,6 @@ Upgrade the local `tako` CLI binary to the latest available release.
 CLI upgrade strategy:
 
 - Homebrew install detection: runs `brew upgrade tako`
-- Cargo install detection (`~/.cargo/bin/tako`): runs `cargo install tako --locked`
 - Default/fallback: downloads and runs hosted installer (`https://tako.sh/install.sh`) via `curl`/`wget`
 - `--canary`: always uses hosted installer mode and sets `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary`
 - `--stable`: forces stable channel and persists it as default
@@ -408,7 +409,7 @@ Start (or attach to) a local development session for the current app, backed by 
   - The daemon performs an upfront bind-availability check for its HTTPS listen address and exits immediately with an explicit error when that address is unavailable.
 - `tako dev` **registers** the app with the daemon (selected config path is the unique key, state is persisted in SQLite at `{TAKO_HOME}/dev-server.db`).
 - App statuses: `running` (actively serving), `idle` (process stopped, routes retained for wake-on-request), `stopped` (unregistered, routes removed).
-- The app starts immediately when `tako dev` starts (1 local instance) and transitions to idle after 10 minutes of no attached CLI clients.
+- The app starts immediately when `tako dev` starts (1 local instance) and transitions to idle after 30 minutes of no attached CLI clients.
   - After an idle transition, the next HTTP request triggers wake-on-request: the daemon spawns the app process and routes the request once the app is healthy.
   - Idle shutdown is suppressed while there are in-flight requests.
   - When `Ctrl+c` is pressed, Tako unregisters the app (sets status to stopped, removes routes, kills the process).
@@ -476,7 +477,7 @@ Start (or attach to) a local development session for the current app, backed by 
 **Environment variables:**
 
 - Loads from `[vars]` + `[vars.development]` in tako.toml
-- `ENV=development`, `BUN_ENV=development`, `NODE_ENV=development`
+- `NODE_ENV=development`, plus runtime-specific vars (`BUN_ENV=development` for Bun, `DENO_ENV=development` for Deno)
 
 ### tako dev stop [name] [--all]
 
@@ -843,7 +844,7 @@ Deploy flow helpers:
 - Servers receive prebuilt artifacts and do not run app build steps during deploy. After extracting the artifact, `tako-server` runs the runtime plugin's production install command (e.g. `bun install --production`) before starting instances.
 - Build logic runs in the workdir: `[build].install` then `[build].run` (simple mode), or `[[build_stages]]` in declaration order (multi-stage mode).
 - Deploy uses `runtime_version` from `tako.toml` when set. Otherwise it resolves runtime version by running `<tool> --version` directly, falling back to `latest`.
-- Artifact include precedence: in simple build mode, `build.include` -> `**/*`. In multi-stage mode, the union of all stage `include` patterns (each prefixed by the stage's `cwd`) -> `**/*` if no stage has `include`.
+- Artifact include precedence: in simple build mode, `build.include` -> `**/*`. In multi-stage mode, `**/*` is used (stages control output via `exclude` patterns only).
 - Asset roots are preset `assets` plus top-level `assets` (deduplicated), merged into app `public/` after build with ordered overwrite.
 - Target artifacts are cached locally by deterministic key and reused across deploys when build inputs are unchanged.
 - Cached artifacts are validated by checksum/size before reuse; invalid cache entries are rebuilt automatically.
@@ -1177,6 +1178,7 @@ Reference scripts in this repo:
 | `TAKO_ENV`            | app             | Environment name                                     | Set during deploy manifest generation (`production`, `staging`, etc.).                                              |
 | `NODE_ENV`            | app             | Node.js convention env                               | Set by runtime adapter / server (`development` or `production`).                                                    |
 | `BUN_ENV`             | app             | Bun convention env                                   | Set by runtime adapter (`development` or `production`).                                                             |
+| `DENO_ENV`            | app             | Deno convention env                                  | Set by runtime adapter (`development` or `production`).                                                             |
 | `TAKO_BUILD`          | app             | Deployed build/version identifier                    | Included in deploy command payload and injected by `tako-server` at process spawn.                                  |
 | `TAKO_INTERNAL_TOKEN` | app / `tako.sh` | Per-instance token for internal health check traffic | Generated by `tako-server` for each app instance.                                                                   |
 | `TAKO_VERSION`        | app / `tako.sh` | App version string (if you choose to set one)        | string                                                                                                              |
@@ -1228,6 +1230,16 @@ Response:
 
 ```json
 { "command": "exit_upgrading", "owner": "upgrade-prod-..." }
+```
+
+- `prepare_release` (download runtime and install production dependencies for a release; called before `deploy` so that the deploy step only does app registration and instance startup):
+
+```json
+{
+  "command": "prepare_release",
+  "app": "my-app/production",
+  "path": "/opt/tako/apps/my-app/production/releases/1.0.0"
+}
 ```
 
 - `deploy` (includes route patterns and optional secrets payload; env vars are read from `app.json` in the release dir). When `secrets` is omitted or `null`, the server keeps existing secrets for the app:
@@ -1348,7 +1360,7 @@ Expected response:
   "status": "healthy",
   "app": "dashboard",
   "version": "abc1234",
-  "instance_id": 1,
+  "instance_id": "a1b2c3d4",
   "pid": 12345,
   "uptime_seconds": 3600
 }
@@ -1465,6 +1477,10 @@ export default function fetch(request: Request): Response | Promise<Response> {
 import { Tako } from "tako.sh";
 ```
 
+- `Tako.secrets` — Read-only proxy providing access to Tako-managed secrets. Redacts automatically on `JSON.stringify`, `console.log`, and `toString` (returns `"[REDACTED]"`).
+- `Tako.build` — Returns the `TAKO_BUILD` environment variable (deploy version identifier) or `"unknown"`.
+- `Tako.isRunningInTako()` — Returns `true` when the app is running under Tako (checks `TAKO_BUILD` env var).
+
 ### Go SDK
 
 #### Installation
@@ -1533,7 +1549,7 @@ import { tako } from "tako.sh/vite";
   "status": "healthy",
   "app": "dashboard",
   "version": "abc1234",
-  "instance_id": 1,
+  "instance_id": "a1b2c3d4",
   "pid": 12345,
   "uptime_seconds": 3600
 }

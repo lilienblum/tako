@@ -4927,7 +4927,7 @@ dependencies = [
 
 [[package]]
 name = "tako"
-version = "0.0.2"
+version = "0.0.0"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -4986,7 +4986,7 @@ dependencies = [
 
 [[package]]
 name = "tako-core"
-version = "0.0.2"
+version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -4995,7 +4995,7 @@ dependencies = [
 
 [[package]]
 name = "tako-runtime"
-version = "0.0.1"
+version = "0.0.0"
 dependencies = [
  "flate2",
  "reqwest",
@@ -5012,7 +5012,7 @@ dependencies = [
 
 [[package]]
 name = "tako-server"
-version = "0.1.0"
+version = "0.0.0"
 dependencies = [
  "async-trait",
  "base64",
@@ -5057,7 +5057,7 @@ dependencies = [
 
 [[package]]
 name = "tako-socket"
-version = "0.0.2"
+version = "0.0.0"
 dependencies = [
  "serde",
  "serde_json",

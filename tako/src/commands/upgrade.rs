@@ -21,15 +21,12 @@ const TAG_PREFIX: &str = "tako-v";
 enum CliUpgradeMethod {
     Installer,
     Homebrew,
-    Cargo,
 }
 
 #[derive(Debug, Clone)]
 struct CliUpgradeDetectionContext {
     current_exe: PathBuf,
-    home_dir: Option<PathBuf>,
     has_brew: bool,
-    has_cargo: bool,
     brew_formula_installed: bool,
 }
 
@@ -49,7 +46,6 @@ enum UpgradeTaskId {
     ExtractArchive,
     InstallBinaries,
     UpgradeViaHomebrew,
-    UpgradeViaCargo,
 }
 
 #[derive(Debug, Clone)]
@@ -69,7 +65,6 @@ impl CliUpgradeMethod {
         match self {
             Self::Installer => "Installer",
             Self::Homebrew => "Homebrew",
-            Self::Cargo => "Cargo",
         }
     }
 }
@@ -93,7 +88,6 @@ impl UpgradeTaskId {
             Self::ExtractArchive => "extract-archive",
             Self::InstallBinaries => "install-binaries",
             Self::UpgradeViaHomebrew => "upgrade-via-homebrew",
-            Self::UpgradeViaCargo => "upgrade-via-cargo",
         }
     }
 
@@ -105,7 +99,6 @@ impl UpgradeTaskId {
             Self::ExtractArchive => "Extract archive",
             Self::InstallBinaries => "Install binaries",
             Self::UpgradeViaHomebrew => "Upgrade via Homebrew",
-            Self::UpgradeViaCargo => "Upgrade via cargo",
         }
     }
 }
@@ -233,10 +226,6 @@ fn build_upgrade_tasks(_channel: UpgradeChannel, method: CliUpgradeMethod) -> Ve
             UpgradeTaskId::UpgradeViaHomebrew.key(),
             UpgradeTaskId::UpgradeViaHomebrew.label(),
         )],
-        CliUpgradeMethod::Cargo => vec![TaskItemState::pending(
-            UpgradeTaskId::UpgradeViaCargo.key(),
-            UpgradeTaskId::UpgradeViaCargo.label(),
-        )],
     }
 }
 
@@ -304,7 +293,6 @@ async fn run_upgrade(channel: UpgradeChannel) -> Result<(), Box<dyn std::error::
     match method {
         CliUpgradeMethod::Installer => run_installer_upgrade(channel).await,
         CliUpgradeMethod::Homebrew => run_brew_upgrade(),
-        CliUpgradeMethod::Cargo => run_cargo_upgrade(),
     }
 }
 
@@ -319,11 +307,6 @@ async fn run_upgrade_with_task_tree(
         CliUpgradeMethod::Homebrew => {
             run_local_upgrade_pretty(&controller, UpgradeTaskId::UpgradeViaHomebrew, || {
                 run_local_upgrade_command("brew", &["upgrade", "tako"])
-            })
-        }
-        CliUpgradeMethod::Cargo => {
-            run_local_upgrade_pretty(&controller, UpgradeTaskId::UpgradeViaCargo, || {
-                run_local_upgrade_command("cargo", &["install", "tako", "--locked"])
             })
         }
     }
@@ -666,20 +649,12 @@ fn tarball_url_for_tag(tag: &str, os: &str, arch: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Homebrew / Cargo upgrades
+// Homebrew upgrades
 // ---------------------------------------------------------------------------
 
 fn run_brew_upgrade() -> Result<(), Box<dyn std::error::Error>> {
     output::with_spinner("Upgrading via Homebrew", "Upgraded via Homebrew", || {
         run_local_upgrade_command("brew", &["upgrade", "tako"])
-    })
-    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-    Ok(())
-}
-
-fn run_cargo_upgrade() -> Result<(), Box<dyn std::error::Error>> {
-    output::with_spinner("Upgrading via cargo", "Upgraded via cargo", || {
-        run_local_upgrade_command("cargo", &["install", "tako", "--locked"])
     })
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
     Ok(())
@@ -1041,13 +1016,10 @@ fn resolve_install_dir() -> PathBuf {
 
 fn build_cli_upgrade_detection_context() -> CliUpgradeDetectionContext {
     let has_brew = command_exists("brew");
-    let has_cargo = command_exists("cargo");
 
     CliUpgradeDetectionContext {
         current_exe: std::env::current_exe().unwrap_or_else(|_| PathBuf::from("tako")),
-        home_dir: dirs::home_dir(),
         has_brew,
-        has_cargo,
         brew_formula_installed: if has_brew {
             homebrew_formula_installed("tako")
         } else {
@@ -1066,10 +1038,6 @@ fn detect_cli_upgrade_method(ctx: &CliUpgradeDetectionContext) -> CliUpgradeMeth
         return CliUpgradeMethod::Homebrew;
     }
 
-    if ctx.has_cargo && is_cargo_install_path(&ctx.current_exe, ctx.home_dir.as_deref()) {
-        return CliUpgradeMethod::Cargo;
-    }
-
     if ctx.has_brew && ctx.brew_formula_installed {
         return CliUpgradeMethod::Homebrew;
     }
@@ -1083,17 +1051,6 @@ fn is_homebrew_path(path: &Path) -> bool {
         || value.starts_with("/usr/local/Homebrew/")
         || value.starts_with("/home/linuxbrew/.linuxbrew/")
         || value.contains("/Cellar/tako/")
-}
-
-fn is_cargo_install_path(path: &Path, home_dir: Option<&Path>) -> bool {
-    if let Some(home_dir) = home_dir {
-        let cargo_bin = home_dir.join(".cargo").join("bin");
-        if path.starts_with(cargo_bin) {
-            return true;
-        }
-    }
-
-    path.to_string_lossy().contains("/.cargo/bin/")
 }
 
 fn homebrew_formula_installed(formula: &str) -> bool {
@@ -1212,33 +1169,19 @@ mod tests {
     fn detect_cli_upgrade_method_prefers_homebrew_path() {
         let ctx = CliUpgradeDetectionContext {
             current_exe: PathBuf::from("/opt/homebrew/bin/tako"),
-            home_dir: Some(PathBuf::from("/Users/alice")),
+
             has_brew: true,
-            has_cargo: true,
             brew_formula_installed: true,
         };
         assert_eq!(detect_cli_upgrade_method(&ctx), CliUpgradeMethod::Homebrew);
     }
 
     #[test]
-    fn detect_cli_upgrade_method_prefers_cargo_path() {
-        let ctx = CliUpgradeDetectionContext {
-            current_exe: PathBuf::from("/Users/alice/.cargo/bin/tako"),
-            home_dir: Some(PathBuf::from("/Users/alice")),
-            has_brew: true,
-            has_cargo: true,
-            brew_formula_installed: true,
-        };
-        assert_eq!(detect_cli_upgrade_method(&ctx), CliUpgradeMethod::Cargo);
-    }
-
-    #[test]
     fn detect_cli_upgrade_method_uses_formula_presence_when_path_is_generic() {
         let ctx = CliUpgradeDetectionContext {
             current_exe: PathBuf::from("/usr/local/bin/tako"),
-            home_dir: Some(PathBuf::from("/Users/alice")),
+
             has_brew: true,
-            has_cargo: true,
             brew_formula_installed: true,
         };
         assert_eq!(detect_cli_upgrade_method(&ctx), CliUpgradeMethod::Homebrew);
@@ -1248,9 +1191,8 @@ mod tests {
     fn detect_cli_upgrade_method_falls_back_to_installer() {
         let ctx = CliUpgradeDetectionContext {
             current_exe: PathBuf::from("/usr/local/bin/tako"),
-            home_dir: Some(PathBuf::from("/Users/alice")),
+
             has_brew: false,
-            has_cargo: false,
             brew_formula_installed: false,
         };
         assert_eq!(detect_cli_upgrade_method(&ctx), CliUpgradeMethod::Installer);
@@ -1393,16 +1335,11 @@ mod tests {
     }
 
     #[test]
-    fn homebrew_and_cargo_task_trees_use_single_method_task() {
+    fn homebrew_task_tree_uses_single_method_task() {
         let homebrew =
             UpgradeTaskTreeController::new(UpgradeChannel::Stable, CliUpgradeMethod::Homebrew)
                 .snapshot();
         assert_eq!(homebrew.tasks.len(), 1);
         assert_eq!(homebrew.tasks[0].label, "Upgrade via Homebrew");
-
-        let cargo = UpgradeTaskTreeController::new(UpgradeChannel::Stable, CliUpgradeMethod::Cargo)
-            .snapshot();
-        assert_eq!(cargo.tasks.len(), 1);
-        assert_eq!(cargo.tasks[0].label, "Upgrade via cargo");
     }
 }

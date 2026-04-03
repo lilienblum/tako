@@ -11,12 +11,7 @@
     { "type": "fix", "section": "Bug Fixes" },
     { "type": "perf", "section": "Performance" }
   ],
-  "plugins": [
-    {
-      "type": "cargo-workspace",
-      "merge": false
-    }
-  ],
+  "plugins": [],
   "packages": {
     "tako": {
       "release-type": "rust",
