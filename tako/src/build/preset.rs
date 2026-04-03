@@ -459,7 +459,16 @@ fn parse_official_alias_preset_content(
         return parse_group_preset_content(path, content, preset_name);
     }
     if BuildAdapter::from_id(alias).is_some() {
-        return parse_group_preset_content(path, content, alias);
+        // Base runtime presets (bun, node, deno, go) may not have a section in
+        // the presets file — they use runtime defaults instead.
+        return match parse_group_preset_content(path, content, alias) {
+            Ok(preset) => Ok(preset),
+            Err(e) if e.contains("was not found") => Ok(BuildPreset {
+                name: alias.to_string(),
+                ..Default::default()
+            }),
+            Err(e) => Err(e),
+        };
     }
     parse_and_validate_preset(content, alias)
 }
@@ -869,14 +878,15 @@ assets = ["dist/client"]
     }
 
     #[test]
-    fn runtime_alias_errors_when_missing_from_manifest() {
+    fn runtime_alias_returns_empty_preset_when_missing_from_manifest() {
         let content = r#"
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
 "#;
-        let err = parse_official_alias_preset_content("bun", "presets/javascript.toml", content)
-            .expect_err("runtime alias should error when not in manifest");
-        assert!(err.contains("Preset 'bun' was not found"));
+        let preset = parse_official_alias_preset_content("bun", "presets/javascript.toml", content)
+            .expect("base runtime preset should fall back to empty defaults");
+        assert_eq!(preset.name, "bun");
+        assert!(preset.main.is_none());
     }
 
     #[test]
