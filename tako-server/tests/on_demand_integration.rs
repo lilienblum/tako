@@ -53,7 +53,7 @@ fn run_on_demand_case() -> Result<(), String> {
         "path": app_dir.to_string_lossy(),
         "routes": [host],
         "instances": 0,
-        "idle_timeout": 1,
+        "idle_timeout": 5,
     }));
     if resp.get("status").and_then(|s| s.as_str()) != Some("ok") {
         return Err(format!("deploy failed: {resp:?}"));
@@ -103,8 +103,9 @@ fn run_on_demand_case() -> Result<(), String> {
     }
 
     // Eventually idle monitor stops the instance and reports no instances.
+    // idle_timeout=5s plus some slack for the monitor interval.
     let mut status_snapshot = serde_json::Value::Null;
-    let idle_ok = wait_for(Duration::from_secs(20), || {
+    let idle_ok = wait_for(Duration::from_secs(30), || {
         let resp = server.send_command(&serde_json::json!({
             "command": "status",
             "app": "test-app",

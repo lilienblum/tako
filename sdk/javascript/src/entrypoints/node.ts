@@ -89,6 +89,7 @@ void run(
 
       process.on("SIGTERM", () => {
         setDraining();
+        server.close();
       });
     }),
 );

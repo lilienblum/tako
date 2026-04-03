@@ -266,7 +266,17 @@ fn extract_binary_name(def: &RuntimeDef) -> Option<&str> {
     }
 }
 
+/// Maximum download size for runtime archives (256 MiB).
+const MAX_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
+
+/// Maximum download size for checksum/metadata files (1 MiB).
+const MAX_METADATA_BYTES: u64 = 1024 * 1024;
+
 async fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
+    download_bytes_limited(url, MAX_ARCHIVE_BYTES).await
+}
+
+async fn download_bytes_limited(url: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(300))
@@ -286,11 +296,27 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
         ));
     }
 
-    response
+    if let Some(len) = response.content_length() {
+        if len > max_bytes {
+            return Err(format!(
+                "download too large: {len} bytes exceeds limit of {max_bytes} bytes for {url}"
+            ));
+        }
+    }
+
+    let bytes = response
         .bytes()
         .await
-        .map(|b| b.to_vec())
-        .map_err(|e| format!("failed to read response body from {url}: {e}"))
+        .map_err(|e| format!("failed to read response body from {url}: {e}"))?;
+
+    if bytes.len() as u64 > max_bytes {
+        return Err(format!(
+            "download too large: {} bytes exceeds limit of {max_bytes} bytes for {url}",
+            bytes.len()
+        ));
+    }
+
+    Ok(bytes.to_vec())
 }
 
 async fn verify_checksum(
@@ -299,7 +325,7 @@ async fn verify_checksum(
     checksum_format: &str,
     archive_url: &str,
 ) -> Result<(), String> {
-    let checksum_text = download_bytes(checksum_url)
+    let checksum_text = download_bytes_limited(checksum_url, MAX_METADATA_BYTES)
         .await
         .map_err(|e| format!("failed to fetch checksum from {checksum_url}: {e}"))?;
     let checksum_text = String::from_utf8_lossy(&checksum_text);

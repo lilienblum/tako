@@ -50,27 +50,17 @@ impl BuildExecutor {
 
     /// Run a build command
     pub fn run_build(&self, command: &str) -> Result<BuildResult, BuildError> {
-        let parts: Vec<&str> = command.split_whitespace().collect();
-        if parts.is_empty() {
+        if command.trim().is_empty() {
             return Err(BuildError::CommandFailed("Empty command".to_string()));
         }
 
-        let program = parts[0];
-        let args = &parts[1..];
-
-        let output = Command::new(program)
-            .args(args)
+        let output = Command::new("sh")
+            .args(["-c", command])
             .current_dir(&self.cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .output()
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    BuildError::CommandNotFound(program.to_string())
-                } else {
-                    BuildError::Io(e)
-                }
-            })?;
+            .map_err(BuildError::Io)?;
 
         Ok(BuildResult {
             success: output.status.success(),
@@ -573,8 +563,9 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let executor = BuildExecutor::new(temp.path());
 
-        let result = executor.run_build("nonexistent_command_12345");
-        assert!(matches!(result, Err(BuildError::CommandNotFound(_))));
+        let result = executor.run_build("nonexistent_command_12345").unwrap();
+        assert!(!result.success);
+        assert_eq!(result.exit_code, Some(127));
     }
 
     #[test]

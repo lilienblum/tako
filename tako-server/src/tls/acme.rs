@@ -619,17 +619,10 @@ async fn ensure_lego_installed(data_dir: &std::path::Path) -> Result<PathBuf, Ac
         return Ok(lego_bin);
     }
 
-    // Check if lego is in PATH
-    if let Ok(output) = tokio::process::Command::new("lego")
-        .arg("--version")
-        .output()
-        .await
-        && output.status.success()
-    {
-        return Ok(PathBuf::from("lego"));
-    }
-
-    tracing::info!("lego not found, downloading v{LEGO_VERSION}");
+    tracing::info!(
+        "lego not found at {}, downloading v{LEGO_VERSION}",
+        lego_bin.display()
+    );
 
     let go_arch = match std::env::consts::ARCH {
         "x86_64" => "amd64",

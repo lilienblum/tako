@@ -17,6 +17,7 @@ void run((handleRequest) => {
   // @ts-ignore - Deno global
   Deno.addSignalListener?.("SIGTERM", () => {
     setDraining();
+    void server.shutdown();
   });
 
   return actualPort;

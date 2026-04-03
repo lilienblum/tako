@@ -1601,11 +1601,12 @@ async fn prepare_release_runtime(
         tracing::info!(runtime = %runtime, install_dir = %install_dir.display(), "Running production install: {}", install_cmd);
         let install_path = install_env.get("PATH").cloned().unwrap_or_default();
         let prefixed_cmd = format!("export PATH=\"{install_path}\"; {install_cmd}");
-        let output = std::process::Command::new("sh")
+        let output = tokio::process::Command::new("sh")
             .args(["-c", &prefixed_cmd])
             .current_dir(&install_dir)
             .envs(&install_env)
             .output()
+            .await
             .map_err(|e| format!("Failed to run production install: {e}"))?;
         if !output.status.success() {
             return Err(format_process_failure(

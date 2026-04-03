@@ -4997,7 +4997,6 @@ dependencies = [
 name = "tako-runtime"
 version = "0.0.1"
 dependencies = [
- "base64",
  "flate2",
  "reqwest",
  "serde",

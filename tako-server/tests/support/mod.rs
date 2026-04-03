@@ -294,7 +294,7 @@ if (!internalToken) {{
   throw new Error("TAKO_INTERNAL_TOKEN is required");
 }}
 
-Bun.serve({{
+const server = Bun.serve({{
   hostname: host,
   port,
   fetch(req) {{
@@ -307,7 +307,7 @@ Bun.serve({{
           headers: {{ "content-type": "application/json" }},
         }});
       }}
-      return new Response(JSON.stringify({{ healthy: true }}), {{
+      return new Response(JSON.stringify({{ status: "healthy" }}), {{
         headers: {{
           "content-type": "application/json",
           "X-Tako-Internal-Token": internalToken,
@@ -320,6 +320,9 @@ Bun.serve({{
     return new Response("not found", {{ status: 404 }});
   }},
 }});
+
+// Signal readiness to tako-server (SDK protocol)
+process.stdout.write(`TAKO:READY:${{server.port}}\n`);
 "#
     )
 }
