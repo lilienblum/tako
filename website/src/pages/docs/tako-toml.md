@@ -94,6 +94,16 @@ runtime_version = "1.2.3"
 
 `tako init` pins the locally-installed version by default. To update, change the value or remove the field to let deploy auto-detect.
 
+### `package_manager`
+
+Optional package manager override. Controls which package manager Tako uses for dependency installation.
+
+```toml
+package_manager = "pnpm"
+```
+
+Accepted values: `npm`, `pnpm`, `yarn`, `bun`. When omitted, Tako auto-detects from your `package.json` `packageManager` field or lockfiles.
+
 ### `preset`
 
 Optional app preset. Provides default `main` entrypoint and `assets` directories for framework-specific apps.
@@ -116,20 +126,10 @@ When omitted, Tako uses the base preset for the selected runtime (from `runtime`
 
 **How presets work:**
 
-- Presets are metadata-only: they define `name`, `main`, and `assets` defaults. They do not contain build, install, start, or dev commands.
+- Presets are metadata-only: they define `name`, `main`, and `assets` defaults. They do not contain build, install, start, or dev commands (though they can define a `dev` command override).
 - Base presets (`bun`, `node`, `deno`, `go`) are built into the CLI from embedded runtime definitions.
 - Family presets (like `tanstack-start`) live in `presets/<language>/<language>.toml` in the Tako repo and are fetched from `master` on each resolve. Fetch failures fail the resolve.
-- Base runtime aliases (`bun`, `node`, `deno`, `go`) fall back to embedded defaults when missing from the fetched family manifest.
 - Resolved preset metadata is written to `.tako/build.lock.json` for visibility and cache-key inputs.
-
-**Preset effect on `tako dev`:**
-
-- When `preset` is omitted, Tako runs the runtime-default dev script:
-  - Bun: `bun run dev`
-  - Node: `npm run dev`
-  - Deno: `deno task dev`
-  - Go: `go run .`
-- When `preset` is explicitly set, the same runtime-default dev scripts are used (presets do not define dev commands), unless the preset defines its own `dev` command (e.g. `tanstack-start` uses `vite dev`).
 
 See [Presets](/docs/presets) for the full preset schema and available presets.
 
@@ -142,16 +142,6 @@ assets = ["dist/client", "assets/shared"]
 ```
 
 Asset directories are merged in listed order. When files conflict, later entries overwrite earlier ones. These are combined with preset-defined assets (deduplicated).
-
-### `package_manager`
-
-Optional package manager override. Controls which package manager Tako uses for dependency installation.
-
-```toml
-package_manager = "pnpm"
-```
-
-When omitted, Tako auto-detects the package manager from your `package.json` `packageManager` field or lockfiles. For Go projects, the package manager is Go Modules (detected from `go.sum`).
 
 ---
 
@@ -222,7 +212,7 @@ Cannot be used alongside `[[build_stages]]`.
 
 ## `[[build_stages]]`
 
-Custom multi-stage build pipeline. Each stage is a top-level TOML array-of-tables entry. **Mutually exclusive with `[build]` when `[build]` has a `run` field** -- use one or the other. `[build].include` and `[build].exclude` also cannot be used alongside `[[build_stages]]`.
+Custom multi-stage build pipeline. Each stage is a top-level TOML array-of-tables entry. **Mutually exclusive with `[build]` when `[build]` has a `run` field** -- use one or the other. `[build].include` and `[build].exclude` also cannot be used alongside `[[build_stages]]`; use per-stage `exclude` instead.
 
 ```toml
 [[build_stages]]
@@ -230,26 +220,24 @@ name = "frontend-assets"
 cwd = "frontend"
 install = "bun install"
 run = "bun run build"
-include = ["dist/**"]
 
 [[build_stages]]
 name = "generate-api-types"
 run = "bun run generate:types"
+exclude = ["**/*.map"]
 ```
 
 **Stage fields:**
 
-| Field     | Required | Description                                                                                                                               |
-| --------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `name`    | No       | Display label shown in deploy output                                                                                                      |
-| `cwd`     | No       | Working directory relative to tako.toml location. Allows `..` for monorepo traversal but must not escape the project root.                |
-| `install` | No       | Command run before `run`                                                                                                                  |
-| `run`     | Yes      | The build command to execute                                                                                                              |
-| `include` | No       | Array of file globs relative to the stage's `cwd`. Stages without `include` are intermediate and contribute nothing to the final artifact |
+| Field     | Required | Description                                                                                                       |
+| --------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `name`    | No       | Display label shown in deploy output                                                                              |
+| `cwd`     | No       | Working directory relative to tako.toml location. Allows `..` for monorepo traversal but must not escape the root |
+| `install` | No       | Command run before `run`                                                                                          |
+| `run`     | Yes      | The build command to execute                                                                                      |
+| `exclude` | No       | Array of file globs to exclude from the deploy artifact                                                           |
 
 Stages run in declaration order. Each stage runs its `install` (if set) then `run`.
-
-In multi-stage mode, the final artifact includes the union of all stage `include` patterns (each prefixed by the stage's `cwd`). If no stage defines `include`, the artifact defaults to `**/*`.
 
 ---
 
@@ -293,7 +281,7 @@ For any target environment, variables are merged in this order (later overrides 
 3. **Auto-set by Tako** -- injected automatically during deploy:
    - `TAKO_ENV=<environment>`
    - `TAKO_BUILD=<version>`
-   - Runtime convention vars (for Bun: `NODE_ENV`, `BUN_ENV`; Node: `NODE_ENV`)
+   - Runtime convention vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
 
 Since auto-set variables are applied last, they override any manually set values for those keys.
 
@@ -346,9 +334,7 @@ You can use `route` or `routes` in an environment, but not both.
 
 - Hostname only: `example.com`
 - Hostname with path: `example.com/api/*`
-- `example.com` and `example.com/*` are equivalent (both match all paths)
 - `example.com/api` and `example.com/api/` are equivalent (trailing slash is normalized)
-- `example.com/api/*` matches `/api`, `/api/`, and `/api/anything/else`
 
 **Route rules:**
 
@@ -357,16 +343,6 @@ You can use `route` or `routes` in an environment, but not both.
 - Empty route lists are rejected for non-development environments
 - Development routes must be `{app}.tako.test` or a subdomain of it
 - `[envs.development]` may omit routes entirely and defaults to `{app}.tako.test` for `tako dev`
-
-**TLS behavior:**
-
-- Public route hostnames get automatic ACME (Let's Encrypt) certificates
-- Private/local hostnames (`localhost`, `*.localhost`, single-label hosts, reserved suffixes like `*.local`) get self-signed certificates generated during deploy
-
-**Static assets:**
-
-- Requests for paths with file extensions are served from the deployed `public/` directory when present
-- For path-prefixed routes (like `example.com/app/*`), static lookup also tries the prefix-stripped path
 
 ### `servers`
 
@@ -381,8 +357,6 @@ The same server name can appear in multiple non-development environments. Each e
 
 Servers listed under `[envs.development]` are ignored by deploy validation -- development is for `tako dev` only.
 
-Server architecture (`arch`, `libc`) is not configured in `tako.toml`. Tako detects and stores this metadata in each server's entry in the global config (`config.toml`) when you run `tako servers add`.
-
 ### `idle_timeout`
 
 Seconds before an idle instance is stopped. Applies per instance.
@@ -393,8 +367,6 @@ idle_timeout = 300
 ```
 
 Defaults to `300` (5 minutes). Instances are never stopped while serving in-flight requests.
-
-When desired instances is `0` (scale-to-zero), instances start on demand when a request arrives and stop after this timeout with no traffic.
 
 ### `log_level`
 
@@ -466,20 +438,13 @@ Instance counts are not configured in `tako.toml`. They are runtime state stored
 - Instances are never stopped while serving in-flight requests.
 - Explicit scale-down drains in-flight requests before stopping excess instances.
 
-**Cold start behavior (scale-to-zero):**
-
-- The next request triggers a cold start and waits for readiness up to the startup timeout (default 30 seconds).
-- If no healthy instance is ready before timeout, the proxy returns `504 App startup timed out`.
-- If cold start setup fails before readiness, the proxy returns `502 App failed to start`.
-- While a cold start is in progress, requests queue up to 100 waiters per app. If the queue is full, the proxy returns `503 App startup queue is full` with `Retry-After: 1`.
-
 ---
 
 ## Config Validation Rules
 
 Tako validates your `tako.toml` and reports clear errors when something is wrong:
 
-- **Top-level keys**: Only `name`, `main`, `runtime`, `runtime_version`, `package_manager`, `preset`, `assets`, `dev`, `[build]`, `[[build_stages]]`, `[vars]`, and `[envs]` are allowed at the top level.
+- **Top-level keys**: Only `name`, `main`, `runtime`, `runtime_version`, `package_manager`, `preset`, `dev`, `assets`, `[build]`, `[[build_stages]]`, `[vars]`, and `[envs]` are allowed at the top level.
 - **Mutual exclusion**: `[build]` with a `run` field and `[[build_stages]]` cannot both be present. `[build].include`/`[build].exclude` also cannot be used alongside `[[build_stages]]`.
 - **Environment sections**: `[envs.<env>]` accepts only `route`/`routes`, `servers`, `idle_timeout`, and `log_level`. Env vars belong in `[vars]` / `[vars.<env>]`.
 - **Route exclusivity**: Each environment can set `route` or `routes`, but not both.
@@ -489,7 +454,6 @@ Tako validates your `tako.toml` and reports clear errors when something is wrong
 - **Build stage paths**: `cwd` allows `..` for monorepo traversal but must not escape the project root. Absolute paths are rejected.
 - **Build stage run**: Each `[[build_stages]]` entry must have a `run` field.
 - **Preset namespacing**: Namespaced aliases like `js/tanstack-start` in `preset` are rejected. Use `runtime` for the runtime and keep `preset` runtime-local.
-- **Preset references**: `github:` preset references are not supported.
 - **App name format**: Must be DNS-compatible: lowercase letters, numbers, hyphens, starting with a letter.
 
 ---
@@ -540,7 +504,7 @@ install = "bun install"
 # cwd = "frontend"
 # install = "bun install"
 # run = "bun run build"
-# include = ["dist/**"]
+# exclude = ["**/*.map"]
 
 # [[build_stages]]
 # name = "generate-api-types"
@@ -593,13 +557,13 @@ Global user-level settings and server inventory. Stored in the platform config d
 name = "la"
 host = "1.2.3.4"
 port = 22
+description = "Primary production server"
 arch = "x86_64"
 libc = "glibc"
 
 [[servers]]
 name = "nyc"
 host = "5.6.7.8"
-port = 22
 arch = "aarch64"
 libc = "musl"
 ```
@@ -613,9 +577,9 @@ Each server is a `[[servers]]` array-of-tables entry managed by `tako servers ad
 | `name`        | Yes      | Unique name used in `[envs.<env>].servers` to target this server             |
 | `host`        | Yes      | IP address or hostname                                                       |
 | `port`        | No       | SSH port (defaults to `22`)                                                  |
+| `description` | No       | Optional human-readable label shown in `tako servers ls`                     |
 | `arch`        | Auto     | CPU architecture (`x86_64` or `aarch64`), detected during `tako servers add` |
 | `libc`        | Auto     | C library (`glibc` or `musl`), detected during `tako servers add`            |
-| `description` | No       | Optional human-readable label shown in `tako servers ls`                     |
 
 All names and hosts must be globally unique. The `arch` and `libc` fields are detected automatically via SSH when you add a server. Deploy requires valid target metadata for all selected servers; if metadata is missing or invalid, deploy fails early with guidance to remove and re-add the affected server.
 
@@ -637,16 +601,22 @@ You do not need to edit this file directly -- use `tako upgrade --canary` or `ta
 
 ## `.tako/secrets.json` (Project - Encrypted)
 
-Per-environment encrypted secrets stored in your project's `.tako/` directory. Secret names are plaintext; values are encrypted with AES-256-GCM.
+Per-environment encrypted secrets stored in your project's `.tako/` directory. Each environment has a `salt` (base64-encoded Argon2id salt for key derivation) and a `secrets` map. Secret names are plaintext; values are encrypted with AES-256-GCM.
 
 ```json
 {
   "production": {
-    "DATABASE_URL": "encrypted_value",
-    "API_KEY": "encrypted_value"
+    "salt": "base64_encoded_argon2id_salt",
+    "secrets": {
+      "DATABASE_URL": "encrypted_value",
+      "API_KEY": "encrypted_value"
+    }
   },
   "staging": {
-    "DATABASE_URL": "encrypted_value_different"
+    "salt": "base64_encoded_argon2id_salt",
+    "secrets": {
+      "DATABASE_URL": "encrypted_value_different"
+    }
   }
 }
 ```

@@ -165,11 +165,12 @@ For each server, the CLI:
 6. Uploads and extracts the target artifact into `/opt/tako/apps/<app>/<env>/releases/<version>/`
 7. Links shared directories (e.g., `logs`)
 8. Syncs secrets if needed (compares hashes; only sends when changed)
-9. Sends the deploy command to `tako-server`
-10. `tako-server` acquires its per-app in-memory deploy lock, runs runtime prep (production dependency install via the runtime's package manager for JS; skipped for Go since the binary is self-contained), and performs a first start or rolling update over per-instance private TCP upstreams
-11. Updates the `current` symlink and cleans up old releases (older than 30 days)
+9. Sends a `prepare_release` command to download the runtime and install production dependencies
+10. Sends the `deploy` command to `tako-server`
+11. `tako-server` acquires its per-app in-memory deploy lock and performs a first start or rolling update over per-instance private TCP upstreams
+12. Updates the `current` symlink and cleans up old releases (older than 30 days)
 
-Server-side runtime prep uses the runtime's package manager to install production dependencies from the deployed manifest. For Go apps, this step is skipped -- the deployed binary runs directly with no runtime download or dependency install.
+The `prepare_release` step is separated from `deploy` so that runtime download and dependency installation happen before app registration and instance startup, keeping the deploy step fast.
 
 ### CLI output modes
 
@@ -205,14 +206,13 @@ name = "shared-ui"
 cwd = "packages/ui"
 install = "bun install"
 run = "bun run build"
-include = ["dist/**"]
 
 [[build_stages]]
 name = "app"
 cwd = "packages/app"
 install = "bun install"
 run = "bun run build"
-include = ["dist/**", ".output/**"]
+exclude = ["**/*.map"]
 ```
 
 Stages run in declaration order. Each stage has:
@@ -221,9 +221,9 @@ Stages run in declaration order. Each stage has:
 - `cwd` (optional, relative to app root; `..` is allowed for monorepo traversal but guarded against escaping the workspace root)
 - `install` (optional command run before `run`)
 - `run` (required command)
-- `include` (optional array of file globs relative to the stage's `cwd`; stages without `include` are intermediate and contribute nothing to the artifact)
+- `exclude` (optional array of file globs to exclude from the deploy artifact)
 
-Having both `[build].run` and `[[build_stages]]` is an error. `[build].include`/`[build].exclude` cannot be used alongside `[[build_stages]]`.
+Having both `[build].run` and `[[build_stages]]` is an error. `[build].include`/`[build].exclude` cannot be used alongside `[[build_stages]]`; use per-stage `exclude` instead.
 
 ### Asset handling
 

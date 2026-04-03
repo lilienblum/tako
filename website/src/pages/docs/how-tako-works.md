@@ -50,7 +50,7 @@ The daemon supports multiple apps simultaneously, each on its own `*.tako.test` 
 
 Your app stays running while you work. If you press `b`, it backgrounds to the daemon and the CLI exits -- your app keeps serving. Run `tako dev` again to reattach. Press `Ctrl+c` to stop the app entirely.
 
-After 10 minutes with no attached CLI client, the daemon idles the app process. The next HTTP request wakes it back up automatically.
+After 30 minutes with no attached CLI client, the daemon idles the app process. The next HTTP request wakes it back up automatically.
 
 ### Variants
 
@@ -114,9 +114,9 @@ For each target server (in parallel):
 - Checks free disk space under `/opt/tako` before uploading
 - Uploads and extracts the target artifact
 - Syncs secrets only if they have changed (compares hashes)
-- Sends the deploy command to `tako-server`
+- Sends a `prepare_release` command to download the runtime and install production dependencies
+- Sends the `deploy` command to `tako-server`
 - `tako-server` acquires its per-app in-memory deploy lock
-- Runs runtime prep (production dependency install via the runtime's package manager)
 - Performs a first start or rolling update of app instances
 - Updates `current` symlink and cleans up releases older than 30 days
 
@@ -229,7 +229,7 @@ In production, Tako handles TLS automatically:
 - **SNI-based selection** picks the right certificate during the TLS handshake.
 - **Automatic renewal** happens 30 days before expiry with zero downtime. Renewal checks run every 12 hours.
 - **HTTP-01 challenges** are handled transparently on port 80.
-- **DNS-01 challenges** are supported for wildcard certificates via the [`lego`](https://go-acme.github.io/lego/) ACME client, which must be [installed on the server](https://go-acme.github.io/lego/installation/). When wildcard routes are deployed and no DNS provider is configured, deploy prompts interactively for provider credentials.
+- **DNS-01 challenges** are supported for wildcard certificates via the [`lego`](https://go-acme.github.io/lego/) ACME client, which `tako-server` downloads and installs on-demand. Run `tako servers setup-wildcard` to configure DNS credentials before deploying wildcard routes.
 - **Fallback certificate**: if no certificate exists yet for a hostname, Tako serves a self-signed default so HTTPS still completes and routing can return normal HTTP status codes.
 - **Private/local hostnames** (like `localhost`, `*.local`, `*.test`): Tako skips ACME and generates a self-signed certificate during deploy.
 
@@ -256,23 +256,24 @@ The CLI and `tako-server` communicate over a Unix socket at `/var/run/tako/tako.
 
 ### Protocol Commands
 
-| Command            | Purpose                                                      |
-| ------------------ | ------------------------------------------------------------ |
-| `hello`            | Protocol negotiation and capability discovery                |
-| `deploy`           | Deploy a new version with routes and optional secrets        |
-| `scale`            | Change desired instance count                                |
-| `delete`           | Remove an app's state and routes                             |
-| `rollback`         | Roll back to a previous release                              |
-| `routes`           | List current route mappings                                  |
-| `stop`             | Stop a running app                                           |
-| `status`           | Get status of a specific app                                 |
-| `list`             | List all deployed apps with their status                     |
-| `update_secrets`   | Update secrets for a deployed app (triggers rolling restart) |
-| `list_releases`    | Return release/build history for an app                      |
-| `get_secrets_hash` | Get the SHA-256 hash of an app's current secrets             |
-| `server_info`      | Return server runtime config and upgrade mode                |
-| `enter_upgrading`  | Acquire the durable upgrade lock (rejects mutating commands) |
-| `exit_upgrading`   | Release the durable upgrade lock                             |
+| Command            | Purpose                                                            |
+| ------------------ | ------------------------------------------------------------------ |
+| `hello`            | Protocol negotiation and capability discovery                      |
+| `prepare_release`  | Download runtime and install production dependencies before deploy |
+| `deploy`           | Deploy a new version with routes and optional secrets              |
+| `scale`            | Change desired instance count                                      |
+| `delete`           | Remove an app's state and routes                                   |
+| `rollback`         | Roll back to a previous release                                    |
+| `routes`           | List current route mappings                                        |
+| `stop`             | Stop a running app                                                 |
+| `status`           | Get status of a specific app                                       |
+| `list`             | List all deployed apps with their status                           |
+| `update_secrets`   | Update secrets for a deployed app (triggers rolling restart)       |
+| `list_releases`    | Return release/build history for an app                            |
+| `get_secrets_hash` | Get the SHA-256 hash of an app's current secrets                   |
+| `server_info`      | Return server runtime config and upgrade mode                      |
+| `enter_upgrading`  | Acquire the durable upgrade lock (rejects mutating commands)       |
+| `exit_upgrading`   | Release the durable upgrade lock                                   |
 
 App instances do not connect to this management socket. Instead, `tako-server` manages their lifecycle directly (spawn, health check, stop) and proxies HTTP traffic to each instance's private TCP endpoint on loopback.
 
@@ -291,7 +292,7 @@ On each deployment server, Tako organizes files under `/opt/tako/`:
   config.json              # Server-level config (name, DNS provider)
   tako.db                  # Persisted app state (SQLite)
   runtimes/{tool}/{version}/  # Downloaded runtime binaries
-  acme/credentials.json    # DNS provider credentials
+  acme/credentials.json    # ACME account credentials
   certs/{domain}/          # TLS certificates (fullchain.pem, privkey.pem)
   apps/{app}/{env}/
     current -> releases/{version}   # Active release symlink

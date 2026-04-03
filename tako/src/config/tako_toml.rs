@@ -193,6 +193,7 @@ impl Config {
         let runtime_version = parse_optional_string(&raw, "runtime_version")?;
         let package_manager = parse_optional_string(&raw, "package_manager")?;
         let preset = parse_optional_string(&raw, "preset")?;
+        let dev = parse_string_array(&raw, "dev")?.unwrap_or_default();
         let assets = parse_string_array(&raw, "assets")?.unwrap_or_default();
         let build = parse_build_config(&raw)?;
         let build_stages = parse_build_stages(&raw)?;
@@ -203,6 +204,7 @@ impl Config {
             runtime_version,
             package_manager,
             preset,
+            dev,
             assets,
             build,
             build_stages,
@@ -584,6 +586,7 @@ fn validate_top_level_keys(raw: &toml::Value) -> Result<()> {
                 | "runtime_version"
                 | "package_manager"
                 | "preset"
+                | "dev"
                 | "main"
                 | "assets"
                 | "build"
@@ -1050,6 +1053,15 @@ preset = "bun"
         assert_eq!(config.name, Some("my-app".to_string()));
         assert_eq!(config.main, Some("server/index.mjs".to_string()));
         assert_eq!(config.preset, Some("bun".to_string()));
+    }
+
+    #[test]
+    fn test_parse_dev_command() {
+        let toml = r#"
+dev = ["vite", "dev"]
+"#;
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(config.dev, vec!["vite".to_string(), "dev".to_string()]);
     }
 
     #[test]

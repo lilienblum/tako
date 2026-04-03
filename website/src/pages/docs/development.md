@@ -74,7 +74,7 @@ When you run `tako dev`, the app starts immediately with one local instance. If 
 
 ### Going idle
 
-After 10 minutes with no attached CLI clients, a running app transitions to `idle`. The daemon keeps its routes registered but stops the process. Idle shutdown is suppressed while there are in-flight requests.
+After 30 minutes with no attached CLI clients, a running app transitions to `idle`. The daemon keeps its routes registered but stops the process. Idle shutdown is suppressed while there are in-flight requests.
 
 ### Wake-on-request
 
@@ -241,12 +241,12 @@ For JS apps, this means your `export default function fetch()` or `export defaul
 
 ### Automatically set
 
-| Variable   | Value         | Purpose                               |
-| ---------- | ------------- | ------------------------------------- |
-| `PORT`     | _(ephemeral)_ | The port your app should listen on    |
-| `ENV`      | `development` | General environment hint              |
-| `NODE_ENV` | `development` | Node.js convention (JS runtimes only) |
-| `BUN_ENV`  | `development` | Bun convention (JS runtimes only)     |
+| Variable   | Value         | Purpose                              |
+| ---------- | ------------- | ------------------------------------ |
+| `PORT`     | _(ephemeral)_ | The port your app should listen on   |
+| `NODE_ENV` | `development` | Node.js convention (all JS runtimes) |
+| `BUN_ENV`  | `development` | Bun convention (Bun runtime only)    |
+| `DENO_ENV` | `development` | Deno convention (Deno runtime only)  |
 
 ### From tako.toml
 
