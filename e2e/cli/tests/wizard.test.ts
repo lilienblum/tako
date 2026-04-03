@@ -149,10 +149,10 @@ describe("init wizard interaction", () => {
 
     // Step 3: Build preset — accept default when preset discovery is available.
     await term.waitFor(
-      (screen) => screen.toLowerCase().includes("preset") || screen.includes("Production route"),
-      { timeout: 5000, label: "waitFor preset or production route" },
+      (screen) => screen.includes("enter submit") || screen.includes("Production route"),
+      { timeout: 5000, label: "waitFor preset options or production route" },
     );
-    if (term.screenText().toLowerCase().includes("preset")) {
+    if (term.screenText().includes("enter submit")) {
       term.press("\r");
     }
 
@@ -187,19 +187,41 @@ describe("init wizard interaction", () => {
     await term.waitForText("Choose a runtime:", { timeout: 5000 });
     term.press("\r");
 
+    // Handle optional build preset step
+    await term.waitFor(
+      (screen) => screen.includes("enter submit") || screen.includes("Production route"),
+      { timeout: 5000, label: "waitFor preset options or production route" },
+    );
+    const hasPresetStep = term.screenText().includes("enter submit");
+    if (hasPresetStep) {
+      term.press("\r");
+    }
+
     await term.waitForText("Production route", { timeout: 5000 });
     expect(countRowsContaining(term, "Application name")).toBe(1);
 
+    // Esc back: route -> preset (if present) or runtime
     term.press("\x1b");
     await term.waitFor(
       (screen) =>
-        screen.includes("◆ Choose a runtime:") &&
+        (screen.includes("enter submit") || screen.includes("◆ Choose a runtime:")) &&
         screen.includes("◇ Production route") &&
         !screen.includes("◆ Production route"),
-      { timeout: 5000, label: "waitFor runtime to reactivate" },
+      { timeout: 5000, label: "waitFor previous step to reactivate" },
     );
 
     expect(countRowsContaining(term, "Application name")).toBe(1);
+
+    // Esc back again: if we were on preset, go to runtime; then to application name
+    if (hasPresetStep) {
+      term.press("\x1b");
+      await term.waitFor(
+        (screen) =>
+          screen.includes("◆ Choose a runtime:") && !screen.includes("◆ Choose a build preset:"),
+        { timeout: 5000, label: "waitFor runtime to reactivate" },
+      );
+      expect(countRowsContaining(term, "Application name")).toBe(1);
+    }
 
     term.press("\x1b");
     await term.waitFor(
@@ -226,10 +248,10 @@ describe("init wizard interaction", () => {
     await term.waitForText("runtime", { timeout: 5000 });
     term.press("\r");
     await term.waitFor(
-      (screen) => screen.toLowerCase().includes("preset") || screen.includes("Production route"),
-      { timeout: 5000, label: "waitFor preset or production route" },
+      (screen) => screen.includes("enter submit") || screen.includes("Production route"),
+      { timeout: 5000, label: "waitFor preset options or production route" },
     );
-    if (term.screenText().toLowerCase().includes("preset")) {
+    if (term.screenText().includes("enter submit")) {
       term.press("\r");
     }
     await term.waitForText("Production route", { timeout: 5000 });
