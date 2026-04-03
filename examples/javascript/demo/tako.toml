@@ -13,7 +13,7 @@ WIDLCARD_SUFFIX = ".tako-demo.tako.test"
 WIDLCARD_SUFFIX = ".demo.tako.sh"
 
 [envs.development]
-routes = ["tako-demo.test/foobar", "*.tako-demo.tako.test"]
+routes = ["tako-demo.tako.test/foobar", "*.tako-demo.tako.test"]
 
 [envs.production]
 routes = ["demo.tako.sh/foobar", "*.demo.tako.sh"]

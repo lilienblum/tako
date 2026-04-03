@@ -6,7 +6,7 @@ export default function fetch(req: Request) {
   const pid = process.pid;
   const servesRootForTenant = tenant !== null && (url.pathname === "/" || url.pathname === "");
 
-  if (url.pathname === "/bun" || url.pathname === "/bun/" || servesRootForTenant) {
+  if (url.pathname === "/foobar" || url.pathname === "/foobar/" || servesRootForTenant) {
     const tenantHtml = tenant ? `<p>Tenant: ${escapeHtml(tenant)}</p>` : "";
     const pidHtml = `<p>PID: ${pid}</p>`;
     const html = `<h1>Bun example for tako</h1>${tenantHtml}${pidHtml}`;
