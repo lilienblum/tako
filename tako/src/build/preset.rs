@@ -312,9 +312,10 @@ async fn resolve_by_branch(
 ) -> Result<(String, String, String), String> {
     // Check freshness — if TTL hasn't expired, use cached content
     if let Some(sha) = preset_cache::fresh_sha(repo, branch)
-        && let Some(content) = preset_cache::read_cached(repo, &sha, path) {
-            return Ok((repo.to_string(), sha, content));
-        }
+        && let Some(content) = preset_cache::read_cached(repo, &sha, path)
+    {
+        return Ok((repo.to_string(), sha, content));
+    }
 
     // Fetch from GitHub to resolve current SHA
     match fetch_preset_content_from_master_branch(repo, path).await {
@@ -326,10 +327,11 @@ async fn resolve_by_branch(
         Err(fetch_err) => {
             // Stale fallback: last known SHA for this branch
             if let Some(sha) = preset_cache::last_known_sha(repo, branch)
-                && let Some(content) = preset_cache::read_cached(repo, &sha, path) {
-                    tracing::warn!("Preset fetch failed, using stale cache: {}", fetch_err);
-                    return Ok((repo.to_string(), sha, content));
-                }
+                && let Some(content) = preset_cache::read_cached(repo, &sha, path)
+            {
+                tracing::warn!("Preset fetch failed, using stale cache: {}", fetch_err);
+                return Ok((repo.to_string(), sha, content));
+            }
             // Any cached version at all
             if let Some((sha, content)) = preset_cache::find_any_cached(repo, path) {
                 tracing::warn!("Preset fetch failed, using stale cache: {}", fetch_err);
