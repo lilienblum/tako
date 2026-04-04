@@ -26,7 +26,12 @@ export default defineConfig({
   },
 
   integrations: [
-    astroD2({ sketch: true, theme: { light: "102", dark: "200" }, pad: 40 }),
+    astroD2({
+      sketch: true,
+      theme: { light: "102", dark: "200" },
+      pad: 40,
+      skipGeneration: true,
+    }),
     sitemap(),
   ],
 });
