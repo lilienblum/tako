@@ -17,8 +17,10 @@
     "lucide-astro": "^0.556.0"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
     "@tsconfig/strictest": "catalog:dev",
     "@types/bun": "catalog:dev",
+    "satori": "^0.26.0",
     "typescript": "catalog:dev",
     "wrangler": "catalog:dev"
   }
