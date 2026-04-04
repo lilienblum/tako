@@ -264,7 +264,7 @@ jobs:
 
       - name: Install Playwright Chromium
         if: steps.changes.outputs.website == 'true'
-        run: npx playwright install --with-deps chromium
+        run: bunx playwright install --with-deps chromium
 
       - name: Build website
         if: steps.changes.outputs.website == 'true'
