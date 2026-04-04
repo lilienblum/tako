@@ -1,7 +1,7 @@
 ---
 layout: ../../layouts/BlogPostLayout.astro
 title: "Why We Don't Default to Docker (and When You Should Still Use It)"
-date: "2026-03-22"
+date: "2026-03-22T12:00"
 description: "Why we skip the Docker rebuild loop — and when containers still make sense."
 image: cd8dcd9cec6e
 ---

@@ -7,7 +7,8 @@ type: framework
 library: tako.sh
 library_version: "0.0.1"
 sources:
-  - lilienblum/tako:sdk/go
+  - lilienblum/tako:tako.go
+  - lilienblum/tako:internal
 ---
 
 # Tako SDK (`tako.sh` Go module)

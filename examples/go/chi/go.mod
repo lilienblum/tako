@@ -7,4 +7,4 @@ require (
 	tako.sh v0.0.0
 )
 
-replace tako.sh => ../../../sdk/go
+replace tako.sh => ../../..

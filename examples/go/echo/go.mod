@@ -20,4 +20,4 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 )
 
-replace tako.sh => ../../../sdk/go
+replace tako.sh => ../../..

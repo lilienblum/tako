@@ -12,7 +12,7 @@ export async function GET(context: APIContext) {
     .sort((a, b) => new Date(b.frontmatter.date).getTime() - new Date(a.frontmatter.date).getTime())
     .map((p) => ({
       title: p.frontmatter.title,
-      pubDate: new Date(p.frontmatter.date + "T00:00:00"),
+      pubDate: new Date(p.frontmatter.date),
       description: p.frontmatter.description ?? "",
       link: p.url!,
     }));

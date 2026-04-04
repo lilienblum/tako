@@ -15,7 +15,7 @@ unit-js:
     bun test --cwd sdk/javascript
 
 unit-go:
-    cd sdk/go && go test ./...
+    go test ./...
 
 workspace:
     cargo test --workspace
@@ -26,7 +26,7 @@ sdk:
     bun test --cwd sdk/javascript
 
 sdk-go:
-    cd sdk/go && go test ./...
+    go test ./...
     for dir in examples/go/*/; do echo "Building $dir..." && (cd "$dir" && go build -o /dev/null .); done
 
 cli:

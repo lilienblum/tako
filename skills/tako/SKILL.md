@@ -1,5 +1,5 @@
 ---
-name: tako-cli
+name: tako
 description: >-
   Tako CLI commands: init, dev, deploy, secrets, typegen, scale, logs,
   rollback, servers, doctor. Includes output design patterns for interactive

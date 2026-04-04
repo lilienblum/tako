@@ -29,7 +29,7 @@ Create a new markdown file at `website/src/pages/blog/{slug}.md` with this front
 ---
 layout: ../../layouts/BlogPostLayout.astro
 title: "Post Title"
-date: "YYYY-MM-DD"
+date: "YYYY-MM-DDTHH:MM"
 description: "A concise 1-2 sentence summary for SEO meta tags and social previews. Should be compelling and specific — not generic."
 image: 9q15scNA
 ---
@@ -71,7 +71,7 @@ Format:
 ---
 layout: ../../layouts/BlogPostLayout.astro
 title: "Post Title"
-date: "YYYY-MM-DD"
+date: "YYYY-MM-DDTHH:MM"
 description: "SEO description here"
 image:
 ---
@@ -99,6 +99,8 @@ Output: a single image in widescreen landscape format.
 
 The prompt should be specific to the post's topic — not generic. Describe an actual scene or metaphor that fits the content. When describing mood or feeling, phrase it as a style direction, NOT as quoted text that ChatGPT might render literally.
 
+After writing the post, copy the image prompt text (everything between the `<!-- IMAGE PROMPT` and `-->` markers, excluding the markers themselves) to the clipboard using `pbcopy`.
+
 After the user downloads the image, they run `just blog::img` which crops to 5:2 from center, converts to webp, and outputs the hash ID to put in the `image:` frontmatter field.
 
 ### Step 3 — Verify
@@ -109,7 +111,7 @@ After the user downloads the image, they run `just blog::img` which crops to 5:2
 
 ## Date
 
-Always use today's date for the post. Get today's date from the system.
+Always use today's date and current time (UTC) for the post. Format: `YYYY-MM-DDTHH:MM`. Get from the system.
 
 ## Slug
 

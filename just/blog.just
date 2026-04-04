@@ -14,7 +14,7 @@ img file="":
     fi
     mkdir -p "$root/website/public/assets/blog"
     max_w=1400
-    tmp_src=$(mktemp /tmp/blog-img-XXXXXX.png)
+    tmp_src=$(mktemp /tmp/blog-img-XXXXXX).png
     cp "$src" "$tmp_src"
     # Resize width to max if needed
     cur_w=$(sips -g pixelWidth "$tmp_src" | tail -1 | awk '{print $2}')
@@ -30,10 +30,22 @@ img file="":
         sips --cropOffset "$crop_y" 0 --cropToHeightWidth "$target_h" "$cur_w" "$tmp_src" --out "$tmp_src" >/dev/null 2>&1
     fi
     # Convert to webp
-    tmp=$(mktemp /tmp/blog-img-XXXXXX.webp)
+    tmp=$(mktemp /tmp/blog-img-XXXXXX).webp
     cwebp -q 85 "$tmp_src" -o "$tmp" >/dev/null 2>&1
     rm "$tmp_src"
     id=$(shasum -a 256 "$tmp" | cut -c1-12)
     out="$root/website/public/assets/blog/${id}.webp"
     mv "$tmp" "$out"
-    echo "$id"
+    # Find the most recent blog post and patch it
+    blog_dir="$root/website/src/pages/blog"
+    post=$(ls -t "$blog_dir"/*.md 2>/dev/null | head -1)
+    if [ -n "$post" ]; then
+        # Insert hash into image: frontmatter
+        sed -i '' 's/^image:.*$/image: '"$id"'/' "$post"
+        # Remove IMAGE PROMPT comment block
+        sed -i '' '/^<!-- IMAGE PROMPT/,/^-->/d' "$post"
+        echo "$id → $(basename "$post")"
+    else
+        echo -n "$id" | pbcopy
+        echo "$id (copied)"
+    fi

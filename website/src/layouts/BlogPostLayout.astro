@@ -59,7 +59,7 @@ const jsonLd = JSON.stringify({
 });
 
 const formatted = date
-  ? new Date(date + "T00:00:00").toLocaleDateString("en-US", {
+  ? new Date(date).toLocaleDateString("en-US", {
       year: "numeric",
       month: "long",
       day: "numeric",
@@ -95,13 +95,35 @@ const formatted = date
 </BaseLayout>
 
 <script>
-  const codes = document.querySelectorAll("code.language-mermaid");
-  if (codes.length > 0) {
-    for (const code of codes) {
-      const pre = code.parentElement!;
-      pre.classList.add("mermaid");
-      pre.textContent = code.textContent;
+  const article = document.querySelector(".blog-article");
+  if (article instanceof HTMLElement) {
+    const headings = Array.from(
+      article.querySelectorAll("h2[id], h3[id], h4[id], h5[id], h6[id]"),
+    );
+    for (const heading of headings) {
+      if (!(heading instanceof HTMLElement)) continue;
+      const id = heading.getAttribute("id");
+      if (!id) continue;
+      const anchor = document.createElement("a");
+      anchor.className = "blog-heading-anchor";
+      anchor.href = `#${id}`;
+      anchor.textContent = "#";
+      const headingText = heading.textContent?.trim();
+      anchor.setAttribute("aria-label", headingText ? `Link to section: ${headingText}` : `Link to section: ${id}`);
+      anchor.title = "Link to this section";
+      heading.append(anchor);
+      heading.classList.add("blog-clickable-heading");
+      heading.addEventListener("click", (event) => {
+        if (!(event.target instanceof Element)) return;
+        if (event.target.closest("a")) return;
+        if (window.getSelection()?.toString()) return;
+        window.location.hash = id;
+      });
     }
+  }
+
+  const codes = document.querySelectorAll("code.language-mermaid, pre[data-language='mermaid']");
+  if (codes.length > 0) {
     const { default: mermaid } = await import("mermaid");
     mermaid.initialize({
       startOnLoad: false,
@@ -128,7 +150,16 @@ const formatted = date
         nodeTextColor: "#2f2a44",
       },
     });
-    await mermaid.run();
+    let i = 0;
+    for (const el of codes) {
+      const pre = el.tagName === "PRE" ? el : el.parentElement!;
+      const text = pre.textContent ?? "";
+      const { svg } = await mermaid.render(`mermaid-${i++}`, text);
+      const wrapper = document.createElement("div");
+      wrapper.className = "mermaid";
+      wrapper.innerHTML = svg;
+      pre.replaceWith(wrapper);
+    }
   }
 </script>
 
@@ -376,5 +407,37 @@ const formatted = date
   .blog-article.content pre.mermaid svg {
     max-width: 100%;
     height: auto;
+  }
+
+  .blog-article.content :is(h2, h3, h4, h5, h6)[id] {
+    scroll-margin-top: 108px;
+  }
+
+  .blog-article.content .blog-clickable-heading {
+    cursor: pointer;
+  }
+
+  .blog-article.content .blog-clickable-heading:hover {
+    text-decoration: underline;
+    text-decoration-thickness: 2px;
+    text-underline-offset: 0.16em;
+    text-decoration-color: rgba(232, 135, 131, 0.65);
+  }
+
+  .blog-article.content .blog-heading-anchor {
+    display: inline-block;
+    margin-left: 8px;
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.7em;
+    color: var(--accent);
+    text-decoration: none;
+    opacity: 0;
+    vertical-align: middle;
+    border-bottom: none;
+    transition: opacity 0.14s ease;
+  }
+
+  .blog-article.content :is(h2, h3, h4, h5, h6)[id]:hover .blog-heading-anchor {
+    opacity: 1;
   }
 </style>
