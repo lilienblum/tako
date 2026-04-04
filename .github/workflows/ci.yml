@@ -111,6 +111,8 @@ jobs:
 
   bun:
     name: Bun
+    needs: [detect-changes]
+    if: needs.detect-changes.outputs.website_only != 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
