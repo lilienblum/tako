@@ -33,7 +33,9 @@ const rawImage = Astro.props.image ?? frontmatter.image ?? "";
 const image = rawImage ? `/assets/blog/${rawImage}.webp` : "";
 const imageAlt = Astro.props.imageAlt ?? frontmatter.imageAlt ?? title;
 const description = Astro.props.description ?? frontmatter.description ?? title;
-const ogImage = image ? new URL(image, Astro.site).href : "https://tako.sh/assets/og.png";
+const slug = Astro.url.pathname.replace(/^\/blog\//, "").replace(/\/$/, "");
+const ogPath = `/assets/blog/og/${slug}.png`;
+const ogImage = new URL(ogPath, Astro.site).href;
 const canonicalURL = new URL(Astro.url.pathname, Astro.site).href;
 
 const jsonLd = JSON.stringify({

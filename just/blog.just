@@ -1,3 +1,18 @@
+# Regenerate OG images for all blog posts
+og:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    root="{{ source_directory() }}/.."
+    blog_dir="$root/website/src/pages/blog"
+    mkdir -p "$root/website/public/assets/blog/og"
+    for post in "$blog_dir"/*.md; do
+        title=$(sed -n 's/^title: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$post" | head -1)
+        slug=$(basename "$post" .md)
+        if [ -n "$title" ]; then
+            (cd "$root/website" && bun run scripts/generate-og.ts "$title" "public/assets/blog/og/${slug}.png")
+        fi
+    done
+
 # Import a local image as blog hero (from ~/Downloads, or specify filename)
 img file="":
     #!/usr/bin/env bash
@@ -45,6 +60,13 @@ img file="":
         # Remove IMAGE PROMPT comment block
         sed -i '' '/^<!-- IMAGE PROMPT/,/^-->/d' "$post"
         echo "$id → $(basename "$post")"
+        # Generate OG image with title baked in
+        title=$(sed -n 's/^title: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$post" | head -1)
+        slug=$(basename "$post" .md)
+        if [ -n "$title" ]; then
+            mkdir -p "$root/website/public/assets/blog/og"
+            (cd "$root/website" && bun run scripts/generate-og.ts "$title" "public/assets/blog/og/${slug}.png")
+        fi
     else
         echo -n "$id" | pbcopy
         echo "$id (copied)"
