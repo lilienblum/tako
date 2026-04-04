@@ -73,6 +73,40 @@ export async function generateOgImage(title: string, outputPath: string) {
               },
             },
           },
+          // top: logo + url
+          {
+            type: "div",
+            props: {
+              style: {
+                display: "flex",
+                alignItems: "center",
+                gap: "14px",
+              },
+              children: [
+                {
+                  type: "img",
+                  props: {
+                    src: logoUri,
+                    width: 44,
+                    height: 44,
+                  },
+                },
+                {
+                  type: "div",
+                  props: {
+                    style: {
+                      fontFamily: "IBM Plex Mono",
+                      fontSize: "22px",
+                      fontWeight: 400,
+                      color: "#2F2A44",
+                      letterSpacing: "0.01em",
+                    },
+                    children: "tako.sh/blog",
+                  },
+                },
+              ],
+            },
+          },
           // title area
           {
             type: "div",
@@ -80,7 +114,6 @@ export async function generateOgImage(title: string, outputPath: string) {
               style: {
                 display: "flex",
                 flexDirection: "column",
-                gap: "0",
                 flexGrow: 1,
                 justifyContent: "center",
               },
@@ -97,40 +130,6 @@ export async function generateOgImage(title: string, outputPath: string) {
                       maxWidth: "1000px",
                     },
                     children: title,
-                  },
-                },
-              ],
-            },
-          },
-          // bottom: logo + url
-          {
-            type: "div",
-            props: {
-              style: {
-                display: "flex",
-                alignItems: "center",
-                gap: "14px",
-              },
-              children: [
-                {
-                  type: "img",
-                  props: {
-                    src: logoUri,
-                    width: 48,
-                    height: 48,
-                  },
-                },
-                {
-                  type: "div",
-                  props: {
-                    style: {
-                      fontFamily: "IBM Plex Mono",
-                      fontSize: "24px",
-                      fontWeight: 400,
-                      color: "#2F2A44",
-                      letterSpacing: "0.01em",
-                    },
-                    children: "tako.sh/blog",
                   },
                 },
               ],
