@@ -609,6 +609,16 @@ fn write_locked_preset(project_dir: &Path, resolved: &ResolvedPresetSource) -> R
     fs::write(&lock_path, json).map_err(|e| format!("Failed to write {}: {e}", lock_path.display()))
 }
 
+fn apply_github_auth(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    let token = std::env::var("GITHUB_TOKEN")
+        .or_else(|_| std::env::var("GH_TOKEN"))
+        .ok();
+    match token {
+        Some(t) => builder.header("Authorization", format!("Bearer {t}")),
+        None => builder,
+    }
+}
+
 async fn fetch_preset_content_by_commit(
     repo: &str,
     path: &str,
@@ -616,9 +626,7 @@ async fn fetch_preset_content_by_commit(
 ) -> Result<String, String> {
     let url = format!("https://raw.githubusercontent.com/{repo}/{commit}/{path}");
     let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .header("User-Agent", "tako-cli")
+    let response = apply_github_auth(client.get(url).header("User-Agent", "tako-cli"))
         .send()
         .await
         .map_err(|_e| "Failed to fetch preset".to_string())?;
@@ -642,9 +650,7 @@ async fn fetch_preset_content_from_master_branch(
         "https://api.github.com/repos/{owner}/{repository}/contents/{path}?ref={OFFICIAL_PRESET_BRANCH}"
     );
     let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .header("User-Agent", "tako-cli")
+    let response = apply_github_auth(client.get(url).header("User-Agent", "tako-cli"))
         .send()
         .await
         .map_err(|_e| "Failed to fetch preset".to_string())?;

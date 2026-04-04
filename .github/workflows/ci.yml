@@ -176,6 +176,7 @@ jobs:
         env:
           TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
           TAKO_DEV_E2E: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cd e2e/cli && sudo -E env "PATH=$PATH" bun test tests/dev.test.ts
 
   cli-macos:
@@ -224,6 +225,7 @@ jobs:
         env:
           TAKO_BIN: ${{ github.workspace }}/.e2e-bin/tako
           TAKO_DEV_E2E: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: cd e2e/cli && sudo -E env "PATH=$PATH" bun test tests/dev.test.ts
 
   links:
@@ -501,6 +503,7 @@ jobs:
       - name: Run E2E suites
         env:
           E2E_BIN_DIR: ${{ github.workspace }}/.e2e-bin
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           for fixture in $(find e2e/fixtures -mindepth 2 -maxdepth 2 -type d | sort); do
