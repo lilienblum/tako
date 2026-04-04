@@ -28,7 +28,7 @@ export default defineConfig({
   integrations: [
     astroD2({
       sketch: true,
-      theme: { light: "102", dark: "200" },
+      theme: { light: "102", dark: "102" },
       pad: 40,
       skipGeneration: true,
     }),
