@@ -315,12 +315,13 @@ cp -R "$FIXTURE_DIR" "$PROJECT_DIR"
 
 if [[ -f "$PROJECT_DIR/go.mod" ]]; then
   # ── Go fixture setup ─────────────────────────────────────────────
-  # Copy the Go SDK source so the fixture's replace directive resolves.
-  mkdir -p "$JS_WORKSPACE_DIR/sdk/go"
-  cp -R "$WORKSPACE/sdk/go/." "$JS_WORKSPACE_DIR/sdk/go/"
+  # Copy the Go SDK source (go.mod + *.go + internal/) so the fixture's replace directive resolves.
+  mkdir -p "$JS_WORKSPACE_DIR/internal"
+  cp "$WORKSPACE/go.mod" "$WORKSPACE/tako.go" "$JS_WORKSPACE_DIR/"
+  cp -R "$WORKSPACE/internal/." "$JS_WORKSPACE_DIR/internal/"
   (cd "$JS_WORKSPACE_DIR" && git init -q)
   # Rewrite the replace directive to point to the staged SDK location
-  sed -i "s|=> .*sdk/go|=> $JS_WORKSPACE_DIR/sdk/go|" "$PROJECT_DIR/go.mod"
+  sed -i "s|=> .*|=> $JS_WORKSPACE_DIR|" "$PROJECT_DIR/go.mod"
   (cd "$PROJECT_DIR" && go mod tidy 2>&1 || true)
 else
   # ── JS fixture setup ─────────────────────────────────────────────
