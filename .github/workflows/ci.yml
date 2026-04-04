@@ -73,7 +73,9 @@ jobs:
         with:
           filters: |
             go:
-              - 'sdk/go/**'
+              - 'go.mod'
+              - '*.go'
+              - 'internal/**'
               - 'examples/go/**'
 
       - name: Setup Go
@@ -85,19 +87,19 @@ jobs:
       - name: Format check
         if: steps.changes.outputs.go == 'true'
         run: |
-          test -z "$(gofmt -l sdk/go/ examples/go/)" || {
-            echo "Go files not formatted. Run: gofmt -w sdk/go/ examples/go/"
-            gofmt -l sdk/go/ examples/go/
+          test -z "$(gofmt -l . examples/go/)" || {
+            echo "Go files not formatted. Run: gofmt -w . examples/go/"
+            gofmt -l . examples/go/
             exit 1
           }
 
       - name: Vet
         if: steps.changes.outputs.go == 'true'
-        run: cd sdk/go && go vet ./...
+        run: go vet ./...
 
       - name: Test
         if: steps.changes.outputs.go == 'true'
-        run: cd sdk/go && go test ./...
+        run: go test ./...
 
       - name: Build examples
         if: steps.changes.outputs.go == 'true'
@@ -260,6 +262,10 @@ jobs:
         if: steps.changes.outputs.website == 'true'
         run: bun install --frozen-lockfile
 
+      - name: Install Playwright Chromium
+        if: steps.changes.outputs.website == 'true'
+        run: npx playwright install --with-deps chromium
+
       - name: Build website
         if: steps.changes.outputs.website == 'true'
         run: bun run --filter website build --silent
@@ -268,7 +274,7 @@ jobs:
         if: steps.changes.outputs.website == 'true'
         uses: lycheeverse/lychee-action@v2
         with:
-          args: "--root-dir website/dist --exclude 'dub\\.sh' website/dist/**/*.html"
+          args: "--root-dir website/dist --exclude 'dub\\.sh' --exclude 'pkg\\.go\\.dev' --exclude 'tako\\.sh/blog' website/dist/**/*.html"
 
   # x86_64 glibc — needed for CLI tests + E2E
   build-x86_64-glibc:
