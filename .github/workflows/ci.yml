@@ -262,9 +262,9 @@ jobs:
         if: steps.changes.outputs.website == 'true'
         run: bun install --frozen-lockfile
 
-      - name: Install Playwright Chromium
+      - name: Install D2
         if: steps.changes.outputs.website == 'true'
-        run: bunx playwright install --with-deps chromium
+        run: curl -fsSL https://d2lang.com/install.sh | sh -s --
 
       - name: Build website
         if: steps.changes.outputs.website == 'true'

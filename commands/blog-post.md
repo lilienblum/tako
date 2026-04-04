@@ -59,7 +59,7 @@ Guidelines:
 - Code examples when they clarify. Use real Tako commands/config, not pseudocode.
 - **Backlinks are mandatory.** Every post must link to at least 2-3 relevant docs pages (e.g., `/docs`, `/docs/tako-toml`, `/docs/deployment`, `/docs/cli`, `/docs/development`). Link inline where concepts are mentioned — don't save all links for the end. Also link to the GitHub repo, other blog posts, or external resources where relevant. Think of each post as an entry point that guides readers deeper into Tako's docs.
 - **Use tables for structured data.** When comparing tools, listing features, or presenting any data with multiple dimensions, use Markdown tables instead of prose or bullet lists. Tables are easier to scan and make comparisons obvious.
-- **Use Mermaid diagrams for architecture and flows.** When explaining how components connect, data flows, or multi-step processes, use ` ```mermaid ` code blocks. Keep diagrams simple — they should clarify, not overwhelm. Good uses: deploy pipelines, request routing, component relationships. Bad uses: anything that's clearer as a sentence.
+- **Use D2 diagrams for architecture and flows.** When explaining how components connect, data flows, or multi-step processes, use ` ```d2 ` code blocks. D2 renders to inline SVG at build time via `astro-d2` (sketch mode, Shirley Temple theme). Keep diagrams simple — they should clarify, not overwhelm. Good uses: deploy pipelines, request routing, component relationships. Bad uses: anything that's clearer as a sentence.
 
 ### Step 2b — Image prompt
 

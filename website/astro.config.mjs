@@ -1,7 +1,7 @@
 import { defineConfig } from "astro/config";
 import { fileURLToPath } from "node:url";
 import { SNIPPET_THEME } from "./src/config/snippet-theme.js";
-import rehypeMermaid from "rehype-mermaid";
+import astroD2 from "astro-d2";
 import sitemap from "@astrojs/sitemap";
 
 const workspaceRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -14,9 +14,7 @@ export default defineConfig({
   markdown: {
     shikiConfig: {
       theme: SNIPPET_THEME,
-      excludeLangs: ["mermaid"],
     },
-    rehypePlugins: [[rehypeMermaid, { strategy: "inline-svg" }]],
   },
 
   vite: {
@@ -27,5 +25,8 @@ export default defineConfig({
     },
   },
 
-  integrations: [sitemap()],
+  integrations: [
+    astroD2({ sketch: true, theme: { light: "102", dark: "200" }, pad: 40 }),
+    sitemap(),
+  ],
 });

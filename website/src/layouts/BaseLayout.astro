@@ -49,6 +49,9 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
       rel="stylesheet"
     />
     <style is:inline>
+      html {
+        scroll-behavior: smooth;
+      }
       :root {
         --bg: #fff9f4;
         --paper: #fffefc;
