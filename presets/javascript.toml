@@ -10,3 +10,7 @@ dev = ["vite", "dev"]
 main = "@tanstack/react-start/server-entry"
 assets = ["dist/client"]
 dev = ["vite", "dev"]
+
+[nextjs]
+main = ".next/tako-entry.mjs"
+dev = ["next", "dev"]
