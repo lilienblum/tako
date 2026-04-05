@@ -21,9 +21,9 @@
       "dev": {
         "@tsconfig/strictest": "^2.0.0",
         "@types/bun": "^1.3.11",
-        "@types/node": "^25.5.0",
+        "@types/node": "^25.5.2",
         "astro": "^6.1.2",
-        "wrangler": "^4.79.0",
+        "wrangler": "^4.80.0",
         "typescript": "^6.0.2"
       }
     }
