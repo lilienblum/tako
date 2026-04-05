@@ -222,7 +222,7 @@ Dev routes have a few constraints:
 `tako dev` resolves the dev command with this priority:
 
 1. **`dev` in `tako.toml`** -- user override (e.g. `dev = ["custom", "cmd"]`)
-2. **Preset dev command** -- framework presets like `tanstack-start` and `vite` use `vite dev`
+2. **Preset dev command** -- framework presets can replace the runtime default, for example `tanstack-start` and `vite` use `vite dev`, while `nextjs` uses `next dev`
 3. **Runtime default** -- JS runtimes run your app through the Tako SDK entrypoint, same as production. Go uses `go run .`.
 
 For JS apps, this means your `export default function fetch()` or `export default { fetch }` is automatically wrapped into an HTTP server by the SDK -- no `dev` script in `package.json` needed.

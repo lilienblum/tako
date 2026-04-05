@@ -72,7 +72,7 @@ Init walks you through setting up your project. It prompts for:
 - **App name** -- defaults to the selected config file's parent directory name, sanitized for DNS compatibility.
 - **Production route** -- the hostname your app will be served at (defaults to `{name}.example.com`).
 - **Runtime** -- detects your runtime automatically (Bun, Node, Deno, Go) and lets you confirm or override.
-- **Preset** -- fetches available presets for your runtime and lets you pick one, or use the base runtime preset. When "custom preset reference" is selected, `preset` is left commented/unset.
+- **Preset** -- fetches available presets for your runtime and lets you pick one, or use the base runtime preset. For JavaScript, that can include framework presets like `tanstack-start` or `nextjs`. When "custom preset reference" is selected, `preset` is left commented/unset.
 - **Main entrypoint** -- only prompted when neither adapter inference nor the chosen preset provides a default.
 
 The generated `tako.toml` leaves only essential options uncommented (`name`, `runtime`, `runtime_version`, `route`) with all other options included as commented examples. `runtime_version` is pinned from the locally-installed runtime version. A non-base `preset` is uncommented only when one is selected.

@@ -69,7 +69,7 @@ This is useful for running multiple configurations of the same app side by side.
 `tako dev` resolves the command to run your app in this order:
 
 1. `dev` in `tako.toml` (your override, e.g. `dev = ["custom", "cmd"]`)
-2. Preset `dev` command (e.g. the vite preset uses `vite dev`)
+2. Preset `dev` command (for example `vite`/`tanstack-start` use `vite dev`, `nextjs` uses `next dev`)
 3. Runtime default: JS runtimes run through the SDK entrypoint, Go uses `go run .`
 
 JS dev uses the same SDK entrypoint as production -- the SDK wraps your `export default function fetch()` into a proper HTTP server.
@@ -102,10 +102,11 @@ Tako validates the selected config file, resolves your app name, checks that sec
 Your app is always built on your machine, never on the server. Tako:
 
 - Copies your project into a clean workdir (respecting `.gitignore`), symlinks `node_modules/` from the original tree (JS runtimes only)
+- Restores local JS build caches like workspace `.turbo/` and app `.next/cache/` into that workdir when present
 - Runs your build commands (`[build]` or `[[build_stages]]`)
 - Merges configured asset directories into `public/`
 - Verifies the resolved entrypoint file exists in the built workspace
-- Packages the result into a deploy artifact (excluding `node_modules/` -- for JS runtimes, the server installs its own production dependencies; Go deploys a self-contained binary with no production install step)
+- Packages the result into a deploy artifact (excluding `node_modules/` and local JS build cache directories like `.turbo/` and `.next/cache` -- for JS runtimes, the server installs its own production dependencies; Go deploys a self-contained binary with no production install step)
 - Caches artifacts locally so unchanged builds are instant on subsequent deploys
 
 ### 3. Upload and Deploy

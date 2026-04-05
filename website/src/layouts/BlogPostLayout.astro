@@ -119,6 +119,13 @@ const formatted = date
         };
       })(id));
     }
+    var tables = article.querySelectorAll("table");
+    for (var j = 0; j < tables.length; j++) {
+      var wrap = document.createElement("div");
+      wrap.className = "table-scroll";
+      tables[j].parentNode.insertBefore(wrap, tables[j]);
+      wrap.appendChild(tables[j]);
+    }
   })();
 </script>
 
@@ -330,6 +337,12 @@ const formatted = date
 
   .blog-article.content strong {
     color: var(--ink);
+  }
+
+  .blog-article.content .table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    margin: 18px 0;
   }
 
   .blog-article.content table {

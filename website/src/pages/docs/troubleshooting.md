@@ -148,7 +148,7 @@ The dev daemon performs an upfront bind-availability check for port 47831 and ex
 
 Things to check:
 
-- **Preset resolution:** Make sure your `preset` value is a runtime-local alias (like `tanstack-start`), not a namespaced alias (like `js/tanstack-start`, which is rejected). `github:` refs are also not supported.
+- **Preset resolution:** Make sure your `preset` value is a runtime-local alias (like `tanstack-start` or `nextjs`), not a namespaced alias (like `js/tanstack-start`, which is rejected). `github:` refs are also not supported.
 - **Build commands:** Check your `[build].run` or `[[build_stages]]` entries. These two are mutually exclusive -- you cannot have both. Combining `[build].include`/`[build].exclude` with `[[build_stages]]` is also an error.
 - **Working directory:** If using `cwd` in `[build]` or `[[build_stages]]`, make sure the path is relative and does not escape the project root.
 - **Preset fetch:** Unpinned official aliases are fetched from `master` on each resolve. If fetch fails, resolution fails. Runtime base aliases (`bun`, `node`, `deno`, `go`) fall back to embedded defaults when missing from fetched family manifests.
@@ -160,6 +160,14 @@ Things to check:
 **Fix:** Make sure your build output creates the file specified by `main` (from `tako.toml` or the preset). For JS runtimes with preset `main` set to `index.<ext>` or `src/index.<ext>` (where ext is `ts`, `tsx`, `js`, or `jsx`), Tako checks `index.<ext>` first, then `src/index.<ext>`.
 
 If neither `tako.toml main`, manifest main (e.g. `package.json` `main`), nor preset `main` is set, deploy fails with guidance.
+
+For Next.js deploys, make sure your build is using `withTakoNextjs(...)` or otherwise writing `.next/tako-entry.mjs`. If `.next/standalone/server.js` is missing, Tako falls back to `next start`, so the installed `next` package and built `.next/` directory still need to be present.
+
+### Next.js or Turbo cache confusion
+
+**Symptom:** You see `.next/cache` or `.turbo` inside the build workdir locally and are unsure whether they deploy.
+
+**Expected behavior:** Tako restores those local caches into the temporary build workdir when present, but strips them back out of the final deploy artifact. They speed up repeated local builds and are not shipped to servers.
 
 ### Concurrent deploy already in progress
 

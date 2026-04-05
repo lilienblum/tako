@@ -46,11 +46,11 @@ Provides the TanStack Start server entry module as the entrypoint, marks `dist/c
 
 ```toml
 [nextjs]
-main = ".next/standalone/tako-entry.mjs"
+main = ".next/tako-entry.mjs"
 dev = ["next", "dev"]
 ```
 
-Uses the `tako.sh/nextjs` adapter output. The adapter generates `.next/standalone/tako-entry.mjs` after `next build`, and `tako dev` runs `next dev`.
+Uses the `tako.sh/nextjs` adapter output. The adapter generates `.next/tako-entry.mjs` after `next build`, and `tako dev` runs `next dev`. If Next emits standalone output, Tako uses it; otherwise the wrapper falls back to `next start`.
 
 ### vite
 

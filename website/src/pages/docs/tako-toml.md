@@ -110,15 +110,15 @@ Accepted values: `npm`, `pnpm`, `yarn`, `bun`. When omitted, Tako auto-detects f
 Optional app preset. Provides default `main` entrypoint and `assets` directories for framework-specific apps.
 
 ```toml
-preset = "tanstack-start"
+preset = "nextjs"
 ```
 
 When omitted, Tako uses the base preset for the selected runtime (from `runtime` or auto-detection).
 
 **Supported formats:**
 
-- Runtime-local alias: `tanstack-start` (resolved under the runtime set by `runtime`)
-- Pinned alias: `tanstack-start@abc1234def` (pinned to a specific commit hash)
+- Runtime-local alias: `tanstack-start` or `nextjs` (resolved under the runtime set by `runtime`)
+- Pinned alias: `tanstack-start@abc1234def` or `nextjs@abc1234def` (pinned to a specific commit hash)
 
 **Not supported:**
 
@@ -130,6 +130,7 @@ When omitted, Tako uses the base preset for the selected runtime (from `runtime`
 - Presets are metadata-only: they define `name`, `main`, and `assets` defaults. They do not contain build, install, start, or dev commands (though they can define a `dev` command override).
 - Preset definitions live in `presets/<language>.toml` (e.g. `presets/javascript.toml`) in the Tako repo. They are fetched from GitHub on demand and cached locally for offline use.
 - Resolved preset metadata is written to `.tako/build.lock.json` for visibility and cache-key inputs.
+- Example built-in JS presets: `tanstack-start` (`vite dev`, `@tanstack/react-start/server-entry`) and `nextjs` (`next dev`, `.next/tako-entry.mjs`).
 
 See [Presets](/docs/presets) for the full preset schema and available presets.
 
