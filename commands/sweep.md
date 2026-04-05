@@ -1,3 +1,7 @@
+---
+description: Security, performance, and code quality audit
+---
+
 # Sweep
 
 Combined security, performance, and code quality audit. Commit progress along the way.

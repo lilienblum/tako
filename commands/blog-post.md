@@ -1,3 +1,9 @@
+---
+description: Create a new blog post from a topic or idea
+---
+
+$ARGUMENTS
+
 # Blog Post
 
 Create a new blog post for the Tako website based on an idea provided by the user.

@@ -1,3 +1,7 @@
+---
+description: Resolve all pending Detail bugs
+---
+
 # Detail Bug Review
 
 Review and resolve all pending Detail bugs until the dashboard is clean.

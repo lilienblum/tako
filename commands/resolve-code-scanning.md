@@ -1,3 +1,7 @@
+---
+description: Resolve all open GitHub code scanning alerts
+---
+
 # Code Scanning Review
 
 Review and resolve all open GitHub code scanning alerts until the dashboard is clean.

@@ -1,3 +1,7 @@
+---
+description: Reconcile SPEC.md with code, then regenerate docs
+---
+
 # Spec Sync — Reconcile SPEC.md with Code, Then Regenerate Docs
 
 ## Goal
