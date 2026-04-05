@@ -508,6 +508,17 @@ jobs:
       - name: Make binaries executable
         run: chmod +x .e2e-bin/glibc/* .e2e-bin/musl/*
 
+      - name: Write E2E build stamp
+        run: |
+          set -euo pipefail
+          arch=$(uname -m)
+          head=$(git rev-parse HEAD)
+          dirty_suffix=""
+          if ! git diff --quiet --ignore-submodules HEAD --; then
+            dirty_suffix="-dirty"
+          fi
+          printf '%s-%s%s\n' "$head" "$arch" "$dirty_suffix" > .e2e-bin/.build-stamp
+
       - name: Run E2E suites
         env:
           E2E_BIN_DIR: ${{ github.workspace }}/.e2e-bin
