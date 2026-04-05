@@ -8,40 +8,25 @@ image: 33baa22b4174
 
 You just bought a VPS. Hetzner, DigitalOcean, OVH, whatever — the welcome email is still warm, and you have an IP address and an SSH key. Now you want to put an app on it: real domain, real HTTPS, rolling updates, the works.
 
-Here's the whole path, start to finish. No Docker, no YAML, no reverse proxy config files.
+Here's the whole path, start to finish. Five commands across two machines. No Docker, no YAML, no reverse proxy config files.
 
-## The five commands
+## Step 1 — Put the VPS on your tailnet
 
-```d2
-direction: right
+Before you do anything else, put the box on [Tailscale](https://tailscale.com/). This is the smartest thing you can do with a fresh VPS, and it takes about a minute:
 
-vps: Fresh VPS {
-  shape: cylinder
-}
-
-server: tako-server {
-  shape: hexagon
-}
-
-local: Your laptop {
-  shape: rectangle
-}
-
-app: Your app live {
-  shape: cloud
-}
-
-vps -> server: "1. install-server.sh"
-local -> server: "2. servers add"
-local -> server: "3. init + deploy"
-server -> app: "4. Pingora routes traffic"
+```bash
+# on the VPS, one time
+curl -fsSL https://tailscale.com/install.sh | sh
+sudo tailscale up
 ```
 
-That's the whole mental model. Two machines, four steps, one app. Let's walk through it.
+Follow the login URL, approve the device, and note the `100.x.x.x` tailnet address it's assigned. Now the VPS lives on a private network only you can reach. Close port 22 to the public internet in your provider's firewall — you'll never need it again. No fail2ban, no drive-by SSH probes, no key rotation panic.
 
-## Step 1 — Install the server runtime
+Every SSH command in the rest of this post uses that tailnet IP. `tako-server` will still bind 80 and 443 on the public interface for real traffic; only management stays private.
 
-SSH into your VPS as root and run one line:
+## Step 2 — Install the server runtime
+
+SSH into your VPS (over the tailnet) as root and run one line:
 
 ```bash
 sudo sh -c "$(curl -fsSL https://tako.sh/install-server.sh)"
@@ -51,18 +36,18 @@ The installer detects your architecture and libc (glibc or musl), downloads the 
 
 That's the entire server setup. You never have to SSH back in again.
 
-## Step 2 — Install the CLI and register the server
+## Step 3 — Install the CLI and register the server
 
 Back on your laptop:
 
 ```bash
 curl -fsSL https://tako.sh/install.sh | sh
-tako servers add 1.2.3.4 --name prod
+tako servers add 100.x.x.x
 ```
 
-[`tako servers add`](/docs/cli) tests the SSH connection, detects the target's build metadata, and records the server in your global [`config.toml`](/docs/tako-toml). It uses your existing `~/.ssh` keys — nothing new to generate.
+Pass the tailnet IP from Step 1. [`tako servers add`](/docs/cli) launches a short wizard, tests the SSH connection over the tailnet, detects the target's build metadata, and records the server in your global [`config.toml`](/docs/tako-toml). It uses your existing `~/.ssh` keys — nothing new to generate.
 
-## Step 3 — Configure your app
+## Step 4 — Configure your app
 
 From your project directory:
 
