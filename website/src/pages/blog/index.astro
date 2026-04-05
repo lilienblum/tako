@@ -163,3 +163,13 @@ const sorted = Object.values(modules)
   }
 
 </style>
+
+<script is:inline>
+  document.querySelectorAll('.blog-post-card').forEach(function(card) {
+    card.addEventListener('click', function() {
+      var title = card.querySelector('.blog-post-title')?.textContent?.trim();
+      var href = card.getAttribute('href');
+      window.posthog?.capture('blog_post_clicked', { title: title, href: href });
+    });
+  });
+</script>

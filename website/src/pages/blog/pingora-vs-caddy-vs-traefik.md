@@ -53,21 +53,28 @@ That sounds like more work. It is. But it's the right tradeoff for a deployment 
 **Full control over the request path.** When a request arrives for a scale-to-zero app, Tako needs to: check if an instance is running, start one if not, wait for the SDK readiness signal, probe the health endpoint, add it to the load balancer, then forward the request. That's not something you configure — it's something you program. Pingora's trait-based API makes each of those steps a method you implement.
 
 ```d2
-direction: right
+direction: down
 
-Request -> Pingora Proxy: incoming
+request: Incoming request
+proxy: Pingora Proxy
+route: Route Table
+lb: Load Balancer
+app: App Process
 
-Pingora Proxy -> Route Table: lookup host
-Route Table -> Pingora Proxy: app + backend
+cold: Cold start path {
+  gate: Need instance?
+  spawn: Spawn process
+  ready: "TAKO:READY:port"
 
-Pingora Proxy -> Cold Start: need instance?
-Cold Start -> Process Manager: spawn
-Process Manager -> Cold Start: "TAKO:READY:port"
-Cold Start -> Load Balancer: add backend
+  gate -> spawn -> ready
+}
 
-Pingora Proxy -> Load Balancer: pick instance
-Load Balancer -> Pingora Proxy: 127.0.0.1:port
-Pingora Proxy -> App Process: forward request
+request -> proxy: incoming
+proxy -> route: lookup host
+route -> cold.gate: app + backend
+cold.ready -> lb: add backend
+proxy -> lb: pick instance
+lb -> app: 127.0.0.1:port
 ```
 
 **Built-in caching.** Pingora ships with `pingora-cache` — an in-memory response cache with LRU eviction and cache-lock support for collapsing concurrent misses. We get upstream response caching without bolting on Varnish or writing our own.

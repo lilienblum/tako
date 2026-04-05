@@ -59,9 +59,12 @@ proxy: Loopback Proxy {
   style.font-size: 13
 }
 
-daemon: Tako Dev Daemon {
-  tls: TLS Termination
-  router: Router
+tls: TLS Termination {
+  style.font-size: 13
+}
+
+router: Route Matcher {
+  style.font-size: 13
 }
 
 app: Your App {
@@ -71,9 +74,9 @@ app: Your App {
 browser -> dns: "A query\n*.tako.test"
 dns -> browser: "127.77.0.1"
 browser -> proxy: ":443"
-proxy -> daemon.tls
-daemon.tls -> daemon.router
-daemon.router -> app
+proxy -> tls
+tls -> router
+router -> app
 ```
 
 ## What makes this different

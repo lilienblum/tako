@@ -43,18 +43,24 @@ Tako's approach is different. The SDK signals readiness explicitly:
 ```d2
 direction: down
 
-tako-server -> App + SDK: spawn (PORT=0)
+server: tako-server
+lb: Load Balancer
 
-App + SDK: {
-  Read secrets from fd 3
-  Import user code
-  Bind to port
+app: App + SDK {
+  startup: SDK startup {
+    secrets: Read secrets from fd 3
+    code: Import user code
+    bind: Bind to port
+
+    secrets -> code -> bind
+  }
 }
 
-App + SDK -> tako-server: "TAKO:READY:12345 (stdout)"
-tako-server -> App + SDK: probe /status
-tako-server -> Load Balancer: add instance
-Load Balancer -> App + SDK: route traffic
+server -> app.startup.secrets: spawn (PORT=0)
+app.startup.bind -> server: "TAKO:READY:12345"
+server -> app: probe /status
+server -> lb: add instance
+lb -> app: route traffic
 ```
 
 The new instance writes `TAKO:READY:<port>` to stdout only after it has read secrets, imported your code, and bound to a port. The server waits for that signal, runs a health probe, and only then adds the instance to the [load balancer](/docs/deployment). No dropped requests, no 502s.

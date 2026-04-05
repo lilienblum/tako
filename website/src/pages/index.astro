@@ -1086,6 +1086,7 @@ import CopyButton from "../components/CopyButton.astro";
       await navigator.clipboard.writeText(installCommand);
       setCopyButtonCopied(true);
       setCopyButtonText("copied");
+      window.posthog?.capture("install_command_copied");
       setTimeout(() => {
         setCopyButtonCopied(false);
         setCopyButtonText("copy install command");
@@ -1332,6 +1333,7 @@ import CopyButton from "../components/CopyButton.astro";
           applyFilter(null);
         } else {
           applyFilter(category);
+          window.posthog?.capture("feature_filter_applied", { category });
         }
       });
     }
@@ -1339,5 +1341,37 @@ import CopyButton from "../components/CopyButton.astro";
     if (showAllBtn) {
       showAllBtn.addEventListener("click", () => setExpanded(true));
     }
+  }
+
+  // CTA button tracking
+  for (const btn of document.querySelectorAll(".cta-section .btn, .command-actions .btn, .hero-mobile-cta .btn")) {
+    btn.addEventListener("click", () => {
+      window.posthog?.capture("cta_clicked", {
+        label: btn.textContent?.trim(),
+        href: btn.getAttribute("href"),
+      });
+    });
+  }
+
+  // Workflow step tracking
+  for (const link of document.querySelectorAll(".workflow-link")) {
+    link.addEventListener("click", () => {
+      const cmd = link.querySelector(".workflow-cmd")?.textContent?.trim();
+      window.posthog?.capture("workflow_step_clicked", {
+        command: cmd,
+        href: link.getAttribute("href"),
+      });
+    });
+  }
+
+  // Feature link tracking
+  for (const link of document.querySelectorAll(".feature-link[href]")) {
+    link.addEventListener("click", () => {
+      const title = link.querySelector(".feature-link-title")?.textContent?.trim();
+      window.posthog?.capture("feature_link_clicked", {
+        feature: title,
+        href: link.getAttribute("href"),
+      });
+    });
   }
 </script>

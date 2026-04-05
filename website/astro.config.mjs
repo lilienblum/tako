@@ -1,6 +1,7 @@
 import { defineConfig } from "astro/config";
 import { fileURLToPath } from "node:url";
 import { SNIPPET_THEME } from "./src/config/snippet-theme.js";
+import { remarkD2Theme } from "./src/remark/remark-d2-theme.js";
 import astroD2 from "astro-d2";
 import sitemap from "@astrojs/sitemap";
 
@@ -12,6 +13,7 @@ export default defineConfig({
   output: "static",
 
   markdown: {
+    remarkPlugins: [remarkD2Theme],
     shikiConfig: {
       theme: SNIPPET_THEME,
     },
@@ -27,10 +29,13 @@ export default defineConfig({
 
   integrations: [
     astroD2({
+      experimental: {
+        useD2js: true,
+      },
       sketch: true,
-      theme: { light: "102", dark: "102" },
+      theme: { default: "102", dark: false },
       pad: 40,
-      skipGeneration: true,
+      skipGeneration: false,
     }),
     sitemap(),
   ],

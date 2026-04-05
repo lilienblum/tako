@@ -268,6 +268,9 @@ const docsNav = [
           try {
             await navigator.clipboard.writeText(text);
             copyButton.classList.add("is-copied");
+            window.posthog?.capture("docs_snippet_copied", {
+              language: (pre.getAttribute("data-language") || "").toLowerCase(),
+            });
             window.setTimeout(() => {
               copyButton.classList.remove("is-copied");
             }, 1200);
@@ -282,6 +285,17 @@ const docsNav = [
         wrapper.append(copyButton);
       }
     }
+  </script>
+  <script is:inline>
+    // Track docs section navigation
+    document.querySelectorAll('.docs-nav-link').forEach(function(link) {
+      link.addEventListener('click', function() {
+        window.posthog?.capture('docs_nav_link_clicked', {
+          label: link.textContent?.trim(),
+          href: link.getAttribute('href'),
+        });
+      });
+    });
   </script>
 </BaseLayout>
 

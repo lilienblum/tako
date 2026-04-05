@@ -49,6 +49,8 @@ Tako skips all of that. You build locally, and the artifact goes straight to the
 direction: right
 
 kamal: Kamal {
+  direction: down
+
   build: Docker build
   registry: Registry
   server: Server pull
@@ -58,10 +60,14 @@ kamal: Kamal {
 }
 
 tako: Tako {
+  direction: down
+
   build: Local build
+  artifact: Build artifact
   server: Server
 
-  build -> server: SFTP
+  build -> artifact: bundle
+  artifact -> server: SFTP
 }
 ```
 

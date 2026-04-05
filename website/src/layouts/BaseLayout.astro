@@ -1,6 +1,7 @@
 ---
 import NavLinks from "../components/NavLinks.astro";
 import StarIcon from "lucide-astro/Star";
+import PostHog from "../components/posthog.astro";
 
 export interface Props {
   title?: string;
@@ -421,6 +422,7 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
       }
     </style>
     <slot name="head" />
+    <PostHog />
   </head>
   <body>
     <div class="site">
@@ -542,6 +544,18 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
             }
           }, 70);
         }, 700);
+      })();
+    </script>
+    <script is:inline>
+      (function() {
+        document.querySelectorAll('a[href*="github.com"]').forEach(function(link) {
+          link.addEventListener('click', function() {
+            window.posthog?.capture('github_clicked', {
+              href: link.getAttribute('href'),
+              location: link.closest('header') ? 'header' : 'footer',
+            });
+          });
+        });
       })();
     </script>
   </body>
