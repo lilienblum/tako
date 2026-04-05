@@ -32,6 +32,10 @@
     "./vite": {
       "types": "./dist/vite.d.mts",
       "import": "./dist/vite.mjs"
+    },
+    "./nextjs": {
+      "types": "./dist/nextjs.d.mts",
+      "import": "./dist/nextjs.mjs"
     }
   },
   "scripts": {

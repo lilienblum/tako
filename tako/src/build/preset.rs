@@ -13,6 +13,8 @@ const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const OFFICIAL_PRESET_BRANCH: &str = "master";
 const OFFICIAL_JS_GROUP_PRESETS_PATH: &str = "presets/javascript.toml";
 const OFFICIAL_GO_GROUP_PRESETS_PATH: &str = "presets/go.toml";
+const EMBEDDED_JS_GROUP_PRESETS: &str = include_str!("../../../presets/javascript.toml");
+const EMBEDDED_GO_GROUP_PRESETS: &str = include_str!("../../../presets/go.toml");
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -337,6 +339,18 @@ async fn resolve_by_branch(
                 tracing::warn!("Preset fetch failed, using stale cache: {}", fetch_err);
                 return Ok((repo.to_string(), sha, content));
             }
+            if let Some(content) = embedded_group_manifest_content(path) {
+                tracing::warn!(
+                    "Preset fetch failed, using embedded group manifest for {}: {}",
+                    path,
+                    fetch_err
+                );
+                return Ok((
+                    repo.to_string(),
+                    "embedded".to_string(),
+                    content.to_string(),
+                ));
+            }
             Err(fetch_err)
         }
     }
@@ -361,6 +375,14 @@ fn official_group_manifest_path(group: PresetGroup) -> Option<&'static str> {
         PresetGroup::Js => Some(OFFICIAL_JS_GROUP_PRESETS_PATH),
         PresetGroup::Go => Some(OFFICIAL_GO_GROUP_PRESETS_PATH),
         PresetGroup::Unknown => None,
+    }
+}
+
+fn embedded_group_manifest_content(path: &str) -> Option<&'static str> {
+    match path {
+        OFFICIAL_JS_GROUP_PRESETS_PATH => Some(EMBEDDED_JS_GROUP_PRESETS),
+        OFFICIAL_GO_GROUP_PRESETS_PATH => Some(EMBEDDED_GO_GROUP_PRESETS),
+        _ => None,
     }
 }
 
@@ -811,6 +833,46 @@ mod tests {
     }
 
     #[test]
+    fn embedded_group_manifest_content_supports_known_group_paths() {
+        assert!(embedded_group_manifest_content("presets/javascript.toml").is_some());
+        assert!(embedded_group_manifest_content("presets/go.toml").is_some());
+        assert!(embedded_group_manifest_content("presets/unknown.toml").is_none());
+    }
+
+    #[test]
+    fn embedded_javascript_group_manifest_includes_nextjs() {
+        let preset = parse_official_alias_preset_content(
+            "javascript/nextjs",
+            "presets/javascript.toml",
+            embedded_group_manifest_content("presets/javascript.toml")
+                .expect("embedded javascript manifest should exist"),
+        )
+        .expect("embedded javascript manifest should parse nextjs preset");
+        assert_eq!(preset.name, "nextjs");
+        assert_eq!(preset.main.as_deref(), Some(".next/tako-entry.mjs"));
+        assert_eq!(preset.dev, vec!["next", "dev"]);
+    }
+
+    #[test]
+    fn fetched_group_manifest_missing_preset_still_errors() {
+        let fetched_content = r#"
+[vite]
+dev = ["vite", "dev"]
+"#;
+
+        let error = parse_resolved_preset_from_content(
+            &PresetReference::OfficialAlias {
+                name: "javascript/nextjs".to_string(),
+                commit: None,
+            },
+            "presets/javascript.toml",
+            fetched_content,
+        )
+        .expect_err("fetched manifest should not contain nextjs");
+        assert!(error.contains("Preset 'nextjs' was not found"));
+    }
+
+    #[test]
     fn parse_group_manifest_preset_names_collects_sorted_sections() {
         let names = parse_group_manifest_preset_names(
             "presets/javascript.toml",
@@ -881,6 +943,24 @@ assets = ["dist/client"]
         assert_eq!(preset.name, "tanstack-start");
         assert_eq!(preset.main.as_deref(), Some("dist/server/tako-entry.mjs"));
         assert_eq!(preset.assets, vec!["dist/client"]);
+    }
+
+    #[test]
+    fn nextjs_preset_parses_from_group_manifest() {
+        let content = r#"
+[nextjs]
+main = ".next/tako-entry.mjs"
+dev = ["next", "dev"]
+"#;
+        let preset = parse_official_alias_preset_content(
+            "javascript/nextjs",
+            "presets/javascript.toml",
+            content,
+        )
+        .unwrap();
+        assert_eq!(preset.name, "nextjs");
+        assert_eq!(preset.main.as_deref(), Some(".next/tako-entry.mjs"));
+        assert_eq!(preset.dev, vec!["next", "dev"]);
     }
 
     #[test]

@@ -1,0 +1,17 @@
+{
+  "name": "nextjs-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^16.2.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tako.sh": "*"
+  },
+  "packageManager": "bun@1.3.11"
+}

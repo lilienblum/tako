@@ -55,6 +55,33 @@ main = "dist/server/tako-entry.mjs"
 
 If your app uses Vite or another JS workspace tool behind package scripts, keep using this plugin. Tako's JS defaults run the runtime lane's `dev` / `build` scripts, so those scripts are the right place to call `vp`, `turbo`, or similar tools.
 
+## Next.js Adapter
+
+Use the Next.js helper to enable standalone output plus the Tako adapter:
+
+```ts
+import { withTako } from "tako.sh/nextjs";
+
+export default withTako({
+  // your existing Next config
+});
+```
+
+On build, the adapter:
+
+- forces `output: "standalone"`
+- writes `.next/tako-entry.mjs`
+- copies `public/` and `.next/static/` into `.next/standalone/` when Next emits standalone output
+
+The generated wrapper prefers `.next/standalone/server.js` when it exists. If Next does not emit standalone output for the current build pipeline, the wrapper falls back to spawning `next start` against the built `.next/` directory.
+
+For Tako projects using the `nextjs` preset, the generated deploy entrypoint is:
+
+```toml
+preset = "nextjs"
+# main defaults to .next/tako-entry.mjs
+```
+
 ## Build and Test
 
 ```bash

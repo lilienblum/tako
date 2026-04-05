@@ -199,7 +199,7 @@ When desired instances is `0`, Tako enters on-demand mode. This is the default f
 - After the idle timeout (default: 5 minutes), the instance shuts down.
 - The next request triggers a cold start -- Tako spins up an instance and holds the request until it is healthy (up to 30 seconds). If no healthy instance is ready before timeout, the proxy returns `504 App startup timed out`.
 - If cold start setup fails before readiness, the proxy returns `502 App failed to start`.
-- While a cold start is in progress, additional requests queue up (up to 100 by default). If the queue is full, the proxy returns `503 App startup queue is full` with a `Retry-After: 1` header.
+- While a cold start is in progress, additional requests queue up (up to 1000 by default). If the queue is full, the proxy returns `503 App startup queue is full` with a `Retry-After: 1` header.
 
 Scaling to zero keeps costs low for apps with intermittent traffic.
 

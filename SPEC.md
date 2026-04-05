@@ -49,7 +49,7 @@ main = "server/index.mjs"   # Optional override; required only when preset does 
 runtime = "bun"              # Optional override; defaults to detected adapter
 runtime_version = "1.2.3"   # Optional pinned version; auto-detected if omitted
 package_manager = "bun"      # Optional override; auto-detected from package.json or lockfiles
-preset = "tanstack-start"   # Optional app preset; provides `main` and `assets` defaults
+preset = "tanstack-start"   # Optional app preset; provides `main`, `assets`, and `dev` defaults
 dev = ["vite", "dev"]        # Optional custom dev command override
 assets = ["dist/client"]     # Optional asset directories for deploy artifact
 
@@ -118,17 +118,19 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Top-level `runtime` is optional; when set to `bun`, `node`, `deno`, or `go`, it overrides adapter detection for default preset selection in `tako deploy`/`tako dev`.
 - Top-level `runtime_version` is optional; when set (e.g. `"1.2.3"`), deploy uses it directly instead of auto-detecting with `<runtime> --version`. `tako init` pins the locally-installed version by default.
 - Top-level `package_manager` is optional; when set (e.g. `"npm"`, `"pnpm"`, `"yarn"`, `"bun"`), it overrides auto-detection from `package.json` `packageManager` field or lockfiles.
-- Top-level `preset` is optional. Presets are metadata-only (`name`, `main`, `assets`) providing entrypoint and asset defaults. They do not contain build, install, start, or dev commands.
+- Top-level `preset` is optional. Presets are metadata-only (`name`, `main`, `assets`, `dev`) providing entrypoint, asset, and dev-command defaults. They do not contain build, install, or start commands.
 - Top-level `dev` is optional; when set (e.g. `["vite", "dev"]`), it overrides both preset and runtime default dev commands for `tako dev`.
 - Top-level `assets` is optional; lists asset directories to include in the deploy artifact (e.g. `["dist/client"]`). Asset roots are preset `assets` plus top-level `assets` (deduplicated).
 - `preset` supports:
-  - runtime-local aliases: `tanstack-start` (resolved under selected runtime, e.g. `runtime = "bun"`)
-  - pinned runtime-local aliases: `tanstack-start@<commit-hash>`
+  - runtime-local aliases: `tanstack-start`, `nextjs` (resolved under selected runtime, e.g. `runtime = "bun"`)
+  - pinned runtime-local aliases: `tanstack-start@<commit-hash>`, `nextjs@<commit-hash>`
 - namespaced preset aliases in `tako.toml` (for example `js/tanstack-start`) are rejected; choose runtime via top-level `runtime` and keep `preset` runtime-local.
 - `github:` preset references are not supported in `tako.toml`.
 - Preset definitions live in `presets/<language>.toml` (for example `presets/javascript.toml`), where each preset is a section (`[tanstack-start]`, etc.). Each section contains `name` (optional, fallback: section name), `main`, `assets`, and `dev` (custom dev command). Presets are fetched from GitHub on demand and cached locally; the first fetch requires network connectivity, subsequent uses work offline via the cache.
 - `tanstack-start` preset defaults `main = "@tanstack/react-start/server-entry"`, `assets = ["dist/client"]`, and `dev = ["vite", "dev"]`.
+- `nextjs` preset defaults `main = ".next/tako-entry.mjs"` and `dev = ["next", "dev"]`.
 - `vite` preset defaults `dev = ["vite", "dev"]` for projects using Vite as their dev server.
+- Deploy restores local JS build caches from workspace-root `.turbo/` and app-root `.next/cache/` into the temporary build workspace when present, then excludes those cache directories from the final deploy artifact.
 - Runtime behavior (install commands, launch args, entrypoint resolution) lives in runtime plugins (`tako-runtime/src/plugins/`), not in presets.
 - `tako init` installs the `tako.sh` SDK via the selected runtime's package-manager `add` command.
 - Server membership is declared per environment with `[envs.<name>].servers`.
@@ -176,7 +178,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Desired instances `0`: On-demand with scale-to-zero. Deploy keeps one warm instance running so the app is immediately reachable after deploy. Instances are stopped after idle timeout.
   - Once scaled to zero, the next request triggers a cold start and waits for readiness up to startup timeout (default 30 seconds). If no healthy instance is ready before timeout, proxy returns `504 App startup timed out`.
   - If cold start setup fails before readiness, proxy returns `502 App failed to start`.
-  - While a cold start is already in progress, requests are queued up to 100 waiters per app (default). If the queue is full, proxy returns `503 App startup queue is full` with `Retry-After: 1`.
+  - While a cold start is already in progress, requests are queued up to 1000 waiters per app (default). If the queue is full, proxy returns `503 App startup queue is full` with `Retry-After: 1`.
   - If warm-instance startup fails during deploy, deploy fails.
 - Desired instances `N` (`N > 0`): keep at least `N` instances running on that server.
 - `idle_timeout`: Applies per-instance (default 300s / 5 minutes)
@@ -1531,6 +1533,18 @@ import { tako } from "tako.sh/vite";
 - During `vite dev`, when `PORT` is set, it binds Vite to `127.0.0.1:$PORT` with `strictPort: true`.
 - Deploy does not read Vite metadata files.
 - To use the generated wrapper as deploy entry, set `main` in `tako.toml` to the generated file (for example `dist/server/tako-entry.mjs`) or define preset top-level `main`.
+
+### Next.js Adapter
+
+```typescript
+import { withTako } from "tako.sh/nextjs";
+```
+
+- `tako.sh/nextjs` provides `withTako()`, a helper that sets `output = "standalone"` and points `adapterPath` at the installed Tako adapter.
+- On build, the adapter writes `.next/tako-entry.mjs`.
+- If Next emits `.next/standalone/server.js`, the adapter copies `public/` and `.next/static/` into `.next/standalone/` so that standalone server can serve them.
+- If standalone output is not emitted, the generated wrapper falls back to `next start` against the built `.next/` directory and installed `next` package.
+- The generated `tako-entry.mjs` exports a fetch handler that proxies requests to the standalone `server.js`.
 
 ### Feature Overview
 

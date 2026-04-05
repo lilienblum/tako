@@ -16,6 +16,7 @@ From repo root:
 
 ```bash
 just e2e e2e/fixtures/javascript/bun
+just e2e e2e/fixtures/javascript/nextjs
 just e2e e2e/fixtures/javascript/tanstack-start
 ```
 

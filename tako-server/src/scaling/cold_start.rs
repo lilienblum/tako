@@ -18,7 +18,7 @@ impl Default for ColdStartConfig {
     fn default() -> Self {
         Self {
             startup_timeout: Duration::from_secs(30),
-            max_queued_requests: 100,
+            max_queued_requests: 1000,
         }
     }
 }
@@ -212,7 +212,7 @@ mod tests {
     fn test_cold_start_config_defaults() {
         let config = ColdStartConfig::default();
         assert_eq!(config.startup_timeout, Duration::from_secs(30));
-        assert_eq!(config.max_queued_requests, 100);
+        assert_eq!(config.max_queued_requests, 1000);
     }
 
     #[test]

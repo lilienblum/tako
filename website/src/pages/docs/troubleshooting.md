@@ -161,7 +161,7 @@ Things to check:
 
 If neither `tako.toml main`, manifest main (e.g. `package.json` `main`), nor preset `main` is set, deploy fails with guidance.
 
-For Next.js deploys, make sure your build is using `withTakoNextjs(...)` or otherwise writing `.next/tako-entry.mjs`. If `.next/standalone/server.js` is missing, Tako falls back to `next start`, so the installed `next` package and built `.next/` directory still need to be present.
+For Next.js deploys, make sure your build is using `withTako(...)` from `tako.sh/nextjs` or otherwise writing `.next/tako-entry.mjs`. If `.next/standalone/server.js` is missing, Tako falls back to `next start`, so the installed `next` package and built `.next/` directory still need to be present.
 
 ### Next.js or Turbo cache confusion
 
@@ -242,7 +242,7 @@ When the desired instance count is `0` (scale-to-zero mode), a deploy still star
 
 - **504 App startup timed out:** The app scaled to zero and cold start did not become healthy within the startup timeout (30 seconds by default). Check startup logs and health probe readiness.
 - **502 App failed to start:** Cold start failed before the app reached a healthy state. Check the runtime command, startup errors, and app dependencies.
-- **503 App startup queue is full:** A cold start is already in progress and concurrent startup waiters exceeded the queue limit (100 per app by default). Retry shortly (the response includes `Retry-After: 1`), or keep at least one warm instance with `tako scale 1` for bursty traffic.
+- **503 App startup queue is full:** A cold start is already in progress and concurrent startup waiters exceeded the queue limit (1000 per app by default). Retry shortly (the response includes `Retry-After: 1`), or keep at least one warm instance with `tako scale 1` for bursty traffic.
 
 ### Process crash recovery
 

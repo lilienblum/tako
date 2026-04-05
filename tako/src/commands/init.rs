@@ -1556,7 +1556,7 @@ mod tests {
     fn build_preset_selection_options_includes_presets_and_custom_mode() {
         let options = build_preset_selection_options(
             BuildAdapter::Node,
-            &["tanstack-start".to_string(), "next-start".to_string()],
+            &["tanstack-start".to_string(), "nextjs".to_string()],
         )
         .expect("options should be available");
 
@@ -1570,7 +1570,7 @@ mod tests {
         );
         assert_eq!(
             options[1],
-            ("next-start".to_string(), Some("next-start".to_string()))
+            ("nextjs".to_string(), Some("nextjs".to_string()))
         );
         assert_eq!(options[2], ("custom".to_string(), None));
     }

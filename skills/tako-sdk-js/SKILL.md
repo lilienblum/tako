@@ -2,7 +2,7 @@
 name: tako-sdk
 description: >-
   tako.sh SDK: fetch handler interface, Tako class for secrets and build info,
-  Vite plugin for SSR frameworks, types reference.
+  Vite and Next.js adapters for framework builds, types reference.
 type: framework
 library: tako.sh
 library_version: "0.0.1"
@@ -16,7 +16,7 @@ Runtime SDK for JavaScript/TypeScript apps deployed with Tako.
 
 > **CRITICAL**: The `tako.sh` package is **required** — it provides the entrypoint binaries (`tako-bun`, `tako-node`, `tako-deno`) that tako-server launches to run your app. Your app exports a standard fetch handler `(Request, env) => Response`, but importing the `Tako` class is optional.
 
-> **CRITICAL**: The Vite plugin (`tako.sh/vite`) is only for SSR/server framework builds (e.g. TanStack Start, Nuxt, SolidStart). Plain fetch-handler apps do not need it.
+> **CRITICAL**: Framework helpers are opt-in. Use `tako.sh/vite` for Vite-based SSR frameworks (TanStack Start, Nuxt, SolidStart) and `tako.sh/nextjs` for Next.js standalone builds. Plain fetch-handler apps do not need either helper.
 
 ## Core Concept: The Fetch Handler
 
@@ -53,10 +53,11 @@ export default {
 
 ## Package Exports
 
-| Import path    | Purpose                    | Key exports              |
-| -------------- | -------------------------- | ------------------------ |
-| `tako.sh`      | Core utilities             | `Tako` class, types      |
-| `tako.sh/vite` | Vite plugin for SSR builds | `tako()` plugin function |
+| Import path      | Purpose                              | Key exports                                                         |
+| ---------------- | ------------------------------------ | ------------------------------------------------------------------- |
+| `tako.sh`        | Core utilities                       | `Tako` class, types                                                 |
+| `tako.sh/vite`   | Vite plugin for SSR builds           | `tako()` plugin function                                            |
+| `tako.sh/nextjs` | Next.js standalone adapter + wrapper | `withTako()`, `createNextjsAdapter()`, `createNextjsFetchHandler()` |
 
 ## Tako Class
 
@@ -110,6 +111,29 @@ export default defineConfig({
 
 **On `vite dev`:** Adds `.tako.test` to allowed hosts. If `PORT` env var is set, binds Vite to `127.0.0.1:$PORT` with `strictPort: true` (used by `tako dev`).
 
+## Next.js Adapter
+
+For Next.js standalone builds:
+
+```typescript
+// next.config.mjs
+import { withTako } from "tako.sh/nextjs";
+
+export default withTako({});
+```
+
+`withTako()` sets `output = "standalone"` and points `adapterPath` at the Tako adapter shipped in the SDK.
+
+On `next build`, the adapter:
+
+- copies `public/` into `.next/standalone/public/` when standalone output exists
+- copies `.next/static/` into `.next/standalone/.next/static/` when standalone output exists
+- writes `.next/tako-entry.mjs`
+
+The generated wrapper prefers `.next/standalone/server.js` when it exists. Otherwise it falls back to `next start`.
+
+Point your Tako deploy `main` at `.next/tako-entry.mjs`, or use the `nextjs` preset so that default is provided for you.
+
 ## Types
 
 ```typescript
@@ -140,7 +164,19 @@ interface TakoStatus {
 // For plain apps, just export a fetch handler and set main in tako.toml
 ```
 
-### 2. HIGH: Serializing the secrets object
+### 2. HIGH: Forgetting the Next.js helper for standalone deploys
+
+```typescript
+// WRONG — plain Next config without the Tako helper
+export default {};
+
+// CORRECT — let Tako configure standalone output and adapterPath
+import { withTako } from "tako.sh/nextjs";
+
+export default withTako({});
+```
+
+### 3. HIGH: Serializing the secrets object
 
 ```typescript
 // WRONG — bulk access is redacted

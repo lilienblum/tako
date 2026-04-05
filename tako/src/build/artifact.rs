@@ -377,9 +377,14 @@ pub fn create_workdir_archive(
 }
 
 fn should_workdir_force_exclude(relative_path: &Path) -> bool {
+    let mut previous_component: Option<&str> = None;
     for component in relative_path.components() {
         if let Component::Normal(name) = component {
-            match name.to_str() {
+            let component_name = name.to_str();
+            if previous_component == Some(".next") && component_name == Some("cache") {
+                return true;
+            }
+            match component_name {
                 // Version control & project meta
                 Some(".git") | Some(".tako") => return true,
                 // Dependencies & package caches
@@ -399,6 +404,7 @@ fn should_workdir_force_exclude(relative_path: &Path) -> bool {
                 Some(name) if name.starts_with(".env") => return true,
                 _ => {}
             }
+            previous_component = component_name;
         }
     }
     if let Some(ext) = relative_path.extension().and_then(|e| e.to_str())
@@ -553,6 +559,29 @@ mod tests {
             !dest.join("README.md").exists(),
             "non-included file should be absent"
         );
+    }
+
+    #[test]
+    fn workdir_archive_excludes_next_cache_and_turbo() {
+        let temp = TempDir::new().unwrap();
+        let workdir = temp.path().join("workdir");
+        let archive = temp.path().join("out.tar.zst");
+        let dest = temp.path().join("dest");
+
+        fs::create_dir_all(workdir.join(".next/cache")).unwrap();
+        fs::create_dir_all(workdir.join(".next/static")).unwrap();
+        fs::create_dir_all(workdir.join(".turbo")).unwrap();
+        fs::write(workdir.join(".next/cache/fetch-cache"), "cache").unwrap();
+        fs::write(workdir.join(".next/static/chunk.js"), "static").unwrap();
+        fs::write(workdir.join(".turbo/state.json"), "turbo").unwrap();
+        fs::write(workdir.join("app.json"), r#"{"main":"index.ts"}"#).unwrap();
+
+        create_workdir_archive(&workdir, &archive, &[String::from("**/*")], &[]).unwrap();
+
+        BuildExecutor::extract_archive(&archive, &dest).unwrap();
+        assert!(dest.join(".next/static/chunk.js").exists());
+        assert!(!dest.join(".next/cache/fetch-cache").exists());
+        assert!(!dest.join(".turbo/state.json").exists());
     }
 
     #[cfg(unix)]

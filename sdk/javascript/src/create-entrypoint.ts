@@ -12,7 +12,7 @@ import { readFileSync, closeSync, fstatSync } from "node:fs";
 import { handleTakoEndpoint } from "./endpoints";
 import { injectSecrets } from "./secrets";
 import { Tako } from "./tako";
-import type { FetchFunction, TakoStatus } from "./types";
+import type { FetchFunction, ReadyableFetchHandler, TakoStatus } from "./types";
 
 function readSecretsFromFd(): void {
   try {
@@ -110,23 +110,40 @@ export function createEntrypoint() {
     console.log("Starting application");
 
     let userFetch: FetchFunction;
+    let userReady: (() => void | Promise<void>) | null = null;
     try {
       const module = await import(parsed.main);
       const defaultExport = module.default;
       if (typeof defaultExport === "function") {
-        userFetch = defaultExport as FetchFunction;
+        const readyable = defaultExport as ReadyableFetchHandler;
+        userFetch = readyable;
+        if (typeof readyable.ready === "function") {
+          userReady = () => readyable.ready?.();
+        }
       } else if (
         defaultExport &&
         typeof defaultExport === "object" &&
         typeof defaultExport.fetch === "function"
       ) {
         userFetch = defaultExport.fetch as FetchFunction;
+        if (typeof defaultExport.ready === "function") {
+          userReady = () => defaultExport.ready();
+        }
       } else {
         throw new Error("App must export a default fetch function or { fetch } object.");
       }
     } catch (err) {
       console.error(`Failed to import app from ${parsed.main}:`, err);
       process.exit(1);
+    }
+
+    if (userReady) {
+      try {
+        await userReady();
+      } catch (err) {
+        console.error(`Failed to initialize app readiness from ${parsed.main}:`, err);
+        process.exit(1);
+      }
     }
 
     Tako.getInstance();

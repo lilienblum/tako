@@ -35,6 +35,7 @@ fn on_demand_cold_start_and_idle_scale_to_zero() {
 
 fn run_on_demand_case() -> Result<(), String> {
     let server = TestServer::start();
+    let app_id = "test-app/production";
     let app_dir = server
         .data_dir()
         .join("apps")
@@ -65,7 +66,7 @@ fn run_on_demand_case() -> Result<(), String> {
     let warm_ok = wait_for(Duration::from_secs(10), || {
         let resp = server.send_command(&serde_json::json!({
             "command": "status",
-            "app": "test-app",
+            "app": app_id,
         }));
         warm_status = resp.clone();
         resp.get("data")
@@ -108,7 +109,7 @@ fn run_on_demand_case() -> Result<(), String> {
     let idle_ok = wait_for(Duration::from_secs(30), || {
         let resp = server.send_command(&serde_json::json!({
             "command": "status",
-            "app": "test-app",
+            "app": app_id,
         }));
         status_snapshot = resp.clone();
         let Some(data) = resp.get("data") else {

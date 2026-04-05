@@ -9,7 +9,7 @@ use super::BuildPhaseResult;
 use super::cache::{
     ArtifactCachePaths, artifact_cache_paths, artifact_cache_temp_path,
     cleanup_local_artifact_cache, cleanup_local_build_workspaces, load_valid_cached_artifact,
-    persist_cached_artifact, remove_cached_artifact_files,
+    persist_cached_artifact, remove_cached_artifact_files, sanitize_cache_label,
 };
 use super::format::{
     format_artifact_cache_hit_message_for_output, format_artifact_cache_invalid_message,
@@ -26,8 +26,32 @@ use super::manifest::{
 use super::task_tree::{ArtifactBuildGroup, DeployTaskTreeController};
 
 pub(super) const LOCAL_BUILD_WORKSPACE_RELATIVE_DIR: &str = ".tako/tmp/workspaces";
+pub(super) const LOCAL_BUILD_CACHE_RELATIVE_DIR: &str = ".tako/tmp/build-caches";
 pub(super) const RUNTIME_VERSION_OUTPUT_FILE: &str = ".tako-runtime-version";
 pub(super) const LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS: usize = 90;
+
+#[derive(Clone, Copy)]
+enum LocalBuildCacheScope {
+    Workspace,
+    App,
+}
+
+#[derive(Clone, Copy)]
+struct LocalBuildCacheSpec {
+    relative_path: &'static str,
+    scope: LocalBuildCacheScope,
+}
+
+const JS_LOCAL_BUILD_CACHE_SPECS: &[LocalBuildCacheSpec] = &[
+    LocalBuildCacheSpec {
+        relative_path: ".turbo",
+        scope: LocalBuildCacheScope::Workspace,
+    },
+    LocalBuildCacheSpec {
+        relative_path: ".next/cache",
+        scope: LocalBuildCacheScope::App,
+    },
+];
 
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn prepare_build_phase(
@@ -374,6 +398,92 @@ pub(super) fn normalize_asset_root(asset_root: &str) -> Result<String, String> {
     Ok(trimmed.replace('\\', "/"))
 }
 
+fn local_build_cache_specs(runtime_adapter: BuildAdapter) -> &'static [LocalBuildCacheSpec] {
+    if runtime_adapter.preset_group() == PresetGroup::Js {
+        JS_LOCAL_BUILD_CACHE_SPECS
+    } else {
+        &[]
+    }
+}
+
+fn local_build_cache_root(project_dir: &Path, cache_target_label: &str) -> PathBuf {
+    project_dir
+        .join(LOCAL_BUILD_CACHE_RELATIVE_DIR)
+        .join(sanitize_cache_label(cache_target_label))
+}
+
+fn restore_local_build_caches(
+    cache_root: &Path,
+    workspace_root: &Path,
+    app_dir: &Path,
+    runtime_adapter: BuildAdapter,
+) -> Result<usize, String> {
+    let mut restored = 0usize;
+    for spec in local_build_cache_specs(runtime_adapter) {
+        let source = cache_root.join(spec.relative_path);
+        if !source.is_dir() {
+            continue;
+        }
+        let destination = local_build_cache_destination(spec, workspace_root, app_dir);
+        replace_directory_from_cache(&source, &destination)?;
+        restored += 1;
+    }
+    Ok(restored)
+}
+
+fn persist_local_build_caches(
+    cache_root: &Path,
+    workspace_root: &Path,
+    app_dir: &Path,
+    runtime_adapter: BuildAdapter,
+) -> Result<usize, String> {
+    let mut persisted = 0usize;
+    for spec in local_build_cache_specs(runtime_adapter) {
+        let source = local_build_cache_destination(spec, workspace_root, app_dir);
+        if !source.is_dir() {
+            continue;
+        }
+        let destination = cache_root.join(spec.relative_path);
+        replace_directory_from_cache(&source, &destination)?;
+        persisted += 1;
+    }
+    Ok(persisted)
+}
+
+fn local_build_cache_destination(
+    spec: &LocalBuildCacheSpec,
+    workspace_root: &Path,
+    app_dir: &Path,
+) -> PathBuf {
+    match spec.scope {
+        LocalBuildCacheScope::Workspace => workspace_root.join(spec.relative_path),
+        LocalBuildCacheScope::App => app_dir.join(spec.relative_path),
+    }
+}
+
+fn replace_directory_from_cache(source: &Path, destination: &Path) -> Result<(), String> {
+    remove_path_if_exists(destination)?;
+    std::fs::create_dir_all(destination)
+        .map_err(|e| format!("Failed to create {}: {e}", destination.display()))?;
+    copy_dir_contents(source, destination)
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("Failed to stat {}: {error}", path.display())),
+    };
+
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        std::fs::remove_file(path)
+            .map_err(|e| format!("Failed to remove {}: {e}", path.display()))?;
+        return Ok(());
+    }
+
+    std::fs::remove_dir_all(path).map_err(|e| format!("Failed to remove {}: {e}", path.display()))
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn build_target_artifacts(
     project_dir: &Path,
@@ -401,6 +511,7 @@ async fn build_target_artifacts(
     for target_group in target_groups.iter().cloned() {
         let build_target_label = target_group.build_target_label;
         let cache_target_label = target_group.cache_target_label;
+        let build_cache_root = local_build_cache_root(project_dir, &cache_target_label);
         let display_target_label = target_group.display_target_label.as_deref();
         let tree_target_label = display_target_label.unwrap_or("shared target").to_string();
         let use_local_build_spinners =
@@ -429,6 +540,30 @@ async fn build_target_artifacts(
             Ok(rel) if !rel.as_os_str().is_empty() => workspace.join(rel),
             _ => workspace.clone(),
         };
+
+        match restore_local_build_caches(
+            &build_cache_root,
+            &workspace,
+            &app_dir_in_workspace,
+            runtime_adapter,
+        ) {
+            Ok(restored) if restored > 0 => {
+                tracing::debug!(
+                    "Restored {} local build cache director{} for {}",
+                    restored,
+                    if restored == 1 { "y" } else { "ies" },
+                    cache_target_label
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(
+                    "Failed to restore local build caches for {}: {}",
+                    cache_target_label,
+                    error
+                );
+            }
+        }
 
         // Write app.json at the workdir root (project dir = archive root).
         {
@@ -629,6 +764,29 @@ async fn build_target_artifacts(
                 )?;
             }
             save_runtime_version_to_manifest(&workspace, &runtime_version)?;
+            match persist_local_build_caches(
+                &build_cache_root,
+                &workspace,
+                &app_dir_in_workspace,
+                runtime_adapter,
+            ) {
+                Ok(persisted) if persisted > 0 => {
+                    tracing::debug!(
+                        "Saved {} local build cache director{} for {}",
+                        persisted,
+                        if persisted == 1 { "y" } else { "ies" },
+                        cache_target_label
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(
+                        "Failed to persist local build caches for {}: {}",
+                        cache_target_label,
+                        error
+                    );
+                }
+            }
             tracing::debug!("{}", format_build_completed_message(display_target_label));
 
             let prepare_label = format_prepare_artifact_message(display_target_label);
@@ -1431,6 +1589,74 @@ mod tests {
 
         let err = merge_assets_locally(&workspace, &["missing".to_string()]).unwrap_err();
         assert!(err.contains("not found after build"));
+    }
+
+    #[test]
+    fn restore_local_build_caches_copies_workspace_and_app_scoped_directories() {
+        let temp = TempDir::new().unwrap();
+        let cache_root = temp.path().join("cache");
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+
+        std::fs::create_dir_all(cache_root.join(".turbo")).unwrap();
+        std::fs::create_dir_all(cache_root.join(".next/cache")).unwrap();
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(cache_root.join(".turbo/state.json"), "workspace-cache").unwrap();
+        std::fs::write(cache_root.join(".next/cache/fetch-cache"), "app-cache").unwrap();
+
+        let restored =
+            restore_local_build_caches(&cache_root, &workspace, &app_dir, BuildAdapter::Node)
+                .unwrap();
+
+        assert_eq!(restored, 2);
+        assert_eq!(
+            std::fs::read_to_string(workspace.join(".turbo/state.json")).unwrap(),
+            "workspace-cache"
+        );
+        assert_eq!(
+            std::fs::read_to_string(app_dir.join(".next/cache/fetch-cache")).unwrap(),
+            "app-cache"
+        );
+    }
+
+    #[test]
+    fn persist_local_build_caches_overwrites_stale_entries() {
+        let temp = TempDir::new().unwrap();
+        let cache_root = temp.path().join("cache");
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+
+        std::fs::create_dir_all(cache_root.join(".turbo")).unwrap();
+        std::fs::create_dir_all(cache_root.join(".next/cache")).unwrap();
+        std::fs::create_dir_all(workspace.join(".turbo")).unwrap();
+        std::fs::create_dir_all(app_dir.join(".next/cache")).unwrap();
+        std::fs::write(cache_root.join(".turbo/stale.txt"), "stale").unwrap();
+        std::fs::write(cache_root.join(".next/cache/stale.txt"), "stale").unwrap();
+        std::fs::write(workspace.join(".turbo/state.json"), "fresh-workspace").unwrap();
+        std::fs::write(app_dir.join(".next/cache/fetch-cache"), "fresh-app").unwrap();
+
+        let persisted =
+            persist_local_build_caches(&cache_root, &workspace, &app_dir, BuildAdapter::Node)
+                .unwrap();
+
+        assert_eq!(persisted, 2);
+        assert_eq!(
+            std::fs::read_to_string(cache_root.join(".turbo/state.json")).unwrap(),
+            "fresh-workspace"
+        );
+        assert_eq!(
+            std::fs::read_to_string(cache_root.join(".next/cache/fetch-cache")).unwrap(),
+            "fresh-app"
+        );
+        assert!(!cache_root.join(".turbo/stale.txt").exists());
+        assert!(!cache_root.join(".next/cache/stale.txt").exists());
+    }
+
+    #[test]
+    fn local_build_cache_root_sanitizes_target_labels() {
+        let temp = TempDir::new().unwrap();
+        let root = local_build_cache_root(temp.path(), "linux/arm64 (shared)");
+        assert!(root.ends_with(".tako/tmp/build-caches/linux_arm64__shared_"));
     }
 
     #[test]

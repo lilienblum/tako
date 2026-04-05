@@ -13,6 +13,10 @@ export type FetchFunction = (
 
 export type FetchHandler = FetchFunction;
 
+export interface ReadyableFetchHandler extends FetchFunction {
+  ready?: () => void | Promise<void>;
+}
+
 /**
  * Options for Tako SDK
  */

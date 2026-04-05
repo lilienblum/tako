@@ -1,0 +1,10 @@
+name = "nextjs-e2e"
+runtime = "node"
+package_manager = "bun"
+preset = "nextjs"
+
+[build]
+run = "bun run build"
+
+[envs.production]
+route = "nextjs-e2e.example.com"

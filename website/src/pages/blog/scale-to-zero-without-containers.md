@@ -15,21 +15,22 @@ Tako does it differently. Your app scales to zero and cold-starts on demand, wit
 Every Tako app starts with desired instances set to `0` — on-demand mode. Here's the lifecycle:
 
 ```d2
-direction: right
+direction: down
 
 deploy: Deploy {style.fill: "#9BC4B6"; style.font-size: 20}
 warm: Warm instance {style.fill: "#9BC4B6"; style.font-size: 20}
 serving: Serving {style.fill: "#9BC4B6"; style.font-size: 20}
 idle: Idle timeout {style.fill: "#E88783"; style.font-size: 20}
 zero: Zero instances {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 20}
-cold: Cold start {style.fill: "#9BC4B6"; style.font-size: 20}
+cold: Cold start {style.fill: "#E88783"; style.font-size: 20}
+back: Serving again {style.fill: "#9BC4B6"; style.font-size: 20}
 
 deploy -> warm: start 1 instance
 warm -> serving: request arrives
 serving -> idle: no requests for 5 min
 idle -> zero: instance stopped
 zero -> cold: next request arrives
-cold -> serving: "~100-500ms"
+cold -> back: "often 10s of ms"
 ```
 
 **Deploy.** When you run [`tako deploy`](/docs/deployment), the server starts one warm instance immediately — so your app is reachable right away. If that instance fails to start, the deploy fails. No surprise cold starts after shipping.
@@ -38,20 +39,20 @@ cold -> serving: "~100-500ms"
 
 **Idle.** An idle monitor checks instances periodically. If an instance has no in-flight requests and has been idle longer than `idle_timeout` (default: 5 minutes), it gets stopped. The app drops to zero running instances.
 
-**Cold start.** The next request triggers a cold start. The proxy spawns a new process, waits for the app's readiness signal (`TAKO:READY:<port>` via the [SDK](/docs)), and routes the request once the instance is healthy. The requesting client just sees a slightly slower first response — typically 100-500ms depending on the app.
+**Cold start.** The next request triggers a cold start. The proxy spawns a new process, waits for the app's readiness signal (`TAKO:READY:<port>` via the [SDK](/docs)), and routes the request once the instance is healthy. For lightweight APIs, that first response is often only tens of milliseconds slower. Heavier apps can take longer.
 
 ## What happens to requests during cold start
 
 This is the tricky part. What if 50 requests arrive while the app is booting?
 
-Tako uses a leader/waiter pattern. The first request becomes the "leader" and triggers the instance spawn. Every subsequent request becomes a "waiter" and queues behind it. Up to 100 requests can queue per app. When the instance is ready, all waiters are unblocked simultaneously.
+Tako uses a leader/waiter pattern. The first request becomes the "leader" and triggers the instance spawn. Every subsequent request becomes a "waiter" and queues behind it. Up to 1000 requests can queue per app. When the instance is ready, all waiters are unblocked simultaneously.
 
-| Scenario                   | Response                                                |
-| -------------------------- | ------------------------------------------------------- |
-| Instance starts in time    | Normal response (after cold start delay)                |
-| Startup exceeds 30s        | `504 App startup timed out`                             |
-| Process crashes on start   | `502 App failed to start`                               |
-| Queue exceeds 100 requests | `503 App startup queue is full` (with `Retry-After: 1`) |
+| Scenario                    | Response                                                |
+| --------------------------- | ------------------------------------------------------- |
+| Instance starts in time     | Normal response (after cold start delay)                |
+| Startup exceeds 30s         | `504 App startup timed out`                             |
+| Process crashes on start    | `502 App failed to start`                               |
+| Queue exceeds 1000 requests | `503 App startup queue is full` (with `Retry-After: 1`) |
 
 Instances are never killed while serving in-flight requests. The idle monitor only stops instances that are both idle _and_ have zero active connections.
 

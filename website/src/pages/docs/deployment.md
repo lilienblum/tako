@@ -315,7 +315,7 @@ The desired instance count is persisted on the server and survives deploys, roll
 - Idle instances are stopped after the configured timeout (default: 5 minutes)
 - Cold start waits up to 30 seconds for readiness; timeout returns `504`
 - If cold start setup fails, proxy returns `502`
-- During a cold start, up to 100 requests queue; overflow returns `503` with `Retry-After: 1`
+- During a cold start, up to 1000 requests queue; overflow returns `503` with `Retry-After: 1`
 
 **Always-on (desired instances > 0):**
 
