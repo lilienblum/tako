@@ -42,6 +42,16 @@ dev = ["vite", "dev"]
 
 Provides the TanStack Start server entry module as the entrypoint, marks `dist/client` as the asset directory to merge into `public/` after build, and uses `vite dev` for local development.
 
+### nextjs
+
+```toml
+[nextjs]
+main = ".next/standalone/tako-entry.mjs"
+dev = ["next", "dev"]
+```
+
+Uses the `tako.sh/nextjs` adapter output. The adapter generates `.next/standalone/tako-entry.mjs` after `next build`, and `tako dev` runs `next dev`.
+
 ### vite
 
 ```toml

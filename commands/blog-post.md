@@ -51,6 +51,12 @@ Guidelines:
 - No corporate speak, no marketing buzzwords, no "leverage", no "empower", no "game-changer".
 - No filler intros ("In today's fast-paced world..."). Get to the interesting part.
 
+**Tako's vision (weave in where relevant):**
+
+Tako isn't just a deploy tool — it's becoming the platform layer between your code and the internet. Today it handles deployment, routing, TLS, secrets, and local dev. The roadmap includes backend primitives like WebSocket/SSE channels, queues, workflows, and image optimization — things most apps bolt on as separate services. Most competitors (Kamal, Dokku, Coolify) stop at "get your code running." Tako wants to provide the infrastructure your app needs so you don't have to.
+
+Combined with multi-server environments and Cloudflare Argo smart routing, Tako lets you build your own edge network on cheap VPS boxes worldwide — competitive with Fly.io, but on your own hardware.
+
 **Structure & content:**
 
 - **Length**: 400-800 words. Say what needs to be said, then stop.
@@ -105,9 +111,10 @@ After the user downloads the image, they run `just blog::img` which crops to 5:2
 
 ### Step 3 — Verify
 
-1. Run `cd website && npx astro build` to confirm the post builds.
-2. Check that the post appears in the blog listing page.
-3. Show the user the post title, slug, and a brief summary for approval.
+1. Run `just blog og` to generate/regenerate OG images (includes the new post).
+2. Run `cd website && npx astro build` to confirm the post builds.
+3. Check that the post appears in the blog listing page.
+4. Show the user the post title, slug, and a brief summary for approval.
 
 ## Date
 

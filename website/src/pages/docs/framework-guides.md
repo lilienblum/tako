@@ -38,3 +38,15 @@ Point `main` in `tako.toml` at the generated wrapper:
 ```toml
 main = "dist/server/tako-entry.mjs"
 ```
+
+## Next.js
+
+For Next.js standalone builds, use the SDK helper in `next.config.*`:
+
+```ts
+import { withTakoNextjs } from "tako.sh/nextjs";
+
+export default withTakoNextjs({});
+```
+
+This enables Next.js standalone output, installs the Tako adapter, and generates `.next/standalone/tako-entry.mjs` for deploys. In `tako.toml`, use the `nextjs` preset or point `main` at `.next/standalone/tako-entry.mjs`.
