@@ -12,6 +12,26 @@ const websiteRoot = fileURLToPath(new URL(".", import.meta.url));
 const pagesRoot = fileURLToPath(new URL("./src/pages", import.meta.url));
 const defaultLastModified = statSync(path.join(websiteRoot, "public")).mtime;
 
+function normalizeRoutePath(pathname) {
+  if (pathname === "/" || pathname === "/index.html") {
+    return "/";
+  }
+
+  if (pathname.endsWith("/index.html")) {
+    return pathname.slice(0, -"/index.html".length) || "/";
+  }
+
+  if (pathname.endsWith(".html")) {
+    return pathname.slice(0, -".html".length) || "/";
+  }
+
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    return pathname.slice(0, -1);
+  }
+
+  return pathname;
+}
+
 function walkFiles(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const fullPath = path.join(dir, entry.name);
@@ -42,7 +62,7 @@ function toRoutePath(filePath) {
     return routePath;
   }
 
-  return routePath.length > 1 && routePath.endsWith("/") ? routePath.slice(0, -1) : routePath;
+  return normalizeRoutePath(routePath);
 }
 
 const pageLastModified = new Map(
@@ -58,10 +78,6 @@ const pageLastModified = new Map(
 export default defineConfig({
   site: "https://tako.sh",
   output: "static",
-  trailingSlash: "never",
-  build: {
-    format: "file",
-  },
 
   markdown: {
     remarkPlugins: [remarkD2Theme],
@@ -90,7 +106,7 @@ export default defineConfig({
     }),
     sitemap({
       serialize(item) {
-        const pathname = new URL(item.url).pathname;
+        const pathname = normalizeRoutePath(new URL(item.url).pathname);
         return {
           ...item,
           lastmod: pageLastModified.get(pathname) ?? defaultLastModified,
