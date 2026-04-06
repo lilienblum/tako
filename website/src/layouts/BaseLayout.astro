@@ -80,8 +80,8 @@ const pageStructuredData = structuredData
       href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=IBM+Plex+Mono:wght@400;700&family=Nunito:wght@400;600;700&family=Poppins:wght@600;700&display=swap"
       rel="stylesheet"
     />
-    <script type="application/ld+json" set:html={baseStructuredData}></script>
-    {pageStructuredData && <script type="application/ld+json" set:html={pageStructuredData}></script>}
+    <script is:inline type="application/ld+json" set:html={baseStructuredData}></script>
+    {pageStructuredData && <script is:inline type="application/ld+json" set:html={pageStructuredData}></script>}
     <style is:inline>
       html {
         scroll-behavior: smooth;

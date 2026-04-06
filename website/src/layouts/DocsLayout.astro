@@ -60,7 +60,7 @@ const breadcrumbJsonLd = JSON.stringify({
 });
 ---
 <BaseLayout title={title} description={description}>
-  <script slot="head" type="application/ld+json" set:html={breadcrumbJsonLd}></script>
+  <script is:inline slot="head" type="application/ld+json" set:html={breadcrumbJsonLd}></script>
   <section class="sheet" data-docs-sheet data-heading-anchors={headingAnchors ? "true" : "false"}>
     <div class="sheet-top">
       <div class="breadcrumb">
