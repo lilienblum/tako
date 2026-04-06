@@ -1,10 +1,32 @@
 ---
 import BaseLayout from "../layouts/BaseLayout.astro";
 import CopyButton from "../components/CopyButton.astro";
+import ChevronDownIcon from "lucide-astro/ChevronDown";
+
+const homeStructuredData = {
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  name: "Tako",
+  applicationCategory: "DeveloperApplication",
+  operatingSystem: "macOS, Linux",
+  url: "https://tako.sh/",
+  image: "https://tako.sh/assets/og.png",
+  description: "Run apps on your own servers with local development, production deploys, routing, TLS, logs, secrets, and more.",
+  softwareHelp: "https://tako.sh/docs",
+  downloadUrl: "https://tako.sh/install.sh",
+  codeRepository: "https://github.com/lilienblum/tako",
+  featureList: [
+    "Local development with HTTPS and custom domains",
+    "Production deploys with rolling updates",
+    "Automatic TLS and request routing",
+    "Logs, secrets, and server management",
+  ],
+};
 ---
 <BaseLayout
-  title="Tako | Ship it like FTP"
-  description="Deploy Node.js, Bun, and Deno apps to your own servers with rolling deploys, health checks, TLS, logs, and secrets. Tako is a self-hosted alternative to managed PaaS platforms."
+  title="Run apps on your own servers - Tako"
+  description="Deploy apps to your own servers with rolling deploys, TLS, health checks, logs, and secrets for Node.js, Bun, Go, and more."
+  structuredData={homeStructuredData}
 >
   <section class="hero">
     <div
@@ -22,28 +44,25 @@ import CopyButton from "../components/CopyButton.astro";
         </div>
       </div>
     </div>
-    <h1 class="title">Your servers<br />were <span class="swirl">fine</span><br />all along.</h1>
+    <h1 class="title">Your app belongs<br />on <span class="accent">your servers</span></h1>
     <p class="subtitle">
-      Development to production and everything in between &mdash; one tool, your servers
+      Local development, production deploys, and everything in between
     </p>
 
     <div class="command-card">
       <div class="command-head">
-        <div class="command-title">install</div>
+        <span class="command-caption">install with one command</span>
       </div>
       <div class="command-body">
         <span class="prompt">$</span>
         <span class="cmd" id="typed-cmd"></span>
         <span class="cursor" aria-hidden="true"></span>
-        <CopyButton class="copy-inline" id="copy" ariaLabel="copy install command" title="copy install command" label="copy install command" />
-      </div>
-      <div class="command-actions">
-        <a class="btn" href="/docs">read the docs</a>
+        <CopyButton class="copy-inline" id="copy" ariaLabel="copy install command" title="copy install command" label="copy" />
       </div>
     </div>
-    <div class="hero-mobile-cta">
-      <a href="/docs/quickstart" class="btn cta-btn">get started</a>
-      <a href="/docs" class="cta-link">or read the docs &rarr;</a>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="/docs/quickstart">get started</a>
+      <a class="cta-link hero-actions-link" href="/docs">or read the docs &rarr;</a>
     </div>
   </section>
 
@@ -183,7 +202,10 @@ import CopyButton from "../components/CopyButton.astro";
         <span class="feature-link-desc">Real-time out of the box</span>
       </span>
     </div>
-    <button type="button" class="feature-show-all" data-feature-show-all>show more</button>
+    <button type="button" class="feature-show-all" data-feature-show-all>
+      <span class="feature-show-all-label">show more</span>
+      <ChevronDownIcon class="feature-show-all-icon" aria-hidden="true" focusable="false" />
+    </button>
   </section>
 
   <section class="cta-section">
@@ -336,55 +358,48 @@ import CopyButton from "../components/CopyButton.astro";
     margin-bottom: 14px;
   }
 
-  .title .swirl {
-    color: var(--primary-text);
+  .title .accent {
+    color: var(--accent);
   }
 
   .subtitle {
     max-width: 680px;
     font-size: clamp(18px, 2.8vw, 26px);
-    line-height: 1.2;
+    line-height: 1.25;
     color: var(--muted);
     margin-bottom: 24px;
   }
 
-  .hero-mobile-cta {
-    display: none;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 12px;
-    margin-top: 20px;
-  }
-
   .command-card {
     border: 2px solid rgba(47, 42, 68, 0.2);
-    border-radius: 20px;
+    border-radius: 18px;
     background: var(--paper);
     overflow: hidden;
-    max-width: 700px;
+    max-width: 640px;
   }
 
   .command-head {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 12px;
+    justify-content: flex-start;
     position: relative;
     background: var(--mint-soft);
-    border-bottom: 2px solid rgba(47, 42, 68, 0.14);
-    padding: 10px 14px;
+    border-bottom: 1.5px solid rgba(47, 42, 68, 0.1);
+    padding: 7px 14px;
   }
 
-  .command-title {
-    font-family: var(--font-heading);
-    font-size: 19px;
-    font-weight: 600;
+  .command-caption {
+    font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: rgba(47, 42, 68, 0.6);
   }
 
   .command-body {
     font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
     font-size: clamp(14px, 2.1vw, 18px);
-    padding: 16px;
+    padding: 14px 14px 14px 16px;
     display: flex;
     flex-wrap: nowrap;
     gap: 10px;
@@ -412,15 +427,17 @@ import CopyButton from "../components/CopyButton.astro";
     flex: 0 0 auto;
   }
 
-  .command-actions {
+  .hero-actions {
     display: flex;
-    flex-wrap: nowrap;
-    justify-content: space-between;
     align-items: center;
-    gap: 10px;
-    padding: 0 16px 16px;
+    gap: 18px;
+    flex-wrap: wrap;
+    margin-top: 18px;
   }
 
+  .hero-actions-link {
+    font-size: 15px;
+  }
 
   .btn {
     border: 1.5px solid rgba(232, 135, 131, 0.4);
@@ -434,13 +451,28 @@ import CopyButton from "../components/CopyButton.astro";
     line-height: 1;
     text-decoration: none;
     cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease;
+    transition: background 0.15s ease, border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
   }
 
   .btn:hover {
     transform: translateY(-1px);
     background: rgba(232, 135, 131, 0.32);
     border-color: rgba(232, 135, 131, 0.55);
+  }
+
+  .btn-primary {
+    border-color: var(--primary);
+    background: var(--primary);
+    color: #fffaf4;
+    padding: 12px 26px;
+    font-size: 17px;
+    box-shadow: 0 6px 16px rgba(196, 96, 92, 0.22);
+  }
+
+  .btn-primary:hover {
+    background: #d9726e;
+    border-color: #d9726e;
+    box-shadow: 0 8px 20px rgba(196, 96, 92, 0.28);
   }
 
   .btn:focus-visible,
@@ -450,13 +482,20 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   .copy-inline {
-    width: 44px;
-    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 40px;
     margin-left: auto;
-    border: 2px solid rgba(47, 42, 68, 0.26);
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.86);
-    color: var(--ink);
+    padding: 0 14px 0 38px;
+    border: 1.5px solid rgba(232, 135, 131, 0.45);
+    border-radius: 999px;
+    background: rgba(232, 135, 131, 0.14);
+    color: var(--primary-text);
+    font-family: "Nunito", sans-serif;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
     cursor: pointer;
     flex: 0 0 auto;
     transition: transform 0.15s ease, background 0.15s ease, border-color 0.15s ease;
@@ -464,16 +503,45 @@ import CopyButton from "../components/CopyButton.astro";
 
   .copy-inline:hover {
     transform: translateY(-1px);
+    background: rgba(232, 135, 131, 0.22);
+    border-color: rgba(232, 135, 131, 0.6);
   }
 
   .copy-inline .copy-button-icon {
-    width: 17px;
-    height: 17px;
+    width: 15px;
+    height: 15px;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+  }
+
+  .copy-inline.is-copied .copy-button-icon-copy {
+    transform: translateY(-50%) scale(0.85);
+  }
+
+  .copy-inline .copy-button-icon-check {
+    transform: translateY(-50%) scale(0.85);
+  }
+
+  .copy-inline.is-copied .copy-button-icon-check {
+    transform: translateY(-50%) scale(1);
+  }
+
+  .copy-inline .copy-button-label {
+    position: static;
+    width: auto;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    overflow: visible;
+    clip: auto;
+    border: 0;
+    text-transform: lowercase;
   }
 
   .copy-inline.is-copied {
-    background: rgba(155, 196, 182, 0.24);
-    border-color: rgba(155, 196, 182, 0.58);
+    background: rgba(155, 196, 182, 0.28);
+    border-color: rgba(155, 196, 182, 0.6);
     color: rgba(22, 110, 80, 0.95);
   }
 
@@ -592,11 +660,13 @@ import CopyButton from "../components/CopyButton.astro";
   .philosophy-label {
     font-family: "Caveat", cursive;
     font-weight: 500;
-    font-size: 22px;
-    color: var(--primary-text);
-    margin-bottom: 8px;
+    font-size: clamp(30px, 5vw, 44px);
+    line-height: 1;
+    letter-spacing: 0.01em;
+    color: var(--accent);
+    margin-bottom: 14px;
     display: inline-block;
-    transform: rotate(-2deg);
+    transform: rotate(-1deg);
     transform-origin: left center;
   }
 
@@ -748,6 +818,17 @@ import CopyButton from "../components/CopyButton.astro";
     display: none;
   }
 
+  @keyframes feature-reveal {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
   .feature-link {
     display: flex;
     flex-direction: column;
@@ -884,6 +965,10 @@ import CopyButton from "../components/CopyButton.astro";
 
   @media (prefers-reduced-motion: reduce) {
     .cursor { animation: none; }
+    .feature-list.is-expanded .feature-link:nth-child(n+7),
+    .feature-list.is-expanded .feature-link-soon:nth-child(n+7) {
+      animation: none;
+    }
     .included-tag,
     .feature-link,
     .feature-link-title,
@@ -927,8 +1012,8 @@ import CopyButton from "../components/CopyButton.astro";
       display: none;
     }
 
-    .hero-mobile-cta {
-      display: flex;
+    .hero-actions {
+      margin-top: 4px;
     }
 
     .workflow-link {
@@ -952,13 +1037,13 @@ import CopyButton from "../components/CopyButton.astro";
       flex-shrink: 0;
     }
 
-    .command-actions {
-      flex-wrap: wrap;
-      align-items: center;
-    }
-
     .btn {
       padding: 10px 20px;
+    }
+
+    .btn-primary {
+      padding: 13px 28px;
+      font-size: 17px;
     }
 
     .feature-list {
@@ -980,8 +1065,11 @@ import CopyButton from "../components/CopyButton.astro";
     }
 
     .feature-show-all {
-      display: block;
-      margin: 12px auto 0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: fit-content;
+      margin: 14px auto 0;
       font: inherit;
       font-size: 14px;
       font-weight: 600;
@@ -989,14 +1077,47 @@ import CopyButton from "../components/CopyButton.astro";
       background: none;
       border: 1.5px solid var(--line);
       border-radius: 999px;
-      padding: 8px 20px;
+      padding: 9px 18px 9px 20px;
       cursor: pointer;
     }
 
-    .feature-show-all:hover {
-      color: var(--ink);
-      border-color: rgba(47, 42, 68, 0.3);
+    .feature-show-all-icon {
+      width: 14px;
+      height: 14px;
+      stroke: currentColor;
+      stroke-width: 2.5;
     }
+
+    .feature-show-all:active {
+      color: var(--primary-text);
+      border-color: rgba(232, 135, 131, 0.45);
+      background: rgba(232, 135, 131, 0.08);
+    }
+
+    .feature-show-all:focus-visible {
+      outline: 2px solid var(--primary);
+      outline-offset: 2px;
+    }
+
+    .feature-list.is-expanded .feature-link:nth-child(n+7),
+    .feature-list.is-expanded .feature-link-soon:nth-child(n+7) {
+      animation: feature-reveal 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+
+    .feature-list.is-expanded > :nth-child(7)  { animation-delay: 0ms; }
+    .feature-list.is-expanded > :nth-child(8)  { animation-delay: 45ms; }
+    .feature-list.is-expanded > :nth-child(9)  { animation-delay: 90ms; }
+    .feature-list.is-expanded > :nth-child(10) { animation-delay: 135ms; }
+    .feature-list.is-expanded > :nth-child(11) { animation-delay: 180ms; }
+    .feature-list.is-expanded > :nth-child(12) { animation-delay: 225ms; }
+    .feature-list.is-expanded > :nth-child(13) { animation-delay: 270ms; }
+    .feature-list.is-expanded > :nth-child(14) { animation-delay: 315ms; }
+    .feature-list.is-expanded > :nth-child(15) { animation-delay: 360ms; }
+    .feature-list.is-expanded > :nth-child(16) { animation-delay: 400ms; }
+    .feature-list.is-expanded > :nth-child(17) { animation-delay: 440ms; }
+    .feature-list.is-expanded > :nth-child(18) { animation-delay: 475ms; }
+    .feature-list.is-expanded > :nth-child(19) { animation-delay: 505ms; }
+    .feature-list.is-expanded > :nth-child(20) { animation-delay: 530ms; }
 
     .workflow-steps {
       grid-template-columns: 1fr;
@@ -1035,13 +1156,13 @@ import CopyButton from "../components/CopyButton.astro";
 
   let typingTimeout = null;
 
-  const setCopyButtonText = (text) => {
+  const setCopyButtonText = (visible, aria) => {
     if (copyBtnLabel instanceof HTMLElement) {
-      copyBtnLabel.textContent = text;
+      copyBtnLabel.textContent = visible;
     }
     if (copyBtn instanceof HTMLElement) {
-      copyBtn.setAttribute("aria-label", text);
-      copyBtn.setAttribute("title", text);
+      copyBtn.setAttribute("aria-label", aria);
+      copyBtn.setAttribute("title", aria);
     }
   };
 
@@ -1085,17 +1206,17 @@ import CopyButton from "../components/CopyButton.astro";
     try {
       await navigator.clipboard.writeText(installCommand);
       setCopyButtonCopied(true);
-      setCopyButtonText("copied");
+      setCopyButtonText("copied", "copied");
       window.posthog?.capture("install_command_copied");
       setTimeout(() => {
         setCopyButtonCopied(false);
-        setCopyButtonText("copy install command");
+        setCopyButtonText("copy", "copy install command");
       }, 1400);
     } catch {
       setCopyButtonCopied(false);
-      setCopyButtonText("copy failed");
+      setCopyButtonText("failed", "copy failed");
       setTimeout(() => {
-        setCopyButtonText("copy install command");
+        setCopyButtonText("copy", "copy install command");
       }, 1400);
     }
   });
@@ -1344,7 +1465,7 @@ import CopyButton from "../components/CopyButton.astro";
   }
 
   // CTA button tracking
-  for (const btn of document.querySelectorAll(".cta-section .btn, .command-actions .btn, .hero-mobile-cta .btn")) {
+  for (const btn of document.querySelectorAll(".cta-section .btn, .hero-actions .btn")) {
     btn.addEventListener("click", () => {
       window.posthog?.capture("cta_clicked", {
         label: btn.textContent?.trim(),

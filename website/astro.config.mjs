@@ -1,4 +1,6 @@
 import { defineConfig } from "astro/config";
+import { readdirSync, statSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { SNIPPET_THEME } from "./src/config/snippet-theme.js";
 import { remarkD2Theme } from "./src/remark/remark-d2-theme.js";
@@ -6,11 +8,60 @@ import astroD2 from "astro-d2";
 import sitemap from "@astrojs/sitemap";
 
 const workspaceRoot = fileURLToPath(new URL("..", import.meta.url));
+const websiteRoot = fileURLToPath(new URL(".", import.meta.url));
+const pagesRoot = fileURLToPath(new URL("./src/pages", import.meta.url));
+const defaultLastModified = statSync(path.join(websiteRoot, "public")).mtime;
+
+function walkFiles(dir) {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+    const fullPath = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      return walkFiles(fullPath);
+    }
+
+    return [fullPath];
+  });
+}
+
+function toRoutePath(filePath) {
+  const relativePath = path.relative(pagesRoot, filePath).replaceAll(path.sep, "/");
+  const withoutPageExtension = relativePath.replace(/\.(astro|md|mdx|html|js|ts)$/u, "");
+  const routePath =
+    withoutPageExtension === "index"
+      ? "/"
+      : withoutPageExtension.endsWith("/index")
+        ? `/${withoutPageExtension.slice(0, -"/index".length)}`
+        : `/${withoutPageExtension}`;
+
+  if (routePath.includes("[") || routePath === "/404" || routePath === "/500") {
+    return null;
+  }
+
+  if (routePath.endsWith(".xml") || routePath.endsWith(".json") || routePath.endsWith(".txt")) {
+    return routePath;
+  }
+
+  return routePath.length > 1 && routePath.endsWith("/") ? routePath.slice(0, -1) : routePath;
+}
+
+const pageLastModified = new Map(
+  walkFiles(pagesRoot)
+    .map((filePath) => {
+      const routePath = toRoutePath(filePath);
+      return routePath ? [routePath, statSync(filePath).mtime] : null;
+    })
+    .filter(Boolean),
+);
 
 // Static build (dist/). Cloudflare Workers serves the assets and handles installer script headers.
 export default defineConfig({
   site: "https://tako.sh",
   output: "static",
+  trailingSlash: "never",
+  build: {
+    format: "file",
+  },
 
   markdown: {
     remarkPlugins: [remarkD2Theme],
@@ -37,6 +88,14 @@ export default defineConfig({
       pad: 40,
       skipGeneration: false,
     }),
-    sitemap(),
+    sitemap({
+      serialize(item) {
+        const pathname = new URL(item.url).pathname;
+        return {
+          ...item,
+          lastmod: pageLastModified.get(pathname) ?? defaultLastModified,
+        };
+      },
+    }),
   ],
 });

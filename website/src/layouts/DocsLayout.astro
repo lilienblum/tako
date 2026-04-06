@@ -1,6 +1,7 @@
 ---
 import BaseLayout from "./BaseLayout.astro";
 import SnippetCopyButton from "../components/SnippetCopyButton.astro";
+import { createCanonicalUrl } from "../utils/canonical";
 
 export interface Props {
   title: string;
@@ -23,6 +24,7 @@ const heading = Astro.props.heading ?? frontmatter.heading ?? "Docs";
 const current = Astro.props.current ?? frontmatter.current ?? "intro";
 const description = Astro.props.description ?? frontmatter.description ?? "Tako documentation — everything you need to run apps on your own hardware.";
 const headingAnchors = Astro.props.headingAnchors ?? frontmatter.headingAnchors ?? true;
+const canonicalURL = createCanonicalUrl(Astro.url.pathname, Astro.site).href;
 
 const docsNav = [
   { id: "intro", label: "Intro", href: "/docs" },
@@ -36,8 +38,29 @@ const docsNav = [
   { id: "deployment", label: "Deployment", href: "/docs/deployment" },
   { id: "troubleshooting", label: "Troubleshooting", href: "/docs/troubleshooting" },
 ];
+const currentDoc = docsNav.find((item) => item.id === current);
+const breadcrumbItems = [
+  { "@type": "ListItem", position: 1, name: "Home", item: "https://tako.sh/" },
+  { "@type": "ListItem", position: 2, name: "Docs", item: "https://tako.sh/docs" },
+];
+
+if (currentDoc && currentDoc.href !== "/docs") {
+  breadcrumbItems.push({
+    "@type": "ListItem",
+    position: 3,
+    name: heading,
+    item: canonicalURL,
+  });
+}
+
+const breadcrumbJsonLd = JSON.stringify({
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  itemListElement: breadcrumbItems,
+});
 ---
 <BaseLayout title={title} description={description}>
+  <script slot="head" type="application/ld+json" set:html={breadcrumbJsonLd}></script>
   <section class="sheet" data-docs-sheet data-heading-anchors={headingAnchors ? "true" : "false"}>
     <div class="sheet-top">
       <div class="breadcrumb">

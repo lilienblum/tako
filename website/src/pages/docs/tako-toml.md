@@ -1,9 +1,9 @@
 ---
 layout: ../../layouts/DocsLayout.astro
-title: "Tako Docs - tako.toml Reference"
+title: "tako.toml reference for routes, builds, secrets, and scaling - Tako Docs"
 heading: "tako.toml Reference"
 current: tako-toml
-description: "Complete reference for tako.toml — project configuration for builds, routes, secrets, scaling, and deployment settings."
+description: "Complete tako.toml reference covering routes, runtime settings, builds, secrets, scaling, environments, and deployment configuration."
 ---
 
 # `tako.toml` Reference

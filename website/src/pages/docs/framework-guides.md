@@ -1,9 +1,9 @@
 ---
 layout: ../../layouts/DocsLayout.astro
-title: Tako Docs - Framework Guides
+title: Framework guides for Next.js, Astro, Nuxt, SvelteKit, and more - Tako Docs
 heading: Framework Guides
 current: framework-guides
-description: "Framework-specific guides for deploying with Tako — fetch handlers, Next.js, Astro, SvelteKit, Nuxt, TanStack Start, and more."
+description: "Framework-specific Tako guides for Next.js, Astro, SvelteKit, Nuxt, TanStack Start, and other apps using fetch handlers or Vite."
 ---
 
 # Framework Guides

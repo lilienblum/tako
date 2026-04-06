@@ -2,12 +2,14 @@
 import NavLinks from "../components/NavLinks.astro";
 import StarIcon from "lucide-astro/Star";
 import PostHog from "../components/posthog.astro";
+import { createCanonicalUrl } from "../utils/canonical";
 
 export interface Props {
   title?: string;
   description?: string;
   image?: string;
   type?: string;
+  structuredData?: Record<string, unknown> | Array<Record<string, unknown>>;
 }
 
 const {
@@ -15,9 +17,38 @@ const {
   description = "Everything you need to run apps on your own hardware. Routes, logs, secrets, rolling deploys, local dev — one tool.",
   image = "https://tako.sh/assets/og.png",
   type = "website",
+  structuredData,
 } = Astro.props;
 
-const canonicalURL = new URL(Astro.url.pathname, Astro.site);
+const canonicalURL = createCanonicalUrl(Astro.url.pathname, Astro.site);
+const organizationSchema = {
+  "@context": "https://schema.org",
+  "@type": "Organization",
+  name: "Tako",
+  url: "https://tako.sh",
+  logo: "https://tako.sh/assets/og.png",
+  sameAs: [
+    "https://github.com/lilienblum/tako",
+    "https://x.com/lilienblum",
+  ],
+};
+const websiteSchema = {
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  name: "Tako",
+  url: "https://tako.sh",
+  description,
+  publisher: {
+    "@type": "Organization",
+    name: "Tako",
+    url: "https://tako.sh",
+  },
+  inLanguage: "en",
+};
+const baseStructuredData = JSON.stringify([organizationSchema, websiteSchema]);
+const pageStructuredData = structuredData
+  ? JSON.stringify(Array.isArray(structuredData) ? structuredData : [structuredData])
+  : null;
 ---
 <!doctype html>
 <html lang="en">
@@ -49,6 +80,8 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
       href="https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=IBM+Plex+Mono:wght@400;700&family=Nunito:wght@400;600;700&family=Poppins:wght@600;700&display=swap"
       rel="stylesheet"
     />
+    <script type="application/ld+json" set:html={baseStructuredData}></script>
+    {pageStructuredData && <script type="application/ld+json" set:html={pageStructuredData}></script>}
     <style is:inline>
       html {
         scroll-behavior: smooth;
@@ -500,7 +533,7 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
       (function() {
         var el = document.getElementById('logo-text');
         if (!el) return;
-        if (sessionStorage.getItem('logo-animated')) {
+        if (window.location.pathname !== '/') {
           el.textContent = 'tako';
           el.style.fontFamily = '"Nunito", sans-serif';
           return;
@@ -538,7 +571,6 @@ const canonicalURL = new URL(Astro.url.pathname, Astro.site);
                 k++;
                 if (k >= 4) {
                   clearInterval(toTako);
-                  sessionStorage.setItem('logo-animated', '1');
                 }
               }, 150);
             }

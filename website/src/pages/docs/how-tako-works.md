@@ -1,9 +1,9 @@
 ---
 layout: ../../layouts/DocsLayout.astro
-title: "Tako Docs - How Tako Works"
+title: "How Tako works: rolling deploys, TLS, health checks, and scale to zero - Tako Docs"
 heading: How Tako Works
 current: how-tako-works
-description: "How Tako handles building, deploying, routing, TLS, health checks, scaling, and rolling updates for your apps."
+description: "Learn how Tako handles local development, rolling deploys, TLS, health checks, request routing, scaling, and runtime management."
 ---
 
 # How Tako Works
