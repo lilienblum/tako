@@ -1,0 +1,22 @@
+{
+  "name": "nextjs-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^16.2.2",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "tako.sh": "workspace:*"
+  },
+  "devDependencies": {
+    "@tsconfig/strictest": "catalog:dev",
+    "@types/react": "catalog:dev",
+    "@types/react-dom": "catalog:dev",
+    "typescript": "catalog:dev"
+  }
+}
