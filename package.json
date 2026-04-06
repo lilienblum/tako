@@ -10,21 +10,21 @@
     "catalog": {
       "@tanstack/react-router": "^1.168.10",
       "@tanstack/react-start": "^1.167.16",
-      "@types/react": "^19.0.8",
-      "@types/react-dom": "^19.0.3",
-      "@vitejs/plugin-react": "^6.0.1",
       "react": "^19.0.0",
-      "react-dom": "^19.0.0",
-      "vite": "^8.0.3"
+      "react-dom": "^19.0.0"
     },
     "catalogs": {
       "dev": {
         "@tsconfig/strictest": "^2.0.0",
+        "@types/react": "^19.0.8",
+        "@types/react-dom": "^19.0.3",
+        "@vitejs/plugin-react": "^6.0.1",
         "@types/bun": "^1.3.11",
         "@types/node": "^25.5.2",
         "astro": "^6.1.2",
         "wrangler": "^4.80.0",
-        "typescript": "^6.0.2"
+        "typescript": "^6.0.2",
+        "vite": "^8.0.3"
       }
     }
   },

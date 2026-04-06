@@ -4435,6 +4435,14 @@ async fn spawn_app_process(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
+    // Prepend node_modules/.bin to PATH so preset commands like `next`, `vite`
+    // are found — same as what npm/yarn/bun do when running package scripts.
+    let bin_dir = project_dir.join("node_modules/.bin");
+    if bin_dir.is_dir() {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        c.env("PATH", format!("{}:{current_path}", bin_dir.display()));
+    }
+
     for (k, v) in env {
         c.env(k, v);
     }

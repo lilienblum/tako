@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 
 export type NextConfigShape = Record<string, unknown> & {
   adapterPath?: string;
+  allowedDevOrigins?: string[];
   output?: string;
 };
 

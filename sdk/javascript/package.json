@@ -48,6 +48,6 @@
     "@types/node": "catalog:dev",
     "tsdown": "^0.21.7",
     "typescript": "catalog:dev",
-    "vite": "catalog:"
+    "vite": "catalog:dev"
   }
 }

@@ -1,4 +1,5 @@
 .claude/
+.next/
 !.claude/skills/
 !.claude/commands/
 node_modules/
