@@ -10,6 +10,7 @@ import sitemap from "@astrojs/sitemap";
 const workspaceRoot = fileURLToPath(new URL("..", import.meta.url));
 const websiteRoot = fileURLToPath(new URL(".", import.meta.url));
 const pagesRoot = fileURLToPath(new URL("./src/pages", import.meta.url));
+const contentRoot = fileURLToPath(new URL("./src/content", import.meta.url));
 const defaultLastModified = statSync(path.join(websiteRoot, "public")).mtime;
 
 function normalizeRoutePath(pathname) {
@@ -73,6 +74,16 @@ const pageLastModified = new Map(
     })
     .filter(Boolean),
 );
+
+// Content collections (blog posts in src/content/blog/) map to /blog/{slug}
+for (const filePath of walkFiles(contentRoot)) {
+  const rel = path.relative(contentRoot, filePath).replaceAll(path.sep, "/");
+  const match = rel.match(/^(\w+)\/(.+)\.\w+$/);
+  if (match) {
+    const [, collection, slug] = match;
+    pageLastModified.set(`/${collection}/${slug}`, statSync(filePath).mtime);
+  }
+}
 
 // Static build (dist/). Cloudflare Workers serves the assets and handles installer script headers.
 export default defineConfig({

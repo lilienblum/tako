@@ -1,5 +1,4 @@
 ---
-layout: ../../layouts/BlogPostLayout.astro
 title: "Why Tako Ships an SDK"
 date: "2026-04-04T12:00"
 description: "Most deploy tools stop at infrastructure. Tako's SDK gives your app readiness signaling, secret injection, and runtime abstraction — here's why."

@@ -1,4 +1,5 @@
 ---
+import { getCollection } from "astro:content";
 import BaseLayout from "../../layouts/BaseLayout.astro";
 
 const DEFAULT_AUTHOR = "Tako-kun";
@@ -6,10 +7,8 @@ const authors: Record<string, string> = {
   dan: "Dan Lilienblum",
 };
 
-const modules = import.meta.glob<{ frontmatter: Record<string, string>; url: string }>("./*.md", { eager: true });
-const sorted = Object.values(modules)
-  .filter((p) => p.frontmatter.title)
-  .sort((a, b) => new Date(b.frontmatter.date).getTime() - new Date(a.frontmatter.date).getTime());
+const posts = await getCollection("blog");
+const sorted = posts.sort((a, b) => new Date(b.data.date).getTime() - new Date(a.data.date).getTime());
 ---
 <BaseLayout title="Tako Blog" description="Updates, ideas, and progress from the Tako project.">
   <section class="blog-list-sheet">
@@ -19,24 +18,24 @@ const sorted = Object.values(modules)
     </div>
     {sorted.length === 0 && <p class="blog-empty">No posts yet.</p>}
     <div class="blog-posts">
-      {sorted.map((post, i) => {
-        const date = post.frontmatter.date
-          ? new Date(post.frontmatter.date).toLocaleDateString("en-US", {
+      {sorted.map((post) => {
+        const date = post.data.date
+          ? new Date(post.data.date).toLocaleDateString("en-US", {
               year: "numeric",
               month: "short",
               day: "numeric",
             })
           : "";
-        const authorName = authors[post.frontmatter.author] ?? DEFAULT_AUTHOR;
+        const authorName = (post.data.author && authors[post.data.author]) ?? DEFAULT_AUTHOR;
         return (
-          <a href={post.url} class="blog-post-card">
+          <a href={`/blog/${post.id}/`} class="blog-post-card">
             <div class="blog-post-body">
-              <span class="blog-post-title">{post.frontmatter.title}</span>
-              {post.frontmatter.description && (
-                <span class="blog-post-desc">{post.frontmatter.description}</span>
+              <span class="blog-post-title">{post.data.title}</span>
+              {post.data.description && (
+                <span class="blog-post-desc">{post.data.description}</span>
               )}
               <div class="blog-post-meta">
-                {date && <time class="blog-post-date" datetime={post.frontmatter.date}>{date}</time>}
+                {date && <time class="blog-post-date" datetime={post.data.date}>{date}</time>}
                 {date && authorName && <span class="blog-post-sep">&middot;</span>}
                 {authorName && <span class="blog-post-author">{authorName}</span>}
               </div>

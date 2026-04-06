@@ -1,5 +1,4 @@
 ---
-layout: ../../layouts/BlogPostLayout.astro
 title: "Local Dev with Real HTTPS, Real DNS, and Zero Config"
 date: "2026-04-04T14:24"
 description: "Stop fighting localhost:3000 and self-signed cert warnings. Tako dev gives you real HTTPS, real domains, and a local proxy — automatically."

@@ -18,6 +18,6 @@ export function normalizeCanonicalPath(pathname: string): string {
   return pathname;
 }
 
-export function createCanonicalUrl(pathname: string, site: URL): URL {
+export function createCanonicalUrl(pathname: string, site: URL | undefined): URL {
   return new URL(normalizeCanonicalPath(pathname), site);
 }

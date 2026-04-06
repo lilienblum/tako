@@ -21,7 +21,7 @@ The user provides a topic or idea. Examples:
 ### Step 1 — Research
 
 1. Read `SPEC.md` to understand current Tako capabilities and architecture.
-2. Read existing blog posts in `website/src/pages/blog/` to match tone and style.
+2. Read existing blog posts in `website/src/content/blog/` to match tone and style.
 3. Check memory for competitor landscape data (reference_competitor_landscape.md) for context on similar tools.
 4. If the topic involves a specific feature, read the relevant source code to get details right.
 5. If the topic involves competitors or external tools, do web research to get current facts (stars, versions, status).
@@ -29,11 +29,10 @@ The user provides a topic or idea. Examples:
 
 ### Step 2 — Write
 
-Create a new markdown file at `website/src/pages/blog/{slug}.md` with this frontmatter:
+Create a new markdown file at `website/src/content/blog/{slug}.md` with this frontmatter:
 
 ```markdown
 ---
-layout: ../../layouts/BlogPostLayout.astro
 title: "Post Title"
 date: "YYYY-MM-DDTHH:MM"
 description: "A concise 1-2 sentence summary for SEO meta tags and social previews. Should be compelling and specific — not generic."
@@ -81,7 +80,6 @@ Format:
 
 ```markdown
 ---
-layout: ../../layouts/BlogPostLayout.astro
 title: "Post Title"
 date: "YYYY-MM-DDTHH:MM"
 description: "SEO description here"

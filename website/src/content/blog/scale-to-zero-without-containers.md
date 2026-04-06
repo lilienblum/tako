@@ -1,5 +1,4 @@
 ---
-layout: ../../layouts/BlogPostLayout.astro
 title: "Scale-to-Zero Without Containers"
 date: "2026-04-05T05:17"
 description: "How Tako scales apps to zero and cold-starts them on demand — without Docker, containers, or a cloud platform."

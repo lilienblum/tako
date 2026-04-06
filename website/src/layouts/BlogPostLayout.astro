@@ -11,29 +11,20 @@ const defaultAuthor = { name: "Tako-kun", link: "/" };
 export interface Props {
   title: string;
   date: string;
-  author?: string;
-  image?: string;
-  imageAlt?: string;
-  description?: string;
-  frontmatter?: {
-    title?: string;
-    date?: string;
-    author?: string;
-    image?: string;
-    imageAlt?: string;
-    description?: string;
-  };
+  author?: string | undefined;
+  image?: string | undefined;
+  imageAlt?: string | undefined;
+  description?: string | undefined;
 }
 
-const frontmatter = Astro.props.frontmatter ?? {};
-const title = Astro.props.title ?? frontmatter.title ?? "Tako Blog";
-const date = Astro.props.date ?? frontmatter.date ?? "";
-const authorId = Astro.props.author ?? frontmatter.author ?? "";
+const title = Astro.props.title ?? "Tako Blog";
+const date = Astro.props.date ?? "";
+const authorId = Astro.props.author ?? "";
 const { name: author, link: authorLink } = authors[authorId] ?? defaultAuthor;
-const rawImage = Astro.props.image ?? frontmatter.image ?? "";
+const rawImage = Astro.props.image ?? "";
 const image = rawImage ? `/assets/blog/${rawImage}.webp` : "";
-const imageAlt = Astro.props.imageAlt ?? frontmatter.imageAlt ?? title;
-const description = Astro.props.description ?? frontmatter.description ?? title;
+const imageAlt = Astro.props.imageAlt ?? title;
+const description = Astro.props.description ?? title;
 const slug = normalizeCanonicalPath(Astro.url.pathname).replace(/^\/blog\//, "").replace(/^\//, "");
 const ogPath = `/assets/blog/og/${slug}.png`;
 const ogImage = new URL(ogPath, Astro.site).href;

@@ -3,13 +3,13 @@ og:
     #!/usr/bin/env bash
     set -euo pipefail
     root="{{ source_directory() }}/.."
-    blog_dir="$root/website/src/pages/blog"
+    blog_dir="$root/website/src/content/blog"
     mkdir -p "$root/website/public/assets/blog/og"
     for post in "$blog_dir"/*.md; do
         title=$(sed -n 's/^title: *"\{0,1\}\([^"]*\)"\{0,1\} *$/\1/p' "$post" | head -1)
         slug=$(basename "$post" .md)
         if [ -n "$title" ]; then
-            (cd "$root/website" && bun run scripts/generate-og.ts "$title" "public/assets/blog/og/${slug}.png")
+            (cd "$root/website" && bun run scripts/generate-og.tsx "$title" "public/assets/blog/og/${slug}.png")
         fi
     done
 
@@ -52,7 +52,7 @@ img file="":
     out="$root/website/public/assets/blog/${id}.webp"
     mv "$tmp" "$out"
     # Find the most recent blog post and patch it
-    blog_dir="$root/website/src/pages/blog"
+    blog_dir="$root/website/src/content/blog"
     post=$(ls -t "$blog_dir"/*.md 2>/dev/null | head -1)
     if [ -n "$post" ]; then
         # Insert hash into image: frontmatter

@@ -1,20 +1,18 @@
 import rss from "@astrojs/rss";
+import { getCollection } from "astro:content";
 import type { APIContext } from "astro";
 
 export async function GET(context: APIContext) {
-  const posts = import.meta.glob<{
-    frontmatter: Record<string, string>;
-    url: string;
-  }>("./blog/*.md", { eager: true });
+  const posts = await getCollection("blog");
 
-  const items = Object.values(posts)
-    .filter((p) => p.frontmatter.title && p.frontmatter.date)
-    .sort((a, b) => new Date(b.frontmatter.date).getTime() - new Date(a.frontmatter.date).getTime())
+  const items = posts
+    .filter((p) => p.data.title && p.data.date)
+    .sort((a, b) => new Date(b.data.date).getTime() - new Date(a.data.date).getTime())
     .map((p) => ({
-      title: p.frontmatter.title,
-      pubDate: new Date(p.frontmatter.date),
-      description: p.frontmatter.description ?? "",
-      link: p.url!,
+      title: p.data.title,
+      pubDate: new Date(p.data.date),
+      description: p.data.description ?? "",
+      link: `/blog/${p.id}/`,
     }));
 
   return rss({

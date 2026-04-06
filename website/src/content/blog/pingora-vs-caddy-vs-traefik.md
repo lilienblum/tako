@@ -1,5 +1,4 @@
 ---
-layout: ../../layouts/BlogPostLayout.astro
 title: "Pingora vs Caddy vs Traefik: Why We Built on Cloudflare's Proxy"
 date: "2026-04-04T14:13"
 description: "How we chose Pingora over Caddy and Traefik for Tako's proxy layer — and what it means for performance, memory, and architecture."

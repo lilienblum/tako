@@ -1,5 +1,4 @@
 ---
-layout: ../../layouts/BlogPostLayout.astro
 title: "One Config, Many Servers"
 date: "2026-04-05T14:04"
 description: "One tako.toml, two environments, three servers across regions — how Tako takes a side project all the way to a real production setup."

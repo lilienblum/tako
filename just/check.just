@@ -1,7 +1,8 @@
 set working-directory := ".."
 
-# Build website and check for broken internal links
+# Typecheck and build website, then check for broken internal links
 website:
+    bun run --filter website check
     bun run --filter website build
     lychee \
         --root-dir website/dist \

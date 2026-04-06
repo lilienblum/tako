@@ -1,5 +1,4 @@
 ---
-layout: ../../layouts/BlogPostLayout.astro
 title: "Tako vs Dokku: Two Philosophies for Self-Hosted Deployment"
 date: "2026-04-04T14:32"
 description: "Dokku wraps everything in Docker. Tako runs your app directly. Here's how the two approaches compare — and when each one makes sense."

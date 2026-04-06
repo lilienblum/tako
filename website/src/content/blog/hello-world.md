@@ -1,5 +1,4 @@
 ---
-layout: ../../layouts/BlogPostLayout.astro
 title: Hello, world
 date: "2026-03-17T12:00"
 author: dan
