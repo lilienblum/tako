@@ -2576,6 +2576,10 @@ pub async fn run(
     let reserve_state = std::sync::Arc::new(tokio::sync::Mutex::new(Some(reserve_listener)));
     let app_started_once = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let app_started_at = std::sync::Arc::new(tokio::sync::Mutex::new(std::time::Instant::now()));
+
+    // Clean up any orphaned app process from a previously crashed run.
+    kill_orphaned_process(&project_dir, &config_key);
+
     if dev_initial_instance_count() > 0 {
         // Free the reserved port so the app process can bind immediately.
         let _ = reserve_state.lock().await.take();
@@ -2593,6 +2597,7 @@ pub async fn run(
         {
             Ok(mut child) => {
                 if let Some(pid) = child.id() {
+                    write_pid_file(&project_dir, &config_key, pid);
                     emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppPid(pid))
                         .await;
                 }
@@ -2775,6 +2780,7 @@ pub async fn run(
                         match restarted {
                             Ok(mut child) => {
                                 if let Some(pid) = child.id() {
+                                    write_pid_file(&project_dir, &config_key, pid);
                                     emit_persisted_app_event(
                                         &event_tx,
                                         &log_store_path,
@@ -3056,6 +3062,7 @@ pub async fn run(
                                     {
                                         Ok(mut child) => {
                                             if let Some(pid) = child.id() {
+                                                write_pid_file(&project_dir, &config_key, pid);
                                                 emit_persisted_app_event(
                                                     &event_tx,
                                                     &log_store_path,
@@ -3439,6 +3446,7 @@ pub async fn run(
             let _ = child.wait().await;
         }
     }
+    remove_pid_file(&project_dir, &config_key);
     let _ = crate::dev_server_client::unregister_app(&config_key).await;
     let _ = log_watch_stop_tx.send(true);
     if verbose {
@@ -4435,6 +4443,16 @@ async fn spawn_app_process(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
+    // On Linux, ask the kernel to send SIGTERM to the child when the parent
+    // dies (including SIGKILL). This prevents orphaned app processes.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        c.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+
     // Prepend node_modules/.bin to PATH so preset commands like `next`, `vite`
     // are found — same as what npm/yarn/bun do when running package scripts.
     let bin_dir = project_dir.join("node_modules/.bin");
@@ -4608,6 +4626,52 @@ pub enum DevEvent {
     LogsReady,
     /// Another client stopped the app — exit cleanly.
     ExitWithMessage(String),
+}
+
+// ---------------------------------------------------------------------------
+// PID file management — track child app PIDs so orphans from a crashed
+// parent can be cleaned up on next startup.
+// ---------------------------------------------------------------------------
+
+const PID_FILE_DIR: &str = ".tako/dev-pids";
+
+fn pid_file_path(project_dir: &Path, config_key: &str) -> PathBuf {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    config_key.hash(&mut hasher);
+    let key = format!("{:016x}", hasher.finish());
+    project_dir.join(PID_FILE_DIR).join(format!("{key}.pid"))
+}
+
+fn write_pid_file(project_dir: &Path, config_key: &str, pid: u32) {
+    let path = pid_file_path(project_dir, config_key);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, pid.to_string());
+}
+
+fn remove_pid_file(project_dir: &Path, config_key: &str) {
+    let _ = std::fs::remove_file(pid_file_path(project_dir, config_key));
+}
+
+fn kill_orphaned_process(project_dir: &Path, config_key: &str) {
+    let pid: u32 = match std::fs::read_to_string(pid_file_path(project_dir, config_key)) {
+        Ok(s) => match s.trim().parse() {
+            Ok(p) if p > 0 => p,
+            _ => {
+                remove_pid_file(project_dir, config_key);
+                return;
+            }
+        },
+        Err(_) => return,
+    };
+    let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
+    if alive {
+        tracing::info!(pid, "killing orphaned app process from previous run");
+        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    }
+    remove_pid_file(project_dir, config_key);
 }
 
 #[cfg(test)]

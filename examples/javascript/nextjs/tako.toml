@@ -2,9 +2,3 @@ name = "nextjs-example"
 runtime = "node"
 package_manager = "bun"
 preset = "nextjs"
-
-[build]
-run = "bun run build"
-
-[envs.production]
-route = "nextjs-example.example.com"
