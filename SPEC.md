@@ -126,7 +126,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
   - pinned runtime-local aliases: `tanstack-start@<commit-hash>`, `nextjs@<commit-hash>`
 - namespaced preset aliases in `tako.toml` (for example `js/tanstack-start`) are rejected; choose runtime via top-level `runtime` and keep `preset` runtime-local.
 - `github:` preset references are not supported in `tako.toml`.
-- Preset definitions live in `presets/<language>.toml` (for example `presets/javascript.toml`), where each preset is a section (`[tanstack-start]`, etc.). Each section contains `name` (optional, fallback: section name), `main`, `assets`, and `dev` (custom dev command). Presets are fetched from GitHub on demand and cached locally; the first fetch requires network connectivity, subsequent uses work offline via the cache.
+- Preset definitions live in `presets/<language>.toml` (for example `presets/javascript.toml`), where each preset is a section (`[tanstack-start]`, etc.). Each section contains `name` (optional, fallback: section name), `main`, `assets`, and `dev` (custom dev command). Tako caches fetched preset manifests locally. `tako dev` prefers cached or embedded preset data and only fetches from GitHub when nothing local is available; deploy refreshes unpinned aliases from GitHub and falls back to cached content on fetch failure.
 - `tanstack-start` preset defaults `main = "@tanstack/react-start/server-entry"`, `assets = ["dist/client"]`, and `dev = ["vite", "dev"]`.
 - `nextjs` preset defaults `main = ".next/tako-entry.mjs"` and `dev = ["next", "dev"]`.
 - `vite` preset defaults `dev = ["vite", "dev"]` for projects using Vite as their dev server.
@@ -143,8 +143,8 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
   3. Runtime default: JS runtimes run through the SDK entrypoint (`bun run node_modules/tako.sh/dist/entrypoints/bun.mjs {main}`), Go uses `go run .`
 - JS dev uses the same SDK entrypoint as production — the SDK wraps `export default function fetch()` or `export default { fetch }` into a proper HTTP server on `PORT`.
 - Process exit detection: `tako dev` polls `try_wait()` every 500ms to detect when the app process exits. On exit, the route goes idle (proxy stops forwarding) and the next HTTP request triggers a restart.
-- Deploy resolves the preset source and writes `.tako/build.lock.json` (`preset_ref`, `repo`, `path`, `commit`) for visibility and cache-key inputs.
-- Unpinned official preset aliases are fetched from the `master` branch on each resolve; if fetch fails, preset resolution fails.
+- `tako dev` resolves unpinned official preset aliases from cached or embedded preset data when available and only fetches from the `master` branch as a last resort.
+- `tako deploy` resolves unpinned official preset aliases from the `master` branch on each deploy; if the refresh fails, it falls back to cached content.
 - Deploy sends app vars + runtime vars to `tako-server` in the `deploy` command payload (non-secret env vars in `app.json`); secrets are sent separately and stored encrypted in SQLite. `tako-server` passes secrets to instances via fd 3 (file descriptor 3) at spawn time — the server writes secrets as JSON to a pipe and the child process reads fd 3 before any user code runs.
 - `[build]` section has `run` (build command), `install` (optional pre-build install command), `cwd` (optional working directory relative to project root), plus `include`/`exclude` for artifact filtering.
 - `[build]` and `[[build_stages]]` are mutually exclusive: having both `build.run` and `[[build_stages]]` is an error. `[build].include`/`[build].exclude` cannot be used alongside `[[build_stages]]`; use per-stage `exclude` instead.
@@ -163,7 +163,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, build commands, include/exclude patterns, asset roots, and app subdirectory.
 - Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
 - After build, deploy verifies the resolved runtime `main` file exists in the build workspace before artifact packaging; missing files fail deploy with an explicit error.
-- On every deploy, local artifact cache is pruned automatically (best-effort): keep 30 most recent source archives (`*-source.tar.zst`), keep 90 most recent target artifacts (`artifact-cache-*.tar.zst`), and remove orphan target metadata files.
+- On every deploy, local artifact cache is pruned automatically (best-effort): keep 90 most recent target artifacts (`artifact-cache-*.tar.zst`) and remove orphan target metadata files.
 - Artifact include patterns are resolved in this order:
   - `build.include` (if set)
   - fallback `**/*`
@@ -810,7 +810,7 @@ Deploy flow helpers:
 2. Resolve source bundle root (git root when available; otherwise app directory)
 3. Resolve app subdirectory from the selected config file's parent directory relative to source bundle root
 4. Resolve deploy runtime `main` (`main` from `tako.toml`; otherwise preset `main`, with JS index fallback order: `index.<ext>` then `src/index.<ext>` for `ts`/`tsx`/`js`/`jsx` when applicable)
-5. Resolve app preset (top-level `preset` in `tako.toml`), fetching unpinned official aliases from `master`, then persist resolved metadata in `.tako/build.lock.json`
+5. Resolve app preset (top-level `preset` in `tako.toml`), fetching unpinned official aliases from `master`
 6. Prepare workdir: copy project from source root (respecting `.gitignore`), symlink `node_modules/` directories from original tree
 7. Run build commands in workdir:
    - If `[build]` is used: run `build.install` (if set), then `build.run`
@@ -820,7 +820,7 @@ Deploy flow helpers:
    - Save resolved runtime version into `app.json` (`runtime_version` field) for server-side version pinning
 8. Archive workdir (excluding `node_modules/`) as deploy artifact
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
-   - Best-effort local artifact cache prune runs before builds (retention: 30 source archives, 90 target artifacts; orphan target metadata is removed)
+   - Best-effort local artifact cache prune runs before builds (retention: 90 target artifacts; orphan target metadata is removed)
    - Package filtered artifact tarball using include/exclude rules and store in local cache
 9. Deploy to all servers in parallel:
    - Require `tako-server` to be pre-installed and running on each server

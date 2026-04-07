@@ -124,11 +124,13 @@ dev = ["vite", "dev"]
 
 ## Preset resolution
 
-When you deploy or run `tako dev`, Tako resolves your preset alias into actual metadata. Presets are fetched from GitHub on demand and cached locally for offline use.
+When you deploy or run `tako dev`, Tako resolves your preset alias into actual metadata. Presets are cached locally for offline use.
 
-**Unpinned aliases** (e.g. `preset = "tanstack-start"`) are fetched from the `master` branch of the presets repository and cached for 1 hour. After the cache expires, Tako re-fetches from GitHub. If the fetch fails, Tako falls back to previously cached content.
+**`tako dev`** prefers cached preset data immediately. If you already have a cached or embedded preset manifest, dev startup does not wait on GitHub. It only fetches from the `master` branch when nothing local is available.
 
-**First run**: Requires network connectivity to fetch presets. After the initial fetch, presets work offline via the local cache.
+**`tako deploy`** refreshes unpinned aliases (for example `preset = "tanstack-start"`) from the `master` branch of the presets repository. Fresh branch metadata is cached for 1 hour. If the refresh fails, Tako falls back to previously cached content.
+
+**First run**: `tako dev` can start offline for built-in presets because JS and Go family manifests are embedded in the CLI. `tako deploy` still needs a successful fetch the first time unless the preset is already cached.
 
 ### Pinning a preset version
 
@@ -139,17 +141,6 @@ preset = "tanstack-start@a1b2c3d"
 ```
 
 Pinned presets fetch from that exact commit instead of `master`, so upstream changes never affect your builds.
-
-### build.lock.json
-
-After resolving a preset, Tako writes the resolved metadata to `.tako/build.lock.json` with these fields:
-
-- `preset_ref` -- the preset alias as specified
-- `repo` -- source repository
-- `path` -- path to the family manifest file
-- `commit` -- resolved commit hash
-
-This file provides visibility into what was resolved and is used as an input to the artifact cache key.
 
 ## Presets during tako init
 

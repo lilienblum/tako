@@ -1,13 +1,11 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use base64::Engine;
 use serde::{Deserialize, Serialize};
 
 use crate::build::adapter::{BuildAdapter, PresetGroup};
 use crate::build::preset_cache;
 
-pub const BUILD_LOCK_RELATIVE_PATH: &str = ".tako/build.lock.json";
 const FALLBACK_OFFICIAL_PRESET_REPO: &str = "tako-sh/presets";
 const PACKAGE_REPOSITORY_URL: &str = env!("CARGO_PKG_REPOSITORY");
 const OFFICIAL_PRESET_BRANCH: &str = "master";
@@ -15,6 +13,12 @@ const OFFICIAL_JS_GROUP_PRESETS_PATH: &str = "presets/javascript.toml";
 const OFFICIAL_GO_GROUP_PRESETS_PATH: &str = "presets/go.toml";
 const EMBEDDED_JS_GROUP_PRESETS: &str = include_str!("../../../presets/javascript.toml");
 const EMBEDDED_GO_GROUP_PRESETS: &str = include_str!("../../../presets/go.toml");
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PresetResolveMode {
+    Deploy,
+    Dev,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PresetReference {
@@ -68,12 +72,6 @@ pub struct ResolvedPresetSource {
     pub repo: String,
     pub path: String,
     pub commit: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct BuildLockFile {
-    schema_version: u32,
-    preset: ResolvedPresetSource,
 }
 
 pub fn parse_preset_reference(value: &str) -> Result<PresetReference, String> {
@@ -245,6 +243,21 @@ pub async fn load_build_preset(
     project_dir: &Path,
     preset_ref: &str,
 ) -> Result<(BuildPreset, ResolvedPresetSource), String> {
+    load_build_preset_with_mode(project_dir, preset_ref, PresetResolveMode::Deploy).await
+}
+
+pub async fn load_dev_build_preset(
+    project_dir: &Path,
+    preset_ref: &str,
+) -> Result<(BuildPreset, ResolvedPresetSource), String> {
+    load_build_preset_with_mode(project_dir, preset_ref, PresetResolveMode::Dev).await
+}
+
+async fn load_build_preset_with_mode(
+    project_dir: &Path,
+    preset_ref: &str,
+    mode: PresetResolveMode,
+) -> Result<(BuildPreset, ResolvedPresetSource), String> {
     let parsed_ref = parse_preset_reference(preset_ref)?;
 
     let (alias, commit_override) = match &parsed_ref {
@@ -255,13 +268,8 @@ pub async fn load_build_preset(
 
     let (repo, commit, content) = if let Some(commit) = commit_override {
         resolve_by_commit(&official_repo, &path, &commit).await?
-    } else if let Ok(Some(locked)) = read_locked_preset(project_dir)
-        && locked.path == path
-        && locked.commit != "embedded"
-    {
-        resolve_by_commit(&locked.repo, &path, &locked.commit).await?
     } else {
-        resolve_by_branch(&official_repo, &path, OFFICIAL_PRESET_BRANCH).await?
+        resolve_by_branch(&official_repo, &path, OFFICIAL_PRESET_BRANCH, mode).await?
     };
 
     let preset = parse_resolved_preset_from_content(&parsed_ref, &path, &content)?;
@@ -271,7 +279,7 @@ pub async fn load_build_preset(
         path,
         commit: commit.clone(),
     };
-    write_locked_preset(project_dir, &resolved)?;
+    remove_legacy_build_lock(project_dir);
     Ok((preset, resolved))
 }
 
@@ -311,12 +319,31 @@ async fn resolve_by_branch(
     repo: &str,
     path: &str,
     branch: &str,
+    mode: PresetResolveMode,
 ) -> Result<(String, String, String), String> {
     // Check freshness — if TTL hasn't expired, use cached content
     if let Some(sha) = preset_cache::fresh_sha(repo, branch)
         && let Some(content) = preset_cache::read_cached(repo, &sha, path)
     {
         return Ok((repo.to_string(), sha, content));
+    }
+
+    if mode == PresetResolveMode::Dev {
+        if let Some(sha) = preset_cache::last_known_sha(repo, branch)
+            && let Some(content) = preset_cache::read_cached(repo, &sha, path)
+        {
+            return Ok((repo.to_string(), sha, content));
+        }
+        if let Some((sha, content)) = preset_cache::find_any_cached(repo, path) {
+            return Ok((repo.to_string(), sha, content));
+        }
+        if let Some(content) = embedded_group_manifest_content(path) {
+            return Ok((
+                repo.to_string(),
+                "embedded".to_string(),
+                content.to_string(),
+            ));
+        }
     }
 
     // Fetch from GitHub to resolve current SHA
@@ -442,8 +469,13 @@ pub async fn load_available_group_preset_definitions(
     };
 
     let official_repo = official_preset_repo();
-    let (_repo, _commit, content) =
-        resolve_by_branch(&official_repo, path, OFFICIAL_PRESET_BRANCH).await?;
+    let (_repo, _commit, content) = resolve_by_branch(
+        &official_repo,
+        path,
+        OFFICIAL_PRESET_BRANCH,
+        PresetResolveMode::Deploy,
+    )
+    .await?;
     parse_group_manifest_preset_definitions(path, &content)
 }
 
@@ -455,8 +487,13 @@ pub async fn load_available_group_presets(group: PresetGroup) -> Result<Vec<Stri
         ));
     };
     let official_repo = official_preset_repo();
-    let (_repo, _commit, content) =
-        resolve_by_branch(&official_repo, path, OFFICIAL_PRESET_BRANCH).await?;
+    let (_repo, _commit, content) = resolve_by_branch(
+        &official_repo,
+        path,
+        OFFICIAL_PRESET_BRANCH,
+        PresetResolveMode::Deploy,
+    )
+    .await?;
     parse_group_manifest_preset_names(path, &content)
 }
 
@@ -603,32 +640,18 @@ fn infer_adapter_from_official_alias_name(alias: &str) -> BuildAdapter {
     BuildAdapter::from_id(group_or_name).unwrap_or(BuildAdapter::Unknown)
 }
 
-fn read_locked_preset(project_dir: &Path) -> Result<Option<ResolvedPresetSource>, String> {
-    let lock_path = project_dir.join(BUILD_LOCK_RELATIVE_PATH);
+fn remove_legacy_build_lock(project_dir: &Path) {
+    let lock_path = project_dir.join(".tako/build.lock.json");
     if !lock_path.exists() {
-        return Ok(None);
+        return;
     }
-
-    let raw = fs::read_to_string(&lock_path)
-        .map_err(|e| format!("Failed to read {}: {e}", lock_path.display()))?;
-    let lock: BuildLockFile = serde_json::from_str(&raw)
-        .map_err(|e| format!("Failed to parse {}: {e}", lock_path.display()))?;
-    Ok(Some(lock.preset))
-}
-
-fn write_locked_preset(project_dir: &Path, resolved: &ResolvedPresetSource) -> Result<(), String> {
-    let lock_path = project_dir.join(BUILD_LOCK_RELATIVE_PATH);
-    if let Some(parent) = lock_path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    if let Err(error) = fs::remove_file(&lock_path) {
+        tracing::warn!(
+            "Failed to remove legacy preset lock file {}: {}",
+            lock_path.display(),
+            error
+        );
     }
-    let lock = BuildLockFile {
-        schema_version: 1,
-        preset: resolved.clone(),
-    };
-    let json = serde_json::to_string_pretty(&lock)
-        .map_err(|e| format!("Failed to serialize build lock: {e}"))?;
-    fs::write(&lock_path, json).map_err(|e| format!("Failed to write {}: {e}", lock_path.display()))
 }
 
 fn apply_github_auth(builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
@@ -665,12 +688,16 @@ async fn fetch_preset_content_from_master_branch(
     repo: &str,
     path: &str,
 ) -> Result<(String, String), String> {
+    let commit = fetch_github_branch_commit(repo, OFFICIAL_PRESET_BRANCH).await?;
+    let content = fetch_preset_content_by_commit(repo, path, &commit).await?;
+    Ok((commit, content))
+}
+
+async fn fetch_github_branch_commit(repo: &str, branch: &str) -> Result<String, String> {
     let Some((owner, repository)) = repo.split_once('/') else {
         return Err("Failed to fetch preset".to_string());
     };
-    let url = format!(
-        "https://api.github.com/repos/{owner}/{repository}/contents/{path}?ref={OFFICIAL_PRESET_BRANCH}"
-    );
+    let url = format!("https://api.github.com/repos/{owner}/{repository}/git/ref/heads/{branch}");
     let client = reqwest::Client::new();
     let response = apply_github_auth(client.get(url).header("User-Agent", "tako-cli"))
         .send()
@@ -683,28 +710,25 @@ async fn fetch_preset_content_from_master_branch(
         .text()
         .await
         .map_err(|_e| "Failed to fetch preset".to_string())?;
-    let json: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|_e| "Failed to fetch preset".to_string())?;
-
-    let sha = json
-        .get("sha")
-        .and_then(|v| v.as_str())
-        .map(ToOwned::to_owned)
-        .ok_or_else(|| "Failed to fetch preset".to_string())?;
-    let content_b64 = json
-        .get("content")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "Failed to fetch preset".to_string())?;
-    let normalized = content_b64.replace('\n', "");
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(normalized)
-        .map_err(|_e| "Failed to fetch preset".to_string())?;
-    let content = String::from_utf8(bytes).map_err(|_e| "Failed to fetch preset".to_string())?;
-    Ok((sha, content))
+    parse_github_branch_commit_sha(&raw)
 }
 
-pub fn lock_file_path(project_dir: &Path) -> PathBuf {
-    project_dir.join(BUILD_LOCK_RELATIVE_PATH)
+fn parse_github_branch_commit_sha(raw: &str) -> Result<String, String> {
+    let json: serde_json::Value =
+        serde_json::from_str(raw).map_err(|_e| "Failed to fetch preset".to_string())?;
+    let object = json
+        .get("object")
+        .and_then(|value| value.as_object())
+        .ok_or_else(|| "Failed to fetch preset".to_string())?;
+    if object.get("type").and_then(|value| value.as_str()) != Some("commit") {
+        return Err("Failed to fetch preset".to_string());
+    }
+    object
+        .get("sha")
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| "Failed to fetch preset".to_string())
 }
 
 #[cfg(test)]
@@ -1116,21 +1140,6 @@ assets = ["dist/client"]
     }
 
     #[test]
-    fn lock_round_trip_writes_and_reads_build_lock_file() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let resolved = ResolvedPresetSource {
-            preset_ref: "bun".to_string(),
-            repo: "tako-sh/presets".to_string(),
-            path: "presets/javascript.toml".to_string(),
-            commit: "abc123".to_string(),
-        };
-        write_locked_preset(temp.path(), &resolved).unwrap();
-        let loaded = read_locked_preset(temp.path()).unwrap().unwrap();
-        assert_eq!(loaded, resolved);
-        assert!(lock_file_path(temp.path()).exists());
-    }
-
-    #[test]
     fn fetch_preset_content_from_master_branch_returns_generic_fetch_error() {
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let err = runtime
@@ -1140,5 +1149,148 @@ assets = ["dist/client"]
             ))
             .unwrap_err();
         assert_eq!(err, "Failed to fetch preset");
+    }
+
+    #[test]
+    fn resolve_by_branch_uses_stale_cache_immediately_in_dev_mode() {
+        let _lock = crate::paths::test_tako_home_env_lock();
+        let previous = std::env::var_os("TAKO_HOME");
+        let home = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("TAKO_HOME", home.path());
+        }
+
+        let repo = "invalid-repo-slug";
+        let path = "presets/javascript.toml";
+        let sha = "abc1234567890";
+        let manifest = r#"
+[nextjs]
+main = ".next/tako-entry.mjs"
+dev = ["next", "dev"]
+"#;
+        crate::build::preset_cache::write_cached(repo, sha, path, manifest).unwrap();
+
+        let repo_dir = crate::paths::tako_cache_dir()
+            .unwrap()
+            .join("presets")
+            .join(repo.replace('/', "__"));
+        fs::create_dir_all(&repo_dir).unwrap();
+        fs::write(
+            repo_dir.join("_meta.json"),
+            format!(
+                r#"{{
+  "branches": {{
+    "{branch}": {{
+      "sha": "{sha}",
+      "last_checked": 0
+    }}
+  }}
+}}"#,
+                branch = OFFICIAL_PRESET_BRANCH,
+                sha = sha
+            ),
+        )
+        .unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let resolved = runtime.block_on(resolve_by_branch(
+            repo,
+            path,
+            OFFICIAL_PRESET_BRANCH,
+            PresetResolveMode::Dev,
+        ));
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+            None => unsafe { std::env::remove_var("TAKO_HOME") },
+        }
+
+        let (resolved_repo, resolved_sha, content) = resolved.unwrap();
+        assert_eq!(resolved_repo, repo);
+        assert_eq!(resolved_sha, sha);
+        assert_eq!(content, manifest);
+    }
+
+    #[test]
+    fn parse_github_branch_commit_sha_extracts_commit_sha() {
+        let sha = parse_github_branch_commit_sha(
+            r#"{
+  "ref": "refs/heads/master",
+  "object": {
+    "sha": "d0ff9bec5b3d42a874b1bff544249b3a4c530d9f",
+    "type": "commit"
+  }
+}"#,
+        )
+        .unwrap();
+        assert_eq!(sha, "d0ff9bec5b3d42a874b1bff544249b3a4c530d9f");
+    }
+
+    #[test]
+    fn parse_github_branch_commit_sha_rejects_non_commit_objects() {
+        let err = parse_github_branch_commit_sha(
+            r#"{
+  "ref": "refs/heads/master",
+  "object": {
+    "sha": "eb9c0c1dd0b123ce72c29397826966d831617d0a",
+    "type": "blob"
+  }
+}"#,
+        )
+        .unwrap_err();
+        assert_eq!(err, "Failed to fetch preset");
+    }
+
+    #[test]
+    fn load_build_preset_ignores_and_removes_legacy_build_lock() {
+        let _lock = crate::paths::test_tako_home_env_lock();
+        let previous = std::env::var_os("TAKO_HOME");
+        let home = tempfile::TempDir::new().unwrap();
+        let project = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("TAKO_HOME", home.path());
+        }
+
+        let repo = official_preset_repo();
+        let path = "presets/javascript.toml";
+        let branch_sha = "d0ff9bec5b3d42a874b1bff544249b3a4c530d9f";
+        let manifest = r#"
+[nextjs]
+main = ".next/tako-entry.mjs"
+dev = ["next", "dev"]
+"#;
+        crate::build::preset_cache::write_cached(&repo, branch_sha, path, manifest).unwrap();
+        crate::build::preset_cache::update_freshness(&repo, OFFICIAL_PRESET_BRANCH, branch_sha)
+            .unwrap();
+
+        let lock_path = project.path().join(".tako/build.lock.json");
+        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        fs::write(
+            &lock_path,
+            r#"{
+  "schema_version": 1,
+  "preset": {
+    "preset_ref": "javascript/nextjs",
+    "repo": "lilienblum/tako",
+    "path": "presets/javascript.toml",
+    "commit": "eb9c0c1dd0b123ce72c29397826966d831617d0a"
+  }
+}"#,
+        )
+        .unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (preset, resolved) = runtime
+            .block_on(load_build_preset(project.path(), "javascript/nextjs"))
+            .unwrap();
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+            None => unsafe { std::env::remove_var("TAKO_HOME") },
+        }
+
+        assert_eq!(preset.name, "nextjs");
+        assert_eq!(resolved.commit, branch_sha);
+        assert!(!lock_path.exists());
     }
 }

@@ -34,7 +34,7 @@ use tokio::time::timeout;
 use crate::app::resolve_app_name_from_config_path;
 use crate::build::{
     BuildAdapter, BuildPreset, PresetGroup, PresetReference, apply_adapter_base_runtime_defaults,
-    infer_adapter_from_preset_reference, js, load_build_preset, parse_preset_reference,
+    infer_adapter_from_preset_reference, js, parse_preset_reference,
     qualify_runtime_local_preset_ref,
 };
 use crate::config::TakoToml;
@@ -2230,7 +2230,7 @@ pub async fn run(
     let preset_ref = resolve_dev_preset_ref(&eff_app_dir, &cfg)?;
     let runtime_adapter = resolve_effective_dev_build_adapter(&eff_app_dir, &cfg, &preset_ref)
         .map_err(|e| format!("Failed to resolve runtime adapter: {}", e))?;
-    let (mut build_preset, _) = load_build_preset(&eff_app_dir, &preset_ref)
+    let (mut build_preset, _) = crate::build::load_dev_build_preset(&eff_app_dir, &preset_ref)
         .await
         .map_err(|e| format!("Failed to resolve build preset '{}': {}", preset_ref, e))?;
     let plugin_ctx = tako_runtime::PluginContext {
@@ -3892,7 +3892,7 @@ async fn run_attached_dev_client(
     if interactive {
         let adapter_name = if let Ok(cfg) = load_dev_tako_toml(&session.config_path) {
             if let Ok(preset_ref) = resolve_dev_preset_ref(&session.project_dir, &cfg) {
-                match load_build_preset(&session.project_dir, &preset_ref).await {
+                match crate::build::load_dev_build_preset(&session.project_dir, &preset_ref).await {
                     Ok((preset, _)) => preset.name,
                     Err(_) => infer_preset_name_from_ref(&preset_ref),
                 }

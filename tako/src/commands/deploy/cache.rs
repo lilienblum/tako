@@ -171,31 +171,6 @@ pub(super) fn cleanup_local_artifact_cache(
     Ok(summary)
 }
 
-pub(super) fn cleanup_local_build_workspaces(workspace_root: &Path) -> Result<usize, String> {
-    if !workspace_root.exists() {
-        return Ok(0);
-    }
-
-    let mut removed = 0usize;
-    for entry in std::fs::read_dir(workspace_root)
-        .map_err(|e| format!("Failed to read {}: {e}", workspace_root.display()))?
-    {
-        let entry = entry.map_err(|e| {
-            format!(
-                "Failed to read dir entry in {}: {e}",
-                workspace_root.display()
-            )
-        })?;
-        let path = entry.path();
-        if path.is_dir() {
-            std::fs::remove_dir_all(&path)
-                .map_err(|e| format!("Failed to remove build workspace {}: {e}", path.display()))?;
-            removed += 1;
-        }
-    }
-    Ok(removed)
-}
-
 fn artifact_cache_metadata_path_for_archive(archive_path: &Path) -> Option<PathBuf> {
     let file_name = archive_path.file_name()?.to_str()?;
     let stem = file_name.strip_suffix(".tar.zst")?;

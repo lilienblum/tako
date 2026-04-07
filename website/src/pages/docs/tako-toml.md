@@ -128,8 +128,7 @@ When omitted, Tako uses the base preset for the selected runtime (from `runtime`
 **How presets work:**
 
 - Presets are metadata-only: they define `name`, `main`, and `assets` defaults. They do not contain build, install, start, or dev commands (though they can define a `dev` command override).
-- Preset definitions live in `presets/<language>.toml` (e.g. `presets/javascript.toml`) in the Tako repo. They are fetched from GitHub on demand and cached locally for offline use.
-- Resolved preset metadata is written to `.tako/build.lock.json` for visibility and cache-key inputs.
+- Preset definitions live in `presets/<language>.toml` (e.g. `presets/javascript.toml`) in the Tako repo. Tako caches them locally; `tako dev` prefers cached or embedded manifests, while deploy refreshes unpinned aliases from GitHub and falls back to cache if refresh fails.
 - Example built-in JS presets: `tanstack-start` (`vite dev`, `@tanstack/react-start/server-entry`) and `nextjs` (`next dev`, `.next/tako-entry.mjs`).
 
 See [Presets](/docs/presets) for the full preset schema and available presets.

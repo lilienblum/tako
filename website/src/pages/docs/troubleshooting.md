@@ -213,7 +213,7 @@ Deploy runs against all servers in parallel. If some servers succeed while other
 
 **Symptom:** Repeated deploys unexpectedly rebuild, or a cache warning appears before rebuild.
 
-**Expected behavior:** Tako verifies cached artifact checksum/size and automatically rebuilds if the cache is invalid. Each deploy also prunes local `.tako/artifacts/` cache (best-effort), keeping 30 newest source archives and 90 newest target artifacts, and removing orphan target metadata files.
+**Expected behavior:** Tako verifies cached artifact checksum/size and automatically rebuilds if the cache is invalid. Each deploy also prunes local `.tako/artifacts/` cache (best-effort), keeping 90 newest target artifacts and removing orphan target metadata files.
 
 **Fix:** If cache behavior is unexpected, remove the local cache directory `.tako/artifacts/` and redeploy.
 

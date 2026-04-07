@@ -4,8 +4,6 @@ use std::path::{Component, Path};
 use crate::build::{BuildAdapter, BuildError, BuildExecutor};
 use crate::config::{SecretsStore, TakoToml};
 
-pub(super) const DEPLOY_ARCHIVE_MANIFEST_FILE: &str = "app.json";
-
 #[derive(Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
 pub(super) struct DeployArchiveManifest {
     pub(super) app_name: String,

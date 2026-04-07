@@ -8,8 +8,8 @@ use crate::output;
 use super::BuildPhaseResult;
 use super::cache::{
     ArtifactCachePaths, artifact_cache_paths, artifact_cache_temp_path,
-    cleanup_local_artifact_cache, cleanup_local_build_workspaces, load_valid_cached_artifact,
-    persist_cached_artifact, remove_cached_artifact_files, sanitize_cache_label,
+    cleanup_local_artifact_cache, load_valid_cached_artifact, persist_cached_artifact,
+    remove_cached_artifact_files, sanitize_cache_label,
 };
 use super::format::{
     format_artifact_cache_hit_message_for_output, format_artifact_cache_invalid_message,
@@ -20,12 +20,11 @@ use super::format::{
     format_runtime_probe_success, format_size, format_stage_label, should_use_local_build_spinners,
 };
 use super::manifest::{
-    DEPLOY_ARCHIVE_MANIFEST_FILE, build_deploy_archive_manifest, decrypt_deploy_secrets,
-    resolve_deploy_main, resolve_deploy_version_and_source_hash, resolve_git_commit_message,
+    build_deploy_archive_manifest, decrypt_deploy_secrets, resolve_deploy_main,
+    resolve_deploy_version_and_source_hash, resolve_git_commit_message,
 };
 use super::task_tree::{ArtifactBuildGroup, DeployTaskTreeController};
 
-pub(super) const LOCAL_BUILD_WORKSPACE_RELATIVE_DIR: &str = ".tako/tmp/workspaces";
 pub(super) const LOCAL_BUILD_CACHE_RELATIVE_DIR: &str = ".tako/tmp/build-caches";
 pub(super) const RUNTIME_VERSION_OUTPUT_FILE: &str = ".tako-runtime-version";
 pub(super) const LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS: usize = 90;
@@ -98,24 +97,6 @@ pub(super) async fn prepare_build_phase(
             }
         }
     }
-    let build_workspace_root = project_dir.join(LOCAL_BUILD_WORKSPACE_RELATIVE_DIR);
-    match cleanup_local_build_workspaces(&build_workspace_root) {
-        Ok(removed) if removed > 0 => {
-            tracing::debug!(
-                "Local build workspace cleanup: removed {} workspace(s)",
-                removed
-            );
-        }
-        Ok(_) => {}
-        Err(error) => {
-            if task_tree.is_none() {
-                output::warning(&format!("Local build workspace cleanup skipped: {}", error));
-            } else {
-                tracing::warn!("Local build workspace cleanup skipped: {}", error);
-            }
-        }
-    }
-
     let (version, _source_hash) = resolve_deploy_version_and_source_hash(&executor, &source_root)
         .map_err(|e| e.to_string())?;
     let git_commit_message = resolve_git_commit_message(&source_root);
@@ -219,51 +200,7 @@ pub(super) async fn prepare_build_phase(
     let deploy_secrets =
         decrypt_deploy_secrets(&app_name, &env, &secrets).map_err(|e| e.to_string())?;
 
-    let source_archive_dir = project_dir.join(".tako/tmp");
-    std::fs::create_dir_all(&source_archive_dir).map_err(|e| e.to_string())?;
-    let source_archive_path = source_archive_dir.join("source.tar.zst");
     let app_json_bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
-    let app_manifest_archive_path = DEPLOY_ARCHIVE_MANIFEST_FILE.to_string();
-    let source_archive_size = if task_tree.is_none() {
-        output::with_spinner("Creating source archive", "Source archive created", || {
-            tracing::debug!("Archiving source from {}…", source_root.display());
-            let _t = output::timed("Source archive creation");
-            let size = executor.create_source_archive_with_extra_files(
-                &source_root,
-                &source_archive_path,
-                &[(
-                    app_manifest_archive_path.as_str(),
-                    app_json_bytes.as_slice(),
-                )],
-            );
-            if let Ok(bytes) = &size {
-                tracing::debug!("Source archive size: {}", format_size(*bytes));
-            }
-            size
-        })
-        .map_err(|e| e.to_string())?
-    } else {
-        tracing::debug!("Archiving source from {}…", source_root.display());
-        let _t = output::timed("Source archive creation");
-        let size = executor.create_source_archive_with_extra_files(
-            &source_root,
-            &source_archive_path,
-            &[(
-                app_manifest_archive_path.as_str(),
-                app_json_bytes.as_slice(),
-            )],
-        );
-        if let Ok(bytes) = &size {
-            tracing::debug!("Source archive size: {}", format_size(*bytes));
-        }
-        size.map_err(|e| e.to_string())?
-    };
-
-    tracing::debug!(
-        "Source archive created: {} ({})",
-        format_path_relative_to(&project_dir, &source_archive_path),
-        format_size(source_archive_size),
-    );
 
     let include_patterns = build_artifact_include_patterns(&tako_config);
     let exclude_patterns = build_artifact_exclude_patterns(&build_preset, &tako_config);
@@ -281,8 +218,6 @@ pub(super) async fn prepare_build_phase(
         &source_root,
         &tako_config,
         cache.cache_dir(),
-        &build_workspace_root,
-        &source_archive_path,
         &app_json_bytes,
         &version,
         &runtime_tool,
@@ -490,8 +425,6 @@ async fn build_target_artifacts(
     source_root: &Path,
     tako_config: &TakoToml,
     cache_dir: &Path,
-    _build_workspace_root: &Path,
-    _source_archive_path: &Path,
     app_manifest_bytes: &[u8],
     version: &str,
     runtime_tool: &str,
@@ -1862,5 +1795,68 @@ mod tests {
             format_build_stages_summary_for_output(&summary, Some("linux-x86_64-glibc")),
             Some("Build stages for linux-x86_64-glibc: Stage 'preset' -> Stage 2".to_string())
         );
+    }
+
+    #[test]
+    fn prepare_build_phase_does_not_leave_unused_tmp_paths() {
+        let _lock = crate::paths::test_tako_home_env_lock();
+        let previous = std::env::var_os("TAKO_HOME");
+        let home = TempDir::new().unwrap();
+        let project = TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("TAKO_HOME", home.path());
+        }
+
+        std::fs::write(project.path().join("package.json"), r#"{"name":"app"}"#).unwrap();
+        std::fs::write(project.path().join("index.ts"), "export default {};\n").unwrap();
+
+        let repo = "lilienblum/tako";
+        let path = "presets/javascript.toml";
+        let branch_sha = "d0ff9bec5b3d42a874b1bff544249b3a4c530d9f";
+        let manifest = r#"
+[vite]
+dev = ["vite", "dev"]
+"#;
+        crate::build::preset_cache::write_cached(&repo, branch_sha, path, manifest).unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let result = runtime.block_on(prepare_build_phase(
+            project.path().to_path_buf(),
+            project.path().to_path_buf(),
+            project.path().to_path_buf(),
+            "app".to_string(),
+            "production".to_string(),
+            TakoToml::default(),
+            crate::config::SecretsStore::default(),
+            format!("javascript/vite@{branch_sha}"),
+            BuildAdapter::Node,
+            vec![(
+                "local".to_string(),
+                crate::config::ServerTarget {
+                    arch: "x86_64".to_string(),
+                    libc: "glibc".to_string(),
+                },
+            )],
+            vec![ArtifactBuildGroup {
+                build_target_label: "linux-x86_64-glibc".to_string(),
+                cache_target_label: "linux-x86_64-glibc".to_string(),
+                target_labels: vec!["linux-x86_64-glibc".to_string()],
+                display_target_label: None,
+            }],
+            None,
+        ));
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+            None => unsafe { std::env::remove_var("TAKO_HOME") },
+        }
+
+        let build_phase = result.unwrap();
+        assert!(
+            build_phase
+                .artifacts_by_target
+                .contains_key("linux-x86_64-glibc")
+        );
+        assert!(!project.path().join(".tako/tmp").exists());
     }
 }
