@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.2.0](https://github.com/lilienblum/tako/compare/tako-v0.1.0...tako-v0.2.0) (2026-04-07)
+
+
+### Features
+
+* **nextjs:** add Next.js preset, SDK adapter, and raise cold start queue ([9d40f06](https://github.com/lilienblum/tako/commit/9d40f06f83bfd47dc5fd2bf7437a339a775fe688))
+
+
+### Bug Fixes
+
+* **ci:** authenticate GitHub API calls for preset fetching ([3047ddc](https://github.com/lilienblum/tako/commit/3047ddc3bfdf77e2ff13a94f6d14e0559b27d91c))
+* **deploy:** clean up lock file on drop to prevent stale flock contention ([6ce0f57](https://github.com/lilienblum/tako/commit/6ce0f57cfd4efa4e0c1e5fda7b39ae36fb7918b6))
+* **deploy:** lock local deploy execution ([a14626d](https://github.com/lilienblum/tako/commit/a14626dbc978feb4e0ce302202aa5ac16e0c669c))
+* **deploy:** prune stale local build caches ([63a87c8](https://github.com/lilienblum/tako/commit/63a87c81656e5acbd14866023e489d465ecb710f))
+* **dev:** kill orphaned app processes from previous crashed runs ([7a3aa81](https://github.com/lilienblum/tako/commit/7a3aa8182b994781c2ce097cf8c770cf8fc947d3))
+* **dev:** prepend node_modules/.bin to PATH when spawning app process ([7791420](https://github.com/lilienblum/tako/commit/7791420e5506256d3a6da15bacbb86222e74f175))
+* **repo:** update preset resolution and deploy cleanup ([628f6c4](https://github.com/lilienblum/tako/commit/628f6c42abf6512c31c26a166c47cfeff838d243))
+
 ## 0.1.0 (2026-04-03)
 
 ### Features
