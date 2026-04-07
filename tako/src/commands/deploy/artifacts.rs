@@ -375,10 +375,11 @@ fn persist_local_build_caches(
     let mut persisted = 0usize;
     for spec in local_build_cache_specs(runtime_adapter) {
         let source = local_build_cache_destination(spec, workspace_root, app_dir);
+        let destination = cache_root.join(spec.relative_path);
         if !source.is_dir() {
+            remove_path_if_exists(&destination)?;
             continue;
         }
-        let destination = cache_root.join(spec.relative_path);
         replace_directory_from_cache(&source, &destination)?;
         persisted += 1;
     }
@@ -1583,6 +1584,28 @@ mod tests {
         );
         assert!(!cache_root.join(".turbo/stale.txt").exists());
         assert!(!cache_root.join(".next/cache/stale.txt").exists());
+    }
+
+    #[test]
+    fn persist_local_build_caches_removes_entries_when_build_did_not_recreate_them() {
+        let temp = TempDir::new().unwrap();
+        let cache_root = temp.path().join("cache");
+        let workspace = temp.path().join("workspace");
+        let app_dir = workspace.join("apps/web");
+
+        std::fs::create_dir_all(cache_root.join(".turbo")).unwrap();
+        std::fs::create_dir_all(cache_root.join(".next/cache")).unwrap();
+        std::fs::create_dir_all(&app_dir).unwrap();
+        std::fs::write(cache_root.join(".turbo/stale.txt"), "stale").unwrap();
+        std::fs::write(cache_root.join(".next/cache/stale.txt"), "stale").unwrap();
+
+        let persisted =
+            persist_local_build_caches(&cache_root, &workspace, &app_dir, BuildAdapter::Node)
+                .unwrap();
+
+        assert_eq!(persisted, 0);
+        assert!(!cache_root.join(".turbo").exists());
+        assert!(!cache_root.join(".next/cache").exists());
     }
 
     #[test]
