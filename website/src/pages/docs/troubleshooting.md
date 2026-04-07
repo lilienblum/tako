@@ -177,6 +177,12 @@ For Next.js deploys, make sure your build is using `withTako(...)` from `tako.sh
 
 `tako-server` uses an in-memory per-app lock for deploys. No `.deploy_lock` directory is written to disk. If `tako-server` restarted mid-deploy, the in-flight deploy fails and a retry does not require manual lock cleanup.
 
+### Another local deploy is already running
+
+**Symptom:** The CLI exits immediately with a message like `Another deploy is already running for this project (PID ...)`.
+
+**Fix:** Another non-dry-run `tako deploy` already holds the local project lock at `.tako/deploy.lock`. Wait for that process to finish, or inspect/stop the reported PID before retrying. The lock itself is advisory `flock` state, so crashes do not require manual lock-file deletion.
+
 ### Low disk space
 
 **Symptom:** Deploy fails before upload with a message showing required vs. available disk sizes.

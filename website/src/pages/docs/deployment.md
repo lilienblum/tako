@@ -145,6 +145,8 @@ Use `--dry-run` to preview the deploy without performing any side effects -- val
 tako deploy --dry-run
 ```
 
+Non-dry-run deploys also take a project-local `.tako/deploy.lock` before server checks and build work begin. If another local deploy is already running for the same project, Tako fails fast and shows the owning PID instead of racing on the shared local workdir/cache state.
+
 ### What happens during deploy
 
 1. **Pre-validation** -- Checks that secrets are present, server target metadata exists for all selected servers, and routes are valid.

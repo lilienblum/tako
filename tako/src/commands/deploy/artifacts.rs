@@ -1817,7 +1817,7 @@ mod tests {
 [vite]
 dev = ["vite", "dev"]
 "#;
-        crate::build::preset_cache::write_cached(&repo, branch_sha, path, manifest).unwrap();
+        crate::build::preset_cache::write_cached(repo, branch_sha, path, manifest).unwrap();
 
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let result = runtime.block_on(prepare_build_phase(

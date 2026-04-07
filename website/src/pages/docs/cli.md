@@ -201,6 +201,8 @@ In interactive terminals, deploying to `production` requires confirmation unless
 
 Deploy resolves app identity from `name` in the selected config file, falling back to the sanitized selected config parent directory name.
 
+Before server checks and build work start, non-dry-run deploy acquires a project-local `.tako/deploy.lock`. If another local deploy is already running for the same project, the second command fails immediately and reports the owning PID.
+
 **Server auto-selection:** If you're deploying to `production` and `[envs.production].servers` is empty, Tako will auto-select your only server or prompt you to pick one when you have multiple servers configured. The selection is persisted to `tako.toml`.
 
 **Failure handling:** If some servers fail while others succeed, deploy continues and reports failures at the end. Failed deploys automatically roll back on the affected server and clean up partial release directories.

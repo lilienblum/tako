@@ -8,6 +8,9 @@ mod remote;
 mod task_tree;
 
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -92,6 +95,11 @@ struct ValidationResult {
     secrets: SecretsStore,
     env: String,
     warnings: Vec<String>,
+}
+
+#[derive(Debug)]
+struct ProjectDeployLock {
+    _file: File,
 }
 
 impl DeployConfig {
@@ -267,6 +275,9 @@ async fn run_async(
         print_deploy_summary("App", &app_name, &routes);
         return Ok(());
     }
+
+    let _deploy_lock = acquire_project_deploy_lock(&project_dir)
+        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
     let use_per_server_spinners = deploy_task_tree.is_none()
         && should_use_per_server_spinners(server_names.len(), output::is_interactive());
@@ -550,9 +561,68 @@ fn source_bundle_root(project_dir: &Path, runtime_id: &str) -> PathBuf {
     }
 }
 
+fn deploy_lock_path(project_dir: &Path) -> PathBuf {
+    project_dir.join(".tako/deploy.lock")
+}
+
+fn acquire_project_deploy_lock(project_dir: &Path) -> Result<ProjectDeployLock, String> {
+    let path = deploy_lock_path(project_dir);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create {}: {e}", parent.display()))?;
+    }
+
+    let mut file = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| format!("Failed to open {}: {e}", path.display()))?;
+
+    let rc = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    if rc == 0 {
+        write_deploy_lock_pid(&mut file)
+            .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
+        return Ok(ProjectDeployLock { _file: file });
+    }
+
+    let err = std::io::Error::last_os_error();
+    if err.raw_os_error() != Some(libc::EWOULDBLOCK) {
+        return Err(format!("Failed to lock {}: {err}", path.display()));
+    }
+
+    let owner_pid = read_deploy_lock_pid(&mut file);
+    match owner_pid {
+        Some(pid) => Err(format!(
+            "Another deploy is already running for this project (PID {pid}). Wait for it to finish and try again."
+        )),
+        None => Err(
+            "Another deploy is already running for this project. Wait for it to finish and try again."
+                .to_string(),
+        ),
+    }
+}
+
+fn write_deploy_lock_pid(file: &mut File) -> std::io::Result<()> {
+    file.set_len(0)?;
+    file.seek(SeekFrom::Start(0))?;
+    write!(file, "{}", std::process::id())?;
+    file.sync_all()?;
+    Ok(())
+}
+
+fn read_deploy_lock_pid(file: &mut File) -> Option<u32> {
+    file.seek(SeekFrom::Start(0)).ok()?;
+    let mut raw = String::new();
+    file.read_to_string(&mut raw).ok()?;
+    raw.trim().parse::<u32>().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use tempfile::TempDir;
 
     #[test]
@@ -590,5 +660,42 @@ mod tests {
         std::fs::write(root.join("bun.lock"), "").unwrap();
         // No git, but lockfile is at the monorepo root → returns lockfile root
         assert_eq!(source_bundle_root(&project_dir, "bun"), root);
+    }
+
+    #[test]
+    fn acquire_project_deploy_lock_writes_current_pid() {
+        let temp = TempDir::new().unwrap();
+        let _lock = acquire_project_deploy_lock(temp.path()).unwrap();
+
+        let pid_path = deploy_lock_path(temp.path());
+        assert_eq!(
+            fs::read_to_string(pid_path).unwrap().trim(),
+            std::process::id().to_string()
+        );
+    }
+
+    #[test]
+    fn acquire_project_deploy_lock_rejects_second_holder() {
+        let temp = TempDir::new().unwrap();
+        let _lock = acquire_project_deploy_lock(temp.path()).unwrap();
+
+        let err = acquire_project_deploy_lock(temp.path()).unwrap_err();
+        assert!(err.contains("Another deploy is already running"));
+        assert!(err.contains(&std::process::id().to_string()));
+    }
+
+    #[test]
+    fn acquire_project_deploy_lock_allows_reacquire_after_drop() {
+        let temp = TempDir::new().unwrap();
+        let first = acquire_project_deploy_lock(temp.path()).unwrap();
+        drop(first);
+
+        let second = acquire_project_deploy_lock(temp.path()).unwrap();
+        let pid_path = deploy_lock_path(temp.path());
+        assert_eq!(
+            fs::read_to_string(pid_path).unwrap().trim(),
+            std::process::id().to_string()
+        );
+        drop(second);
     }
 }

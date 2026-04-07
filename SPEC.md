@@ -162,6 +162,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Deploy saves the resolved runtime version into `app.json` (`runtime_version` field).
 - Built target artifacts are cached locally under `.tako/artifacts/` using a deterministic cache key that includes source hash, target label, resolved preset source/commit, build commands, include/exclude patterns, asset roots, and app subdirectory.
 - Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
+- Non-dry-run `tako deploy` acquires a project-local `.tako/deploy.lock` before local server checks/build/deploy work begins. If another deploy already holds the lock, the second CLI exits immediately with the owning PID.
 - After build, deploy verifies the resolved runtime `main` file exists in the build workspace before artifact packaging; missing files fail deploy with an explicit error.
 - On every deploy, local artifact cache is pruned automatically (best-effort): keep 90 most recent target artifacts (`artifact-cache-*.tar.zst`) and remove orphan target metadata files.
 - Artifact include patterns are resolved in this order:
