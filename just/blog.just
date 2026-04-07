@@ -51,6 +51,7 @@ img file="":
     id=$(shasum -a 256 "$tmp" | cut -c1-12)
     out="$root/website/public/assets/blog/${id}.webp"
     mv "$tmp" "$out"
+    rm "$src"
     # Find the most recent blog post and patch it
     blog_dir="$root/website/src/content/blog"
     post=$(ls -t "$blog_dir"/*.md 2>/dev/null | head -1)
