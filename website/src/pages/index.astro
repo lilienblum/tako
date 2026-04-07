@@ -44,7 +44,7 @@ const homeStructuredData = {
         </div>
       </div>
     </div>
-    <h1 class="title">Your app belongs<br />on <span class="accent">your servers</span></h1>
+    <h1 class="title">Your app <span class="title-mid">belongs<br /> on</span> <span class="accent">your servers</span></h1>
     <p class="subtitle">
       Local development, production deploys, and everything in between
     </p>
@@ -988,6 +988,18 @@ const homeStructuredData = {
   }
 
   @media (max-width: 640px) {
+    .title br {
+      display: none;
+    }
+
+    .title .title-mid {
+      display: block;
+    }
+
+    .title .accent {
+      display: block;
+    }
+
     .panel-hanger {
       right: -8px;
       top: 10px;
