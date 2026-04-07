@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.0](https://github.com/lilienblum/tako/compare/tako-server-v0.1.0...tako-server-v0.2.0) (2026-04-07)
+
+
+### Features
+
+* **nextjs:** add Next.js preset, SDK adapter, and raise cold start queue ([9d40f06](https://github.com/lilienblum/tako/commit/9d40f06f83bfd47dc5fd2bf7437a339a775fe688))
+
 ## [0.1.0](https://github.com/lilienblum/tako/compare/tako-server-v0.0.1...tako-server-v0.1.0) (2026-04-03)
 
 ### Features
