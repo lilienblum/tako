@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/lilienblum/tako/compare/sdk-js-v0.1.0...sdk-js-v0.2.0) (2026-04-07)
+
+
+### Features
+
+* **nextjs:** add Next.js preset, SDK adapter, and raise cold start queue ([9d40f06](https://github.com/lilienblum/tako/commit/9d40f06f83bfd47dc5fd2bf7437a339a775fe688))
+
+
+### Bug Fixes
+
+* **ci:** trigger release workflows on published, not created ([bec4b7b](https://github.com/lilienblum/tako/commit/bec4b7bcdf473048c9a6ae92f33616a2aa21ef11))
+* **dev:** prepend node_modules/.bin to PATH when spawning app process ([7791420](https://github.com/lilienblum/tako/commit/7791420e5506256d3a6da15bacbb86222e74f175))
+
 ## [0.1.0](https://github.com/lilienblum/tako/compare/sdk-js-v0.0.1...sdk-js-v0.1.0) (2026-04-03)
 
 ### Features
