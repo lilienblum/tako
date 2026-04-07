@@ -100,6 +100,13 @@ struct ValidationResult {
 #[derive(Debug)]
 struct ProjectDeployLock {
     _file: File,
+    path: PathBuf,
+}
+
+impl Drop for ProjectDeployLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
 }
 
 impl DeployConfig {
@@ -584,7 +591,7 @@ fn acquire_project_deploy_lock(project_dir: &Path) -> Result<ProjectDeployLock, 
     if rc == 0 {
         write_deploy_lock_pid(&mut file)
             .map_err(|e| format!("Failed to write {}: {e}", path.display()))?;
-        return Ok(ProjectDeployLock { _file: file });
+        return Ok(ProjectDeployLock { _file: file, path });
     }
 
     let err = std::io::Error::last_os_error();
