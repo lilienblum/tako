@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::io::{self, Write};
-use std::path::PathBuf;
+
 use std::time::Duration;
 
 use console::{Term, measure_text_width, truncate_str};
@@ -24,6 +24,7 @@ const METRICS_REFRESH_SECS: u64 = 2;
 
 const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
+const XDIM: &str = "\x1b[2;38;5;242m";
 // Accent dim border color (muted with dim so it's subtle, not screaming).
 const BORDER: &str = "\x1b[2;38;2;79;107;122m";
 // Accent for panel header text (22 = normal intensity, cancels inherited dim).
@@ -572,23 +573,48 @@ fn panel_row(c1: &str, c2: &str, c3: &str, col1_w: usize, col2_w: usize) -> Stri
 pub fn format_keymap() -> String {
     let cols = terminal_cols().max(20);
     let text = if cols < 52 {
-        "r restart   d detach   ^c stop"
+        format!("r {DIM}restart{RESET}   d {DIM}detach{RESET}   ^c/q {DIM}stop{RESET}")
     } else {
-        "r restart   d detach   ctrl+c stop"
+        format!("r {DIM}restart{RESET}   d {DIM}detach{RESET}   ctrl+c/q {DIM}stop{RESET}")
     };
-    let pad = cols.saturating_sub(measure_text_width(text) + 1);
-    format!("{DIM}{}{text}{RESET} ", " ".repeat(pad))
+    let plain = if cols < 52 {
+        "r restart   d detach   ^c/q stop"
+    } else {
+        "r restart   d detach   ctrl+c/q stop"
+    };
+    let pad = cols.saturating_sub(measure_text_width(plain) + 1);
+    format!("{}{text} ", " ".repeat(pad))
+}
+
+const SCOPE_MIN: usize = 4;
+const SCOPE_MAX: usize = 12;
+
+/// Fit a scope label into a fixed-width column: pad short scopes, truncate long
+/// ones with `…`.
+fn fit_scope(scope: &str) -> String {
+    let len = scope.len();
+    if len <= SCOPE_MAX {
+        format!("{scope:<SCOPE_MIN$}")
+    } else {
+        format!("{}\u{2026}", &scope[..SCOPE_MAX - 1])
+    }
 }
 
 /// Format a log line with ANSI color for the level token.
 pub fn format_log(log: &ScopedLog) -> String {
     if log.scope == super::DIVIDER_SCOPE {
-        return format!("{DIM}──── restarted ────{RESET}");
+        let label = if log.message.is_empty() {
+            "restarted"
+        } else {
+            &log.message
+        };
+        return format!("{DIM}──── {label} ────{RESET}");
     }
     let color = level_color(&log.level);
+    let scope = fit_scope(&log.scope);
     format!(
-        "{DIM}{}{RESET} {color}{:>5}{RESET} {DIM}{}{RESET} {}",
-        log.timestamp, log.level, log.scope, log.message
+        "{DIM}{}{RESET} {color}{:>5}{RESET} {DIM}{scope}{RESET} {}",
+        log.timestamp, log.level, log.message
     )
 }
 
@@ -698,6 +724,8 @@ impl StickyFooter {
         for line in &self.lines {
             let _ = write!(out, "{}\r\n", line);
         }
+        // Re-hide cursor in case child process output leaked a show-cursor sequence.
+        let _ = queue!(out, cursor::Hide);
         let _ = out.flush();
         self.drawn_cols = terminal::size().unwrap_or((80, 24)).0;
     }
@@ -874,7 +902,6 @@ pub async fn run_dev_output(
     mut log_rx: mpsc::Receiver<ScopedLog>,
     mut event_rx: mpsc::Receiver<DevEvent>,
     control_tx: mpsc::Sender<ControlCmd>,
-    log_store_path: Option<PathBuf>,
 ) -> Result<DevOutputExit, Box<dyn std::error::Error>> {
     let _guard = TerminalGuard::enter(&app_name)?;
 
@@ -965,9 +992,6 @@ pub async fn run_dev_output(
                     }
             }
             Some(log) = log_rx.recv() => {
-                if let Some(path) = log_store_path.as_ref() {
-                    super::append_log_to_store(path, &log).await;
-                }
                 footer.println(&format_log(&log));
             }
             event = event_rx.recv() => {
@@ -1059,10 +1083,20 @@ pub async fn run_dev_output(
                         );
                         footer.println(&format!("\x1b[38;2;232;163;160merror:{RESET} {e}"));
                     }
+                    DevEvent::SessionAttached { is_self } => {
+                        if is_self {
+                            footer.println(&format!("{DIM}──── session attached ────{RESET}"));
+                        } else {
+                            footer.println(&format_log(&ScopedLog::at(
+                                LogLevel::Debug,
+                                "tako",
+                                "another session attached",
+                            )));
+                        }
+                    }
                     DevEvent::ExitWithMessage(msg) => {
                         break LoopExit::Message(msg);
                     }
-                    DevEvent::LogsCleared | DevEvent::LogsReady => {}
                 }
             }
             Some(event) = key_rx.recv() => {
@@ -1071,6 +1105,10 @@ pub async fn run_dev_output(
                         KeyCode::Char('c')
                             if key.modifiers.contains(KeyModifiers::CONTROL) =>
                         {
+                            let _ = control_tx.send(ControlCmd::Terminate).await;
+                            break LoopExit::Terminate;
+                        }
+                        KeyCode::Char('q') | KeyCode::Char('Q') => {
                             let _ = control_tx.send(ControlCmd::Terminate).await;
                             break LoopExit::Terminate;
                         }
@@ -1115,7 +1153,7 @@ pub async fn run_dev_output(
     // Build the exit value (now that log_rx/event_rx are no longer borrowed).
     let exit = match loop_exit {
         LoopExit::Terminate => {
-            println!("{DIM}{app_name} stopped{RESET}");
+            println!("\n{DIM}{app_name} stopped{RESET}");
             DevOutputExit::Terminate
         }
         LoopExit::Detach => {
@@ -1123,7 +1161,7 @@ pub async fn run_dev_output(
             DevOutputExit::Detach { log_rx, event_rx }
         }
         LoopExit::Message(msg) => {
-            println!("{DIM}{app_name} {msg}{RESET}");
+            println!("\n{DIM}{app_name} {msg}{RESET}");
             DevOutputExit::Terminate
         }
     };
@@ -1180,6 +1218,28 @@ mod tests {
         assert!(out.contains("INFO"));
         assert!(out.contains("app"));
         assert!(out.contains("hello"));
+    }
+
+    #[test]
+    fn fit_scope_pads_short_scopes() {
+        assert_eq!(fit_scope("app"), "app ");
+        assert_eq!(fit_scope("up"), "up  ");
+    }
+
+    #[test]
+    fn fit_scope_keeps_exact_min() {
+        assert_eq!(fit_scope("tako"), "tako");
+    }
+
+    #[test]
+    fn fit_scope_keeps_mid_length() {
+        assert_eq!(fit_scope("myservice"), "myservice");
+    }
+
+    #[test]
+    fn fit_scope_truncates_long_scopes() {
+        // 13 chars → truncated to 11 + …
+        assert_eq!(fit_scope("longservicenm"), "longservice\u{2026}");
     }
 
     #[test]

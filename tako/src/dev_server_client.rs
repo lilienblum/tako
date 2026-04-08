@@ -268,6 +268,11 @@ pub enum DevServerEvent {
         config_path: String,
         app_name: String,
     },
+    SessionAttached {
+        config_path: String,
+        app_name: String,
+        session_id: u32,
+    },
 }
 
 fn parse_event_line(line: &str) -> Option<DevServerEvent> {
@@ -294,6 +299,11 @@ fn parse_event_line(line: &str) -> Option<DevServerEvent> {
         "RestartRequested" => Some(DevServerEvent::RestartRequested {
             config_path: event.get("config_path")?.as_str()?.to_string(),
             app_name: event.get("app_name")?.as_str()?.to_string(),
+        }),
+        "SessionAttached" => Some(DevServerEvent::SessionAttached {
+            config_path: event.get("config_path")?.as_str()?.to_string(),
+            app_name: event.get("app_name")?.as_str()?.to_string(),
+            session_id: event.get("session_id")?.as_u64()? as u32,
         }),
         _ => None,
     }
@@ -400,7 +410,6 @@ pub async fn register_app(
     upstream_port: u16,
     command: &[String],
     env: &std::collections::HashMap<String, String>,
-    log_path: &str,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let sock = socket_path()?;
     let stream = UnixStream::connect(&sock).await?;
@@ -414,7 +423,6 @@ pub async fn register_app(
         "upstream_port": upstream_port,
         "command": command,
         "env": env,
-        "log_path": log_path,
         "client_pid": std::process::id(),
     });
     if let Some(v) = variant {
@@ -470,44 +478,24 @@ pub async fn restart_app(config_path: &str) -> Result<(), Box<dyn std::error::Er
     }
 }
 
-pub async fn set_app_status(
+pub async fn open_session(
     config_path: &str,
-    status: &str,
+    session_id: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let sock = socket_path()?;
     let stream = UnixStream::connect(&sock).await?;
     let mut c = LineClient::new(stream);
     let req = serde_json::json!({
-        "type": "SetAppStatus",
+        "type": "OpenSession",
         "config_path": config_path,
-        "status": status,
+        "session_id": session_id,
     });
     c.send_line(&req.to_string()).await?;
     let line = c.read_line().await?;
     let v: serde_json::Value = serde_json::from_str(&line)?;
     match v.get("type").and_then(|t| t.as_str()) {
-        Some("AppStatusUpdated") => Ok(()),
         Some("Error") => Err(format!("dev-server error: {}", v).into()),
-        _ => Err(format!("unexpected response: {}", line).into()),
-    }
-}
-
-pub async fn handoff_app(config_path: &str, pid: u32) -> Result<(), Box<dyn std::error::Error>> {
-    let sock = socket_path()?;
-    let stream = UnixStream::connect(&sock).await?;
-    let mut c = LineClient::new(stream);
-    let req = serde_json::json!({
-        "type": "HandoffApp",
-        "config_path": config_path,
-        "pid": pid,
-    });
-    c.send_line(&req.to_string()).await?;
-    let line = c.read_line().await?;
-    let v: serde_json::Value = serde_json::from_str(&line)?;
-    match v.get("type").and_then(|t| t.as_str()) {
-        Some("AppHandedOff") => Ok(()),
-        Some("Error") => Err(format!("dev-server error: {}", v).into()),
-        _ => Err(format!("unexpected response: {}", line).into()),
+        _ => Ok(()),
     }
 }
 
@@ -570,6 +558,80 @@ pub async fn info() -> Result<serde_json::Value, Box<dyn std::error::Error>> {
     c.send_line(r#"{"type":"Info"}"#).await?;
     let line = c.read_line().await?;
     Ok(serde_json::from_str(&line)?)
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum LogStreamEntry {
+    Entry { id: u64, line: String },
+    Truncated,
+}
+
+pub async fn subscribe_logs(
+    config_path: &str,
+    after: Option<u64>,
+) -> Result<tokio::sync::mpsc::UnboundedReceiver<LogStreamEntry>, Box<dyn std::error::Error>> {
+    let sock = socket_path()?;
+    let stream = UnixStream::connect(&sock).await?;
+    let mut c = LineClient::new(stream);
+    let req = serde_json::json!({
+        "type": "SubscribeLogs",
+        "config_path": config_path,
+        "after": after,
+    });
+    c.send_line(&req.to_string()).await?;
+
+    // Wait for LogsSubscribed.
+    let line = c.read_line().await?;
+    let v: serde_json::Value = serde_json::from_str(&line)?;
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("LogsSubscribed") => {}
+        Some("Error") => return Err(format!("dev-server error: {}", v).into()),
+        _ => return Err(format!("unexpected response: {}", line).into()),
+    }
+
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    tokio::spawn(async move {
+        loop {
+            let line = match c.read_line().await {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            match v.get("type").and_then(|t| t.as_str()) {
+                Some("LogEntry") => {
+                    let id = v.get("id").and_then(|i| i.as_u64()).unwrap_or(0);
+                    let entry_line = v
+                        .get("line")
+                        .and_then(|l| l.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if tx
+                        .send(LogStreamEntry::Entry {
+                            id,
+                            line: entry_line,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+                Some("LogsTruncated") => {
+                    if tx.send(LogStreamEntry::Truncated).is_err() {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    });
+
+    Ok(rx)
 }
 
 pub async fn stop_server() -> Result<(), Box<dyn std::error::Error>> {

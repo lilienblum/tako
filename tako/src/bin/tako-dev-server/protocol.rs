@@ -17,7 +17,6 @@ pub enum Request {
         upstream_port: u16,
         command: Vec<String>,
         env: std::collections::HashMap<String, String>,
-        log_path: String,
         #[serde(default)]
         client_pid: Option<u32>,
     },
@@ -38,6 +37,17 @@ pub enum Request {
     /// Request an app restart (relayed to the owning client via events).
     RestartApp {
         config_path: String,
+    },
+    /// A client session started for an app.
+    OpenSession {
+        config_path: String,
+        session_id: u32,
+    },
+    /// Subscribe to an app's log stream.
+    SubscribeLogs {
+        config_path: String,
+        #[serde(default)]
+        after: Option<u64>,
     },
     /// List all registered apps.
     ListRegisteredApps,
@@ -82,6 +92,12 @@ pub enum Response {
     Event {
         event: DevEvent,
     },
+    LogsSubscribed,
+    LogEntry {
+        id: u64,
+        line: String,
+    },
+    LogsTruncated,
     Stopping,
     Error {
         message: String,
@@ -107,6 +123,11 @@ pub enum DevEvent {
     RestartRequested {
         config_path: String,
         app_name: String,
+    },
+    SessionAttached {
+        config_path: String,
+        app_name: String,
+        session_id: u32,
     },
 }
 
@@ -244,7 +265,6 @@ mod tests {
                 "NODE_ENV".to_string(),
                 "development".to_string(),
             )]),
-            log_path: "/home/user/.tako/dev/logs/my-app.jsonl".to_string(),
             client_pid: Some(1234),
         };
         let json = serde_json::to_string(&req).unwrap();

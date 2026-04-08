@@ -1,11 +1,11 @@
-//! Tako Dev Server
+//! Tako Dev Client
 //!
-//! Local development server with:
+//! CLI client for the tako-dev-server daemon:
 //! - HTTPS via local CA (`{app-name}.tako.test`)
 //! - Local authoritative DNS for `*.tako.test`
 //! - `tako.toml` watching for env/route updates
 //! - Streaming logs, status, and resource monitoring
-//! - Idle timeout (stops app process after inactivity)
+//! - Process lifecycle managed by the daemon
 
 mod ca_setup;
 mod linux_setup;
@@ -23,8 +23,6 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
 
-use sha2::Digest;
-use tokio::io::{AsyncBufReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -142,43 +140,30 @@ impl ScopedLog {
         Self::at(LogLevel::Error, scope, message)
     }
 
-    pub fn fatal(scope: impl Into<String>, message: impl Into<String>) -> Self {
-        Self::at(LogLevel::Fatal, scope, message)
-    }
-
-    pub fn divider() -> Self {
+    #[allow(dead_code)]
+    pub fn divider(label: &str) -> Self {
         Self {
             timestamp: String::new(),
             level: LogLevel::Info,
             scope: DIVIDER_SCOPE.to_string(),
-            message: String::new(),
+            message: label.to_string(),
         }
     }
 }
 
-const DEV_SERVER_SCOPE: &str = "tako";
+#[cfg(test)]
 const APP_SCOPE: &str = "app";
 pub const DIVIDER_SCOPE: &str = "__divider__";
 
-fn dev_server_starting_log() -> ScopedLog {
-    ScopedLog::info(DEV_SERVER_SCOPE, "Starting dev server")
-}
-
-fn dev_server_ready_log(port: u16) -> ScopedLog {
-    ScopedLog::info(
-        DEV_SERVER_SCOPE,
-        format!("Dev server listening on localhost:{}", port),
-    )
-}
-
+#[cfg(test)]
 fn app_log_scope() -> String {
     APP_SCOPE.to_string()
 }
 
+#[cfg(test)]
 const DEV_INITIAL_INSTANCE_COUNT: usize = 1;
+#[cfg(test)]
 const DEV_IDLE_TIMEOUT_SECS: u64 = 30 * 60;
-const DEV_LOG_TAIL_POLL_MS: u64 = 120;
-const DEV_LOG_CLEAR_MARKER_TYPE: &str = "clear_logs";
 const DEV_LOG_APP_EVENT_MARKER_TYPE: &str = "app_event";
 pub(crate) const LOCAL_DNS_PORT: u16 = 53535;
 #[cfg(target_os = "macos")]
@@ -193,10 +178,12 @@ const LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS: u64 = 500;
 const LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS: u64 = 150;
 pub(crate) const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
 
+#[cfg(test)]
 fn dev_initial_instance_count() -> usize {
     DEV_INITIAL_INSTANCE_COUNT
 }
 
+#[cfg(test)]
 fn dev_idle_timeout() -> Duration {
     Duration::from_secs(DEV_IDLE_TIMEOUT_SECS)
 }
@@ -350,6 +337,7 @@ fn compute_dev_hosts(
 /// Check whether a route pattern's hostname matches an incoming request hostname.
 /// Route pattern may include a path (e.g. "app.tako.test/api") — the path is ignored.
 /// Wildcard hosts (e.g. "*.app.tako.test") match any subdomain.
+#[cfg(test)]
 fn route_hostname_matches(route_pattern: &str, request_host: &str) -> bool {
     let host = route_pattern.split('/').next().unwrap_or(route_pattern);
     if host == request_host {
@@ -1074,18 +1062,17 @@ pub(crate) fn local_dns_resolver_values() -> Option<(String, u16)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        DevEvent, LogLevel, ScopedLog, StoredLogEvent, app_log_scope, child_log_level_and_message,
+        DevEvent, LogLevel, LogStreamEvent, ScopedLog, app_log_scope, child_log_level_and_message,
         compute_dev_hosts, compute_display_routes, dev_idle_timeout, dev_initial_instance_count,
-        dev_server_ready_log, dev_server_starting_log, dev_server_tls_names_path_for_home,
-        dev_server_tls_paths_for_home, dev_startup_lines, doctor_dev_server_lines,
-        doctor_local_forwarding_preflight_lines, ensure_dev_server_tls_material_for_home,
-        host_and_port_from_url, is_dev_server_unavailable_error_message,
-        local_dns_resolver_contents, local_dns_sudo_action_line, local_https_probe_host,
-        parse_local_dns_resolver, parse_stored_log_line, port_from_listen, preferred_public_url,
-        replay_and_follow_logs, resolve_dev_preset_ref, resolve_dev_run_command,
-        resolve_effective_dev_build_adapter, restart_required_for_requested_listen,
-        route_hostname_matches, should_drop_child_log_line, sudo_setup_action_items, tcp_probe,
-        trim_child_log_message,
+        dev_server_tls_names_path_for_home, dev_server_tls_paths_for_home, dev_startup_lines,
+        doctor_dev_server_lines, doctor_local_forwarding_preflight_lines,
+        ensure_dev_server_tls_material_for_home, host_and_port_from_url,
+        is_dev_server_unavailable_error_message, local_dns_resolver_contents,
+        local_dns_sudo_action_line, local_https_probe_host, parse_local_dns_resolver,
+        parse_log_line, port_from_listen, preferred_public_url, resolve_dev_preset_ref,
+        resolve_dev_run_command, resolve_effective_dev_build_adapter,
+        restart_required_for_requested_listen, route_hostname_matches, should_drop_child_log_line,
+        sudo_setup_action_items, tcp_probe, trim_child_log_message,
     };
     #[cfg(target_os = "macos")]
     use super::{ensure_local_dns_resolver_configured, local_https_probe_error};
@@ -1095,7 +1082,6 @@ mod tests {
     use std::path::Path;
     use std::time::Duration;
     use tempfile::TempDir;
-    use tokio::sync::{mpsc, watch};
 
     #[test]
     fn resolve_dev_preset_ref_uses_build_adapter_override_when_preset_is_missing() {
@@ -1337,22 +1323,6 @@ main = "src/index.ts"
     }
 
     #[test]
-    fn dev_server_starting_log_has_scope_and_message() {
-        let log = dev_server_starting_log();
-        assert!(matches!(log.level, LogLevel::Info));
-        assert_eq!(log.scope, "tako");
-        assert_eq!(log.message, "Starting dev server");
-    }
-
-    #[test]
-    fn dev_server_ready_log_has_scope_and_message() {
-        let log = dev_server_ready_log(47831);
-        assert!(matches!(log.level, LogLevel::Info));
-        assert_eq!(log.scope, "tako");
-        assert_eq!(log.message, "Dev server listening on localhost:47831");
-    }
-
-    #[test]
     fn log_level_display_uses_five_levels() {
         assert_eq!(LogLevel::Debug.to_string(), "DEBUG");
         assert_eq!(LogLevel::Info.to_string(), "INFO");
@@ -1451,9 +1421,9 @@ main = "src/index.ts"
         assert!(!encoded.contains(r#""h":"#));
         assert!(!encoded.contains(r#""m":"#));
         assert!(!encoded.contains(r#""s":"#));
-        let decoded = parse_stored_log_line(&encoded).unwrap();
+        let decoded = parse_log_line(&encoded).unwrap();
 
-        let StoredLogEvent::Log(decoded) = decoded else {
+        let LogStreamEvent::Log(decoded) = decoded else {
             panic!("expected log event");
         };
 
@@ -1471,8 +1441,8 @@ main = "src/index.ts"
             message: "fatal issue".to_string(),
         };
         let encoded = serde_json::to_string(&line).unwrap();
-        let decoded = parse_stored_log_line(&encoded).unwrap();
-        let StoredLogEvent::Log(decoded) = decoded else {
+        let decoded = parse_log_line(&encoded).unwrap();
+        let LogStreamEvent::Log(decoded) = decoded else {
             panic!("expected log event");
         };
         assert!(matches!(decoded.level, LogLevel::Fatal));
@@ -1481,9 +1451,9 @@ main = "src/index.ts"
     #[test]
     fn stored_log_line_preserves_unrecognized_json_log_shape_as_message() {
         let raw_line = r#"{"h":12,"m":3,"s":7,"level":"Info","scope":"app","message":"hello"}"#;
-        let decoded = parse_stored_log_line(raw_line).unwrap();
+        let decoded = parse_log_line(raw_line).unwrap();
 
-        let StoredLogEvent::Log(decoded) = decoded else {
+        let LogStreamEvent::Log(decoded) = decoded else {
             panic!("expected log event");
         };
 
@@ -1494,168 +1464,21 @@ main = "src/index.ts"
     }
 
     #[test]
-    fn stored_log_line_parses_clear_logs_marker() {
-        let decoded = parse_stored_log_line(r#"{"type":"clear_logs"}"#).unwrap();
-        assert!(matches!(decoded, StoredLogEvent::ClearLogs));
-    }
-
-    #[test]
     fn stored_log_line_parses_app_started_marker() {
-        let decoded = parse_stored_log_line(r#"{"type":"app_event","event":"started"}"#).unwrap();
+        let decoded = parse_log_line(r#"{"type":"app_event","event":"started"}"#).unwrap();
         assert!(matches!(
             decoded,
-            StoredLogEvent::AppEvent(DevEvent::AppStarted)
+            LogStreamEvent::AppEvent(DevEvent::AppStarted)
         ));
     }
 
     #[test]
     fn stored_log_line_parses_app_pid_marker() {
-        let decoded =
-            parse_stored_log_line(r#"{"type":"app_event","event":"pid","pid":4242}"#).unwrap();
+        let decoded = parse_log_line(r#"{"type":"app_event","event":"pid","pid":4242}"#).unwrap();
         assert!(matches!(
             decoded,
-            StoredLogEvent::AppEvent(DevEvent::AppPid(4242))
+            LogStreamEvent::AppEvent(DevEvent::AppPid(4242))
         ));
-    }
-
-    #[tokio::test]
-    async fn replay_and_follow_logs_emits_logs_cleared_event_for_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let log_path = dir.path().join("events.jsonl");
-        std::fs::write(&log_path, b"{\"type\":\"clear_logs\"}\n").unwrap();
-
-        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(4);
-        let (stop_tx, stop_rx) = watch::channel(false);
-
-        let handle = tokio::spawn(async move {
-            replay_and_follow_logs(log_path, None, Some(event_tx), stop_rx, false).await;
-        });
-
-        let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-            .await
-            .expect("timed out waiting for event")
-            .expect("event channel closed unexpectedly");
-        assert!(matches!(event, DevEvent::LogsCleared));
-
-        let _ = stop_tx.send(true);
-        let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
-    }
-
-    #[tokio::test]
-    async fn replay_and_follow_logs_emits_logs_ready_after_initial_replay() {
-        let dir = tempfile::tempdir().unwrap();
-        let log_path = dir.path().join("events.jsonl");
-        std::fs::write(&log_path, b"").unwrap();
-
-        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(4);
-        let (stop_tx, stop_rx) = watch::channel(false);
-
-        let handle = tokio::spawn(async move {
-            replay_and_follow_logs(log_path, None, Some(event_tx), stop_rx, false).await;
-        });
-
-        let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-            .await
-            .expect("timed out waiting for event")
-            .expect("event channel closed unexpectedly");
-        assert!(matches!(event, DevEvent::LogsReady));
-
-        let _ = stop_tx.send(true);
-        let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
-    }
-
-    #[tokio::test]
-    async fn replay_and_follow_logs_emits_app_started_event_for_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let log_path = dir.path().join("events.jsonl");
-        std::fs::write(
-            &log_path,
-            b"{\"type\":\"app_event\",\"event\":\"started\"}\n",
-        )
-        .unwrap();
-
-        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(4);
-        let (stop_tx, stop_rx) = watch::channel(false);
-
-        let handle = tokio::spawn(async move {
-            replay_and_follow_logs(log_path, None, Some(event_tx), stop_rx, false).await;
-        });
-
-        let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-            .await
-            .expect("timed out waiting for event")
-            .expect("event channel closed unexpectedly");
-        assert!(matches!(event, DevEvent::AppStarted));
-
-        let _ = stop_tx.send(true);
-        let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
-    }
-
-    #[tokio::test]
-    async fn replay_and_follow_logs_emits_app_pid_event_for_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let log_path = dir.path().join("events.jsonl");
-        std::fs::write(
-            &log_path,
-            b"{\"type\":\"app_event\",\"event\":\"pid\",\"pid\":4242}\n",
-        )
-        .unwrap();
-
-        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(4);
-        let (stop_tx, stop_rx) = watch::channel(false);
-
-        let handle = tokio::spawn(async move {
-            replay_and_follow_logs(log_path, None, Some(event_tx), stop_rx, false).await;
-        });
-
-        let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-            .await
-            .expect("timed out waiting for event")
-            .expect("event channel closed unexpectedly");
-        assert!(matches!(event, DevEvent::AppPid(4242)));
-
-        let _ = stop_tx.send(true);
-        let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
-    }
-
-    #[tokio::test]
-    async fn replay_and_follow_logs_ignores_followed_app_event_markers_for_owner_tail() {
-        let dir = tempfile::tempdir().unwrap();
-        let log_path = dir.path().join("events.jsonl");
-        std::fs::write(&log_path, b"").unwrap();
-
-        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(8);
-        let (stop_tx, stop_rx) = watch::channel(false);
-        let log_path_for_task = log_path.clone();
-
-        let handle = tokio::spawn(async move {
-            replay_and_follow_logs(log_path_for_task, None, Some(event_tx), stop_rx, true).await;
-        });
-
-        let event = tokio::time::timeout(Duration::from_secs(1), event_rx.recv())
-            .await
-            .expect("timed out waiting for logs-ready event")
-            .expect("event channel closed unexpectedly");
-        assert!(matches!(event, DevEvent::LogsReady));
-
-        let mut file = std::fs::OpenOptions::new()
-            .append(true)
-            .open(&log_path)
-            .unwrap();
-        std::io::Write::write_all(
-            &mut file,
-            b"{\"type\":\"app_event\",\"event\":\"started\"}\n",
-        )
-        .unwrap();
-
-        let unexpected = tokio::time::timeout(Duration::from_millis(300), event_rx.recv()).await;
-        assert!(
-            unexpected.is_err(),
-            "owner tail should not echo persisted app lifecycle markers"
-        );
-
-        let _ = stop_tx.send(true);
-        let _ = tokio::time::timeout(Duration::from_secs(1), handle).await;
     }
 
     #[test]
@@ -2262,11 +2085,11 @@ pub async fn run(
     };
 
     // Disambiguate if another project already owns this name.
-    let canonical_for_disambig =
-        std::fs::canonicalize(&project_dir).unwrap_or_else(|_| project_dir.clone());
-    let canonical_for_disambig_str = canonical_for_disambig.to_string_lossy().to_string();
+    // Use config_key (canonicalized tako.toml path) since that's what the
+    // daemon stores — comparing against a different key would make the app
+    // appear as a conflict with itself.
     let existing_apps = try_list_registered_app_names().await;
-    let app_name = disambiguate_app_name(&app_name, &canonical_for_disambig_str, &existing_apps);
+    let app_name = disambiguate_app_name(&app_name, &config_key, &existing_apps);
 
     let domain = LocalCA::app_domain(&app_name);
     // When a variant is active, routes in tako.toml reference the base app
@@ -2417,8 +2240,6 @@ pub async fn run(
 
     // Ensure the dev daemon is running.
 
-    let _ = log_tx.send(dev_server_starting_log()).await;
-
     if let Err(e) = crate::dev_server_client::ensure_running(&listen_addr, daemon_dns_ip).await {
         let msg = e.to_string();
         let _ = log_tx
@@ -2431,8 +2252,6 @@ pub async fn run(
 
         return Err(msg.into());
     }
-
-    let _ = log_tx.send(dev_server_ready_log(public_port)).await;
 
     if public_url_port == 443 {
         let Ok(loopback_ip) = DEV_LOOPBACK_ADDR.parse::<std::net::Ipv4Addr>() else {
@@ -2516,17 +2335,11 @@ pub async fn run(
         }
     }
 
-    let tako_data = crate::paths::tako_data_dir()?;
-
     if let Ok(apps) = crate::dev_server_client::list_registered_apps().await
         && let Some(existing) = apps.iter().find(|a| a.config_path == config_key)
         && existing.status.as_str() == "running"
     {
         // Attach to existing running app.
-        let log_dir = tako_data.join("dev").join("logs");
-        std::fs::create_dir_all(&log_dir)?;
-        let suffix = dev_client_suffix(&config_path);
-        let log_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));
         let url = if let Some(host) = existing.hosts.first() {
             let port = if public_url_port == 443 {
                 String::new()
@@ -2542,101 +2355,16 @@ pub async fn run(
             config_path: config_path.clone(),
             project_dir: project_dir.clone(),
             url,
-            log_path,
+            pid: existing.pid,
         };
         let display_hosts = compute_display_routes(&cfg, &domain, base_domain.as_deref());
         return run_attached_dev_client(&app_name, interactive, session, display_hosts).await;
     }
 
-    // Compute log store path (still use lock dir scheme for log files).
-    let log_dir = tako_data.join("dev").join("logs");
-    std::fs::create_dir_all(&log_dir)?;
-    let suffix = dev_client_suffix(&config_path);
-    let log_store_path = log_dir.join(format!("{}-{}.jsonl", app_name, suffix));
+    // Free the reserved port so the daemon-spawned app process can bind.
+    drop(reserve_listener);
 
-    prepare_shared_log_store_for_new_owner(&log_store_path).await;
-    let (log_watch_stop_tx, log_watch_stop_rx) = watch::channel(false);
-    {
-        let log_store_path = log_store_path.clone();
-        let event_tx = event_tx.clone();
-        tokio::spawn(async move {
-            replay_and_follow_logs(
-                log_store_path,
-                None,
-                Some(event_tx),
-                log_watch_stop_rx,
-                true,
-            )
-            .await;
-        });
-    }
-
-    // Keep one app process running on startup.
-    let child_state = std::sync::Arc::new(tokio::sync::Mutex::new(None::<tokio::process::Child>));
-    let reserve_state = std::sync::Arc::new(tokio::sync::Mutex::new(Some(reserve_listener)));
-    let app_started_once = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let app_started_at = std::sync::Arc::new(tokio::sync::Mutex::new(std::time::Instant::now()));
-
-    // Clean up any orphaned app process from a previously crashed run.
-    kill_orphaned_process(&project_dir, &config_key);
-
-    if dev_initial_instance_count() > 0 {
-        // Free the reserved port so the app process can bind immediately.
-        let _ = reserve_state.lock().await.take();
-
-        let env = env_state.lock().await.clone();
-        match spawn_app_process(
-            &cmd,
-            &env,
-            &project_dir,
-            upstream_port,
-            log_tx.clone(),
-            app_log_scope(),
-        )
-        .await
-        {
-            Ok(mut child) => {
-                if let Some(pid) = child.id() {
-                    write_pid_file(&project_dir, &config_key, pid);
-                    emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppPid(pid))
-                        .await;
-                }
-                match wait_for_app_ready(&mut child, upstream_port, 30).await {
-                    Ok(()) => {
-                        *child_state.lock().await = Some(child);
-                        *app_started_at.lock().await = std::time::Instant::now();
-                        app_started_once.store(true, std::sync::atomic::Ordering::Relaxed);
-                        emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppStarted)
-                            .await;
-                    }
-                    Err(msg) => {
-                        let _ = child.kill().await;
-                        let _ = log_tx
-                            .send(ScopedLog::error("tako", format!("failed to start: {msg}")))
-                            .await;
-                        emit_persisted_app_event(
-                            &event_tx,
-                            &log_store_path,
-                            DevEvent::AppError(msg),
-                        )
-                        .await;
-                    }
-                }
-            }
-            Err(e) => {
-                let msg = e.to_string();
-                let _ = log_tx
-                    .send(ScopedLog::error(
-                        "tako",
-                        format!("failed to start app: {}", msg),
-                    ))
-                    .await;
-                emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppError(msg)).await;
-            }
-        }
-    }
-
-    // Register the app with the daemon (persistent, no TTL).
+    // Register the app with the daemon. The daemon spawns the process.
     let reg_hosts = hosts_state.lock().await.clone();
     let env_snapshot = env_state.lock().await.clone();
     let reg_url = crate::dev_server_client::register_app(
@@ -2648,9 +2376,41 @@ pub async fn run(
         upstream_port,
         &cmd,
         &env_snapshot,
-        &log_store_path.to_string_lossy(),
     )
     .await?;
+
+    // Subscribe to the daemon's log stream for this app.
+    {
+        let log_tx = log_tx.clone();
+        let event_tx = event_tx.clone();
+        let config_key = config_key.clone();
+        tokio::spawn(async move {
+            let Ok(mut rx) = crate::dev_server_client::subscribe_logs(&config_key, None).await
+            else {
+                return;
+            };
+            while let Some(entry) = rx.recv().await {
+                match entry {
+                    crate::dev_server_client::LogStreamEntry::Entry { line, .. } => {
+                        match parse_log_line(&line) {
+                            Some(LogStreamEvent::Log(log)) => {
+                                let _ = log_tx.send(log).await;
+                            }
+                            Some(LogStreamEvent::AppEvent(ev)) => {
+                                let _ = event_tx.send(ev).await;
+                            }
+                            None => {}
+                        }
+                    }
+                    crate::dev_server_client::LogStreamEntry::Truncated => {
+                        let _ = log_tx
+                            .send(ScopedLog::info("tako", "earlier logs trimmed"))
+                            .await;
+                    }
+                }
+            }
+        });
+    }
 
     if reg_hosts.iter().any(|h| {
         let host = h.split('/').next().unwrap_or(h);
@@ -2678,7 +2438,7 @@ pub async fn run(
         let app_name_for_output = app_name.clone();
         let adapter_name_for_output = runtime_name.clone();
         let control_tx_for_output = control_tx.clone();
-        let log_store_for_output = log_store_path.clone();
+
         let log_rx = log_rx_opt.take().unwrap();
         let event_rx = event_rx_opt.take().unwrap();
         output_handle = Some(tokio::spawn(async move {
@@ -2691,7 +2451,6 @@ pub async fn run(
                 log_rx,
                 event_rx,
                 control_tx_for_output,
-                Some(log_store_for_output),
             )
             .await
             .map_err(|e| e.to_string())
@@ -2722,133 +2481,33 @@ pub async fn run(
             "Starting server at {}...",
             dev_url(&primary_host, public_url_port)
         );
-        println!("Press Ctrl+c to stop");
+        println!("Press Ctrl+c or q to stop");
         println!();
     }
 
-    // Supervisor: apply control commands to the local child process.
+    // Supervisor: forward control commands to the daemon.
     {
-        let child_state = child_state.clone();
-        let reserve_state = reserve_state.clone();
         let config_key = config_key.clone();
-        let cmd = cmd.clone();
-        let env_state = env_state.clone();
-        let project_dir = project_dir.clone();
         let log_tx = log_tx.clone();
-        let event_tx = event_tx.clone();
-        let app_started_at = app_started_at.clone();
-        let log_store_path = log_store_path.clone();
         let should_exit_tx = should_exit_tx.clone();
         let terminate_requested = terminate_requested.clone();
-        let app_started_once = app_started_once.clone();
 
         tokio::spawn(async move {
             while let Some(cmd_in) = control_rx.recv().await {
                 match cmd_in {
                     output::ControlCmd::Restart => {
-                        let mut lock = child_state.lock().await;
-                        if let Some(mut child) = lock.take() {
-                            let _ = child.kill().await;
-                            let _ = child.wait().await;
-                        }
-
-                        if app_started_once.load(std::sync::atomic::Ordering::Relaxed) {
-                            let _ = log_tx.send(ScopedLog::divider()).await;
-                        }
-
-                        emit_persisted_app_event(
-                            &event_tx,
-                            &log_store_path,
-                            DevEvent::AppLaunching,
-                        )
-                        .await;
-
-                        // Ensure the reserved port is free for the app.
-                        let _ = reserve_state.lock().await.take();
-
-                        let env = env_state.lock().await.clone();
-                        let restarted = spawn_app_process(
-                            &cmd,
-                            &env,
-                            &project_dir,
-                            upstream_port,
-                            log_tx.clone(),
-                            app_log_scope(),
-                        )
-                        .await
-                        .map_err(|e| e.to_string());
-                        match restarted {
-                            Ok(mut child) => {
-                                if let Some(pid) = child.id() {
-                                    write_pid_file(&project_dir, &config_key, pid);
-                                    emit_persisted_app_event(
-                                        &event_tx,
-                                        &log_store_path,
-                                        DevEvent::AppPid(pid),
-                                    )
-                                    .await;
-                                }
-                                match wait_for_app_ready(&mut child, upstream_port, 30).await {
-                                    Ok(()) => {
-                                        let _ = crate::dev_server_client::set_app_status(
-                                            &config_key,
-                                            "running",
-                                        )
-                                        .await;
-                                        *lock = Some(child);
-                                        *app_started_at.lock().await = std::time::Instant::now();
-                                        app_started_once
-                                            .store(true, std::sync::atomic::Ordering::Relaxed);
-                                        emit_persisted_app_event(
-                                            &event_tx,
-                                            &log_store_path,
-                                            DevEvent::AppStarted,
-                                        )
-                                        .await;
-                                    }
-                                    Err(msg) => {
-                                        let _ = child.kill().await;
-                                        let _ = log_tx
-                                            .send(ScopedLog::error(
-                                                "tako",
-                                                format!("failed to start: {msg}"),
-                                            ))
-                                            .await;
-                                        emit_persisted_app_event(
-                                            &event_tx,
-                                            &log_store_path,
-                                            DevEvent::AppError(msg),
-                                        )
-                                        .await;
-                                    }
-                                }
-                            }
-                            Err(msg) => {
-                                let _ = log_tx
-                                    .send(ScopedLog::error(
-                                        "tako",
-                                        format!("restart failed: {}", msg),
-                                    ))
-                                    .await;
-                                emit_persisted_app_event(
-                                    &event_tx,
-                                    &log_store_path,
-                                    DevEvent::AppError(msg),
-                                )
+                        let result = crate::dev_server_client::restart_app(&config_key)
+                            .await
+                            .map_err(|e| e.to_string());
+                        if let Err(msg) = result {
+                            let _ = log_tx
+                                .send(ScopedLog::error("tako", format!("restart failed: {}", msg)))
                                 .await;
-                            }
                         }
                     }
                     output::ControlCmd::Terminate => {
                         terminate_requested.store(true, Ordering::Relaxed);
-                        let mut lock = child_state.lock().await;
-                        if let Some(mut child) = lock.take() {
-                            let _ = child.kill().await;
-                            let _ = child.wait().await;
-                        }
-                        let _ = crate::dev_server_client::set_app_status(&config_key, "idle").await;
-                        emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppStopped)
-                            .await;
+                        let _ = crate::dev_server_client::unregister_app(&config_key).await;
                         let _ = should_exit_tx.send(true);
                         break;
                     }
@@ -2857,7 +2516,7 @@ pub async fn run(
         });
     }
 
-    // Config change loop: reload tako.toml, update state, always restart the app.
+    // Config change loop: reload tako.toml, update state, send RestartApp to daemon.
     {
         let project_dir = project_dir.clone();
         let config_path = config_path.clone();
@@ -2869,10 +2528,8 @@ pub async fn run(
         let env_state = env_state.clone();
         let hosts_state = hosts_state.clone();
         let cmd = cmd.clone();
-        let log_store_path = log_store_path.clone();
         let log_tx = log_tx.clone();
         let mut cfg_rx = cfg_rx;
-        let control_tx = control_tx.clone();
         tokio::spawn(async move {
             while cfg_rx.recv().await.is_some() {
                 let cfg = match load_dev_tako_toml(&config_path) {
@@ -2925,7 +2582,8 @@ pub async fn run(
                     changed
                 };
 
-                // Re-register app if routing changed.
+                // Re-register app if routing changed (this also triggers a restart
+                // in the daemon since RegisterApp kills the existing process).
                 if hosts_changed {
                     let reg_result = crate::dev_server_client::register_app(
                         &config_key,
@@ -2936,7 +2594,6 @@ pub async fn run(
                         upstream_port,
                         &cmd,
                         &new_env,
-                        &log_store_path.to_string_lossy(),
                     )
                     .await
                     .map_err(|e| e.to_string());
@@ -2948,344 +2605,67 @@ pub async fn run(
                             ))
                             .await;
                     }
+                } else {
+                    // Routes unchanged — just restart the process with new env/config.
+                    let _ = log_tx
+                        .send(ScopedLog::info("tako", "tako.toml changed, restarting…"))
+                        .await;
+                    let _ = crate::dev_server_client::restart_app(&config_key).await;
                 }
-
-                // Always restart — runtime, preset, env, routes: any change may matter.
-                let _ = log_tx
-                    .send(ScopedLog::info("tako", "tako.toml changed, restarting…"))
-                    .await;
-                let _ = control_tx.send(output::ControlCmd::Restart).await;
             }
         });
     }
 
-    // Scale-to-0 on idle and wake on request.
+    // Subscribe to daemon events to detect when the app is stopped by another client.
     {
-        let last_req = std::sync::Arc::new(tokio::sync::Mutex::new(std::time::Instant::now()));
-        let inflight = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let last_req2 = last_req.clone();
+        let config_key = config_key.clone();
+        let event_tx = event_tx.clone();
+        let should_exit_tx = should_exit_tx.clone();
 
-        {
-            let config_key = config_key.clone();
-            let app_hosts = hosts_state.lock().await.clone();
-            let child_state = child_state.clone();
-            let reserve_state = reserve_state.clone();
-            let cmd = cmd.clone();
-            let env_state = env_state.clone();
-            let project_dir = project_dir.clone();
-            let log_tx = log_tx.clone();
-            let event_tx = event_tx.clone();
-            let log_store_path = log_store_path.clone();
-            let last_req = last_req.clone();
-            let inflight = inflight.clone();
-            let app_started_at = app_started_at.clone();
-            let app_started_once = app_started_once.clone();
-            let control_tx = control_tx.clone();
-            let should_exit_tx = should_exit_tx.clone();
-
-            let mut ev_rx = match crate::dev_server_client::subscribe_events().await {
-                Ok(rx) => Some(rx),
-                Err(e) => {
-                    let _ = log_tx
-                        .send(ScopedLog::warn(
-                            "tako",
-                            format!("failed to subscribe to dev server events: {}", e),
-                        ))
-                        .await;
-                    None
-                }
-            };
-
-            if let Some(mut ev_rx) = ev_rx.take() {
-                tokio::spawn(async move {
-                    while let Some(ev) = ev_rx.recv().await {
-                        match ev {
-                            crate::dev_server_client::DevServerEvent::RequestStarted {
-                                host,
-                                ..
-                            } => {
-                                if !app_hosts.iter().any(|h| route_hostname_matches(h, &host)) {
-                                    continue;
-                                }
-
-                                inflight.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                                *last_req.lock().await = std::time::Instant::now();
-
-                                let mut lock = child_state.lock().await;
-                                if lock.is_none() {
-                                    // Project dir or config gone — unregister and exit.
-                                    if !project_dir.exists() {
-                                        drop(lock);
-                                        let _ = log_tx
-                                            .send(ScopedLog::warn(
-                                                "tako",
-                                                "project directory no longer exists, removing app"
-                                                    .to_string(),
-                                            ))
-                                            .await;
-                                        let _ =
-                                            crate::dev_server_client::unregister_app(&config_key)
-                                                .await;
-                                        let _ = should_exit_tx.send(true);
-                                        break;
-                                    }
-
-                                    if app_started_once.load(std::sync::atomic::Ordering::Relaxed) {
-                                        let _ = log_tx.send(ScopedLog::divider()).await;
-                                    }
-                                    emit_persisted_app_event(
-                                        &event_tx,
-                                        &log_store_path,
-                                        DevEvent::AppLaunching,
-                                    )
-                                    .await;
-                                    let _ = log_tx
-                                        .send(ScopedLog::info(
-                                            "tako",
-                                            format!("starting app on request ({})", host),
-                                        ))
-                                        .await;
-
-                                    // Free the reserved port for the app.
-                                    let _ = reserve_state.lock().await.take();
-
-                                    let env = env_state.lock().await.clone();
-                                    match spawn_app_process(
-                                        &cmd,
-                                        &env,
-                                        &project_dir,
-                                        upstream_port,
-                                        log_tx.clone(),
-                                        app_log_scope(),
-                                    )
-                                    .await
-                                    {
-                                        Ok(mut child) => {
-                                            if let Some(pid) = child.id() {
-                                                write_pid_file(&project_dir, &config_key, pid);
-                                                emit_persisted_app_event(
-                                                    &event_tx,
-                                                    &log_store_path,
-                                                    DevEvent::AppPid(pid),
-                                                )
-                                                .await;
-                                            }
-                                            match wait_for_app_ready(&mut child, upstream_port, 30)
-                                                .await
-                                            {
-                                                Ok(()) => {
-                                                    let _ =
-                                                        crate::dev_server_client::set_app_status(
-                                                            &config_key,
-                                                            "running",
-                                                        )
-                                                        .await;
-                                                    *lock = Some(child);
-                                                    *app_started_at.lock().await =
-                                                        std::time::Instant::now();
-                                                    app_started_once.store(
-                                                        true,
-                                                        std::sync::atomic::Ordering::Relaxed,
-                                                    );
-                                                    emit_persisted_app_event(
-                                                        &event_tx,
-                                                        &log_store_path,
-                                                        DevEvent::AppStarted,
-                                                    )
-                                                    .await;
-                                                }
-                                                Err(msg) => {
-                                                    let _ = child.kill().await;
-                                                    let _ = log_tx
-                                                        .send(ScopedLog::error(
-                                                            "tako",
-                                                            format!("failed to start: {msg}"),
-                                                        ))
-                                                        .await;
-                                                    emit_persisted_app_event(
-                                                        &event_tx,
-                                                        &log_store_path,
-                                                        DevEvent::AppError(msg),
-                                                    )
-                                                    .await;
-                                                }
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let msg = e.to_string();
-                                            drop(e);
-                                            let _ = log_tx
-                                                .send(ScopedLog::error(
-                                                    "tako",
-                                                    format!("failed to start app: {}", msg),
-                                                ))
-                                                .await;
-                                            emit_persisted_app_event(
-                                                &event_tx,
-                                                &log_store_path,
-                                                DevEvent::AppError(msg),
-                                            )
-                                            .await;
-                                        }
-                                    }
-                                }
-                            }
-                            crate::dev_server_client::DevServerEvent::RequestFinished {
-                                host,
-                                ..
-                            } => {
-                                if !app_hosts.iter().any(|h| route_hostname_matches(h, &host)) {
-                                    continue;
-                                }
-                                inflight
-                                    .fetch_update(
-                                        std::sync::atomic::Ordering::Relaxed,
-                                        std::sync::atomic::Ordering::Relaxed,
-                                        |v| Some(v.saturating_sub(1)),
-                                    )
-                                    .ok();
-                            }
-                            crate::dev_server_client::DevServerEvent::AppStatusChanged {
-                                ref config_path,
-                                ref status,
-                                ..
-                            } => {
-                                if config_path == &config_key && status == "stopped" {
-                                    // Send ExitWithMessage so the output loop
-                                    // can exit cleanly (erase footer + print message).
-                                    let _ = event_tx
-                                        .send(DevEvent::ExitWithMessage(
-                                            "stopped by another client".to_string(),
-                                        ))
-                                        .await;
-                                    let _ = should_exit_tx.send(true);
-                                    break;
-                                }
-                            }
-                            crate::dev_server_client::DevServerEvent::RestartRequested {
-                                ref config_path,
-                                ..
-                            } => {
-                                if config_path == &config_key {
-                                    let _ = control_tx.send(output::ControlCmd::Restart).await;
-                                }
-                            }
-                        }
-                    }
-                });
-            }
-        }
-
-        {
-            let config_key = config_key.clone();
-            let child_state = child_state.clone();
-            let reserve_state = reserve_state.clone();
-            let event_tx = event_tx.clone();
-            let log_store_path = log_store_path.clone();
-            let inflight = inflight.clone();
-            tokio::spawn(async move {
-                let idle_timeout = dev_idle_timeout();
-                let mut ticker = tokio::time::interval(Duration::from_secs(10));
-                loop {
-                    ticker.tick().await;
-                    let idle_for =
-                        std::time::Instant::now().duration_since(*last_req2.lock().await);
-                    if idle_for < idle_timeout {
-                        continue;
-                    }
-
-                    if inflight.load(std::sync::atomic::Ordering::Relaxed) > 0 {
-                        continue;
-                    }
-
-                    let mut lock = child_state.lock().await;
-                    let Some(mut child) = lock.take() else {
-                        continue;
-                    };
-
-                    let _ = child.kill().await;
-                    let _ = child.wait().await;
-
-                    emit_persisted_app_event(&event_tx, &log_store_path, DevEvent::AppStopped)
-                        .await;
-
-                    let _ = crate::dev_server_client::set_app_status(&config_key, "idle").await;
-
-                    // Re-reserve the upstream port.
-                    if reserve_state.lock().await.is_none()
-                        && let Ok(std_listener) =
-                            std::net::TcpListener::bind(("127.0.0.1", upstream_port))
-                    {
-                        let _ = std_listener.set_nonblocking(true);
-                        if let Ok(listener) = TcpListener::from_std(std_listener) {
-                            *reserve_state.lock().await = Some(listener);
-                        }
-                    }
-                }
-            });
-        }
-
-        // Child process exit monitor: detect when the app process exits
-        // unexpectedly and update status so the
-        // proxy stops routing to a dead port.
-        {
-            let child_state = child_state.clone();
-            let config_key = config_key.clone();
-            let event_tx = event_tx.clone();
-            let log_tx = log_tx.clone();
-            let log_store_path = log_store_path.clone();
-            let reserve_state = reserve_state.clone();
-            let app_started_at = app_started_at.clone();
-            tokio::spawn(async move {
-                loop {
-                    tokio::time::sleep(Duration::from_millis(500)).await;
-
-                    let mut lock = child_state.lock().await;
-                    let Some(ref mut child) = *lock else {
-                        continue;
-                    };
-
-                    let Ok(Some(status)) = child.try_wait() else {
-                        continue;
-                    };
-
-                    // Child exited — remove from state.
-                    lock.take();
-                    drop(lock);
-
-                    // Re-reserve the upstream port so nothing else grabs it.
-                    if reserve_state.lock().await.is_none()
-                        && let Ok(std_listener) =
-                            std::net::TcpListener::bind(("127.0.0.1", upstream_port))
-                    {
-                        let _ = std_listener.set_nonblocking(true);
-                        if let Ok(listener) = TcpListener::from_std(std_listener) {
-                            *reserve_state.lock().await = Some(listener);
-                        }
-                    }
-
-                    let code_str = status
-                        .code()
-                        .map(|c| format!("exit code {c}"))
-                        .unwrap_or_else(|| "killed by signal".to_string());
-                    let uptime = app_started_at.lock().await.elapsed();
-                    let duration_str = if uptime.as_secs() < 1 {
-                        format!("after {}ms", uptime.as_millis())
-                    } else {
-                        format!("after {}s", uptime.as_secs())
-                    };
-                    let msg = format!("app exited ({code_str}, {duration_str})");
-                    let _ = log_tx.send(ScopedLog::fatal("tako", msg.clone())).await;
-
-                    // Mark idle (not stopped) so wake-on-request can restart
-                    // the app on the next HTTP request.
-                    let _ = crate::dev_server_client::set_app_status(&config_key, "idle").await;
-                    emit_persisted_app_event(
-                        &event_tx,
-                        &log_store_path,
-                        DevEvent::AppProcessExited(msg),
-                    )
+        let mut ev_rx = match crate::dev_server_client::subscribe_events().await {
+            Ok(rx) => Some(rx),
+            Err(e) => {
+                let _ = log_tx
+                    .send(ScopedLog::warn(
+                        "tako",
+                        format!("failed to subscribe to dev server events: {}", e),
+                    ))
                     .await;
+                None
+            }
+        };
+
+        if let Some(mut ev_rx) = ev_rx.take() {
+            tokio::spawn(async move {
+                while let Some(ev) = ev_rx.recv().await {
+                    match ev {
+                        crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                            ref config_path,
+                            ref status,
+                            ..
+                        } => {
+                            if config_path == &config_key && status == "stopped" {
+                                let _ = event_tx
+                                    .send(DevEvent::ExitWithMessage(
+                                        "stopped by another client".to_string(),
+                                    ))
+                                    .await;
+                                let _ = should_exit_tx.send(true);
+                                break;
+                            }
+                        }
+                        crate::dev_server_client::DevServerEvent::SessionAttached {
+                            ref config_path,
+                            ..
+                        } => {
+                            if config_path == &config_key {
+                                let _ = event_tx
+                                    .send(DevEvent::SessionAttached { is_self: false })
+                                    .await;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
             });
         }
@@ -3364,19 +2744,9 @@ pub async fn run(
                 }
             }
 
-            // When the user pressed `b`, hand off the running process to the
-            // daemon and exit the CLI immediately.
+            // When the user pressed `b`, detach from the running process.
+            // The daemon already owns the process, so just exit.
             if let Some(output::DevOutputExit::Detach { .. }) = dev_exit {
-                let child_pid = {
-                    let lock = child_state.lock().await;
-                    lock.as_ref().and_then(|c| c.id())
-                };
-                if let Some(pid) = child_pid {
-                    let _ = crate::dev_server_client::handoff_app(&config_key, pid).await;
-                    // Detach the child so cleanup doesn't kill it.
-                    let _ = child_state.lock().await.take();
-                }
-                let _ = log_watch_stop_tx.send(true);
                 return Ok(());
             }
         }
@@ -3387,14 +2757,12 @@ pub async fn run(
         let mut event_rx = event_rx_opt
             .take()
             .expect("non-interactive should have event rx");
-        let log_store_path_for_stdout = log_store_path.clone();
         // Handle events and logs (plain stdout)
         tokio::select! {
             _ = async {
                 loop {
                     tokio::select! {
                         Some(log) = log_rx.recv() => {
-                            append_log_to_store(&log_store_path_for_stdout, &log).await;
                             println!(
                                 "{} {:<5} [{}] {}",
                                 log.timestamp, log.level, log.scope, log.message
@@ -3415,10 +2783,11 @@ pub async fn run(
                                 DevEvent::AppError(e) => {
                                     eprintln!("App error: {}", e);
                                 }
-                                DevEvent::LogsCleared => {
-                                    println!("logs cleared");
+                                DevEvent::SessionAttached { is_self } => {
+                                    if !is_self {
+                                        println!("another session attached");
+                                    }
                                 }
-                                DevEvent::LogsReady => {}
                                 DevEvent::ExitWithMessage(msg) => {
                                     println!("{}", msg);
                                     break;
@@ -3438,20 +2807,8 @@ pub async fn run(
         }
     }
 
-    // Cleanup.
-    {
-        let mut lock = child_state.lock().await;
-        if let Some(mut child) = lock.take() {
-            let _ = child.kill().await;
-            let _ = child.wait().await;
-        }
-    }
-    remove_pid_file(&project_dir, &config_key);
+    // Cleanup: unregister from daemon (which kills the process).
     let _ = crate::dev_server_client::unregister_app(&config_key).await;
-    let _ = log_watch_stop_tx.send(true);
-    if verbose {
-        println!("Goodbye!");
-    }
     Ok(())
 }
 
@@ -3491,22 +2848,12 @@ struct AttachedDevClient {
     config_path: PathBuf,
     project_dir: PathBuf,
     url: String,
-    log_path: std::path::PathBuf,
-}
-
-fn dev_client_suffix(config_path: &Path) -> String {
-    let canonical =
-        std::fs::canonicalize(config_path).unwrap_or_else(|_| config_path.to_path_buf());
-    let mut h = sha2::Sha256::new();
-    h.update(canonical.to_string_lossy().as_bytes());
-    let digest = h.finalize();
-    hex::encode(&digest[..4])
+    pid: Option<u32>,
 }
 
 #[derive(Debug)]
-enum StoredLogEvent {
+enum LogStreamEvent {
     Log(ScopedLog),
-    ClearLogs,
     AppEvent(DevEvent),
 }
 
@@ -3537,229 +2884,28 @@ fn parse_app_event_marker(v: &serde_json::Value) -> Option<DevEvent> {
     }
 }
 
-fn app_event_marker_payload(event: &DevEvent) -> Option<serde_json::Value> {
-    match event {
-        DevEvent::AppLaunching => {
-            Some(serde_json::json!({ "type": DEV_LOG_APP_EVENT_MARKER_TYPE, "event": "launching" }))
-        }
-        DevEvent::AppStarted => {
-            Some(serde_json::json!({ "type": DEV_LOG_APP_EVENT_MARKER_TYPE, "event": "started" }))
-        }
-        DevEvent::AppStopped => {
-            Some(serde_json::json!({ "type": DEV_LOG_APP_EVENT_MARKER_TYPE, "event": "stopped" }))
-        }
-        DevEvent::AppPid(pid) => Some(serde_json::json!({
-            "type": DEV_LOG_APP_EVENT_MARKER_TYPE,
-            "event": "pid",
-            "pid": pid,
-        })),
-        DevEvent::AppProcessExited(message) => Some(serde_json::json!({
-            "type": DEV_LOG_APP_EVENT_MARKER_TYPE,
-            "event": "exited",
-            "message": message,
-        })),
-        DevEvent::AppError(message) => Some(serde_json::json!({
-            "type": DEV_LOG_APP_EVENT_MARKER_TYPE,
-            "event": "error",
-            "message": message,
-        })),
-        DevEvent::LogsCleared | DevEvent::LogsReady | DevEvent::ExitWithMessage(_) => None,
-    }
-}
-
-fn parse_stored_log_line(line: &str) -> Option<StoredLogEvent> {
+fn parse_log_line(line: &str) -> Option<LogStreamEvent> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
     }
 
     if let Ok(log) = serde_json::from_str::<ScopedLog>(trimmed) {
-        return Some(StoredLogEvent::Log(log));
+        return Some(LogStreamEvent::Log(log));
     }
 
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed)
         && let Some(marker_type) = v.get("type").and_then(|x| x.as_str())
     {
-        if marker_type == DEV_LOG_CLEAR_MARKER_TYPE {
-            return Some(StoredLogEvent::ClearLogs);
-        }
-
         if marker_type == DEV_LOG_APP_EVENT_MARKER_TYPE {
-            return parse_app_event_marker(&v).map(StoredLogEvent::AppEvent);
+            return parse_app_event_marker(&v).map(LogStreamEvent::AppEvent);
         }
     }
 
-    Some(StoredLogEvent::Log(ScopedLog::info(
+    Some(LogStreamEvent::Log(ScopedLog::info(
         "app",
         trimmed.to_string(),
     )))
-}
-
-#[cfg(test)]
-async fn ensure_shared_log_store(log_path: &Path) {
-    if let Some(parent) = log_path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-
-    let _ = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .await;
-}
-
-#[cfg(test)]
-async fn reset_shared_log_store(log_path: &Path) {
-    if let Some(parent) = log_path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-
-    let _ = tokio::fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(log_path)
-        .await;
-}
-
-async fn prepare_shared_log_store_for_new_owner(log_path: &Path) {
-    if let Some(parent) = log_path.parent() {
-        let _ = tokio::fs::create_dir_all(parent).await;
-    }
-
-    let marker = format!(r#"{{"type":"{}"}}"#, DEV_LOG_CLEAR_MARKER_TYPE);
-    let _ = tokio::fs::write(log_path, marker + "\n").await;
-}
-
-async fn append_log_to_store(log_path: &Path, line: &ScopedLog) {
-    let mut encoded = match serde_json::to_string(line) {
-        Ok(s) => s,
-        Err(_) => return,
-    };
-    encoded.push('\n');
-
-    let file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .await;
-
-    let Ok(mut file) = file else {
-        return;
-    };
-    let _ = file.write_all(encoded.as_bytes()).await;
-}
-
-async fn append_app_event_marker_to_store(log_path: &Path, event: &DevEvent) {
-    let Some(marker) = app_event_marker_payload(event) else {
-        return;
-    };
-
-    let mut encoded = marker.to_string();
-    encoded.push('\n');
-
-    let file = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .await;
-
-    let Ok(mut file) = file else {
-        return;
-    };
-
-    let _ = file.write_all(encoded.as_bytes()).await;
-}
-
-async fn emit_persisted_app_event(
-    event_tx: &mpsc::Sender<DevEvent>,
-    log_path: &Path,
-    event: DevEvent,
-) {
-    append_app_event_marker_to_store(log_path, &event).await;
-    let _ = event_tx.send(event).await;
-}
-
-async fn replay_and_follow_logs(
-    log_path: PathBuf,
-    log_tx: Option<mpsc::Sender<ScopedLog>>,
-    event_tx: Option<mpsc::Sender<DevEvent>>,
-    mut stop_rx: watch::Receiver<bool>,
-    start_from_end: bool,
-) {
-    loop {
-        if *stop_rx.borrow() {
-            return;
-        }
-
-        let mut file = match tokio::fs::File::open(&log_path).await {
-            Ok(f) => f,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                tokio::time::sleep(Duration::from_millis(DEV_LOG_TAIL_POLL_MS)).await;
-                continue;
-            }
-            Err(_) => return,
-        };
-
-        if start_from_end {
-            let _ = file.seek(std::io::SeekFrom::End(0)).await;
-        }
-
-        let mut reader = tokio::io::BufReader::new(file);
-        let mut buf = String::new();
-        let mut replay_completed = false;
-
-        loop {
-            tokio::select! {
-                changed = stop_rx.changed() => {
-                    if changed.is_ok() && *stop_rx.borrow() {
-                        return;
-                    }
-                }
-                read = reader.read_line(&mut buf) => {
-                    match read {
-                        Ok(0) => {
-                            if !replay_completed {
-                                replay_completed = true;
-                                if let Some(tx) = event_tx.as_ref() {
-                                    let _ = tx.send(DevEvent::LogsReady).await;
-                                }
-                            }
-                            buf.clear();
-                            tokio::time::sleep(Duration::from_millis(DEV_LOG_TAIL_POLL_MS)).await;
-                        }
-                        Ok(_) => {
-                            match parse_stored_log_line(&buf) {
-                                Some(StoredLogEvent::Log(log)) => {
-                                    if let Some(tx) = log_tx.as_ref() {
-                                        let _ = tx.send(log).await;
-                                    }
-                                }
-                                Some(StoredLogEvent::ClearLogs) => {
-                                    if let Some(tx) = event_tx.as_ref() {
-                                        let _ = tx.send(DevEvent::LogsCleared).await;
-                                    }
-                                }
-                                Some(StoredLogEvent::AppEvent(event)) => {
-                                    // The owning client receives app lifecycle events directly
-                                    // from the supervisor; attached clients rebuild app state
-                                    // from persisted markers.
-                                    if !start_from_end
-                                        && let Some(tx) = event_tx.as_ref()
-                                    {
-                                        let _ = tx.send(event).await;
-                                    }
-                                }
-                                None => {}
-                            }
-                            buf.clear();
-                        }
-                        Err(_) => return,
-                    }
-                }
-            }
-        }
-    }
 }
 
 fn host_and_port_from_url(url: &str) -> Option<(String, u16)> {
@@ -3800,6 +2946,8 @@ async fn run_attached_dev_client(
             .unwrap_or(public_port);
     }
 
+    // Query current app state from the daemon. We only reach this function
+    // when the app is already registered as running, so seed "running" state.
     if let Ok(apps) = crate::dev_server_client::list_apps().await
         && let Some(app) = apps.into_iter().find(|a| a.app_name == app_name)
     {
@@ -3808,8 +2956,17 @@ async fn run_attached_dev_client(
 
     let hosts = display_hosts;
 
+    let my_session_id = std::process::id();
+
     let (log_tx, log_rx) = mpsc::channel::<ScopedLog>(1000);
     let (event_tx, event_rx) = mpsc::channel::<DevEvent>(32);
+
+    // Seed the event channel with current state — we only reach this function
+    // when the app is registered as running.
+    if let Some(pid) = session.pid {
+        let _ = event_tx.send(DevEvent::AppPid(pid)).await;
+    }
+    let _ = event_tx.send(DevEvent::AppStarted).await;
     let (control_tx, mut control_rx) = mpsc::channel::<output::ControlCmd>(32);
     let (stop_tx, stop_rx) = watch::channel(false);
 
@@ -3820,6 +2977,7 @@ async fn run_attached_dev_client(
         let event_tx = event_tx.clone();
         let stop_tx = stop_tx.clone();
         let config_key = session.config_key.clone();
+        let sid = my_session_id;
         tokio::spawn(async move {
             let mut got_stop = false;
 
@@ -3829,25 +2987,34 @@ async fn run_attached_dev_client(
             };
 
             if let Some(mut ev_rx) = connected.await {
+                let _ = crate::dev_server_client::open_session(&config_key, sid).await;
+
                 while let Some(ev) = ev_rx.recv().await {
-                    if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
-                        ref config_path,
-                        ref status,
-                        ..
-                    } = ev
-                        && config_path == &config_key
-                        && status == "stopped"
-                    {
-                        got_stop = true;
-                        break;
+                    match ev {
+                        crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                            ref config_path,
+                            ref status,
+                            ..
+                        } if config_path == &config_key && status == "stopped" => {
+                            got_stop = true;
+                            break;
+                        }
+                        crate::dev_server_client::DevServerEvent::SessionAttached {
+                            ref config_path,
+                            session_id,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx
+                                .send(DevEvent::SessionAttached {
+                                    is_self: session_id == sid,
+                                })
+                                .await;
+                        }
+                        _ => {}
                     }
                 }
             }
 
-            // Always signal exit — either we got a "stopped" event, the
-            // subscription disconnected (dev-server exited), or we failed
-            // to connect at all. In every case the attached client should
-            // exit cleanly with footer removal.
             let _ = stop_tx.send(true);
             let msg = if got_stop {
                 "stopped by another client".to_string()
@@ -3859,12 +3026,35 @@ async fn run_attached_dev_client(
     }
 
     {
-        let log_path = session.log_path.clone();
         let log_tx = log_tx.clone();
-        let event_tx = event_tx.clone();
-        let stop_rx = stop_rx.clone();
+        let real_event_tx = event_tx.clone();
+        let config_key_for_logs = session.config_key.clone();
         tokio::spawn(async move {
-            replay_and_follow_logs(log_path, Some(log_tx), Some(event_tx), stop_rx, false).await;
+            let Ok(mut rx) =
+                crate::dev_server_client::subscribe_logs(&config_key_for_logs, None).await
+            else {
+                return;
+            };
+            while let Some(entry) = rx.recv().await {
+                match entry {
+                    crate::dev_server_client::LogStreamEntry::Entry { line, .. } => {
+                        match parse_log_line(&line) {
+                            Some(LogStreamEvent::Log(log)) => {
+                                let _ = log_tx.send(log).await;
+                            }
+                            Some(LogStreamEvent::AppEvent(ev)) => {
+                                let _ = real_event_tx.send(ev).await;
+                            }
+                            None => {}
+                        }
+                    }
+                    crate::dev_server_client::LogStreamEntry::Truncated => {
+                        let _ = log_tx
+                            .send(ScopedLog::info("tako", "earlier logs trimmed"))
+                            .await;
+                    }
+                }
+            }
         });
     }
 
@@ -3920,7 +3110,6 @@ async fn run_attached_dev_client(
             log_rx,
             event_rx,
             control_tx,
-            None,
         )
         .await?;
     } else {
@@ -3944,16 +3133,19 @@ async fn run_attached_dev_client(
                             match event {
                                 DevEvent::AppStopped => println!("○ App stopped (idle)"),
                                 DevEvent::AppError(e) => eprintln!("App error: {}", e),
-                                DevEvent::LogsCleared => println!("logs cleared"),
                                 DevEvent::ExitWithMessage(msg) => {
                                     println!("{}", msg);
                                     break;
                                 }
+                                DevEvent::SessionAttached { is_self } => {
+                                    if !is_self {
+                                        println!("another session attached");
+                                    }
+                                }
                                 DevEvent::AppLaunching
                                 | DevEvent::AppStarted
                                 | DevEvent::AppPid(_)
-                                | DevEvent::AppProcessExited(_)
-                                | DevEvent::LogsReady => {}
+                                | DevEvent::AppProcessExited(_) => {}
                             }
                         }
                         else => break,
@@ -3978,57 +3170,6 @@ async fn run_attached_dev_client(
 #[cfg(test)]
 mod dev_lock_tests {
     use super::*;
-
-    #[tokio::test]
-    async fn ensure_shared_log_store_preserves_existing_contents() {
-        let dir = tempfile::tempdir().unwrap();
-        let log_path = dir.path().join("dev").join("logs").join("shared.jsonl");
-
-        if let Some(parent) = log_path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(&log_path, b"existing-line\n").unwrap();
-
-        ensure_shared_log_store(&log_path).await;
-
-        let contents = std::fs::read_to_string(&log_path).unwrap();
-        assert_eq!(contents, "existing-line\n");
-    }
-
-    #[tokio::test]
-    async fn reset_shared_log_store_truncates_existing_contents() {
-        let dir = tempfile::tempdir().unwrap();
-        let log_path = dir.path().join("dev").join("logs").join("shared.jsonl");
-
-        if let Some(parent) = log_path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(&log_path, b"old-line\n").unwrap();
-
-        reset_shared_log_store(&log_path).await;
-
-        let contents = std::fs::read_to_string(&log_path).unwrap();
-        assert_eq!(contents, "");
-    }
-
-    #[tokio::test]
-    async fn prepare_shared_log_store_for_new_owner_writes_clear_boundary_marker() {
-        let dir = tempfile::tempdir().unwrap();
-        let log_path = dir.path().join("dev").join("logs").join("shared.jsonl");
-
-        if let Some(parent) = log_path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        std::fs::write(&log_path, b"old-line\n").unwrap();
-
-        prepare_shared_log_store_for_new_owner(&log_path).await;
-
-        let contents = std::fs::read_to_string(&log_path).unwrap();
-        assert_eq!(
-            contents,
-            format!(r#"{{"type":"{}"}}"#, DEV_LOG_CLEAR_MARKER_TYPE) + "\n"
-        );
-    }
 
     #[tokio::test]
     async fn exit_with_message_event_breaks_output_loop() {
@@ -4300,216 +3441,9 @@ mod dev_lock_tests {
         assert!(status.is_some(), "child should have exited");
         assert!(status.unwrap().success());
     }
-
-    #[tokio::test]
-    async fn child_exit_monitor_emits_process_exited_on_nonzero_exit() {
-        // Verify the full monitoring flow: spawn an exiting child, put it
-        // in a child_state mutex, poll with try_wait(), and assert the right
-        // DevEvent is produced.
-        let child = tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg("exit 1")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-
-        let child_state = std::sync::Arc::new(tokio::sync::Mutex::new(Some(child)));
-        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
-        let (_log_tx, mut _log_rx) = mpsc::channel::<ScopedLog>(32);
-        let log_store_path = std::env::temp_dir().join("test_exit_monitor.jsonl");
-
-        let cs = child_state.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                let mut lock = cs.lock().await;
-                let Some(ref mut child) = *lock else {
-                    continue;
-                };
-                let Ok(Some(status)) = child.try_wait() else {
-                    continue;
-                };
-                lock.take();
-                drop(lock);
-
-                let code_str = status
-                    .code()
-                    .map(|c| format!("exit code {c}"))
-                    .unwrap_or_else(|| "killed by signal".to_string());
-                emit_persisted_app_event(
-                    &event_tx,
-                    &log_store_path,
-                    DevEvent::AppProcessExited(format!("app exited ({code_str})")),
-                )
-                .await;
-                break;
-            }
-        });
-
-        let event = timeout(Duration::from_secs(5), event_rx.recv())
-            .await
-            .expect("should detect exit within timeout")
-            .expect("channel should not be closed");
-
-        match event {
-            DevEvent::AppProcessExited(msg) => {
-                assert!(msg.contains("exit code 1"), "got: {msg}");
-            }
-            other => panic!("expected AppProcessExited, got: {:?}", other),
-        }
-
-        // child_state should be None after monitor clears it.
-        assert!(child_state.lock().await.is_none());
-    }
-
-    #[tokio::test]
-    async fn child_exit_monitor_emits_process_exited_on_clean_exit() {
-        // Even exit code 0 is unexpected for a dev server app — it should
-        // keep running. The monitor treats all exits the same.
-        let child = tokio::process::Command::new("true")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-
-        let child_state = std::sync::Arc::new(tokio::sync::Mutex::new(Some(child)));
-        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
-        let log_store_path = std::env::temp_dir().join("test_exit_monitor_clean.jsonl");
-
-        let cs = child_state.clone();
-        tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-                let mut lock = cs.lock().await;
-                let Some(ref mut child) = *lock else {
-                    continue;
-                };
-                let Ok(Some(status)) = child.try_wait() else {
-                    continue;
-                };
-                lock.take();
-                drop(lock);
-
-                let code_str = status
-                    .code()
-                    .map(|c| format!("exit code {c}"))
-                    .unwrap_or_else(|| "killed by signal".to_string());
-                emit_persisted_app_event(
-                    &event_tx,
-                    &log_store_path,
-                    DevEvent::AppProcessExited(format!("app exited ({code_str})")),
-                )
-                .await;
-                break;
-            }
-        });
-
-        let event = timeout(Duration::from_secs(5), event_rx.recv())
-            .await
-            .expect("should detect exit within timeout")
-            .expect("channel should not be closed");
-
-        match event {
-            DevEvent::AppProcessExited(msg) => {
-                assert!(msg.contains("exit code 0"), "got: {msg}");
-            }
-            other => panic!("expected AppProcessExited, got: {:?}", other),
-        }
-
-        assert!(child_state.lock().await.is_none());
-    }
 }
 
-async fn spawn_app_process(
-    cmd: &[String],
-    env: &std::collections::HashMap<String, String>,
-    project_dir: &Path,
-    port: u16,
-    log_tx: mpsc::Sender<ScopedLog>,
-    scope: String,
-) -> Result<tokio::process::Child, Box<dyn std::error::Error + Send + Sync>> {
-    if cmd.is_empty() {
-        return Err("runtime returned empty run command".into());
-    }
-
-    let mut c = tokio::process::Command::new(&cmd[0]);
-    if cmd.len() > 1 {
-        c.args(&cmd[1..]);
-    }
-    c.current_dir(project_dir)
-        .env("PORT", port.to_string())
-        .stdin(std::process::Stdio::inherit())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped());
-
-    // On Linux, ask the kernel to send SIGTERM to the child when the parent
-    // dies (including SIGKILL). This prevents orphaned app processes.
-    #[cfg(target_os = "linux")]
-    unsafe {
-        c.pre_exec(|| {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-            Ok(())
-        });
-    }
-
-    // Prepend node_modules/.bin to PATH so preset commands like `next`, `vite`
-    // are found — same as what npm/yarn/bun do when running package scripts.
-    let bin_dir = project_dir.join("node_modules/.bin");
-    if bin_dir.is_dir() {
-        let current_path = std::env::var("PATH").unwrap_or_default();
-        c.env("PATH", format!("{}:{current_path}", bin_dir.display()));
-    }
-
-    for (k, v) in env {
-        c.env(k, v);
-    }
-
-    let mut child = c.spawn()?;
-    if let Some(stdout) = child.stdout.take() {
-        let tx = log_tx.clone();
-        let scope = scope.clone();
-        tokio::spawn(async move { read_child_lines(stdout, tx, scope, LogLevel::Info).await });
-    }
-    if let Some(stderr) = child.stderr.take() {
-        let tx = log_tx.clone();
-        let scope = scope.clone();
-        tokio::spawn(async move { read_child_lines(stderr, tx, scope, LogLevel::Error).await });
-    }
-
-    Ok(child)
-}
-
-/// Wait for the app process to start accepting TCP connections on the given
-/// port, polling every 100ms.  Returns `Ok(())` when the port is reachable,
-/// or `Err(msg)` if the process exits before that.
-async fn wait_for_app_ready(
-    child: &mut tokio::process::Child,
-    port: u16,
-    timeout_secs: u64,
-) -> Result<(), String> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(timeout_secs);
-    while std::time::Instant::now() < deadline {
-        // Fast path: did the process already exit?
-        if let Ok(Some(status)) = child.try_wait() {
-            let code = status
-                .code()
-                .map(|c| format!("exit code {c}"))
-                .unwrap_or_else(|| "signal".to_string());
-            return Err(format!("process exited during startup ({code})"));
-        }
-        // Try TCP connect.
-        if tokio::net::TcpStream::connect(("127.0.0.1", port))
-            .await
-            .is_ok()
-        {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    Err("timed out waiting for app to listen on port".to_string())
-}
-
+#[cfg(test)]
 fn strip_ascii_case_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     if s.len() < prefix.len() {
         return None;
@@ -4518,6 +3452,7 @@ fn strip_ascii_case_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     head.eq_ignore_ascii_case(prefix).then_some(tail)
 }
 
+#[cfg(test)]
 fn prefixed_child_log_level_and_message(line: &str) -> Option<(LogLevel, String)> {
     let trimmed = line.trim_start();
     if trimmed.is_empty() {
@@ -4565,10 +3500,12 @@ fn prefixed_child_log_level_and_message(line: &str) -> Option<(LogLevel, String)
     None
 }
 
+#[cfg(test)]
 fn child_log_level_and_message(default_level: LogLevel, line: &str) -> (LogLevel, String) {
     prefixed_child_log_level_and_message(line).unwrap_or((default_level, line.to_string()))
 }
 
+#[cfg(test)]
 fn should_drop_child_log_line(line: &str) -> bool {
     let trimmed = line.trim();
     if trimmed.is_empty() {
@@ -4582,6 +3519,7 @@ fn should_drop_child_log_line(line: &str) -> bool {
         .is_some_and(|ch| ch.is_ascii_alphanumeric() || ch == '.' || ch == '/' || ch == '@')
 }
 
+#[cfg(test)]
 fn trim_child_log_message(message: &str) -> Option<String> {
     let trimmed_end = message.trim_end();
     if trimmed_end.trim().is_empty() {
@@ -4591,30 +3529,9 @@ fn trim_child_log_message(message: &str) -> Option<String> {
     }
 }
 
-async fn read_child_lines<R>(r: R, log_tx: mpsc::Sender<ScopedLog>, scope: String, level: LogLevel)
-where
-    R: tokio::io::AsyncRead + Unpin,
-{
-    let mut lines = tokio::io::BufReader::new(r).lines();
-    while let Ok(Some(line)) = lines.next_line().await {
-        let Some(line) = trim_child_log_message(&line) else {
-            continue;
-        };
-        if should_drop_child_log_line(&line) {
-            continue;
-        }
-        let (line_level, line_message) = child_log_level_and_message(level.clone(), &line);
-        let Some(line_message) = trim_child_log_message(&line_message) else {
-            continue;
-        };
-        let _ = log_tx
-            .send(ScopedLog::at(line_level, scope.clone(), line_message))
-            .await;
-    }
-}
-
 /// Events from the dev server
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum DevEvent {
     AppLaunching,
     AppStarted,
@@ -4622,56 +3539,12 @@ pub enum DevEvent {
     AppProcessExited(String),
     AppPid(u32),
     AppError(String),
-    LogsCleared,
-    LogsReady,
+    /// A session attached — `is_self` true for the current session.
+    SessionAttached {
+        is_self: bool,
+    },
     /// Another client stopped the app — exit cleanly.
     ExitWithMessage(String),
-}
-
-// ---------------------------------------------------------------------------
-// PID file management — track child app PIDs so orphans from a crashed
-// parent can be cleaned up on next startup.
-// ---------------------------------------------------------------------------
-
-const PID_FILE_DIR: &str = ".tako/dev-pids";
-
-fn pid_file_path(project_dir: &Path, config_key: &str) -> PathBuf {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    config_key.hash(&mut hasher);
-    let key = format!("{:016x}", hasher.finish());
-    project_dir.join(PID_FILE_DIR).join(format!("{key}.pid"))
-}
-
-fn write_pid_file(project_dir: &Path, config_key: &str, pid: u32) {
-    let path = pid_file_path(project_dir, config_key);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&path, pid.to_string());
-}
-
-fn remove_pid_file(project_dir: &Path, config_key: &str) {
-    let _ = std::fs::remove_file(pid_file_path(project_dir, config_key));
-}
-
-fn kill_orphaned_process(project_dir: &Path, config_key: &str) {
-    let pid: u32 = match std::fs::read_to_string(pid_file_path(project_dir, config_key)) {
-        Ok(s) => match s.trim().parse() {
-            Ok(p) if p > 0 => p,
-            _ => {
-                remove_pid_file(project_dir, config_key);
-                return;
-            }
-        },
-        Err(_) => return,
-    };
-    let alive = unsafe { libc::kill(pid as i32, 0) } == 0;
-    if alive {
-        tracing::info!(pid, "killing orphaned app process from previous run");
-        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
-    }
-    remove_pid_file(project_dir, config_key);
 }
 
 #[cfg(test)]

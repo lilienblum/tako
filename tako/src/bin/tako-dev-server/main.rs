@@ -21,7 +21,7 @@ use openssl::x509::X509;
 use pingora_core::listeners::TlsAccept;
 use pingora_core::listeners::tls::TlsSettings;
 use pingora_core::prelude::Server;
-use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt as _, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream, UnixListener, UnixStream};
 use tokio::sync::mpsc;
 use tokio::sync::watch;
@@ -458,6 +458,81 @@ async fn handle_client(
                 }
                 return Ok(());
             }
+            Request::SubscribeLogs { config_path, after } => {
+                let log_buffer = {
+                    let s = state.lock().unwrap();
+                    s.apps.get(&config_path).map(|a| a.log_buffer.clone())
+                };
+
+                let Some(log_buffer) = log_buffer else {
+                    write_resp(
+                        &mut w,
+                        &Response::Error {
+                            message: format!("app not found: {config_path}"),
+                        },
+                    )
+                    .await?;
+                    continue;
+                };
+
+                let _control_client = ControlClientSubscription::register(&state);
+
+                let (backlog, mut rx, truncated) = log_buffer.subscribe(after);
+
+                if write_resp(&mut w, &Response::LogsSubscribed).await.is_err() {
+                    return Ok(());
+                }
+                if truncated {
+                    if write_resp(&mut w, &Response::LogsTruncated).await.is_err() {
+                        return Ok(());
+                    }
+                }
+
+                for entry in backlog {
+                    if write_resp(
+                        &mut w,
+                        &Response::LogEntry {
+                            id: entry.id,
+                            line: entry.line,
+                        },
+                    )
+                    .await
+                    .is_err()
+                    {
+                        return Ok(());
+                    }
+                }
+
+                let mut disconnect_probe = [0_u8; 1];
+                loop {
+                    tokio::select! {
+                        maybe_entry = rx.recv() => {
+                            let Some(entry) = maybe_entry else {
+                                break;
+                            };
+                            if write_resp(
+                                &mut w,
+                                &Response::LogEntry {
+                                    id: entry.id,
+                                    line: entry.line,
+                                },
+                            )
+                            .await
+                            .is_err()
+                            {
+                                break;
+                            }
+                        }
+                        read_result = r.read(&mut disconnect_probe) => {
+                            match read_result {
+                                Ok(0) | Err(_) => break,
+                                Ok(_) => {}
+                            }
+                        }
+                    }
+                }
+                return Ok(());
+            }
             Request::RegisterApp {
                 config_path,
                 project_dir,
@@ -467,10 +542,20 @@ async fn handle_client(
                 upstream_port,
                 command,
                 env,
-                log_path,
                 client_pid,
             } => {
                 let app_name = sanitize_app_name(&app_name);
+
+                // If an app is already registered with this config_path, kill it first.
+                {
+                    let s = state.lock().unwrap();
+                    if let Some(existing) = s.apps.get(&config_path) {
+                        if let Some(pid) = existing.pid {
+                            kill_app_process(pid);
+                        }
+                    }
+                }
+
                 let mut s = state.lock().unwrap();
                 s.cancel_idle_exit();
 
@@ -483,6 +568,17 @@ async fn handle_client(
                 if let Some(db) = &s.db {
                     let _ = db.register(&config_path, &project_dir, &app_name, variant.as_deref());
                 }
+
+                // Reuse existing buffer if re-registering, otherwise create new.
+                let log_buffer = s
+                    .apps
+                    .get(&config_path)
+                    .map(|a| {
+                        a.log_buffer.clear();
+                        a.log_buffer.clone()
+                    })
+                    .unwrap_or_else(state::LogBuffer::new);
+
                 s.apps.insert(
                     config_path.clone(),
                     state::RuntimeApp {
@@ -494,7 +590,7 @@ async fn handle_client(
                         is_idle: false,
                         command,
                         env,
-                        log_path,
+                        log_buffer,
                         pid: None,
                         client_pid,
                     },
@@ -514,13 +610,35 @@ async fn handle_client(
                 } else {
                     format!("https://{}:{}/", host, public_port)
                 };
+                drop(s);
 
-                s.events.broadcast(Response::Event {
-                    event: protocol::DevEvent::AppStatusChanged {
-                        config_path: config_path.clone(),
-                        app_name: app_name.clone(),
-                        status: "running".to_string(),
-                    },
+                // Spawn the app process (daemon-owned).
+                let spawn_state = state.clone();
+                let spawn_config = config_path.clone();
+                tokio::spawn(async move {
+                    match spawn_and_monitor_app(spawn_state.clone(), &spawn_config).await {
+                        Ok(pid) => {
+                            tracing::info!(config_path = %spawn_config, pid = pid, "spawned app process");
+                            broadcast_app_status(&spawn_state, &spawn_config, "running");
+                        }
+                        Err(e) => {
+                            tracing::warn!(config_path = %spawn_config, error = %e, "failed to spawn app");
+                            let log_buffer = {
+                                let s = spawn_state.lock().unwrap();
+                                s.apps.get(&spawn_config).map(|a| a.log_buffer.clone())
+                            };
+                            broadcast_app_status(&spawn_state, &spawn_config, "idle");
+                            if let Some(buf) = log_buffer {
+                                let msg = format!("failed to start app: {e}");
+                                push_scoped_log(&buf, "Error", "tako", &msg);
+                                push_app_event(
+                                    &buf,
+                                    "error",
+                                    Some(("message", serde_json::json!(msg))),
+                                );
+                            }
+                        }
+                    }
                 });
 
                 Response::AppRegistered {
@@ -532,6 +650,15 @@ async fn handle_client(
             }
             Request::UnregisterApp { config_path } => {
                 let mut s = state.lock().unwrap();
+
+                // Kill the child process before removing.
+                if let Some(app) = s.apps.get(&config_path) {
+                    if let Some(pid) = app.pid {
+                        kill_app_process(pid);
+                        state::remove_pid_file(&app.project_dir, &config_path);
+                    }
+                }
+
                 let app_name = s
                     .apps
                     .remove(&config_path)
@@ -558,18 +685,55 @@ async fn handle_client(
                 Response::AppUnregistered { config_path }
             }
             Request::RestartApp { config_path } => {
-                let s = state.lock().unwrap();
-                let app_name = s
-                    .apps
-                    .get(&config_path)
-                    .map(|a| a.name.clone())
-                    .unwrap_or_default();
-                s.events.broadcast(Response::Event {
-                    event: protocol::DevEvent::RestartRequested {
-                        config_path: config_path.clone(),
-                        app_name,
-                    },
+                // Kill the current child if any.
+                {
+                    let mut s = state.lock().unwrap();
+                    if let Some(app) = s.apps.get_mut(&config_path) {
+                        if let Some(pid) = app.pid.take() {
+                            kill_app_process(pid);
+                            state::remove_pid_file(&app.project_dir, &config_path);
+                        }
+                        app.is_idle = true;
+                    }
+                }
+
+                // Write divider to log buffer for attached clients.
+                let log_buffer = {
+                    let s = state.lock().unwrap();
+                    s.apps.get(&config_path).map(|a| a.log_buffer.clone())
+                };
+                if let Some(ref buf) = log_buffer {
+                    push_divider(buf, "restarted");
+                }
+
+                // Spawn a new process.
+                let spawn_state = state.clone();
+                let spawn_config = config_path.clone();
+                tokio::spawn(async move {
+                    match spawn_and_monitor_app(spawn_state.clone(), &spawn_config).await {
+                        Ok(pid) => {
+                            tracing::info!(config_path = %spawn_config, pid = pid, "restarted app process");
+                            broadcast_app_status(&spawn_state, &spawn_config, "running");
+                        }
+                        Err(e) => {
+                            tracing::warn!(config_path = %spawn_config, error = %e, "failed to restart app");
+                            let log_buffer = {
+                                let s = spawn_state.lock().unwrap();
+                                s.apps.get(&spawn_config).map(|a| a.log_buffer.clone())
+                            };
+                            if let Some(buf) = log_buffer {
+                                let msg = format!("restart failed: {e}");
+                                push_scoped_log(&buf, "Error", "tako", &msg);
+                                push_app_event(
+                                    &buf,
+                                    "error",
+                                    Some(("message", serde_json::json!(msg))),
+                                );
+                            }
+                        }
+                    }
                 });
+
                 Response::AppRestarting { config_path }
             }
             Request::SetAppStatus {
@@ -645,6 +809,26 @@ async fn handle_client(
                 });
 
                 Response::AppHandedOff { config_path }
+            }
+            Request::OpenSession {
+                config_path,
+                session_id,
+            } => {
+                let s = state.lock().unwrap();
+                let app_name = s
+                    .apps
+                    .get(&config_path)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default();
+                s.events.broadcast(Response::Event {
+                    event: protocol::DevEvent::SessionAttached {
+                        config_path: config_path.clone(),
+                        app_name,
+                        session_id,
+                    },
+                });
+                drop(s);
+                Response::Pong
             }
             Request::ListRegisteredApps => {
                 let s = state.lock().unwrap();
@@ -816,21 +1000,198 @@ async fn monitor_handoff_pid(
         sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]), false);
         if sys.process(sysinfo_pid).is_none() {
             let mut s = state.lock().unwrap();
-            if let Some(app) = s.apps.get_mut(&config_path) {
-                app.is_idle = true;
-                app.pid = None;
+            // Only act if this PID is still the current one (a restart may
+            // have spawned a new process since the handoff).
+            let still_current = s
+                .apps
+                .get(&config_path)
+                .and_then(|a| a.pid)
+                .map(|p| p == pid)
+                .unwrap_or(false);
+            if still_current {
+                if let Some(app) = s.apps.get_mut(&config_path) {
+                    app.is_idle = true;
+                    app.pid = None;
+                }
+                let route_id = format!("reg:{}", config_path);
+                s.routes.set_active(&route_id, false);
+                state::remove_pid_file(&project_dir, &config_path);
             }
-            let route_id = format!("reg:{}", config_path);
-            s.routes.set_active(&route_id, false);
-            state::remove_pid_file(&project_dir, &config_path);
-            tracing::info!(config_path = %config_path, project_dir = %project_dir, pid = pid, "handoff'd process exited, marking idle");
+            tracing::info!(config_path = %config_path, project_dir = %project_dir, pid = pid, still_current = still_current, "handoff'd process exited");
             break;
         }
     }
 }
 
-/// Spawn an app process for wake-on-request. Returns the child PID on success.
-async fn spawn_app_for_wake(
+/// Broadcast an AppStatusChanged event for a config_path, reading the app_name from state.
+fn broadcast_app_status(state: &Arc<Mutex<State>>, config_path: &str, status: &str) {
+    let s = state.lock().unwrap();
+    let app_name = s
+        .apps
+        .get(config_path)
+        .map(|a| a.name.clone())
+        .unwrap_or_default();
+    s.events.broadcast(Response::Event {
+        event: protocol::DevEvent::AppStatusChanged {
+            config_path: config_path.to_string(),
+            app_name,
+            status: status.to_string(),
+        },
+    });
+}
+
+/// Kill an app process by PID using process group SIGKILL.
+fn kill_app_process(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+        libc::kill(pid as i32, libc::SIGKILL);
+    }
+}
+
+/// Push an app event marker to the log buffer (for subscribed clients).
+fn push_app_event(
+    buf: &state::LogBuffer,
+    event_name: &str,
+    extra: Option<(&str, serde_json::Value)>,
+) {
+    let mut payload = serde_json::json!({
+        "type": "app_event",
+        "event": event_name,
+    });
+    if let Some((key, value)) = extra {
+        payload[key] = value;
+    }
+    buf.push(payload.to_string());
+}
+
+/// Push a divider marker to the log buffer (shows "restarted" separator in subscribed clients).
+fn push_divider(buf: &state::LogBuffer, label: &str) {
+    let payload = serde_json::json!({
+        "timestamp": "",
+        "level": "Info",
+        "scope": "__divider__",
+        "message": label,
+    });
+    buf.push(payload.to_string());
+}
+
+/// Push a scoped log line to the log buffer.
+fn push_scoped_log(buf: &state::LogBuffer, level: &str, scope: &str, message: &str) {
+    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    let timestamp = format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second());
+    let payload = serde_json::json!({
+        "timestamp": timestamp,
+        "level": level,
+        "scope": scope,
+        "message": message,
+    });
+    buf.push(payload.to_string());
+}
+
+/// Spawn an app process and set up a monitor task. Returns the child PID.
+/// On process exit, the monitor marks the app idle and broadcasts status.
+async fn spawn_and_monitor_app(
+    state: Arc<Mutex<State>>,
+    config_path: &str,
+) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+    let (project_dir, app_clone, log_buffer) = {
+        let s = state.lock().unwrap();
+        let app = s.apps.get(config_path).ok_or("app not found")?;
+        (app.project_dir.clone(), app.clone(), app.log_buffer.clone())
+    };
+
+    push_app_event(&log_buffer, "launching", None);
+
+    let mut child = spawn_app(&project_dir, &app_clone).await?;
+    let pid = child.id().ok_or("failed to get child PID")?;
+
+    // Update app state with the new PID.
+    {
+        let mut s = state.lock().unwrap();
+        if let Some(app) = s.apps.get_mut(config_path) {
+            app.pid = Some(pid);
+            app.is_idle = false;
+        }
+        let route_id = format!("reg:{}", config_path);
+        s.routes.set_active(&route_id, true);
+    }
+
+    state::write_pid_file(&project_dir, config_path, pid);
+    push_app_event(&log_buffer, "pid", Some(("pid", serde_json::json!(pid))));
+
+    // Spawn monitor task: wait for child exit, then mark idle.
+    let state_for_monitor = state.clone();
+    let config_for_monitor = config_path.to_string();
+    let dir_for_monitor = project_dir.clone();
+    let buf_for_monitor = log_buffer.clone();
+    tokio::spawn(async move {
+        let exit_status = child.wait().await;
+        let code_str = exit_status
+            .as_ref()
+            .ok()
+            .and_then(|s| s.code())
+            .map(|c| format!("exit code {c}"))
+            .unwrap_or_else(|| "signal".to_string());
+
+        let still_current = {
+            let mut s = state_for_monitor.lock().unwrap();
+            let current = s
+                .apps
+                .get(&config_for_monitor)
+                .and_then(|a| a.pid)
+                .map(|p| p == pid)
+                .unwrap_or(false);
+
+            if current {
+                if let Some(app) = s.apps.get_mut(&config_for_monitor) {
+                    app.is_idle = true;
+                    app.pid = None;
+                }
+                let route_id = format!("reg:{}", config_for_monitor);
+                s.routes.set_active(&route_id, false);
+                state::remove_pid_file(&dir_for_monitor, &config_for_monitor);
+                let app_name = s
+                    .apps
+                    .get(&config_for_monitor)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default();
+                s.events.broadcast(Response::Event {
+                    event: protocol::DevEvent::AppStatusChanged {
+                        config_path: config_for_monitor.clone(),
+                        app_name,
+                        status: "idle".to_string(),
+                    },
+                });
+            }
+            current
+        };
+
+        if still_current {
+            let msg = format!("app exited ({code_str})");
+            push_scoped_log(&buf_for_monitor, "Fatal", "tako", &msg);
+            push_app_event(
+                &buf_for_monitor,
+                "exited",
+                Some(("message", serde_json::json!(msg))),
+            );
+
+            tracing::info!(config_path = %config_for_monitor, pid = pid, "app process exited, marking idle");
+        }
+    });
+
+    push_app_event(&log_buffer, "started", None);
+
+    Ok(pid)
+}
+
+/// Spawn an app process. Returns the child on success.
+///
+/// This is the universal spawner used by RegisterApp, RestartApp, and
+/// wake-on-request. It captures stdout/stderr to the app's JSONL log file.
+async fn spawn_app(
     project_dir: &str,
     app: &state::RuntimeApp,
 ) -> Result<tokio::process::Child, Box<dyn std::error::Error + Send + Sync>> {
@@ -848,55 +1209,65 @@ async fn spawn_app_for_wake(
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
 
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    // On Linux, ask the kernel to send SIGTERM to the child when the daemon
+    // dies (including SIGKILL). Belt-and-suspenders with process-group kill.
+    #[cfg(target_os = "linux")]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+
+    // Prepend node_modules/.bin to PATH so preset commands like `next`, `vite`
+    // are found — same as what npm/yarn/bun do when running package scripts.
+    let bin_dir = std::path::Path::new(project_dir).join("node_modules/.bin");
+    if bin_dir.is_dir() {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", format!("{}:{current_path}", bin_dir.display()));
+    }
+
     for (k, v) in &app.env {
         cmd.env(k, v);
     }
 
     let mut child = cmd.spawn()?;
 
-    // Drain stdout/stderr to the app's JSONL log store.
-    let log_path = std::path::PathBuf::from(&app.log_path);
+    // Drain stdout/stderr to the app's in-memory log buffer.
+    let log_buffer = app.log_buffer.clone();
     if let Some(stdout) = child.stdout.take() {
-        let log_path = log_path.clone();
+        let buf = log_buffer.clone();
         tokio::spawn(async move {
-            drain_pipe_to_log(stdout, &log_path).await;
+            drain_pipe_to_buffer(stdout, buf).await;
         });
     }
     if let Some(stderr) = child.stderr.take() {
-        let log_path = log_path.clone();
+        let buf = log_buffer.clone();
         tokio::spawn(async move {
-            drain_pipe_to_log(stderr, &log_path).await;
+            drain_pipe_to_buffer(stderr, buf).await;
         });
     }
 
     Ok(child)
 }
 
-async fn drain_pipe_to_log(pipe: impl tokio::io::AsyncRead + Unpin, log_path: &std::path::Path) {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
-    let Ok(mut file) = tokio::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(log_path)
-        .await
-    else {
-        return;
-    };
+async fn drain_pipe_to_buffer(pipe: impl tokio::io::AsyncRead + Unpin, buf: state::LogBuffer) {
     let reader = tokio::io::BufReader::new(pipe);
     let mut lines = reader.lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let ts = time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap_or_default();
+        let now =
+            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        let ts = format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second());
         let json = serde_json::json!({
             "timestamp": ts,
             "level": "Info",
             "scope": "app",
             "message": line,
         });
-        let mut encoded = json.to_string();
-        encoded.push('\n');
-        let _ = file.write_all(encoded.as_bytes()).await;
+        buf.push(json.to_string());
     }
 }
 
@@ -944,7 +1315,7 @@ async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: St
         "waking idle app on request"
     );
 
-    match spawn_app_for_wake(&app.project_dir, &app).await {
+    match spawn_app(&app.project_dir, &app).await {
         Ok(mut child) => {
             let pid = child.id();
 
@@ -964,17 +1335,44 @@ async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: St
                 let state = state.clone();
                 let config_path = config_path.clone();
                 let project_dir = app.project_dir.clone();
+                let log_buffer = app.log_buffer.clone();
                 tokio::spawn(async move {
-                    let _ = child.wait().await;
+                    let exit_status = child.wait().await;
+                    let code_str = exit_status
+                        .as_ref()
+                        .ok()
+                        .and_then(|s| s.code())
+                        .map(|c| format!("exit code {c}"))
+                        .unwrap_or_else(|| "signal".to_string());
+
                     let mut s = state.lock().unwrap();
-                    if let Some(rt) = s.apps.get_mut(&config_path) {
-                        rt.is_idle = true;
-                        rt.pid = None;
+                    let still_current = s
+                        .apps
+                        .get(&config_path)
+                        .and_then(|a| a.pid)
+                        .map(|p| p == pid)
+                        .unwrap_or(false);
+                    if still_current {
+                        if let Some(rt) = s.apps.get_mut(&config_path) {
+                            rt.is_idle = true;
+                            rt.pid = None;
+                        }
+                        let route_id = format!("reg:{}", config_path);
+                        s.routes.set_active(&route_id, false);
+                        state::remove_pid_file(&project_dir, &config_path);
                     }
-                    let route_id = format!("reg:{}", config_path);
-                    s.routes.set_active(&route_id, false);
-                    state::remove_pid_file(&project_dir, &config_path);
-                    tracing::info!(config_path = %config_path, project_dir = %project_dir, pid = pid, "wake-spawned process exited, marking idle");
+                    drop(s);
+
+                    if still_current {
+                        let msg = format!("app exited ({code_str})");
+                        push_scoped_log(&log_buffer, "Fatal", "tako", &msg);
+                        push_app_event(
+                            &log_buffer,
+                            "exited",
+                            Some(("message", serde_json::json!(msg))),
+                        );
+                    }
+                    tracing::info!(config_path = %config_path, project_dir = %project_dir, pid = pid, still_current = still_current, "wake-spawned process exited");
                 });
             }
         }
@@ -995,8 +1393,9 @@ fn kill_all_app_processes(state: &Arc<Mutex<State>>) {
         if let Some(pid) = app.pid
             && pid > 0
         {
-            tracing::info!(app = %app.name, pid = pid, "killing app process on shutdown");
-            unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+            tracing::info!(app = %app.name, pid = pid, "killing app process group on shutdown");
+            unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
             state::remove_pid_file(&app.project_dir, config_path);
         }
     }
@@ -1267,8 +1666,7 @@ mod tests {
             "hosts": ["my-app.tako.test"],
             "upstream_port": 1234,
             "command": ["node", "index.js"],
-            "env": {},
-            "log_path": "/tmp/test.jsonl"
+            "env": {}
         });
         w.write_all(req.to_string().as_bytes()).await.unwrap();
         w.write_all(b"\n").await.unwrap();
@@ -1375,7 +1773,7 @@ mod tests {
                 is_idle: false,
                 command: vec!["bun".to_string()],
                 env: std::collections::HashMap::new(),
-                log_path: "/log".to_string(),
+                log_buffer: state::LogBuffer::new(),
                 pid: None,
                 client_pid: None,
             },
@@ -1445,15 +1843,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn restart_app_broadcasts_restart_requested_event() {
+    async fn restart_app_responds_with_app_restarting() {
         let (state, _tmp) = test_state();
         insert_test_app(&state, "/proj", "my-app");
-
-        // Subscribe to events.
-        let mut ev_rx = {
-            let s = state.lock().unwrap();
-            s.events.subscribe()
-        };
 
         // Send RestartApp.
         let (a, b) = tokio::net::UnixStream::pair().unwrap();
@@ -1471,31 +1863,162 @@ mod tests {
         let mut lines = BufReader::new(r).lines();
         let line = lines.next_line().await.unwrap().unwrap();
         let resp: Response = serde_json::from_str(&line).unwrap();
-        assert!(matches!(resp, Response::AppRestarting { .. }));
+        match resp {
+            Response::AppRestarting { config_path } => {
+                assert_eq!(config_path, "/proj/tako.toml");
+            }
+            other => panic!("expected AppRestarting, got: {other:?}"),
+        }
 
         drop(w);
         drop(lines);
         h.await.unwrap().unwrap();
+    }
 
-        // Subscriber should have received RestartRequested.
-        let event = tokio::time::timeout(Duration::from_millis(100), ev_rx.recv())
-            .await
-            .expect("should not time out")
-            .unwrap();
+    #[tokio::test]
+    async fn subscribe_logs_streams_backlog_and_live_entries() {
+        let (state, _tmp) = test_state();
+        insert_test_app(&state, "/proj", "my-app");
 
-        match event {
-            Response::Event {
-                event:
-                    protocol::DevEvent::RestartRequested {
-                        config_path,
-                        app_name,
-                    },
-            } => {
-                assert_eq!(config_path, "/proj/tako.toml");
-                assert_eq!(app_name, "my-app");
-            }
-            other => panic!("expected RestartRequested, got: {other:?}"),
+        // Push some entries to the log buffer before subscribing.
+        {
+            let s = state.lock().unwrap();
+            let app = s.apps.get("/proj/tako.toml").unwrap();
+            app.log_buffer.push(
+                r#"{"timestamp":"00:00:01","level":"Info","scope":"app","message":"line-1"}"#
+                    .to_string(),
+            );
+            app.log_buffer.push(
+                r#"{"timestamp":"00:00:02","level":"Info","scope":"app","message":"line-2"}"#
+                    .to_string(),
+            );
         }
+
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let state_for_handler = state.clone();
+        let h = tokio::spawn(async move { handle_client(a, state_for_handler).await });
+
+        let (r, mut w) = b.into_split();
+        let mut lines = BufReader::new(r).lines();
+
+        let req = serde_json::json!({
+            "type": "SubscribeLogs",
+            "config_path": "/proj/tako.toml",
+        });
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        // First response: LogsSubscribed
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        assert!(matches!(resp, Response::LogsSubscribed));
+
+        // Next: two backlog entries
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        match resp {
+            Response::LogEntry { id, line } => {
+                assert_eq!(id, 0);
+                assert!(line.contains("line-1"));
+            }
+            other => panic!("expected LogEntry, got: {other:?}"),
+        }
+
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        match resp {
+            Response::LogEntry { id, line } => {
+                assert_eq!(id, 1);
+                assert!(line.contains("line-2"));
+            }
+            other => panic!("expected LogEntry, got: {other:?}"),
+        }
+
+        // Push a live entry while subscribed.
+        {
+            let s = state.lock().unwrap();
+            let app = s.apps.get("/proj/tako.toml").unwrap();
+            app.log_buffer.push(
+                r#"{"timestamp":"00:00:03","level":"Info","scope":"app","message":"line-3"}"#
+                    .to_string(),
+            );
+        }
+
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        match resp {
+            Response::LogEntry { id, line } => {
+                assert_eq!(id, 2);
+                assert!(line.contains("line-3"));
+            }
+            other => panic!("expected LogEntry, got: {other:?}"),
+        }
+
+        drop(w);
+        drop(lines);
+        h.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn subscribe_logs_returns_error_for_unknown_app() {
+        let (state, _tmp) = test_state();
+
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let state_for_handler = state.clone();
+        let h = tokio::spawn(async move { handle_client(a, state_for_handler).await });
+
+        let (r, mut w) = b.into_split();
+        let mut lines = BufReader::new(r).lines();
+
+        let req = serde_json::json!({
+            "type": "SubscribeLogs",
+            "config_path": "/nonexistent/tako.toml",
+        });
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        assert!(matches!(resp, Response::Error { .. }));
+
+        drop(w);
+        h.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn subscribe_logs_counts_as_control_client() {
+        let (state, _tmp) = test_state();
+        insert_test_app(&state, "/proj", "my-app");
+
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let state_for_handler = state.clone();
+        let h = tokio::spawn(async move { handle_client(a, state_for_handler).await });
+
+        let (r, mut w) = b.into_split();
+        let mut lines = BufReader::new(r).lines();
+
+        let req = serde_json::json!({
+            "type": "SubscribeLogs",
+            "config_path": "/proj/tako.toml",
+        });
+        w.write_all(req.to_string().as_bytes()).await.unwrap();
+        w.write_all(b"\n").await.unwrap();
+
+        let line = lines.next_line().await.unwrap().unwrap();
+        assert!(line.contains("LogsSubscribed"));
+
+        // While subscribed, control_clients should be 1.
+        let clients = query_control_clients(state.clone()).await;
+        assert_eq!(clients, 1);
+
+        // Disconnect.
+        drop(w);
+        drop(lines);
+        h.await.unwrap().unwrap();
+
+        // After disconnect, control_clients should be 0.
+        let clients = query_control_clients(state).await;
+        assert_eq!(clients, 0);
     }
 
     #[tokio::test]
@@ -1781,7 +2304,7 @@ mod tests {
                     is_idle: false,
                     command: vec!["sleep".to_string(), "60".to_string()],
                     env: std::collections::HashMap::new(),
-                    log_path: "/log".to_string(),
+                    log_buffer: state::LogBuffer::new(),
                     pid: Some(pid),
                     client_pid: None,
                 },
@@ -1965,6 +2488,112 @@ mod tests {
 
         drop(w);
         h.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn register_app_spawns_process_and_sets_pid() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (state, _tmp_db) = test_state();
+
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let state_for_handler = state.clone();
+        let h = tokio::spawn(async move { handle_client(a, state_for_handler).await });
+
+        let (r, mut w) = b.into_split();
+        let mut lines = BufReader::new(r).lines();
+
+        let req = serde_json::json!({
+            "type": "RegisterApp",
+            "config_path": "/tmp/test-spawn/tako.toml",
+            "project_dir": tmp.path().to_str().unwrap(),
+            "app_name": "spawn-test",
+            "hosts": ["spawn-test.tako.test"],
+            "upstream_port": 19999,
+            "command": ["sleep", "60"],
+            "env": {},
+        });
+        w.write_all(format!("{}\n", req).as_bytes()).await.unwrap();
+
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        assert!(matches!(resp, Response::AppRegistered { .. }));
+
+        // Wait a moment for the background spawn task.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+
+        // The app should now have a PID set by the daemon.
+        let pid = {
+            let s = state.lock().unwrap();
+            s.apps.get("/tmp/test-spawn/tako.toml").and_then(|a| a.pid)
+        };
+        assert!(pid.is_some(), "daemon should have spawned the app process");
+
+        // Clean up: kill the spawned process.
+        if let Some(pid) = pid {
+            kill_app_process(pid);
+        }
+
+        drop(w);
+        drop(lines);
+        h.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn unregister_app_kills_running_process() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let (state, _tmp_db) = test_state();
+
+        // Insert an app with a real running process.
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+
+        {
+            let mut s = state.lock().unwrap();
+            s.apps.insert(
+                "/tmp/test-kill/tako.toml".to_string(),
+                state::RuntimeApp {
+                    project_dir: tmp.path().to_string_lossy().to_string(),
+                    name: "kill-test".to_string(),
+                    variant: None,
+                    hosts: vec!["kill-test.tako.test".to_string()],
+                    upstream_port: 19998,
+                    is_idle: false,
+                    command: vec!["sleep".to_string(), "60".to_string()],
+                    env: std::collections::HashMap::new(),
+                    log_buffer: state::LogBuffer::new(),
+                    pid: Some(pid),
+                    client_pid: None,
+                },
+            );
+        }
+
+        // Unregister via socket.
+        let (a, b) = tokio::net::UnixStream::pair().unwrap();
+        let state_for_handler = state.clone();
+        let h = tokio::spawn(async move { handle_client(a, state_for_handler).await });
+
+        let (r, mut w) = b.into_split();
+        let req = serde_json::json!({
+            "type": "UnregisterApp",
+            "config_path": "/tmp/test-kill/tako.toml",
+        });
+        w.write_all(format!("{}\n", req).as_bytes()).await.unwrap();
+
+        let mut lines = BufReader::new(r).lines();
+        let line = lines.next_line().await.unwrap().unwrap();
+        let resp: Response = serde_json::from_str(&line).unwrap();
+        assert!(matches!(resp, Response::AppUnregistered { .. }));
+
+        drop(w);
+        drop(lines);
+        h.await.unwrap().unwrap();
+
+        // The process should have been killed.
+        let status = child.wait().unwrap();
+        assert!(!status.success(), "process should have been killed");
     }
 
     #[test]

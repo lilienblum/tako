@@ -1,11 +1,14 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 #[cfg(test)]
 use rusqlite::OptionalExtension;
 use rusqlite::{Connection, params};
+use tokio::sync::mpsc;
 
 const PID_FILE_DIR: &str = ".tako/dev-pids";
 
@@ -22,6 +25,111 @@ pub struct RegisteredApp {
     pub updated_at: u64,
 }
 
+// ---------------------------------------------------------------------------
+// In-memory log ring buffer — replaces the JSONL file-based log store.
+// ---------------------------------------------------------------------------
+
+const LOG_BUFFER_CAPACITY: usize = 500;
+
+#[derive(Debug, Clone)]
+pub struct LogEntry {
+    pub id: u64,
+    pub line: String,
+}
+
+struct LogBufferInner {
+    entries: VecDeque<LogEntry>,
+    next_id: u64,
+    capacity: usize,
+    subscribers: Vec<mpsc::UnboundedSender<LogEntry>>,
+}
+
+/// Thread-safe, clonable log ring buffer.
+///
+/// Stores up to `capacity` entries per app. When the buffer is full, the oldest
+/// entry is dropped. Subscribers receive new entries in real time.
+#[derive(Clone)]
+pub struct LogBuffer {
+    inner: Arc<Mutex<LogBufferInner>>,
+}
+
+impl std::fmt::Debug for LogBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LogBuffer").finish_non_exhaustive()
+    }
+}
+
+impl LogBuffer {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(LogBufferInner {
+                entries: VecDeque::with_capacity(LOG_BUFFER_CAPACITY),
+                next_id: 0,
+                capacity: LOG_BUFFER_CAPACITY,
+                subscribers: Vec::new(),
+            })),
+        }
+    }
+
+    /// Push a line into the buffer. Assigns a sequential ID, trims the oldest
+    /// entry if over capacity, and broadcasts to all live subscribers.
+    pub fn push(&self, line: String) {
+        let mut inner = self.inner.lock().unwrap();
+        let id = inner.next_id;
+        inner.next_id += 1;
+        let entry = LogEntry {
+            id,
+            line: line.clone(),
+        };
+        if inner.entries.len() >= inner.capacity {
+            inner.entries.pop_front();
+        }
+        inner.entries.push_back(entry.clone());
+        inner
+            .subscribers
+            .retain(|tx| tx.send(entry.clone()).is_ok());
+    }
+
+    /// Subscribe to the log stream. Returns:
+    /// - backlog entries after the given `after` ID (or all buffered if None)
+    /// - a receiver for new entries
+    /// - whether the requested `after` point was truncated (oldest entries dropped)
+    pub fn subscribe(
+        &self,
+        after: Option<u64>,
+    ) -> (Vec<LogEntry>, mpsc::UnboundedReceiver<LogEntry>, bool) {
+        let mut inner = self.inner.lock().unwrap();
+        let (tx, rx) = mpsc::unbounded_channel();
+
+        let oldest_id = inner.entries.front().map(|e| e.id);
+        let truncated = match (after, oldest_id) {
+            (Some(req), Some(oldest)) => req < oldest,
+            (Some(_), None) => false, // buffer empty, nothing truncated
+            (None, _) => false,
+        };
+
+        let backlog: Vec<LogEntry> = match after {
+            Some(after_id) => inner
+                .entries
+                .iter()
+                .filter(|e| e.id > after_id)
+                .cloned()
+                .collect(),
+            None => inner.entries.iter().cloned().collect(),
+        };
+
+        inner.subscribers.push(tx);
+        (backlog, rx, truncated)
+    }
+
+    /// Clear all entries. Preserves the ID counter so cursor-based resumption
+    /// still works across clears. Existing subscribers remain connected.
+    pub fn clear(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.entries.clear();
+    }
+}
+
 /// Runtime app state (in-memory only, lost on server restart).
 #[derive(Debug, Clone)]
 pub struct RuntimeApp {
@@ -33,7 +141,7 @@ pub struct RuntimeApp {
     pub is_idle: bool,
     pub command: Vec<String>,
     pub env: HashMap<String, String>,
-    pub log_path: String,
+    pub log_buffer: LogBuffer,
     pub pid: Option<u32>,
     pub client_pid: Option<u32>,
 }
@@ -96,7 +204,8 @@ pub fn kill_orphaned_process(project_dir: &str, config_path: &str) {
             pid = pid,
             "killing orphaned app process from previous run"
         );
-        unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+        unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+        unsafe { libc::kill(pid as i32, libc::SIGKILL) };
     }
     remove_pid_file(project_dir, config_path);
 }
@@ -505,5 +614,116 @@ mod tests {
             read_pid_file(project_dir, "/tmp/example/two.toml"),
             Some(222)
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // LogBuffer tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn log_buffer_push_and_subscribe_returns_backlog() {
+        let buf = LogBuffer::new();
+        buf.push("line-0".to_string());
+        buf.push("line-1".to_string());
+        buf.push("line-2".to_string());
+
+        let (backlog, _rx, truncated) = buf.subscribe(None);
+        assert!(!truncated);
+        assert_eq!(backlog.len(), 3);
+        assert_eq!(backlog[0].id, 0);
+        assert_eq!(backlog[0].line, "line-0");
+        assert_eq!(backlog[2].id, 2);
+        assert_eq!(backlog[2].line, "line-2");
+    }
+
+    #[test]
+    fn log_buffer_subscribe_after_returns_entries_after_id() {
+        let buf = LogBuffer::new();
+        for i in 0..5 {
+            buf.push(format!("line-{i}"));
+        }
+
+        let (backlog, _rx, truncated) = buf.subscribe(Some(2));
+        assert!(!truncated);
+        assert_eq!(backlog.len(), 2);
+        assert_eq!(backlog[0].id, 3);
+        assert_eq!(backlog[1].id, 4);
+    }
+
+    #[test]
+    fn log_buffer_capacity_drops_oldest() {
+        let buf = LogBuffer::new();
+        // Push more than capacity (500).
+        for i in 0..510 {
+            buf.push(format!("line-{i}"));
+        }
+
+        let (backlog, _rx, _) = buf.subscribe(None);
+        assert_eq!(backlog.len(), 500);
+        // Oldest should be id=10 (first 10 were dropped).
+        assert_eq!(backlog[0].id, 10);
+        assert_eq!(backlog[0].line, "line-10");
+    }
+
+    #[test]
+    fn log_buffer_truncated_flag_when_after_is_before_oldest() {
+        let buf = LogBuffer::new();
+        for i in 0..510 {
+            buf.push(format!("line-{i}"));
+        }
+
+        // Request after=5, but oldest is 10 — truncated.
+        let (_backlog, _rx, truncated) = buf.subscribe(Some(5));
+        assert!(truncated);
+
+        // Request after=10, oldest is 10 — not truncated.
+        let (_backlog, _rx, truncated) = buf.subscribe(Some(10));
+        assert!(!truncated);
+    }
+
+    #[test]
+    fn log_buffer_clear_preserves_id_counter() {
+        let buf = LogBuffer::new();
+        buf.push("before".to_string());
+        buf.clear();
+        buf.push("after".to_string());
+
+        let (backlog, _rx, _) = buf.subscribe(None);
+        assert_eq!(backlog.len(), 1);
+        // ID counter is preserved across clear (was 1 after "before", now 1 for "after").
+        assert_eq!(backlog[0].id, 1);
+        assert_eq!(backlog[0].line, "after");
+    }
+
+    #[tokio::test]
+    async fn log_buffer_subscriber_receives_live_entries() {
+        let buf = LogBuffer::new();
+        let (_backlog, mut rx, _) = buf.subscribe(None);
+
+        buf.push("live-1".to_string());
+        buf.push("live-2".to_string());
+
+        let entry = rx.recv().await.unwrap();
+        assert_eq!(entry.id, 0);
+        assert_eq!(entry.line, "live-1");
+
+        let entry = rx.recv().await.unwrap();
+        assert_eq!(entry.id, 1);
+        assert_eq!(entry.line, "live-2");
+    }
+
+    #[tokio::test]
+    async fn log_buffer_dead_subscriber_is_cleaned_up() {
+        let buf = LogBuffer::new();
+        let (_backlog, rx, _) = buf.subscribe(None);
+        drop(rx); // Subscriber disconnects.
+
+        // Pushing should not panic; the dead subscriber is cleaned up.
+        buf.push("after-drop".to_string());
+
+        // Verify the entry is still in the buffer.
+        let (backlog, _rx2, _) = buf.subscribe(None);
+        assert_eq!(backlog.len(), 1);
+        assert_eq!(backlog[0].line, "after-drop");
     }
 }
