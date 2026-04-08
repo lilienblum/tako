@@ -34,7 +34,7 @@ const PRIMARY: &str = "\x1b[22;38;2;125;196;228m";
 const STACKED_THRESHOLD: usize = 76;
 
 // Panel column widths (wide mode).
-const COL3_W: usize = 22; // cpu · ram · pid · port
+const COL3_W: usize = 22; // cpu · ram · port
 const COL_SEP: usize = 2; // gap between columns
 const BAR_W: usize = 8; // chars inside the progress bar
 const ROUTES_LABEL_W: usize = 8; // "routes  " prefix
@@ -282,7 +282,6 @@ pub fn format_panel(
     app_port: u16,
     cpu: Option<f32>,
     mem_bytes: Option<u64>,
-    pid: Option<usize>,
 ) -> String {
     let cols = terminal_cols().max(40);
     if cols < STACKED_THRESHOLD {
@@ -298,7 +297,6 @@ pub fn format_panel(
             app_port,
             cpu,
             mem_bytes,
-            pid,
             cols,
         )
     } else {
@@ -314,7 +312,6 @@ pub fn format_panel(
             app_port,
             cpu,
             mem_bytes,
-            pid,
             cols,
         )
     }
@@ -333,7 +330,6 @@ fn format_panel_wide(
     app_port: u16,
     cpu: Option<f32>,
     mem_bytes: Option<u64>,
-    pid: Option<usize>,
     cols: usize,
 ) -> String {
     // Warm amber — distinct from all log-level colors.
@@ -404,7 +400,7 @@ fn format_panel_wide(
         })
         .collect();
 
-    // ── Right column: cpu, ram, pid ───────────────────────────────────────────
+    // ── Right column: cpu, ram, port ───────────────────────────────────────────
     let r0 = if let Some(c) = cpu {
         let bar = progress_bar(c / 100.0, BAR_W);
         format!("{DIM}cpu  {RESET}{bar} {:.0}%", c)
@@ -416,13 +412,8 @@ fn format_panel_wide(
     } else {
         format!("{DIM}ram  {RESET}—")
     };
-    let r2 = format!(
-        "{DIM}pid  {RESET}{}",
-        pid.map(|p| p.to_string())
-            .unwrap_or_else(|| "—".to_string())
-    );
-    let r3 = format!("{DIM}port {RESET}{app_port}");
-    let right = [r0, r1, r2, r3];
+    let r2 = format!("{DIM}port {RESET}{app_port}");
+    let right = [r0, r1, r2];
 
     // ── Assemble ──────────────────────────────────────────────────────────────
     let data_rows = left.len().max(mid.len()).max(right.len());
@@ -450,7 +441,6 @@ fn format_panel_stacked(
     app_port: u16,
     cpu: Option<f32>,
     mem_bytes: Option<u64>,
-    pid: Option<usize>,
     cols: usize,
 ) -> String {
     let url_color = ansi_rgb(240, 175, 95);
@@ -513,7 +503,7 @@ fn format_panel_stacked(
         rows.push(stacked_row(&line, inner_w));
     }
 
-    // Metrics: cpu + ram + pid on one line
+    // Metrics: cpu + ram on one line
     let cpu_str = if let Some(c) = cpu {
         format!("{DIM}cpu{RESET} {:.0}%", c)
     } else {
@@ -524,15 +514,7 @@ fn format_panel_stacked(
     } else {
         format!("{DIM}ram{RESET} —")
     };
-    let pid_str = format!(
-        "{DIM}pid{RESET} {}",
-        pid.map(|p| p.to_string())
-            .unwrap_or_else(|| "—".to_string())
-    );
-    rows.push(stacked_row(
-        &format!("{cpu_str}  {ram_str}  {pid_str}"),
-        inner_w,
-    ));
+    rows.push(stacked_row(&format!("{cpu_str}  {ram_str}"), inner_w));
     rows.push(stacked_row(
         &format!("{DIM}port{RESET} {app_port}"),
         inner_w,
@@ -822,7 +804,6 @@ struct FooterState {
     status: String,
     cpu: Option<f32>,
     mem_bytes: Option<u64>,
-    pid: Option<usize>,
 }
 
 impl FooterState {
@@ -834,7 +815,6 @@ impl FooterState {
             status: "starting...".to_string(),
             cpu: None,
             mem_bytes: None,
-            pid: None,
         }
     }
 
@@ -858,7 +838,6 @@ impl FooterState {
             app_port,
             self.cpu,
             self.mem_bytes,
-            self.pid,
         )
         .lines()
         .map(|l| l.to_string())
@@ -1033,7 +1012,6 @@ pub async fn run_dev_output(
                         app_pid = None;
                         fs.cpu = None;
                         fs.mem_bytes = None;
-                        fs.pid = None;
                         fs.status = "stopped".to_string();
                         fs.refresh(
                             &mut footer,
@@ -1046,7 +1024,6 @@ pub async fn run_dev_output(
                     }
                     DevEvent::AppPid(pid) => {
                         app_pid = Some(Pid::from(pid as usize));
-                        fs.pid = Some(pid as usize);
                         fs.refresh(
                             &mut footer,
                             &app_name,
@@ -1060,7 +1037,6 @@ pub async fn run_dev_output(
                         app_pid = None;
                         fs.cpu = None;
                         fs.mem_bytes = None;
-                        fs.pid = None;
                         fs.status = "exited".to_string();
                         fs.refresh(
                             &mut footer,
@@ -1275,7 +1251,6 @@ mod tests {
             3000,
             None,
             None,
-            None,
         );
         assert!(panel.contains('┌'));
         assert!(panel.contains('└'));
@@ -1296,7 +1271,6 @@ mod tests {
             3000,
             None,
             None,
-            None,
         );
         let plain = strip_ansi(&panel);
         assert!(plain.contains("routes"));
@@ -1307,7 +1281,7 @@ mod tests {
     fn format_panel_shows_all_urls() {
         let hosts = vec!["a.tako.test".to_string(), "b.tako.test".to_string()];
         let panel = format_panel(
-            "app", "running", "bun", "u/r", "", None, &hosts, 443, 3000, None, None, None,
+            "app", "running", "bun", "u/r", "", None, &hosts, 443, 3000, None, None,
         );
         let plain = strip_ansi(&panel);
         assert!(plain.contains("https://a.tako.test"));
@@ -1332,7 +1306,6 @@ mod tests {
             &hosts,
             443,
             3000,
-            None,
             None,
             None,
             120,
@@ -1368,7 +1341,6 @@ mod tests {
             3000,
             None,
             None,
-            None,
         );
         assert!(!strip_ansi(&panel).contains(":443"));
     }
@@ -1386,7 +1358,6 @@ mod tests {
             &["app.tako.test".to_string()],
             47831,
             3000,
-            None,
             None,
             None,
             120,
@@ -1408,12 +1379,10 @@ mod tests {
             3001,
             Some(50.0),
             Some(100 * 1024 * 1024),
-            Some(9999),
         );
         let plain = strip_ansi(&panel);
         assert!(plain.contains("50%") || plain.contains("50"));
         assert!(plain.contains("100 MB"));
-        assert!(plain.contains("9999"));
         assert!(plain.contains("port"));
         assert!(plain.contains("3001"));
     }
@@ -1432,7 +1401,6 @@ mod tests {
             3000,
             None,
             None,
-            None,
         );
         assert!(strip_ansi(&panel).contains('—'));
     }
@@ -1449,7 +1417,6 @@ mod tests {
             &["app.tako.test".to_string()],
             443,
             3000,
-            None,
             None,
             None,
         );
@@ -1474,7 +1441,6 @@ mod tests {
             3000,
             Some(25.0),
             Some(50 * 1024 * 1024),
-            Some(1234),
             60,
         );
         let plain = strip_ansi(&panel);
@@ -1485,10 +1451,8 @@ mod tests {
         assert!(plain.contains("https://app.tako.test"));
         assert!(plain.contains("cpu"));
         assert!(plain.contains("ram"));
-        assert!(plain.contains("pid"));
         assert!(plain.contains("port 3000"));
         assert!(plain.contains("3000"));
-        assert!(plain.contains("1234"));
     }
 
     #[test]
@@ -1565,7 +1529,6 @@ mod tests {
             3000,
             None,
             None,
-            None,
         );
         let plain = strip_ansi(&panel);
         assert!(plain.contains("worktree (wt1)"));
@@ -1583,7 +1546,6 @@ mod tests {
             &["app.tako.test".to_string()],
             443,
             3000,
-            None,
             None,
             None,
         );
