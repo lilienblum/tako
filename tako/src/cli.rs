@@ -840,7 +840,7 @@ mod tests {
 
 #[derive(clap::Args, Debug)]
 pub struct DevArgs {
-    /// Run a variant of the app (e.g. --variant foo → myapp-foo.tako.test)
+    /// Run a variant of the app (e.g. --variant foo → myapp-foo.test)
     #[arg(long, visible_alias = "var")]
     pub variant: Option<String>,
 }

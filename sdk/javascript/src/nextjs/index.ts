@@ -19,7 +19,7 @@ export function withTako<T extends NextConfigShape>(config: T): T & NextConfigSh
     ...config,
     output: "standalone",
     adapterPath: fileURLToPath(import.meta.url),
-    allowedDevOrigins: [...(config.allowedDevOrigins ?? []), "*.tako.test"],
+    allowedDevOrigins: [...(config.allowedDevOrigins ?? []), "*.tako.test", "*.test"],
   };
 }
 

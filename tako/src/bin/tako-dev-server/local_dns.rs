@@ -1,4 +1,4 @@
-//! Local authoritative DNS for `*.tako.test` development hosts.
+//! Local authoritative DNS for `*.test` and `*.tako.test` development hosts.
 //!
 //! Answers queries directly from the current app host table.
 
@@ -13,6 +13,7 @@ use tokio::net::UdpSocket;
 
 const DNS_TTL_SECS: u32 = 30;
 const TAKO_DEV_SUFFIX: &str = ".tako.test";
+const SHORT_DEV_SUFFIX: &str = ".test";
 
 #[derive(Debug, Clone)]
 struct ParsedDnsQuery {
@@ -38,9 +39,9 @@ impl LocalDns {
     }
 }
 
-fn is_tako_dev_host(host: &str) -> bool {
+fn is_dev_host(host: &str) -> bool {
     let h = host.to_ascii_lowercase();
-    h == "tako.test" || h.ends_with(TAKO_DEV_SUFFIX)
+    h == "test" || h.ends_with(SHORT_DEV_SUFFIX) || h == "tako.test" || h.ends_with(TAKO_DEV_SUFFIX)
 }
 
 fn parse_dns_query(packet: &[u8]) -> Option<ParsedDnsQuery> {
@@ -79,7 +80,7 @@ fn response_with_record(
 fn build_dns_response(packet: &[u8], loopback_ip: Ipv4Addr) -> Option<Vec<u8>> {
     let q = parse_dns_query(packet)?;
     let mut response = Message::new();
-    let in_zone = is_tako_dev_host(&q.qname);
+    let in_zone = is_dev_host(&q.qname);
 
     response.set_id(q.request.id());
     response.set_message_type(MessageType::Response);
@@ -237,6 +238,31 @@ mod tests {
         assert_eq!(rcode(&resp), 0);
         assert_eq!(ancount(&resp), 1);
         assert!(resp.ends_with(&[127, 77, 0, 1]));
+    }
+
+    #[test]
+    fn resolves_short_test_domain() {
+        let q = build_query("app.test", DNS_TYPE_A);
+        let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
+        assert_eq!(rcode(&resp), 0);
+        assert_eq!(ancount(&resp), 1);
+        assert!(resp.ends_with(&[127, 77, 0, 1]));
+    }
+
+    #[test]
+    fn resolves_bare_test_tld() {
+        let q = build_query("test", DNS_TYPE_A);
+        let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
+        assert_eq!(rcode(&resp), 0);
+        assert_eq!(ancount(&resp), 1);
+    }
+
+    #[test]
+    fn resolves_nested_short_test_subdomain() {
+        let q = build_query("api.my-app.test", DNS_TYPE_A);
+        let resp = build_dns_response(&q, Ipv4Addr::new(127, 77, 0, 1)).expect("response");
+        assert_eq!(rcode(&resp), 0);
+        assert_eq!(ancount(&resp), 1);
     }
 
     #[test]

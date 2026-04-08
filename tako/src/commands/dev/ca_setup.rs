@@ -18,7 +18,7 @@ struct CaSetupPlan {
 }
 
 fn sudo_action_line() -> &'static str {
-    "Trust the Tako local CA for trusted https://*.tako.test"
+    "Trust the Tako local CA for trusted https://*.test"
 }
 
 fn plan_ca_setup(ca_exists: bool, ca_trusted: bool) -> CaSetupPlan {
@@ -146,6 +146,6 @@ mod tests {
     fn sudo_action_line_mentions_trusted_local_domains() {
         let line = sudo_action_line();
         assert!(line.contains("local CA"));
-        assert!(line.contains("https://*.tako.test"));
+        assert!(line.contains("https://*.test"));
     }
 }

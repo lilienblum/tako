@@ -33,11 +33,11 @@ This separation keeps things predictable. Commands change your deployment state.
 
 ## Local Development
 
-When you run `tako dev`, the CLI starts a persistent local daemon (`tako-dev-server`) that manages your app process and provides HTTPS routing on `*.tako.test` domains.
+When you run `tako dev`, the CLI starts a persistent local daemon (`tako-dev-server`) that manages your app process and provides HTTPS routing on `*.test` domains (with `*.tako.test` always available as a fallback).
 
 ```
 tako dev
-# Your app is now live at https://my-app.tako.test
+# Your app is now live at https://my-app.test
 ```
 
 Here is what happens under the hood:
@@ -47,9 +47,9 @@ Here is what happens under the hood:
 3. One local instance of your app starts immediately.
 4. HTTPS is set up using a local Certificate Authority -- no browser security warnings once the CA is trusted.
 
-The daemon supports multiple apps simultaneously, each on its own `*.tako.test` subdomain. On macOS, Tako installs a loopback proxy so your app is available on standard ports (443/80) without `sudo`. On Linux, Tako uses iptables redirect rules to achieve the same portless URLs.
+The daemon supports multiple apps simultaneously, each on its own `*.test` subdomain (`*.tako.test` also works). On macOS, Tako installs a loopback proxy so your app is available on standard ports (443/80) without `sudo`. On Linux, Tako uses iptables redirect rules to achieve the same portless URLs.
 
-Your app stays running while you work. If you press `b`, it backgrounds to the daemon and the CLI exits -- your app keeps serving. Run `tako dev` again to reattach. Press `Ctrl+c` to stop the app entirely.
+Your app stays running while you work. If you press `b`, it backgrounds to the daemon and the CLI exits -- your app keeps serving. Run `tako dev` again to reconnect. Press `Ctrl+c` to stop the app entirely.
 
 After 30 minutes with no attached CLI client, the daemon idles the app process. The next HTTP request wakes it back up automatically.
 
@@ -59,7 +59,7 @@ You can run DNS variants of your app with `--variant`:
 
 ```
 tako dev --variant admin
-# Live at https://my-app-admin.tako.test
+# Live at https://my-app-admin.test
 ```
 
 This is useful for running multiple configurations of the same app side by side.

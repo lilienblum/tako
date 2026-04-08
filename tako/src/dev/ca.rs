@@ -22,7 +22,7 @@ use std::process::Command;
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
 
-use super::domain::TAKO_DEV_DOMAIN;
+use super::domain::{SHORT_DEV_DOMAIN, TAKO_DEV_DOMAIN};
 
 /// Root CA certificate validity period (10 years)
 const CA_VALIDITY_DAYS: i64 = 3650;
@@ -216,9 +216,14 @@ impl LocalCA {
         })
     }
 
-    /// Get the domain for an app name
+    /// Get the full Tako domain for an app name (`{app}.tako.test`)
     pub fn app_domain(app_name: &str) -> String {
         format!("{}.{}", app_name, TAKO_DEV_DOMAIN)
+    }
+
+    /// Get the short domain for an app name (`{app}.test`)
+    pub fn app_short_domain(app_name: &str) -> String {
+        format!("{}.{}", app_name, SHORT_DEV_DOMAIN)
     }
 
     /// Generate a leaf certificate with multiple SANs (DNS names and/or IPs).

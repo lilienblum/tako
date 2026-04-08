@@ -47,7 +47,7 @@ If omitted, Tako falls back to a sanitized version of the selected config file's
 
 - Lowercase letters (`a-z`), numbers (`0-9`), and hyphens (`-`) only
 - Must start with a lowercase letter
-- Must be DNS-compatible (it becomes `{name}.tako.test` in local dev)
+- Must be DNS-compatible (it becomes `{name}.test` in local dev)
 
 Valid names: `my-app`, `api-server`, `web-frontend`
 
@@ -341,8 +341,8 @@ You can use `route` or `routes` in an environment, but not both.
 - Every non-development environment must define `route` or `routes`
 - Routes must include a hostname (path-only routes like `"/api/*"` are invalid)
 - Empty route lists are rejected for non-development environments
-- Development routes must be `{app}.tako.test` or a subdomain of it
-- `[envs.development]` may omit routes entirely and defaults to `{app}.tako.test` for `tako dev`
+- Development routes must use `.test` or `.tako.test` -- for example `{app}.test` or a subdomain of it
+- `[envs.development]` may omit routes entirely and defaults to `{app}.test` for `tako dev`
 
 ### `servers`
 
@@ -449,7 +449,7 @@ Tako validates your `tako.toml` and reports clear errors when something is wrong
 - **Environment sections**: `[envs.<env>]` accepts only `route`/`routes`, `servers`, `idle_timeout`, and `log_level`. Env vars belong in `[vars]` / `[vars.<env>]`.
 - **Route exclusivity**: Each environment can set `route` or `routes`, but not both.
 - **Non-development routes required**: Every non-development environment must have `route` or `routes` defined (empty lists are rejected).
-- **Development route restrictions**: Must be `{app}.tako.test` or a subdomain of it.
+- **Development route restrictions**: Must use `.test` or `.tako.test` -- for example `{app}.test` or a subdomain of it.
 - **Route hostnames required**: Path-only routes (like `"/api/*"`) are invalid.
 - **Build stage paths**: `cwd` allows `..` for monorepo traversal but must not escape the project root. Absolute paths are rejected.
 - **Build stage run**: Each `[[build_stages]]` entry must have a `run` field.
@@ -539,7 +539,7 @@ log_level = "debug"
 # Development environment (used by tako dev, not deployable)
 [envs.development]
 log_level = "debug"
-# route defaults to {name}.tako.test
+# route defaults to {name}.test
 ```
 
 ---

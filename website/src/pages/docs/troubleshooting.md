@@ -58,8 +58,8 @@ If the dev daemon is not running, doctor reports `status: not running` with a hi
 1. Run `tako doctor` and fix any issues it reports.
 2. Run `tako dev`.
 3. Open your app:
-   - macOS / Linux: `https://{app}.tako.test/`
-   - Other platforms: `https://{app}.tako.test:47831/`
+   - macOS / Linux: `https://{app}.test/`
+   - Other platforms: `https://{app}.test:47831/`
 
 ### Dev daemon not starting
 
@@ -76,7 +76,7 @@ If `tako dev` fails to start the daemon:
 
 Make sure `tako dev` is currently running. If it is, run `tako doctor` and check for preflight failures.
 
-On macOS, verify that `/etc/resolver/tako.test` exists and points to `127.0.0.1:53535`. This file is created automatically during first setup, but macOS updates can sometimes remove it.
+On macOS, verify that `/etc/resolver/test` and `/etc/resolver/tako.test` exist and point to `127.0.0.1:53535`. These files are created automatically during first setup, but macOS updates can sometimes remove them.
 
 ### Local CA and HTTPS
 
@@ -97,7 +97,7 @@ On macOS, Tako configures a launchd-managed loopback proxy so you can access app
 
 If `tako dev` reports the loopback proxy looks inactive, run `tako doctor` and check the preflight results. The proxy is socket-activated and may exit after a long idle window; launchd reactivates it on the next request. If the proxy needs reinstallation, `tako dev` explains it is reloading or reinstalling the launchd helper before prompting for sudo.
 
-After applying or repairing the loopback proxy, Tako retries reachability on ports 80 and 443 and fails startup if they remain unreachable. If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.tako.test/` still fails, Tako reports a targeted hint that the loopback proxy is not forwarding correctly.
+After applying or repairing the loopback proxy, Tako retries reachability on ports 80 and 443 and fails startup if they remain unreachable. If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.test/` still fails, Tako reports a targeted hint that the loopback proxy is not forwarding correctly.
 
 ### Linux port redirect
 
@@ -118,17 +118,17 @@ On NixOS, `nixos-rebuild` wipes imperative network changes. Tako detects NixOS a
 
 ### DNS issues
 
-Tako uses split DNS so `*.tako.test` hostnames resolve locally. The dev daemon answers `A` queries for active `*.tako.test` hosts on `127.0.0.1:53535`.
+Tako uses split DNS so `*.test` and `*.tako.test` hostnames resolve locally. The dev daemon answers `A` queries for active hosts on `127.0.0.1:53535`.
 
-If DNS resolution fails for `*.tako.test`:
+If DNS resolution fails for `*.test` or `*.tako.test`:
 
-- On macOS, check that `/etc/resolver/tako.test` exists and contains `nameserver 127.0.0.1` and `port 53535`. If the file was removed by an OS update, running `tako dev` again recreates it (may prompt for sudo).
-- On Linux, check that `systemd-resolved` is running (`systemctl status systemd-resolved`) and the `tako.test` forward zone is configured. Run `resolvectl query test.tako.test` to test resolution directly.
+- On macOS, check that `/etc/resolver/test` and `/etc/resolver/tako.test` exist and contain `nameserver 127.0.0.1` and `port 53535`. If these files were removed by an OS update, running `tako dev` again recreates them (may prompt for sudo).
+- On Linux, check that `systemd-resolved` is running (`systemctl status systemd-resolved`) and both the `test` and `tako.test` forward zones are configured (`Domains=~tako.test ~test`). Run `resolvectl query myapp.test` to test resolution directly.
 - Make sure `tako dev` is running (the DNS listener runs inside the dev daemon).
 
 ### Dev route configuration
 
-Routes for `[envs.development]` must be `{app}.tako.test` or a subdomain of it. Dev routing matches exact hostnames only; wildcard host entries are ignored. If your configured dev routes contain no exact hostnames, `tako dev` fails with an invalid route error.
+Routes for `[envs.development]` must use `.test` or `.tako.test` -- for example `{app}.test` or a subdomain of it (or the equivalent `.tako.test` forms). Dev routing matches exact hostnames only; wildcard host entries are ignored. If your configured dev routes contain no exact hostnames, `tako dev` fails with an invalid route error.
 
 ### App crashing or restarting in dev
 
@@ -283,7 +283,7 @@ If `.tako/secrets.json` is deleted, Tako shows a warning and prompts you to rest
 
 - Routes must include a hostname (path-only routes like `"/api/*"` are invalid).
 - Exact path routes normalize trailing slashes (`example.com/api` and `example.com/api/` are equivalent).
-- Development routes must be `{app}.tako.test` or a subdomain of it.
+- Development routes must use `.test` or `.tako.test` -- for example `{app}.test` or a subdomain of it.
 - Wildcard host entries are ignored in dev routing (exact hostnames only).
 - Each non-development environment must define `route` or `routes`.
 

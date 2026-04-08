@@ -1,8 +1,8 @@
 //! Tako Dev Client
 //!
 //! CLI client for the tako-dev-server daemon:
-//! - HTTPS via local CA (`{app-name}.tako.test`)
-//! - Local authoritative DNS for `*.tako.test`
+//! - HTTPS via local CA (`{app-name}.test` / `{app-name}.tako.test`)
+//! - Local authoritative DNS for `*.test` and `*.tako.test`
 //! - `tako.toml` watching for env/route updates
 //! - Streaming logs, status, and resource monitoring
 //! - Process lifecycle managed by the daemon
@@ -170,6 +170,8 @@ pub(crate) const LOCAL_DNS_PORT: u16 = 53535;
 const RESOLVER_DIR: &str = "/etc/resolver";
 #[cfg(target_os = "macos")]
 pub(crate) const TAKO_RESOLVER_FILE: &str = "/etc/resolver/tako.test";
+#[cfg(target_os = "macos")]
+pub(crate) const SHORT_RESOLVER_FILE: &str = "/etc/resolver/test";
 const DEV_TLS_CERT_FILENAME: &str = "fullchain.pem";
 const DEV_TLS_KEY_FILENAME: &str = "privkey.pem";
 const DEV_TLS_NAMES_FILENAME: &str = "names.json";
@@ -313,7 +315,7 @@ fn compute_dev_hosts(
         _ => return Ok(vec![default_host.to_string()]),
     };
 
-    // Always include the default host so `{app-name}.tako.test` works even when
+    // Always include the default host so `{app-name}.test` works even when
     // the user only configures path-specific or wildcard routes.
     let mut out = vec![default_host.to_string()];
     for r in routes {
@@ -611,7 +613,12 @@ fn dev_server_tls_names_path_for_home(home: &Path) -> PathBuf {
 
 fn default_dev_tls_names_for_app(app_name: &str) -> Vec<String> {
     let d = crate::dev::TAKO_DEV_DOMAIN;
+    let s = crate::dev::SHORT_DEV_DOMAIN;
     vec![
+        format!("*.{s}"),
+        s.to_string(),
+        format!("{app_name}.{s}"),
+        format!("*.{app_name}.{s}"),
         format!("*.{d}"),
         d.to_string(),
         format!("{app_name}.{d}"),
@@ -712,8 +719,8 @@ fn write_system_file_with_sudo(
 }
 
 #[cfg(target_os = "macos")]
-fn local_dns_resolver_configured(port: u16) -> bool {
-    let Ok(contents) = std::fs::read_to_string(TAKO_RESOLVER_FILE) else {
+fn resolver_file_matches(path: &str, port: u16) -> bool {
+    let Ok(contents) = std::fs::read_to_string(path) else {
         return false;
     };
     let (nameserver, configured_port) = parse_local_dns_resolver(&contents);
@@ -721,12 +728,26 @@ fn local_dns_resolver_configured(port: u16) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    if local_dns_resolver_configured(port) {
-        return Ok(());
+fn local_dns_resolver_configured(port: u16) -> bool {
+    resolver_file_matches(TAKO_RESOLVER_FILE, port)
+}
+
+#[cfg(target_os = "macos")]
+fn short_dns_resolver_configured(port: u16) -> bool {
+    resolver_file_matches(SHORT_RESOLVER_FILE, port)
+}
+
+/// Returns true if the short `.test` resolver is active after setup.
+#[cfg(target_os = "macos")]
+fn ensure_local_dns_resolver_configured(port: u16) -> Result<bool, Box<dyn std::error::Error>> {
+    let tako_ok = local_dns_resolver_configured(port);
+    let short_ok = short_dns_resolver_configured(port);
+
+    if tako_ok && short_ok {
+        return Ok(true);
     }
 
-    if !crate::output::is_interactive() && !crate::output::is_root() {
+    if !tako_ok && !crate::output::is_interactive() && !crate::output::is_root() {
         return Err(format!(
             "local DNS resolver is not configured at {TAKO_RESOLVER_FILE}; run `tako dev` interactively once to install it"
         )
@@ -739,21 +760,54 @@ fn ensure_local_dns_resolver_configured(port: u16) -> Result<(), Box<dyn std::er
         &["install", "-d", "-m", "755", RESOLVER_DIR],
         "creating /etc/resolver",
     )?;
-    write_system_file_with_sudo(TAKO_RESOLVER_FILE, &local_dns_resolver_contents(port))?;
 
-    if !local_dns_resolver_configured(port) {
-        return Err("local DNS resolver setup verification failed".into());
+    // Always ensure the scoped tako.test resolver
+    if !tako_ok {
+        write_system_file_with_sudo(TAKO_RESOLVER_FILE, &local_dns_resolver_contents(port))?;
+
+        if !local_dns_resolver_configured(port) {
+            return Err("local DNS resolver setup verification failed".into());
+        }
     }
 
-    crate::output::success("Local DNS resolver configured for *.tako.test.");
+    // Set up short .test resolver if not already owned by another tool
+    let short_active = if short_ok {
+        true
+    } else if !std::path::Path::new(SHORT_RESOLVER_FILE).exists() {
+        // No existing file — safe to create
+        write_system_file_with_sudo(SHORT_RESOLVER_FILE, &local_dns_resolver_contents(port))?;
+        short_dns_resolver_configured(port)
+    } else if crate::output::is_interactive() {
+        // File exists with different content — ask user
+        crate::output::warning(
+            "Another tool owns /etc/resolver/test. Override it for shorter *.test URLs?",
+        );
+        if crate::output::confirm("Override /etc/resolver/test?", false).unwrap_or(false) {
+            write_system_file_with_sudo(SHORT_RESOLVER_FILE, &local_dns_resolver_contents(port))?;
+            short_dns_resolver_configured(port)
+        } else {
+            crate::output::muted("Skipped — using *.tako.test URLs instead.");
+            false
+        }
+    } else {
+        false
+    };
 
-    Ok(())
+    if short_active {
+        crate::output::success("Local DNS resolver configured for *.test and *.tako.test.");
+    } else {
+        crate::output::success("Local DNS resolver configured for *.tako.test.");
+    }
+
+    Ok(short_active)
 }
 
+/// Returns true if the short `.test` resolver is active (always true on Linux).
 #[cfg(not(target_os = "macos"))]
-fn ensure_local_dns_resolver_configured(_port: u16) -> Result<(), Box<dyn std::error::Error>> {
+fn ensure_local_dns_resolver_configured(_port: u16) -> Result<bool, Box<dyn std::error::Error>> {
     // On Linux, DNS is set up as part of linux_setup::ensure_installed().
-    Ok(())
+    // The resolved drop-in routes both *.test and *.tako.test.
+    Ok(true)
 }
 
 #[cfg(target_os = "linux")]
@@ -776,9 +830,9 @@ fn explain_pending_sudo_setup(_port: u16) -> Result<(), Box<dyn std::error::Erro
         return Ok(());
     }
 
-    crate::output::warning_full("One-time sudo is required for:");
+    crate::output::warning("One-time sudo is required for:");
     for item in &items {
-        crate::output::warning_bullet(item);
+        crate::output::bullet(item);
     }
 
     // Pre-authenticate sudo so the password prompt is not overwritten by spinners.
@@ -787,7 +841,7 @@ fn explain_pending_sudo_setup(_port: u16) -> Result<(), Box<dyn std::error::Erro
         .status()
         .map_err(|e| -> Box<dyn std::error::Error> { format!("failed to run sudo: {e}").into() })?;
     if !status.success() {
-        return Err("sudo authentication failed".into());
+        return Err(crate::output::silent_exit_error().into());
     }
 
     Ok(())
@@ -795,7 +849,7 @@ fn explain_pending_sudo_setup(_port: u16) -> Result<(), Box<dyn std::error::Erro
 
 #[cfg(any(target_os = "macos", test))]
 fn local_dns_sudo_action_line() -> &'static str {
-    "Configure local DNS for *.tako.test"
+    "Configure local DNS for *.test and *.tako.test"
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -823,18 +877,19 @@ fn explain_pending_sudo_setup(port: u16) -> Result<(), Box<dyn std::error::Error
         return Ok(());
     }
 
+    let dns_needed = !local_dns_resolver_configured(port) || !short_dns_resolver_configured(port);
     let items = sudo_setup_action_items(
         ca_setup::pending_sudo_action()?,
-        !local_dns_resolver_configured(port),
+        dns_needed,
         loopback_proxy::pending_sudo_action()?,
     );
     if items.is_empty() {
         return Ok(());
     }
 
-    crate::output::warning_full("One-time sudo is required for:");
+    crate::output::warning("One-time sudo is required for:");
     for item in items {
-        crate::output::warning_bullet(&item);
+        crate::output::bullet(&item);
     }
 
     // Pre-authenticate sudo so the password prompt is not overwritten by spinners.
@@ -843,7 +898,7 @@ fn explain_pending_sudo_setup(port: u16) -> Result<(), Box<dyn std::error::Error
         .status()
         .map_err(|e| -> Box<dyn std::error::Error> { format!("failed to run sudo: {e}").into() })?;
     if !status.success() {
-        return Err("sudo authentication failed".into());
+        return Err(crate::output::silent_exit_error().into());
     }
 
     Ok(())
@@ -1648,10 +1703,14 @@ main = "src/index.ts"
         std::fs::write(
             &names_path,
             r#"[
+  "*.demo.tako.test",
+  "*.demo.test",
   "*.tako.test",
-  "tako.test",
+  "*.test",
   "demo.tako.test",
-  "*.demo.tako.test"
+  "demo.test",
+  "tako.test",
+  "test"
 ]"#,
         )
         .unwrap();
@@ -1743,14 +1802,14 @@ main = "src/index.ts"
     #[test]
     fn sudo_setup_action_items_uses_expected_order() {
         let items = sudo_setup_action_items(
-            Some("Trust the Tako local CA for trusted https://*.tako.test"),
+            Some("Trust the Tako local CA for trusted https://*.test"),
             true,
             Some("Install the local loopback proxy for 127.77.0.1:80/443"),
         );
         assert_eq!(
             items,
             vec![
-                "Trust the Tako local CA for trusted https://*.tako.test".to_string(),
+                "Trust the Tako local CA for trusted https://*.test".to_string(),
                 local_dns_sudo_action_line().to_string(),
                 "Install the local loopback proxy for 127.77.0.1:80/443".to_string(),
             ]
@@ -2091,22 +2150,30 @@ pub async fn run(
     let existing_apps = try_list_registered_app_names().await;
     let app_name = disambiguate_app_name(&app_name, &config_key, &existing_apps);
 
-    let domain = LocalCA::app_domain(&app_name);
-    // When a variant is active, routes in tako.toml reference the base app
-    // domain (e.g. `*.example.tako.test`).  We rewrite them to use the
-    // variant domain (e.g. `*.example-foo.tako.test`).
-    let base_domain = if variant.is_some() {
-        Some(LocalCA::app_domain(&base_name))
-    } else {
-        None
-    };
-
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     explain_pending_sudo_setup(LOCAL_DNS_PORT)?;
 
     let local_ca = setup_local_ca().await?;
     let tls_material_updated = ensure_dev_server_tls_material(&local_ca, &app_name)?;
-    ensure_local_dns_resolver_configured(LOCAL_DNS_PORT)?;
+    let short_domain_active = ensure_local_dns_resolver_configured(LOCAL_DNS_PORT)?;
+
+    let domain = if short_domain_active {
+        LocalCA::app_short_domain(&app_name)
+    } else {
+        LocalCA::app_domain(&app_name)
+    };
+    // When a variant is active, routes in tako.toml reference the base app
+    // domain (e.g. `*.example.test`).  We rewrite them to use the
+    // variant domain (e.g. `*.example-foo.test`).
+    let base_domain = if variant.is_some() {
+        if short_domain_active {
+            Some(LocalCA::app_short_domain(&base_name))
+        } else {
+            Some(LocalCA::app_domain(&base_name))
+        }
+    } else {
+        None
+    };
 
     #[cfg(target_os = "macos")]
     loopback_proxy::ensure_installed()?;
@@ -2339,7 +2406,7 @@ pub async fn run(
         && let Some(existing) = apps.iter().find(|a| a.config_path == config_key)
         && existing.status.as_str() == "running"
     {
-        // Attach to existing running app.
+        // Connect to existing running app.
         let url = if let Some(host) = existing.hosts.first() {
             let port = if public_url_port == 443 {
                 String::new()
@@ -2350,7 +2417,7 @@ pub async fn run(
         } else {
             dev_url(&primary_host, public_url_port)
         };
-        let session = AttachedDevClient {
+        let session = ConnectedDevClient {
             config_key: config_key.clone(),
             config_path: config_path.clone(),
             project_dir: project_dir.clone(),
@@ -2358,7 +2425,7 @@ pub async fn run(
             pid: existing.pid,
         };
         let display_hosts = compute_display_routes(&cfg, &domain, base_domain.as_deref());
-        return run_attached_dev_client(&app_name, interactive, session, display_hosts).await;
+        return run_connected_dev_client(&app_name, interactive, session, display_hosts).await;
     }
 
     // Free the reserved port so the daemon-spawned app process can bind.
@@ -2423,9 +2490,7 @@ pub async fn run(
             .and_then(|b| b.as_bool())
             .unwrap_or(false);
         if !local_dns_enabled {
-            crate::output::warning(
-                "Local DNS is unavailable; .tako.test hostnames may not resolve.",
-            );
+            crate::output::warning("Local DNS is unavailable; .test hostnames may not resolve.");
             crate::output::muted("Run `tako doctor` for diagnostics.");
         }
     }
@@ -2654,13 +2719,28 @@ pub async fn run(
                                 break;
                             }
                         }
-                        crate::dev_server_client::DevServerEvent::SessionAttached {
+                        crate::dev_server_client::DevServerEvent::ClientConnected {
                             ref config_path,
+                            client_id,
                             ..
                         } => {
                             if config_path == &config_key {
                                 let _ = event_tx
-                                    .send(DevEvent::SessionAttached { is_self: false })
+                                    .send(DevEvent::ClientConnected {
+                                        is_self: false,
+                                        client_id,
+                                    })
+                                    .await;
+                            }
+                        }
+                        crate::dev_server_client::DevServerEvent::ClientDisconnected {
+                            ref config_path,
+                            client_id,
+                            ..
+                        } => {
+                            if config_path == &config_key {
+                                let _ = event_tx
+                                    .send(DevEvent::ClientDisconnected { client_id })
                                     .await;
                             }
                         }
@@ -2744,9 +2824,9 @@ pub async fn run(
                 }
             }
 
-            // When the user pressed `b`, detach from the running process.
+            // When the user pressed `b`, background the running process.
             // The daemon already owns the process, so just exit.
-            if let Some(output::DevOutputExit::Detach { .. }) = dev_exit {
+            if let Some(output::DevOutputExit::Disconnect { .. }) = dev_exit {
                 return Ok(());
             }
         }
@@ -2783,10 +2863,13 @@ pub async fn run(
                                 DevEvent::AppError(e) => {
                                     eprintln!("App error: {}", e);
                                 }
-                                DevEvent::SessionAttached { is_self } => {
+                                DevEvent::ClientConnected { is_self, client_id } => {
                                     if !is_self {
-                                        println!("another session attached");
+                                        println!("Client {} connected", client_id);
                                     }
+                                }
+                                DevEvent::ClientDisconnected { client_id } => {
+                                    println!("Client {} disconnected", client_id);
                                 }
                                 DevEvent::ExitWithMessage(msg) => {
                                     println!("{}", msg);
@@ -2843,7 +2926,7 @@ fn reserve_ephemeral_port() -> Result<(u16, TcpListener), Box<dyn std::error::Er
 }
 
 #[derive(Debug, Clone)]
-struct AttachedDevClient {
+struct ConnectedDevClient {
     config_key: String,
     config_path: PathBuf,
     project_dir: PathBuf,
@@ -2925,10 +3008,10 @@ fn host_and_port_from_url(url: &str) -> Option<(String, u16)> {
     Some((host_port.to_string(), 443))
 }
 
-async fn run_attached_dev_client(
+async fn run_connected_dev_client(
     app_name: &str,
     interactive: bool,
-    session: AttachedDevClient,
+    session: ConnectedDevClient,
     display_hosts: Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut public_port = host_and_port_from_url(&session.url)
@@ -2955,7 +3038,7 @@ async fn run_attached_dev_client(
 
     let hosts = display_hosts;
 
-    let my_session_id = std::process::id();
+    let my_client_id = std::process::id();
 
     let (log_tx, log_rx) = mpsc::channel::<ScopedLog>(1000);
     let (event_tx, event_rx) = mpsc::channel::<DevEvent>(32);
@@ -2976,7 +3059,7 @@ async fn run_attached_dev_client(
         let event_tx = event_tx.clone();
         let stop_tx = stop_tx.clone();
         let config_key = session.config_key.clone();
-        let sid = my_session_id;
+        let sid = my_client_id;
         tokio::spawn(async move {
             let mut got_stop = false;
 
@@ -2986,7 +3069,10 @@ async fn run_attached_dev_client(
             };
 
             if let Some(mut ev_rx) = connected.await {
-                let _ = crate::dev_server_client::open_session(&config_key, sid).await;
+                // Hold _client_conn alive — dropping it triggers ClientDisconnected.
+                let _client_conn = crate::dev_server_client::connect_client(&config_key, sid)
+                    .await
+                    .ok();
 
                 while let Some(ev) = ev_rx.recv().await {
                     match ev {
@@ -2998,15 +3084,25 @@ async fn run_attached_dev_client(
                             got_stop = true;
                             break;
                         }
-                        crate::dev_server_client::DevServerEvent::SessionAttached {
+                        crate::dev_server_client::DevServerEvent::ClientConnected {
                             ref config_path,
-                            session_id,
+                            client_id,
                             ..
                         } if config_path == &config_key => {
                             let _ = event_tx
-                                .send(DevEvent::SessionAttached {
-                                    is_self: session_id == sid,
+                                .send(DevEvent::ClientConnected {
+                                    is_self: client_id == sid,
+                                    client_id,
                                 })
+                                .await;
+                        }
+                        crate::dev_server_client::DevServerEvent::ClientDisconnected {
+                            ref config_path,
+                            client_id,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx
+                                .send(DevEvent::ClientDisconnected { client_id })
                                 .await;
                         }
                         _ => {}
@@ -3113,7 +3209,7 @@ async fn run_attached_dev_client(
         .await?;
     } else {
         println!("{}", session.url);
-        println!("Attached to running dev app '{}'.", app_name);
+        println!("Connected to running dev app '{}'.", app_name);
 
         let mut log_rx = log_rx;
         let mut event_rx = event_rx;
@@ -3136,10 +3232,13 @@ async fn run_attached_dev_client(
                                     println!("{}", msg);
                                     break;
                                 }
-                                DevEvent::SessionAttached { is_self } => {
+                                DevEvent::ClientConnected { is_self, client_id } => {
                                     if !is_self {
-                                        println!("another session attached");
+                                        println!("Client {} connected", client_id);
                                     }
+                                }
+                                DevEvent::ClientDisconnected { client_id } => {
+                                    println!("Client {} disconnected", client_id);
                                 }
                                 DevEvent::AppLaunching
                                 | DevEvent::AppStarted
@@ -3538,9 +3637,14 @@ pub enum DevEvent {
     AppProcessExited(String),
     AppPid(u32),
     AppError(String),
-    /// A session attached — `is_self` true for the current session.
-    SessionAttached {
+    /// A CLI client connected — `is_self` true for the current client.
+    ClientConnected {
         is_self: bool,
+        client_id: u32,
+    },
+    /// A CLI client disconnected.
+    ClientDisconnected {
+        client_id: u32,
     },
     /// Another client stopped the app — exit cleanly.
     ExitWithMessage(String),

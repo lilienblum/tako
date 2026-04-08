@@ -3,12 +3,12 @@ layout: ../../layouts/DocsLayout.astro
 title: "Local development with Tako dev: HTTPS, domains, and hot reload - Tako Docs"
 heading: Development
 current: development
-description: "Learn how tako dev provides trusted HTTPS, custom .tako.test domains, hot reload, variants, and a persistent local background daemon."
+description: "Learn how tako dev provides trusted HTTPS, custom .test domains, hot reload, variants, and a persistent local background daemon."
 ---
 
 # Local Development with Tako
 
-`tako dev` gives you a production-like local environment: trusted HTTPS, custom `.tako.test` domains, hot reload, and a persistent background daemon that keeps your apps running even after the CLI exits.
+`tako dev` gives you a production-like local environment: trusted HTTPS, custom `.test` domains, hot reload, and a persistent background daemon that keeps your apps running even after the CLI exits.
 
 ## How it works
 
@@ -27,7 +27,7 @@ tako dev
 tako -c path/to/project/preview dev
 ```
 
-The app name is resolved from the top-level `name` in the selected config file, or from the sanitized parent directory name if `name` is not set. This name determines your local URL: `https://{app}.tako.test/`.
+The app name is resolved from the top-level `name` in the selected config file, or from the sanitized parent directory name if `name` is not set. This name determines your local URL: `https://{app}.test/`.
 
 ### DNS variants
 
@@ -35,7 +35,7 @@ Use `--variant` (alias `--var`) to run a DNS variant of the app. This gives you 
 
 ```bash
 tako dev --variant foo
-# → https://myapp-foo.tako.test/
+# → https://myapp-foo.test/
 ```
 
 This is useful for running multiple branches or configurations of the same app side by side.
@@ -48,7 +48,7 @@ The daemon:
 
 - Terminates HTTPS using certificates issued by the local CA (SNI-based cert selection).
 - Routes requests by `Host` header to the correct app port.
-- Answers DNS queries for `*.tako.test` hostnames.
+- Answers DNS queries for `*.test` and `*.tako.test` hostnames.
 - Manages app processes (spawn, stop, wake-on-request).
 
 Installed CLI distributions include `tako` and `tako-dev-server` (on macOS, also `tako-loopback-proxy`). When running from a source checkout, `tako dev` prefers repo-local debug/release builds of these helpers.
@@ -79,7 +79,7 @@ After 30 minutes with no attached CLI clients, a running app transitions to `idl
 
 ### Wake-on-request
 
-When an HTTP request arrives for an idle app, the daemon spawns the process and routes the request once the app is healthy. This means your app is always reachable at its `.tako.test` URL, even after going idle.
+When an HTTP request arrives for an idle app, the daemon spawns the process and routes the request once the app is healthy. This means your app is always reachable at its `.test` URL, even after going idle.
 
 ### Stopping
 
@@ -87,13 +87,13 @@ Press `Ctrl+c` to fully stop the app. This unregisters it from the daemon, remov
 
 ### Backgrounding
 
-Press `b` to hand the running process off to the daemon and exit the CLI. The daemon keeps the process alive and routes active. Run `tako dev` again with the same selected config file to re-attach.
+Press `b` to hand the running process off to the daemon and exit the CLI. The daemon keeps the process alive and routes active. Run `tako dev` again with the same selected config file to reconnect.
 
 ## Dev subcommands
 
 ### tako dev stop
 
-Stop a running or idle dev app without needing to attach first.
+Stop a running or idle dev app without needing to connect first.
 
 ```bash
 # Stop the app for the selected config file
@@ -132,13 +132,17 @@ If your browser still shows certificate warnings after setup, try quitting and r
 
 ## Local DNS
 
-Tako uses split DNS so `*.tako.test` hostnames resolve locally without touching your `/etc/hosts` file.
+Tako uses split DNS so `*.test` and `*.tako.test` hostnames resolve locally without touching your `/etc/hosts` file.
 
 ### macOS resolver
 
-`tako dev` writes a one-time resolver file (requires sudo):
+`tako dev` writes one-time resolver files (requires sudo):
 
 ```
+/etc/resolver/test
+  nameserver 127.0.0.1
+  port 53535
+
 /etc/resolver/tako.test
   nameserver 127.0.0.1
   port 53535
@@ -146,9 +150,9 @@ Tako uses split DNS so `*.tako.test` hostnames resolve locally without touching 
 
 ### Linux resolver
 
-On Linux, `tako dev` configures `systemd-resolved` to forward `tako.test` queries to the local DNS listener. This is part of the one-time setup described in the [Linux port redirect](#linux-port-redirect) section below.
+On Linux, `tako dev` configures `systemd-resolved` to forward both `test` and `tako.test` queries (`Domains=~tako.test ~test`) to the local DNS listener. This is part of the one-time setup described in the [Linux port redirect](#linux-port-redirect) section below.
 
-The dev daemon runs a DNS listener on `127.0.0.1:53535` and answers `A` queries for active `*.tako.test` hosts:
+The dev daemon runs a DNS listener on `127.0.0.1:53535` and answers `A` queries for active `*.test` and `*.tako.test` hosts:
 
 - On macOS, app hosts resolve to `127.77.0.1` (the dedicated loopback address used by the loopback proxy).
 - On Linux, app hosts resolve to `127.77.0.1` (the dedicated loopback address used by iptables redirect).
@@ -174,7 +178,7 @@ After applying or repairing the loopback proxy, Tako retries loopback 80/443 rea
 After setup, your dev URLs look like:
 
 ```
-https://my-app.tako.test/
+https://my-app.test/
 ```
 
 ## Linux port redirect
@@ -185,7 +189,7 @@ On first run, `tako dev` performs a one-time setup (requires sudo) that configur
 
 - A loopback alias (`127.77.0.1` on `lo`)
 - iptables DNAT rules: `127.77.0.1:443` to port `47831`, `127.77.0.1:80` to port `47830`, and `127.77.0.1:53` to port `53535`
-- A `systemd-resolved` drop-in to forward `tako.test` DNS queries to the local listener
+- A `systemd-resolved` drop-in to forward `test` and `tako.test` DNS queries to the local listener
 - A systemd oneshot service (`tako-dev-redirect.service`) so the alias and iptables rules persist across reboots
 
 ### NixOS
@@ -195,25 +199,25 @@ On NixOS, imperative network changes are wiped by `nixos-rebuild`. Instead of ru
 On platforms without the loopback proxy or port redirect, the URL includes the port:
 
 ```
-https://my-app.tako.test:47831/
+https://my-app.test:47831/
 ```
 
 ## Dev routes
 
-By default, `tako dev` registers `{app}.tako.test` as the route for your app.
+By default, `tako dev` registers `{app}.test` as the route for your app.
 
 You can configure custom dev routes in `tako.toml`:
 
 ```toml
 [envs.development]
-route = "my-app.tako.test"
+route = "my-app.test"
 # or multiple routes:
-# routes = ["my-app.tako.test", "api.my-app.tako.test"]
+# routes = ["my-app.test", "api.my-app.test"]
 ```
 
 Dev routes have a few constraints:
 
-- Routes must be `{app}.tako.test` or a subdomain of it.
+- Routes must use `.test` or `.tako.test` -- for example `{app}.test` or a subdomain of `{app}.test` (or the equivalent `.tako.test` forms).
 - Wildcard host entries are ignored in dev routing (exact hostnames only).
 - If configured routes contain no exact hostnames, `tako dev` fails with an error.
 
@@ -290,7 +294,7 @@ export default defineConfig({
 
 The plugin:
 
-- Adds `.tako.test` to Vite's `server.allowedHosts` so local Tako hosts are accepted.
+- Adds `.test` and `.tako.test` to Vite's `server.allowedHosts` so local Tako hosts are accepted.
 - When `PORT` is set by `tako dev`, binds Vite to `127.0.0.1:$PORT` with `strictPort: true`.
 
 ## Interactive terminal UI
@@ -372,8 +376,8 @@ If the daemon is not running, doctor reports `status: not running` with a hint t
 
 If name resolution fails:
 
-- On macOS, verify `/etc/resolver/tako.test` exists and points to `127.0.0.1:53535`.
-- On Linux, verify `systemd-resolved` is running and the `tako.test` DNS forward zone is configured.
+- On macOS, verify `/etc/resolver/test` and `/etc/resolver/tako.test` exist and point to `127.0.0.1:53535`.
+- On Linux, verify `systemd-resolved` is running and the `test` and `tako.test` DNS forward zones are configured.
 - Ensure `tako dev` is running and your app is listed in `tako dev ls`.
 - On macOS, verify `tako doctor` shows the loopback proxy helper loaded, the `127.77.0.1` alias present, and TCP `127.77.0.1:443` reachable.
 - On Linux, verify `tako doctor` shows the port redirect rules active and TCP `127.77.0.1:443` reachable.
@@ -391,7 +395,8 @@ Paths follow platform conventions (`~/Library/Application Support/tako/` on macO
 | `{TAKO_HOME}/dev/logs/{app}-{hash}.jsonl`       | `tako-dev-server` | Shared per-app log stream                     |
 | `{TAKO_HOME}/certs/fullchain.pem`               | `tako dev`        | Dev daemon TLS certificate                    |
 | `{TAKO_HOME}/certs/privkey.pem`                 | `tako dev`        | Dev daemon TLS private key                    |
-| `/etc/resolver/tako.test`                       | `tako dev`        | macOS DNS resolver config                     |
+| `/etc/resolver/test`                            | `tako dev`        | macOS DNS resolver config (primary)           |
+| `/etc/resolver/tako.test`                       | `tako dev`        | macOS DNS resolver config (fallback)          |
 | `/etc/systemd/system/tako-dev-redirect.service` | `tako dev`        | Linux loopback alias and iptables persistence |
 
 Log records use a single `timestamp` field (`hh:mm:ss`). When a new owning session starts, the shared log stream is truncated. Attached clients replay existing contents and then follow new lines.
@@ -400,6 +405,6 @@ Log records use a single `timestamp` field (`hh:mm:ss`). When a new owning sessi
 
 1. Run `tako doctor` to confirm local prerequisites (DNS, loopback proxy, CA).
 2. Run `tako dev` from your project directory, or use `tako -c <FILE> dev` for a non-default config file.
-3. Open `https://{app}.tako.test/` in your browser.
+3. Open `https://{app}.test/` in your browser.
 4. Edit code while `tako dev` stays running -- your runtime handles reload.
 5. Press `b` to background the app, or `Ctrl+c` to stop it.

@@ -6,10 +6,10 @@
 //! - Optional path suffix allowed: `api.example.com/admin/*`
 //!
 //! Development-Specific Rules (`[envs.development]`):
-//! - Routes are optional in config; if omitted, `tako dev` defaults to `{app-name}.tako.test`
-//! - Hostname must end with `.tako.test` (the local dev TLD, RFC 6761)
-//! - Examples valid: `"my-app.tako.test"`, `"*.my-app.tako.test"`, `"api.my-app.tako.test"`, `"shared.tako.test/api"`
-//! - Examples invalid: `"example.com"` (not .tako.test domain), `"/api/*"` (path-only)
+//! - Routes are optional in config; if omitted, `tako dev` defaults to `{app-name}.test`
+//! - Hostname must end with `.test` or `.tako.test` (RFC 6761 reserved TLD)
+//! - Examples valid: `"my-app.test"`, `"*.my-app.test"`, `"my-app.tako.test"`, `"shared.test/api"`
+//! - Examples invalid: `"example.com"` (not .test domain), `"/api/*"` (path-only)
 
 use thiserror::Error;
 
@@ -25,7 +25,7 @@ pub enum RouteValidationError {
     InvalidPattern(String, String),
 
     #[error(
-        "Development route must use .tako.test domain: '{0}'. Hostname must end with '.tako.test'"
+        "Development route must use .test domain: '{0}'. Hostname must end with '.test' or '.tako.test'"
     )]
     InvalidDevDomain(String, String),
 
@@ -67,7 +67,7 @@ pub fn validate_route(route: &str) -> RouteResult<()> {
 /// Validates a route pattern for development environment
 ///
 /// Additional rules for development:
-/// - Hostname must end with `.tako.test` (the local dev TLD)
+/// - Hostname must end with `.test` or `.tako.test`
 pub fn validate_dev_route(route: &str, _app_name: &str) -> RouteResult<()> {
     // First, apply general validation
     validate_route(route)?;
@@ -77,7 +77,8 @@ pub fn validate_dev_route(route: &str, _app_name: &str) -> RouteResult<()> {
     // Remove wildcard prefix if present
     let hostname = hostname.strip_prefix("*.").unwrap_or(hostname);
 
-    if !hostname.ends_with(&format!(".{}", crate::dev::TAKO_DEV_DOMAIN)) {
+    let is_test = hostname.ends_with(&format!(".{}", crate::dev::SHORT_DEV_DOMAIN));
+    if !is_test {
         return Err(RouteValidationError::InvalidDevDomain(
             route.to_string(),
             _app_name.to_string(),
@@ -89,7 +90,7 @@ pub fn validate_dev_route(route: &str, _app_name: &str) -> RouteResult<()> {
 
 /// Generates the default development route for an app
 pub fn default_dev_route(app_name: &str) -> String {
-    format!("{}.{}", app_name, crate::dev::TAKO_DEV_DOMAIN)
+    format!("{}.{}", app_name, crate::dev::SHORT_DEV_DOMAIN)
 }
 
 /// Splits a route into hostname and optional path components
@@ -374,8 +375,17 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_dev_route_accepts_short_test_domain() {
+        validate_dev_route("my-app.test", "my-app").unwrap();
+        validate_dev_route("other.test", "my-app").unwrap();
+        validate_dev_route("shared.test/api", "my-app").unwrap();
+        validate_dev_route("*.my-app.test", "my-app").unwrap();
+        validate_dev_route("api.my-app.test", "my-app").unwrap();
+    }
+
+    #[test]
     fn test_default_dev_route_uses_app_name() {
-        assert_eq!(default_dev_route("dashboard"), "dashboard.tako.test");
+        assert_eq!(default_dev_route("dashboard"), "dashboard.test");
     }
 
     #[test]

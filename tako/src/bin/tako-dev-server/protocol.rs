@@ -39,9 +39,9 @@ pub enum Request {
         config_path: String,
     },
     /// A client session started for an app.
-    OpenSession {
+    ConnectClient {
         config_path: String,
-        session_id: u32,
+        client_id: u32,
     },
     /// Subscribe to an app's log stream.
     SubscribeLogs {
@@ -124,10 +124,15 @@ pub enum DevEvent {
         config_path: String,
         app_name: String,
     },
-    SessionAttached {
+    ClientConnected {
         config_path: String,
         app_name: String,
-        session_id: u32,
+        client_id: u32,
+    },
+    ClientDisconnected {
+        config_path: String,
+        app_name: String,
+        client_id: u32,
     },
 }
 

@@ -70,7 +70,7 @@ describe("tako Vite entry plugin", () => {
     const plugin = tako();
     expect(plugin.config?.({}, { command: "serve" })).toEqual({
       server: {
-        allowedHosts: [".tako.test"],
+        allowedHosts: [".tako.test", ".test"],
         host: "127.0.0.1",
         port: 47831,
         strictPort: true,
@@ -82,7 +82,7 @@ describe("tako Vite entry plugin", () => {
     const plugin = tako();
     expect(plugin.config?.({}, { command: "serve" })).toEqual({
       server: {
-        allowedHosts: [".tako.test"],
+        allowedHosts: [".tako.test", ".test"],
       },
     });
   });
@@ -101,7 +101,7 @@ describe("tako Vite entry plugin", () => {
       ),
     ).toEqual({
       server: {
-        allowedHosts: ["localhost", ".tako.test"],
+        allowedHosts: ["localhost", ".tako.test", ".test"],
         host: "127.0.0.1",
         port: 47831,
         strictPort: true,

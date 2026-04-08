@@ -54,7 +54,7 @@ fn format_dev_server_connect_error(
     }
 }
 
-struct LineClient {
+pub(crate) struct LineClient {
     reader: BufReader<tokio::net::unix::OwnedReadHalf>,
     writer: tokio::net::unix::OwnedWriteHalf,
 }
@@ -268,10 +268,15 @@ pub enum DevServerEvent {
         config_path: String,
         app_name: String,
     },
-    SessionAttached {
+    ClientConnected {
         config_path: String,
         app_name: String,
-        session_id: u32,
+        client_id: u32,
+    },
+    ClientDisconnected {
+        config_path: String,
+        app_name: String,
+        client_id: u32,
     },
 }
 
@@ -300,10 +305,15 @@ fn parse_event_line(line: &str) -> Option<DevServerEvent> {
             config_path: event.get("config_path")?.as_str()?.to_string(),
             app_name: event.get("app_name")?.as_str()?.to_string(),
         }),
-        "SessionAttached" => Some(DevServerEvent::SessionAttached {
+        "ClientConnected" => Some(DevServerEvent::ClientConnected {
             config_path: event.get("config_path")?.as_str()?.to_string(),
             app_name: event.get("app_name")?.as_str()?.to_string(),
-            session_id: event.get("session_id")?.as_u64()? as u32,
+            client_id: event.get("client_id")?.as_u64()? as u32,
+        }),
+        "ClientDisconnected" => Some(DevServerEvent::ClientDisconnected {
+            config_path: event.get("config_path")?.as_str()?.to_string(),
+            app_name: event.get("app_name")?.as_str()?.to_string(),
+            client_id: event.get("client_id")?.as_u64()? as u32,
         }),
         _ => None,
     }
@@ -478,24 +488,27 @@ pub async fn restart_app(config_path: &str) -> Result<(), Box<dyn std::error::Er
     }
 }
 
-pub async fn open_session(
+/// Connect to the daemon as a named client. The returned `LineClient` must be
+/// kept alive for the duration of the CLI session — dropping it triggers a
+/// `ClientDisconnected` event in the daemon.
+pub async fn connect_client(
     config_path: &str,
-    session_id: u32,
-) -> Result<(), Box<dyn std::error::Error>> {
+    client_id: u32,
+) -> Result<LineClient, Box<dyn std::error::Error>> {
     let sock = socket_path()?;
     let stream = UnixStream::connect(&sock).await?;
     let mut c = LineClient::new(stream);
     let req = serde_json::json!({
-        "type": "OpenSession",
+        "type": "ConnectClient",
         "config_path": config_path,
-        "session_id": session_id,
+        "client_id": client_id,
     });
     c.send_line(&req.to_string()).await?;
     let line = c.read_line().await?;
     let v: serde_json::Value = serde_json::from_str(&line)?;
     match v.get("type").and_then(|t| t.as_str()) {
         Some("Error") => Err(format!("dev-server error: {}", v).into()),
-        _ => Ok(()),
+        _ => Ok(c),
     }
 }
 

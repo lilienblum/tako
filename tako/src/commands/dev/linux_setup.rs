@@ -157,14 +157,15 @@ WantedBy=multi-user.target
     )
 }
 
-/// systemd-resolved drop-in that routes `*.tako.test` queries to the loopback
-/// alias (which iptables redirects to the dev server DNS on port 53535).
+/// systemd-resolved drop-in that routes `*.test` and `*.tako.test` queries to
+/// the loopback alias (which iptables redirects to the dev server DNS on port
+/// 53535).
 #[cfg(any(target_os = "linux", test))]
 pub(crate) fn resolved_drop_in_contents() -> String {
     "\
 [Resolve]
 DNS=127.77.0.1
-Domains=~tako.test
+Domains=~tako.test ~test
 "
     .to_string()
 }
@@ -202,7 +203,7 @@ pub(crate) fn nixos_config_snippet() -> String {
   environment.etc."systemd/resolved.conf.d/tako-dev.conf".text = ''
     [Resolve]
     DNS=127.77.0.1
-    Domains=~tako.test
+    Domains=~tako.test ~test
   '';
 }}"#,
         https = 47831,
@@ -713,7 +714,7 @@ REDIRECT   tcp  --  0.0.0.0/0            127.77.0.1           tcp dpt:443 redir 
     fn resolved_drop_in_routes_tako_test() {
         let content = resolved_drop_in_contents();
         assert!(content.contains("DNS=127.77.0.1"));
-        assert!(content.contains("Domains=~tako.test"));
+        assert!(content.contains("Domains=~tako.test ~test"));
     }
 
     #[test]

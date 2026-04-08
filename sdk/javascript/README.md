@@ -43,7 +43,7 @@ On build, the plugin:
 
 On dev (`vite dev`), the plugin:
 
-- adds `.tako` to `server.allowedHosts`
+- adds `.test` and `.tako.test` to `server.allowedHosts`
 - binds Vite to `127.0.0.1:$PORT` with `strictPort: true` when `PORT` is provided
 
 Deploy entry resolution uses `main` from `tako.toml`, then preset top-level `main`.

@@ -34,6 +34,7 @@ use tracing_subscriber::EnvFilter;
 
 const IDLE_EXIT_DELAY: Duration = Duration::from_secs(2);
 const TAKO_DEV_DOMAIN: &str = "tako.test";
+const SHORT_DEV_DOMAIN: &str = "test";
 const LOCAL_DNS_LISTEN_ADDR: &str = "127.0.0.1:53535";
 const DEV_LOOPBACK_ADDR: &str = "127.77.0.1";
 const HTTP_REDIRECT_LISTEN_ADDR: &str = "127.0.0.1:47830";
@@ -141,12 +142,16 @@ fn write_pid(file: &mut File) -> std::io::Result<()> {
     Ok(())
 }
 
+fn app_short_host(app_name: &str) -> String {
+    format!("{}.{}", app_name, SHORT_DEV_DOMAIN)
+}
+
 fn app_host(app_name: &str) -> String {
     format!("{}.{}", app_name, TAKO_DEV_DOMAIN)
 }
 
 fn default_hosts(app_name: &str) -> Vec<String> {
-    vec![app_host(app_name)]
+    vec![app_short_host(app_name), app_host(app_name)]
 }
 
 fn advertised_https_port(s: &State) -> u16 {
@@ -601,7 +606,7 @@ async fn handle_client(
                 let host = hosts
                     .first()
                     .cloned()
-                    .unwrap_or_else(|| app_host(&app_name));
+                    .unwrap_or_else(|| app_short_host(&app_name));
                 let public_port = advertised_https_port(&s);
                 let url = if public_port == 443 {
                     format!("https://{}/", host)
@@ -695,7 +700,7 @@ async fn handle_client(
                     }
                 }
 
-                // Write divider to log buffer for attached clients.
+                // Write divider to log buffer for connected clients.
                 let log_buffer = {
                     let s = state.lock().unwrap();
                     s.apps.get(&config_path).map(|a| a.log_buffer.clone())
@@ -808,25 +813,69 @@ async fn handle_client(
 
                 Response::AppHandedOff { config_path }
             }
-            Request::OpenSession {
+            Request::ConnectClient {
                 config_path,
-                session_id,
+                client_id,
             } => {
-                let s = state.lock().unwrap();
-                let app_name = s
-                    .apps
-                    .get(&config_path)
-                    .map(|a| a.name.clone())
-                    .unwrap_or_default();
-                s.events.broadcast(Response::Event {
-                    event: protocol::DevEvent::SessionAttached {
-                        config_path: config_path.clone(),
-                        app_name,
-                        session_id,
-                    },
-                });
-                drop(s);
-                Response::Pong
+                let app_name = {
+                    let s = state.lock().unwrap();
+                    let name = s
+                        .apps
+                        .get(&config_path)
+                        .map(|a| a.name.clone())
+                        .unwrap_or_default();
+                    if let Some(app) = s.apps.get(&config_path) {
+                        push_scoped_log(
+                            &app.log_buffer,
+                            "Debug",
+                            "tako",
+                            &format!("Client {} connected", client_id),
+                        );
+                    }
+                    s.events.broadcast(Response::Event {
+                        event: protocol::DevEvent::ClientConnected {
+                            config_path: config_path.clone(),
+                            app_name: name.clone(),
+                            client_id,
+                        },
+                    });
+                    name
+                };
+
+                if write_resp(&mut w, &Response::Pong).await.is_err() {
+                    return Ok(());
+                }
+
+                // Hold connection open until client disconnects.
+                let mut probe = [0_u8; 1];
+                loop {
+                    match r.read(&mut probe).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) => {}
+                    }
+                }
+
+                // Broadcast disconnect.
+                {
+                    let s = state.lock().unwrap();
+                    if let Some(app) = s.apps.get(&config_path) {
+                        push_scoped_log(
+                            &app.log_buffer,
+                            "Debug",
+                            "tako",
+                            &format!("Client {} disconnected", client_id),
+                        );
+                    }
+                    s.events.broadcast(Response::Event {
+                        event: protocol::DevEvent::ClientDisconnected {
+                            config_path,
+                            app_name,
+                            client_id,
+                        },
+                    });
+                }
+
+                return Ok(());
             }
             Request::ListRegisteredApps => {
                 let s = state.lock().unwrap();
@@ -2115,7 +2164,7 @@ mod tests {
     /// End-to-end test: client B subscribes to events via a real socket
     /// handler, client A unregisters an app via a separate socket handler,
     /// and client B must receive the AppStatusChanged{stopped} event over
-    /// the wire. This exercises the exact codepath that the attached dev
+    /// the wire. This exercises the exact codepath that the connected dev
     /// client uses to detect when the owner stops the app.
     #[tokio::test]
     async fn subscriber_receives_stopped_event_over_socket_when_app_unregistered() {

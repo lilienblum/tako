@@ -9,4 +9,4 @@ mod ca;
 mod domain;
 
 pub use ca::{CaError, Certificate, LocalCA, LocalCAStore};
-pub use domain::{TAKO_DEV_DOMAIN, get_tako_domain};
+pub use domain::{SHORT_DEV_DOMAIN, TAKO_DEV_DOMAIN, get_short_domain, get_tako_domain};

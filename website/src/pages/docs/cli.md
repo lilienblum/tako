@@ -89,23 +89,23 @@ The full "Detected" diagnostics summary is only shown when `--verbose` is active
 
 ## `tako dev`
 
-Start or attach to a local development session.
+Start or connect to a local development session.
 
 ```bash
 tako dev [--variant <VARIANT>]
 ```
 
-| Flag                  | Description                                                                         |
-| --------------------- | ----------------------------------------------------------------------------------- |
-| `--variant <VARIANT>` | Run a DNS variant of the app (e.g. `--variant foo` serves at `myapp-foo.tako.test`) |
+| Flag                  | Description                                                                    |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `--variant <VARIANT>` | Run a DNS variant of the app (e.g. `--variant foo` serves at `myapp-foo.test`) |
 
 Alias for `--variant`: `--var`
 
 `tako dev` is a client that connects to the `tako-dev-server` daemon. It registers the selected config file, starts your app, and streams logs directly to your terminal.
 
-On first run, Tako sets up a local Certificate Authority and HTTPS infrastructure so your app is available at `https://{app}.tako.test/`. On macOS, a loopback proxy is installed so your app is served on the default HTTPS port (443) without needing to specify a port. On Linux, iptables redirect rules achieve the same result without an extra proxy binary.
+On first run, Tako sets up a local Certificate Authority and HTTPS infrastructure so your app is available at `https://{app}.test/`. On macOS, a loopback proxy is installed so your app is served on the default HTTPS port (443) without needing to specify a port. On Linux, iptables redirect rules achieve the same result without an extra proxy binary.
 
-When `[envs.development]` defines custom routes in `tako.toml`, those routes are used instead of the default. Dev routes must be `{app}.tako.test` or a subdomain of it.
+When `[envs.development]` defines custom routes in `tako.toml`, those routes are used instead of the default. Dev routes must use `.test` or `.tako.test` -- for example `{app}.test` or a subdomain of it.
 
 The app starts immediately when `tako dev` starts (1 local instance) and transitions to idle after 30 minutes of no attached CLI clients. After an idle transition, the next HTTP request triggers wake-on-request. Running `tako dev` again with the same config attaches to the existing session.
 
@@ -711,7 +711,7 @@ Removes the Tako config directory, data directory (CA certs, encryption keys, de
 
 Also removes system-level services installed by `tako dev` (requires sudo):
 
-- **macOS:** loopback proxy LaunchDaemons, `/Library/Application Support/Tako/`, `/etc/resolver/tako.test`, CA certificate in system keychain, loopback alias.
+- **macOS:** loopback proxy LaunchDaemons, `/Library/Application Support/Tako/`, `/etc/resolver/test`, `/etc/resolver/tako.test`, CA certificate in system keychain, loopback alias.
 - **Linux:** systemd redirect service, resolved drop-in, CA certificate in system trust store, iptables rules, loopback alias.
 
 If nothing exists to remove, reports that and exits.

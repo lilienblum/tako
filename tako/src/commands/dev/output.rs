@@ -24,7 +24,8 @@ const METRICS_REFRESH_SECS: u64 = 2;
 
 const RESET: &str = "\x1b[0m";
 const DIM: &str = "\x1b[2m";
-const XDIM: &str = "\x1b[2;38;5;242m";
+#[allow(dead_code)]
+const XDIM: &str = "\x1b[2;38;5;242m"; // Reserved for VERBOSE level (dimmer than DIM)
 // Accent dim border color (muted with dim so it's subtle, not screaming).
 const BORDER: &str = "\x1b[2;38;2;79;107;122m";
 // Accent for panel header text (22 = normal intensity, cancels inherited dim).
@@ -49,11 +50,11 @@ pub enum ControlCmd {
 pub enum DevOutputExit {
     /// The client terminated (Ctrl+C or supervisor-driven exit).
     Terminate,
-    /// The user pressed `d` to detach the UI while keeping the app running.
+    /// The user pressed `b` to background the app while keeping it running.
     ///
     /// The caller receives the log/event receivers so it can keep draining
     /// them to the JSONL store while the process stays alive in the background.
-    Detach {
+    Disconnect {
         #[allow(dead_code)]
         log_rx: mpsc::Receiver<ScopedLog>,
         #[allow(dead_code)]
@@ -555,14 +556,14 @@ fn panel_row(c1: &str, c2: &str, c3: &str, col1_w: usize, col2_w: usize) -> Stri
 pub fn format_keymap() -> String {
     let cols = terminal_cols().max(20);
     let text = if cols < 52 {
-        format!("r {DIM}restart{RESET}   d {DIM}detach{RESET}   ^c/q {DIM}stop{RESET}")
+        format!("r {DIM}restart{RESET}   b {DIM}background{RESET}   ^c/q {DIM}stop{RESET}")
     } else {
-        format!("r {DIM}restart{RESET}   d {DIM}detach{RESET}   ctrl+c/q {DIM}stop{RESET}")
+        format!("r {DIM}restart{RESET}   b {DIM}background{RESET}   ctrl+c/q {DIM}stop{RESET}")
     };
     let plain = if cols < 52 {
-        "r restart   d detach   ^c/q stop"
+        "r restart   b background   ^c/q stop"
     } else {
-        "r restart   d detach   ctrl+c/q stop"
+        "r restart   b background   ctrl+c/q stop"
     };
     let pad = cols.saturating_sub(measure_text_width(plain) + 1);
     format!("{}{text} ", " ".repeat(pad))
@@ -592,10 +593,19 @@ pub fn format_log(log: &ScopedLog) -> String {
         };
         return format!("{DIM}──── {label} ────{RESET}");
     }
+    if matches!(log.level, LogLevel::Debug) {
+        let scope = fit_scope(&log.scope);
+        let scope_color = scope_color(&log.scope);
+        return format!(
+            "{DIM}{} {:>5}{RESET} {scope_color}{scope}{RESET} {DIM}{}{RESET}",
+            log.timestamp, log.level, log.message
+        );
+    }
     let color = level_color(&log.level);
     let scope = fit_scope(&log.scope);
+    let scope_color = scope_color(&log.scope);
     format!(
-        "{DIM}{}{RESET} {color}{:>5}{RESET} {DIM}{scope}{RESET} {}",
+        "{DIM}{}{RESET} {color}{:>5}{RESET} {scope_color}{scope}{RESET} {}",
         log.timestamp, log.level, log.message
     )
 }
@@ -607,6 +617,40 @@ fn level_color(level: &LogLevel) -> &'static str {
         LogLevel::Warn => "\x1b[38;2;234;211;156m",
         LogLevel::Error => "\x1b[38;2;232;163;160m",
         LogLevel::Fatal => "\x1b[38;2;200;166;242m",
+    }
+}
+
+/// Colorblind-safe palette for log scopes. Colors are chosen at fixed
+/// lightness (~75%) and moderate chroma so they're distinct but readable on
+/// dark backgrounds. Based on the Oklab color space with hues spread to
+/// remain distinguishable under deuteranopia/protanopia.
+const SCOPE_PALETTE: &[(u8, u8, u8)] = &[
+    (138, 198, 209), // teal
+    (194, 178, 128), // sand
+    (176, 186, 140), // sage
+    (190, 168, 206), // lavender
+    (140, 195, 174), // mint
+    (209, 170, 160), // blush
+    (160, 190, 210), // sky
+    (200, 180, 170), // clay
+];
+
+/// Tako brand color (coral) for the `tako` scope.
+const SCOPE_TAKO: &str = "\x1b[38;2;232;135;131m";
+/// Neutral warm gray for the `app` scope — your code, not framework noise.
+const SCOPE_APP: &str = "\x1b[38;2;200;200;190m";
+
+fn scope_color(scope: &str) -> String {
+    match scope {
+        "tako" => SCOPE_TAKO.to_string(),
+        "app" => SCOPE_APP.to_string(),
+        _ => {
+            let hash = scope
+                .bytes()
+                .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+            let (r, g, b) = SCOPE_PALETTE[hash as usize % SCOPE_PALETTE.len()];
+            format!("\x1b[38;2;{r};{g};{b}m")
+        }
     }
 }
 
@@ -865,7 +909,7 @@ impl FooterState {
 
 enum LoopExit {
     Terminate,
-    Detach,
+    Disconnect,
     Message(String),
 }
 
@@ -1059,16 +1103,23 @@ pub async fn run_dev_output(
                         );
                         footer.println(&format!("\x1b[38;2;232;163;160merror:{RESET} {e}"));
                     }
-                    DevEvent::SessionAttached { is_self } => {
+                    DevEvent::ClientConnected { is_self, client_id } => {
                         if is_self {
-                            footer.println(&format!("{DIM}──── session attached ────{RESET}"));
+                            footer.println(&format!("{DIM}──── connected ────{RESET}"));
                         } else {
                             footer.println(&format_log(&ScopedLog::at(
                                 LogLevel::Debug,
                                 "tako",
-                                "another session attached",
+                                format!("Client {} connected", client_id),
                             )));
                         }
+                    }
+                    DevEvent::ClientDisconnected { client_id } => {
+                        footer.println(&format_log(&ScopedLog::at(
+                            LogLevel::Debug,
+                            "tako",
+                            format!("Client {} disconnected", client_id),
+                        )));
                     }
                     DevEvent::ExitWithMessage(msg) => {
                         break LoopExit::Message(msg);
@@ -1091,8 +1142,8 @@ pub async fn run_dev_output(
                         KeyCode::Char('r') | KeyCode::Char('R') => {
                             let _ = control_tx.send(ControlCmd::Restart).await;
                         }
-                        KeyCode::Char('d') | KeyCode::Char('D') => {
-                            break LoopExit::Detach;
+                        KeyCode::Char('b') | KeyCode::Char('B') => {
+                            break LoopExit::Disconnect;
                         }
                         _ => {}
                     },
@@ -1132,9 +1183,12 @@ pub async fn run_dev_output(
             println!("\n{DIM}{app_name} stopped{RESET}");
             DevOutputExit::Terminate
         }
-        LoopExit::Detach => {
-            println!("{DIM}{app_name} detached — run `tako dev` to re-attach{RESET}");
-            DevOutputExit::Detach { log_rx, event_rx }
+        LoopExit::Disconnect => {
+            println!();
+            println!(
+                "{DIM}{app_name} is running in the background — run `tako dev` to reconnect{RESET}"
+            );
+            DevOutputExit::Disconnect { log_rx, event_rx }
         }
         LoopExit::Message(msg) => {
             println!("\n{DIM}{app_name} {msg}{RESET}");
@@ -1456,12 +1510,13 @@ mod tests {
     }
 
     #[test]
-    fn format_keymap_has_restart_stop_detach() {
+    fn format_keymap_has_restart_stop_background() {
         let km = strip_ansi(&format_keymap());
         assert!(km.contains('r'));
         assert!(km.contains("restart"));
         assert!(km.contains("stop"));
-        assert!(km.contains('d'));
+        assert!(km.contains('b'));
+        assert!(km.contains("background"));
         // No 'q' quit
         assert!(!km.contains("quit"));
     }

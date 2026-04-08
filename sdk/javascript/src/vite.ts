@@ -91,6 +91,9 @@ function mergeServeAllowedHosts(existing: unknown): true | string[] {
   if (!merged.includes(".tako.test")) {
     merged.push(".tako.test");
   }
+  if (!merged.includes(".test")) {
+    merged.push(".test");
+  }
   return merged;
 }
 
