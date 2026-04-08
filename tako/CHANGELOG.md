@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/lilienblum/tako/compare/tako-v0.2.0...tako-v0.3.0) (2026-04-08)
+
+
+### Features
+
+* **dev:** short .test domains, client connect/disconnect, and log styling ([15dfedf](https://github.com/lilienblum/tako/commit/15dfedfe3644d0b5fce633af162004106ba8c910))
+
 ## [0.2.0](https://github.com/lilienblum/tako/compare/tako-v0.1.0...tako-v0.2.0) (2026-04-08)
 
 
