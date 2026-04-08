@@ -482,10 +482,8 @@ async fn handle_client(
                 if write_resp(&mut w, &Response::LogsSubscribed).await.is_err() {
                     return Ok(());
                 }
-                if truncated {
-                    if write_resp(&mut w, &Response::LogsTruncated).await.is_err() {
-                        return Ok(());
-                    }
+                if truncated && write_resp(&mut w, &Response::LogsTruncated).await.is_err() {
+                    return Ok(());
                 }
 
                 for entry in backlog {
@@ -549,10 +547,10 @@ async fn handle_client(
                 // If an app is already registered with this config_path, kill it first.
                 {
                     let s = state.lock().unwrap();
-                    if let Some(existing) = s.apps.get(&config_path) {
-                        if let Some(pid) = existing.pid {
-                            kill_app_process(pid);
-                        }
+                    if let Some(existing) = s.apps.get(&config_path)
+                        && let Some(pid) = existing.pid
+                    {
+                        kill_app_process(pid);
                     }
                 }
 
@@ -652,11 +650,11 @@ async fn handle_client(
                 let mut s = state.lock().unwrap();
 
                 // Kill the child process before removing.
-                if let Some(app) = s.apps.get(&config_path) {
-                    if let Some(pid) = app.pid {
-                        kill_app_process(pid);
-                        state::remove_pid_file(&app.project_dir, &config_path);
-                    }
+                if let Some(app) = s.apps.get(&config_path)
+                    && let Some(pid) = app.pid
+                {
+                    kill_app_process(pid);
+                    state::remove_pid_file(&app.project_dir, &config_path);
                 }
 
                 let app_name = s
@@ -1134,7 +1132,16 @@ async fn spawn_and_monitor_app(
             .ok()
             .and_then(|s| s.code())
             .map(|c| format!("exit code {c}"))
-            .unwrap_or_else(|| "signal".to_string());
+            .unwrap_or_else(|| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    if let Some(sig) = exit_status.as_ref().ok().and_then(|s| s.signal()) {
+                        return format!("killed by signal {sig}");
+                    }
+                }
+                "signal".to_string()
+            });
 
         let still_current = {
             let mut s = state_for_monitor.lock().unwrap();

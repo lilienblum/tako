@@ -2896,10 +2896,9 @@ fn parse_log_line(line: &str) -> Option<LogStreamEvent> {
 
     if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed)
         && let Some(marker_type) = v.get("type").and_then(|x| x.as_str())
+        && marker_type == DEV_LOG_APP_EVENT_MARKER_TYPE
     {
-        if marker_type == DEV_LOG_APP_EVENT_MARKER_TYPE {
-            return parse_app_event_marker(&v).map(LogStreamEvent::AppEvent);
-        }
+        return parse_app_event_marker(&v).map(LogStreamEvent::AppEvent);
     }
 
     Some(LogStreamEvent::Log(ScopedLog::info(
