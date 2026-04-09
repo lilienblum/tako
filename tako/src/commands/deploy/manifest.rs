@@ -17,6 +17,8 @@ pub(super) struct DeployArchiveManifest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) package_manager: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) package_manager_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) commit_message: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) git_dirty: Option<bool>,
@@ -195,6 +197,7 @@ pub(super) fn build_deploy_archive_manifest(
         env_vars,
         secret_names,
         package_manager,
+        package_manager_version: None,
         commit_message,
         git_dirty,
         app_dir,

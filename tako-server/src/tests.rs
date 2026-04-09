@@ -7,11 +7,12 @@ use super::release::{
 };
 use super::{
     SIGNAL_PARENT_ON_READY_ENV, ServerRuntimeConfig, ServerState, extract_zstd_archive,
-    handle_idle_event, run_extract_archive_mode,
+    run_extract_archive_mode,
 };
 use crate::instances::AppConfig;
+use crate::runtime_events::handle_idle_event;
 use crate::socket::{AppState, Command, InstanceState, Response};
-use crate::tls::{CertManager, CertManagerConfig};
+use crate::tls::{CertManager, CertManagerConfig, ChallengeTokens};
 use clap::Parser;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -23,7 +24,7 @@ use std::time::Duration;
 use tako_core::UpgradeMode;
 use tempfile::TempDir;
 
-fn empty_challenge_tokens() -> super::ChallengeTokens {
+fn empty_challenge_tokens() -> ChallengeTokens {
     Arc::new(parking_lot::RwLock::new(HashMap::new()))
 }
 

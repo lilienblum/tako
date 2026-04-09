@@ -20,7 +20,7 @@ use super::super::format::{
 use super::super::task_tree::{ArtifactBuildGroup, DeployTaskTreeController};
 use super::runtime_version::{
     resolve_runtime_version_from_workspace, resolve_runtime_version_from_workspace_quiet,
-    save_runtime_version_to_manifest,
+    save_package_manager_version_to_manifest, save_runtime_version_to_manifest,
 };
 use super::{
     copy_dir_contents, local_build_cache_root, persist_local_build_caches,
@@ -43,6 +43,7 @@ pub(super) async fn build_target_artifacts(
     exclude_patterns: &[String],
     asset_roots: &[String],
     pinned_runtime_version: Option<&str>,
+    package_manager_tool: Option<&str>,
     task_tree: Option<DeployTaskTreeController>,
 ) -> Result<HashMap<String, PathBuf>, String> {
     let has_multiple_targets = target_groups.len() > 1;
@@ -172,6 +173,13 @@ pub(super) async fn build_target_artifacts(
             tracing::debug!("Detected {} {}", runtime_tool, version);
             version
         };
+        let package_manager_version = package_manager_tool.map(|tool| {
+            if tool == runtime_tool {
+                return runtime_version.clone();
+            }
+            resolve_runtime_version_from_workspace_quiet(&workspace, tool)
+                .unwrap_or_else(|_| "latest".to_string())
+        });
 
         let target_label_for_path = if has_multiple_targets {
             Some(cache_target_label.as_str())
@@ -298,6 +306,9 @@ pub(super) async fn build_target_artifacts(
                 )?;
             }
             save_runtime_version_to_manifest(&workspace, &runtime_version)?;
+            if let Some(version) = package_manager_version.as_deref() {
+                save_package_manager_version_to_manifest(&workspace, version)?;
+            }
             match persist_local_build_caches(
                 &build_cache_root,
                 &workspace,

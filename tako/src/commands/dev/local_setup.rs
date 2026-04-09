@@ -393,8 +393,3 @@ pub(crate) fn local_dns_resolver_values() -> Option<(String, u16)> {
     let (nameserver, port) = parse_local_dns_resolver(&contents);
     Some((nameserver?, port?))
 }
-
-#[cfg(not(target_os = "macos"))]
-pub(crate) fn local_dns_resolver_values() -> Option<(String, u16)> {
-    None
-}

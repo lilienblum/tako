@@ -2,7 +2,8 @@ use super::super::cache::artifact_cache_paths;
 use super::packaging::{merge_assets_locally, package_target_artifact};
 use super::runtime_version::{
     RUNTIME_VERSION_OUTPUT_FILE, extract_semver_from_version_output,
-    resolve_runtime_version_from_workspace, save_runtime_version_to_manifest,
+    resolve_runtime_version_from_workspace, save_package_manager_version_to_manifest,
+    save_runtime_version_to_manifest,
 };
 use super::*;
 use crate::build::{BuildExecutor, BuildPreset};
@@ -423,6 +424,25 @@ fn save_runtime_version_to_manifest_writes_version_to_app_json() {
     let manifest: serde_json::Value = serde_json::from_str(&manifest_raw).unwrap();
     assert_eq!(manifest["runtime_version"], "1.3.9");
     assert_eq!(manifest["runtime"], "bun");
+}
+
+#[test]
+fn save_package_manager_version_to_manifest_writes_version_to_app_json() {
+    let temp = TempDir::new().unwrap();
+    let workspace = temp.path().join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("app.json"),
+        r#"{"runtime":"deno","main":"index.ts","idle_timeout":300,"package_manager":"bun"}"#,
+    )
+    .unwrap();
+
+    save_package_manager_version_to_manifest(&workspace, "1.3.11").unwrap();
+
+    let manifest_raw = std::fs::read_to_string(workspace.join("app.json")).unwrap();
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_raw).unwrap();
+    assert_eq!(manifest["package_manager_version"], "1.3.11");
+    assert_eq!(manifest["package_manager"], "bun");
 }
 
 #[test]

@@ -6,17 +6,33 @@ pub(super) fn save_runtime_version_to_manifest(
     workspace: &Path,
     runtime_version: &str,
 ) -> Result<(), String> {
+    save_manifest_version_field(workspace, "runtime_version", runtime_version)?;
+    let _ = std::fs::remove_file(workspace.join(RUNTIME_VERSION_OUTPUT_FILE));
+    Ok(())
+}
+
+pub(super) fn save_package_manager_version_to_manifest(
+    workspace: &Path,
+    package_manager_version: &str,
+) -> Result<(), String> {
+    save_manifest_version_field(
+        workspace,
+        "package_manager_version",
+        package_manager_version,
+    )
+}
+
+fn save_manifest_version_field(workspace: &Path, field: &str, version: &str) -> Result<(), String> {
     let manifest_path = workspace.join("app.json");
     let content = std::fs::read_to_string(&manifest_path)
         .map_err(|e| format!("Failed to read {}: {e}", manifest_path.display()))?;
     let mut value: serde_json::Value = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse {}: {e}", manifest_path.display()))?;
-    value["runtime_version"] = serde_json::Value::String(runtime_version.to_string());
+    value[field] = serde_json::Value::String(version.to_string());
     let updated = serde_json::to_string_pretty(&value)
         .map_err(|e| format!("Failed to serialize {}: {e}", manifest_path.display()))?;
     std::fs::write(&manifest_path, updated)
         .map_err(|e| format!("Failed to write {}: {e}", manifest_path.display()))?;
-    let _ = std::fs::remove_file(workspace.join(RUNTIME_VERSION_OUTPUT_FILE));
     Ok(())
 }
 

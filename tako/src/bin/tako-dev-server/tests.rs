@@ -2,6 +2,7 @@ use super::process::{kill_all_app_processes, kill_app_process};
 use super::redirect::redirect_location;
 use super::*;
 
+use openssl::x509::X509;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;

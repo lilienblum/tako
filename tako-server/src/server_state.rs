@@ -1,0 +1,286 @@
+use crate::instances::AppManager;
+use crate::lb::LoadBalancer;
+use crate::release::{apply_release_runtime_to_config, release_app_path};
+use crate::routing::RouteTable;
+use crate::socket::{AppState, Response};
+use crate::state_store::{SqliteStateStore, StateStoreError, load_or_create_device_key};
+use crate::tls::{AcmeClient, CertManager, ChallengeTokens};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tako_core::{ServerRuntimeInfo, UpgradeMode};
+use tokio::sync::RwLock;
+
+#[derive(Debug, Clone)]
+pub struct ServerRuntimeConfig {
+    pub(crate) pid: u32,
+    pub(crate) socket: String,
+    pub(crate) data_dir: PathBuf,
+    pub(crate) http_port: u16,
+    pub(crate) https_port: u16,
+    pub(crate) no_acme: bool,
+    pub(crate) acme_staging: bool,
+    pub(crate) renewal_interval_hours: u64,
+    pub(crate) dns_provider: Option<String>,
+    pub(crate) standby: bool,
+    pub(crate) metrics_port: Option<u16>,
+    pub(crate) server_name: Option<String>,
+}
+
+impl ServerRuntimeConfig {
+    pub(crate) fn for_defaults(data_dir: PathBuf) -> Self {
+        Self {
+            pid: std::process::id(),
+            socket: "/var/run/tako/tako.sock".to_string(),
+            data_dir,
+            http_port: 80,
+            https_port: 443,
+            no_acme: false,
+            acme_staging: false,
+            renewal_interval_hours: 12,
+            dns_provider: None,
+            standby: false,
+            metrics_port: Some(9898),
+            server_name: None,
+        }
+    }
+
+    pub(crate) fn to_runtime_info(&self, mode: UpgradeMode) -> ServerRuntimeInfo {
+        ServerRuntimeInfo {
+            pid: self.pid,
+            mode,
+            socket: self.socket.clone(),
+            data_dir: self.data_dir.to_string_lossy().to_string(),
+            http_port: self.http_port,
+            https_port: self.https_port,
+            no_acme: self.no_acme,
+            acme_staging: self.acme_staging,
+            acme_email: None,
+            renewal_interval_hours: self.renewal_interval_hours,
+            dns_provider: self.dns_provider.clone(),
+            standby: self.standby,
+            metrics_port: self.metrics_port,
+            server_name: self.server_name.clone(),
+        }
+    }
+}
+
+/// Server state shared across components
+pub struct ServerState {
+    pub(crate) app_manager: Arc<AppManager>,
+    pub(crate) load_balancer: Arc<LoadBalancer>,
+    pub(crate) cert_manager: Arc<CertManager>,
+    pub(crate) acme_client: RwLock<Option<Arc<AcmeClient>>>,
+    pub(crate) challenge_tokens: ChallengeTokens,
+    pub(crate) routes: Arc<RwLock<RouteTable>>,
+    pub(crate) deploy_locks: RwLock<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+    pub(crate) cold_start: Arc<crate::scaling::ColdStartManager>,
+    pub(crate) state_store: Arc<SqliteStateStore>,
+    pub(crate) server_mode: RwLock<UpgradeMode>,
+    pub(crate) runtime: ServerRuntimeConfig,
+}
+
+impl ServerState {
+    pub fn new(
+        data_dir: PathBuf,
+        cert_manager: Arc<CertManager>,
+        acme_client: Option<Arc<AcmeClient>>,
+        challenge_tokens: ChallengeTokens,
+    ) -> Result<Self, StateStoreError> {
+        let runtime = ServerRuntimeConfig::for_defaults(data_dir.clone());
+        Self::new_with_runtime(
+            data_dir,
+            cert_manager,
+            acme_client,
+            challenge_tokens,
+            runtime,
+        )
+    }
+
+    pub fn new_with_runtime(
+        data_dir: PathBuf,
+        cert_manager: Arc<CertManager>,
+        acme_client: Option<Arc<AcmeClient>>,
+        challenge_tokens: ChallengeTokens,
+        runtime: ServerRuntimeConfig,
+    ) -> Result<Self, StateStoreError> {
+        let app_manager = Arc::new(AppManager::new(data_dir.clone()));
+        let load_balancer = Arc::new(LoadBalancer::new(app_manager.clone()));
+        let device_key = load_or_create_device_key(&data_dir.join("secret.key"))?;
+        let state_store = Arc::new(SqliteStateStore::new(data_dir.join("tako.db"), device_key));
+        state_store.init()?;
+        let server_mode = state_store.server_mode()?;
+        if server_mode == UpgradeMode::Upgrading {
+            state_store.set_server_mode(UpgradeMode::Normal)?;
+            if let Some(owner) = state_store.upgrade_lock_owner()? {
+                let _ = state_store.release_upgrade_lock(&owner);
+            }
+        }
+        let server_mode = UpgradeMode::Normal;
+
+        Ok(Self {
+            app_manager,
+            load_balancer,
+            cert_manager,
+            acme_client: RwLock::new(acme_client),
+            challenge_tokens,
+            routes: Arc::new(RwLock::new(RouteTable::default())),
+            deploy_locks: RwLock::new(HashMap::new()),
+            cold_start: Arc::new(crate::scaling::ColdStartManager::new(
+                crate::scaling::ColdStartConfig::default(),
+            )),
+            state_store,
+            server_mode: RwLock::new(server_mode),
+            runtime,
+        })
+    }
+
+    pub(crate) fn app_manager(&self) -> Arc<AppManager> {
+        self.app_manager.clone()
+    }
+
+    pub(crate) fn load_balancer(&self) -> Arc<LoadBalancer> {
+        self.load_balancer.clone()
+    }
+
+    pub(crate) fn runtime_config(&self) -> &ServerRuntimeConfig {
+        &self.runtime
+    }
+
+    pub fn cold_start(&self) -> Arc<crate::scaling::ColdStartManager> {
+        self.cold_start.clone()
+    }
+
+    pub async fn set_acme_client(&self, client: Arc<AcmeClient>) {
+        *self.acme_client.write().await = Some(client);
+    }
+
+    pub(crate) async fn get_deploy_lock(&self, app_name: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let locks = self.deploy_locks.read().await;
+        if let Some(lock) = locks.get(app_name) {
+            return lock.clone();
+        }
+        drop(locks);
+
+        let mut locks = self.deploy_locks.write().await;
+        locks
+            .entry(app_name.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    pub fn routes(&self) -> Arc<RwLock<RouteTable>> {
+        self.routes.clone()
+    }
+
+    pub async fn set_server_mode(&self, mode: UpgradeMode) -> Result<(), StateStoreError> {
+        self.state_store.set_server_mode(mode)?;
+        *self.server_mode.write().await = mode;
+        Ok(())
+    }
+
+    pub async fn try_enter_upgrading(&self, owner: &str) -> Result<bool, StateStoreError> {
+        if !self.state_store.try_acquire_upgrade_lock(owner)? {
+            return Ok(false);
+        }
+        self.set_server_mode(UpgradeMode::Upgrading).await?;
+        Ok(true)
+    }
+
+    pub async fn exit_upgrading(&self, owner: &str) -> Result<bool, StateStoreError> {
+        if !self.state_store.release_upgrade_lock(owner)? {
+            return Ok(false);
+        }
+        self.set_server_mode(UpgradeMode::Normal).await?;
+        Ok(true)
+    }
+
+    pub(crate) async fn reject_mutating_when_upgrading(&self, command: &str) -> Option<Response> {
+        let mode = *self.server_mode.read().await;
+        if mode == UpgradeMode::Upgrading {
+            return Some(Response::error(format!(
+                "Server is upgrading; '{}' is temporarily blocked. Please retry shortly.",
+                command
+            )));
+        }
+        None
+    }
+
+    pub async fn runtime_info(&self) -> ServerRuntimeInfo {
+        let mode = *self.server_mode.read().await;
+        self.runtime.to_runtime_info(mode)
+    }
+
+    pub async fn restore_from_state_store(&self) -> Result<(), StateStoreError> {
+        let apps = self.state_store.load_apps()?;
+        if apps.is_empty() {
+            return Ok(());
+        }
+
+        tracing::info!(apps = apps.len(), "Restoring apps from durable state");
+
+        for persisted in apps {
+            let mut config = persisted.config.clone();
+            let app_name = config.deployment_id();
+            let routes = persisted.routes.clone();
+
+            if self.runtime.standby && config.min_instances > 1 {
+                config.min_instances = 1;
+                config.max_instances = config.max_instances.max(1);
+            }
+
+            let should_start = config.min_instances > 0;
+            let release_path = release_app_path(&self.runtime.data_dir, &config);
+            if let Err(error) = apply_release_runtime_to_config(&mut config, release_path, None) {
+                tracing::error!(app = %app_name, "Failed to restore app config: {}", error);
+                continue;
+            }
+            config.secrets = self.state_store.get_secrets(&app_name).unwrap_or_else(|e| {
+                tracing::warn!(app = %app_name, "Failed to read secrets: {}", e);
+                HashMap::new()
+            });
+
+            let app = self.app_manager.register_app(config.clone());
+            self.load_balancer.register_app(app.clone());
+
+            {
+                let mut route_table = self.routes.write().await;
+                route_table.set_app_routes(app_name.clone(), routes);
+            }
+
+            if should_start {
+                match self.app_manager.start_app(&app_name).await {
+                    Ok(()) => {
+                        app.set_state(AppState::Running);
+                        tracing::info!(app = %app_name, "Restored and started app");
+                    }
+                    Err(e) => {
+                        app.set_state(AppState::Error);
+                        app.set_last_error(format!("Restore startup failed: {}", e));
+                        tracing::error!(app = %app_name, "Failed to start restored app: {}", e);
+                    }
+                }
+            } else {
+                app.set_state(AppState::Idle);
+                self.cold_start.reset(&app_name);
+                tracing::info!(app = %app_name, "Restored on-demand app in idle state");
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn persist_app_state(&self, app_name: &str) {
+        let Some(app) = self.app_manager.get_app(app_name) else {
+            return;
+        };
+        let config = app.config.read().clone();
+        let routes = {
+            let route_table = self.routes.read().await;
+            route_table.routes_for_app(app_name)
+        };
+        if let Err(e) = self.state_store.upsert_app(&config, &routes) {
+            tracing::warn!(app = app_name, "Failed to persist app state: {}", e);
+        }
+    }
+}

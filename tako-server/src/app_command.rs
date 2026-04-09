@@ -43,6 +43,8 @@ pub(crate) struct ReleaseManifest {
     pub runtime_version: Option<String>,
     #[serde(default)]
     pub package_manager: Option<String>,
+    #[serde(default)]
+    pub package_manager_version: Option<String>,
     /// Path from the archive root to the app directory. Empty = archive root.
     #[serde(default)]
     pub app_dir: String,
@@ -365,6 +367,20 @@ mod tests {
 
         let manifest = load_release_manifest(dir.path()).unwrap();
         assert!(manifest.runtime_version.is_none());
+    }
+
+    #[test]
+    fn package_manager_version_deserialized_from_manifest() {
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("app.json"),
+            r#"{"runtime":"deno","main":"index.ts","idle_timeout":300,"package_manager":"bun","package_manager_version":"1.3.11"}"#,
+        )
+        .unwrap();
+
+        let manifest = load_release_manifest(dir.path()).unwrap();
+        assert_eq!(manifest.package_manager.as_deref(), Some("bun"));
+        assert_eq!(manifest.package_manager_version.as_deref(), Some("1.3.11"));
     }
 
     #[test]

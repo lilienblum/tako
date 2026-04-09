@@ -34,6 +34,7 @@ pub(crate) const LOOPBACK_PROXY_HTTP_NAME: &str = "http";
 #[cfg(test)]
 pub(crate) const LOOPBACK_PROXY_IDLE_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LoopbackProxyRepairPlan {
     None,

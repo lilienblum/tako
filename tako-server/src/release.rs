@@ -179,7 +179,12 @@ pub(crate) async fn prepare_release_runtime(
     if let Some(ref pm) = manifest.package_manager
         && pm != runtime
     {
-        let pm_bin = crate::version_manager::install_and_resolve(pm, None, data_dir).await;
+        let pm_bin = crate::version_manager::install_and_resolve(
+            pm,
+            manifest.package_manager_version.as_deref(),
+            data_dir,
+        )
+        .await;
         if let Some(ref bin) = pm_bin
             && let Some(bin_dir) = Path::new(bin).parent()
         {

@@ -200,6 +200,7 @@ pub(super) async fn prepare_build_phase(
         &exclude_patterns,
         &asset_roots,
         tako_config.runtime_version.as_deref(),
+        manifest.package_manager.as_deref(),
         task_tree.clone(),
     )
     .await?;
