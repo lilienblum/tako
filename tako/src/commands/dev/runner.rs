@@ -845,9 +845,16 @@ pub(super) async fn wait_for_dev_server_stopped(listen_addr: &str) {
     let socket_path = crate::paths::tako_data_dir()
         .ok()
         .map(|dir| dir.join("dev-server.sock"));
+    wait_for_dev_server_stopped_with_socket_path(listen_addr, socket_path.as_deref()).await;
+}
+
+pub(super) async fn wait_for_dev_server_stopped_with_socket_path(
+    listen_addr: &str,
+    socket_path: Option<&std::path::Path>,
+) {
     for _ in 0..40 {
         let info_available = crate::dev_server_client::info().await.is_ok();
-        let socket_still_exists = socket_path.as_ref().is_some_and(|path| path.exists());
+        let socket_still_exists = socket_path.is_some_and(|path| path.exists());
         if !info_available && !socket_still_exists {
             break;
         }

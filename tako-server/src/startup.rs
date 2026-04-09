@@ -30,6 +30,18 @@ struct StandbyPromotionConfig {
     challenge_tokens: ChallengeTokens,
 }
 
+struct AcmeInitConfig {
+    standby: bool,
+    acme_staging: bool,
+    acme_email: Option<String>,
+    dns_provider: Option<String>,
+    no_acme: bool,
+    account_dir: PathBuf,
+    data_dir: PathBuf,
+    cert_manager: Arc<CertManager>,
+    challenge_tokens: ChallengeTokens,
+}
+
 pub(crate) fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     let rt = Runtime::new()?;
     let exe = std::env::current_exe().ok();
@@ -106,14 +118,17 @@ pub(crate) fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 
     let acme_client = init_acme_client(
         &rt,
-        &args,
-        standby,
-        &server_config,
-        config_dns_provider.clone(),
-        acme_dir,
-        data_dir.clone(),
-        cert_manager.clone(),
-        challenge_tokens.clone(),
+        AcmeInitConfig {
+            standby,
+            acme_staging: args.acme_staging,
+            acme_email: server_config.acme_email.clone(),
+            dns_provider: config_dns_provider.clone(),
+            no_acme: args.no_acme,
+            account_dir: acme_dir,
+            data_dir: data_dir.clone(),
+            cert_manager: cert_manager.clone(),
+            challenge_tokens: challenge_tokens.clone(),
+        },
     );
 
     let runtime = ServerRuntimeConfig {
@@ -218,19 +233,9 @@ pub(crate) fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn init_acme_client(
-    rt: &Runtime,
-    args: &Args,
-    standby: bool,
-    server_config: &crate::boot::ServerConfigFile,
-    dns_provider: Option<String>,
-    account_dir: PathBuf,
-    data_dir: PathBuf,
-    cert_manager: Arc<CertManager>,
-    challenge_tokens: ChallengeTokens,
-) -> Option<Arc<AcmeClient>> {
-    if args.no_acme || standby {
-        if standby {
+fn init_acme_client(rt: &Runtime, config: AcmeInitConfig) -> Option<Arc<AcmeClient>> {
+    if config.no_acme || config.standby {
+        if config.standby {
             tracing::info!("ACME disabled (standby mode)");
         } else {
             tracing::info!("ACME disabled, using manual certificate management");
@@ -240,15 +245,15 @@ fn init_acme_client(
 
     let client = Arc::new(AcmeClient::with_tokens(
         AcmeConfig {
-            staging: args.acme_staging,
-            email: server_config.acme_email.clone(),
-            account_dir,
-            dns_provider,
-            data_dir,
+            staging: config.acme_staging,
+            email: config.acme_email,
+            account_dir: config.account_dir,
+            dns_provider: config.dns_provider,
+            data_dir: config.data_dir,
             ..Default::default()
         },
-        cert_manager,
-        challenge_tokens,
+        config.cert_manager,
+        config.challenge_tokens,
     ));
 
     if let Err(e) = rt.block_on(client.init()) {
@@ -256,7 +261,7 @@ fn init_acme_client(
         tracing::warn!("Continuing without ACME - certificates must be managed manually");
         None
     } else {
-        if args.acme_staging {
+        if config.acme_staging {
             tracing::warn!(
                 "Using Let's Encrypt STAGING environment - certificates will NOT be trusted!"
             );

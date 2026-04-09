@@ -18,6 +18,6 @@ if (import.meta.main) {
 
   process.on("SIGTERM", () => {
     setDraining();
-    server?.stop(true);
+    void server?.stop(true);
   });
 }

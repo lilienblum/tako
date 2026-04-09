@@ -135,13 +135,15 @@ impl<'a> TextField<'a> {
             };
             let value = raw_text_input(
                 &display_label,
-                self.default,
-                self.suggestions,
-                self.password,
-                self.placeholder,
-                self.required,
-                self.trimmed,
-                true, // use › separator
+                RawTextInputOptions {
+                    initial: self.default,
+                    suggestions: self.suggestions,
+                    password: self.password,
+                    placeholder_override: self.placeholder,
+                    required: self.required,
+                    trimmed: self.trimmed,
+                    use_separator: true, // use › separator
+                },
             )?;
             return Ok(value);
         }
@@ -186,13 +188,15 @@ impl<'a> TextField<'a> {
 
         let value = match raw_text_input(
             &super::format_pretty_prompt_input_prefix(true),
-            self.default,
-            self.suggestions,
-            self.password,
-            self.placeholder,
-            self.required,
-            self.trimmed,
-            false, // no › separator in pretty mode
+            RawTextInputOptions {
+                initial: self.default,
+                suggestions: self.suggestions,
+                password: self.password,
+                placeholder_override: self.placeholder,
+                required: self.required,
+                trimmed: self.trimmed,
+                use_separator: false, // no › separator in pretty mode
+            },
         ) {
             Ok(v) => v,
             Err(e) => {
@@ -252,16 +256,17 @@ impl<'a> TextField<'a> {
 /// `use_separator`: if true, renders `{prompt} › {cursor}` (verbose style).
 /// If false, renders `{prompt}{cursor}` — the caller has already printed the label
 /// and `prompt` is any optional indentation prefix.
-fn raw_text_input(
-    prompt: &str,
-    initial: Option<&str>,
-    suggestions: &[String],
+struct RawTextInputOptions<'a> {
+    initial: Option<&'a str>,
+    suggestions: &'a [String],
     password: bool,
-    placeholder_override: Option<&str>,
+    placeholder_override: Option<&'a str>,
     required: bool,
     trimmed: bool,
     use_separator: bool,
-) -> io::Result<String> {
+}
+
+fn raw_text_input(prompt: &str, options: RawTextInputOptions<'_>) -> io::Result<String> {
     use crossterm::{
         cursor,
         event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
@@ -270,6 +275,16 @@ fn raw_text_input(
     use std::io::Write;
 
     let mut out = io::stderr();
+    let RawTextInputOptions {
+        initial,
+        suggestions,
+        password,
+        placeholder_override,
+        required,
+        trimmed,
+        use_separator,
+    } = options;
+
     let mut buf: Vec<char> = initial.unwrap_or("").chars().collect();
     let mut pos: usize = buf.len(); // cursor position in chars
     let mut suggestion_idx: Option<usize> = None;

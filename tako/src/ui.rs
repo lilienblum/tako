@@ -286,7 +286,7 @@ pub fn finalize_active_session() -> bool {
 fn create_inline_terminal(tree: &[TreeNode]) -> io::Result<RatatuiTerminal> {
     let width = crossterm::terminal::size()?.0;
     let height = rendered_height(&render_tree_to_lines(tree, 0), width);
-    let height = height.max(4).min(20); // at least 4, at most 20
+    let height = height.clamp(4, 20); // at least 4, at most 20
     let backend = CrosstermBackend::new(io::stderr());
     Terminal::with_options(
         backend,

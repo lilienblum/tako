@@ -289,10 +289,10 @@ impl DeployTaskTreeController {
         self.warn_pending_children(&deploy_target_task_id(server_name), reason);
     }
 
-    pub(super) fn abort_incomplete(&self, reason: &str) {
+    pub(super) fn abort_incomplete(&self, _reason: &str) {
         let mut state = self.state.lock().unwrap();
-        abort_incomplete_tasks(&mut state.builds, reason);
-        abort_incomplete_tasks(&mut state.deploys, reason);
+        abort_incomplete_tasks(&mut state.builds);
+        abort_incomplete_tasks(&mut state.deploys);
         self.refresh_locked(&state);
     }
 
@@ -376,15 +376,15 @@ pub(super) fn should_use_deploy_task_tree() -> bool {
     output::is_pretty() && output::is_interactive()
 }
 
-fn abort_incomplete_tasks(tasks: &mut [TaskItemState], reason: &str) {
+fn abort_incomplete_tasks(tasks: &mut [TaskItemState]) {
     for task in tasks {
-        abort_incomplete_task(task, reason);
+        abort_incomplete_task(task);
     }
 }
 
-fn abort_incomplete_task(task: &mut TaskItemState, reason: &str) {
+fn abort_incomplete_task(task: &mut TaskItemState) {
     for child in &mut task.children {
-        abort_incomplete_task(child, reason);
+        abort_incomplete_task(child);
     }
 
     let elapsed = match task.state {
