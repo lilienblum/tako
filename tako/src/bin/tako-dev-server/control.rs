@@ -573,14 +573,6 @@ pub(crate) async fn handle_client(
                         .get(&config_path)
                         .map(|a| a.name.clone())
                         .unwrap_or_default();
-                    if let Some(app) = s.apps.get(&config_path) {
-                        push_scoped_log(
-                            &app.log_buffer,
-                            "Debug",
-                            "tako",
-                            &format!("Client {} connected", client_id),
-                        );
-                    }
                     s.events.broadcast(Response::Event {
                         event: protocol::DevEvent::ClientConnected {
                             config_path: config_path.clone(),
@@ -605,14 +597,6 @@ pub(crate) async fn handle_client(
 
                 {
                     let s = state.lock().unwrap();
-                    if let Some(app) = s.apps.get(&config_path) {
-                        push_scoped_log(
-                            &app.log_buffer,
-                            "Debug",
-                            "tako",
-                            &format!("Client {} disconnected", client_id),
-                        );
-                    }
                     s.events.broadcast(Response::Event {
                         event: protocol::DevEvent::ClientDisconnected {
                             config_path,

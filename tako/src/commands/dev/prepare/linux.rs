@@ -368,6 +368,42 @@ pub(crate) fn status() -> LinuxSetupStatus {
 }
 
 #[cfg(target_os = "linux")]
+pub(crate) fn explain_pending_sudo_setup() -> Result<(), Box<dyn std::error::Error>> {
+    if !crate::output::is_interactive() {
+        return Ok(());
+    }
+
+    let ca_action = super::tls::pending_sudo_action()?;
+    let redirect_action = pending_sudo_action()?;
+
+    let mut items = Vec::new();
+    if let Some(action) = ca_action {
+        items.push(action.to_string());
+    }
+    if let Some(action) = redirect_action {
+        items.push(action.to_string());
+    }
+    if items.is_empty() {
+        return Ok(());
+    }
+
+    crate::output::warning("One-time sudo is required for:");
+    for item in &items {
+        crate::output::bullet(item);
+    }
+
+    let status = std::process::Command::new("sudo")
+        .arg("-v")
+        .status()
+        .map_err(|e| -> Box<dyn std::error::Error> { format!("failed to run sudo: {e}").into() })?;
+    if !status.success() {
+        return Err(crate::output::silent_exit_error().into());
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
 pub(crate) fn pending_sudo_action() -> Result<Option<&'static str>, Box<dyn std::error::Error>> {
     let s = status();
     let plan = repair_plan(&s);

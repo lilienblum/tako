@@ -169,7 +169,7 @@ fn gather_system_targets() -> Vec<SystemTarget> {
 
 #[cfg(target_os = "macos")]
 fn gather_macos_system_targets() -> Vec<SystemTarget> {
-    use crate::commands::dev::dev_proxy::{
+    use crate::commands::dev::prepare::macos::{
         DEV_PROXY_BINARY_PATH, DEV_PROXY_BOOTSTRAP_LABEL, DEV_PROXY_BOOTSTRAP_PLIST_PATH,
         DEV_PROXY_LABEL, DEV_PROXY_PLIST_PATH,
     };
@@ -253,7 +253,7 @@ fn has_ca_certs_in_keychain() -> bool {
         .args([
             "find-certificate",
             "-c",
-            "Tako Local Development CA",
+            "Tako Development",
             "/Library/Keychains/System.keychain",
         ])
         .stdin(Stdio::null())
@@ -282,7 +282,7 @@ fn remove_ca_certs_from_keychain() {
             .args([
                 "find-certificate",
                 "-c",
-                "Tako Local Development CA",
+                "Tako Development",
                 "-Z",
                 "/Library/Keychains/System.keychain",
             ])

@@ -7,17 +7,13 @@
 //! - Streaming logs, status, and resource monitoring
 //! - Process lifecycle managed by the daemon
 
-mod ca_setup;
 mod client;
-pub(crate) mod dev_proxy;
-mod linux_setup;
-mod local_setup;
 mod output;
 mod output_render;
+pub(crate) mod prepare;
 mod project;
 mod runner;
 mod shared;
-mod tls;
 mod types;
 mod watcher;
 
@@ -28,16 +24,25 @@ use crate::app::resolve_app_name_from_config_path;
 use crate::build::{PresetGroup, apply_adapter_base_runtime_defaults, js};
 use crate::dev::LocalCA;
 use client::{ConnectedDevClient, LogStreamEvent, parse_log_line, run_connected_dev_client};
-#[cfg(target_os = "macos")]
-use local_setup::local_https_probe_error;
-use local_setup::{
-    ensure_local_dns_resolver_configured, explain_pending_sudo_setup, local_https_probe_host,
-    wait_for_https_host_reachable_via_ip,
-};
 #[cfg(test)]
-use local_setup::{
+use prepare::local::tcp_probe;
+use prepare::local::{local_https_probe_host, wait_for_https_host_reachable_via_ip};
+#[cfg(target_os = "macos")]
+use prepare::macos::ensure_local_dns_resolver_configured;
+#[cfg(not(target_os = "macos"))]
+fn ensure_local_dns_resolver_configured(_port: u16) -> Result<bool, Box<dyn std::error::Error>> {
+    Ok(true)
+}
+#[cfg(test)]
+use prepare::macos::{
     local_dns_resolver_contents, local_dns_sudo_action_line, parse_local_dns_resolver,
-    sudo_setup_action_items, tcp_probe,
+    sudo_setup_action_items,
+};
+use prepare::tls::ensure_dev_server_tls_material;
+#[cfg(test)]
+use prepare::tls::{
+    ca_fingerprint, ca_fingerprint_path_for_home, dev_server_tls_names_path_for_home,
+    dev_server_tls_paths_for_home, ensure_dev_server_tls_material_for_home,
 };
 use project::{
     compute_dev_env, compute_dev_hosts, compute_display_routes, dev_startup_lines, dev_url,
@@ -49,26 +54,20 @@ use project::{
 use project::{route_hostname_matches, sanitize_name_segment, short_path_hash};
 #[cfg(test)]
 use shared::{doctor_dev_server_lines, doctor_local_forwarding_preflight_lines};
-use tls::ensure_dev_server_tls_material;
-#[cfg(test)]
-use tls::{
-    dev_server_tls_names_path_for_home, dev_server_tls_paths_for_home,
-    ensure_dev_server_tls_material_for_home,
-};
 pub use types::{DIVIDER_SCOPE, DevEvent, LogLevel, ScopedLog};
 #[cfg(test)]
 use types::{
     app_log_scope, child_log_level_and_message, should_drop_child_log_line, trim_child_log_message,
 };
 
-pub use ca_setup::setup_local_ca;
-#[cfg(target_os = "macos")]
-pub(crate) use dev_proxy::{DEV_PROXY_LABEL, DevProxyStatus, status as dev_proxy_status};
 #[cfg(target_os = "linux")]
-pub(crate) use linux_setup::{LinuxSetupStatus, status as linux_setup_status};
-pub(crate) use local_setup::is_dev_server_unavailable_error_message;
+pub(crate) use prepare::linux::{LinuxSetupStatus, status as linux_setup_status};
+pub(crate) use prepare::local::is_dev_server_unavailable_error_message;
 #[cfg(target_os = "macos")]
-pub(crate) use local_setup::local_dns_resolver_values;
+pub(crate) use prepare::macos::local_dns_resolver_values;
+#[cfg(target_os = "macos")]
+pub(crate) use prepare::macos::{DevProxyStatus, status as dev_proxy_status};
+pub use prepare::tls::setup_local_ca;
 
 #[cfg(test)]
 const DEV_INITIAL_INSTANCE_COUNT: usize = 1;

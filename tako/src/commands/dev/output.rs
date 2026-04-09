@@ -16,7 +16,7 @@ use sysinfo::{Pid, ProcessesToUpdate, System};
 use tokio::sync::mpsc;
 
 use super::output_render::{
-    DIM, RESET, format_header, format_keymap, format_log, format_panel, format_qr_code, git_info,
+    DIM, RESET, format_header, format_keymap, format_lan_block, format_log, format_panel, git_info,
 };
 use super::{DevEvent, LogLevel, ScopedLog};
 
@@ -514,25 +514,15 @@ pub async fn run_dev_output(
                     }
                     DevEvent::LanModeChanged { enabled, lan_ip, ca_url } => {
                         if enabled {
-                            if let Some(ref ip) = lan_ip {
+                            let ip = lan_ip.as_deref().unwrap_or("unknown");
+                            if let Some(ref url) = ca_url {
+                                for line in format_lan_block(ip, url) {
+                                    footer.println(&line);
+                                }
+                            } else {
                                 footer.println(&format_log(&ScopedLog::info(
                                     "tako",
                                     format!("LAN mode enabled — {ip}"),
-                                )));
-                            }
-                            if let Some(ref url) = ca_url {
-                                footer.println("");
-                                for line in format_qr_code(url) {
-                                    footer.println(&format!("  {line}"));
-                                }
-                                footer.println("");
-                                footer.println(&format_log(&ScopedLog::info(
-                                    "tako",
-                                    "Scan to install CA cert on your device",
-                                )));
-                                footer.println(&format_log(&ScopedLog::info(
-                                    "tako",
-                                    url.clone(),
                                 )));
                             }
                         } else {

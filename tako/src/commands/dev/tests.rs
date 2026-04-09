@@ -256,7 +256,7 @@ async fn wait_for_dev_server_stopped_waits_for_socket_path_to_disappear() {
     });
 
     let start = std::time::Instant::now();
-    runner::wait_for_dev_server_stopped_with_socket_path("127.0.0.1:59091", Some(&socket_path))
+    prepare::wait_for_dev_server_stopped_with_socket_path("127.0.0.1:59091", Some(&socket_path))
         .await;
 
     assert!(
@@ -508,20 +508,6 @@ fn doctor_preflight_lines_show_proxy_loaded() {
     assert!(lines.iter().any(|line| line.contains("loaded")));
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn local_https_probe_error_mentions_launchd_when_server_directly_reachable() {
-    let msg = local_https_probe_error("bun-example.tako.test", 47831, "timed out", true);
-    assert!(msg.contains("launchd"));
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-fn local_https_probe_error_mentions_doctor_when_server_not_directly_reachable() {
-    let msg = local_https_probe_error("bun-example.tako.test", 47831, "timed out", false);
-    assert!(msg.contains("tako doctor"));
-}
-
 #[test]
 fn unavailable_error_detection_matches_missing_or_stale_socket_errors() {
     assert!(is_dev_server_unavailable_error_message(
@@ -604,6 +590,13 @@ fn ensure_dev_server_tls_material_keeps_existing_files() {
     .unwrap();
 
     let ca = LocalCA::generate().unwrap();
+    // Write matching CA fingerprint so the check passes.
+    std::fs::write(
+        ca_fingerprint_path_for_home(temp.path()),
+        ca_fingerprint(&ca),
+    )
+    .unwrap();
+
     let changed = ensure_dev_server_tls_material_for_home(&ca, temp.path(), "demo").unwrap();
     assert!(!changed);
 
@@ -611,6 +604,23 @@ fn ensure_dev_server_tls_material_keeps_existing_files() {
     let key = std::fs::read_to_string(key_path).unwrap();
     assert_eq!(cert, "existing-cert");
     assert_eq!(key, "existing-key");
+}
+
+#[test]
+fn ensure_dev_server_tls_material_regenerates_when_ca_changes() {
+    let temp = TempDir::new().unwrap();
+    let ca1 = LocalCA::generate().unwrap();
+    let changed = ensure_dev_server_tls_material_for_home(&ca1, temp.path(), "demo").unwrap();
+    assert!(changed);
+
+    // Same CA, same names → no change.
+    let changed = ensure_dev_server_tls_material_for_home(&ca1, temp.path(), "demo").unwrap();
+    assert!(!changed);
+
+    // Different CA, same names → must regenerate.
+    let ca2 = LocalCA::generate().unwrap();
+    let changed = ensure_dev_server_tls_material_for_home(&ca2, temp.path(), "demo").unwrap();
+    assert!(changed);
 }
 
 #[test]

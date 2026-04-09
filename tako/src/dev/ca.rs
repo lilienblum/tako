@@ -31,7 +31,7 @@ const CA_VALIDITY_DAYS: i64 = 3650;
 const LEAF_VALIDITY_DAYS: i64 = 365;
 
 /// Root CA common name
-const CA_COMMON_NAME: &str = "Tako Local Development CA";
+const CA_COMMON_NAME: &str = "Tako Development";
 
 /// Root CA organization
 const CA_ORGANIZATION: &str = "Tako";

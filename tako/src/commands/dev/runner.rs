@@ -1,13 +1,12 @@
-use std::io::IsTerminal;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::sync::watch;
 
+use super::prepare::{DevSession, PrepareOutcome, prepare};
 use super::*;
 
 /// Run the dev server
@@ -95,308 +94,45 @@ pub async fn run(
     variant: Option<String>,
     config_path: Option<&Path>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let context = crate::commands::project_context::resolve_existing(config_path)?;
-    let config_key = context.config_key();
-    let project_dir = context.project_dir.clone();
-    let config_path = context.config_path.clone();
-    let cfg = load_dev_tako_toml(&config_path)?;
-    let eff_app_dir = project_dir.clone();
-    let preset_ref = resolve_dev_preset_ref(&eff_app_dir, &cfg)?;
-    let runtime_adapter = resolve_effective_dev_build_adapter(&eff_app_dir, &cfg, &preset_ref)
-        .map_err(|e| format!("Failed to resolve runtime adapter: {}", e))?;
-    let (mut build_preset, _) = crate::build::load_dev_build_preset(&eff_app_dir, &preset_ref)
-        .await
-        .map_err(|e| format!("Failed to resolve build preset '{}': {}", preset_ref, e))?;
-    let plugin_ctx = tako_runtime::PluginContext {
-        project_dir: &eff_app_dir,
-        package_manager: cfg.package_manager.as_deref(),
-    };
-    apply_adapter_base_runtime_defaults(&mut build_preset, runtime_adapter, Some(&plugin_ctx))
-        .map_err(|e| format!("Failed to apply runtime defaults to preset: {}", e))?;
-    let main = crate::commands::deploy::resolve_deploy_main(
-        &eff_app_dir,
-        runtime_adapter,
-        &cfg,
-        build_preset.main.as_deref(),
-    )
-    .map_err(|e| format!("Failed to resolve deploy entrypoint: {}", e))?;
-
-    if runtime_adapter.preset_group() == PresetGroup::Js {
-        let _ = js::write_types(&project_dir);
-    }
-
-    let runtime_name = build_preset.name.clone();
-
-    let base_name = resolve_app_name_from_config_path(&config_path)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e.to_string()))?;
-    let app_name = if let Some(ref v) = variant {
-        format!("{base_name}-{v}")
-    } else {
-        base_name.clone()
+    let session = match prepare(public_port, variant, config_path).await? {
+        PrepareOutcome::Ready(s) => *s,
+        PrepareOutcome::AlreadyConnected => return Ok(()),
     };
 
-    let existing_apps = try_list_registered_app_names().await;
-    let app_name = disambiguate_app_name(&app_name, &config_key, &existing_apps);
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    explain_pending_sudo_setup(LOCAL_DNS_PORT)?;
-
-    let local_ca = setup_local_ca().await?;
-    let tls_material_updated = ensure_dev_server_tls_material(&local_ca, &app_name)?;
-    let short_domain_active = ensure_local_dns_resolver_configured(LOCAL_DNS_PORT)?;
-
-    let domain = if short_domain_active {
-        LocalCA::app_short_domain(&app_name)
-    } else {
-        LocalCA::app_domain(&app_name)
-    };
-    let base_domain = if variant.is_some() {
-        if short_domain_active {
-            Some(LocalCA::app_short_domain(&base_name))
-        } else {
-            Some(LocalCA::app_domain(&base_name))
-        }
-    } else {
-        None
-    };
-
-    #[cfg(target_os = "macos")]
-    dev_proxy::ensure_installed()?;
-    #[cfg(target_os = "linux")]
-    linux_setup::ensure_installed()?;
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let public_url_port: u16 = 443;
-    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-    let mut public_url_port: u16 = public_port;
-    let daemon_dns_ip = if public_url_port == 443 {
-        DEV_LOOPBACK_ADDR
-    } else {
-        "127.0.0.1"
-    };
-    let listen_addr = format!("127.0.0.1:{}", public_port);
-
-    let existing_info = crate::dev_server_client::info().await.ok();
-    let existing_listen = existing_info.as_ref().and_then(|v| {
-        v.get("info")
-            .and_then(|i| i.get("listen"))
-            .and_then(|s| s.as_str())
-            .map(|s| s.to_string())
-    });
-    let existing_advertised_ip = existing_info.as_ref().and_then(|v| {
-        v.get("info")
-            .and_then(|i| i.get("advertised_ip"))
-            .and_then(|s| s.as_str())
-            .map(|s| s.to_string())
-    });
-    let restart_for_listen =
-        restart_required_for_requested_listen(existing_listen.as_deref(), &listen_addr);
-    let restart_for_dns = existing_advertised_ip
-        .as_deref()
-        .map(|ip| ip != daemon_dns_ip)
-        .unwrap_or(false);
-    let restart_for_tls = tls_material_updated && existing_info.is_some();
-
-    if restart_for_listen || restart_for_dns || restart_for_tls {
-        let current_listen = existing_listen.unwrap_or_else(|| "(unknown)".to_string());
-        let current_dns_ip = existing_advertised_ip.unwrap_or_else(|| "(unknown)".to_string());
-        let mut reasons = Vec::new();
-        if restart_for_listen {
-            reasons.push(format!("listen {}", current_listen));
-        }
-        if restart_for_dns {
-            reasons.push(format!("DNS {}", current_dns_ip));
-        }
-        if restart_for_tls {
-            reasons.push("updated TLS certificates".to_string());
-        }
-        let restart_reason = reasons.join(" and ");
-
-        if crate::output::is_interactive() {
-            crate::output::section("Dev Server");
-            crate::output::warning(&format!(
-                "A dev server is already running with {}.",
-                crate::output::strong(&restart_reason)
-            ));
-            let should_restart = crate::output::confirm(
-                &format!(
-                    "Restart it with listen {}?",
-                    crate::output::strong(&listen_addr)
-                ),
-                true,
-            )?;
-            if !should_restart {
-                return Err(format!("Kept existing dev server on {}.", current_listen).into());
-            }
-
-            crate::dev_server_client::stop_server().await?;
-            wait_for_dev_server_stopped(&listen_addr).await;
-        } else {
-            crate::dev_server_client::stop_server().await?;
-            wait_for_dev_server_stopped(&listen_addr).await;
-        }
-    }
-
-    let dev_hosts = compute_dev_hosts(&app_name, &cfg, &domain, base_domain.as_deref())
-        .map_err(|e| format!("invalid development routes: {}", e))?;
-    let primary_host = dev_hosts
-        .iter()
-        .map(|h| h.split('/').next().unwrap_or(h))
-        .find(|h| !h.starts_with("*."))
-        .map(|h| h.to_string())
-        .unwrap_or_else(|| domain.clone());
+    let DevSession {
+        config_key,
+        config_path,
+        project_dir,
+        app_name,
+        variant,
+        runtime_name,
+        domain,
+        base_domain,
+        primary_host,
+        public_port,
+        public_url_port,
+        upstream_port,
+        reserve_listener,
+        cfg,
+        cmd,
+        dev_hosts,
+        env,
+        interactive,
+    } = session;
 
     let hosts_state = Arc::new(tokio::sync::Mutex::new(dev_hosts.clone()));
-    let mut env = compute_dev_env(&cfg);
-    inject_dev_secrets(&project_dir, &app_name, &mut env).map_err(|e| e.to_string())?;
-
-    if runtime_adapter.preset_group() == PresetGroup::Js {
-        let _ = crate::build::js::write_types(&project_dir);
-    }
-
     let env_state = Arc::new(tokio::sync::Mutex::new(env));
 
     let (log_tx, log_rx) = mpsc::channel::<ScopedLog>(1000);
     let (event_tx, event_rx) = mpsc::channel::<DevEvent>(100);
-
     let (control_tx, mut control_rx) = mpsc::channel::<output::ControlCmd>(32);
     let (should_exit_tx, mut should_exit_rx) = watch::channel(false);
     let terminate_requested = Arc::new(AtomicBool::new(false));
-
-    let interactive = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-
-    let (upstream_port, reserve_listener) = reserve_ephemeral_port()?;
-    let cmd = resolve_dev_run_command(
-        &cfg,
-        &build_preset,
-        &main,
-        runtime_adapter,
-        has_explicit_dev_preset(&cfg),
-        &project_dir,
-    )
-    .map_err(|e| format!("Invalid dev start command: {}", e))?;
 
     let mut log_rx_opt = Some(log_rx);
     let mut event_rx_opt = Some(event_rx);
     let mut output_handle: Option<tokio::task::JoinHandle<Result<output::DevOutputExit, String>>> =
         None;
-
-    if let Err(e) = crate::dev_server_client::ensure_running(&listen_addr, daemon_dns_ip).await {
-        let msg = e.to_string();
-        let _ = log_tx
-            .send(ScopedLog::error(
-                "tako",
-                format!("dev server failed to start: {}", msg),
-            ))
-            .await;
-        let _ = event_tx.send(DevEvent::AppError(msg.clone())).await;
-
-        return Err(msg.into());
-    }
-
-    if public_url_port == 443 {
-        let Ok(loopback_ip) = DEV_LOOPBACK_ADDR.parse::<std::net::Ipv4Addr>() else {
-            return Err(format!("Invalid loopback address: {DEV_LOOPBACK_ADDR}").into());
-        };
-        let probe_host = local_https_probe_host(&primary_host);
-        let probe_result = wait_for_https_host_reachable_via_ip(
-            probe_host,
-            loopback_ip,
-            443,
-            LOCALHOST_443_HTTPS_PROBE_ATTEMPTS,
-            LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS,
-            LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS,
-        )
-        .await;
-        if let Err(_loopback_error) = probe_result.as_ref() {
-            #[cfg(target_os = "macos")]
-            {
-                let server_directly_reachable = wait_for_https_host_reachable_via_ip(
-                    probe_host,
-                    std::net::Ipv4Addr::new(127, 0, 0, 1),
-                    public_port,
-                    LOCALHOST_443_HTTPS_PROBE_ATTEMPTS,
-                    LOCALHOST_443_HTTPS_PROBE_TIMEOUT_MS,
-                    LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS,
-                )
-                .await
-                .is_ok();
-                return Err(local_https_probe_error(
-                    probe_host,
-                    public_port,
-                    _loopback_error,
-                    server_directly_reachable,
-                )
-                .into());
-            }
-            #[cfg(target_os = "linux")]
-            {
-                return Err(
-                    "HTTPS endpoint unreachable at 127.77.0.1:443. Check iptables redirect rules with `tako doctor`."
-                        .into(),
-                );
-            }
-            #[cfg(not(any(target_os = "macos", target_os = "linux")))]
-            {
-                crate::output::warning(
-                    "Local 80/443 forwarding is configured but the dev HTTPS endpoint is unreachable.",
-                );
-                crate::output::muted("Continuing with explicit dev port URL.");
-                public_url_port = public_port;
-            }
-        }
-    }
-
-    let final_dns_ip = if public_url_port == 443 {
-        DEV_LOOPBACK_ADDR
-    } else {
-        "127.0.0.1"
-    };
-    if final_dns_ip != daemon_dns_ip {
-        crate::dev_server_client::stop_server().await?;
-        for _ in 0..40 {
-            if crate::dev_server_client::info().await.is_err() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(50)).await;
-        }
-        if let Err(e) = crate::dev_server_client::ensure_running(&listen_addr, final_dns_ip).await {
-            let msg = e.to_string();
-            let _ = log_tx
-                .send(ScopedLog::error(
-                    "tako",
-                    format!("dev server failed to start: {}", msg),
-                ))
-                .await;
-            let _ = event_tx.send(DevEvent::AppError(msg.clone())).await;
-            return Err(msg.into());
-        }
-    }
-
-    if let Ok(apps) = crate::dev_server_client::list_registered_apps().await
-        && let Some(existing) = apps.iter().find(|a| a.config_path == config_key)
-        && existing.status.as_str() == "running"
-    {
-        let url = if let Some(host) = existing.hosts.first() {
-            let port = if public_url_port == 443 {
-                String::new()
-            } else {
-                format!(":{}", public_url_port)
-            };
-            format!("https://{}{}/", host, port)
-        } else {
-            dev_url(&primary_host, public_url_port)
-        };
-        let session = ConnectedDevClient {
-            config_key: config_key.clone(),
-            config_path: config_path.clone(),
-            project_dir: project_dir.clone(),
-            url,
-            pid: existing.pid,
-        };
-        let display_hosts = compute_display_routes(&cfg, &domain, base_domain.as_deref());
-        return run_connected_dev_client(&app_name, interactive, session, display_hosts).await;
-    }
 
     drop(reserve_listener);
 
@@ -494,7 +230,7 @@ pub async fn run(
             verbose,
             &app_name,
             &runtime_name,
-            &project_dir.join(&main),
+            &project_dir.join(&cmd[0]),
             &url,
         ) {
             println!("{}", line);
@@ -881,43 +617,4 @@ pub async fn run(
 
     let _ = crate::dev_server_client::unregister_app(&config_key).await;
     Ok(())
-}
-
-pub(super) async fn wait_for_dev_server_stopped(listen_addr: &str) {
-    let socket_path = crate::paths::tako_data_dir()
-        .ok()
-        .map(|dir| dir.join("dev-server.sock"));
-    wait_for_dev_server_stopped_with_socket_path(listen_addr, socket_path.as_deref()).await;
-}
-
-pub(super) async fn wait_for_dev_server_stopped_with_socket_path(
-    listen_addr: &str,
-    socket_path: Option<&std::path::Path>,
-) {
-    for _ in 0..40 {
-        let info_available = crate::dev_server_client::info().await.is_ok();
-        let socket_still_exists = socket_path.is_some_and(|path| path.exists());
-        if !info_available && !socket_still_exists {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    if let Some(port_str) = listen_addr.rsplit(':').next()
-        && let Ok(port) = port_str.parse::<u16>()
-    {
-        for _ in 0..20 {
-            if std::net::TcpListener::bind(("127.0.0.1", port)).is_ok() {
-                return;
-            }
-            tokio::time::sleep(Duration::from_millis(100)).await;
-        }
-    }
-}
-
-fn reserve_ephemeral_port() -> Result<(u16, TcpListener), Box<dyn std::error::Error>> {
-    let std_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    std_listener.set_nonblocking(true)?;
-    let port = std_listener.local_addr()?.port();
-    let listener = TcpListener::from_std(std_listener)?;
-    Ok((port, listener))
 }

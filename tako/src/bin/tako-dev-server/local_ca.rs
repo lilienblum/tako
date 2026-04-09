@@ -18,7 +18,7 @@ const CA_VALIDITY_DAYS: i64 = 3650;
 /// Leaf certificate validity period (1 year)
 const LEAF_VALIDITY_DAYS: i64 = 365;
 
-const CA_COMMON_NAME: &str = "Tako Local Development CA";
+const CA_COMMON_NAME: &str = "Tako Development";
 const CA_ORGANIZATION: &str = "Tako";
 const LOCAL_CA_CERT_FILENAME: &str = "ca.crt";
 

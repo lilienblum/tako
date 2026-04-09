@@ -549,7 +549,7 @@ fn scope_color(scope: &str) -> String {
 /// Render a URL as a terminal-friendly QR code using Unicode block characters.
 /// Each row of the QR code uses upper/lower half-block characters to pack two
 /// rows of modules into one terminal line, giving a compact square appearance.
-pub(super) fn format_qr_code(url: &str) -> Vec<String> {
+fn format_qr_code(url: &str) -> Vec<String> {
     use qrcode::QrCode;
 
     let code = match QrCode::new(url.as_bytes()) {
@@ -561,7 +561,6 @@ pub(super) fn format_qr_code(url: &str) -> Vec<String> {
     let width = code.width();
     let height = matrix.len() / width;
 
-    // Use "██" for dark modules, "  " for light modules.
     // Two module rows per terminal line via upper/lower half-blocks.
     let mut lines = Vec::new();
 
@@ -587,4 +586,22 @@ pub(super) fn format_qr_code(url: &str) -> Vec<String> {
     }
 
     lines
+}
+
+/// Render a LAN mode block: QR code + description as a single visual unit.
+pub(super) fn format_lan_block(ip: &str, ca_url: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    out.push(String::new());
+    out.push(format!("  {DIM}LAN mode{RESET} {PRIMARY}{ip}{RESET}"));
+    out.push(String::new());
+    for line in format_qr_code(ca_url) {
+        out.push(format!("  {line}"));
+    }
+    out.push(String::new());
+    out.push(format!(
+        "  {DIM}Scan to install CA cert on your device{RESET}"
+    ));
+    out.push(format!("  {DIM}{ca_url}{RESET}"));
+    out.push(String::new());
+    out
 }
