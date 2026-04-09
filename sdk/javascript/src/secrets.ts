@@ -39,11 +39,10 @@ export function loadSecrets(): Record<string, string> {
     },
     getOwnPropertyDescriptor(_target, prop: string | symbol) {
       if (typeof prop === "string" && prop in secretStore) {
-        return {
-          configurable: true,
-          enumerable: true,
-          value: secretStore[prop],
-        };
+        // Non-enumerable so `{ ...Tako.secrets }` and `Object.assign({}, Tako.secrets)`
+        // produce an empty object instead of silently leaking all secret values.
+        // Individual access via `Tako.secrets.KEY` still works through the `get` trap.
+        return { configurable: true, enumerable: false, value: secretStore[prop] };
       }
       return undefined;
     },

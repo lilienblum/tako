@@ -69,15 +69,13 @@ async fn download_and_install_pretty_inner(
                 .ok_or_else(|| "archive did not contain a tako binary".to_string())?;
             let new_dev_server = find_binary(&extract_dir, "tako-dev-server")
                 .ok_or_else(|| "archive did not contain a tako-dev-server binary".to_string())?;
-            let new_loopback_proxy =
-                find_binary(&extract_dir, "tako-loopback-proxy").ok_or_else(|| {
-                    "archive did not contain a tako-loopback-proxy binary".to_string()
-                })?;
+            let new_dev_proxy = find_binary(&extract_dir, "tako-dev-proxy")
+                .ok_or_else(|| "archive did not contain a tako-dev-proxy binary".to_string())?;
             std::fs::create_dir_all(install_dir)
                 .map_err(|e| format!("failed to create install dir: {e}"))?;
             install_binary(&new_tako, install_dir, "tako")?;
             install_binary(&new_dev_server, install_dir, "tako-dev-server")?;
-            install_binary(&new_loopback_proxy, install_dir, "tako-loopback-proxy")?;
+            install_binary(&new_dev_proxy, install_dir, "tako-dev-proxy")?;
             Ok::<(), String>(())
         },
     )
@@ -152,13 +150,13 @@ async fn download_and_install_inner(
         find_binary(&extract_dir, "tako").ok_or("archive did not contain a tako binary")?;
     let dev_server_bin = find_binary(&extract_dir, "tako-dev-server")
         .ok_or("archive did not contain a tako-dev-server binary")?;
-    let loopback_proxy_bin = find_binary(&extract_dir, "tako-loopback-proxy")
-        .ok_or("archive did not contain a tako-loopback-proxy binary")?;
+    let dev_proxy_bin = find_binary(&extract_dir, "tako-dev-proxy")
+        .ok_or("archive did not contain a tako-dev-proxy binary")?;
 
     std::fs::create_dir_all(install_dir)?;
     install_binary(&tako_bin, install_dir, "tako")?;
     install_binary(&dev_server_bin, install_dir, "tako-dev-server")?;
-    install_binary(&loopback_proxy_bin, install_dir, "tako-loopback-proxy")?;
+    install_binary(&dev_proxy_bin, install_dir, "tako-dev-proxy")?;
 
     Ok(())
 }

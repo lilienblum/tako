@@ -177,6 +177,11 @@ impl CertManager {
 
                 // Convert ASN1Time to SystemTime
                 let timestamp = not_after.timestamp();
+                if timestamp < 0 {
+                    return Err(CertError::ParseError(
+                        "certificate has negative expiry timestamp".to_string(),
+                    ));
+                }
                 let system_time = UNIX_EPOCH + Duration::from_secs(timestamp as u64);
 
                 return Ok(system_time);

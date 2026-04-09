@@ -117,10 +117,11 @@ impl HealthChecker {
             return;
         }
 
+        let instance_key = format!("{}:{}", app.name(), instance.id);
+
         // Fast path: detect process exit immediately via try_wait() instead
         // of waiting for the HTTP probe to time out.
         if !instance.is_alive().await {
-            let instance_key = format!("{}:{}", app.name(), instance.id);
             self.failure_counts.remove(&instance_key);
             instance.set_state(InstanceState::Stopped);
             tracing::error!(
@@ -146,7 +147,6 @@ impl HealthChecker {
                 config.health_check_path.clone(),
             )
         };
-        let instance_key = format!("{}:{}", app.name(), instance.id);
 
         // Perform HTTP probe
         let probe_success = probe_instance_health(

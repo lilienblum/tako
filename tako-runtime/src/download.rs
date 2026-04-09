@@ -30,6 +30,7 @@ impl DownloadManager {
         version: &str,
         def: &RuntimeDef,
     ) -> Result<PathBuf, String> {
+        validate_version_string(version)?;
         if let Some(existing) = self.resolve_bin(id, version, def) {
             return Ok(existing);
         }
@@ -182,7 +183,21 @@ pub async fn resolve_latest_version(def: &RuntimeDef) -> Result<String, String> 
             "empty version after stripping prefix '{tag_prefix}' from tag '{tag}'"
         ));
     }
+    validate_version_string(&version)?;
     Ok(version)
+}
+
+/// Reject version strings that could cause path traversal when used in filesystem paths.
+fn validate_version_string(version: &str) -> Result<(), String> {
+    if !version
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '+'))
+    {
+        return Err(format!(
+            "version string contains invalid characters: '{version}'"
+        ));
+    }
+    Ok(())
 }
 
 // ── Internals ──

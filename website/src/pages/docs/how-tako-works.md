@@ -47,7 +47,7 @@ Here is what happens under the hood:
 3. One local instance of your app starts immediately.
 4. HTTPS is set up using a local Certificate Authority -- no browser security warnings once the CA is trusted.
 
-The daemon supports multiple apps simultaneously, each on its own `*.test` subdomain (`*.tako.test` also works). On macOS, Tako installs a loopback proxy so your app is available on standard ports (443/80) without `sudo`. On Linux, Tako uses iptables redirect rules to achieve the same portless URLs.
+The daemon supports multiple apps simultaneously, each on its own `*.test` subdomain (`*.tako.test` also works). On macOS, Tako installs a dev proxy so your app is available on standard ports (443/80) without `sudo`. On Linux, Tako uses iptables redirect rules to achieve the same portless URLs.
 
 Your app stays running while you work. If you press `b`, it backgrounds to the daemon and the CLI exits -- your app keeps serving. Run `tako dev` again to reconnect. Press `Ctrl+c` to stop the app entirely.
 

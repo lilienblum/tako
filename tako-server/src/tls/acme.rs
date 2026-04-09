@@ -183,7 +183,19 @@ impl AcmeClient {
         let credentials_json = serde_json::to_string_pretty(&credentials).map_err(|e| {
             AcmeError::IssuanceFailed(format!("Failed to serialize credentials: {}", e))
         })?;
-        std::fs::write(&credentials_path, credentials_json)?;
+        {
+            use std::io::Write;
+            #[cfg(unix)]
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            opts.mode(0o600);
+            let mut f = opts.open(&credentials_path).map_err(|e| {
+                std::io::Error::new(e.kind(), format!("{}: {e}", credentials_path.display()))
+            })?;
+            f.write_all(credentials_json.as_bytes())?;
+        }
 
         // Save account info for reference
         let account_path = self.config.account_dir.join("account.json");
@@ -197,10 +209,23 @@ impl AcmeClient {
             "staging": self.config.staging,
             "id": account.id(),
         });
-        std::fs::write(
-            &account_path,
-            serde_json::to_string_pretty(&account_info).unwrap(),
-        )?;
+        {
+            use std::io::Write;
+            #[cfg(unix)]
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut opts = std::fs::OpenOptions::new();
+            opts.write(true).create(true).truncate(true);
+            #[cfg(unix)]
+            opts.mode(0o600);
+            let mut f = opts.open(&account_path).map_err(|e| {
+                std::io::Error::new(e.kind(), format!("{}: {e}", account_path.display()))
+            })?;
+            f.write_all(
+                serde_json::to_string_pretty(&account_info)
+                    .unwrap()
+                    .as_bytes(),
+            )?;
+        }
 
         tracing::info!(
             staging = self.config.staging,
@@ -718,6 +743,9 @@ fn parse_cert_expiry(pem_data: &str) -> Option<std::time::SystemTime> {
         {
             let not_after = cert.validity().not_after;
             let timestamp = not_after.timestamp();
+            if timestamp < 0 {
+                return None;
+            }
             return std::time::UNIX_EPOCH
                 .checked_add(std::time::Duration::from_secs(timestamp as u64));
         }

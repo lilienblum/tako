@@ -78,6 +78,10 @@ pub(crate) struct State {
     pub(crate) advertised_ip: String,
     pub(crate) control_clients: u32,
 
+    pub(crate) lan_enabled: bool,
+    pub(crate) lan_ip: Option<String>,
+    pub(crate) mdns: Option<crate::lan::MdnsPublisher>,
+
     pub(crate) db: Option<state::DevStateStore>,
     pub(crate) apps: std::collections::HashMap<String, RuntimeApp>,
 }
@@ -105,6 +109,9 @@ impl State {
             listen_addr,
             advertised_ip,
             control_clients: 0,
+            lan_enabled: false,
+            lan_ip: None,
+            mdns: None,
             db: None,
             apps: std::collections::HashMap::new(),
         }
@@ -661,9 +668,12 @@ pub(crate) async fn handle_client(
                         local_dns_enabled: s.local_dns_enabled,
                         local_dns_port: s.local_dns_port,
                         control_clients: s.control_clients,
+                        lan_enabled: s.lan_enabled,
+                        lan_ip: s.lan_ip.clone(),
                     },
                 }
             }
+            Request::ToggleLan { enabled } => handle_toggle_lan(&state, enabled).await,
             Request::StopServer => {
                 let s = state.lock().unwrap();
                 let _ = s.shutdown_tx.send(true);
@@ -675,6 +685,106 @@ pub(crate) async fn handle_client(
     }
 
     Ok(())
+}
+
+async fn handle_toggle_lan(state: &Arc<Mutex<State>>, enabled: bool) -> Response {
+    if enabled {
+        let lan_ip = match crate::lan::detect_lan_ip() {
+            Some(ip) => ip,
+            None => {
+                return Response::Error {
+                    message: "could not detect LAN IP address".to_string(),
+                };
+            }
+        };
+
+        // Tell the dev proxy to bind 0.0.0.0:443/80 for LAN traffic
+        if let Err(e) =
+            send_dev_proxy_command(r#"{"command":"enable_lan","bind_addr":"0.0.0.0"}"#).await
+        {
+            return Response::Error {
+                message: format!("failed to enable LAN on dev proxy: {e}"),
+            };
+        }
+
+        let ca_url = format!("http://{lan_ip}/ca.pem");
+
+        let mut s = state.lock().unwrap();
+
+        // Start mDNS publisher and publish all registered app hostnames
+        let mut mdns = crate::lan::MdnsPublisher::new(lan_ip.clone());
+        for app in s.apps.values() {
+            for host in &app.hosts {
+                mdns.publish(host);
+            }
+        }
+        s.mdns = Some(mdns);
+        s.lan_enabled = true;
+        s.lan_ip = Some(lan_ip.clone());
+        s.events.broadcast(Response::Event {
+            event: protocol::DevEvent::LanModeChanged {
+                enabled: true,
+                lan_ip: Some(lan_ip.clone()),
+                ca_url: Some(ca_url.clone()),
+            },
+        });
+        Response::LanToggled {
+            enabled: true,
+            lan_ip: Some(lan_ip),
+            ca_url: Some(ca_url),
+        }
+    } else {
+        let _ = send_dev_proxy_command(r#"{"command":"disable_lan"}"#).await;
+
+        let mut s = state.lock().unwrap();
+        if let Some(ref mut mdns) = s.mdns {
+            mdns.cleanup_all();
+        }
+        s.mdns = None;
+        s.lan_enabled = false;
+        s.lan_ip = None;
+        s.events.broadcast(Response::Event {
+            event: protocol::DevEvent::LanModeChanged {
+                enabled: false,
+                lan_ip: None,
+                ca_url: None,
+            },
+        });
+        Response::LanToggled {
+            enabled: false,
+            lan_ip: None,
+            ca_url: None,
+        }
+    }
+}
+
+/// Send a command to the dev proxy control socket and read the response.
+async fn send_dev_proxy_command(json_line: &str) -> Result<String, String> {
+    const SOCKET_PATH: &str = "/tmp/tako-dev-proxy.sock";
+
+    let stream = tokio::net::UnixStream::connect(SOCKET_PATH)
+        .await
+        .map_err(|e| format!("dev proxy not reachable at {SOCKET_PATH}: {e}"))?;
+
+    let (reader, mut writer) = stream.into_split();
+    let mut line = json_line.to_string();
+    if !line.ends_with('\n') {
+        line.push('\n');
+    }
+    tokio::io::AsyncWriteExt::write_all(&mut writer, line.as_bytes())
+        .await
+        .map_err(|e| format!("failed to send command to dev proxy: {e}"))?;
+
+    let mut reader = tokio::io::BufReader::new(reader);
+    let mut response = String::new();
+    tokio::io::AsyncBufReadExt::read_line(&mut reader, &mut response)
+        .await
+        .map_err(|e| format!("failed to read dev proxy response: {e}"))?;
+
+    if response.contains("\"error\"") {
+        return Err(response.trim().to_string());
+    }
+    Ok(response)
 }
 
 async fn write_resp(

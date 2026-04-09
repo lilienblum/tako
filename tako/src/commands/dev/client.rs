@@ -255,6 +255,19 @@ pub(super) async fn run_connected_dev_client(
                         let _ = stop_tx.send(true);
                         break;
                     }
+                    output::ControlCmd::ToggleLan => {
+                        let result = crate::dev_server_client::toggle_lan(true)
+                            .await
+                            .map_err(|e| e.to_string());
+                        if let Err(msg) = result {
+                            let _ = log_tx
+                                .send(ScopedLog::error(
+                                    "tako",
+                                    format!("LAN toggle failed: {}", msg),
+                                ))
+                                .await;
+                        }
+                    }
                 }
             }
         });
@@ -321,7 +334,8 @@ pub(super) async fn run_connected_dev_client(
                                 DevEvent::AppLaunching
                                 | DevEvent::AppStarted
                                 | DevEvent::AppPid(_)
-                                | DevEvent::AppProcessExited(_) => {}
+                                | DevEvent::AppProcessExited(_)
+                                | DevEvent::LanModeChanged { .. } => {}
                             }
                         }
                         else => break,

@@ -161,7 +161,7 @@ pub async fn run(
     };
 
     #[cfg(target_os = "macos")]
-    loopback_proxy::ensure_installed()?;
+    dev_proxy::ensure_installed()?;
     #[cfg(target_os = "linux")]
     linux_setup::ensure_installed()?;
 
@@ -521,6 +521,7 @@ pub async fn run(
         let terminate_requested = terminate_requested.clone();
 
         tokio::spawn(async move {
+            let mut lan_enabled = false;
             while let Some(cmd_in) = control_rx.recv().await {
                 match cmd_in {
                     output::ControlCmd::Restart => {
@@ -538,6 +539,25 @@ pub async fn run(
                         let _ = crate::dev_server_client::unregister_app(&config_key).await;
                         let _ = should_exit_tx.send(true);
                         break;
+                    }
+                    output::ControlCmd::ToggleLan => {
+                        let target = !lan_enabled;
+                        let result = crate::dev_server_client::toggle_lan(target)
+                            .await
+                            .map_err(|e| e.to_string());
+                        match result {
+                            Ok((enabled, _, _)) => {
+                                lan_enabled = enabled;
+                            }
+                            Err(msg) => {
+                                let _ = log_tx
+                                    .send(ScopedLog::error(
+                                        "tako",
+                                        format!("LAN toggle failed: {}", msg),
+                                    ))
+                                    .await;
+                            }
+                        }
                     }
                 }
             }
@@ -699,6 +719,19 @@ pub async fn run(
                                     .await;
                             }
                         }
+                        crate::dev_server_client::DevServerEvent::LanModeChanged {
+                            enabled,
+                            lan_ip,
+                            ca_url,
+                        } => {
+                            let _ = event_tx
+                                .send(DevEvent::LanModeChanged {
+                                    enabled,
+                                    lan_ip,
+                                    ca_url,
+                                })
+                                .await;
+                        }
                         _ => {}
                     }
                 }
@@ -817,6 +850,15 @@ pub async fn run(
                                 }
                                 DevEvent::ClientDisconnected { client_id } => {
                                     println!("Client {} disconnected", client_id);
+                                }
+                                DevEvent::LanModeChanged { enabled, lan_ip, .. } => {
+                                    if enabled {
+                                        if let Some(ip) = lan_ip {
+                                            println!("LAN mode enabled — {}", ip);
+                                        }
+                                    } else {
+                                        println!("LAN mode disabled");
+                                    }
                                 }
                                 DevEvent::ExitWithMessage(msg) => {
                                     println!("{}", msg);

@@ -126,7 +126,7 @@ fn find_tako_binaries() -> Vec<PathBuf> {
         return vec![];
     };
 
-    ["tako", "tako-dev-server", "tako-loopback-proxy"]
+    ["tako", "tako-dev-server", "tako-dev-proxy"]
         .iter()
         .map(|name| dir.join(name))
         .filter(|path| path.exists())
@@ -169,38 +169,38 @@ fn gather_system_targets() -> Vec<SystemTarget> {
 
 #[cfg(target_os = "macos")]
 fn gather_macos_system_targets() -> Vec<SystemTarget> {
-    use crate::commands::dev::loopback_proxy::{
-        LOOPBACK_PROXY_BINARY_PATH, LOOPBACK_PROXY_BOOTSTRAP_LABEL,
-        LOOPBACK_PROXY_BOOTSTRAP_PLIST_PATH, LOOPBACK_PROXY_LABEL, LOOPBACK_PROXY_PLIST_PATH,
+    use crate::commands::dev::dev_proxy::{
+        DEV_PROXY_BINARY_PATH, DEV_PROXY_BOOTSTRAP_LABEL, DEV_PROXY_BOOTSTRAP_PLIST_PATH,
+        DEV_PROXY_LABEL, DEV_PROXY_PLIST_PATH,
     };
 
     let mut targets = Vec::new();
 
     // Loopback proxy services and files
-    if Path::new(LOOPBACK_PROXY_BOOTSTRAP_PLIST_PATH).exists()
-        || Path::new(LOOPBACK_PROXY_PLIST_PATH).exists()
-        || Path::new(LOOPBACK_PROXY_BINARY_PATH).exists()
+    if Path::new(DEV_PROXY_BOOTSTRAP_PLIST_PATH).exists()
+        || Path::new(DEV_PROXY_PLIST_PATH).exists()
+        || Path::new(DEV_PROXY_BINARY_PATH).exists()
     {
         targets.push(SystemTarget {
-            description: "Loopback proxy (LaunchDaemons, binary)".into(),
+            description: "Dev proxy (LaunchDaemons, binary)".into(),
             commands: vec![
                 vec![
                     "launchctl".into(),
                     "bootout".into(),
-                    format!("system/{LOOPBACK_PROXY_LABEL}"),
+                    format!("system/{DEV_PROXY_LABEL}"),
                 ],
                 vec![
                     "launchctl".into(),
                     "bootout".into(),
-                    format!("system/{LOOPBACK_PROXY_BOOTSTRAP_LABEL}"),
+                    format!("system/{DEV_PROXY_BOOTSTRAP_LABEL}"),
                 ],
-                vec!["rm".into(), "-f".into(), LOOPBACK_PROXY_PLIST_PATH.into()],
+                vec!["rm".into(), "-f".into(), DEV_PROXY_PLIST_PATH.into()],
                 vec![
                     "rm".into(),
                     "-f".into(),
-                    LOOPBACK_PROXY_BOOTSTRAP_PLIST_PATH.into(),
+                    DEV_PROXY_BOOTSTRAP_PLIST_PATH.into(),
                 ],
-                vec!["rm".into(), "-f".into(), LOOPBACK_PROXY_BINARY_PATH.into()],
+                vec!["rm".into(), "-f".into(), DEV_PROXY_BINARY_PATH.into()],
                 vec![
                     "rm".into(),
                     "-rf".into(),
@@ -382,6 +382,40 @@ fn gather_linux_system_targets() -> Vec<SystemTarget> {
                     "rm".into(),
                     "-f".into(),
                     "/etc/systemd/system/tako-dev-redirect.service".into(),
+                ],
+                vec!["systemctl".into(), "daemon-reload".into()],
+            ],
+        });
+    }
+
+    // Dev proxy service (LAN mode)
+    if Path::new("/etc/systemd/system/tako-dev-proxy.service").exists()
+        || Path::new("/etc/systemd/system/tako-dev-proxy.socket").exists()
+    {
+        targets.push(SystemTarget {
+            description: "Dev proxy service (tako-dev-proxy)".into(),
+            commands: vec![
+                vec![
+                    "systemctl".into(),
+                    "disable".into(),
+                    "--now".into(),
+                    "tako-dev-proxy.socket".into(),
+                ],
+                vec![
+                    "systemctl".into(),
+                    "disable".into(),
+                    "--now".into(),
+                    "tako-dev-proxy.service".into(),
+                ],
+                vec![
+                    "rm".into(),
+                    "-f".into(),
+                    "/etc/systemd/system/tako-dev-proxy.service".into(),
+                ],
+                vec![
+                    "rm".into(),
+                    "-f".into(),
+                    "/etc/systemd/system/tako-dev-proxy.socket".into(),
                 ],
                 vec!["systemctl".into(), "daemon-reload".into()],
             ],
@@ -704,7 +738,7 @@ mod tests {
         std::fs::write(tmp.path().join("tako"), b"bin").unwrap();
         std::fs::write(tmp.path().join("tako-dev-server"), b"bin").unwrap();
 
-        let names = ["tako", "tako-dev-server", "tako-loopback-proxy"];
+        let names = ["tako", "tako-dev-server", "tako-dev-proxy"];
         let found: Vec<PathBuf> = names
             .iter()
             .map(|name| tmp.path().join(name))
@@ -753,7 +787,7 @@ mod tests {
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_system_targets_include_loopback_proxy_when_present() {
+    fn macos_system_targets_include_dev_proxy_when_present() {
         // This is a detection test — it verifies the function runs without panic.
         // Actual file presence depends on the machine state.
         let targets = gather_macos_system_targets();

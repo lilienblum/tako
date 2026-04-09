@@ -491,35 +491,10 @@ impl ProxyHttp for TakoProxy {
 
     async fn upstream_peer(
         &self,
-        session: &mut Session,
+        _session: &mut Session,
         ctx: &mut Self::CTX,
     ) -> Result<Box<HttpPeer>> {
-        let transport_https = session
-            .digest()
-            .map(|d| d.ssl_digest.is_some())
-            .unwrap_or(false);
-        let request_headers = &session.req_header().headers;
-        let host = request_headers
-            .get("host")
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("");
-        let hostname = host.split(':').next().unwrap_or(host);
-        let x_forwarded_for = request_headers
-            .get("x-forwarded-for")
-            .and_then(|h| h.to_str().ok());
-        let x_forwarded_proto = request_headers
-            .get("x-forwarded-proto")
-            .and_then(|h| h.to_str().ok());
-        let forwarded = request_headers
-            .get("forwarded")
-            .and_then(|h| h.to_str().ok());
-        ctx.is_https = is_effective_request_https(transport_https, x_forwarded_proto, forwarded)
-            || should_assume_forwarded_private_request_https(
-                hostname,
-                x_forwarded_for,
-                x_forwarded_proto,
-                forwarded,
-            );
+        // ctx.is_https was already computed in request_filter
 
         let backend = ctx
             .backend

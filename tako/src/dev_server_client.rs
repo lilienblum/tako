@@ -285,6 +285,11 @@ pub enum DevServerEvent {
         app_name: String,
         client_id: u32,
     },
+    LanModeChanged {
+        enabled: bool,
+        lan_ip: Option<String>,
+        ca_url: Option<String>,
+    },
 }
 
 fn parse_event_line(line: &str) -> Option<DevServerEvent> {
@@ -321,6 +326,17 @@ fn parse_event_line(line: &str) -> Option<DevServerEvent> {
             config_path: event.get("config_path")?.as_str()?.to_string(),
             app_name: event.get("app_name")?.as_str()?.to_string(),
             client_id: event.get("client_id")?.as_u64()? as u32,
+        }),
+        "LanModeChanged" => Some(DevServerEvent::LanModeChanged {
+            enabled: event.get("enabled")?.as_bool()?,
+            lan_ip: event
+                .get("lan_ip")
+                .and_then(|v| v.as_str())
+                .map(String::from),
+            ca_url: event
+                .get("ca_url")
+                .and_then(|v| v.as_str())
+                .map(String::from),
         }),
         _ => None,
     }
@@ -491,6 +507,36 @@ pub async fn restart_app(config_path: &str) -> Result<(), Box<dyn std::error::Er
     match v.get("type").and_then(|t| t.as_str()) {
         Some("AppRestarting") => Ok(()),
         Some("Error") => Err(format!("dev-server error: {}", v).into()),
+        _ => Err(format!("unexpected response: {}", line).into()),
+    }
+}
+
+pub async fn toggle_lan(
+    enabled: bool,
+) -> Result<(bool, Option<String>, Option<String>), Box<dyn std::error::Error>> {
+    let sock = socket_path()?;
+    let stream = UnixStream::connect(&sock).await?;
+    let mut c = LineClient::new(stream);
+    let req = serde_json::json!({
+        "type": "ToggleLan",
+        "enabled": enabled,
+    });
+    c.send_line(&req.to_string()).await?;
+    let line = c.read_line().await?;
+    let v: serde_json::Value = serde_json::from_str(&line)?;
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("LanToggled") => {
+            let enabled = v.get("enabled").and_then(|b| b.as_bool()).unwrap_or(false);
+            let lan_ip = v.get("lan_ip").and_then(|s| s.as_str()).map(String::from);
+            let ca_url = v.get("ca_url").and_then(|s| s.as_str()).map(String::from);
+            Ok((enabled, lan_ip, ca_url))
+        }
+        Some("Error") => Err(v
+            .get("message")
+            .and_then(|m| m.as_str())
+            .unwrap_or("unknown error")
+            .to_string()
+            .into()),
         _ => Err(format!("unexpected response: {}", line).into()),
     }
 }

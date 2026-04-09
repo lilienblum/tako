@@ -118,7 +118,7 @@ fn gather_ca_status() -> CaStatus {
 
 #[cfg(target_os = "macos")]
 struct MacosData {
-    loopback_proxy: super::dev::LoopbackProxyStatus,
+    dev_proxy: super::dev::DevProxyStatus,
     https_tcp_ok: bool,
     http_tcp_ok: bool,
     advertised_ip: String,
@@ -133,7 +133,7 @@ fn gather_macos_data(
     apps: &[crate::dev_server_client::ListedApp],
 ) -> MacosData {
     use super::dev::{
-        DEV_LOOPBACK_ADDR, LOCAL_DNS_PORT, local_dns_resolver_values, loopback_proxy_status,
+        DEV_LOOPBACK_ADDR, LOCAL_DNS_PORT, dev_proxy_status, local_dns_resolver_values,
         system_resolver_ipv4,
     };
 
@@ -148,7 +148,7 @@ fn gather_macos_data(
         Err(_) => LOCAL_DNS_PORT,
     };
 
-    let loopback_proxy = loopback_proxy_status();
+    let dev_proxy = dev_proxy_status();
     let advertised_ip = DEV_LOOPBACK_ADDR.to_string();
     let resolver_values = local_dns_resolver_values();
 
@@ -169,9 +169,9 @@ fn gather_macos_data(
         .collect();
 
     MacosData {
-        https_tcp_ok: loopback_proxy.https_ready,
-        http_tcp_ok: loopback_proxy.http_ready,
-        loopback_proxy,
+        https_tcp_ok: dev_proxy.https_ready,
+        http_tcp_ok: dev_proxy.http_ready,
+        dev_proxy,
         advertised_ip,
         local_dns_port,
         resolver_values,
@@ -320,36 +320,32 @@ fn format_macos_sections(
         &tcp_80,
     ]);
 
-    heading(buf, "Loopback Proxy");
+    heading(buf, "Dev Proxy");
     hinted_row(
         buf,
         "Installed",
-        &format_active_status(macos.loopback_proxy.installed, "ok", "missing"),
+        &format_active_status(macos.dev_proxy.installed, "ok", "missing"),
         fwd_width,
         "Binary and support files are present on disk",
     );
     hinted_row(
         buf,
         "Boot Helper",
-        &format_active_status(
-            macos.loopback_proxy.bootstrap_loaded,
-            "loaded",
-            "not loaded",
-        ),
+        &format_active_status(macos.dev_proxy.bootstrap_loaded, "loaded", "not loaded"),
         fwd_width,
-        "Boot-time helper is loaded so Tako can restore loopback proxy setup",
+        "Boot-time helper is loaded so Tako can restore dev proxy setup",
     );
     hinted_row(
         buf,
         "Alias",
-        &format_active_status(macos.loopback_proxy.alias_ready, "ok", "missing"),
+        &format_active_status(macos.dev_proxy.alias_ready, "ok", "missing"),
         fwd_width,
         "127.77.0.1 is assigned on the lo0 loopback interface",
     );
     hinted_row(
         buf,
         "Launchd",
-        &format_active_status(macos.loopback_proxy.launchd_loaded, "loaded", "not loaded"),
+        &format_active_status(macos.dev_proxy.launchd_loaded, "loaded", "not loaded"),
         fwd_width,
         "macOS launchd has loaded the proxy service definition",
     );
@@ -690,7 +686,7 @@ mod tests {
             }
         }));
         let macos = MacosData {
-            loopback_proxy: super::super::dev::LoopbackProxyStatus {
+            dev_proxy: super::super::dev::DevProxyStatus {
                 installed: true,
                 bootstrap_loaded: true,
                 alias_ready: true,
@@ -762,10 +758,10 @@ mod tests {
     }
 
     #[test]
-    fn format_macos_sections_capitalizes_loopback_proxy_labels() {
+    fn format_macos_sections_capitalizes_dev_proxy_labels() {
         let mut buf = Vec::new();
         let macos = MacosData {
-            loopback_proxy: super::super::dev::LoopbackProxyStatus {
+            dev_proxy: super::super::dev::DevProxyStatus {
                 installed: true,
                 bootstrap_loaded: true,
                 alias_ready: true,
@@ -795,7 +791,7 @@ mod tests {
                 .any(|line| line.contains("Binary and support files are present on disk"))
         );
         assert!(buf.iter().any(|line| {
-            line.contains("Boot-time helper is loaded so Tako can restore loopback proxy setup")
+            line.contains("Boot-time helper is loaded so Tako can restore dev proxy setup")
         }));
         assert!(
             buf.iter()
@@ -819,7 +815,7 @@ mod tests {
     fn format_local_dns_expects_macos_loopback_ip_for_app_hosts() {
         let mut buf = Vec::new();
         let macos = MacosData {
-            loopback_proxy: super::super::dev::LoopbackProxyStatus {
+            dev_proxy: super::super::dev::DevProxyStatus {
                 installed: true,
                 bootstrap_loaded: true,
                 alias_ready: true,
@@ -852,7 +848,7 @@ mod tests {
     fn format_local_dns_accepts_advertised_loopback_ip_for_app_hosts() {
         let mut buf = Vec::new();
         let macos = MacosData {
-            loopback_proxy: super::super::dev::LoopbackProxyStatus {
+            dev_proxy: super::super::dev::DevProxyStatus {
                 installed: true,
                 bootstrap_loaded: true,
                 alias_ready: true,

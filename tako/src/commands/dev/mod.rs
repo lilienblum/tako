@@ -9,9 +9,9 @@
 
 mod ca_setup;
 mod client;
+pub(crate) mod dev_proxy;
 mod linux_setup;
 mod local_setup;
-pub(crate) mod loopback_proxy;
 mod output;
 mod output_render;
 mod project;
@@ -62,15 +62,13 @@ use types::{
 };
 
 pub use ca_setup::setup_local_ca;
+#[cfg(target_os = "macos")]
+pub(crate) use dev_proxy::{DEV_PROXY_LABEL, DevProxyStatus, status as dev_proxy_status};
 #[cfg(target_os = "linux")]
 pub(crate) use linux_setup::{LinuxSetupStatus, status as linux_setup_status};
 pub(crate) use local_setup::is_dev_server_unavailable_error_message;
 #[cfg(target_os = "macos")]
 pub(crate) use local_setup::local_dns_resolver_values;
-#[cfg(target_os = "macos")]
-pub(crate) use loopback_proxy::{
-    LOOPBACK_PROXY_LABEL, LoopbackProxyStatus, status as loopback_proxy_status,
-};
 
 #[cfg(test)]
 const DEV_INITIAL_INSTANCE_COUNT: usize = 1;

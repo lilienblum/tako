@@ -103,7 +103,7 @@ Alias for `--variant`: `--var`
 
 `tako dev` is a client that connects to the `tako-dev-server` daemon. It registers the selected config file, starts your app, and streams logs directly to your terminal.
 
-On first run, Tako sets up a local Certificate Authority and HTTPS infrastructure so your app is available at `https://{app}.test/`. On macOS, a loopback proxy is installed so your app is served on the default HTTPS port (443) without needing to specify a port. On Linux, iptables redirect rules achieve the same result without an extra proxy binary.
+On first run, Tako sets up a local Certificate Authority and HTTPS infrastructure so your app is available at `https://{app}.test/`. On macOS, a dev proxy is installed so your app is served on the default HTTPS port (443) without needing to specify a port. On Linux, iptables redirect rules achieve the same result without an extra proxy binary.
 
 When `[envs.development]` defines custom routes in `tako.toml`, those routes are used instead of the default. Dev routes must use `.test` or `.tako.test` -- for example `{app}.test` or a subdomain of it.
 
@@ -164,7 +164,7 @@ tako doctor
 
 Reports on the dev daemon, local DNS, and listener status. If the dev daemon is not running, doctor reports that and hints to start `tako dev`. Platform-specific sections:
 
-- **macOS:** Loopback proxy install status, boot-helper load status, dedicated loopback alias, launchd load status, TCP reachability on `127.77.0.1:443` and `:80`.
+- **macOS:** Dev proxy install status, boot-helper load status, dedicated loopback alias, launchd load status, TCP reachability on `127.77.0.1:443` and `:80`.
 - **Linux:** Port redirect status (loopback alias and iptables rules), TCP reachability on `127.77.0.1:443` and `:80`.
 
 ---
@@ -707,11 +707,11 @@ tako implode [-y|--yes]
 
 Alias: `tako uninstall`
 
-Removes the Tako config directory, data directory (CA certs, encryption keys, dev server state), and CLI binaries (`tako`, `tako-dev-server`, `tako-loopback-proxy`). Stops the dev server before removal.
+Removes the Tako config directory, data directory (CA certs, encryption keys, dev server state), and CLI binaries (`tako`, `tako-dev-server`, `tako-dev-proxy`). Stops the dev server before removal.
 
 Also removes system-level services installed by `tako dev` (requires sudo):
 
-- **macOS:** loopback proxy LaunchDaemons, `/Library/Application Support/Tako/`, `/etc/resolver/test`, `/etc/resolver/tako.test`, CA certificate in system keychain, loopback alias.
+- **macOS:** dev proxy LaunchDaemons, `/Library/Application Support/Tako/`, `/etc/resolver/test`, `/etc/resolver/tako.test`, CA certificate in system keychain, loopback alias.
 - **Linux:** systemd redirect service, resolved drop-in, CA certificate in system trust store, iptables rules, loopback alias.
 
 If nothing exists to remove, reports that and exits.

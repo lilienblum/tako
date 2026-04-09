@@ -36,10 +36,6 @@ pub struct StaticConfig {
     pub cache_max_age: u64,
     /// Whether to serve index.html for directories
     pub serve_index: bool,
-    /// Whether to serve gzip-compressed files if available
-    pub serve_gzip: bool,
-    /// File extensions to consider as static
-    pub static_extensions: Vec<String>,
 }
 
 impl Default for StaticConfig {
@@ -49,14 +45,6 @@ impl Default for StaticConfig {
             public_dir: "public".to_string(),
             cache_max_age: 3600, // 1 hour
             serve_index: true,
-            serve_gzip: true,
-            static_extensions: vec![
-                "html", "css", "js", "json", "png", "jpg", "jpeg", "gif", "svg", "ico", "woff",
-                "woff2", "ttf", "eot", "map", "webp", "avif", "mp4", "webm", "pdf", "txt", "xml",
-            ]
-            .into_iter()
-            .map(String::from)
-            .collect(),
         }
     }
 }
@@ -286,20 +274,6 @@ impl AppStaticServer {
             .as_secs();
 
         format!("\"{}{}\"", size, modified_secs)
-    }
-
-    /// Check if we have a gzipped version of the file
-    pub fn has_gzip(&self, path: &Path) -> bool {
-        if !self.config.serve_gzip {
-            return false;
-        }
-
-        let gz_path = path.with_extension(format!(
-            "{}.gz",
-            path.extension().and_then(|e| e.to_str()).unwrap_or("")
-        ));
-
-        gz_path.exists()
     }
 
     /// Get app name

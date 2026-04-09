@@ -219,7 +219,7 @@ pub(super) fn local_dns_sudo_action_line() -> &'static str {
 pub(super) fn sudo_setup_action_items(
     ca_action: Option<&str>,
     local_dns_needed: bool,
-    loopback_proxy_action: Option<&str>,
+    dev_proxy_action: Option<&str>,
 ) -> Vec<String> {
     let mut items = Vec::new();
     if let Some(action) = ca_action {
@@ -228,7 +228,7 @@ pub(super) fn sudo_setup_action_items(
     if local_dns_needed {
         items.push(local_dns_sudo_action_line().to_string());
     }
-    if let Some(action) = loopback_proxy_action {
+    if let Some(action) = dev_proxy_action {
         items.push(action.to_string());
     }
     items
@@ -244,7 +244,7 @@ pub(super) fn explain_pending_sudo_setup(port: u16) -> Result<(), Box<dyn std::e
     let items = sudo_setup_action_items(
         super::ca_setup::pending_sudo_action()?,
         dns_needed,
-        super::loopback_proxy::pending_sudo_action()?,
+        super::dev_proxy::pending_sudo_action()?,
     );
     if items.is_empty() {
         return Ok(());
@@ -353,14 +353,14 @@ pub(super) fn local_https_probe_error(
     if server_directly_reachable {
         format!(
             "Local HTTPS endpoint is unreachable at https://{host}/ ({loopback_error}). \
-             Tako dev server is reachable directly on 127.0.0.1:{public_port}, so the local launchd loopback proxy is not forwarding correctly. \
+             Tako dev server is reachable directly on 127.0.0.1:{public_port}, so the local launchd dev proxy is not forwarding correctly. \
              Check `launchctl print system/{}`, then re-run `tako dev`.",
-            super::LOOPBACK_PROXY_LABEL
+            super::DEV_PROXY_LABEL
         )
     } else {
         format!(
             "Local HTTPS endpoint is unreachable at https://{host}/ ({loopback_error}). \
-             Check that the local loopback proxy is loaded (`tako doctor`) and try again."
+             Check that the local dev proxy is loaded (`tako doctor`) and try again."
         )
     }
 }

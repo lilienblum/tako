@@ -690,22 +690,22 @@ fn sudo_setup_action_items_uses_expected_order() {
     let items = sudo_setup_action_items(
         Some("Trust the Tako local CA for trusted https://*.test"),
         true,
-        Some("Install the local loopback proxy for 127.77.0.1:80/443"),
+        Some("Install the local dev proxy for 127.77.0.1:80/443"),
     );
     assert_eq!(
         items,
         vec![
             "Trust the Tako local CA for trusted https://*.test".to_string(),
             local_dns_sudo_action_line().to_string(),
-            "Install the local loopback proxy for 127.77.0.1:80/443".to_string(),
+            "Install the local dev proxy for 127.77.0.1:80/443".to_string(),
         ]
     );
 }
 
 #[test]
 fn sudo_setup_action_items_omits_absent_steps() {
-    let items = sudo_setup_action_items(None, false, Some("Repair loopback proxy"));
-    assert_eq!(items, vec!["Repair loopback proxy".to_string()]);
+    let items = sudo_setup_action_items(None, false, Some("Repair dev proxy"));
+    assert_eq!(items, vec!["Repair dev proxy".to_string()]);
 }
 
 #[test]

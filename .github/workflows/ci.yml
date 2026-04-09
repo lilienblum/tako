@@ -150,7 +150,7 @@ jobs:
           path: .e2e-bin
 
       - name: Make binaries executable
-        run: chmod +x .e2e-bin/tako .e2e-bin/tako-dev-server
+        run: chmod +x .e2e-bin/tako .e2e-bin/tako-dev-server .e2e-bin/tako-dev-proxy
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -199,7 +199,7 @@ jobs:
           path: .e2e-bin
 
       - name: Make binaries executable
-        run: chmod +x .e2e-bin/tako .e2e-bin/tako-dev-server .e2e-bin/tako-loopback-proxy
+        run: chmod +x .e2e-bin/tako .e2e-bin/tako-dev-server .e2e-bin/tako-dev-proxy
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
@@ -306,7 +306,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo build -p tako-server --release
-          cargo build -p tako --bin tako --bin tako-dev-server --release
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-dev-proxy --release
 
       - name: Upload server binary
         uses: actions/upload-artifact@v7
@@ -322,6 +322,7 @@ jobs:
           path: |
             target/release/tako
             target/release/tako-dev-server
+            target/release/tako-dev-proxy
           if-no-files-found: error
 
   # x86_64 musl — needed for E2E (Alpine)
@@ -382,7 +383,7 @@ jobs:
         run: |
           set -euo pipefail
           cargo build -p tako-server --release
-          cargo build -p tako --bin tako --bin tako-dev-server --release
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-dev-proxy --release
 
       - name: Upload server binary
         uses: actions/upload-artifact@v7
@@ -398,6 +399,7 @@ jobs:
           path: |
             target/release/tako
             target/release/tako-dev-server
+            target/release/tako-dev-proxy
           if-no-files-found: error
 
   # aarch64 musl — master only (for canary)
@@ -457,8 +459,8 @@ jobs:
           TAKO_CANARY_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target aarch64-apple-darwin
-          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target x86_64-apple-darwin
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-dev-proxy --release --target aarch64-apple-darwin
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-dev-proxy --release --target x86_64-apple-darwin
 
       - name: Upload aarch64
         uses: actions/upload-artifact@v7
@@ -467,7 +469,7 @@ jobs:
           path: |
             target/aarch64-apple-darwin/release/tako
             target/aarch64-apple-darwin/release/tako-dev-server
-            target/aarch64-apple-darwin/release/tako-loopback-proxy
+            target/aarch64-apple-darwin/release/tako-dev-proxy
           if-no-files-found: error
 
       - name: Upload x86_64
@@ -477,7 +479,7 @@ jobs:
           path: |
             target/x86_64-apple-darwin/release/tako
             target/x86_64-apple-darwin/release/tako-dev-server
-            target/x86_64-apple-darwin/release/tako-loopback-proxy
+            target/x86_64-apple-darwin/release/tako-dev-proxy
           if-no-files-found: error
 
   e2e:

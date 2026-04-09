@@ -46,7 +46,7 @@ tako deploy --ci --verbose
 
 - Dev daemon listen info and status
 - Local DNS status
-- On macOS: loopback proxy install and load status, boot-helper status, dedicated loopback alias, launchd load status, TCP reachability on `127.77.0.1:443` and `:80`
+- On macOS: dev proxy install and load status, boot-helper status, dedicated loopback alias, launchd load status, TCP reachability on `127.77.0.1:443` and `:80`
 - On Linux: port redirect status (loopback alias and iptables rules), TCP reachability on `127.77.0.1:443` and `:80`
 
 If the dev daemon is not running, doctor reports `status: not running` with a hint to start `tako dev`. It exits successfully either way, so you can always run it safely.
@@ -88,20 +88,20 @@ Tako generates a root CA on first run and stores the private key in the system k
 
 If you see certificate errors after reinstalling Tako or changing `TAKO_HOME`, the CA key in the keychain may not match the CA cert on disk. Run `tako dev` again and it will re-establish trust.
 
-### macOS loopback proxy
+### macOS dev proxy
 
-On macOS, Tako configures a launchd-managed loopback proxy so you can access apps on standard ports (443 for HTTPS, 80 for HTTP redirect) without specifying a port number. The proxy uses a dedicated loopback address (`127.77.0.1`) and forwards traffic:
+On macOS, Tako configures a launchd-managed dev proxy so you can access apps on standard ports (443 for HTTPS, 80 for HTTP redirect) without specifying a port number. The proxy uses a dedicated loopback address (`127.77.0.1`) and forwards traffic:
 
 - `127.77.0.1:443` to `127.0.0.1:47831`
 - `127.77.0.1:80` to `127.0.0.1:47830`
 
-If `tako dev` reports the loopback proxy looks inactive, run `tako doctor` and check the preflight results. The proxy is socket-activated and may exit after a long idle window; launchd reactivates it on the next request. If the proxy needs reinstallation, `tako dev` explains it is reloading or reinstalling the launchd helper before prompting for sudo.
+If `tako dev` reports the dev proxy looks inactive, run `tako doctor` and check the preflight results. The proxy is socket-activated and may exit after a long idle window; launchd reactivates it on the next request. If the proxy needs reinstallation, `tako dev` explains it is reloading or reinstalling the launchd helper before prompting for sudo.
 
-After applying or repairing the loopback proxy, Tako retries reachability on ports 80 and 443 and fails startup if they remain unreachable. If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.test/` still fails, Tako reports a targeted hint that the loopback proxy is not forwarding correctly.
+After applying or repairing the dev proxy, Tako retries reachability on ports 80 and 443 and fails startup if they remain unreachable. If the daemon is reachable on `127.0.0.1:47831` but `https://{app}.test/` still fails, Tako reports a targeted hint that the dev proxy is not forwarding correctly.
 
 ### Linux port redirect
 
-On Linux, Tako uses iptables redirect rules on a loopback alias (`127.77.0.1`) instead of a loopback proxy binary. If `tako doctor` shows the port redirect as inactive:
+On Linux, Tako uses iptables redirect rules on a loopback alias (`127.77.0.1`) instead of a dev proxy binary. If `tako doctor` shows the port redirect as inactive:
 
 - Verify the loopback alias exists: `ip addr show dev lo` should include `127.77.0.1`.
 - Verify iptables rules are in place: `sudo iptables -t nat -L OUTPUT -n` should show DNAT rules for `127.77.0.1` on ports 443, 80, and 53.
@@ -374,7 +374,7 @@ For path-prefixed routes (like `example.com/app/*`), make sure your asset files 
 
 ### tako doctor
 
-Run `tako doctor` from any directory for a local diagnostic report. It checks dev daemon status, DNS resolution, and platform-specific networking (loopback proxy on macOS, iptables on Linux). Doctor exits successfully even when the daemon is not running, so it is always safe to run.
+Run `tako doctor` from any directory for a local diagnostic report. It checks dev daemon status, DNS resolution, and platform-specific networking (dev proxy on macOS, iptables on Linux). Doctor exits successfully even when the daemon is not running, so it is always safe to run.
 
 ### tako releases rollback
 
@@ -394,7 +394,7 @@ Remove the local Tako CLI and all local data:
 tako implode
 ```
 
-This removes config directories, data directories, CLI binaries (`tako`, `tako-dev-server`, `tako-loopback-proxy`), and platform-specific system-level items (launchd services on macOS, systemd services on Linux, CA certificates, loopback aliases). It asks for confirmation before proceeding.
+This removes config directories, data directories, CLI binaries (`tako`, `tako-dev-server`, `tako-dev-proxy`), and platform-specific system-level items (launchd services on macOS, systemd services on Linux, CA certificates, loopback aliases). It asks for confirmation before proceeding.
 
 ### tako servers implode
 

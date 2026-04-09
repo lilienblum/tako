@@ -200,16 +200,21 @@ impl LocalCAStore {
     }
 
     fn save_ca_key_to_file(&self, key_pem: &str) -> Result<()> {
-        let key_path = self.ca_key_path();
-        fs::write(&key_path, key_pem).map_err(|e| CaError::FileWrite(key_path.clone(), e))?;
+        use std::io::Write;
 
+        let key_path = self.ca_key_path();
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
         #[cfg(unix)]
         {
-            use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(0o600);
-            fs::set_permissions(&key_path, permissions)
-                .map_err(|e| CaError::FileWrite(key_path.clone(), e))?;
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
         }
+        let mut f = opts
+            .open(&key_path)
+            .map_err(|e| CaError::FileWrite(key_path.clone(), e))?;
+        f.write_all(key_pem.as_bytes())
+            .map_err(|e| CaError::FileWrite(key_path.clone(), e))?;
 
         Ok(())
     }

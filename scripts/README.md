@@ -4,7 +4,7 @@ Repository scripts used by installers, CI checks, and local development workflow
 
 ## Scripts
 
-- `install-tako.sh`: POSIX installer for local `tako`, `tako-dev-server`, and `tako-loopback-proxy`.
+- `install-tako.sh`: POSIX installer for local `tako`, `tako-dev-server`, and `tako-dev-proxy`.
 - `install-tako-canary.sh`: lightweight wrapper that runs hosted CLI installer with canary artifact base URL.
 - `install-tako-server.sh`: POSIX installer for `tako-server` on Linux hosts.
 - `install-tako-server-canary.sh`: lightweight wrapper that runs hosted server installer with canary artifact base URL.

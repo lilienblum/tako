@@ -11,9 +11,9 @@ fn credential_verify_command(provider: &str, credentials: &[(String, String)]) -
     match provider {
         "cloudflare" => {
             let token = credentials.iter().find(|(k, _)| k == "CF_DNS_API_TOKEN")?;
-            let escaped = token.1.replace('\'', "'\\''");
+            let escaped = crate::shell::shell_single_quote(&token.1);
             Some(format!(
-                "curl -sf -H 'Authorization: Bearer {}' \
+                "curl -sf -H 'Authorization: Bearer '{} \
                  https://api.cloudflare.com/client/v4/user/tokens/verify \
                  | grep -q '\"active\"'",
                 escaped,
@@ -21,9 +21,9 @@ fn credential_verify_command(provider: &str, credentials: &[(String, String)]) -
         }
         "digitalocean" => {
             let token = credentials.iter().find(|(k, _)| k == "DO_AUTH_TOKEN")?;
-            let escaped = token.1.replace('\'', "'\\''");
+            let escaped = crate::shell::shell_single_quote(&token.1);
             Some(format!(
-                "curl -sf -H 'Authorization: Bearer {}' \
+                "curl -sf -H 'Authorization: Bearer '{} \
                  https://api.digitalocean.com/v2/account \
                  | grep -q '\"account\"'",
                 escaped,
@@ -31,27 +31,27 @@ fn credential_verify_command(provider: &str, credentials: &[(String, String)]) -
         }
         "hetzner" => {
             let token = credentials.iter().find(|(k, _)| k == "HETZNER_API_KEY")?;
-            let escaped = token.1.replace('\'', "'\\''");
+            let escaped = crate::shell::shell_single_quote(&token.1);
             Some(format!(
-                "curl -sf -H 'Auth-API-Token: {}' \
+                "curl -sf -H 'Auth-API-Token: '{} \
                  https://dns.hetzner.com/api/v1/zones >/dev/null",
                 escaped,
             ))
         }
         "vultr" => {
             let token = credentials.iter().find(|(k, _)| k == "VULTR_API_KEY")?;
-            let escaped = token.1.replace('\'', "'\\''");
+            let escaped = crate::shell::shell_single_quote(&token.1);
             Some(format!(
-                "curl -sf -H 'Authorization: Bearer {}' \
+                "curl -sf -H 'Authorization: Bearer '{} \
                  https://api.vultr.com/v2/account >/dev/null",
                 escaped,
             ))
         }
         "linode" => {
             let token = credentials.iter().find(|(k, _)| k == "LINODE_TOKEN")?;
-            let escaped = token.1.replace('\'', "'\\''");
+            let escaped = crate::shell::shell_single_quote(&token.1);
             Some(format!(
-                "curl -sf -H 'Authorization: Bearer {}' \
+                "curl -sf -H 'Authorization: Bearer '{} \
                  https://api.linode.com/v4/profile >/dev/null",
                 escaped,
             ))
@@ -298,14 +298,15 @@ async fn apply_dns_config_inner(
     drop(_t);
 
     // Merge dns.provider into config.json
-    let escaped_provider = provider.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped_provider = crate::shell::shell_single_quote(provider);
     let merge_config_cmd = SshClient::run_with_root_or_sudo(&format!(
         r#"CONFIG="{path}"; \
+         PROVIDER={provider}; \
          EXISTING="$(cat "$CONFIG" 2>/dev/null || echo '{{}}')"; \
          if command -v jq >/dev/null 2>&1; then \
-           echo "$EXISTING" | jq --arg p '{provider}' '.dns.provider = $p' > "$CONFIG.tmp"; \
+           echo "$EXISTING" | jq --arg p "$PROVIDER" '.dns.provider = $p' > "$CONFIG.tmp"; \
          elif command -v python3 >/dev/null 2>&1; then \
-           python3 -c "import json,sys; d=json.loads(sys.argv[1]); d.setdefault('dns',{{}}); d['dns']['provider']=sys.argv[2]; json.dump(d,open(sys.argv[3],'w'))" "$EXISTING" '{provider}' "$CONFIG.tmp"; \
+           python3 -c "import json,sys; d=json.loads(sys.argv[1]); d.setdefault('dns',{{}}); d['dns']['provider']=sys.argv[2]; json.dump(d,open(sys.argv[3],'w'))" "$EXISTING" "$PROVIDER" "$CONFIG.tmp"; \
          else \
            echo "error: jq or python3 required" >&2 && exit 1; \
          fi && \

@@ -455,15 +455,19 @@ fn panel_row(c1: &str, c2: &str, c3: &str, col1_w: usize, col2_w: usize) -> Stri
 
 pub(super) fn format_keymap() -> String {
     let cols = terminal_cols().max(20);
-    let text = if cols < 52 {
-        format!("r {DIM}restart{RESET}   b {DIM}background{RESET}   ^c/q {DIM}stop{RESET}")
+    let text = if cols < 60 {
+        format!(
+            "l {DIM}lan{RESET}   r {DIM}restart{RESET}   b {DIM}background{RESET}   ^c/q {DIM}stop{RESET}"
+        )
     } else {
-        format!("r {DIM}restart{RESET}   b {DIM}background{RESET}   ctrl+c/q {DIM}stop{RESET}")
+        format!(
+            "l {DIM}lan{RESET}   r {DIM}restart{RESET}   b {DIM}background{RESET}   ctrl+c/q {DIM}stop{RESET}"
+        )
     };
-    let plain = if cols < 52 {
-        "r restart   b background   ^c/q stop"
+    let plain = if cols < 60 {
+        "l lan   r restart   b background   ^c/q stop"
     } else {
-        "r restart   b background   ctrl+c/q stop"
+        "l lan   r restart   b background   ctrl+c/q stop"
     };
     let pad = cols.saturating_sub(measure_text_width(plain) + 1);
     format!("{}{text} ", " ".repeat(pad))
@@ -540,4 +544,47 @@ fn scope_color(scope: &str) -> String {
             format!("\x1b[38;2;{r};{g};{b}m")
         }
     }
+}
+
+/// Render a URL as a terminal-friendly QR code using Unicode block characters.
+/// Each row of the QR code uses upper/lower half-block characters to pack two
+/// rows of modules into one terminal line, giving a compact square appearance.
+pub(super) fn format_qr_code(url: &str) -> Vec<String> {
+    use qrcode::QrCode;
+
+    let code = match QrCode::new(url.as_bytes()) {
+        Ok(c) => c,
+        Err(_) => return vec![format!("(QR code generation failed for {url})")],
+    };
+
+    let matrix = code.to_colors();
+    let width = code.width();
+    let height = matrix.len() / width;
+
+    // Use "██" for dark modules, "  " for light modules.
+    // Two module rows per terminal line via upper/lower half-blocks.
+    let mut lines = Vec::new();
+
+    let mut y = 0;
+    while y < height {
+        let mut line = String::new();
+        for x in 0..width {
+            let top = matrix[y * width + x];
+            let bottom = if y + 1 < height {
+                matrix[(y + 1) * width + x]
+            } else {
+                qrcode::Color::Light
+            };
+            match (top, bottom) {
+                (qrcode::Color::Dark, qrcode::Color::Dark) => line.push('█'),
+                (qrcode::Color::Dark, qrcode::Color::Light) => line.push('▀'),
+                (qrcode::Color::Light, qrcode::Color::Dark) => line.push('▄'),
+                (qrcode::Color::Light, qrcode::Color::Light) => line.push(' '),
+            }
+        }
+        lines.push(line);
+        y += 2;
+    }
+
+    lines
 }

@@ -49,6 +49,10 @@ pub enum Request {
         #[serde(default)]
         after: Option<u64>,
     },
+    /// Toggle LAN mode (expose dev server on the local network).
+    ToggleLan {
+        enabled: bool,
+    },
     /// List all registered apps.
     ListRegisteredApps,
     ListApps,
@@ -98,6 +102,13 @@ pub enum Response {
         line: String,
     },
     LogsTruncated,
+    LanToggled {
+        enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lan_ip: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ca_url: Option<String>,
+    },
     Stopping,
     Error {
         message: String,
@@ -133,6 +144,13 @@ pub enum DevEvent {
         config_path: String,
         app_name: String,
         client_id: u32,
+    },
+    LanModeChanged {
+        enabled: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lan_ip: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ca_url: Option<String>,
     },
 }
 
@@ -174,6 +192,10 @@ pub struct DevInfo {
     pub local_dns_port: u16,
     #[serde(default)]
     pub control_clients: u32,
+    #[serde(default)]
+    pub lan_enabled: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lan_ip: Option<String>,
 }
 
 #[cfg(test)]
@@ -247,6 +269,8 @@ mod tests {
                 local_dns_enabled: true,
                 local_dns_port: 53535,
                 control_clients: 1,
+                lan_enabled: false,
+                lan_ip: None,
             },
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -390,6 +414,34 @@ mod tests {
             event: DevEvent::RestartRequested {
                 config_path: "/proj/tako.toml".to_string(),
                 app_name: "app".to_string(),
+            },
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_toggle_lan() {
+        let req = Request::ToggleLan { enabled: true };
+        let json = serde_json::to_string(&req).unwrap();
+        assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);
+
+        let resp = Response::LanToggled {
+            enabled: true,
+            lan_ip: Some("192.168.1.42".to_string()),
+            ca_url: Some("http://192.168.1.42/ca.pem".to_string()),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_lan_mode_changed_event() {
+        let resp = Response::Event {
+            event: DevEvent::LanModeChanged {
+                enabled: true,
+                lan_ip: Some("192.168.1.42".to_string()),
+                ca_url: Some("http://192.168.1.42/ca.pem".to_string()),
             },
         };
         let json = serde_json::to_string(&resp).unwrap();

@@ -16,6 +16,15 @@ const DEV_HTTPS_PORT: u16 = 47831;
 const DEV_HTTP_PORT: u16 = 47830;
 
 #[cfg(target_os = "linux")]
+const DEV_PROXY_SERVICE_NAME: &str = "tako-dev-proxy.service";
+#[cfg(target_os = "linux")]
+const DEV_PROXY_SERVICE_PATH: &str = "/etc/systemd/system/tako-dev-proxy.service";
+#[cfg(target_os = "linux")]
+const DEV_PROXY_SOCKET_NAME: &str = "tako-dev-proxy.socket";
+#[cfg(target_os = "linux")]
+const DEV_PROXY_SOCKET_PATH: &str = "/etc/systemd/system/tako-dev-proxy.socket";
+
+#[cfg(target_os = "linux")]
 pub(crate) const SYSTEMD_SERVICE_NAME: &str = "tako-dev-redirect.service";
 #[cfg(target_os = "linux")]
 const SYSTEMD_SERVICE_PATH: &str = "/etc/systemd/system/tako-dev-redirect.service";
@@ -166,6 +175,48 @@ pub(crate) fn resolved_drop_in_contents() -> String {
 [Resolve]
 DNS=127.77.0.1
 Domains=~tako.test ~test
+"
+    .to_string()
+}
+
+/// systemd service for the dev proxy (LAN mode).
+/// Runs as the installing user with CAP_NET_BIND_SERVICE so it can bind port 443.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn dev_proxy_service_contents(binary_path: &str, user: &str) -> String {
+    format!(
+        "\
+[Unit]
+Description=Tako dev proxy (LAN mode)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={binary_path}
+User={user}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+Restart=no
+
+[Install]
+WantedBy=multi-user.target
+"
+    )
+}
+
+/// systemd socket unit for the dev proxy control socket.
+/// Socket-activates the proxy when the dev-server connects.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn dev_proxy_socket_contents() -> String {
+    "\
+[Unit]
+Description=Tako dev proxy control socket
+
+[Socket]
+ListenStream=/tmp/tako-dev-proxy.sock
+SocketMode=0666
+
+[Install]
+WantedBy=sockets.target
 "
     .to_string()
 }
@@ -399,6 +450,45 @@ fn install_systemd_service() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[cfg(target_os = "linux")]
+fn install_dev_proxy_service() -> Result<(), Box<dyn std::error::Error>> {
+    let binary_path = locate_dev_proxy_binary()?;
+    let binary_str = binary_path.to_string_lossy().to_string();
+    let user = std::env::var("USER").unwrap_or_else(|_| "root".to_string());
+
+    write_system_file_with_sudo(
+        DEV_PROXY_SERVICE_PATH,
+        &dev_proxy_service_contents(&binary_str, &user),
+    )?;
+    write_system_file_with_sudo(DEV_PROXY_SOCKET_PATH, &dev_proxy_socket_contents())?;
+    sudo_run(&["systemctl", "daemon-reload"])?;
+    sudo_run(&["systemctl", "enable", "--now", DEV_PROXY_SOCKET_NAME])?;
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn locate_dev_proxy_binary() -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+    let current_exe = std::env::current_exe()?;
+    if let Some(parent) = current_exe.parent() {
+        let sibling = parent.join("tako-dev-proxy");
+        if sibling.exists() {
+            return Ok(sibling);
+        }
+    }
+    if let Some(root) = crate::paths::repo_root_from_exe(&current_exe) {
+        let candidates = [
+            root.join("target").join("release").join("tako-dev-proxy"),
+            root.join("target").join("debug").join("tako-dev-proxy"),
+        ];
+        for candidate in &candidates {
+            if candidate.exists() {
+                return Ok(candidate.clone());
+            }
+        }
+    }
+    Err("could not locate tako-dev-proxy binary".into())
+}
+
+#[cfg(target_os = "linux")]
 fn setup_dns_resolved() -> Result<(), Box<dyn std::error::Error>> {
     write_system_file_with_sudo(RESOLVED_DROP_IN_FILE, &resolved_drop_in_contents())?;
     // Restart resolved to pick up the new drop-in.
@@ -468,6 +558,11 @@ pub(crate) fn ensure_installed() -> Result<(), Box<dyn std::error::Error>> {
             // Persist via systemd if available
             if run_command("systemctl", &["--version"]).is_some() {
                 install_systemd_service()?;
+                if let Err(e) = install_dev_proxy_service() {
+                    crate::output::warning(&format!(
+                        "Dev proxy service not installed (LAN mode unavailable): {e}"
+                    ));
+                }
                 crate::output::success(
                     "Port redirect installed and persisted (tako-dev-redirect.service).",
                 );

@@ -100,6 +100,8 @@ impl SecretsStore {
 
     /// Save secrets to a specific file
     pub fn save_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        use std::io::Write;
+
         // Ensure parent directory exists
         if let Some(parent) = path.as_ref().parent() {
             fs::create_dir_all(parent)
@@ -107,7 +109,19 @@ impl SecretsStore {
         }
 
         let content = serde_json::to_string_pretty(&sorted_environments(&self.environments))?;
-        fs::write(path.as_ref(), content)
+
+        // Write with restrictive permissions to protect encrypted secrets
+        let mut opts = fs::OpenOptions::new();
+        opts.write(true).create(true).truncate(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            opts.mode(0o600);
+        }
+        let mut f = opts
+            .open(path.as_ref())
+            .map_err(|e| ConfigError::FileWrite(path.as_ref().to_path_buf(), e))?;
+        f.write_all(content.as_bytes())
             .map_err(|e| ConfigError::FileWrite(path.as_ref().to_path_buf(), e))?;
 
         Ok(())

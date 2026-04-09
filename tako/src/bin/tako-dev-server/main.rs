@@ -1,5 +1,6 @@
 mod bootstrap;
 mod control;
+mod lan;
 mod local_ca;
 mod local_dns;
 mod paths;
@@ -144,7 +145,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(sock = %sock.display(), "tako-dev-server listening");
 
     let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
-    start_http_redirect_server(HTTP_REDIRECT_LISTEN_ADDR, shutdown_rx.clone()).await?;
+    let ca_pem = paths::tako_data_dir()
+        .ok()
+        .and_then(|dir| std::fs::read(dir.join("ca").join("ca.crt")).ok());
+    start_http_redirect_server(HTTP_REDIRECT_LISTEN_ADDR, shutdown_rx.clone(), ca_pem).await?;
     tracing::info!(listen = %HTTP_REDIRECT_LISTEN_ADDR, "http redirect server listening");
     let events_for_relay = events.clone();
     let mut st = State::new(

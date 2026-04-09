@@ -59,7 +59,7 @@ pub(crate) fn doctor_local_forwarding_preflight_lines(
     vec![
         "preflight:".to_string(),
         format!(
-            "- loopback proxy ({})",
+            "- dev proxy ({})",
             if proxy_loaded { "loaded" } else { "not loaded" }
         ),
         format!(

@@ -126,8 +126,18 @@ pub enum DevEvent {
     AppProcessExited(String),
     AppPid(u32),
     AppError(String),
-    ClientConnected { is_self: bool, client_id: u32 },
-    ClientDisconnected { client_id: u32 },
+    ClientConnected {
+        is_self: bool,
+        client_id: u32,
+    },
+    ClientDisconnected {
+        client_id: u32,
+    },
+    LanModeChanged {
+        enabled: bool,
+        lan_ip: Option<String>,
+        ca_url: Option<String>,
+    },
     ExitWithMessage(String),
 }
 

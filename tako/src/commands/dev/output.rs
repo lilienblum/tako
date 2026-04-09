@@ -16,7 +16,7 @@ use sysinfo::{Pid, ProcessesToUpdate, System};
 use tokio::sync::mpsc;
 
 use super::output_render::{
-    DIM, RESET, format_header, format_keymap, format_log, format_panel, git_info,
+    DIM, RESET, format_header, format_keymap, format_log, format_panel, format_qr_code, git_info,
 };
 use super::{DevEvent, LogLevel, ScopedLog};
 
@@ -26,6 +26,7 @@ const METRICS_REFRESH_SECS: u64 = 2;
 pub enum ControlCmd {
     Restart,
     Terminate,
+    ToggleLan,
 }
 
 /// Exit value returned by [`run_dev_output`].
@@ -511,6 +512,36 @@ pub async fn run_dev_output(
                             format!("Client {} disconnected", client_id),
                         )));
                     }
+                    DevEvent::LanModeChanged { enabled, lan_ip, ca_url } => {
+                        if enabled {
+                            if let Some(ref ip) = lan_ip {
+                                footer.println(&format_log(&ScopedLog::info(
+                                    "tako",
+                                    format!("LAN mode enabled — {ip}"),
+                                )));
+                            }
+                            if let Some(ref url) = ca_url {
+                                footer.println("");
+                                for line in format_qr_code(url) {
+                                    footer.println(&format!("  {line}"));
+                                }
+                                footer.println("");
+                                footer.println(&format_log(&ScopedLog::info(
+                                    "tako",
+                                    "Scan to install CA cert on your device",
+                                )));
+                                footer.println(&format_log(&ScopedLog::info(
+                                    "tako",
+                                    url.clone(),
+                                )));
+                            }
+                        } else {
+                            footer.println(&format_log(&ScopedLog::info(
+                                "tako",
+                                "LAN mode disabled",
+                            )));
+                        }
+                    }
                     DevEvent::ExitWithMessage(msg) => {
                         break LoopExit::Message(msg);
                     }
@@ -534,6 +565,9 @@ pub async fn run_dev_output(
                         }
                         KeyCode::Char('b') | KeyCode::Char('B') => {
                             break LoopExit::Disconnect;
+                        }
+                        KeyCode::Char('l') | KeyCode::Char('L') => {
+                            let _ = control_tx.send(ControlCmd::ToggleLan).await;
                         }
                         _ => {}
                     },

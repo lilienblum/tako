@@ -182,6 +182,7 @@ async fn wait_for_ready(instance: Arc<Instance>) -> Result<(), InstanceError> {
         .take_stdout()
         .ok_or_else(|| InstanceError::HealthCheckFailed("no stdout pipe available".to_string()))?;
     let mut lines = tokio::io::BufReader::new(stdout).lines();
+    const MAX_STARTUP_OUTPUT_LINES: usize = 500;
     let mut startup_output = Vec::new();
 
     loop {
@@ -201,7 +202,9 @@ async fn wait_for_ready(instance: Arc<Instance>) -> Result<(), InstanceError> {
                             instance.drain_remaining_stdout(lines);
                             return Ok(());
                         }
-                        startup_output.push(line);
+                        if startup_output.len() < MAX_STARTUP_OUTPUT_LINES {
+                            startup_output.push(line);
+                        }
                     }
                     Ok(None) => {
                         // stdout closed — process exited

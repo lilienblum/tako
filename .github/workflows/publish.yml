@@ -31,13 +31,13 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
 
       - name: Build
-        run: cargo build -p tako --bin tako --bin tako-dev-server --release
+        run: cargo build -p tako --bin tako --bin tako-dev-server --bin tako-dev-proxy --release
 
       - name: Package
         run: |
           tmpdir="$(mktemp -d)"
-          cp target/release/tako target/release/tako-dev-server "$tmpdir/"
-          tar -czf tako-linux-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server
+          cp target/release/tako target/release/tako-dev-server target/release/tako-dev-proxy "$tmpdir/"
+          tar -czf tako-linux-x86_64.tar.gz -C "$tmpdir" tako tako-dev-server tako-dev-proxy
           sha256sum tako-linux-x86_64.tar.gz > tako-linux-x86_64.tar.gz.sha256
 
       - name: Upload
@@ -66,13 +66,13 @@ jobs:
           ref: ${{ github.event.release.tag_name }}
 
       - name: Build
-        run: cargo build -p tako --bin tako --bin tako-dev-server --release
+        run: cargo build -p tako --bin tako --bin tako-dev-server --bin tako-dev-proxy --release
 
       - name: Package
         run: |
           tmpdir="$(mktemp -d)"
-          cp target/release/tako target/release/tako-dev-server "$tmpdir/"
-          tar -czf tako-linux-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server
+          cp target/release/tako target/release/tako-dev-server target/release/tako-dev-proxy "$tmpdir/"
+          tar -czf tako-linux-aarch64.tar.gz -C "$tmpdir" tako tako-dev-server tako-dev-proxy
           sha256sum tako-linux-aarch64.tar.gz > tako-linux-aarch64.tar.gz.sha256
 
       - name: Upload
@@ -103,15 +103,15 @@ jobs:
 
       - name: Build
         run: |
-          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target aarch64-apple-darwin
-          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-loopback-proxy --release --target x86_64-apple-darwin
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-dev-proxy --release --target aarch64-apple-darwin
+          cargo build -p tako --bin tako --bin tako-dev-server --bin tako-dev-proxy --release --target x86_64-apple-darwin
 
       - name: Package
         run: |
           for arch in aarch64 x86_64; do
             tmpdir="$(mktemp -d)"
-            cp target/${arch}-apple-darwin/release/tako target/${arch}-apple-darwin/release/tako-dev-server target/${arch}-apple-darwin/release/tako-loopback-proxy "$tmpdir/"
-            tar -czf "tako-darwin-${arch}.tar.gz" -C "$tmpdir" tako tako-dev-server tako-loopback-proxy
+            cp target/${arch}-apple-darwin/release/tako target/${arch}-apple-darwin/release/tako-dev-server target/${arch}-apple-darwin/release/tako-dev-proxy "$tmpdir/"
+            tar -czf "tako-darwin-${arch}.tar.gz" -C "$tmpdir" tako tako-dev-server tako-dev-proxy
             shasum -a 256 "tako-darwin-${arch}.tar.gz" > "tako-darwin-${arch}.tar.gz.sha256"
             rm -rf "$tmpdir"
           done

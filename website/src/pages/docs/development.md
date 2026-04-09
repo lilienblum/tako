@@ -51,7 +51,7 @@ The daemon:
 - Answers DNS queries for `*.test` and `*.tako.test` hostnames.
 - Manages app processes (spawn, stop, wake-on-request).
 
-Installed CLI distributions include `tako` and `tako-dev-server` (on macOS, also `tako-loopback-proxy`). When running from a source checkout, `tako dev` prefers repo-local debug/release builds of these helpers.
+Installed CLI distributions include `tako` and `tako-dev-server` (on macOS, also `tako-dev-proxy`). When running from a source checkout, `tako dev` prefers repo-local debug/release builds of these helpers.
 
 If the daemon binary is missing, `tako dev` reports a build hint (source checkout) or reinstall hint (installed CLI).
 
@@ -154,13 +154,13 @@ On Linux, `tako dev` configures `systemd-resolved` to forward both `test` and `t
 
 The dev daemon runs a DNS listener on `127.0.0.1:53535` and answers `A` queries for active `*.test` and `*.tako.test` hosts:
 
-- On macOS, app hosts resolve to `127.77.0.1` (the dedicated loopback address used by the loopback proxy).
+- On macOS, app hosts resolve to `127.77.0.1` (the dedicated loopback address used by the dev proxy).
 - On Linux, app hosts resolve to `127.77.0.1` (the dedicated loopback address used by iptables redirect).
 - On other platforms, app hosts resolve to `127.0.0.1`.
 
-## macOS loopback proxy
+## macOS dev proxy
 
-On macOS, Tako installs a `launchd`-managed loopback proxy so your dev URLs use standard ports (no `:47831` in the URL). This is a one-time setup that requires sudo.
+On macOS, Tako installs a `launchd`-managed dev proxy so your dev URLs use standard ports (no `:47831` in the URL). This is a one-time setup that requires sudo.
 
 The proxy listens only on `127.77.0.1` and forwards:
 
@@ -169,11 +169,11 @@ The proxy listens only on `127.77.0.1` and forwards:
 
 Tako also installs a boot-time `launchd` helper that ensures the `127.77.0.1` loopback alias exists before the proxy is registered. The entire `127.0.0.0/8` block routes to `lo0` on macOS, so no additional network interface configuration is needed.
 
-The loopback proxy is socket-activated: it may exit after a long idle window, and `launchd` reactivates it on the next incoming request.
+The dev proxy is socket-activated: it may exit after a long idle window, and `launchd` reactivates it on the next incoming request.
 
-If the loopback proxy later appears inactive, `tako dev` explains that it is reloading or reinstalling the launchd helper before prompting for sudo.
+If the dev proxy later appears inactive, `tako dev` explains that it is reloading or reinstalling the launchd helper before prompting for sudo.
 
-After applying or repairing the loopback proxy, Tako retries loopback 80/443 reachability and fails startup if those endpoints remain unreachable.
+After applying or repairing the dev proxy, Tako retries loopback 80/443 reachability and fails startup if those endpoints remain unreachable.
 
 After setup, your dev URLs look like:
 
@@ -183,7 +183,7 @@ https://my-app.test/
 
 ## Linux port redirect
 
-On Linux, Tako uses kernel-level iptables redirect rules instead of a loopback proxy. No extra binary is needed -- the dev server binds its unprivileged ports and the kernel transparently redirects traffic from standard ports on `127.77.0.1`.
+On Linux, Tako uses kernel-level iptables redirect rules instead of a dev proxy. No extra binary is needed -- the dev server binds its unprivileged ports and the kernel transparently redirects traffic from standard ports on `127.77.0.1`.
 
 On first run, `tako dev` performs a one-time setup (requires sudo) that configures:
 
@@ -196,7 +196,7 @@ On first run, `tako dev` performs a one-time setup (requires sudo) that configur
 
 On NixOS, imperative network changes are wiped by `nixos-rebuild`. Instead of running the setup itself, Tako prints a `configuration.nix` snippet that you can add to your system configuration. After adding the snippet, run `nixos-rebuild switch` and restart `tako dev`.
 
-On platforms without the loopback proxy or port redirect, the URL includes the port:
+On platforms without the dev proxy or port redirect, the URL includes the port:
 
 ```
 https://my-app.test:47831/
@@ -361,7 +361,7 @@ The report covers:
 - Dev daemon status (listen info, socket connectivity).
 - Local DNS status (resolver file, name resolution).
 - On macOS:
-  - Loopback proxy install status
+  - Dev proxy install status
   - Boot-helper load status
   - Dedicated loopback alias (`127.77.0.1`) status
   - `launchd` load status
@@ -379,7 +379,7 @@ If name resolution fails:
 - On macOS, verify `/etc/resolver/test` and `/etc/resolver/tako.test` exist and point to `127.0.0.1:53535`.
 - On Linux, verify `systemd-resolved` is running and the `test` and `tako.test` DNS forward zones are configured.
 - Ensure `tako dev` is running and your app is listed in `tako dev ls`.
-- On macOS, verify `tako doctor` shows the loopback proxy helper loaded, the `127.77.0.1` alias present, and TCP `127.77.0.1:443` reachable.
+- On macOS, verify `tako doctor` shows the dev proxy helper loaded, the `127.77.0.1` alias present, and TCP `127.77.0.1:443` reachable.
 - On Linux, verify `tako doctor` shows the port redirect rules active and TCP `127.77.0.1:443` reachable.
 - Confirm no other process is using UDP `127.0.0.1:53535`.
 
@@ -403,7 +403,7 @@ Log records use a single `timestamp` field (`hh:mm:ss`). When a new owning sessi
 
 ## Quick start checklist
 
-1. Run `tako doctor` to confirm local prerequisites (DNS, loopback proxy, CA).
+1. Run `tako doctor` to confirm local prerequisites (DNS, dev proxy, CA).
 2. Run `tako dev` from your project directory, or use `tako -c <FILE> dev` for a non-default config file.
 3. Open `https://{app}.test/` in your browser.
 4. Edit code while `tako dev` stays running -- your runtime handles reload.

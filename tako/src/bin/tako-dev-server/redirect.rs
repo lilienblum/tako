@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -44,11 +45,30 @@ pub(crate) fn parse_http_redirect_target(request: &str) -> (String, String) {
 
 async fn handle_http_redirect_connection(
     mut stream: TcpStream,
+    ca_pem: &Option<Arc<Vec<u8>>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut buf = vec![0u8; 4096];
     let n = tokio::time::timeout(Duration::from_secs(2), stream.read(&mut buf)).await??;
     let req = String::from_utf8_lossy(&buf[..n]).to_string();
     let (host, path) = parse_http_redirect_target(&req);
+
+    if path == "/ca.pem" {
+        if let Some(pem) = ca_pem {
+            let len = pem.len();
+            let header = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/x-pem-file\r\nContent-Disposition: attachment; filename=\"tako-ca.pem\"\r\nContent-Length: {len}\r\nConnection: close\r\n\r\n"
+            );
+            stream.write_all(header.as_bytes()).await?;
+            stream.write_all(pem).await?;
+        } else {
+            let response =
+                "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            stream.write_all(response.as_bytes()).await?;
+        }
+        let _ = stream.shutdown().await;
+        return Ok(());
+    }
+
     let location = redirect_location(&host, &path);
     let response = format!(
         "HTTP/1.1 308 Permanent Redirect\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
@@ -61,8 +81,10 @@ async fn handle_http_redirect_connection(
 pub(crate) async fn start_http_redirect_server(
     listen_addr: &str,
     mut shutdown_rx: watch::Receiver<bool>,
+    ca_pem: Option<Vec<u8>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let listener = TcpListener::bind(listen_addr).await?;
+    let ca_pem = ca_pem.map(Arc::new);
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -74,8 +96,9 @@ pub(crate) async fn start_http_redirect_server(
                 accepted = listener.accept() => {
                     match accepted {
                         Ok((stream, _)) => {
+                            let ca_pem = ca_pem.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = handle_http_redirect_connection(stream).await {
+                                if let Err(e) = handle_http_redirect_connection(stream, &ca_pem).await {
                                     tracing::warn!(error = %e, "http redirect handler failed");
                                 }
                             });

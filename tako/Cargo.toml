@@ -14,8 +14,8 @@ name = "tako-dev-server"
 path = "src/bin/tako-dev-server/main.rs"
 
 [[bin]]
-name = "tako-loopback-proxy"
-path = "src/bin/tako-loopback-proxy/main.rs"
+name = "tako-dev-proxy"
+path = "src/bin/tako-dev-proxy/main.rs"
 
 [dependencies]
 tako-core = { path = "../tako-core" }
@@ -86,6 +86,9 @@ libc = "0.2"
 
 # SQLite state store for dev-server
 rusqlite = { version = "0.39", features = ["bundled"] }
+
+# QR code generation for LAN mode CA cert URL
+qrcode = { version = "0.14", default-features = false }
 
 
 [dev-dependencies]
