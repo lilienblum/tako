@@ -9,6 +9,7 @@ use tokio::net::UnixStream;
 // report daemon exit/log details instead of a generic connect timeout.
 const DEV_SERVER_STARTUP_WAIT_ATTEMPTS: usize = 300;
 const DEV_SERVER_STARTUP_WAIT_INTERVAL_MS: u64 = 50;
+const DEV_SERVER_CONNECTION_CLOSED_MESSAGE: &str = "dev-server closed connection";
 
 fn socket_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(crate::paths::tako_data_dir()?.join("dev-server.sock"))
@@ -76,7 +77,13 @@ impl LineClient {
 
     async fn read_line(&mut self) -> Result<String, Box<dyn std::error::Error>> {
         let mut line = String::new();
-        self.reader.read_line(&mut line).await?;
+        if self.reader.read_line(&mut line).await? == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                DEV_SERVER_CONNECTION_CLOSED_MESSAGE,
+            )
+            .into());
+        }
         Ok(line)
     }
 }
@@ -820,5 +827,20 @@ mod tests {
             .unwrap();
         let msg = format_dev_server_connect_error(&tmp, Some(status));
         assert!(msg.contains("daemon exited"));
+    }
+
+    #[tokio::test]
+    async fn line_client_read_line_errors_when_peer_closes_without_response() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        drop(server_stream);
+
+        let mut client = LineClient::new(client_stream);
+        let err = client.read_line().await.unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains(DEV_SERVER_CONNECTION_CLOSED_MESSAGE),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -841,9 +841,14 @@ pub async fn run(
     Ok(())
 }
 
-async fn wait_for_dev_server_stopped(listen_addr: &str) {
+pub(super) async fn wait_for_dev_server_stopped(listen_addr: &str) {
+    let socket_path = crate::paths::tako_data_dir()
+        .ok()
+        .map(|dir| dir.join("dev-server.sock"));
     for _ in 0..40 {
-        if crate::dev_server_client::info().await.is_err() {
+        let info_available = crate::dev_server_client::info().await.is_ok();
+        let socket_still_exists = socket_path.as_ref().is_some_and(|path| path.exists());
+        if !info_available && !socket_still_exists {
             break;
         }
         tokio::time::sleep(Duration::from_millis(50)).await;

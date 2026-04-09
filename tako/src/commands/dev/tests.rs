@@ -243,6 +243,37 @@ async fn tcp_probe_returns_false_for_closed_port() {
     assert!(!tcp_probe(("127.0.0.1", 0), 10).await);
 }
 
+#[tokio::test]
+async fn wait_for_dev_server_stopped_waits_for_socket_path_to_disappear() {
+    let _lock = crate::paths::test_tako_home_env_lock();
+    let previous = std::env::var_os("TAKO_HOME");
+    let temp = TempDir::new().unwrap();
+    let socket_path = temp.path().join("dev-server.sock");
+    std::fs::write(&socket_path, "stale socket path").unwrap();
+    unsafe {
+        std::env::set_var("TAKO_HOME", temp.path());
+    }
+
+    let remove_path = socket_path.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        let _ = tokio::fs::remove_file(remove_path).await;
+    });
+
+    let start = std::time::Instant::now();
+    runner::wait_for_dev_server_stopped("127.0.0.1:59091").await;
+
+    match previous {
+        Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+        None => unsafe { std::env::remove_var("TAKO_HOME") },
+    }
+
+    assert!(
+        start.elapsed() >= Duration::from_millis(150),
+        "returned before socket path cleanup completed"
+    );
+}
+
 #[test]
 fn log_level_display_uses_five_levels() {
     assert_eq!(LogLevel::Debug.to_string(), "DEBUG");
