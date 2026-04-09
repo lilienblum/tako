@@ -30,6 +30,8 @@ Tako's protocol is v0: do not keep any legacy code, backward compatibility shims
 
 9. **Never commit with known failures** - Do not commit when tests or pre-commit hooks are known to be failing. Fix the issues first. If fixing is impractical, get explicit user confirmation before committing.
 
+10. **Keep files small and focused** - No single source file should grow beyond ~800 lines. When adding code to a file that's already large, split it first. But don't split by line count alone — split by responsibility. Ask "is this the right boundary?" not just "is this file too big?" Each module should have one clear responsibility. Prefer sibling submodules (e.g. `commands/init/scaffold.rs`) over letting a file accumulate unrelated concerns. Tests belong in their own `tests.rs` submodule, not inline in large files.
+
 ## Project Structure
 
 **Rust Crates:**

@@ -1,0 +1,326 @@
+use std::path::{Path, PathBuf};
+
+use crate::build::{BuildAdapter, PresetGroup};
+use crate::config::BuildStage;
+use crate::output;
+
+use super::super::cache::sanitize_cache_label;
+use super::super::format::format_stage_label;
+
+pub(super) const LOCAL_BUILD_CACHE_RELATIVE_DIR: &str = ".tako/tmp/build-caches";
+
+#[derive(Clone, Copy)]
+enum LocalBuildCacheScope {
+    Workspace,
+    App,
+}
+
+#[derive(Clone, Copy)]
+struct LocalBuildCacheSpec {
+    relative_path: &'static str,
+    scope: LocalBuildCacheScope,
+}
+
+const JS_LOCAL_BUILD_CACHE_SPECS: &[LocalBuildCacheSpec] = &[
+    LocalBuildCacheSpec {
+        relative_path: ".turbo",
+        scope: LocalBuildCacheScope::Workspace,
+    },
+    LocalBuildCacheSpec {
+        relative_path: ".next/cache",
+        scope: LocalBuildCacheScope::App,
+    },
+];
+
+fn local_build_cache_specs(runtime_adapter: BuildAdapter) -> &'static [LocalBuildCacheSpec] {
+    if runtime_adapter.preset_group() == PresetGroup::Js {
+        JS_LOCAL_BUILD_CACHE_SPECS
+    } else {
+        &[]
+    }
+}
+
+pub(super) fn local_build_cache_root(project_dir: &Path, cache_target_label: &str) -> PathBuf {
+    project_dir
+        .join(LOCAL_BUILD_CACHE_RELATIVE_DIR)
+        .join(sanitize_cache_label(cache_target_label))
+}
+
+pub(super) fn restore_local_build_caches(
+    cache_root: &Path,
+    workspace_root: &Path,
+    app_dir: &Path,
+    runtime_adapter: BuildAdapter,
+) -> Result<usize, String> {
+    let mut restored = 0usize;
+    for spec in local_build_cache_specs(runtime_adapter) {
+        let source = cache_root.join(spec.relative_path);
+        if !source.is_dir() {
+            continue;
+        }
+        let destination = local_build_cache_destination(spec, workspace_root, app_dir);
+        replace_directory_from_cache(&source, &destination)?;
+        restored += 1;
+    }
+    Ok(restored)
+}
+
+pub(super) fn persist_local_build_caches(
+    cache_root: &Path,
+    workspace_root: &Path,
+    app_dir: &Path,
+    runtime_adapter: BuildAdapter,
+) -> Result<usize, String> {
+    let mut persisted = 0usize;
+    for spec in local_build_cache_specs(runtime_adapter) {
+        let source = local_build_cache_destination(spec, workspace_root, app_dir);
+        let destination = cache_root.join(spec.relative_path);
+        if !source.is_dir() {
+            remove_path_if_exists(&destination)?;
+            continue;
+        }
+        replace_directory_from_cache(&source, &destination)?;
+        persisted += 1;
+    }
+    Ok(persisted)
+}
+
+fn local_build_cache_destination(
+    spec: &LocalBuildCacheSpec,
+    workspace_root: &Path,
+    app_dir: &Path,
+) -> PathBuf {
+    match spec.scope {
+        LocalBuildCacheScope::Workspace => workspace_root.join(spec.relative_path),
+        LocalBuildCacheScope::App => app_dir.join(spec.relative_path),
+    }
+}
+
+fn replace_directory_from_cache(source: &Path, destination: &Path) -> Result<(), String> {
+    remove_path_if_exists(destination)?;
+    std::fs::create_dir_all(destination)
+        .map_err(|e| format!("Failed to create {}: {e}", destination.display()))?;
+    copy_dir_contents(source, destination)
+}
+
+fn remove_path_if_exists(path: &Path) -> Result<(), String> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("Failed to stat {}: {error}", path.display())),
+    };
+
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        std::fs::remove_file(path)
+            .map_err(|e| format!("Failed to remove {}: {e}", path.display()))?;
+        return Ok(());
+    }
+
+    std::fs::remove_dir_all(path).map_err(|e| format!("Failed to remove {}: {e}", path.display()))
+}
+
+pub(super) fn run_local_build(
+    workspace: &Path,
+    app_dir: &Path,
+    original_source_root: &Path,
+    original_app_dir: &Path,
+    build_config: &crate::config::BuildConfig,
+    custom_stages: &[BuildStage],
+    extra_envs: &[(&str, &str)],
+) -> Result<(), String> {
+    if !workspace.is_dir() {
+        return Err(format!(
+            "App directory '{}' does not exist inside build workspace",
+            workspace.display()
+        ));
+    }
+
+    let build_run_dir = match build_config.cwd.as_deref() {
+        Some(cwd) if !cwd.is_empty() && cwd != "." => {
+            let dir = workspace.join(cwd);
+            if !dir.is_dir() {
+                return Err(format!(
+                    "build.cwd directory '{}' does not exist inside build workspace",
+                    cwd
+                ));
+            }
+            dir
+        }
+        Some(_) => workspace.to_path_buf(),
+        None => app_dir.to_path_buf(),
+    };
+
+    let has_build_run = build_config
+        .run
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|s| !s.is_empty());
+
+    if !has_build_run && custom_stages.is_empty() {
+        return Ok(());
+    }
+
+    let app_dir_value = workspace.to_string_lossy().to_string();
+
+    let run_shell =
+        |cwd: &Path, command: &str, phase: &str, stage_label: &str| -> Result<(), String> {
+            let mut cmd = std::process::Command::new("sh");
+            cmd.args(["-lc", command])
+                .current_dir(cwd)
+                .env("TAKO_APP_DIR", &app_dir_value);
+            for (key, value) in extra_envs {
+                cmd.env(key, value);
+            }
+            let output = cmd
+                .stdin(std::process::Stdio::null())
+                .output()
+                .map_err(|e| format!("Failed to run local {stage_label} {phase} command: {e}"))?;
+            if output.status.success() {
+                return Ok(());
+            }
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let detail = if stderr.is_empty() { stdout } else { stderr };
+            Err(format!("{stage_label} {phase} command failed: {detail}"))
+        };
+
+    if has_build_run {
+        if let Some(install) = build_config
+            .install
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            tracing::debug!("Running build install: {install}…");
+            let _t = output::timed("build install");
+            run_shell(&build_run_dir, install, "install", "build")?;
+        }
+        let run_command = build_config.run.as_deref().unwrap().trim();
+        tracing::debug!("Running build: {run_command}…");
+        let _t = output::timed("build");
+        run_shell(&build_run_dir, run_command, "run", "build")?;
+    }
+
+    let mut stage_number = 1usize;
+    for stage in custom_stages {
+        let stage_label = format_stage_label(stage_number, stage.name.as_deref());
+        let stage_cwd = resolve_stage_working_dir_for_local_build(
+            original_source_root,
+            original_app_dir,
+            workspace,
+            stage.cwd.as_deref(),
+            &stage_label,
+        )?;
+        if let Some(install) = stage
+            .install
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            tracing::debug!("Running {stage_label} install: {install}…");
+            let _t = output::timed(&format!("{stage_label} install"));
+            run_shell(&stage_cwd, install, "install", &stage_label)?;
+        }
+        let run_command = stage.run.trim();
+        if run_command.is_empty() {
+            return Err(format!("{stage_label} run command is empty"));
+        }
+        tracing::debug!("Running {stage_label}: {run_command}…");
+        let _t = output::timed(&stage_label);
+        run_shell(&stage_cwd, run_command, "run", &stage_label)?;
+        drop(_t);
+        stage_number += 1;
+    }
+
+    Ok(())
+}
+
+pub(super) fn summarize_build_stages(custom_stages: &[BuildStage]) -> Vec<String> {
+    let mut labels = Vec::new();
+    let mut stage_number = 1;
+    for stage in custom_stages {
+        labels.push(format_stage_label(stage_number, stage.name.as_deref()));
+        stage_number += 1;
+    }
+    labels
+}
+
+fn resolve_stage_working_dir_for_local_build(
+    original_source_root: &Path,
+    original_app_dir: &Path,
+    workspace: &Path,
+    working_dir: Option<&str>,
+    stage_label: &str,
+) -> Result<PathBuf, String> {
+    let Some(working_dir) = working_dir.map(str::trim).filter(|value| !value.is_empty()) else {
+        let relative_app = original_app_dir
+            .strip_prefix(original_source_root)
+            .unwrap_or(Path::new(""));
+        return Ok(workspace.join(relative_app));
+    };
+
+    let relative_app = original_app_dir
+        .strip_prefix(original_source_root)
+        .unwrap_or(Path::new(""));
+    let full_relative = relative_app.join(working_dir);
+    let mut depth: i32 = 0;
+    for component in full_relative.components() {
+        match component {
+            std::path::Component::ParentDir => depth -= 1,
+            std::path::Component::Normal(_) => depth += 1,
+            _ => {}
+        }
+        if depth < 0 {
+            return Err(format!(
+                "{stage_label} working directory '{working_dir}' must not escape the project root",
+            ));
+        }
+    }
+
+    let resolved = original_app_dir.join(working_dir);
+    if !resolved.is_dir() {
+        return Err(format!(
+            "{stage_label} working directory '{working_dir}' not found",
+        ));
+    }
+
+    let canonical = resolved
+        .canonicalize()
+        .map_err(|_| format!("{stage_label} working directory '{working_dir}' not found"))?;
+    let canonical_root = original_source_root.canonicalize().map_err(|e| {
+        format!(
+            "Failed to resolve source root '{}': {e}",
+            original_source_root.display()
+        )
+    })?;
+    let relative = canonical.strip_prefix(&canonical_root).unwrap();
+    Ok(workspace.join(relative))
+}
+
+pub(super) fn copy_dir_contents(src: &Path, dst: &Path) -> Result<(), String> {
+    for entry in
+        std::fs::read_dir(src).map_err(|e| format!("Failed to read {}: {e}", src.display()))?
+    {
+        let entry =
+            entry.map_err(|e| format!("Failed to read dir entry in {}: {e}", src.display()))?;
+        let path = entry.path();
+        let target = dst.join(entry.file_name());
+        let file_type = entry
+            .file_type()
+            .map_err(|e| format!("Failed to inspect {}: {e}", path.display()))?;
+        if file_type.is_dir() {
+            std::fs::create_dir_all(&target)
+                .map_err(|e| format!("Failed to create {}: {e}", target.display()))?;
+            copy_dir_contents(&path, &target)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&path, &target).map_err(|e| {
+                format!(
+                    "Failed to copy {} to {}: {e}",
+                    path.display(),
+                    target.display()
+                )
+            })?;
+        }
+    }
+    Ok(())
+}

@@ -1,0 +1,426 @@
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use crate::control::{State, split_route_pattern};
+use crate::protocol::{DevEvent, Response};
+use crate::state;
+use tokio::io::AsyncBufReadExt;
+
+pub(crate) async fn monitor_handoff_pid(
+    state: Arc<Mutex<State>>,
+    config_path: String,
+    project_dir: String,
+    pid: u32,
+) {
+    let sysinfo_pid = sysinfo::Pid::from_u32(pid);
+    let mut sys = sysinfo::System::new();
+    loop {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]), false);
+        if sys.process(sysinfo_pid).is_none() {
+            let mut s = state.lock().unwrap();
+            let still_current = s
+                .apps
+                .get(&config_path)
+                .and_then(|a| a.pid)
+                .map(|p| p == pid)
+                .unwrap_or(false);
+            if still_current {
+                if let Some(app) = s.apps.get_mut(&config_path) {
+                    app.is_idle = true;
+                    app.pid = None;
+                }
+                let route_id = format!("reg:{}", config_path);
+                s.routes.set_active(&route_id, false);
+                state::remove_pid_file(&project_dir, &config_path);
+            }
+            tracing::info!(config_path = %config_path, project_dir = %project_dir, pid = pid, still_current = still_current, "handoff'd process exited");
+            break;
+        }
+    }
+}
+
+pub(crate) fn broadcast_app_status(state: &Arc<Mutex<State>>, config_path: &str, status: &str) {
+    let s = state.lock().unwrap();
+    let app_name = s
+        .apps
+        .get(config_path)
+        .map(|a| a.name.clone())
+        .unwrap_or_default();
+    s.events.broadcast(Response::Event {
+        event: DevEvent::AppStatusChanged {
+            config_path: config_path.to_string(),
+            app_name,
+            status: status.to_string(),
+        },
+    });
+}
+
+pub(crate) fn kill_app_process(pid: u32) {
+    if pid == 0 {
+        return;
+    }
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+        libc::kill(pid as i32, libc::SIGKILL);
+    }
+}
+
+pub(crate) fn push_app_event(
+    buf: &state::LogBuffer,
+    event_name: &str,
+    extra: Option<(&str, serde_json::Value)>,
+) {
+    let mut payload = serde_json::json!({
+        "type": "app_event",
+        "event": event_name,
+    });
+    if let Some((key, value)) = extra {
+        payload[key] = value;
+    }
+    buf.push(payload.to_string());
+}
+
+pub(crate) fn push_divider(buf: &state::LogBuffer, label: &str) {
+    let payload = serde_json::json!({
+        "timestamp": "",
+        "level": "Info",
+        "scope": "__divider__",
+        "message": label,
+    });
+    buf.push(payload.to_string());
+}
+
+pub(crate) fn push_scoped_log(buf: &state::LogBuffer, level: &str, scope: &str, message: &str) {
+    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+    let timestamp = format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second());
+    let payload = serde_json::json!({
+        "timestamp": timestamp,
+        "level": level,
+        "scope": scope,
+        "message": message,
+    });
+    buf.push(payload.to_string());
+}
+
+pub(crate) async fn spawn_and_monitor_app(
+    state: Arc<Mutex<State>>,
+    config_path: &str,
+) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
+    let (project_dir, app_clone, log_buffer) = {
+        let s = state.lock().unwrap();
+        let app = s.apps.get(config_path).ok_or("app not found")?;
+        (app.project_dir.clone(), app.clone(), app.log_buffer.clone())
+    };
+
+    push_app_event(&log_buffer, "launching", None);
+
+    let mut child = spawn_app(&project_dir, &app_clone).await?;
+    let pid = child.id().ok_or("failed to get child PID")?;
+
+    {
+        let mut s = state.lock().unwrap();
+        if let Some(app) = s.apps.get_mut(config_path) {
+            app.pid = Some(pid);
+            app.is_idle = false;
+        }
+        let route_id = format!("reg:{}", config_path);
+        s.routes.set_active(&route_id, true);
+    }
+
+    state::write_pid_file(&project_dir, config_path, pid);
+    push_app_event(&log_buffer, "pid", Some(("pid", serde_json::json!(pid))));
+
+    let state_for_monitor = state.clone();
+    let config_for_monitor = config_path.to_string();
+    let dir_for_monitor = project_dir.clone();
+    let buf_for_monitor = log_buffer.clone();
+    tokio::spawn(async move {
+        let exit_status = child.wait().await;
+        let code_str = exit_status
+            .as_ref()
+            .ok()
+            .and_then(|s| s.code())
+            .map(|c| format!("exit code {c}"))
+            .unwrap_or_else(|| {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::process::ExitStatusExt;
+                    if let Some(sig) = exit_status.as_ref().ok().and_then(|s| s.signal()) {
+                        return format!("killed by signal {sig}");
+                    }
+                }
+                "signal".to_string()
+            });
+
+        let still_current = {
+            let mut s = state_for_monitor.lock().unwrap();
+            let current = s
+                .apps
+                .get(&config_for_monitor)
+                .and_then(|a| a.pid)
+                .map(|p| p == pid)
+                .unwrap_or(false);
+
+            if current {
+                if let Some(app) = s.apps.get_mut(&config_for_monitor) {
+                    app.is_idle = true;
+                    app.pid = None;
+                }
+                let route_id = format!("reg:{}", config_for_monitor);
+                s.routes.set_active(&route_id, false);
+                state::remove_pid_file(&dir_for_monitor, &config_for_monitor);
+                let app_name = s
+                    .apps
+                    .get(&config_for_monitor)
+                    .map(|a| a.name.clone())
+                    .unwrap_or_default();
+                s.events.broadcast(Response::Event {
+                    event: DevEvent::AppStatusChanged {
+                        config_path: config_for_monitor.clone(),
+                        app_name,
+                        status: "idle".to_string(),
+                    },
+                });
+            }
+            current
+        };
+
+        if still_current {
+            let msg = format!("app exited ({code_str})");
+            push_scoped_log(&buf_for_monitor, "Fatal", "tako", &msg);
+            push_app_event(
+                &buf_for_monitor,
+                "exited",
+                Some(("message", serde_json::json!(msg))),
+            );
+
+            tracing::info!(config_path = %config_for_monitor, pid = pid, "app process exited, marking idle");
+        }
+    });
+
+    push_app_event(&log_buffer, "started", None);
+
+    Ok(pid)
+}
+
+async fn spawn_app(
+    project_dir: &str,
+    app: &state::RuntimeApp,
+) -> Result<tokio::process::Child, Box<dyn std::error::Error + Send + Sync>> {
+    if app.command.is_empty() {
+        return Err("app has empty command".into());
+    }
+
+    let mut cmd = tokio::process::Command::new(&app.command[0]);
+    if app.command.len() > 1 {
+        cmd.args(&app.command[1..]);
+    }
+    cmd.current_dir(project_dir)
+        .env("PORT", app.upstream_port.to_string())
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    #[cfg(unix)]
+    cmd.process_group(0);
+
+    #[cfg(target_os = "linux")]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+
+    let bin_dir = std::path::Path::new(project_dir).join("node_modules/.bin");
+    if bin_dir.is_dir() {
+        let current_path = std::env::var("PATH").unwrap_or_default();
+        cmd.env("PATH", format!("{}:{current_path}", bin_dir.display()));
+    }
+
+    for (k, v) in &app.env {
+        cmd.env(k, v);
+    }
+
+    let mut child = cmd.spawn()?;
+
+    let log_buffer = app.log_buffer.clone();
+    if let Some(stdout) = child.stdout.take() {
+        let buf = log_buffer.clone();
+        tokio::spawn(async move {
+            drain_pipe_to_buffer(stdout, buf).await;
+        });
+    }
+    if let Some(stderr) = child.stderr.take() {
+        let buf = log_buffer.clone();
+        tokio::spawn(async move {
+            drain_pipe_to_buffer(stderr, buf).await;
+        });
+    }
+
+    Ok(child)
+}
+
+async fn drain_pipe_to_buffer(pipe: impl tokio::io::AsyncRead + Unpin, buf: state::LogBuffer) {
+    let reader = tokio::io::BufReader::new(pipe);
+    let mut lines = reader.lines();
+    while let Ok(Some(line)) = lines.next_line().await {
+        let now =
+            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+        let ts = format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second());
+        let json = serde_json::json!({
+            "timestamp": ts,
+            "level": "Info",
+            "scope": "app",
+            "message": line,
+        });
+        buf.push(json.to_string());
+    }
+}
+
+pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: String) {
+    let app_info: Option<(String, state::RuntimeApp)> = {
+        let s = state.lock().unwrap();
+        if s.routes.lookup(&host, &path).is_some_and(|(_, _, a, _)| a) {
+            return;
+        }
+        s.apps
+            .iter()
+            .find(|(_, a)| {
+                if !a.is_idle {
+                    return false;
+                }
+                a.hosts.iter().any(|route_pattern| {
+                    let (pat_host, pat_path) = split_route_pattern(route_pattern);
+                    let host_ok = pat_host == host
+                        || (pat_host.starts_with("*.")
+                            && host
+                                .split_once('.')
+                                .is_some_and(|(_, rest)| format!("*.{rest}") == pat_host));
+                    if !host_ok {
+                        return false;
+                    }
+                    match pat_path {
+                        None => true,
+                        Some(_) => true,
+                    }
+                })
+            })
+            .map(|(config_path, a)| (config_path.clone(), a.clone()))
+    };
+
+    let Some((config_path, app)) = app_info else {
+        return;
+    };
+
+    tracing::info!(
+        app_name = %app.name,
+        host = %host,
+        "waking idle app on request"
+    );
+
+    match spawn_app(&app.project_dir, &app).await {
+        Ok(mut child) => {
+            let pid = child.id();
+
+            {
+                let mut s = state.lock().unwrap();
+                if let Some(rt) = s.apps.get_mut(&config_path) {
+                    rt.is_idle = false;
+                    rt.pid = pid;
+                }
+                let route_id = format!("reg:{}", config_path);
+                s.routes.set_active(&route_id, true);
+            }
+
+            if let Some(pid) = pid {
+                state::write_pid_file(&app.project_dir, &config_path, pid);
+                let state = state.clone();
+                let config_path = config_path.clone();
+                let project_dir = app.project_dir.clone();
+                let log_buffer = app.log_buffer.clone();
+                tokio::spawn(async move {
+                    let exit_status = child.wait().await;
+                    let code_str = exit_status
+                        .as_ref()
+                        .ok()
+                        .and_then(|s| s.code())
+                        .map(|c| format!("exit code {c}"))
+                        .unwrap_or_else(|| "signal".to_string());
+
+                    let mut s = state.lock().unwrap();
+                    let still_current = s
+                        .apps
+                        .get(&config_path)
+                        .and_then(|a| a.pid)
+                        .map(|p| p == pid)
+                        .unwrap_or(false);
+                    if still_current {
+                        if let Some(rt) = s.apps.get_mut(&config_path) {
+                            rt.is_idle = true;
+                            rt.pid = None;
+                        }
+                        let route_id = format!("reg:{}", config_path);
+                        s.routes.set_active(&route_id, false);
+                        state::remove_pid_file(&project_dir, &config_path);
+                    }
+                    drop(s);
+
+                    if still_current {
+                        let msg = format!("app exited ({code_str})");
+                        push_scoped_log(&log_buffer, "Fatal", "tako", &msg);
+                        push_app_event(
+                            &log_buffer,
+                            "exited",
+                            Some(("message", serde_json::json!(msg))),
+                        );
+                    }
+                    tracing::info!(config_path = %config_path, project_dir = %project_dir, pid = pid, still_current = still_current, "wake-spawned process exited");
+                });
+            }
+        }
+        Err(e) => {
+            tracing::warn!(
+                app_name = %app.name,
+                error = %e,
+                "failed to spawn app for wake-on-request"
+            );
+        }
+    }
+}
+
+pub(crate) fn kill_all_app_processes(state: &Arc<Mutex<State>>) {
+    let s = state.lock().unwrap();
+    for (config_path, app) in &s.apps {
+        if let Some(pid) = app.pid
+            && pid > 0
+        {
+            tracing::info!(app = %app.name, pid = pid, "killing app process group on shutdown");
+            unsafe { libc::kill(-(pid as i32), libc::SIGKILL) };
+            unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+            state::remove_pid_file(&app.project_dir, config_path);
+        }
+    }
+}
+
+pub(crate) async fn stale_app_cleanup_loop(state: Arc<Mutex<State>>) {
+    let mut ticker = tokio::time::interval(Duration::from_secs(60));
+    loop {
+        ticker.tick().await;
+        let mut s = state.lock().unwrap();
+        if let Some(db) = &s.db
+            && let Ok(removed) = db.cleanup_stale()
+        {
+            for config_path in &removed {
+                s.apps.remove(config_path);
+                let route_id = format!("reg:{}", config_path);
+                s.routes.remove_app(&route_id);
+            }
+            if !removed.is_empty() {
+                tracing::info!(count = removed.len(), "cleaned up stale app registrations");
+            }
+        }
+    }
+}

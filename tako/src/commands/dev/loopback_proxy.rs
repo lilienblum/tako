@@ -10,7 +10,9 @@ use sha2::Digest;
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
-use super::{DEV_LOOPBACK_ADDR, sudo_run_checked, tcp_port_open, write_system_file_with_sudo};
+use super::DEV_LOOPBACK_ADDR;
+#[cfg(target_os = "macos")]
+use super::local_setup::{sudo_run_checked, tcp_port_open, write_system_file_with_sudo};
 
 #[cfg(any(target_os = "macos", test))]
 pub(crate) const LOOPBACK_PROXY_LABEL: &str = "sh.tako.loopback-proxy";

@@ -1,0 +1,235 @@
+use pingora_cache::cache_control::CacheControl;
+use pingora_cache::filters::{request_cacheable, resp_cacheable};
+use pingora_cache::{CacheKey, CacheMetaDefaults, RespCacheable};
+use pingora_core::prelude::*;
+use pingora_http::{RequestHeader, ResponseHeader};
+use pingora_proxy::Session;
+use std::net::IpAddr;
+use std::path::Path;
+use std::sync::OnceLock;
+use tokio::io::AsyncReadExt;
+
+pub(super) fn should_redirect_http_request(
+    is_effective_https: bool,
+    redirect_http_to_https: bool,
+) -> bool {
+    redirect_http_to_https && !is_effective_https
+}
+
+pub(super) fn is_request_forwarded_https(
+    x_forwarded_proto: Option<&str>,
+    forwarded: Option<&str>,
+) -> bool {
+    x_forwarded_proto.is_some_and(x_forwarded_proto_is_https)
+        || forwarded.is_some_and(forwarded_header_proto_is_https)
+}
+
+pub(super) fn is_effective_request_https(
+    transport_https: bool,
+    x_forwarded_proto: Option<&str>,
+    forwarded: Option<&str>,
+) -> bool {
+    transport_https || is_request_forwarded_https(x_forwarded_proto, forwarded)
+}
+
+pub(super) fn should_assume_forwarded_private_request_https(
+    hostname: &str,
+    x_forwarded_for: Option<&str>,
+    x_forwarded_proto: Option<&str>,
+    forwarded: Option<&str>,
+) -> bool {
+    crate::is_private_local_hostname(hostname)
+        && has_nonempty_header_value(x_forwarded_for)
+        && !has_forwarded_proto(x_forwarded_proto, forwarded)
+}
+
+fn has_forwarded_proto(x_forwarded_proto: Option<&str>, forwarded: Option<&str>) -> bool {
+    has_nonempty_header_value(x_forwarded_proto)
+        || forwarded.is_some_and(forwarded_header_has_proto)
+}
+
+fn has_nonempty_header_value(value: Option<&str>) -> bool {
+    value.is_some_and(|raw| !raw.trim().is_empty())
+}
+
+pub(super) fn x_forwarded_proto_is_https(value: &str) -> bool {
+    value
+        .split(',')
+        .next()
+        .map(str::trim)
+        .is_some_and(|proto| proto.eq_ignore_ascii_case("https"))
+}
+
+pub(super) fn forwarded_header_proto_is_https(value: &str) -> bool {
+    value.split(',').any(|entry| {
+        entry.split(';').any(|param| {
+            let mut parts = param.splitn(2, '=');
+            let key = parts.next().map(str::trim).unwrap_or("");
+            let raw_value = parts.next().map(str::trim).unwrap_or("");
+            let parsed = raw_value.trim_matches('"');
+            key.eq_ignore_ascii_case("proto") && parsed.eq_ignore_ascii_case("https")
+        })
+    })
+}
+
+pub(super) fn forwarded_header_has_proto(value: &str) -> bool {
+    value.split(',').any(|entry| {
+        entry.split(';').any(|param| {
+            let mut parts = param.splitn(2, '=');
+            let key = parts.next().map(str::trim).unwrap_or("");
+            let raw_value = parts.next().map(str::trim).unwrap_or("");
+            let parsed = raw_value.trim_matches('"');
+            key.eq_ignore_ascii_case("proto") && !parsed.is_empty()
+        })
+    })
+}
+
+pub(super) fn insert_body_headers(
+    header: &mut ResponseHeader,
+    content_type: &str,
+    body: &str,
+) -> Result<()> {
+    header.insert_header("Content-Type", content_type)?;
+    header.insert_header("Content-Length", body.len().to_string())?;
+    Ok(())
+}
+
+pub(super) async fn create_text_response(
+    session: &mut Session,
+    status: u16,
+    content_type: &str,
+    body: &str,
+) -> Result<bool> {
+    let mut header = ResponseHeader::build(status, None)?;
+    insert_body_headers(&mut header, content_type, body)?;
+    session
+        .write_response_header(Box::new(header), false)
+        .await?;
+    session
+        .write_response_body(Some(body.to_string().into()), true)
+        .await?;
+    Ok(true)
+}
+
+pub(super) fn request_is_proxy_cacheable(request: &RequestHeader) -> bool {
+    request_cacheable(request) && !request.headers.contains_key("upgrade")
+}
+
+pub(super) fn build_proxy_cache_key(host: &str, uri: &str) -> CacheKey {
+    CacheKey::new(
+        host.trim().to_ascii_lowercase(),
+        uri.as_bytes().to_vec(),
+        "",
+    )
+}
+
+fn response_cache_defaults() -> &'static CacheMetaDefaults {
+    static DEFAULTS: OnceLock<CacheMetaDefaults> = OnceLock::new();
+    DEFAULTS.get_or_init(|| CacheMetaDefaults::new(|_| None, 0, 0))
+}
+
+pub(super) fn response_cacheability(
+    resp: &ResponseHeader,
+    authorization_present: bool,
+) -> RespCacheable {
+    let response_for_cache = resp.clone();
+    let cache_control = CacheControl::from_resp_headers(&response_for_cache);
+    resp_cacheable(
+        cache_control.as_ref(),
+        response_for_cache,
+        authorization_present,
+        response_cache_defaults(),
+    )
+}
+
+pub(super) async fn stream_static_file(
+    session: &mut Session,
+    file: &mut tokio::fs::File,
+    path: &Path,
+) -> Result<()> {
+    const CHUNK_SIZE: usize = 64 * 1024;
+    let mut buffer = vec![0_u8; CHUNK_SIZE];
+
+    loop {
+        let bytes_read = file.read(&mut buffer).await.map_err(|e| {
+            Error::explain(
+                ErrorType::InternalError,
+                format!("Failed to read static asset {}: {}", path.display(), e),
+            )
+        })?;
+
+        if bytes_read == 0 {
+            session.write_response_body(None, true).await?;
+            break;
+        }
+
+        session
+            .write_response_body(Some(buffer[..bytes_read].to_vec().into()), false)
+            .await?;
+    }
+
+    Ok(())
+}
+
+pub(super) fn client_ip_from_session(session: &Session) -> Option<IpAddr> {
+    session
+        .digest()
+        .and_then(|d| d.socket_digest.as_ref())
+        .and_then(|sd| sd.peer_addr())
+        .and_then(|addr| addr.as_inet())
+        .map(|inet| inet.ip())
+}
+
+pub(super) fn request_host(req: &pingora_http::RequestHeader) -> &str {
+    req.uri
+        .authority()
+        .map(|a| a.as_str())
+        .or_else(|| req.headers.get("host").and_then(|h| h.to_str().ok()))
+        .unwrap_or("")
+}
+
+pub(super) fn path_looks_like_static_asset(path: &str) -> bool {
+    let final_segment = path.rsplit_once('/').map_or(path, |(_, segment)| segment);
+    final_segment.contains('.') && !final_segment.ends_with('.')
+}
+
+pub(super) fn static_lookup_paths(
+    request_path: &str,
+    matched_route_path: Option<&str>,
+) -> Vec<String> {
+    let mut candidates = vec![request_path.to_string()];
+    if let Some(route_path) = matched_route_path
+        && let Some(stripped) = strip_route_prefix_for_static_lookup(request_path, route_path)
+        && stripped != request_path
+    {
+        candidates.push(stripped);
+    }
+    candidates
+}
+
+pub(super) fn strip_route_prefix_for_static_lookup(
+    request_path: &str,
+    route_path: &str,
+) -> Option<String> {
+    let prefix = if let Some(p) = route_path.strip_suffix("/*") {
+        p
+    } else if let Some(p) = route_path.strip_suffix('*') {
+        p
+    } else {
+        route_path
+    };
+
+    if request_path == prefix {
+        return Some("/".to_string());
+    }
+
+    let stripped = request_path.strip_prefix(prefix)?;
+    if stripped.is_empty() {
+        return Some("/".to_string());
+    }
+    if stripped.starts_with('/') {
+        Some(stripped.to_string())
+    } else {
+        Some(format!("/{}", stripped))
+    }
+}

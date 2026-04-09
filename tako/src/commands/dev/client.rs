@@ -1,0 +1,602 @@
+use std::path::PathBuf;
+
+use tokio::sync::mpsc;
+use tokio::sync::watch;
+
+#[cfg(test)]
+use tokio::time::timeout;
+
+use super::{
+    DevEvent, ScopedLog, infer_preset_name_from_ref, load_dev_tako_toml, output,
+    resolve_dev_preset_ref,
+};
+
+const DEV_LOG_APP_EVENT_MARKER_TYPE: &str = "app_event";
+
+#[derive(Debug, Clone)]
+pub(super) struct ConnectedDevClient {
+    pub(super) config_key: String,
+    pub(super) config_path: PathBuf,
+    pub(super) project_dir: PathBuf,
+    pub(super) url: String,
+    pub(super) pid: Option<u32>,
+}
+
+#[derive(Debug)]
+pub(super) enum LogStreamEvent {
+    Log(ScopedLog),
+    AppEvent(DevEvent),
+}
+
+fn parse_app_event_marker(v: &serde_json::Value) -> Option<DevEvent> {
+    if v.get("type").and_then(|x| x.as_str()) != Some(DEV_LOG_APP_EVENT_MARKER_TYPE) {
+        return None;
+    }
+
+    let event = v.get("event").and_then(|x| x.as_str())?;
+    match event {
+        "launching" => Some(DevEvent::AppLaunching),
+        "started" => Some(DevEvent::AppStarted),
+        "stopped" => Some(DevEvent::AppStopped),
+        "pid" => v
+            .get("pid")
+            .and_then(|x| x.as_u64())
+            .and_then(|pid| u32::try_from(pid).ok())
+            .map(DevEvent::AppPid),
+        "exited" => v
+            .get("message")
+            .and_then(|x| x.as_str())
+            .map(|msg| DevEvent::AppProcessExited(msg.to_string())),
+        "error" => v
+            .get("message")
+            .and_then(|x| x.as_str())
+            .map(|msg| DevEvent::AppError(msg.to_string())),
+        _ => None,
+    }
+}
+
+pub(super) fn parse_log_line(line: &str) -> Option<LogStreamEvent> {
+    let trimmed = line.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(log) = serde_json::from_str::<ScopedLog>(trimmed) {
+        return Some(LogStreamEvent::Log(log));
+    }
+
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed)
+        && let Some(marker_type) = v.get("type").and_then(|x| x.as_str())
+        && marker_type == DEV_LOG_APP_EVENT_MARKER_TYPE
+    {
+        return parse_app_event_marker(&v).map(LogStreamEvent::AppEvent);
+    }
+
+    Some(LogStreamEvent::Log(ScopedLog::info(
+        "app",
+        trimmed.to_string(),
+    )))
+}
+
+pub(super) fn host_and_port_from_url(url: &str) -> Option<(String, u16)> {
+    let no_scheme = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))?;
+    let host_port = no_scheme.split('/').next().unwrap_or("");
+    if host_port.is_empty() {
+        return None;
+    }
+
+    if let Some((host, port)) = host_port.rsplit_once(':')
+        && let Ok(port) = port.parse::<u16>()
+    {
+        return Some((host.to_string(), port));
+    }
+
+    Some((host_port.to_string(), 443))
+}
+
+pub(super) async fn run_connected_dev_client(
+    app_name: &str,
+    interactive: bool,
+    session: ConnectedDevClient,
+    display_hosts: Vec<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut public_port = host_and_port_from_url(&session.url)
+        .map(|(_, p)| p)
+        .unwrap_or(443);
+    let mut upstream_port = 0u16;
+
+    if let Ok(info) = crate::dev_server_client::info().await {
+        public_port = info
+            .get("info")
+            .and_then(|i| i.get("port"))
+            .and_then(|p| p.as_u64())
+            .map(|p| p as u16)
+            .unwrap_or(public_port);
+    }
+
+    if let Ok(apps) = crate::dev_server_client::list_apps().await
+        && let Some(app) = apps.into_iter().find(|a| a.app_name == app_name)
+    {
+        upstream_port = app.upstream_port;
+    }
+
+    let my_client_id = std::process::id();
+
+    let (log_tx, log_rx) = mpsc::channel::<ScopedLog>(1000);
+    let (event_tx, event_rx) = mpsc::channel::<DevEvent>(32);
+
+    if let Some(pid) = session.pid {
+        let _ = event_tx.send(DevEvent::AppPid(pid)).await;
+    }
+    let _ = event_tx.send(DevEvent::AppStarted).await;
+    let (control_tx, mut control_rx) = mpsc::channel::<output::ControlCmd>(32);
+    let (stop_tx, stop_rx) = watch::channel(false);
+
+    {
+        let event_tx = event_tx.clone();
+        let stop_tx = stop_tx.clone();
+        let config_key = session.config_key.clone();
+        let sid = my_client_id;
+        tokio::spawn(async move {
+            let mut got_stop = false;
+
+            let connected = async {
+                let ev_rx = crate::dev_server_client::subscribe_events().await.ok()?;
+                Some(ev_rx)
+            };
+
+            if let Some(mut ev_rx) = connected.await {
+                let _client_conn = crate::dev_server_client::connect_client(&config_key, sid)
+                    .await
+                    .ok();
+
+                while let Some(ev) = ev_rx.recv().await {
+                    match ev {
+                        crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                            ref config_path,
+                            ref status,
+                            ..
+                        } if config_path == &config_key && status == "stopped" => {
+                            got_stop = true;
+                            break;
+                        }
+                        crate::dev_server_client::DevServerEvent::ClientConnected {
+                            ref config_path,
+                            client_id,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx
+                                .send(DevEvent::ClientConnected {
+                                    is_self: client_id == sid,
+                                    client_id,
+                                })
+                                .await;
+                        }
+                        crate::dev_server_client::DevServerEvent::ClientDisconnected {
+                            ref config_path,
+                            client_id,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx
+                                .send(DevEvent::ClientDisconnected { client_id })
+                                .await;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+
+            let _ = stop_tx.send(true);
+            let msg = if got_stop {
+                "stopped by another client".to_string()
+            } else {
+                "disconnected from dev server".to_string()
+            };
+            let _ = event_tx.send(DevEvent::ExitWithMessage(msg)).await;
+        });
+    }
+
+    {
+        let log_tx = log_tx.clone();
+        let real_event_tx = event_tx.clone();
+        let config_key_for_logs = session.config_key.clone();
+        tokio::spawn(async move {
+            let Ok(mut rx) =
+                crate::dev_server_client::subscribe_logs(&config_key_for_logs, None).await
+            else {
+                return;
+            };
+            while let Some(entry) = rx.recv().await {
+                match entry {
+                    crate::dev_server_client::LogStreamEntry::Entry { line, .. } => {
+                        match parse_log_line(&line) {
+                            Some(LogStreamEvent::Log(log)) => {
+                                let _ = log_tx.send(log).await;
+                            }
+                            Some(LogStreamEvent::AppEvent(ev)) => {
+                                let _ = real_event_tx.send(ev).await;
+                            }
+                            None => {}
+                        }
+                    }
+                    crate::dev_server_client::LogStreamEntry::Truncated => {
+                        let _ = log_tx
+                            .send(ScopedLog::info("tako", "earlier logs trimmed"))
+                            .await;
+                    }
+                }
+            }
+        });
+    }
+
+    {
+        let log_tx = log_tx.clone();
+        let stop_tx = stop_tx.clone();
+        let config_key = session.config_key.clone();
+        tokio::spawn(async move {
+            while let Some(cmd) = control_rx.recv().await {
+                match cmd {
+                    output::ControlCmd::Restart => {
+                        let result = crate::dev_server_client::restart_app(&config_key)
+                            .await
+                            .map_err(|e| e.to_string());
+                        if let Err(msg) = result {
+                            let _ = log_tx
+                                .send(ScopedLog::error("tako", format!("restart failed: {}", msg)))
+                                .await;
+                        }
+                    }
+                    output::ControlCmd::Terminate => {
+                        let _ = crate::dev_server_client::unregister_app(&config_key)
+                            .await
+                            .map_err(|e| e.to_string());
+                        let _ = stop_tx.send(true);
+                        break;
+                    }
+                }
+            }
+        });
+    }
+
+    if interactive {
+        let adapter_name = if let Ok(cfg) = load_dev_tako_toml(&session.config_path) {
+            if let Ok(preset_ref) = resolve_dev_preset_ref(&session.project_dir, &cfg) {
+                match crate::build::load_dev_build_preset(&session.project_dir, &preset_ref).await {
+                    Ok((preset, _)) => preset.name,
+                    Err(_) => infer_preset_name_from_ref(&preset_ref),
+                }
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        output::run_dev_output(
+            app_name.to_string(),
+            adapter_name,
+            display_hosts,
+            public_port,
+            upstream_port,
+            log_rx,
+            event_rx,
+            control_tx,
+        )
+        .await?;
+    } else {
+        println!("{}", session.url);
+        println!("Connected to running dev app '{}'.", app_name);
+
+        let mut log_rx = log_rx;
+        let mut event_rx = event_rx;
+        let mut stop_rx = stop_rx.clone();
+        tokio::select! {
+            _ = async {
+                loop {
+                    tokio::select! {
+                        Some(log) = log_rx.recv() => {
+                            println!(
+                                "{} {:<5} [{}] {}",
+                                log.timestamp, log.level, log.scope, log.message
+                            );
+                        }
+                        Some(event) = event_rx.recv() => {
+                            match event {
+                                DevEvent::AppStopped => println!("○ App stopped (idle)"),
+                                DevEvent::AppError(e) => eprintln!("App error: {}", e),
+                                DevEvent::ExitWithMessage(msg) => {
+                                    println!("{}", msg);
+                                    break;
+                                }
+                                DevEvent::ClientConnected { is_self, client_id } => {
+                                    if !is_self {
+                                        println!("Client {} connected", client_id);
+                                    }
+                                }
+                                DevEvent::ClientDisconnected { client_id } => {
+                                    println!("Client {} disconnected", client_id);
+                                }
+                                DevEvent::AppLaunching
+                                | DevEvent::AppStarted
+                                | DevEvent::AppPid(_)
+                                | DevEvent::AppProcessExited(_) => {}
+                            }
+                        }
+                        else => break,
+                    }
+                }
+            } => {}
+            _ = async {
+                while stop_rx.changed().await.is_ok() {
+                    if *stop_rx.borrow() {
+                        break;
+                    }
+                }
+            } => {}
+            _ = tokio::signal::ctrl_c() => {}
+        }
+    }
+
+    let _ = stop_tx.send(true);
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[tokio::test]
+    async fn exit_with_message_event_breaks_output_loop() {
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+
+        event_tx
+            .send(DevEvent::ExitWithMessage(
+                "stopped by another client".to_string(),
+            ))
+            .await
+            .unwrap();
+
+        let event = timeout(Duration::from_millis(100), event_rx.recv())
+            .await
+            .expect("should not time out")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::ExitWithMessage(msg) => {
+                assert_eq!(msg, "stopped by another client");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn event_subscription_sends_exit_when_channel_closes() {
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+        let (stop_tx, _stop_rx) = watch::channel(false);
+
+        let event_tx_clone = event_tx.clone();
+        let stop_tx_clone = stop_tx.clone();
+        tokio::spawn(async move {
+            let got_stop = false;
+
+            let _ = stop_tx_clone.send(true);
+            let msg = if got_stop {
+                "stopped by another client".to_string()
+            } else {
+                "disconnected from dev server".to_string()
+            };
+            let _ = event_tx_clone.send(DevEvent::ExitWithMessage(msg)).await;
+        });
+
+        let event = timeout(Duration::from_millis(200), event_rx.recv())
+            .await
+            .expect("should not time out")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::ExitWithMessage(msg) => {
+                assert_eq!(msg, "disconnected from dev server");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn event_subscription_sends_exit_on_stopped_status() {
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+        let (stop_tx, _stop_rx) = watch::channel(false);
+
+        let event_tx_clone = event_tx.clone();
+        let stop_tx_clone = stop_tx.clone();
+        let config_key = "/proj/tako.toml".to_string();
+
+        tokio::spawn(async move {
+            let mut got_stop = false;
+
+            let events = vec![crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                config_path: "/proj/tako.toml".to_string(),
+                app_name: "my-app".to_string(),
+                status: "stopped".to_string(),
+            }];
+
+            for ev in events {
+                if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                    ref config_path,
+                    ref status,
+                    ..
+                } = ev
+                    && config_path == &config_key
+                    && status == "stopped"
+                {
+                    got_stop = true;
+                    break;
+                }
+            }
+
+            let _ = stop_tx_clone.send(true);
+            let msg = if got_stop {
+                "stopped by another client".to_string()
+            } else {
+                "disconnected from dev server".to_string()
+            };
+            let _ = event_tx_clone.send(DevEvent::ExitWithMessage(msg)).await;
+        });
+
+        let event = timeout(Duration::from_millis(200), event_rx.recv())
+            .await
+            .expect("should not time out")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::ExitWithMessage(msg) => {
+                assert_eq!(msg, "stopped by another client");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn event_subscription_ignores_non_matching_app_name() {
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+        let (stop_tx, _stop_rx) = watch::channel(false);
+
+        let event_tx_clone = event_tx.clone();
+        let stop_tx_clone = stop_tx.clone();
+        let config_key = "/proj/tako.toml".to_string();
+
+        tokio::spawn(async move {
+            let mut got_stop = false;
+
+            let events = vec![crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                config_path: "/other/tako.toml".to_string(),
+                app_name: "other-app".to_string(),
+                status: "stopped".to_string(),
+            }];
+
+            for ev in events {
+                if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                    ref config_path,
+                    ref status,
+                    ..
+                } = ev
+                    && config_path == &config_key
+                    && status == "stopped"
+                {
+                    got_stop = true;
+                    break;
+                }
+            }
+
+            let _ = stop_tx_clone.send(true);
+            let msg = if got_stop {
+                "stopped by another client".to_string()
+            } else {
+                "disconnected from dev server".to_string()
+            };
+            let _ = event_tx_clone.send(DevEvent::ExitWithMessage(msg)).await;
+        });
+
+        let event = timeout(Duration::from_millis(200), event_rx.recv())
+            .await
+            .expect("should not time out")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::ExitWithMessage(msg) => {
+                assert_eq!(msg, "disconnected from dev server");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn event_subscription_ignores_idle_status() {
+        let (event_tx, mut event_rx) = mpsc::channel::<DevEvent>(32);
+        let (stop_tx, _stop_rx) = watch::channel(false);
+
+        let event_tx_clone = event_tx.clone();
+        let stop_tx_clone = stop_tx.clone();
+        let config_key = "/proj/tako.toml".to_string();
+
+        tokio::spawn(async move {
+            let mut got_stop = false;
+
+            let events = vec![crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                config_path: "/proj/tako.toml".to_string(),
+                app_name: "my-app".to_string(),
+                status: "idle".to_string(),
+            }];
+
+            for ev in events {
+                if let crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                    ref config_path,
+                    ref status,
+                    ..
+                } = ev
+                    && config_path == &config_key
+                    && status == "stopped"
+                {
+                    got_stop = true;
+                    break;
+                }
+            }
+
+            let _ = stop_tx_clone.send(true);
+            let msg = if got_stop {
+                "stopped by another client".to_string()
+            } else {
+                "disconnected from dev server".to_string()
+            };
+            let _ = event_tx_clone.send(DevEvent::ExitWithMessage(msg)).await;
+        });
+
+        let event = timeout(Duration::from_millis(200), event_rx.recv())
+            .await
+            .expect("should not time out")
+            .expect("channel should not be closed");
+
+        match event {
+            DevEvent::ExitWithMessage(msg) => {
+                assert_eq!(msg, "disconnected from dev server");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn child_exit_monitor_detects_nonzero_exit() {
+        let mut child = tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("exit 42")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let _ = child.wait().await;
+
+        let status = child.try_wait().unwrap();
+        assert!(status.is_some(), "child should have exited");
+        let status = status.unwrap();
+        assert!(!status.success());
+        assert_eq!(status.code(), Some(42));
+    }
+
+    #[tokio::test]
+    async fn child_exit_monitor_detects_clean_exit() {
+        let mut child = tokio::process::Command::new("true")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let _ = child.wait().await;
+
+        let status = child.try_wait().unwrap();
+        assert!(status.is_some(), "child should have exited");
+        assert!(status.unwrap().success());
+    }
+}

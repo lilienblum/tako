@@ -6,7 +6,7 @@ on:
     types: [completed]
     branches: [master]
   release:
-    types: [published, released]
+    types: [published]
 
 jobs:
   canary:
