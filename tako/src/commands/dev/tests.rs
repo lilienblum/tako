@@ -527,6 +527,7 @@ fn unavailable_error_detection_matches_missing_or_stale_socket_errors() {
     ));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn local_dns_resolver_template_targets_loopback_port() {
     assert_eq!(
