@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/lilienblum/tako/compare/tako-server-v0.2.0...tako-server-v0.3.0) (2026-04-10)
+
+
+### Features
+
+* **dev:** add LAN mode for real-device testing ([c955027](https://github.com/lilienblum/tako/commit/c9550274edd4efe1831192776c584ae442235f02))
+
 ## [0.2.0](https://github.com/lilienblum/tako/compare/tako-server-v0.1.0...tako-server-v0.2.0) (2026-04-07)
 
 ### Features
