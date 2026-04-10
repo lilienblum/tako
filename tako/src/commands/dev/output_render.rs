@@ -645,6 +645,9 @@ pub(super) fn format_lan_block(hosts: &[String], ca_url: &str) -> Vec<String> {
     for line in format_qr_code(ca_url) {
         out.push(format!("  {line}"));
     }
+    out.push(format!(
+        "  {DIM}Scan to install the CA certificate on your device{RESET}"
+    ));
     out.push(String::new());
     out
 }
