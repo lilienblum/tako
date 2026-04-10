@@ -29,7 +29,7 @@ This runs the example through `tako dev` (HTTPS local ingress + routing).
 - Internal health checks use `Host: tako` with path `/status` via the Tako SDK wrapper.
 - Development routes in `tako.toml` are:
   - `tako-demo.test/foobar`
-  - `*.tako-demo.tako.test`
+  - `*.tako-demo.test`
 - Staging routes:
   - `https://tako-testbed.orb.local/bun`
   - `https://<tenant>.bun.tako-testbed.orb.local/`

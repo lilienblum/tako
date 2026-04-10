@@ -6,7 +6,7 @@ main = "app"
 run = "CGO_ENABLED=0 go build -o app ."
 
 [envs.development]
-route = "go-gin.tako.test"
+route = "go-gin.test"
 
 [envs.production]
 route = "go-gin.tako.sh"

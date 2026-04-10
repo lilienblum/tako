@@ -12,7 +12,7 @@ APP_NAME = "Dev"
 APP_NAME = "Production"
 
 [envs.development]
-route = "go-example.tako.test"
+route = "go-example.test"
 
 [envs.production]
 route = "go.tako.sh"

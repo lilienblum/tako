@@ -476,15 +476,15 @@ const homeStructuredData = {
   .btn-primary {
     border-color: var(--primary);
     background: var(--primary);
-    color: #fffaf4;
+    color: var(--ink);
     padding: 12px 26px;
     font-size: 17px;
     box-shadow: 0 6px 16px rgba(196, 96, 92, 0.22);
   }
 
   .btn-primary:hover {
-    background: #d9726e;
-    border-color: #d9726e;
+    background: color-mix(in srgb, var(--primary) 92%, #000);
+    border-color: color-mix(in srgb, var(--primary) 92%, #000);
     box-shadow: 0 8px 20px rgba(196, 96, 92, 0.28);
   }
 
