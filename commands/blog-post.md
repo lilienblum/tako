@@ -91,15 +91,26 @@ image:
 Generate a wide illustration for a blog post hero image.
 
 Character: A small, simple octopus. Reference: https://tako.sh/assets/logo.svg
-The octopus must match the style of our logo — flat, minimal, no outlines, soft pastel coral pink body with simple dot eyes and a small curved mouth. Not 3D, not shiny, not glossy, not kawaii/cartoonish. Subtle and understated.
+The octopus must match the style of our logo — flat, minimal, no outlines, soft pastel coral pink body with simple dot eyes and a small curved mouth. Not 3D, not shiny, not glossy. Expressive and full of personality — eyes can squint, widen, or glance; the mouth can grin, gasp, or smirk; tentacles are always doing something. Stylized, not realistic, and not hyper-kawaii either.
 
-Scene: [Describe a specific scene or metaphor relevant to the blog post topic.]
+Scene: [This is the most important section. Do not describe a "scene" — describe a STORY MOMENT.
+
+The difference: a scene is decorative ("octopus holding three servers"). A story moment is a single frame from a larger narrative the viewer already half-knows ("the moment the musketeers cross blades above the crown," "the moment Luke looks up at the twin suns," "the moment the heist crew leans over the blueprint"). A story moment arrives pre-loaded with tone, stakes, and meaning because the viewer's brain fills in the rest from memory.
+
+Anchor the image in a recognizable story, film, painting, myth, or genre trope that actually matches the post's content and mood (see the story menu below). Then pin down:
+  (1) WHAT STORY is this a moment from? (e.g. "The Three Musketeers crossing blades," "Hokusai's Great Wave," "the Ocean's Eleven planning table")
+  (2) WHICH moment inside that story? (the triumphant one, the quiet-before-the-storm one, the "oh no" one)
+  (3) What verb is the octopus (or octopuses) physically doing in that moment?
+  (4) What emotional beat does each octopus carry? (determined, delighted, mischievous, proud, nervous, triumphant)
+  (5) What gesture makes each beat legible? (tentacles raised, pointing, bracing, mid-throw, arms crossed)
+
+Aim for "single frame from a story I recognize," not "mascot standing in a scene." Whimsical props and slightly absurd juxtapositions are encouraged when they fit the story you're borrowing from.]
 
 Style requirements:
 - Flat illustration with paper-like grain texture
 - Light, airy, pastel tones — not saturated, not glossy, not 3D
 - Color palette: coral pink (#E88783), mint teal (#9BC4B6), warm beige (#FFF9F4) background, dark purple (#2F2A44) accents
-- Calm, warm, friendly mood — like a watercolor postcard
+- Playful, characterful, and full of motion — warm and friendly but lively. Think children's book spread or New Yorker cover, not corporate landing page. A soft sense of movement (flying confetti, dust puffs, motion lines, tilted angles) is welcome when it fits.
 - Widescreen landscape format
 - IMPORTANT COMPOSITION: All key objects and the main subject must be concentrated in a horizontal band in the CENTER of the image. Leave generous empty space (just background/sky/ground) at the TOP and BOTTOM edges. The image will be cropped to 5:2 ratio from the center — nothing important should be in the outer edges.
 
@@ -107,7 +118,37 @@ Output: a single image in widescreen landscape format.
 -->
 ```
 
-The prompt should be specific to the post's topic — not generic. Describe an actual scene or metaphor that fits the content. When describing mood or feeling, phrase it as a style direction, NOT as quoted text that ChatGPT might render literally.
+The prompt should be specific to the post's topic — not generic. The #1 failure mode is a tidy but lifeless "object + object" composition where the octopus just stands next to some props. The fix is not more motion lines or a better pose — the fix is **telling a story**. A hero image works when it borrows a single frame from a story the viewer already knows (a film, a painting, a myth, a genre trope) and the image arrives pre-loaded with tone, stakes, and meaning. Without a story anchor you're just decorating; with one, you're telling.
+
+**Pick the story before you write the prompt.** Start by asking: _"If this blog post were a movie or a famous painting, which one would it be?"_ Then take one specific frame from that and cast the octopus into it. The reference should actually match the post's content and mood — don't force it, and don't default to the same reference across adjacent posts. Variety matters; context matters more.
+
+**These next examples are just that — examples.** They're here to unblock you when you're staring at a blank prompt, not to limit you. The right story for a given post is almost never going to be on any pre-made list; it's whatever actually matches the specific angle, tone, and details of _that_ post. Treat the table as a sampler of the _kinds_ of places to look (films, paintings, myths, genre tropes, famous scenes), then go find your own. If none of these feel right, that's expected — invent something.
+
+| Post vibe                              | A few example stories in that territory                                                                                    |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Distributed / coordinated / consensus  | The Three Musketeers ("all for one"), Ocean's Eleven planning table, Fellowship of the Ring setting out, Avengers assemble |
+| Scale / resilience / weathering load   | Hokusai's Great Wave, Atlas holding the world, lighthouse keepers in a storm, Moby Dick                                    |
+| Speed / performance / racing           | Mad Max: Fury Road, Wacky Races, Formula 1 pit stop, the Kessel Run                                                        |
+| Local dev / solo craft / quiet focus   | Studio Ghibli workshop scenes, Hopper's _Nighthawks_, Gepetto in his workshop, _Ratatouille_ kitchen                       |
+| Migration / escape from a heavier tool | _The Great Escape_, Exodus, _Shawshank Redemption_ crawling to freedom, Hobbit leaving the Shire                           |
+| Construction / building a system up    | Tower of Babel, medieval cathedral build, ant colony at work, Lego master-builders                                         |
+| Security / secrets / protection        | Indiana Jones temple run, Smaug on his hoard, Gringotts vault, classic safecracker noir                                    |
+| Orchestration / many things in harmony | Symphony conductor, ballet corps, Rube Goldberg machines, _Fantasia_'s Sorcerer's Apprentice                               |
+| Launch / announcement / triumph        | Apollo liftoff, Olympic podium, _Rocky_ on the steps, flag-planting on a mountaintop                                       |
+| Debugging / detective work             | Sherlock Holmes at the crime scene, film noir detective, _Columbo_, _Knives Out_ drawing room                              |
+
+Again: the table is a nudge, not a box. A post about WebSocket channels might borrow from a pneumatic-tube mailroom. A post about cold starts might borrow from a sleeping dragon waking up. A post about secrets might borrow from a heist, a spy film, or a children's diary-with-a-lock. Pick whatever actually tells the right story for _this_ post, and don't feel obliged to reach for anything on the list above.
+
+**Quick self-check before finalizing the prompt:**
+
+- **What story is this a frame from?** (If you can't name it in one sentence, you don't have one yet.)
+- **What moment inside that story?** (The setup? The triumph? The "oh no" beat?)
+- **Is there a verb?** ("standing," "holding," "next to" don't count.)
+- **Is there a facial expression per octopus, and do they differ?**
+- **Are the tentacles doing something specific, or just hanging?**
+- **Would a developer glancing at it for half a second think "oh, that's [reference]!" — and smile?**
+
+If the answer to "what story?" is fuzzy, stop and pick one before writing the scene. Everything else flows from that.
 
 After writing the post, copy the image prompt text (everything between the `<!-- IMAGE PROMPT` and `-->` markers, excluding the markers themselves) to the clipboard using `pbcopy`.
 
