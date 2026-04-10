@@ -268,7 +268,11 @@ impl ProxyHttp for DevProxy {
                 .write_response_header(Box::new(header), false)
                 .await?;
 
-            let app_name = hostname.trim_end_matches(".tako.test");
+            // Strip the more specific suffix first so `app.tako.test` yields `app`, not `app.tako`.
+            let app_name = hostname
+                .strip_suffix(".tako.test")
+                .or_else(|| hostname.strip_suffix(".test"))
+                .unwrap_or(hostname.as_str());
             let mut known = self.routes.all_display_routes();
             known.sort();
             let routes: Vec<String> = known.iter().map(|r| format!("  https://{r}")).collect();
@@ -347,12 +351,12 @@ mod tests {
         let routes = Routes::default();
         routes.set_routes(
             "app".to_string(),
-            vec!["*.app.tako.test".to_string()],
+            vec!["*.app.test".to_string()],
             3000,
             true,
         );
 
-        let hit = routes.lookup("foo.app.tako.test", "/");
+        let hit = routes.lookup("foo.app.test", "/");
         assert!(hit.is_some());
         let (app_id, port, active, _) = hit.unwrap();
         assert_eq!(app_id, "app");
@@ -360,18 +364,13 @@ mod tests {
         assert!(active);
 
         // Unrelated host should not match.
-        assert!(routes.lookup("foo.other.tako.test", "/").is_none());
+        assert!(routes.lookup("foo.other.test", "/").is_none());
     }
 
     #[tokio::test]
     async fn routes_waits_for_active() {
         let routes = Routes::default();
-        routes.set_routes(
-            "app".to_string(),
-            vec!["a.tako.test".to_string()],
-            1234,
-            false,
-        );
+        routes.set_routes("app".to_string(), vec!["a.test".to_string()], 1234, false);
 
         let r2 = routes.clone();
         tokio::spawn(async move {
@@ -391,26 +390,21 @@ mod tests {
         let routes = Routes::default();
         routes.set_routes(
             "api".to_string(),
-            vec!["app.tako.test/api/*".to_string()],
+            vec!["app.test/api/*".to_string()],
             3001,
             true,
         );
-        routes.set_routes(
-            "web".to_string(),
-            vec!["app.tako.test".to_string()],
-            3002,
-            true,
-        );
+        routes.set_routes("web".to_string(), vec!["app.test".to_string()], 3002, true);
 
         // /api/users → api app
-        let hit = routes.lookup("app.tako.test", "/api/users");
+        let hit = routes.lookup("app.test", "/api/users");
         assert!(hit.is_some());
         let (app_id, port, _, _) = hit.unwrap();
         assert_eq!(app_id, "api");
         assert_eq!(port, 3001);
 
         // / → web app
-        let hit = routes.lookup("app.tako.test", "/");
+        let hit = routes.lookup("app.test", "/");
         assert!(hit.is_some());
         let (app_id, port, _, _) = hit.unwrap();
         assert_eq!(app_id, "web");
@@ -422,21 +416,21 @@ mod tests {
         let routes = Routes::default();
         routes.set_routes(
             "exact".to_string(),
-            vec!["app.tako.test/api/health".to_string()],
+            vec!["app.test/api/health".to_string()],
             3001,
             true,
         );
         routes.set_routes(
             "wildcard".to_string(),
-            vec!["app.tako.test/api/*".to_string()],
+            vec!["app.test/api/*".to_string()],
             3002,
             true,
         );
 
-        let hit = routes.lookup("app.tako.test", "/api/health").unwrap();
+        let hit = routes.lookup("app.test", "/api/health").unwrap();
         assert_eq!(hit.0, "exact");
 
-        let hit = routes.lookup("app.tako.test", "/api/other").unwrap();
+        let hit = routes.lookup("app.test", "/api/other").unwrap();
         assert_eq!(hit.0, "wildcard");
     }
 
@@ -445,33 +439,28 @@ mod tests {
         let routes = Routes::default();
         routes.set_routes(
             "exact".to_string(),
-            vec!["api.app.tako.test".to_string()],
+            vec!["api.app.test".to_string()],
             3001,
             true,
         );
         routes.set_routes(
             "wildcard".to_string(),
-            vec!["*.app.tako.test".to_string()],
+            vec!["*.app.test".to_string()],
             3002,
             true,
         );
 
-        let hit = routes.lookup("api.app.tako.test", "/").unwrap();
+        let hit = routes.lookup("api.app.test", "/").unwrap();
         assert_eq!(hit.0, "exact");
 
-        let hit = routes.lookup("other.app.tako.test", "/").unwrap();
+        let hit = routes.lookup("other.app.test", "/").unwrap();
         assert_eq!(hit.0, "wildcard");
     }
 
     #[test]
     fn lookup_matches_local_alias_of_exact_host_route() {
         let routes = Routes::default();
-        routes.set_routes(
-            "app".to_string(),
-            vec!["app.tako.test".to_string()],
-            3000,
-            true,
-        );
+        routes.set_routes("app".to_string(), vec!["app.test".to_string()], 3000, true);
 
         let hit = routes.lookup("app.local", "/").unwrap();
         assert_eq!(hit.0, "app");
@@ -483,7 +472,7 @@ mod tests {
         let routes = Routes::default();
         routes.set_routes(
             "app".to_string(),
-            vec!["*.app.tako.test/api/*".to_string()],
+            vec!["*.app.test/api/*".to_string()],
             3000,
             true,
         );
@@ -496,16 +485,11 @@ mod tests {
     #[test]
     fn remove_app_cleans_up() {
         let routes = Routes::default();
-        routes.set_routes(
-            "app".to_string(),
-            vec!["app.tako.test".to_string()],
-            3000,
-            true,
-        );
-        assert!(routes.lookup("app.tako.test", "/").is_some());
+        routes.set_routes("app".to_string(), vec!["app.test".to_string()], 3000, true);
+        assert!(routes.lookup("app.test", "/").is_some());
 
         routes.remove_app("app");
-        assert!(routes.lookup("app.tako.test", "/").is_none());
+        assert!(routes.lookup("app.test", "/").is_none());
         assert!(routes.all_display_routes().is_empty());
     }
 
@@ -514,36 +498,24 @@ mod tests {
         let routes = Routes::default();
         routes.set_routes(
             "app".to_string(),
-            vec!["app.tako.test".to_string(), "app.tako.test/api".to_string()],
+            vec!["app.test".to_string(), "app.test/api".to_string()],
             3000,
             true,
         );
 
         let mut display = routes.all_display_routes();
         display.sort();
-        assert_eq!(display, vec!["app.tako.test", "app.tako.test/api"]);
+        assert_eq!(display, vec!["app.test", "app.test/api"]);
     }
 
     #[test]
     fn hostname_matches_basic() {
-        assert!(route_host_matches_request("app.tako.test", "app.tako.test"));
-        assert!(!route_host_matches_request(
-            "app.tako.test",
-            "other.tako.test"
-        ));
-        assert!(route_host_matches_request(
-            "*.app.tako.test",
-            "foo.app.tako.test"
-        ));
-        assert!(!route_host_matches_request(
-            "*.app.tako.test",
-            "app.tako.test"
-        ));
-        assert!(route_host_matches_request("app.tako.test", "app.local"));
-        assert!(route_host_matches_request(
-            "*.app.tako.test",
-            "foo.app.local"
-        ));
+        assert!(route_host_matches_request("app.test", "app.test"));
+        assert!(!route_host_matches_request("app.test", "other.test"));
+        assert!(route_host_matches_request("*.app.test", "foo.app.test"));
+        assert!(!route_host_matches_request("*.app.test", "app.test"));
+        assert!(route_host_matches_request("app.test", "app.local"));
+        assert!(route_host_matches_request("*.app.test", "foo.app.local"));
     }
 
     #[test]
@@ -559,12 +531,10 @@ mod tests {
     #[test]
     fn specificity_ordering() {
         // exact host > wildcard host
-        assert!(route_specificity("app.tako.test") > route_specificity("*.app.tako.test"));
+        assert!(route_specificity("app.test") > route_specificity("*.app.test"));
         // longer path > shorter path
-        assert!(
-            route_specificity("app.tako.test/api/v1/*") > route_specificity("app.tako.test/api/*")
-        );
+        assert!(route_specificity("app.test/api/v1/*") > route_specificity("app.test/api/*"));
         // exact path > wildcard path of same length
-        assert!(route_specificity("app.tako.test/api") > route_specificity("app.tako.test/api/*"));
+        assert!(route_specificity("app.test/api") > route_specificity("app.test/api/*"));
     }
 }

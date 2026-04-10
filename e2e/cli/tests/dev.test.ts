@@ -72,7 +72,7 @@ describe.skipIf(SKIP)("tako dev fixtures", () => {
         // Fixtures serve HTML at /.
         const appName = `${runtime}-e2e`;
         const resp = await fetch(`http://127.0.0.1:${port}/`, {
-          headers: { Host: `${appName}.tako.test` },
+          headers: { Host: `${appName}.test` },
         });
         expect(resp.status).toBe(200);
         const body = await resp.text();

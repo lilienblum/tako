@@ -655,8 +655,8 @@ mod tests {
             "┃ One-time sudo required"
         );
         assert_eq!(
-            format_warning_bullet_line("Configure local DNS for *.tako.test"),
-            "┃ • Configure local DNS for *.tako.test"
+            format_warning_bullet_line("Configure local DNS for *.test"),
+            "┃ • Configure local DNS for *.test"
         );
     }
 

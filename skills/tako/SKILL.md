@@ -39,11 +39,11 @@ tako doctor
 
 ### `tako dev`
 
-Start local development server with built-in HTTPS proxy and `.tako.test` domain.
+Start local development server with built-in HTTPS proxy and `.test` domain.
 
 ```bash
 tako dev
-tako dev --variant staging    # myapp-staging.tako.test
+tako dev --variant staging    # myapp-staging.test
 tako dev stop [name]          # stop a running dev app
 tako dev ls                   # list registered dev apps
 ```
@@ -51,7 +51,7 @@ tako dev ls                   # list registered dev apps
 Features:
 
 - Local HTTPS via auto-generated certificates
-- `.tako.test` domain resolution
+- `.test` domain resolution
 - File watching and automatic restart
 - Hot reload passthrough for framework dev servers
 

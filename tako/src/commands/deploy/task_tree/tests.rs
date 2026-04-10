@@ -448,7 +448,7 @@ fn deploy_task_tree_success_summary_appends_release_and_routes() {
         DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
     controller.set_success_summary(
         "20260330",
-        &["app.tako.test".to_string(), "*.app.tako.test".to_string()],
+        &["app.test".to_string(), "*.app.test".to_string()],
     );
 
     let lines = ui::render_plain_lines(&build_deploy_tree(&controller.snapshot()));
@@ -459,13 +459,13 @@ fn deploy_task_tree_success_summary_appends_release_and_routes() {
     assert!(
         lines
             .iter()
-            .any(|line| line == "  Routes  https://app.tako.test"),
-        "expected '  Routes  https://app.tako.test' in {lines:?}"
+            .any(|line| line == "  Routes  https://app.test"),
+        "expected '  Routes  https://app.test' in {lines:?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "          https://*.app.tako.test"),
+            .any(|line| line == "          https://*.app.test"),
         "expected continuation route in {lines:?}"
     );
 }

@@ -174,9 +174,9 @@ fn dev_startup_lines_quiet_is_short() {
         "app",
         "fake",
         Path::new("index.ts"),
-        "https://app.tako.test:8443/",
+        "https://app.test:8443/",
     );
-    assert_eq!(lines[0], "https://app.tako.test:8443/");
+    assert_eq!(lines[0], "https://app.test:8443/");
     assert!(lines.iter().all(|l| !l.contains("Tako Dev Server")));
 }
 
@@ -187,7 +187,7 @@ fn dev_startup_lines_verbose_includes_banner() {
         "app",
         "fake",
         Path::new("index.ts"),
-        "https://app.tako.test:8443/",
+        "https://app.test:8443/",
     );
     assert!(lines.iter().any(|l| l == "Tako Dev Server"));
     assert!(lines.iter().any(|l| l.starts_with("URL:")));
@@ -459,12 +459,12 @@ fn parse_port_from_listen_handles_valid_and_invalid_values() {
 #[test]
 fn host_and_port_parser_handles_default_and_explicit_ports() {
     assert_eq!(
-        host_and_port_from_url("https://app.tako.test/"),
-        Some(("app.tako.test".to_string(), 443))
+        host_and_port_from_url("https://app.test/"),
+        Some(("app.test".to_string(), 443))
     );
     assert_eq!(
-        host_and_port_from_url("https://app.tako.test:47831/"),
-        Some(("app.tako.test".to_string(), 47831))
+        host_and_port_from_url("https://app.test:47831/"),
+        Some(("app.test".to_string(), 47831))
     );
 }
 
@@ -564,7 +564,7 @@ fn ensure_dev_server_tls_material_writes_cert_and_key_when_missing() {
     let names = std::fs::read_to_string(names_path).unwrap();
     assert!(cert.contains("BEGIN CERTIFICATE"));
     assert!(key.contains("BEGIN PRIVATE KEY"));
-    assert!(names.contains("*.demo.tako.test"));
+    assert!(names.contains("*.demo.test"));
 }
 
 #[test]
@@ -641,7 +641,7 @@ fn ensure_dev_server_tls_material_regenerates_files_without_names_manifest() {
     let names = std::fs::read_to_string(dev_server_tls_names_path_for_home(temp.path())).unwrap();
     assert!(cert.contains("BEGIN CERTIFICATE"));
     assert!(key.contains("BEGIN PRIVATE KEY"));
-    assert!(names.contains("*.demo.tako.test"));
+    assert!(names.contains("*.demo.test"));
 }
 
 #[test]
@@ -656,8 +656,8 @@ fn ensure_dev_server_tls_material_merges_names_for_multiple_apps() {
     assert!(second_changed);
 
     let names = std::fs::read_to_string(dev_server_tls_names_path_for_home(temp.path())).unwrap();
-    assert!(names.contains("*.alpha.tako.test"));
-    assert!(names.contains("*.beta.tako.test"));
+    assert!(names.contains("*.alpha.test"));
+    assert!(names.contains("*.beta.test"));
 }
 
 #[cfg(target_os = "macos")]
@@ -727,138 +727,133 @@ fn sudo_setup_action_items_omits_absent_steps() {
 #[test]
 fn prefers_local_url_when_80_443_forwarding_is_detected() {
     let url = preferred_public_url(
-        "bun-example.tako.test",
-        "https://bun-example.tako.test:47831/",
+        "bun-example.test",
+        "https://bun-example.test:47831/",
         47831,
         443,
     );
-    assert_eq!(url, "https://bun-example.tako.test/");
+    assert_eq!(url, "https://bun-example.test/");
 }
 
 #[test]
 fn prefers_daemon_url_when_display_and_listen_ports_match() {
     let url = preferred_public_url(
-        "bun-example.tako.test",
-        "https://bun-example.tako.test:47831/",
+        "bun-example.test",
+        "https://bun-example.test:47831/",
         47831,
         47831,
     );
-    assert_eq!(url, "https://bun-example.tako.test:47831/");
+    assert_eq!(url, "https://bun-example.test:47831/");
 }
 
 #[test]
 fn display_routes_always_includes_default() {
     let cfg = TakoToml::default();
-    let routes = compute_display_routes(&cfg, "app.tako.test", None);
-    assert_eq!(routes, vec!["app.tako.test"]);
+    let routes = compute_display_routes(&cfg, "app.test", None);
+    assert_eq!(routes, vec!["app.test"]);
 }
 
 #[test]
 fn display_routes_includes_default_plus_all_configured() {
-    let cfg = TakoToml::parse(
-        "[envs.development]\nroutes = [\"app.tako.test/bun\", \"*.app.tako.test\"]\n",
-    )
-    .unwrap();
-    let routes = compute_display_routes(&cfg, "app.tako.test", None);
-    assert_eq!(
-        routes,
-        vec!["app.tako.test", "app.tako.test/bun", "*.app.tako.test"]
-    );
+    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.test/bun\", \"*.app.test\"]\n")
+        .unwrap();
+    let routes = compute_display_routes(&cfg, "app.test", None);
+    assert_eq!(routes, vec!["app.test", "app.test/bun", "*.app.test"]);
 }
 
 #[test]
 fn display_routes_deduplicates_default_when_route_matches() {
-    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.tako.test\"]\n").unwrap();
-    let routes = compute_display_routes(&cfg, "app.tako.test", None);
-    assert_eq!(routes, vec!["app.tako.test"]);
+    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.test\"]\n").unwrap();
+    let routes = compute_display_routes(&cfg, "app.test", None);
+    assert_eq!(routes, vec!["app.test"]);
 }
 
 #[test]
 fn display_routes_rewrite_wildcard_for_variant() {
     let cfg = TakoToml::parse(
-        "[envs.development]\nroutes = [\"some-app.tako.test/bun\", \"*.example.tako.test\"]\n",
+        "[envs.development]\nroutes = [\"some-app.test/bun\", \"*.example.test\"]\n",
     )
     .unwrap();
-    let routes = compute_display_routes(&cfg, "example-foo.tako.test", Some("example.tako.test"));
+    let routes = compute_display_routes(&cfg, "example-foo.test", Some("example.test"));
     assert_eq!(
         routes,
         vec![
-            "example-foo.tako.test",
-            "some-app.tako.test/bun",
-            "*.example-foo.tako.test",
+            "example-foo.test",
+            "some-app.test/bun",
+            "*.example-foo.test",
         ]
     );
 }
 
 #[test]
 fn display_routes_variant_deduplicates_rewritten_default() {
-    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"example.tako.test\"]\n").unwrap();
-    let routes = compute_display_routes(&cfg, "example-foo.tako.test", Some("example.tako.test"));
-    assert_eq!(routes, vec!["example-foo.tako.test"]);
+    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"example.test\"]\n").unwrap();
+    let routes = compute_display_routes(&cfg, "example-foo.test", Some("example.test"));
+    assert_eq!(routes, vec!["example-foo.test"]);
 }
 
 #[test]
-fn local_https_probe_host_uses_app_tako_test_domain() {
+fn local_https_probe_host_uses_app_test_domain() {
     assert_eq!(
-        local_https_probe_host("bun-example.tako.test"),
-        "bun-example.tako.test"
+        local_https_probe_host("bun-example.test"),
+        "bun-example.test"
     );
 }
 
 #[test]
 fn falls_back_to_default_host_when_development_routes_are_missing() {
     let cfg = TakoToml::default();
-    let hosts = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
-    assert_eq!(hosts, vec!["app.tako.test".to_string()]);
+    let hosts = compute_dev_hosts("app", &cfg, "app.test", None).unwrap();
+    assert_eq!(hosts, vec!["app.test".to_string()]);
 }
 
 #[test]
 fn falls_back_to_default_host_when_development_routes_are_empty() {
     let cfg = TakoToml::parse("[envs.development]\nroutes = []\n").unwrap();
-    let hosts = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
-    assert_eq!(hosts, vec!["app.tako.test".to_string()]);
+    let hosts = compute_dev_hosts("app", &cfg, "app.test", None).unwrap();
+    assert_eq!(hosts, vec!["app.test".to_string()]);
 }
 
 #[test]
 fn always_includes_default_host_with_explicit_routes() {
-    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"api.app.tako.test\"]\n").unwrap();
-    let hosts = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
-    assert_eq!(hosts, vec!["app.tako.test", "api.app.tako.test"]);
+    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"api.app.test\"]\n").unwrap();
+    let hosts = compute_dev_hosts("app", &cfg, "app.test", None).unwrap();
+    assert_eq!(hosts, vec!["app.test", "api.app.test"]);
 }
 
 #[test]
 fn always_includes_default_host_with_wildcard_routes() {
-    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"*.app.tako.test\"]\n").unwrap();
-    let hosts = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
-    assert_eq!(hosts, vec!["app.tako.test", "*.app.tako.test"]);
+    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"*.app.test\"]\n").unwrap();
+    let hosts = compute_dev_hosts("app", &cfg, "app.test", None).unwrap();
+    assert_eq!(hosts, vec!["app.test", "*.app.test"]);
 }
 
 #[test]
 fn default_host_deduped_when_already_in_routes() {
-    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.tako.test\"]\n").unwrap();
-    let hosts = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
-    assert_eq!(hosts, vec!["app.tako.test"]);
+    let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.test\"]\n").unwrap();
+    let hosts = compute_dev_hosts("app", &cfg, "app.test", None).unwrap();
+    assert_eq!(hosts, vec!["app.test"]);
 }
 
 #[test]
 fn dev_hosts_rewrite_wildcard_for_variant() {
     let cfg = TakoToml::parse(
-        "[envs.development]\nroutes = [\"some-app.tako.test/bun\", \"*.example.tako.test\"]\n",
+        "[envs.development]\nroutes = [\"some-app.test/bun\", \"*.example.test\"]\n",
     )
     .unwrap();
     let hosts = compute_dev_hosts(
         "example-foo",
         &cfg,
-        "example-foo.tako.test",
-        Some("example.tako.test"),
+        "example-foo.test",
+        Some("example.test"),
     )
     .unwrap();
     assert_eq!(
         hosts,
         vec![
-            "example-foo.tako.test",
-            "some-app.tako.test/bun",
-            "*.example-foo.tako.test",
+            "example-foo.test",
+            "some-app.test/bun",
+            "*.example-foo.test",
         ]
     );
 }
@@ -866,48 +861,33 @@ fn dev_hosts_rewrite_wildcard_for_variant() {
 #[test]
 fn dev_hosts_now_include_paths_and_wildcards() {
     let cfg = TakoToml::parse(
-        "[envs.development]\nroutes = [\"app.tako.test\", \"app.tako.test/api\", \"*.app.tako.test\"]\n",
+        "[envs.development]\nroutes = [\"app.test\", \"app.test/api\", \"*.app.test\"]\n",
     )
     .unwrap();
-    let display = compute_display_routes(&cfg, "app.tako.test", None);
-    let routing = compute_dev_hosts("app", &cfg, "app.tako.test", None).unwrap();
+    let display = compute_display_routes(&cfg, "app.test", None);
+    let routing = compute_dev_hosts("app", &cfg, "app.test", None).unwrap();
 
-    assert_eq!(
-        display,
-        vec!["app.tako.test", "app.tako.test/api", "*.app.tako.test"]
-    );
-    assert_eq!(
-        routing,
-        vec!["app.tako.test", "app.tako.test/api", "*.app.tako.test"]
-    );
+    assert_eq!(display, vec!["app.test", "app.test/api", "*.app.test"]);
+    assert_eq!(routing, vec!["app.test", "app.test/api", "*.app.test"]);
 }
 
 #[test]
 fn route_hostname_matches_exact() {
-    assert!(route_hostname_matches("app.tako.test", "app.tako.test"));
-    assert!(!route_hostname_matches("app.tako.test", "other.tako.test"));
+    assert!(route_hostname_matches("app.test", "app.test"));
+    assert!(!route_hostname_matches("app.test", "other.test"));
 }
 
 #[test]
 fn route_hostname_matches_with_path() {
-    assert!(route_hostname_matches("app.tako.test/api", "app.tako.test"));
-    assert!(!route_hostname_matches(
-        "app.tako.test/api",
-        "other.tako.test"
-    ));
+    assert!(route_hostname_matches("app.test/api", "app.test"));
+    assert!(!route_hostname_matches("app.test/api", "other.test"));
 }
 
 #[test]
 fn route_hostname_matches_wildcard() {
-    assert!(route_hostname_matches(
-        "*.app.tako.test",
-        "foo.app.tako.test"
-    ));
-    assert!(!route_hostname_matches("*.app.tako.test", "app.tako.test"));
-    assert!(!route_hostname_matches(
-        "*.app.tako.test",
-        "other.tako.test"
-    ));
+    assert!(route_hostname_matches("*.app.test", "foo.app.test"));
+    assert!(!route_hostname_matches("*.app.test", "app.test"));
+    assert!(!route_hostname_matches("*.app.test", "other.test"));
 }
 
 #[test]

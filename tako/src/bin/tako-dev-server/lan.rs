@@ -20,8 +20,14 @@ impl MdnsPublisher {
     }
 
     /// Publish a `.local` mDNS entry for the given hostname.
+    ///
+    /// Returns silently without publishing if the hostname is a wildcard
+    /// (e.g. `*.app.test`), since mDNS (Bonjour/Avahi) cannot advertise
+    /// wildcard names — each subdomain must be a concrete record.
     pub(crate) fn publish(&mut self, hostname: &str) {
-        let local_hostname = to_local_hostname(hostname);
+        let Some(local_hostname) = to_mdns_hostname(hostname) else {
+            return;
+        };
         if self.publishers.contains_key(&local_hostname) {
             return;
         }
@@ -33,7 +39,9 @@ impl MdnsPublisher {
 
     /// Unpublish a specific hostname (kills its publisher process).
     pub(crate) fn unpublish(&mut self, hostname: &str) {
-        let local_hostname = to_local_hostname(hostname);
+        let Some(local_hostname) = to_mdns_hostname(hostname) else {
+            return;
+        };
         if let Some(mut child) = self.publishers.remove(&local_hostname) {
             let _ = child.kill();
             let _ = child.wait();
@@ -49,26 +57,6 @@ impl MdnsPublisher {
             tracing::debug!(hostname = %hostname, "mDNS unpublished");
         }
     }
-
-    /// Update the LAN IP, re-publishing all entries.
-    pub(crate) fn update_ip(&mut self, new_ip: &str) {
-        if self.lan_ip == new_ip {
-            return;
-        }
-        let hostnames: Vec<String> = self.publishers.keys().cloned().collect();
-        self.cleanup_all();
-        self.lan_ip = new_ip.to_string();
-        for hostname in hostnames {
-            if let Some(child) = spawn_mdns_publisher(&hostname, &self.lan_ip) {
-                self.publishers.insert(hostname, child);
-            }
-        }
-    }
-
-    /// Get all currently published `.local` hostnames.
-    pub(crate) fn published_hostnames(&self) -> Vec<String> {
-        self.publishers.keys().cloned().collect()
-    }
 }
 
 impl Drop for MdnsPublisher {
@@ -78,12 +66,20 @@ impl Drop for MdnsPublisher {
 }
 
 /// Convert a `.test` or `.tako.test` hostname to a `.local` hostname for mDNS.
-fn to_local_hostname(hostname: &str) -> String {
+///
+/// Returns `None` for wildcard hostnames (`*.foo.test`) because mDNS cannot
+/// advertise wildcards — each concrete subdomain needs its own record.
+pub(crate) fn to_mdns_hostname(hostname: &str) -> Option<String> {
+    if hostname.starts_with("*.") {
+        return None;
+    }
+    // Check the more specific suffix first — `.tako.test` ends with `.test`,
+    // so stripping `.test` would leave a trailing `.tako`.
     let base = hostname
         .strip_suffix(".tako.test")
         .or_else(|| hostname.strip_suffix(".test"))
         .unwrap_or(hostname);
-    format!("{base}.local")
+    Some(format!("{base}.local"))
 }
 
 /// Spawn a platform-appropriate mDNS publisher process.
@@ -137,18 +133,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn to_local_hostname_strips_tako_test_suffix() {
-        assert_eq!(to_local_hostname("myapp.tako.test"), "myapp.local");
+    fn to_mdns_hostname_strips_tako_test_suffix() {
+        assert_eq!(
+            to_mdns_hostname("myapp.tako.test").as_deref(),
+            Some("myapp.local")
+        );
     }
 
     #[test]
-    fn to_local_hostname_strips_test_suffix() {
-        assert_eq!(to_local_hostname("myapp.test"), "myapp.local");
+    fn to_mdns_hostname_strips_test_suffix() {
+        assert_eq!(
+            to_mdns_hostname("myapp.test").as_deref(),
+            Some("myapp.local")
+        );
     }
 
     #[test]
-    fn to_local_hostname_handles_bare_name() {
-        assert_eq!(to_local_hostname("myapp"), "myapp.local");
+    fn to_mdns_hostname_handles_bare_name() {
+        assert_eq!(to_mdns_hostname("myapp").as_deref(), Some("myapp.local"));
+    }
+
+    #[test]
+    fn to_mdns_hostname_rejects_wildcards() {
+        // mDNS cannot advertise wildcard hostnames, so the publisher must
+        // refuse to emit them rather than spawning `dns-sd -P '*.myapp'`.
+        assert_eq!(to_mdns_hostname("*.myapp.test"), None);
+        assert_eq!(to_mdns_hostname("*.myapp.tako.test"), None);
     }
 
     #[test]

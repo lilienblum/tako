@@ -195,8 +195,8 @@ impl FakeDevServer {
                         "ListApps" => serde_json::json!({
                             "type": "Apps",
                             "apps": [
-                                { "app_name": "a", "hosts": ["a.tako.test"], "upstream_port": 1234, "pid": 111 },
-                                { "app_name": "b", "hosts": ["b.tako.test"], "upstream_port": 2222 }
+                                { "app_name": "a", "hosts": ["a.test"], "upstream_port": 1234, "pid": 111 },
+                                { "app_name": "b", "hosts": ["b.test"], "upstream_port": 2222 }
                             ]
                         }),
                         "Info" => serde_json::json!({
@@ -217,7 +217,7 @@ impl FakeDevServer {
                             "type": "AppRegistered",
                             "app_name": v.get("app_name").and_then(|a| a.as_str()).unwrap_or(""),
                             "project_dir": v.get("project_dir").and_then(|a| a.as_str()).unwrap_or(""),
-                            "url": format!("https://{}.tako.test/", v.get("app_name").and_then(|a| a.as_str()).unwrap_or("app")),
+                            "url": format!("https://{}.test/", v.get("app_name").and_then(|a| a.as_str()).unwrap_or("app")),
                         }),
                         "SetAppStatus" => serde_json::json!({
                             "type": "AppStatusUpdated",

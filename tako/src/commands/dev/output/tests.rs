@@ -98,7 +98,7 @@ fn format_panel_has_border_and_app_name_with_runtime() {
         "user/myapp",
         "apps/myapp",
         None,
-        &["myapp.tako.test".to_string()],
+        &["myapp.test".to_string()],
         443,
         3000,
         None,
@@ -118,7 +118,7 @@ fn format_panel_shows_routes_label() {
         "user/app",
         "apps/app",
         None,
-        &["app.tako.test".to_string()],
+        &["app.test".to_string()],
         443,
         3000,
         None,
@@ -126,26 +126,26 @@ fn format_panel_shows_routes_label() {
     );
     let plain = strip_ansi(&panel);
     assert!(plain.contains("routes"));
-    assert!(plain.contains("https://app.tako.test"));
+    assert!(plain.contains("https://app.test"));
 }
 
 #[test]
 fn format_panel_shows_all_urls() {
-    let hosts = vec!["a.tako.test".to_string(), "b.tako.test".to_string()];
+    let hosts = vec!["a.test".to_string(), "b.test".to_string()];
     let panel = format_panel(
         "app", "running", "bun", "u/r", "", None, &hosts, 443, 3000, None, None,
     );
     let plain = strip_ansi(&panel);
-    assert!(plain.contains("https://a.tako.test"));
-    assert!(plain.contains("https://b.tako.test"));
+    assert!(plain.contains("https://a.test"));
+    assert!(plain.contains("https://b.test"));
 }
 
 #[test]
 fn format_panel_shows_wildcard_and_path_routes() {
     let hosts = vec![
-        "bun-example.tako.test".to_string(),
-        "bun-example.tako.test/bun".to_string(),
-        "*.bun-example.tako.test".to_string(),
+        "bun-example.test".to_string(),
+        "bun-example.test/bun".to_string(),
+        "*.bun-example.test".to_string(),
     ];
     let panel = format_panel_wide(
         "bun-example",
@@ -163,11 +163,11 @@ fn format_panel_shows_wildcard_and_path_routes() {
     );
     let plain = strip_ansi(&panel);
     assert!(
-        plain.contains("https://bun-example.tako.test/bun"),
+        plain.contains("https://bun-example.test/bun"),
         "missing /bun route"
     );
     assert!(
-        plain.contains("https://*.bun-example.tako.test"),
+        plain.contains("https://*.bun-example.test"),
         "missing wildcard route"
     );
     assert_eq!(
@@ -181,9 +181,9 @@ fn format_panel_shows_wildcard_and_path_routes() {
 fn format_lan_block_rewrites_host_only_and_preserves_paths() {
     let lines = format_lan_block(
         &[
-            "bun-example.tako.test".to_string(),
-            "bun-example.tako.test/bun".to_string(),
-            "*.bun-example.tako.test/api/*".to_string(),
+            "bun-example.test".to_string(),
+            "bun-example.test/bun".to_string(),
+            "*.bun-example.test/api/*".to_string(),
         ],
         "http://192.168.1.2/ca.pem",
     );
@@ -228,7 +228,7 @@ fn format_panel_omits_443_port() {
         "",
         "",
         None,
-        &["app.tako.test".to_string()],
+        &["app.test".to_string()],
         443,
         3000,
         None,
@@ -246,7 +246,7 @@ fn format_panel_includes_custom_port() {
         "",
         "",
         None,
-        &["app.tako.test".to_string()],
+        &["app.test".to_string()],
         47831,
         3000,
         None,
@@ -265,7 +265,7 @@ fn format_panel_shows_metrics() {
         "",
         "",
         None,
-        &["app.tako.test".to_string()],
+        &["app.test".to_string()],
         443,
         3001,
         Some(50.0),
@@ -287,7 +287,7 @@ fn format_panel_shows_dash_without_metrics() {
         "",
         "",
         None,
-        &["app.tako.test".to_string()],
+        &["app.test".to_string()],
         443,
         3000,
         None,
@@ -305,7 +305,7 @@ fn format_panel_shows_repo_info() {
         "myorg/myrepo",
         "apps/myapp",
         None,
-        &["app.tako.test".to_string()],
+        &["app.test".to_string()],
         443,
         3000,
         None,
@@ -325,7 +325,7 @@ fn format_panel_stacked_has_border_and_content() {
         "user/repo",
         "projects/app",
         None,
-        &["app.tako.test".to_string()],
+        &["app.test".to_string()],
         443,
         3000,
         Some(25.0),
@@ -337,7 +337,7 @@ fn format_panel_stacked_has_border_and_content() {
     assert!(plain.contains('└'));
     assert!(plain.contains("app"));
     assert!(plain.contains("routes"));
-    assert!(plain.contains("https://app.tako.test"));
+    assert!(plain.contains("https://app.test"));
     assert!(plain.contains("cpu"));
     assert!(plain.contains("ram"));
     assert!(plain.contains("port 3000"));
@@ -412,7 +412,7 @@ fn format_panel_shows_worktree_indicator() {
         "user/repo",
         "apps/app",
         Some("wt1"),
-        &["app.tako.test".to_string()],
+        &["app.test".to_string()],
         443,
         3000,
         None,
@@ -431,7 +431,7 @@ fn format_panel_omits_worktree_when_none() {
         "user/repo",
         "apps/app",
         None,
-        &["app.tako.test".to_string()],
+        &["app.test".to_string()],
         443,
         3000,
         None,

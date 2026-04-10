@@ -88,6 +88,14 @@ Tako generates a root CA on first run and stores the private key in the system k
 
 If you see certificate errors after reinstalling Tako or changing `TAKO_HOME`, the CA key in the keychain may not match the CA cert on disk. Run `tako dev` again and it will re-establish trust.
 
+### iOS still shows "Not Private" after installing the CA
+
+Installing the Tako CA profile on iOS is only step one — iOS does not trust newly installed root CAs by default. Open **Settings → General → About → Certificate Trust Settings** and enable full trust for `Tako Development`. The `Certificate Trust Settings` screen only appears once a CA profile is installed, which is why it is easy to miss.
+
+### Wildcard subdomain routes don't work from my phone on LAN mode
+
+Wildcard routes (e.g. `*.app.test`) cannot be advertised via mDNS — the protocol only supports concrete records. Tako warns about this below the LAN route list. To reach a specific subdomain from your phone, add it as an explicit route in `[envs.development]` alongside the wildcard (see [Development → LAN mode](/docs/development#wildcard-routes-and-mdns)).
+
 ### macOS dev proxy
 
 On macOS, Tako configures a launchd-managed dev proxy so you can access apps on standard ports (443 for HTTPS, 80 for HTTP redirect) without specifying a port number. The proxy uses a dedicated loopback address (`127.77.0.1`) and forwards traffic:

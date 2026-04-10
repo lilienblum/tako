@@ -631,6 +631,7 @@ fn to_local_route(route: &str) -> String {
 /// Render a LAN mode block: routes + QR code as a single visual unit.
 pub(super) fn format_lan_block(hosts: &[String], ca_url: &str) -> Vec<String> {
     let url_color = ansi_rgb(240, 175, 95);
+    let warn_color = ansi_rgb(234, 211, 156);
     let mut out = Vec::new();
     out.push(String::new());
     out.push(format!(
@@ -641,6 +642,26 @@ pub(super) fn format_lan_block(hosts: &[String], ca_url: &str) -> Vec<String> {
         let local = to_local_route(host);
         out.push(format!("  {url_color}https://{local}{RESET}"));
     }
+
+    // Wildcard routes cannot be advertised via mDNS (Bonjour/Avahi) — each
+    // concrete subdomain needs its own record. Warn once and suggest a
+    // concrete example derived from one of the app's own wildcard routes
+    // so the user can copy it directly into `[envs.development]`.
+    if let Some(wildcard_host) = hosts
+        .iter()
+        .map(|h| split_route_pattern(h).0)
+        .find(|h| h.starts_with("*."))
+    {
+        let example = wildcard_host.replacen('*', "api", 1);
+        out.push(String::new());
+        out.push(format!(
+            "  {warn_color}! Wildcard routes can't be advertised to devices via mDNS.{RESET}"
+        ));
+        out.push(format!(
+            "  {DIM}Add a concrete subdomain route (e.g. {example}) to reach it from your phone.{RESET}"
+        ));
+    }
+
     out.push(String::new());
     for line in format_qr_code(ca_url) {
         out.push(format!("  {line}"));

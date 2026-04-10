@@ -39,7 +39,7 @@ pub(crate) use bootstrap::{
 use protocol::DevEvent;
 use protocol::Response;
 use tracing_subscriber::EnvFilter;
-/// Split a route pattern like "app.tako.test/api" into ("app.tako.test", Some("/api")).
+/// Split a route pattern like "app.test/api" into ("app.test", Some("/api")).
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt()

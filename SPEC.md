@@ -425,6 +425,8 @@ Start (or connect to) a local development session for the current app, backed by
   - App lifecycle state (`starting`, `running`, `stopped`, app PID, and startup errors) is persisted to the same shared stream, so attached sessions reconstruct the same status/CPU/RAM view as the owning session.
 - The daemon supports **multiple concurrent apps** and maintains hostname-based routing for `*.test` (and `*.tako.test` as a fallback).
   - When LAN mode is enabled from the interactive UI (`l`), the same registered dev routes are also reachable via `.local` aliases. Hostnames are rewritten only at the suffix, so subdomains, wildcard hosts, and path-prefixed routes keep the same shape.
+    - Concrete hostnames are advertised to the LAN via mDNS (Bonjour on macOS, Avahi on Linux) so phones and tablets resolve them by name.
+    - Wildcard routes (e.g. `*.app.test`) cannot be advertised via mDNS — the protocol only supports concrete records. They still match at the proxy, so devices with their own DNS server for the subdomain can reach them, but plain mDNS clients (phones) cannot. Tako surfaces a warning under the LAN mode route list pointing to the wildcard routes and suggesting an explicit subdomain route (e.g. `api.app.test`) as the fix.
 - When running in an interactive terminal, `tako dev` prints a branded header (logo + version + app info) once at startup, then streams logs and status updates directly to stdout.
   - Native terminal features (scrollback, search, copy/paste, clickable links) are preserved — no alternate screen is used.
   - Log levels are `DEBUG`, `INFO`, `WARN`, `ERROR`, and `FATAL`; the level token is colorized using pastel colors (electric blue, green, yellow, red, and purple respectively).
@@ -448,7 +450,7 @@ Start (or connect to) a local development session for the current app, backed by
   - The daemon reuses existing TLS files when present.
 - `tako dev` listens on `127.0.0.1:47831` in HTTPS mode.
 - By default, Tako registers `https://{app}.test:47831/` on non-macOS and `https://{app}.test/` on macOS. Both `.test` and `.tako.test` domains work simultaneously (`.tako.test` is always available as a fallback).
-  - In LAN mode, those same dev routes are additionally served via `.local` aliases (for example `app.tako.test/api/*` also answers on `app.local/api/*`).
+  - In LAN mode, those same dev routes are additionally served via `.local` aliases (for example `app.test/api/*` also answers on `app.local/api/*`).
   - On macOS, Tako configures split DNS by writing `/etc/resolver/test` and `/etc/resolver/tako.test` (one-time sudo), pointing to a local DNS listener on `127.0.0.1:53535`. If `/etc/resolver/test` already exists and was not created by Tako, Tako skips it and warns about the conflict (`.tako.test` still works).
   - On Linux, systemd-resolved routes both `~test` and `~tako.test` to the local DNS listener.
   - The dev daemon answers `A` queries for active `*.test` and `*.tako.test` hosts.

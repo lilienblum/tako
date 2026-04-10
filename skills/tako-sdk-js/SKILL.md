@@ -109,7 +109,7 @@ export default defineConfig({
 
 **On `vite build`:** Emits `<outDir>/tako-entry.mjs` — a wrapper that normalizes the compiled server module into a default-exported fetch handler. Point `main` in `tako.toml` at this file.
 
-**On `vite dev`:** Adds `.tako.test` to allowed hosts. If `PORT` env var is set, binds Vite to `127.0.0.1:$PORT` with `strictPort: true` (used by `tako dev`).
+**On `vite dev`:** Adds `.test` to allowed hosts. If `PORT` env var is set, binds Vite to `127.0.0.1:$PORT` with `strictPort: true` (used by `tako dev`).
 
 ## Next.js Adapter
 

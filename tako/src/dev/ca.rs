@@ -1,8 +1,8 @@
 //! Local Certificate Authority for Development
 //!
 //! Generates and manages a local CA for trusted HTTPS in development.
-//! Apps are accessible at `https://{app-name}.tako.test` with certificates
-//! signed by the local CA.
+//! Apps are accessible at `https://{app-name}.test` (with `.tako.test` as a
+//! fallback) using certificates signed by the local CA.
 //!
 //! Security model:
 //! - Root CA private key stored in system keychain (encrypted)
@@ -147,7 +147,7 @@ impl LocalCA {
 
     /// Generate a leaf certificate for a domain
     ///
-    /// The domain should be in the format `{app-name}.tako.test`
+    /// The domain should be in the format `{app-name}.test` (or `.tako.test`)
     pub fn generate_leaf_cert(&self, domain: &str) -> Result<Certificate> {
         // Parse the CA key
         let ca_key = KeyPair::from_pem(&self.ca_key_pem)
@@ -750,7 +750,7 @@ mod tests {
     #[test]
     fn test_generate_leaf_cert() {
         let ca = LocalCA::generate().unwrap();
-        let domain = "my-app.tako.test";
+        let domain = "my-app.test";
 
         let leaf = ca.generate_leaf_cert(domain).unwrap();
 
@@ -762,8 +762,8 @@ mod tests {
     fn test_generate_multiple_leaf_certs() {
         let ca = LocalCA::generate().unwrap();
 
-        let leaf1 = ca.generate_leaf_cert("app1.tako.test").unwrap();
-        let leaf2 = ca.generate_leaf_cert("app2.tako.test").unwrap();
+        let leaf1 = ca.generate_leaf_cert("app1.test").unwrap();
+        let leaf2 = ca.generate_leaf_cert("app2.test").unwrap();
 
         // Each leaf cert should be unique
         assert_ne!(leaf1.cert_pem, leaf2.cert_pem);
@@ -846,7 +846,7 @@ mod tests {
     #[test]
     fn test_leaf_cert_has_correct_san() {
         let ca = LocalCA::generate().unwrap();
-        let domain = "test-app.tako.test";
+        let domain = "test-app.test";
         let leaf = ca.generate_leaf_cert(domain).unwrap();
 
         // Parse the certificate to verify SAN

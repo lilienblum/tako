@@ -88,11 +88,11 @@ function mergeServeAllowedHosts(existing: unknown): true | string[] {
   const merged = Array.isArray(existing)
     ? existing.filter((host): host is string => typeof host === "string")
     : [];
-  if (!merged.includes(".tako.test")) {
-    merged.push(".tako.test");
-  }
   if (!merged.includes(".test")) {
     merged.push(".test");
+  }
+  if (!merged.includes(".tako.test")) {
+    merged.push(".tako.test");
   }
   return merged;
 }

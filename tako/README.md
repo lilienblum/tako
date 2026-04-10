@@ -44,7 +44,7 @@ Operational behavior highlights:
 - For JS runtimes, `tako dev` and deploy build stage 1 use the runtime lane's script runner by default (`bun run dev/build`, `npm run dev/build`, `deno task dev/build`), so external tools like Vite+ can live behind those scripts.
 - `tako deploy` builds per-target artifacts locally before upload, using Docker only when preset `[build].container` resolves to `true`; built-in JS base presets (`bun`, `node`, `deno`) default to local build mode (`container = false`) unless explicitly overridden.
 - Non-dry-run `tako deploy` acquires a project-local `.tako/deploy.lock` and fails fast if another local deploy is already running for the same project.
-- On macOS, `tako dev` uses a dedicated `127.77.0.1` loopback alias plus a launchd-managed dev proxy (`tako-dev-proxy`) so `https://{app}.tako.test/` works on default ports without binding the main network interfaces.
+- On macOS, `tako dev` uses a dedicated `127.77.0.1` loopback alias plus a launchd-managed dev proxy (`tako-dev-proxy`) so `https://{app}.test/` works on default ports without binding the main network interfaces.
 - Container builds stay ephemeral; dependency downloads are reused via per-target Docker cache volumes keyed by target label and builder image.
 - Containerized deploy builds default to `ghcr.io/lilienblum/tako-builder-musl:v1` for `*-musl` targets and `ghcr.io/lilienblum/tako-builder-glibc:v1` for `*-glibc` targets.
 - `tako deploy` caches target artifacts in `.tako/artifacts` and reuses verified cache hits when build inputs are unchanged; invalid cache entries are rebuilt automatically.
@@ -80,7 +80,7 @@ cargo run -p tako --bin tako -- deploy --help
 - App-scoped commands default to `./tako.toml`; `-c/--config CONFIG` selects another config file and uses its parent directory as project context. Omitting the `.toml` suffix is supported and recommended for brevity.
 - Top-level `name` in `tako.toml` is optional; when omitted, app identity falls back to sanitized project directory name.
 - Setting `name` explicitly is recommended for stable identity and uniqueness per server; renaming identity later creates a new app path and requires manual cleanup of old deployments.
-- Non-development environments must define `route` or `routes`; development defaults to `{app}.tako.test`.
+- Non-development environments must define `route` or `routes`; development defaults to `{app}.test`.
 
 ## Related Docs
 

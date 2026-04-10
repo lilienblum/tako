@@ -51,7 +51,7 @@ async fn register_app_roundtrip() {
         "config_path": "/tmp/test-proj/tako.toml",
         "project_dir": "/tmp/test-proj",
         "app_name": "my-app",
-        "hosts": ["my-app.tako.test"],
+        "hosts": ["my-app.test"],
         "upstream_port": 1234,
         "command": ["node", "index.js"],
         "env": {}
@@ -71,7 +71,7 @@ async fn register_app_roundtrip() {
             assert_eq!(app_name, "my-app");
             assert_eq!(config_path, "/tmp/test-proj/tako.toml");
             assert_eq!(project_dir, "/tmp/test-proj");
-            assert!(url.contains("my-app.tako.test"));
+            assert!(url.contains("my-app.test"));
         }
         other => panic!("unexpected: {other:?}"),
     }
@@ -156,7 +156,7 @@ fn insert_test_app(state: &Arc<Mutex<State>>, project_dir: &str, name: &str) {
             project_dir: project_dir.to_string(),
             name: name.to_string(),
             variant: None,
-            hosts: vec![format!("{name}.tako.test")],
+            hosts: vec![format!("{name}.test")],
             upstream_port: 3000,
             is_idle: false,
             command: vec!["bun".to_string()],
@@ -168,7 +168,7 @@ fn insert_test_app(state: &Arc<Mutex<State>>, project_dir: &str, name: &str) {
     );
     s.routes.set_routes(
         format!("reg:{config_path}"),
-        vec![format!("{name}.tako.test")],
+        vec![format!("{name}.test")],
         3000,
         true,
     );
@@ -466,14 +466,14 @@ async fn set_app_status_broadcasts_status_changed_event() {
 
 #[test]
 fn redirect_location_strips_default_http_port() {
-    let location = redirect_location("bun-example.tako.test:80", "/hello");
-    assert_eq!(location, "https://bun-example.tako.test/hello");
+    let location = redirect_location("bun-example.test:80", "/hello");
+    assert_eq!(location, "https://bun-example.test/hello");
 }
 
 #[test]
 fn redirect_location_keeps_non_default_port() {
-    let location = redirect_location("bun-example.tako.test:8080", "/");
-    assert_eq!(location, "https://bun-example.tako.test:8080/");
+    let location = redirect_location("bun-example.test:8080", "/");
+    assert_eq!(location, "https://bun-example.test:8080/");
 }
 
 #[test]
@@ -599,7 +599,7 @@ fn dev_cert_resolver_generates_cert_matching_hostname() {
     let resolver = DevCertResolver::new(ca);
 
     let (x509, _pkey) = resolver
-        .get_or_create_cert("foo.tako.test")
+        .get_or_create_cert("foo.test")
         .expect("should generate cert");
 
     // Verify the SAN contains the exact hostname.
@@ -628,8 +628,8 @@ fn dev_cert_resolver_generates_cert_matching_hostname() {
         .collect();
 
     assert!(
-        dns_names.contains(&"foo.tako.test"),
-        "cert must contain foo.tako.test SAN, got: {:?}",
+        dns_names.contains(&"foo.test"),
+        "cert must contain foo.test SAN, got: {:?}",
         dns_names
     );
 }
@@ -644,7 +644,7 @@ fn dev_cert_resolver_cert_is_signed_by_ca() {
     let resolver = DevCertResolver::new(ca);
 
     let (leaf_x509, _) = resolver
-        .get_or_create_cert("foo.tako.test")
+        .get_or_create_cert("foo.test")
         .expect("should generate cert");
 
     // Verify the leaf cert is signed by the CA's public key.
@@ -660,8 +660,8 @@ fn dev_cert_resolver_caches_certs() {
     let ca = local_ca::LocalCA::generate().unwrap();
     let resolver = DevCertResolver::new(ca);
 
-    let (first, _) = resolver.get_or_create_cert("bar.tako.test").unwrap();
-    let (second, _) = resolver.get_or_create_cert("bar.tako.test").unwrap();
+    let (first, _) = resolver.get_or_create_cert("bar.test").unwrap();
+    let (second, _) = resolver.get_or_create_cert("bar.test").unwrap();
 
     // Same DER bytes → same cert object was returned from cache.
     assert_eq!(first.to_der().unwrap(), second.to_der().unwrap());
@@ -687,7 +687,7 @@ fn kill_all_app_processes_sends_sigterm_to_tracked_pids() {
                 project_dir: "/proj".to_string(),
                 name: "my-app".to_string(),
                 variant: None,
-                hosts: vec!["my-app.tako.test".to_string()],
+                hosts: vec!["my-app.test".to_string()],
                 upstream_port: 3000,
                 is_idle: false,
                 command: vec!["sleep".to_string(), "60".to_string()],
@@ -728,7 +728,7 @@ async fn register_app_with_variant_roundtrip() {
         "project_dir": "/proj/my-app",
         "app_name": "my-app-staging",
         "variant": "staging",
-        "hosts": ["my-app-staging.tako.test"],
+        "hosts": ["my-app-staging.test"],
         "upstream_port": 3000,
         "command": ["bun", "run", "index.ts"],
         "env": {},
@@ -780,7 +780,7 @@ async fn register_app_without_variant_has_none() {
         "config_path": "/proj/my-app/tako.toml",
         "project_dir": "/proj/my-app",
         "app_name": "my-app",
-        "hosts": ["my-app.tako.test"],
+        "hosts": ["my-app.test"],
         "upstream_port": 3000,
         "command": ["bun", "run", "index.ts"],
         "env": {},
@@ -825,7 +825,7 @@ async fn variant_and_non_variant_coexist_in_list() {
         "config_path": "/proj1/tako.toml",
         "project_dir": "/proj1",
         "app_name": "app-foo",
-        "hosts": ["app-foo.tako.test"],
+        "hosts": ["app-foo.test"],
         "upstream_port": 3000,
         "command": ["bun", "run", "index.ts"],
         "env": {},
@@ -844,7 +844,7 @@ async fn variant_and_non_variant_coexist_in_list() {
         "project_dir": "/proj2",
         "app_name": "app-foo-proj2",
         "variant": "foo",
-        "hosts": ["app-foo-proj2.tako.test"],
+        "hosts": ["app-foo-proj2.test"],
         "upstream_port": 3001,
         "command": ["bun", "run", "index.ts"],
         "env": {},
@@ -895,7 +895,7 @@ async fn register_app_spawns_process_and_sets_pid() {
         "config_path": "/tmp/test-spawn/tako.toml",
         "project_dir": tmp.path().to_str().unwrap(),
         "app_name": "spawn-test",
-        "hosts": ["spawn-test.tako.test"],
+        "hosts": ["spawn-test.test"],
         "upstream_port": 19999,
         "command": ["sleep", "60"],
         "env": {},
@@ -946,7 +946,7 @@ async fn unregister_app_kills_running_process() {
                 project_dir: tmp.path().to_string_lossy().to_string(),
                 name: "kill-test".to_string(),
                 variant: None,
-                hosts: vec!["kill-test.tako.test".to_string()],
+                hosts: vec!["kill-test.test".to_string()],
                 upstream_port: 19998,
                 is_idle: false,
                 command: vec!["sleep".to_string(), "60".to_string()],

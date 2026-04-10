@@ -131,6 +131,29 @@ The dev daemon listens on `127.0.0.1:47831` in HTTPS mode. TLS certificate and k
 
 If your browser still shows certificate warnings after setup, try quitting and restarting it, then verify the CA is installed in Keychain Access and marked as trusted.
 
+### Trusting the CA on iOS devices
+
+Scanning the LAN mode QR code installs the Tako CA as a **configuration profile**. That is only step one — iOS does not trust newly installed root CAs by default. Open **Settings → General → About → Certificate Trust Settings** and enable full trust for `Tako Development`. Without that toggle, Safari on your phone will still show "This Connection Is Not Private" because the certificate chain ends at an untrusted root.
+
+## LAN mode
+
+Toggling LAN mode (`l` in the interactive UI) exposes your registered dev routes on the local Wi-Fi network under `.local` aliases, advertised via mDNS (Bonjour on macOS, Avahi on Linux) so phones and tablets can resolve them by name. The CLI prints a QR code that opens an HTTP endpoint on the LAN IP serving the Tako root CA so devices can install it in one step.
+
+### Wildcard routes and mDNS
+
+Wildcard routes like `*.app.test` cannot be advertised to devices via mDNS — the protocol only supports concrete records, and each subdomain would need its own. Tako warns about this below the LAN route list and lists the affected wildcard routes. If you need to hit a specific subdomain from your phone (for example `api.app.test`), add it as an explicit route in `[envs.development]` alongside the wildcard:
+
+```toml
+[envs.development]
+routes = [
+  "app.test",
+  "*.app.test",       # still works on your laptop
+  "api.app.test",     # advertised via mDNS so your phone can reach it
+]
+```
+
+Concrete routes win over wildcards at the proxy, so request matching is unchanged.
+
 ## Local DNS
 
 Tako uses split DNS so `*.test` and `*.tako.test` hostnames resolve locally without touching your `/etc/hosts` file.

@@ -184,7 +184,7 @@ pub struct DevInfo {
     /// Where the daemon proxy is currently listening.
     pub listen: String,
     pub port: u16,
-    /// IP currently advertised for `.tako.test` hostnames.
+    /// IP currently advertised for `.test` (and `.tako.test`) hostnames.
     pub advertised_ip: String,
     #[serde(default)]
     pub local_dns_enabled: bool,
@@ -238,7 +238,7 @@ mod tests {
 
         let resp = Response::Event {
             event: DevEvent::RequestStarted {
-                host: "a.tako.test".to_string(),
+                host: "a.test".to_string(),
                 path: "/api".to_string(),
             },
         };
@@ -247,7 +247,7 @@ mod tests {
 
         let resp = Response::Event {
             event: DevEvent::RequestFinished {
-                host: "a.tako.test".to_string(),
+                host: "a.test".to_string(),
                 path: "/api".to_string(),
             },
         };
@@ -284,10 +284,7 @@ mod tests {
             project_dir: "/home/user/proj".to_string(),
             app_name: "my-app".to_string(),
             variant: None,
-            hosts: vec![
-                "my-app.tako.test".to_string(),
-                "my-app.tako.test/api".to_string(),
-            ],
+            hosts: vec!["my-app.test".to_string(), "my-app.test/api".to_string()],
             upstream_port: 3000,
             command: vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()],
             env: std::collections::HashMap::from([(
@@ -303,7 +300,7 @@ mod tests {
             app_name: "my-app".to_string(),
             config_path: "/home/user/proj/tako.toml".to_string(),
             project_dir: "/home/user/proj".to_string(),
-            url: "https://my-app.tako.test/".to_string(),
+            url: "https://my-app.test/".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
@@ -369,7 +366,7 @@ mod tests {
                 project_dir: "/proj".to_string(),
                 app_name: "app".to_string(),
                 variant: None,
-                hosts: vec!["app.tako.test".to_string()],
+                hosts: vec!["app.test".to_string()],
                 upstream_port: 3000,
                 status: "running".to_string(),
                 pid: Some(111),
@@ -450,7 +447,7 @@ mod tests {
 
     #[test]
     fn serde_request_started_requires_path() {
-        let json = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.tako.test"}}"#;
+        let json = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.test"}}"#;
         assert!(serde_json::from_str::<Response>(json).is_err());
     }
 }

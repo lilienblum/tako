@@ -74,18 +74,15 @@ mod tests {
     #[test]
     fn to_local_route_preserves_path_suffix() {
         assert_eq!(
-            to_local_route("app.tako.test/api/*").as_deref(),
+            to_local_route("app.test/api/*").as_deref(),
             Some("app.local/api/*")
         );
     }
 
     #[test]
     fn route_host_matches_request_accepts_local_aliases() {
-        assert!(route_host_matches_request("app.tako.test", "app.local"));
-        assert!(route_host_matches_request(
-            "*.app.tako.test",
-            "foo.app.local"
-        ));
-        assert!(!route_host_matches_request("app.tako.test", "other.local"));
+        assert!(route_host_matches_request("app.test", "app.local"));
+        assert!(route_host_matches_request("*.app.test", "foo.app.local"));
+        assert!(!route_host_matches_request("app.test", "other.local"));
     }
 }

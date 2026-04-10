@@ -466,9 +466,9 @@ mod tests {
             "Release",
             "20260330",
             &[
-                "app.tako.test".to_string(),
-                "app.tako.test/bun".to_string(),
-                "*.app.tako.test".to_string(),
+                "app.test".to_string(),
+                "app.test/bun".to_string(),
+                "*.app.test".to_string(),
             ],
         );
 
@@ -481,15 +481,15 @@ mod tests {
                 },
                 SummaryLine {
                     label: "Routes".to_string(),
-                    value: "https://app.tako.test".to_string(),
+                    value: "https://app.test".to_string(),
                 },
                 SummaryLine {
                     label: String::new(),
-                    value: "https://app.tako.test/bun".to_string(),
+                    value: "https://app.test/bun".to_string(),
                 },
                 SummaryLine {
                     label: String::new(),
-                    value: "https://*.app.tako.test".to_string(),
+                    value: "https://*.app.test".to_string(),
                 },
             ]
         );
@@ -497,7 +497,7 @@ mod tests {
 
     #[test]
     fn deploy_summary_lines_support_non_url_primary_field() {
-        let lines = format_deploy_summary_lines("App", "bun", &["app.tako.test".to_string()]);
+        let lines = format_deploy_summary_lines("App", "bun", &["app.test".to_string()]);
 
         assert_eq!(
             lines,
@@ -508,7 +508,7 @@ mod tests {
                 },
                 SummaryLine {
                     label: "Routes".to_string(),
-                    value: "https://app.tako.test".to_string(),
+                    value: "https://app.test".to_string(),
                 },
             ]
         );

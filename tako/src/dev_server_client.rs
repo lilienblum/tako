@@ -777,11 +777,12 @@ mod tests {
 
     #[test]
     fn parse_event_line_parses_request_started_event() {
-        let line = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.tako.test","path":"/api"}}"#;
+        let line =
+            r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.test","path":"/api"}}"#;
         assert_eq!(
             parse_event_line(line),
             Some(DevServerEvent::RequestStarted {
-                host: "a.tako.test".to_string(),
+                host: "a.test".to_string(),
                 path: "/api".to_string(),
             })
         );
@@ -789,7 +790,7 @@ mod tests {
 
     #[test]
     fn parse_event_line_rejects_request_started_without_path() {
-        let line = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.tako.test"}}"#;
+        let line = r#"{"type":"Event","event":{"type":"RequestStarted","host":"a.test"}}"#;
         assert_eq!(parse_event_line(line), None);
     }
 
