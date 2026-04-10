@@ -22,6 +22,7 @@ pub(crate) async fn localhost_https_host_reachable_via_ip(
     // Skip TLS verification — the probe checks connectivity (proxy + dev
     // server responding), not certificate validity. The browser does its own
     // chain verification against the system trust store.
+    // CodeQL[rust/disabled-certificate-check]: localhost-only probe, no remote traffic
     let client = match reqwest::Client::builder()
         .danger_accept_invalid_certs(true)
         .connect_timeout(Duration::from_millis(timeout_ms))
