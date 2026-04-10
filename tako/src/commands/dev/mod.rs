@@ -33,7 +33,7 @@ use prepare::macos::ensure_local_dns_resolver_configured;
 fn ensure_local_dns_resolver_configured(_port: u16) -> Result<bool, Box<dyn std::error::Error>> {
     Ok(true)
 }
-#[cfg(test)]
+#[cfg(all(test, target_os = "macos"))]
 use prepare::macos::{
     local_dns_resolver_contents, local_dns_sudo_action_line, parse_local_dns_resolver,
     sudo_setup_action_items,

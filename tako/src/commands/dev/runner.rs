@@ -149,6 +149,15 @@ pub async fn run(
         &env_snapshot,
     )
     .await?;
+    let initial_lan_enabled = crate::dev_server_client::info()
+        .await
+        .ok()
+        .and_then(|info| {
+            info.get("info")
+                .and_then(|i| i.get("lan_enabled"))
+                .and_then(|v| v.as_bool())
+        })
+        .unwrap_or(false);
 
     {
         let log_tx = log_tx.clone();
@@ -257,7 +266,7 @@ pub async fn run(
         let terminate_requested = terminate_requested.clone();
 
         tokio::spawn(async move {
-            let mut lan_enabled = false;
+            let mut lan_enabled = initial_lan_enabled;
             while let Some(cmd_in) = control_rx.recv().await {
                 match cmd_in {
                     output::ControlCmd::Restart => {
@@ -454,19 +463,6 @@ pub async fn run(
                                     .send(DevEvent::ClientDisconnected { client_id })
                                     .await;
                             }
-                        }
-                        crate::dev_server_client::DevServerEvent::LanModeChanged {
-                            enabled,
-                            lan_ip,
-                            ca_url,
-                        } => {
-                            let _ = event_tx
-                                .send(DevEvent::LanModeChanged {
-                                    enabled,
-                                    lan_ip,
-                                    ca_url,
-                                })
-                                .await;
                         }
                         _ => {}
                     }

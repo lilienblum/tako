@@ -50,6 +50,7 @@ The daemon:
 - Routes requests by `Host` header to the correct app port.
 - Answers DNS queries for `*.test` and `*.tako.test` hostnames.
 - Manages app processes (spawn, stop, wake-on-request).
+- When LAN mode is enabled, exposes the same routes via `.local` aliases on the local network.
 
 Installed CLI distributions include `tako` and `tako-dev-server` (on macOS, also `tako-dev-proxy`). When running from a source checkout, `tako dev` prefers repo-local debug/release builds of these helpers.
 
@@ -79,7 +80,7 @@ After 30 minutes with no attached CLI clients, a running app transitions to `idl
 
 ### Wake-on-request
 
-When an HTTP request arrives for an idle app, the daemon spawns the process and routes the request once the app is healthy. This means your app is always reachable at its `.test` URL, even after going idle.
+When an HTTP request arrives for an idle app, the daemon spawns the process and routes the request once the app is healthy. This means your app is always reachable at its `.test` URL, even after going idle. If LAN mode is enabled, the equivalent `.local` alias wakes the app too.
 
 ### Stopping
 
@@ -323,11 +324,12 @@ App lifecycle changes (starting, stopped, errors) appear inline as `-- {status} 
 
 ### Keyboard shortcuts
 
-| Key      | Action                                             |
-| -------- | -------------------------------------------------- |
-| `r`      | Restart the app process                            |
-| `b`      | Background the app (hand off to daemon, CLI exits) |
-| `Ctrl+c` | Stop the app and quit                              |
+| Key      | Action                                                |
+| -------- | ----------------------------------------------------- |
+| `l`      | Toggle LAN mode (`.local` aliases for current routes) |
+| `r`      | Restart the app process                               |
+| `b`      | Background the app (hand off to daemon, CLI exits)    |
+| `Ctrl+c` | Stop the app and quit                                 |
 
 ### Scrollback and search
 

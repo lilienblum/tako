@@ -103,7 +103,7 @@ Alias for `--variant`: `--var`
 
 `tako dev` is a client that connects to the `tako-dev-server` daemon. It registers the selected config file, starts your app, and streams logs directly to your terminal.
 
-On first run, Tako sets up a local Certificate Authority and HTTPS infrastructure so your app is available at `https://{app}.test/`. On macOS, a dev proxy is installed so your app is served on the default HTTPS port (443) without needing to specify a port. On Linux, iptables redirect rules achieve the same result without an extra proxy binary.
+On first run, Tako sets up a local Certificate Authority and HTTPS infrastructure so your app is available at `https://{app}.test/`. On macOS, a dev proxy is installed so your app is served on the default HTTPS port (443) without needing to specify a port. On Linux, iptables redirect rules achieve the same result without an extra proxy binary. In interactive mode, pressing `l` enables LAN mode so the same routes are also available through `.local` aliases.
 
 When `[envs.development]` defines custom routes in `tako.toml`, those routes are used instead of the default. Dev routes must use `.test` or `.tako.test` -- for example `{app}.test` or a subdomain of it.
 
@@ -111,11 +111,12 @@ The app starts immediately when `tako dev` starts (1 local instance) and transit
 
 **Interactive keyboard shortcuts:**
 
-| Key      | Action                                             |
-| -------- | -------------------------------------------------- |
-| `r`      | Restart the app process                            |
-| `b`      | Background the app (hand off to daemon, CLI exits) |
-| `Ctrl+c` | Stop the app and quit                              |
+| Key      | Action                                                |
+| -------- | ----------------------------------------------------- |
+| `l`      | Toggle LAN mode (`.local` aliases for current routes) |
+| `r`      | Restart the app process                               |
+| `b`      | Background the app (hand off to daemon, CLI exits)    |
+| `Ctrl+c` | Stop the app and quit                                 |
 
 When stdout is not a terminal (piped or redirected), output falls back to plain text with no color or raw mode.
 

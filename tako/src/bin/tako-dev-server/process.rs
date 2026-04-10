@@ -1,8 +1,9 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use crate::control::{State, split_route_pattern};
+use crate::control::State;
 use crate::protocol::{DevEvent, Response};
+use crate::route_pattern::{route_host_matches_request, split_route_pattern};
 use crate::state;
 use tokio::io::AsyncBufReadExt;
 
@@ -78,6 +79,26 @@ pub(crate) fn push_app_event(
     });
     if let Some((key, value)) = extra {
         payload[key] = value;
+    }
+    buf.push(payload.to_string());
+}
+
+pub(crate) fn push_lan_mode_event(
+    buf: &state::LogBuffer,
+    enabled: bool,
+    lan_ip: Option<&str>,
+    ca_url: Option<&str>,
+) {
+    let mut payload = serde_json::json!({
+        "type": "app_event",
+        "event": "lan_mode_changed",
+        "enabled": enabled,
+    });
+    if let Some(lan_ip) = lan_ip {
+        payload["lan_ip"] = serde_json::json!(lan_ip);
+    }
+    if let Some(ca_url) = ca_url {
+        payload["ca_url"] = serde_json::json!(ca_url);
     }
     buf.push(payload.to_string());
 }
@@ -294,11 +315,7 @@ pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: Strin
                 }
                 a.hosts.iter().any(|route_pattern| {
                     let (pat_host, pat_path) = split_route_pattern(route_pattern);
-                    let host_ok = pat_host == host
-                        || (pat_host.starts_with("*.")
-                            && host
-                                .split_once('.')
-                                .is_some_and(|(_, rest)| format!("*.{rest}") == pat_host));
+                    let host_ok = route_host_matches_request(pat_host, &host);
                     if !host_ok {
                         return false;
                     }

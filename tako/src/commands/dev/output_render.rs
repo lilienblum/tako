@@ -21,6 +21,13 @@ fn ansi_rgb(r: u8, g: u8, b: u8) -> String {
     format!("\x1b[38;2;{r};{g};{b}m")
 }
 
+fn split_route_pattern(route: &str) -> (&str, Option<&str>) {
+    match route.find('/') {
+        Some(idx) => (&route[..idx], Some(&route[idx..])),
+        None => (route, None),
+    }
+}
+
 fn terminal_cols() -> usize {
     Term::stdout().size().1 as usize
 }
@@ -491,6 +498,21 @@ pub(super) fn format_log(log: &ScopedLog) -> String {
         };
         return format!("{DIM}──── {label} ────{RESET}");
     }
+    if let Some(ip) = log
+        .scope
+        .eq("tako")
+        .then(|| log.message.strip_prefix("LAN mode enabled ("))
+        .flatten()
+        .and_then(|rest| rest.strip_suffix(')'))
+    {
+        let color = level_color(&log.level);
+        let scope = fit_scope(&log.scope);
+        let scope_color = scope_color(&log.scope);
+        return format!(
+            "{DIM}{}{RESET} {color}{:>5}{RESET} {scope_color}{scope}{RESET} LAN mode enabled {DIM}({ip}){RESET}",
+            log.timestamp, log.level
+        );
+    }
     if matches!(log.level, LogLevel::Debug) {
         let scope = fit_scope(&log.scope);
         let scope_color = scope_color(&log.scope);
@@ -588,20 +610,41 @@ fn format_qr_code(url: &str) -> Vec<String> {
     lines
 }
 
-/// Render a LAN mode block: QR code + description as a single visual unit.
-pub(super) fn format_lan_block(ip: &str, ca_url: &str) -> Vec<String> {
+/// Convert a `.test` / `.tako.test` route to its `.local` LAN equivalent.
+fn to_local_route(route: &str) -> String {
+    let (host, path) = split_route_pattern(route);
+    let (wildcard, host) = if let Some(rest) = host.strip_prefix("*.") {
+        ("*.", rest)
+    } else {
+        ("", host)
+    };
+    let base = host
+        .strip_suffix(".tako.test")
+        .or_else(|| host.strip_suffix(".test"))
+        .unwrap_or(host);
+    match path {
+        Some(path) => format!("{wildcard}{base}.local{path}"),
+        None => format!("{wildcard}{base}.local"),
+    }
+}
+
+/// Render a LAN mode block: routes + QR code as a single visual unit.
+pub(super) fn format_lan_block(hosts: &[String], ca_url: &str) -> Vec<String> {
+    let url_color = ansi_rgb(240, 175, 95);
     let mut out = Vec::new();
     out.push(String::new());
-    out.push(format!("  {DIM}LAN mode{RESET} {PRIMARY}{ip}{RESET}"));
+    out.push(format!(
+        "  {DIM}Your app is now available on your local network at these routes{RESET}"
+    ));
+    out.push(String::new());
+    for host in hosts {
+        let local = to_local_route(host);
+        out.push(format!("  {url_color}https://{local}{RESET}"));
+    }
     out.push(String::new());
     for line in format_qr_code(ca_url) {
         out.push(format!("  {line}"));
     }
-    out.push(String::new());
-    out.push(format!(
-        "  {DIM}Scan to install CA cert on your device{RESET}"
-    ));
-    out.push(format!("  {DIM}{ca_url}{RESET}"));
     out.push(String::new());
     out
 }

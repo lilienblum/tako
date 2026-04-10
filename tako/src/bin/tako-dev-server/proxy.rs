@@ -9,30 +9,11 @@ use pingora_proxy::{ProxyHttp, Session};
 use tokio::sync::Notify;
 
 use crate::protocol;
+use crate::route_pattern::{route_host_matches_request, split_route_pattern};
 
 // ---------------------------------------------------------------------------
 // Route matching helpers (ported from tako-server/src/routing.rs)
 // ---------------------------------------------------------------------------
-
-fn split_route(route: &str) -> (&str, Option<&str>) {
-    match route.find('/') {
-        Some(idx) => (&route[..idx], Some(&route[idx..])),
-        None => (route, None),
-    }
-}
-
-fn hostname_matches(pattern: &str, hostname: &str) -> bool {
-    if let Some(suffix) = pattern.strip_prefix("*.") {
-        if hostname == suffix {
-            return false;
-        }
-        hostname.len() > suffix.len()
-            && hostname.as_bytes()[hostname.len() - suffix.len() - 1] == b'.'
-            && hostname.ends_with(suffix)
-    } else {
-        pattern == hostname
-    }
-}
 
 fn path_matches(pattern: &str, path: &str) -> bool {
     if let Some(prefix) = pattern.strip_suffix("/*") {
@@ -58,7 +39,7 @@ fn route_specificity(pattern: &str) -> (u8, usize, u8) {
     if pattern.is_empty() {
         return (0, 0, 0);
     }
-    let (pattern_host, pattern_path) = split_route(pattern);
+    let (pattern_host, pattern_path) = split_route_pattern(pattern);
 
     let host_score: u8 = if pattern_host.starts_with("*.") { 1 } else { 2 };
 
@@ -164,7 +145,7 @@ impl Routes {
             let compiled = self.compiled.lock().unwrap();
             let mut found = None;
             for entry in compiled.iter() {
-                if !hostname_matches(&entry.host, host) {
+                if !route_host_matches_request(&entry.host, host) {
                     continue;
                 }
                 if let Some(p) = &entry.path
@@ -223,7 +204,7 @@ impl Routes {
                 if pattern.is_empty() {
                     continue;
                 }
-                let (host, path) = split_route(pattern);
+                let (host, path) = split_route_pattern(pattern);
                 entries.push(CompiledRoute {
                     host: host.to_string(),
                     path: path.map(|p| p.to_string()),
@@ -483,6 +464,36 @@ mod tests {
     }
 
     #[test]
+    fn lookup_matches_local_alias_of_exact_host_route() {
+        let routes = Routes::default();
+        routes.set_routes(
+            "app".to_string(),
+            vec!["app.tako.test".to_string()],
+            3000,
+            true,
+        );
+
+        let hit = routes.lookup("app.local", "/").unwrap();
+        assert_eq!(hit.0, "app");
+        assert_eq!(hit.1, 3000);
+    }
+
+    #[test]
+    fn lookup_matches_local_alias_of_wildcard_and_path_route() {
+        let routes = Routes::default();
+        routes.set_routes(
+            "app".to_string(),
+            vec!["*.app.tako.test/api/*".to_string()],
+            3000,
+            true,
+        );
+
+        let hit = routes.lookup("foo.app.local", "/api/health").unwrap();
+        assert_eq!(hit.0, "app");
+        assert_eq!(hit.1, 3000);
+    }
+
+    #[test]
     fn remove_app_cleans_up() {
         let routes = Routes::default();
         routes.set_routes(
@@ -515,10 +526,24 @@ mod tests {
 
     #[test]
     fn hostname_matches_basic() {
-        assert!(hostname_matches("app.tako.test", "app.tako.test"));
-        assert!(!hostname_matches("app.tako.test", "other.tako.test"));
-        assert!(hostname_matches("*.app.tako.test", "foo.app.tako.test"));
-        assert!(!hostname_matches("*.app.tako.test", "app.tako.test"));
+        assert!(route_host_matches_request("app.tako.test", "app.tako.test"));
+        assert!(!route_host_matches_request(
+            "app.tako.test",
+            "other.tako.test"
+        ));
+        assert!(route_host_matches_request(
+            "*.app.tako.test",
+            "foo.app.tako.test"
+        ));
+        assert!(!route_host_matches_request(
+            "*.app.tako.test",
+            "app.tako.test"
+        ));
+        assert!(route_host_matches_request("app.tako.test", "app.local"));
+        assert!(route_host_matches_request(
+            "*.app.tako.test",
+            "foo.app.local"
+        ));
     }
 
     #[test]

@@ -8,20 +8,14 @@ use tokio::sync::watch;
 
 use crate::process::{
     broadcast_app_status, kill_app_process, monitor_handoff_pid, push_app_event, push_divider,
-    push_scoped_log, spawn_and_monitor_app,
+    push_lan_mode_event, push_scoped_log, spawn_and_monitor_app,
 };
 use crate::protocol::{self, AppInfo, Request, Response};
+use crate::route_pattern::split_route_pattern;
 use crate::state;
 use crate::state::RuntimeApp;
 use crate::{advertised_https_port, app_short_host, default_hosts};
 use tako_socket::{read_json_line, write_json_line};
-
-pub(crate) fn split_route_pattern(route: &str) -> (&str, Option<&str>) {
-    match route.find('/') {
-        Some(idx) => (&route[..idx], Some(&route[idx..])),
-        None => (route, None),
-    }
-}
 
 fn sanitize_app_name(name: &str) -> String {
     let mut out = String::new();
@@ -42,6 +36,30 @@ fn sanitize_app_name(name: &str) -> String {
         "app".to_string()
     } else {
         out
+    }
+}
+
+fn lan_mode_message(enabled: bool, lan_ip: Option<&str>) -> String {
+    if enabled {
+        match lan_ip {
+            Some(ip) => format!("LAN mode enabled ({ip})"),
+            None => "LAN mode enabled".to_string(),
+        }
+    } else {
+        "LAN mode disabled".to_string()
+    }
+}
+
+fn write_lan_mode_records(
+    log_buffers: impl IntoIterator<Item = state::LogBuffer>,
+    enabled: bool,
+    lan_ip: Option<&str>,
+    ca_url: Option<&str>,
+) {
+    let message = lan_mode_message(enabled, lan_ip);
+    for log_buffer in log_buffers {
+        push_scoped_log(&log_buffer, "Info", "tako", &message);
+        push_lan_mode_event(&log_buffer, enabled, lan_ip, ca_url);
     }
 }
 
@@ -305,6 +323,7 @@ pub(crate) async fn handle_client(
                 client_pid,
             } => {
                 let app_name = sanitize_app_name(&app_name);
+                let route_id = format!("reg:{}", config_path);
 
                 {
                     let s = state.lock().unwrap();
@@ -317,6 +336,11 @@ pub(crate) async fn handle_client(
 
                 let mut s = state.lock().unwrap();
                 s.cancel_idle_exit();
+                let old_hosts = s
+                    .apps
+                    .get(&config_path)
+                    .map(|app| app.hosts.clone())
+                    .unwrap_or_default();
 
                 let hosts = if hosts.is_empty() {
                     default_hosts(&app_name)
@@ -336,6 +360,7 @@ pub(crate) async fn handle_client(
                         a.log_buffer.clone()
                     })
                     .unwrap_or_else(state::LogBuffer::new);
+                let lan_log_buffer = log_buffer.clone();
 
                 s.apps.insert(
                     config_path.clone(),
@@ -354,9 +379,25 @@ pub(crate) async fn handle_client(
                     },
                 );
 
-                let route_id = format!("reg:{}", config_path);
                 s.routes
                     .set_routes(route_id, hosts.clone(), upstream_port, true);
+                if let Some(ref mut mdns) = s.mdns {
+                    for host in &old_hosts {
+                        mdns.unpublish(split_route_pattern(host).0);
+                    }
+                    for host in &hosts {
+                        mdns.publish(split_route_pattern(host).0);
+                    }
+                }
+                if s.lan_enabled {
+                    let ca_url = s.lan_ip.as_ref().map(|ip| format!("http://{ip}/ca.pem"));
+                    write_lan_mode_records(
+                        [lan_log_buffer],
+                        true,
+                        s.lan_ip.as_deref(),
+                        ca_url.as_deref(),
+                    );
+                }
 
                 let host = hosts
                     .first()
@@ -415,11 +456,16 @@ pub(crate) async fn handle_client(
                     state::remove_pid_file(&app.project_dir, &config_path);
                 }
 
-                let app_name = s
-                    .apps
-                    .remove(&config_path)
-                    .map(|a| a.name)
-                    .unwrap_or_default();
+                let app_name = if let Some(app) = s.apps.remove(&config_path) {
+                    if let Some(ref mut mdns) = s.mdns {
+                        for host in &app.hosts {
+                            mdns.unpublish(split_route_pattern(host).0);
+                        }
+                    }
+                    app.name
+                } else {
+                    String::new()
+                };
 
                 let route_id = format!("reg:{}", config_path);
                 s.routes.remove_app(&route_id);
@@ -682,10 +728,10 @@ async fn handle_toggle_lan(state: &Arc<Mutex<State>>, enabled: bool) -> Response
             }
         };
 
-        // Tell the dev proxy to bind 0.0.0.0:443/80 for LAN traffic
-        if let Err(e) =
-            send_dev_proxy_command(r#"{"command":"enable_lan","bind_addr":"0.0.0.0"}"#).await
-        {
+        // Bind the concrete LAN interface so the wildcard dev proxy listener on
+        // loopback does not conflict with LAN exposure on macOS.
+        let command = build_enable_lan_command(&lan_ip);
+        if let Err(e) = send_dev_proxy_command(&command).await {
             return Response::Error {
                 message: format!("failed to enable LAN on dev proxy: {e}"),
             };
@@ -694,17 +740,20 @@ async fn handle_toggle_lan(state: &Arc<Mutex<State>>, enabled: bool) -> Response
         let ca_url = format!("http://{lan_ip}/ca.pem");
 
         let mut s = state.lock().unwrap();
+        let log_buffers: Vec<state::LogBuffer> =
+            s.apps.values().map(|app| app.log_buffer.clone()).collect();
 
         // Start mDNS publisher and publish all registered app hostnames
         let mut mdns = crate::lan::MdnsPublisher::new(lan_ip.clone());
         for app in s.apps.values() {
             for host in &app.hosts {
-                mdns.publish(host);
+                mdns.publish(split_route_pattern(host).0);
             }
         }
         s.mdns = Some(mdns);
         s.lan_enabled = true;
         s.lan_ip = Some(lan_ip.clone());
+        write_lan_mode_records(log_buffers, true, Some(&lan_ip), Some(&ca_url));
         s.events.broadcast(Response::Event {
             event: protocol::DevEvent::LanModeChanged {
                 enabled: true,
@@ -721,12 +770,15 @@ async fn handle_toggle_lan(state: &Arc<Mutex<State>>, enabled: bool) -> Response
         let _ = send_dev_proxy_command(r#"{"command":"disable_lan"}"#).await;
 
         let mut s = state.lock().unwrap();
+        let log_buffers: Vec<state::LogBuffer> =
+            s.apps.values().map(|app| app.log_buffer.clone()).collect();
         if let Some(ref mut mdns) = s.mdns {
             mdns.cleanup_all();
         }
         s.mdns = None;
         s.lan_enabled = false;
         s.lan_ip = None;
+        write_lan_mode_records(log_buffers, false, None, None);
         s.events.broadcast(Response::Event {
             event: protocol::DevEvent::LanModeChanged {
                 enabled: false,
@@ -771,10 +823,56 @@ async fn send_dev_proxy_command(json_line: &str) -> Result<String, String> {
     Ok(response)
 }
 
+fn build_enable_lan_command(lan_ip: &str) -> String {
+    serde_json::json!({
+        "command": "enable_lan",
+        "bind_addr": lan_ip,
+    })
+    .to_string()
+}
+
 async fn write_resp(
     w: &mut tokio::net::unix::OwnedWriteHalf,
     resp: &Response,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     write_json_line(w, resp).await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_enable_lan_command, write_lan_mode_records};
+    use crate::state::LogBuffer;
+
+    #[test]
+    fn build_enable_lan_command_uses_detected_lan_ip() {
+        let json = build_enable_lan_command("192.168.1.42");
+        assert_eq!(
+            json,
+            r#"{"bind_addr":"192.168.1.42","command":"enable_lan"}"#
+        );
+    }
+
+    #[test]
+    fn write_lan_mode_records_appends_log_and_event_entries() {
+        let buffer = LogBuffer::new();
+        write_lan_mode_records(
+            [buffer.clone()],
+            true,
+            Some("192.168.1.42"),
+            Some("http://192.168.1.42/ca.pem"),
+        );
+
+        let (entries, _, truncated) = buffer.subscribe(None);
+        assert!(!truncated);
+        assert_eq!(entries.len(), 2);
+        assert!(
+            entries[0]
+                .line
+                .contains(r#""message":"LAN mode enabled (192.168.1.42)""#)
+        );
+        assert!(entries[1].line.contains(r#""event":"lan_mode_changed""#));
+        assert!(entries[1].line.contains(r#""enabled":true"#));
+        assert!(entries[1].line.contains(r#""lan_ip":"192.168.1.42""#));
+    }
 }

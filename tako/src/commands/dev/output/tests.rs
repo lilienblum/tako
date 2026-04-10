@@ -1,7 +1,8 @@
 use super::super::LogLevel;
 use super::*;
 use crate::commands::dev::output_render::{
-    extract_repo_slug, fit_scope, format_panel_stacked, format_panel_wide, progress_bar, vlen,
+    extract_repo_slug, fit_scope, format_lan_block, format_panel_stacked, format_panel_wide,
+    progress_bar, vlen,
 };
 use crate::output::LOGO_ROWS;
 use console::{measure_text_width, strip_ansi_codes, truncate_str};
@@ -174,6 +175,48 @@ fn format_panel_shows_wildcard_and_path_routes() {
         3,
         "expected exactly 3 route URLs"
     );
+}
+
+#[test]
+fn format_lan_block_rewrites_host_only_and_preserves_paths() {
+    let lines = format_lan_block(
+        &[
+            "bun-example.tako.test".to_string(),
+            "bun-example.tako.test/bun".to_string(),
+            "*.bun-example.tako.test/api/*".to_string(),
+        ],
+        "http://192.168.1.2/ca.pem",
+    );
+    let plain = strip_ansi(&lines.join("\n"));
+
+    assert!(!plain.contains("LAN mode enabled"));
+    assert!(plain.contains("Your app is now available on your local network at these routes"));
+    assert!(plain.contains("https://bun-example.local"));
+    assert!(plain.contains("https://bun-example.local/bun"));
+    assert!(plain.contains("https://*.bun-example.local/api/*"));
+}
+
+#[test]
+fn format_log_dims_lan_mode_ip_suffix() {
+    let enabled = strip_ansi(&format_log(&ScopedLog {
+        timestamp: "12:34:56".to_string(),
+        level: LogLevel::Info,
+        scope: "tako".to_string(),
+        message: "LAN mode enabled (192.168.1.2)".to_string(),
+    }));
+    assert!(enabled.contains("INFO"));
+    assert!(enabled.contains("tako"));
+    assert!(enabled.contains("LAN mode enabled (192.168.1.2)"));
+
+    let disabled = strip_ansi(&format_log(&ScopedLog {
+        timestamp: "12:34:56".to_string(),
+        level: LogLevel::Info,
+        scope: "tako".to_string(),
+        message: "LAN mode disabled".to_string(),
+    }));
+    assert!(disabled.contains("INFO"));
+    assert!(disabled.contains("tako"));
+    assert!(disabled.contains("LAN mode disabled"));
 }
 
 #[test]

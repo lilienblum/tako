@@ -38,6 +38,17 @@ fn parse_app_event_marker(v: &serde_json::Value) -> Option<DevEvent> {
         "launching" => Some(DevEvent::AppLaunching),
         "started" => Some(DevEvent::AppStarted),
         "stopped" => Some(DevEvent::AppStopped),
+        "lan_mode_changed" => Some(DevEvent::LanModeChanged {
+            enabled: v.get("enabled").and_then(|x| x.as_bool())?,
+            lan_ip: v
+                .get("lan_ip")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string()),
+            ca_url: v
+                .get("ca_url")
+                .and_then(|x| x.as_str())
+                .map(|s| s.to_string()),
+        }),
         "pid" => v
             .get("pid")
             .and_then(|x| x.as_u64())
@@ -106,6 +117,7 @@ pub(super) async fn run_connected_dev_client(
         .map(|(_, p)| p)
         .unwrap_or(443);
     let mut upstream_port = 0u16;
+    let mut lan_enabled = false;
 
     if let Ok(info) = crate::dev_server_client::info().await {
         public_port = info
@@ -114,6 +126,11 @@ pub(super) async fn run_connected_dev_client(
             .and_then(|p| p.as_u64())
             .map(|p| p as u16)
             .unwrap_or(public_port);
+        lan_enabled = info
+            .get("info")
+            .and_then(|i| i.get("lan_enabled"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
     }
 
     if let Ok(apps) = crate::dev_server_client::list_apps().await
@@ -256,16 +273,22 @@ pub(super) async fn run_connected_dev_client(
                         break;
                     }
                     output::ControlCmd::ToggleLan => {
-                        let result = crate::dev_server_client::toggle_lan(true)
+                        let target = !lan_enabled;
+                        let result = crate::dev_server_client::toggle_lan(target)
                             .await
                             .map_err(|e| e.to_string());
-                        if let Err(msg) = result {
-                            let _ = log_tx
-                                .send(ScopedLog::error(
-                                    "tako",
-                                    format!("LAN toggle failed: {}", msg),
-                                ))
-                                .await;
+                        match result {
+                            Ok((enabled, _, _)) => {
+                                lan_enabled = enabled;
+                            }
+                            Err(msg) => {
+                                let _ = log_tx
+                                    .send(ScopedLog::error(
+                                        "tako",
+                                        format!("LAN toggle failed: {}", msg),
+                                    ))
+                                    .await;
+                            }
                         }
                     }
                 }
@@ -612,5 +635,23 @@ mod tests {
         let status = child.try_wait().unwrap();
         assert!(status.is_some(), "child should have exited");
         assert!(status.unwrap().success());
+    }
+
+    #[test]
+    fn parse_log_line_parses_lan_mode_marker() {
+        let line = r#"{"type":"app_event","event":"lan_mode_changed","enabled":true,"lan_ip":"192.168.1.42","ca_url":"http://192.168.1.42/ca.pem"}"#;
+        let event = parse_log_line(line).expect("marker should parse");
+        match event {
+            LogStreamEvent::AppEvent(DevEvent::LanModeChanged {
+                enabled,
+                lan_ip,
+                ca_url,
+            }) => {
+                assert!(enabled);
+                assert_eq!(lan_ip.as_deref(), Some("192.168.1.42"));
+                assert_eq!(ca_url.as_deref(), Some("http://192.168.1.42/ca.pem"));
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 }

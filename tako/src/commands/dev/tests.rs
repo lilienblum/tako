@@ -659,6 +659,7 @@ fn ensure_dev_server_tls_material_merges_names_for_multiple_apps() {
     assert!(names.contains("*.beta.tako.test"));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn parse_local_dns_resolver_extracts_nameserver_and_port() {
     let (ns, port) =
@@ -667,6 +668,7 @@ fn parse_local_dns_resolver_extracts_nameserver_and_port() {
     assert_eq!(port, Some(53535));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn parse_local_dns_resolver_prefers_latest_valid_entries() {
     let (ns, port) = parse_local_dns_resolver(
@@ -676,6 +678,7 @@ fn parse_local_dns_resolver_prefers_latest_valid_entries() {
     assert_eq!(port, Some(53535));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn parse_local_dns_resolver_ignores_unknown_lines() {
     let (ns, port) = parse_local_dns_resolver(
@@ -695,6 +698,7 @@ fn ensure_local_dns_resolver_non_interactive_error_is_actionable() {
     assert!(text.contains("run `tako dev` interactively once"));
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn sudo_setup_action_items_uses_expected_order() {
     let items = sudo_setup_action_items(
@@ -712,6 +716,7 @@ fn sudo_setup_action_items_uses_expected_order() {
     );
 }
 
+#[cfg(target_os = "macos")]
 #[test]
 fn sudo_setup_action_items_omits_absent_steps() {
     let items = sudo_setup_action_items(None, false, Some("Repair dev proxy"));

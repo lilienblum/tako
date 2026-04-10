@@ -512,24 +512,17 @@ pub async fn run_dev_output(
                             format!("Client {} disconnected", client_id),
                         )));
                     }
-                    DevEvent::LanModeChanged { enabled, lan_ip, ca_url } => {
+                    DevEvent::LanModeChanged {
+                        enabled,
+                        lan_ip: _,
+                        ca_url,
+                    } => {
                         if enabled {
-                            let ip = lan_ip.as_deref().unwrap_or("unknown");
                             if let Some(ref url) = ca_url {
-                                for line in format_lan_block(ip, url) {
+                                for line in format_lan_block(&hosts, url) {
                                     footer.println(&line);
                                 }
-                            } else {
-                                footer.println(&format_log(&ScopedLog::info(
-                                    "tako",
-                                    format!("LAN mode enabled — {ip}"),
-                                )));
                             }
-                        } else {
-                            footer.println(&format_log(&ScopedLog::info(
-                                "tako",
-                                "LAN mode disabled",
-                            )));
                         }
                     }
                     DevEvent::ExitWithMessage(msg) => {

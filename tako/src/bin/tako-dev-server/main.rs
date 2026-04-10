@@ -8,6 +8,7 @@ mod process;
 mod protocol;
 mod proxy;
 mod redirect;
+mod route_pattern;
 mod state;
 mod tls_accept;
 

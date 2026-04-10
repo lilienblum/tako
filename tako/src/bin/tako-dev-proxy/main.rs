@@ -1,5 +1,42 @@
 mod control;
 
+use std::time::Duration;
+
+fn should_keep_existing_lan_listener(
+    enabled: bool,
+    current_addr: Option<&str>,
+    task_finished: bool,
+    requested_addr: &str,
+) -> bool {
+    enabled && current_addr == Some(requested_addr) && !task_finished
+}
+
+fn should_retry_lan_bind(error: &std::io::Error) -> bool {
+    error.kind() == std::io::ErrorKind::AddrInUse
+}
+
+async fn bind_lan_listener(addr: &str, label: &str) -> Result<tokio::net::TcpListener, String> {
+    const MAX_ATTEMPTS: usize = 10;
+    const RETRY_DELAY: Duration = Duration::from_millis(100);
+
+    let mut last_error = None;
+    for attempt in 0..MAX_ATTEMPTS {
+        match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => return Ok(listener),
+            Err(error) if should_retry_lan_bind(&error) && attempt + 1 < MAX_ATTEMPTS => {
+                last_error = Some(error);
+                tokio::time::sleep(RETRY_DELAY).await;
+            }
+            Err(error) => {
+                return Err(format!("failed to bind LAN {label} on {addr}: {error}"));
+            }
+        }
+    }
+
+    let error = last_error.expect("retry loop should capture the last bind error");
+    Err(format!("failed to bind LAN {label} on {addr}: {error}"))
+}
+
 #[cfg(target_os = "macos")]
 mod macos {
     use std::ffi::CString;
@@ -232,6 +269,20 @@ mod macos {
         bind_addr: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = lan_state.lock().await;
+        let task_finished = state
+            .handle
+            .as_ref()
+            .map(|handle| handle.is_finished())
+            .unwrap_or(true);
+        if super::should_keep_existing_lan_listener(
+            state.enabled,
+            state.addr.as_deref(),
+            task_finished,
+            bind_addr,
+        ) {
+            return Ok(());
+        }
+
         // Tear down existing LAN listener if any
         if let Some(tx) = state.shutdown_tx.take() {
             let _ = tx.send(true);
@@ -244,12 +295,8 @@ mod macos {
         let https_addr = format!("{bind_addr}:443");
         let http_addr = format!("{bind_addr}:80");
 
-        let https_listener = TcpListener::bind(&https_addr)
-            .await
-            .map_err(|e| format!("failed to bind LAN HTTPS on {https_addr}: {e}"))?;
-        let http_listener = TcpListener::bind(&http_addr)
-            .await
-            .map_err(|e| format!("failed to bind LAN HTTP on {http_addr}: {e}"))?;
+        let https_listener = super::bind_lan_listener(&https_addr, "HTTPS").await?;
+        let http_listener = super::bind_lan_listener(&http_addr, "HTTP").await?;
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let proxy_state_clone = proxy_state.clone();
@@ -514,6 +561,40 @@ mod macos {
         fn ensure_running_as_root_accepts_root() {
             ensure_running_as_root(0).expect("root should succeed");
         }
+
+        #[test]
+        fn reuses_existing_lan_listener_when_state_matches_request() {
+            assert!(super::super::should_keep_existing_lan_listener(
+                true,
+                Some("0.0.0.0"),
+                false,
+                "0.0.0.0"
+            ));
+            assert!(!super::super::should_keep_existing_lan_listener(
+                true,
+                Some("0.0.0.0"),
+                true,
+                "0.0.0.0"
+            ));
+            assert!(!super::super::should_keep_existing_lan_listener(
+                true,
+                Some("127.0.0.1"),
+                false,
+                "0.0.0.0"
+            ));
+        }
+
+        #[test]
+        fn retries_only_for_addr_in_use() {
+            assert!(super::super::should_retry_lan_bind(&std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                "busy"
+            )));
+            assert!(!super::super::should_retry_lan_bind(&std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "nope"
+            )));
+        }
     }
 }
 
@@ -704,6 +785,20 @@ mod linux {
         bind_addr: &str,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let mut state = lan_state.lock().await;
+        let task_finished = state
+            .handle
+            .as_ref()
+            .map(|handle| handle.is_finished())
+            .unwrap_or(true);
+        if super::should_keep_existing_lan_listener(
+            state.enabled,
+            state.addr.as_deref(),
+            task_finished,
+            bind_addr,
+        ) {
+            return Ok(());
+        }
+
         if let Some(tx) = state.shutdown_tx.take() {
             let _ = tx.send(true);
         }
@@ -715,12 +810,8 @@ mod linux {
         let https_addr = format!("{bind_addr}:443");
         let http_addr = format!("{bind_addr}:80");
 
-        let https_listener = TcpListener::bind(&https_addr)
-            .await
-            .map_err(|e| format!("failed to bind LAN HTTPS on {https_addr}: {e}"))?;
-        let http_listener = TcpListener::bind(&http_addr)
-            .await
-            .map_err(|e| format!("failed to bind LAN HTTP on {http_addr}: {e}"))?;
+        let https_listener = super::bind_lan_listener(&https_addr, "HTTPS").await?;
+        let http_listener = super::bind_lan_listener(&http_addr, "HTTP").await?;
 
         let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
         let ps = proxy_state.clone();
