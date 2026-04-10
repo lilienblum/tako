@@ -517,13 +517,12 @@ pub async fn run_dev_output(
                         lan_ip: _,
                         ca_url,
                     } => {
-                        if enabled {
-                            if let Some(ref url) = ca_url {
+                        if enabled
+                            && let Some(ref url) = ca_url {
                                 for line in format_lan_block(&hosts, url) {
                                     footer.println(&line);
                                 }
                             }
-                        }
                     }
                     DevEvent::ExitWithMessage(msg) => {
                         break LoopExit::Message(msg);

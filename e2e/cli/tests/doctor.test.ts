@@ -157,25 +157,25 @@ describe.if(isLinux)("tako doctor (Linux)", () => {
     expect(screen).toContain("Persistence");
   });
 
-  test("does not show Loopback Proxy section", async () => {
+  test("does not show Dev Proxy section", async () => {
     const { screen } = await run(["doctor"], {
       cwd: tempDir,
       env: { HOME: tempDir, TAKO_HOME: takoHome },
     });
 
-    expect(screen).not.toContain("Loopback Proxy");
+    expect(screen).not.toContain("Dev Proxy");
     expect(screen).not.toContain("Launchd");
   });
 });
 
 describe.if(isMacOS)("tako doctor (macOS)", () => {
-  test("shows Loopback Proxy section", async () => {
+  test("shows Dev Proxy section", async () => {
     const { screen } = await run(["doctor"], {
       cwd: tempDir,
       env: { HOME: tempDir, TAKO_HOME: takoHome },
     });
 
-    expect(screen).toContain("Loopback Proxy");
+    expect(screen).toContain("Dev Proxy");
   });
 
   test("does not show Port Redirect section", async () => {
