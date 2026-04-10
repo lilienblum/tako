@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/lilienblum/tako/compare/tako-v0.3.0...tako-v0.4.0) (2026-04-10)
+
+
+### Features
+
+* **dev:** add LAN mode for real-device testing ([c955027](https://github.com/lilienblum/tako/commit/c9550274edd4efe1831192776c584ae442235f02))
+
+
+### Bug Fixes
+
+* **cli:** align doctor proxy heading checks ([9e55b97](https://github.com/lilienblum/tako/commit/9e55b97c0b22ed028db927983b9d2f0773ff160b))
+* **dev:** align LAN route aliases and toggle behavior ([1567bd5](https://github.com/lilienblum/tako/commit/1567bd59a26c02adfa145c219a3ca76ac2e03263))
+* **dev:** gate macOS resolver test ([606bb1c](https://github.com/lilienblum/tako/commit/606bb1c4148f504e117f55e875d710e8db2b6a7a))
+* **dev:** harden dev server restart handling ([a98ff02](https://github.com/lilienblum/tako/commit/a98ff02478b8a4a3fe40c2542727dc63f69c53c5))
+
 ## [0.3.0](https://github.com/lilienblum/tako/compare/tako-v0.2.0...tako-v0.3.0) (2026-04-08)
 
 ### Features
