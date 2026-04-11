@@ -193,6 +193,40 @@ fn dev_startup_lines_verbose_includes_banner() {
     assert!(lines.iter().any(|l| l.starts_with("URL:")));
 }
 
+#[test]
+fn inject_dev_data_dir_creates_nested_app_and_tako_dirs() {
+    let temp = TempDir::new().unwrap();
+    let mut env = std::collections::HashMap::new();
+
+    inject_dev_data_dir(temp.path(), &mut env).unwrap();
+
+    assert_eq!(
+        env.get("TAKO_DATA_DIR").map(String::as_str),
+        Some(
+            temp.path()
+                .join(".tako/data/app")
+                .to_string_lossy()
+                .as_ref()
+        )
+    );
+    assert!(dev_runtime_data_root(temp.path()).join("app").is_dir());
+    assert!(dev_runtime_data_root(temp.path()).join("tako").is_dir());
+}
+
+#[test]
+fn compute_dev_env_ignores_configured_env_and_derives_development() {
+    let cfg = TakoToml::parse(
+        r#"
+[vars]
+ENV = "custom"
+"#,
+    )
+    .unwrap();
+
+    let env = compute_dev_env(&cfg);
+    assert_eq!(env.get("ENV").map(String::as_str), Some("development"));
+}
+
 #[tokio::test]
 async fn tcp_probe_detects_open_port() {
     let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await else {

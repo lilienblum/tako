@@ -1,6 +1,7 @@
 use crate::instances::AppManager;
 use crate::lb::LoadBalancer;
 use crate::release::{apply_release_runtime_to_config, release_app_path};
+use crate::release::{ensure_app_runtime_data_dirs, inject_app_data_dir_env};
 use crate::routing::RouteTable;
 use crate::socket::{AppState, Response};
 use crate::state_store::{SqliteStateStore, StateStoreError, load_or_create_device_key};
@@ -234,6 +235,13 @@ impl ServerState {
             if let Err(error) = apply_release_runtime_to_config(&mut config, release_path, None) {
                 tracing::error!(app = %app_name, "Failed to restore app config: {}", error);
                 continue;
+            }
+            match ensure_app_runtime_data_dirs(&self.runtime.data_dir, &app_name) {
+                Ok(paths) => inject_app_data_dir_env(&mut config.env_vars, &paths),
+                Err(error) => {
+                    tracing::error!(app = %app_name, "Failed to prepare app data dirs: {}", error);
+                    continue;
+                }
             }
             config.secrets = self.state_store.get_secrets(&app_name).unwrap_or_else(|e| {
                 tracing::warn!(app = %app_name, "Failed to read secrets: {}", e);

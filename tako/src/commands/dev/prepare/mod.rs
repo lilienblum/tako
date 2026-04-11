@@ -51,6 +51,9 @@ pub(super) async fn prepare(
     let project_dir = context.project_dir.clone();
     let config_path = context.config_path.clone();
     let cfg = load_dev_tako_toml(&config_path)?;
+    for warning in cfg.ignored_reserved_var_warnings() {
+        crate::output::warning(&format!("Validation: {}", warning));
+    }
     let eff_app_dir = project_dir.clone();
     let preset_ref = resolve_dev_preset_ref(&eff_app_dir, &cfg)?;
     let runtime_adapter = resolve_effective_dev_build_adapter(&eff_app_dir, &cfg, &preset_ref)
@@ -167,6 +170,7 @@ pub(super) async fn prepare(
         .unwrap_or_else(|| domain.clone());
 
     let mut env = compute_dev_env(&cfg);
+    inject_dev_data_dir(&project_dir, &mut env).map_err(|e| e.to_string())?;
     inject_dev_secrets(&project_dir, &app_name, &mut env).map_err(|e| e.to_string())?;
 
     if runtime_adapter.preset_group() == PresetGroup::Js {

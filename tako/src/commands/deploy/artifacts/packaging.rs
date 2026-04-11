@@ -65,18 +65,18 @@ pub(super) async fn build_target_artifacts(
             tracing::debug!("{}", stage_summary_message);
         }
 
-        let workdir = project_dir.join(".tako/workdir");
-        crate::build::cleanup_workdir(&workdir);
+        let build_dir = project_dir.join(".tako/build_dir");
+        crate::build::cleanup_workdir(&build_dir);
         {
-            let _t = output::timed("Workdir setup");
-            crate::build::create_workdir(source_root, &workdir)
-                .map_err(|e| format!("Failed to create workdir: {e}"))?;
+            let _t = output::timed("Build dir setup");
+            crate::build::create_workdir(source_root, &build_dir)
+                .map_err(|e| format!("Failed to create build_dir: {e}"))?;
             if runtime_adapter.preset_group() == PresetGroup::Js {
-                crate::build::symlink_node_modules(source_root, &workdir)
+                crate::build::symlink_node_modules(source_root, &build_dir)
                     .map_err(|e| format!("Failed to symlink node_modules: {e}"))?;
             }
         }
-        let workspace = workdir.clone();
+        let workspace = build_dir.clone();
         let app_dir_in_workspace = match project_dir.strip_prefix(source_root) {
             Ok(rel) if !rel.as_os_str().is_empty() => workspace.join(rel),
             _ => workspace.clone(),
@@ -419,7 +419,7 @@ pub(super) async fn build_target_artifacts(
             output::bullet(&format_build_completed_message(display_target_label));
         }
 
-        crate::build::cleanup_workdir(&workdir);
+        crate::build::cleanup_workdir(&build_dir);
     }
 
     Ok(artifacts)

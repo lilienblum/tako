@@ -4,8 +4,9 @@ use crate::instances::{
 };
 use crate::metrics;
 use crate::release::{
-    apply_release_runtime_to_config, collect_running_build_statuses, current_release_version,
-    directory_modified_unix_secs, prepare_release_runtime, read_release_manifest_metadata,
+    app_root, apply_release_runtime_to_config, collect_running_build_statuses,
+    current_release_version, directory_modified_unix_secs, ensure_app_runtime_data_dirs,
+    inject_app_data_dir_env, prepare_release_runtime, read_release_manifest_metadata,
     requested_deployment_identity, resolve_release_runtime_bin, should_use_self_signed_route_cert,
     validate_app_name, validate_deploy_routes, validate_release_path_for_app,
     validate_release_version,
@@ -200,6 +201,11 @@ impl super::ServerState {
         let secrets = self.state_store.get_secrets(app_name).unwrap_or_default();
         let mut release_env = env_vars;
         release_env.extend(secrets);
+        let data_paths = match ensure_app_runtime_data_dirs(&self.runtime.data_dir, app_name) {
+            Ok(paths) => paths,
+            Err(error) => return Response::error(format!("Release preparation failed: {error}")),
+        };
+        inject_app_data_dir_env(&mut release_env, &data_paths);
 
         match prepare_release_runtime(&release_path, &release_env, &self.runtime.data_dir).await {
             Ok(_) => Response::ok(serde_json::json!({ "status": "prepared" })),
@@ -251,6 +257,12 @@ impl super::ServerState {
             Ok(vars) => vars,
             Err(error) => return Response::error(format!("Invalid app release: {}", error)),
         };
+        let data_paths = match ensure_app_runtime_data_dirs(&self.runtime.data_dir, app_name) {
+            Ok(paths) => paths,
+            Err(error) => {
+                return Response::error(format!("Failed to create app data dirs: {error}"));
+            }
+        };
 
         let secrets = if let Some(new_secrets) = secrets {
             if let Err(e) = self.state_store.set_secrets(app_name, &new_secrets) {
@@ -261,6 +273,7 @@ impl super::ServerState {
             self.state_store.get_secrets(app_name).unwrap_or_default()
         };
         let mut release_env = env_vars.clone();
+        inject_app_data_dir_env(&mut release_env, &data_paths);
         release_env.extend(secrets.clone());
 
         let runtime_bin_path =
@@ -287,6 +300,7 @@ impl super::ServerState {
                 ) {
                     return Response::error(format!("Invalid app release: {}", error));
                 }
+                inject_app_data_dir_env(&mut config.env_vars, &data_paths);
                 existing.update_config(config.clone());
                 (existing, config, false)
             } else {
@@ -308,6 +322,7 @@ impl super::ServerState {
                 ) {
                     return Response::error(format!("Invalid app release: {}", error));
                 }
+                inject_app_data_dir_env(&mut config.env_vars, &data_paths);
 
                 let deploy_config = config.clone();
                 let app = self.app_manager.register_app(config);
@@ -602,6 +617,22 @@ impl super::ServerState {
                 "Failed to delete persisted app state: {}",
                 e
             );
+        }
+        let app_root = app_root(&self.runtime.data_dir, app_name);
+        if let Err(e) = std::fs::remove_dir_all(&app_root)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(
+                app = app_name,
+                path = %app_root.display(),
+                "Failed to remove app root: {}",
+                e
+            );
+            return Response::error(format!(
+                "Delete partially completed, but failed to remove app files '{}': {}",
+                app_root.display(),
+                e
+            ));
         }
 
         Response::ok(serde_json::json!({

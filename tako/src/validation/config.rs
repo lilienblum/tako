@@ -100,6 +100,10 @@ pub fn validate_tako_toml(config: &TakoToml) -> ValidationResult {
         }
     }
 
+    for warning in config.ignored_reserved_var_warnings() {
+        result.warn(warning);
+    }
+
     result
 }
 
@@ -239,6 +243,59 @@ mod tests {
                 .warnings
                 .iter()
                 .any(|w| w.contains("'development'") && w.contains("ignored"))
+        );
+    }
+
+    #[test]
+    fn validate_tako_toml_warns_when_global_env_var_is_reserved() {
+        let mut config = TakoToml {
+            name: Some("demo".to_string()),
+            ..Default::default()
+        };
+        config.vars.insert("ENV".to_string(), "custom".to_string());
+        config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                route: Some("demo.example.com".to_string()),
+                servers: vec!["prod".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let result = validate_tako_toml(&config);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("[vars].ENV") && w.contains("ignored"))
+        );
+    }
+
+    #[test]
+    fn validate_tako_toml_warns_when_per_env_var_is_reserved() {
+        let mut config = TakoToml {
+            name: Some("demo".to_string()),
+            ..Default::default()
+        };
+        config.vars_per_env.insert(
+            "production".to_string(),
+            std::collections::HashMap::from([("ENV".to_string(), "custom".to_string())]),
+        );
+        config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                route: Some("demo.example.com".to_string()),
+                servers: vec!["prod".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let result = validate_tako_toml(&config);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("[vars.production].ENV") && w.contains("ignored"))
         );
     }
 

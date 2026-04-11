@@ -252,7 +252,8 @@ pub(super) fn build_manifest_env_vars(
         merged.insert(key, value);
     }
 
-    // 4. TAKO_ENV always set (highest priority)
+    // 4. Derived env markers always set (highest priority)
+    merged.insert("ENV".to_string(), environment.to_string());
     merged.insert("TAKO_ENV".to_string(), environment.to_string());
     merged
 }
@@ -363,12 +364,14 @@ mod tests {
             vec![
                 "A_KEY".to_string(),
                 "BUN_ENV".to_string(),
+                "ENV".to_string(),
                 "NODE_ENV".to_string(),
                 "TAKO_BUILD".to_string(),
                 "TAKO_ENV".to_string(),
                 "Z_KEY".to_string()
             ]
         );
+        assert_eq!(manifest.env_vars.get("ENV"), Some(&"staging".to_string()));
         assert_eq!(
             manifest.env_vars.get("TAKO_ENV"),
             Some(&"staging".to_string())
@@ -385,6 +388,19 @@ mod tests {
             manifest.secret_names,
             vec!["API_KEY".to_string(), "DB_URL".to_string()]
         );
+    }
+
+    #[test]
+    fn build_manifest_env_vars_overrides_configured_env_with_derived_environment() {
+        let env_vars = build_manifest_env_vars(
+            HashMap::from([("ENV".to_string(), "custom".to_string())]),
+            HashMap::new(),
+            "production",
+            "bun",
+        );
+
+        assert_eq!(env_vars.get("ENV"), Some(&"production".to_string()));
+        assert_eq!(env_vars.get("TAKO_ENV"), Some(&"production".to_string()));
     }
 
     #[test]

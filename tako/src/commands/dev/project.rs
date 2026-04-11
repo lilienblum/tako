@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::build::{
     BuildAdapter, BuildPreset, PresetReference, infer_adapter_from_preset_reference,
@@ -6,6 +6,8 @@ use crate::build::{
 };
 use crate::config::TakoToml;
 use crate::validation::validate_dev_route;
+
+const TAKO_APP_DATA_DIR_ENV: &str = "TAKO_DATA_DIR";
 
 pub(super) fn compute_display_routes(
     cfg: &TakoToml,
@@ -143,6 +145,33 @@ pub(super) fn compute_dev_env(cfg: &TakoToml) -> std::collections::HashMap<Strin
     let mut env = cfg.get_merged_vars("development");
     env.insert("ENV".to_string(), "development".to_string());
     env
+}
+
+pub(super) fn dev_runtime_data_root(project_dir: &Path) -> PathBuf {
+    project_dir.join(".tako").join("data")
+}
+
+pub(super) fn ensure_dev_runtime_data_dirs(project_dir: &Path) -> Result<PathBuf, String> {
+    let data_root = dev_runtime_data_root(project_dir);
+    let app_data_dir = data_root.join("app");
+    let tako_data_dir = data_root.join("tako");
+    std::fs::create_dir_all(&app_data_dir)
+        .map_err(|e| format!("create app data dir {}: {e}", app_data_dir.display()))?;
+    std::fs::create_dir_all(&tako_data_dir)
+        .map_err(|e| format!("create tako data dir {}: {e}", tako_data_dir.display()))?;
+    Ok(app_data_dir)
+}
+
+pub(super) fn inject_dev_data_dir(
+    project_dir: &Path,
+    env: &mut std::collections::HashMap<String, String>,
+) -> Result<(), String> {
+    let app_data_dir = ensure_dev_runtime_data_dirs(project_dir)?;
+    env.insert(
+        TAKO_APP_DATA_DIR_ENV.to_string(),
+        app_data_dir.display().to_string(),
+    );
+    Ok(())
 }
 
 pub(super) fn inject_dev_secrets(

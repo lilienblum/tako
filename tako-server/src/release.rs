@@ -9,12 +9,21 @@ use std::process::ExitStatus;
 use std::time::Duration;
 use tokio::process::Command as TokioCommand;
 
+pub(crate) const TAKO_APP_DATA_DIR_ENV: &str = "TAKO_DATA_DIR";
+
 #[derive(Debug, serde::Deserialize)]
 struct ReleaseManifestMetadata {
     #[serde(default)]
     commit_message: Option<String>,
     #[serde(default)]
     git_dirty: Option<bool>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AppRuntimeDataPaths {
+    pub root: PathBuf,
+    pub app: PathBuf,
+    pub tako: PathBuf,
 }
 
 pub(crate) fn collect_running_build_statuses(app: &crate::instances::App) -> Vec<BuildStatus> {
@@ -51,18 +60,47 @@ pub(crate) fn current_release_version(app_root: &Path) -> Option<String> {
     target.file_name()?.to_str().map(|value| value.to_string())
 }
 
+pub(crate) fn app_root(data_dir: &Path, app_name: &str) -> PathBuf {
+    data_dir.join("apps").join(app_name)
+}
+
+pub(crate) fn app_runtime_data_paths(data_dir: &Path, app_name: &str) -> AppRuntimeDataPaths {
+    let root = app_root(data_dir, app_name).join("data");
+    AppRuntimeDataPaths {
+        app: root.join("app"),
+        tako: root.join("tako"),
+        root,
+    }
+}
+
+pub(crate) fn ensure_app_runtime_data_dirs(
+    data_dir: &Path,
+    app_name: &str,
+) -> Result<AppRuntimeDataPaths, String> {
+    let paths = app_runtime_data_paths(data_dir, app_name);
+    std::fs::create_dir_all(&paths.app)
+        .map_err(|e| format!("create app data dir {}: {e}", paths.app.display()))?;
+    std::fs::create_dir_all(&paths.tako)
+        .map_err(|e| format!("create tako data dir {}: {e}", paths.tako.display()))?;
+    Ok(paths)
+}
+
+pub(crate) fn inject_app_data_dir_env(
+    env: &mut HashMap<String, String>,
+    paths: &AppRuntimeDataPaths,
+) {
+    env.insert(
+        TAKO_APP_DATA_DIR_ENV.to_string(),
+        paths.app.display().to_string(),
+    );
+}
+
 pub(crate) fn app_release_root(data_dir: &Path, app_name: &str, version: &str) -> PathBuf {
-    data_dir
-        .join("apps")
-        .join(app_name)
-        .join("releases")
-        .join(version)
+    app_root(data_dir, app_name).join("releases").join(version)
 }
 
 pub(crate) fn release_app_path(data_dir: &Path, config: &AppConfig) -> PathBuf {
-    data_dir
-        .join("apps")
-        .join(config.deployment_id())
+    app_root(data_dir, &config.deployment_id())
         .join("releases")
         .join(&config.version)
 }
@@ -424,4 +462,51 @@ pub(crate) fn validate_deploy_routes(routes: &[String]) -> Result<(), String> {
         return Err("Deploy rejected: routes must be non-empty values".to_string());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn app_runtime_data_paths_use_nested_app_and_tako_dirs() {
+        let data_dir = Path::new("/opt/tako");
+        let paths = app_runtime_data_paths(data_dir, "my-app/production");
+        assert_eq!(
+            paths.root,
+            Path::new("/opt/tako/apps/my-app/production/data")
+        );
+        assert_eq!(
+            paths.app,
+            Path::new("/opt/tako/apps/my-app/production/data/app")
+        );
+        assert_eq!(
+            paths.tako,
+            Path::new("/opt/tako/apps/my-app/production/data/tako")
+        );
+    }
+
+    #[test]
+    fn ensure_app_runtime_data_dirs_creates_both_directories() {
+        let temp = TempDir::new().unwrap();
+        let paths = ensure_app_runtime_data_dirs(temp.path(), "my-app").unwrap();
+        assert!(paths.app.is_dir());
+        assert!(paths.tako.is_dir());
+    }
+
+    #[test]
+    fn inject_app_data_dir_env_sets_tako_data_dir() {
+        let mut env = HashMap::new();
+        let paths = AppRuntimeDataPaths {
+            root: PathBuf::from("/tmp/app/data"),
+            app: PathBuf::from("/tmp/app/data/app"),
+            tako: PathBuf::from("/tmp/app/data/tako"),
+        };
+        inject_app_data_dir_env(&mut env, &paths);
+        assert_eq!(
+            env.get(TAKO_APP_DATA_DIR_ENV).map(String::as_str),
+            Some("/tmp/app/data/app")
+        );
+    }
 }

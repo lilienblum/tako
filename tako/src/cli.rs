@@ -233,6 +233,30 @@ mod tests {
     }
 
     #[test]
+    fn servers_restart_parses_without_force() {
+        let cli = Cli::try_parse_from(["tako", "servers", "restart", "prod"]).unwrap();
+        let Commands::Servers(server::ServerCommands::Restart { name, force }) =
+            cli.command.expect("command")
+        else {
+            panic!("expected Servers::Restart");
+        };
+        assert_eq!(name, "prod");
+        assert!(!force);
+    }
+
+    #[test]
+    fn servers_restart_parses_with_force() {
+        let cli = Cli::try_parse_from(["tako", "servers", "restart", "prod", "--force"]).unwrap();
+        let Commands::Servers(server::ServerCommands::Restart { name, force }) =
+            cli.command.expect("command")
+        else {
+            panic!("expected Servers::Restart");
+        };
+        assert_eq!(name, "prod");
+        assert!(force);
+    }
+
+    #[test]
     fn servers_upgrade_parses_without_name() {
         let cli = Cli::try_parse_from(["tako", "servers", "upgrade"]).unwrap();
         let Commands::Servers(server::ServerCommands::Upgrade {

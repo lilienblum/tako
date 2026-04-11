@@ -8,6 +8,9 @@ use crate::output;
 pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>> {
     let ctx = project_context::resolve(config_path)?;
     let tako_config = TakoToml::load_from_file(&ctx.config_path)?;
+    for warning in tako_config.ignored_reserved_var_warnings() {
+        output::warning(&format!("Validation: {}", warning));
+    }
 
     let adapter = if let Some(runtime) = tako_config
         .runtime

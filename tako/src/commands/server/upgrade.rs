@@ -6,8 +6,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tako_core::ServerRuntimeInfo;
 use tracing::Instrument;
 
-const UPGRADE_SOCKET_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
+pub(super) const UPGRADE_SOCKET_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const UPGRADE_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const SERVER_BINARY_PATH: &str = "/usr/local/bin/tako-server";
+const SERVER_PREVIOUS_BINARY_PATH: &str = "/usr/local/bin/tako-server.prev";
 
 const REPO_OWNER: &str = "lilienblum";
 const REPO_NAME: &str = "tako";
@@ -311,10 +313,25 @@ fn remote_binary_replace_command(url: &str, expected_sha256: &str) -> String {
          zstd -d \"$archive\" --stdout | tar -x -C \"$tmp\"; \
          bin=$(find \"$tmp\" -type f -name tako-server | head -n 1); \
          if [ -z \"$bin\" ]; then echo 'error: archive did not contain tako-server binary' >&2; exit 1; fi; \
-         install -m 0755 \"$bin\" /usr/local/bin/tako-server; \
-         if command -v setcap >/dev/null 2>&1; then setcap cap_net_bind_service=+ep /usr/local/bin/tako-server 2>/dev/null || true; fi"
+         if [ -f {SERVER_BINARY_PATH} ]; then install -m 0755 {SERVER_BINARY_PATH} {SERVER_PREVIOUS_BINARY_PATH}; fi; \
+         install -m 0755 \"$bin\" {SERVER_BINARY_PATH}; \
+         if command -v setcap >/dev/null 2>&1; then setcap cap_net_bind_service=+ep {SERVER_BINARY_PATH} 2>/dev/null || true; fi"
     );
     SshClient::run_with_root_or_sudo(&script)
+}
+
+fn remote_restore_previous_binary_command() -> String {
+    let script = format!(
+        "set -eu; \
+         if [ ! -f {SERVER_PREVIOUS_BINARY_PATH} ]; then echo 'error: previous tako-server binary not found' >&2; exit 1; fi; \
+         install -m 0755 {SERVER_PREVIOUS_BINARY_PATH} {SERVER_BINARY_PATH}; \
+         if command -v setcap >/dev/null 2>&1; then setcap cap_net_bind_service=+ep {SERVER_BINARY_PATH} 2>/dev/null || true; fi"
+    );
+    SshClient::run_with_root_or_sudo(&script)
+}
+
+fn remote_cleanup_previous_binary_command() -> String {
+    SshClient::run_with_root_or_sudo(&format!("rm -f {SERVER_PREVIOUS_BINARY_PATH}"))
 }
 
 /// Resolve the latest stable server tag from the GitHub API.
@@ -347,7 +364,7 @@ async fn resolve_latest_server_tag() -> Result<String, String> {
     ))
 }
 
-async fn wait_for_primary_ready(
+pub(super) async fn wait_for_primary_ready(
     ssh: &mut crate::ssh::SshClient,
     timeout: Duration,
     old_pid: u32,
@@ -699,6 +716,7 @@ async fn run_server_upgrade(
 ) -> Result<Option<String>, String> {
     let owner = build_upgrade_owner(name);
     let mut upgrade_mode_entered = false;
+    let mut binary_replaced = false;
 
     let result: Result<Option<String>, String> = async {
         let status = ssh
@@ -751,6 +769,7 @@ async fn run_server_upgrade(
             tracing::debug!("Binary unchanged, skipping reload");
             return Ok(version_after_install);
         }
+        binary_replaced = true;
 
         // Enter upgrading mode
         let _t = output::timed("Enter upgrade mode");
@@ -799,6 +818,10 @@ async fn run_server_upgrade(
         // Get new version
         let version = ssh.tako_version().await.ok().flatten();
         tracing::debug!("Upgraded (version: {version:?})");
+
+        if let Err(e) = ssh.exec(&remote_cleanup_previous_binary_command()).await {
+            tracing::warn!("Failed to remove previous tako-server binary: {e}");
+        }
         Ok(version)
     }
     .await;
@@ -819,6 +842,23 @@ async fn run_server_upgrade(
                         "Failed to release upgrade lock, retrying (attempt {attempt}): {e}"
                     );
                 }
+            }
+        }
+    }
+
+    if result.is_err() && binary_replaced {
+        match ssh.exec(&remote_restore_previous_binary_command()).await {
+            Ok(output) if output.success() => {
+                tracing::warn!("Restored previous tako-server binary after failed upgrade");
+            }
+            Ok(output) => {
+                tracing::warn!(
+                    "Failed to restore previous tako-server binary: {}",
+                    output.combined().trim()
+                );
+            }
+            Err(e) => {
+                tracing::warn!("Failed to restore previous tako-server binary: {e}");
             }
         }
     }
@@ -963,7 +1003,23 @@ mod tests {
         assert!(cmd.contains("sha256 mismatch"));
         assert!(cmd.contains("abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"));
         assert!(cmd.contains("install -m 0755"));
+        assert!(cmd.contains("/usr/local/bin/tako-server.prev"));
         assert!(cmd.contains("/usr/local/bin/tako-server"));
+    }
+
+    #[test]
+    fn remote_restore_previous_binary_command_restores_prev_binary() {
+        let cmd = remote_restore_previous_binary_command();
+        assert!(cmd.contains("sudo sh -c '"));
+        assert!(cmd.contains("previous tako-server binary not found"));
+        assert!(cmd.contains("/usr/local/bin/tako-server.prev"));
+        assert!(cmd.contains("/usr/local/bin/tako-server"));
+    }
+
+    #[test]
+    fn remote_cleanup_previous_binary_command_removes_prev_binary() {
+        let cmd = remote_cleanup_previous_binary_command();
+        assert!(cmd.contains("rm -f /usr/local/bin/tako-server.prev"));
     }
 
     #[test]

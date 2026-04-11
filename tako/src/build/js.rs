@@ -10,9 +10,33 @@ const TAKO_DTS_HEADER: &str = r#"/**
  */
 "#;
 
+const TAKO_DTS_STANDARD_ENVS: &str = r#"
+interface TakoStandardEnv {
+  readonly ENV?: string;
+  readonly PORT?: string;
+  readonly HOST?: string;
+  readonly TAKO_ENV?: string;
+  readonly TAKO_BUILD?: string;
+  readonly TAKO_DATA_DIR?: string;
+  readonly NODE_ENV?: "development" | "production";
+  readonly TAKO_APP_LOG_LEVEL?: "debug" | "info" | "warn" | "error";
+}
+
+declare namespace NodeJS {
+  interface ProcessEnv extends TakoStandardEnv {}
+}
+
+interface ImportMetaEnv extends TakoStandardEnv {}
+
+interface ImportMeta {
+  readonly env: ImportMetaEnv;
+}
+"#;
+
 /// Build the full `tako.d.ts` content, including typed secrets.
 fn build_dts(secret_names: &[String]) -> String {
     let mut out = String::from(TAKO_DTS_HEADER);
+    out.push_str(TAKO_DTS_STANDARD_ENVS);
 
     if secret_names.is_empty() {
         out.push_str(
@@ -162,6 +186,33 @@ mod tests {
         assert!(content.contains("readonly DATABASE_URL: string;"));
         assert!(content.contains("toString(): \"[REDACTED]\""));
         assert!(content.contains("toJSON(): \"[REDACTED]\""));
+    }
+
+    #[test]
+    fn write_types_includes_standard_env_typings() {
+        let dir = TempDir::new().unwrap();
+
+        write_types(dir.path()).unwrap();
+
+        let content = fs::read_to_string(dir.path().join("tako.d.ts")).unwrap();
+        assert!(content.contains("interface TakoStandardEnv"));
+        assert!(content.contains("readonly ENV?: string;"));
+        assert!(content.contains("readonly PORT?: string;"));
+        assert!(content.contains("readonly HOST?: string;"));
+        assert!(content.contains("readonly TAKO_ENV?: string;"));
+        assert!(content.contains("readonly TAKO_BUILD?: string;"));
+        assert!(content.contains("readonly TAKO_DATA_DIR?: string;"));
+        assert!(content.contains("readonly NODE_ENV?: \"development\" | \"production\";"));
+        assert!(content.contains(
+            "readonly TAKO_APP_LOG_LEVEL?: \"debug\" | \"info\" | \"warn\" | \"error\";"
+        ));
+        assert!(!content.contains("readonly BUN_ENV?:"));
+        assert!(!content.contains("readonly DENO_ENV?:"));
+        assert!(content.contains("declare namespace NodeJS"));
+        assert!(content.contains("interface ProcessEnv extends TakoStandardEnv {}"));
+        assert!(content.contains("interface ImportMetaEnv extends TakoStandardEnv {}"));
+        assert!(content.contains("interface ImportMeta"));
+        assert!(content.contains("readonly env: ImportMetaEnv;"));
     }
 
     #[test]

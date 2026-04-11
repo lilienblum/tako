@@ -13,7 +13,6 @@ pub enum ProxyCommand {
 #[derive(Debug, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ProxyResponse {
-    Ok,
     LanEnabled {
         addr: String,
     },
@@ -59,12 +58,6 @@ mod tests {
     fn status_deserializes() {
         let cmd: ProxyCommand = serde_json::from_str(r#"{"command":"status"}"#).unwrap();
         assert!(matches!(cmd, ProxyCommand::Status));
-    }
-
-    #[test]
-    fn ok_response_serializes() {
-        let json = serde_json::to_string(&ProxyResponse::Ok).unwrap();
-        assert_eq!(json, r#"{"status":"ok"}"#);
     }
 
     #[test]

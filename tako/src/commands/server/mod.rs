@@ -43,13 +43,17 @@ pub enum ServerCommands {
     #[command(visible_alias = "list")]
     Ls,
 
-    /// Restart tako-server on a server
+    /// Reload tako-server on a server without downtime
     Restart {
         /// Server name
         name: String,
+
+        /// Force a full service restart with brief downtime
+        #[arg(long)]
+        force: bool,
     },
 
-    /// Upgrade tako-server with a temporary candidate process and promotion handoff
+    /// Upgrade tako-server via graceful reload with rollback to the previous binary on failure
     Upgrade {
         /// Server name (omit to upgrade all servers)
         name: Option<String>,
@@ -130,7 +134,7 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
         }
         ServerCommands::Rm { name } => crud::remove_server(name.as_deref()).await,
         ServerCommands::Ls => crud::list_servers().await,
-        ServerCommands::Restart { name } => crud::restart_server(&name).await,
+        ServerCommands::Restart { name, force } => crud::restart_server(&name, force).await,
         ServerCommands::Upgrade {
             name,
             canary,

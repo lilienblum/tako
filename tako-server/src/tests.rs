@@ -457,13 +457,11 @@ async fn delete_command_removes_runtime_registration_and_routes() {
     )
     .unwrap();
 
-    let release_dir = temp
-        .path()
-        .join("apps")
-        .join("my-app")
-        .join("releases")
-        .join("v1");
+    let app_root = temp.path().join("apps").join("my-app");
+    let release_dir = app_root.join("releases").join("v1");
     std::fs::create_dir_all(&release_dir).unwrap();
+    std::fs::create_dir_all(app_root.join("data/app")).unwrap();
+    std::fs::create_dir_all(app_root.join("data/tako")).unwrap();
 
     let config = AppConfig {
         name: "my-app".to_string(),
@@ -492,6 +490,7 @@ async fn delete_command_removes_runtime_registration_and_routes() {
         .await;
     assert!(matches!(response, Response::Ok { .. }));
     assert!(state.app_manager.get_app("my-app").is_none());
+    assert!(!app_root.exists());
 
     let route_table = state.routes.read().await;
     assert!(route_table.routes_for_app("my-app").is_empty());

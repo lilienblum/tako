@@ -1,4 +1,5 @@
 use crate::output;
+use std::time::Duration;
 
 fn removal_option_label(name: &str, entry: &crate::config::ServerEntry) -> String {
     match entry.description.as_deref().map(str::trim) {
@@ -156,7 +157,10 @@ pub(super) async fn list_servers() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub(super) async fn restart_server(name: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub(super) async fn restart_server(
+    name: &str,
+    force: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::ServersToml;
     use crate::ssh::{SshClient, SshConfig};
 
@@ -174,41 +178,80 @@ pub(super) async fn restart_server(name: &str) -> Result<(), Box<dyn std::error:
         .await?;
     drop(_t);
 
-    tracing::debug!("Sending restart command…");
-    let _t = output::timed("Restart tako-server");
-    match output::with_spinner_async(
-        "Restarting tako-server",
-        "tako-server restarted",
-        ssh.tako_restart(),
-    )
-    .await
-    {
-        Ok(()) => {
-            // Wait a moment for it to come back up
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-
-            // Check status
-            match ssh.tako_status().await {
-                Ok(status) => {
-                    if status == "active" {
-                        output::success("tako-server is running");
-                    } else {
-                        output::warning(&format!("tako-server status: {}", status));
+    if force {
+        tracing::debug!("Sending force restart command…");
+        let _t = output::timed("Force restart tako-server");
+        match output::with_spinner_async(
+            "Force restarting tako-server",
+            "tako-server restarted",
+            ssh.tako_restart(),
+        )
+        .await
+        {
+            Ok(()) => {
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                match ssh.tako_status().await {
+                    Ok(status) => {
+                        if status == "active" {
+                            output::success("tako-server is running");
+                        } else {
+                            output::warning(&format!("tako-server status: {}", status));
+                        }
+                    }
+                    Err(e) => {
+                        output::warning(&format!("Could not check status: {}", e));
                     }
                 }
-                Err(e) => {
-                    output::warning(&format!("Could not check status: {}", e));
-                }
+            }
+            Err(e) => {
+                drop(_t);
+                output::error(&format!("Force restart failed: {}", e));
+                ssh.disconnect().await?;
+                return Err(format!("Failed to force restart tako-server: {}", e).into());
             }
         }
-        Err(e) => {
-            drop(_t);
-            output::error(&format!("Restart failed: {}", e));
-            ssh.disconnect().await?;
-            return Err(format!("Failed to restart tako-server: {}", e).into());
+        drop(_t);
+    } else {
+        let old_pid = ssh
+            .tako_server_info()
+            .await
+            .map_err(|e| format!("Failed to read runtime config: {e}"))?
+            .pid;
+
+        tracing::debug!("Sending graceful reload command…");
+        let _t = output::timed("Reload tako-server");
+        match output::with_spinner_async(
+            "Reloading tako-server",
+            "tako-server reloaded",
+            ssh.tako_reload(),
+        )
+        .await
+        {
+            Ok(()) => {
+                if let Err(e) = super::upgrade::wait_for_primary_ready(
+                    &mut ssh,
+                    super::upgrade::UPGRADE_SOCKET_WAIT_TIMEOUT,
+                    old_pid,
+                    name,
+                )
+                .await
+                {
+                    drop(_t);
+                    output::error(&format!("Reload failed: {}", e));
+                    ssh.disconnect().await?;
+                    return Err(format!("Failed to reload tako-server: {}", e).into());
+                }
+                output::success("tako-server is running");
+            }
+            Err(e) => {
+                drop(_t);
+                output::error(&format!("Reload failed: {}", e));
+                ssh.disconnect().await?;
+                return Err(format!("Failed to reload tako-server: {}", e).into());
+            }
         }
+        drop(_t);
     }
-    drop(_t);
 
     ssh.disconnect().await?;
 

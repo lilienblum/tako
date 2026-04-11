@@ -101,7 +101,9 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 
 1. `[vars]` - base
 2. `[vars.{environment}]` - environment-specific
-3. Auto-set by Tako during deploy: `TAKO_ENV={environment}`, `TAKO_BUILD={version}`, plus runtime env vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
+3. Auto-set by Tako at runtime: `ENV={environment}` in both dev and deploy, `TAKO_ENV={environment}` and `TAKO_BUILD={version}` on deploys, `TAKO_DATA_DIR=<app data dir>` in both deploy and dev, plus runtime env vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
+
+`ENV` is reserved. If you set `ENV` in `[vars]` or `[vars.{environment}]`, Tako ignores it and prints a warning.
 
 **Build/deploy behavior:**
 
@@ -154,7 +156,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
   - `install` (optional command run before `run`)
   - `run` (required command)
   - `exclude` (optional array of file globs to exclude from the deploy artifact)
-- Build uses a workdir approach: copies the project from source root (respecting `.gitignore`), symlinks `node_modules/` directories from the original tree, runs build commands, then archives the result without `node_modules/`.
+- Build uses a `build_dir` approach: copies the project from source root into `.tako/build_dir` (respecting `.gitignore`), symlinks `node_modules/` directories from the original tree, runs build commands, then archives the result without `node_modules/`.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Deploy always force-excludes `.git/`, `.tako/`, `.env*`, and `node_modules/` from the deploy archive. Additional exclusions come from `[build].exclude` and `.gitignore`.
 - After extracting the deploy artifact, `tako-server` runs the runtime plugin's production install command (e.g. `bun install --production`) before starting instances.
@@ -379,7 +381,7 @@ Show version information (same as `--version` flag).
 
 ### tako typegen
 
-Generate typed secret accessors for the current project (`tako.d.ts` for JS, `tako_secrets.go` for Go).
+Generate typed accessors for the current project: `tako.d.ts` for JS/TS apps (typed `Tako.secrets` plus standard Tako/runtime env vars) and `tako_secrets.go` for Go apps.
 
 ### tako upgrade [--canary|--stable]
 
@@ -486,6 +488,7 @@ Start (or connect to) a local development session for the current app, backed by
 **Environment variables:**
 
 - Loads from `[vars]` + `[vars.development]` in tako.toml
+- `ENV=development`
 - `NODE_ENV=development`, plus runtime-specific vars (`BUN_ENV=development` for Bun, `DENO_ENV=development` for Deno)
 
 ### tako dev stop [name] [--all]
@@ -624,18 +627,25 @@ Alias: `tako servers list`.
 
 If no servers are configured, `tako servers ls` shows a hint to run `tako servers add`.
 
-### tako servers restart {server-name}
+### tako servers restart {server-name} [--force]
 
-Restart `tako-server` process entirely (causes brief downtime for all apps).
+Reload `tako-server` without downtime by default. `--force` performs a full service restart and may cause brief downtime for all apps.
 
-Use for: binary updates, major configuration changes, system recovery.
+Use default reload for normal config refresh and control-plane restarts. Use `--force` for recovery when graceful reload is not appropriate.
 
-Service-manager restart/stop behavior:
+Service-manager reload/restart behavior:
 
+- Default path: `systemctl reload tako-server` on systemd hosts, or `rc-service tako-server reload` on OpenRC hosts. Reload sends `SIGHUP`; the current process spawns a replacement process, the new process takes over the management socket and listener ports, then the old process drains and exits.
+- `--force` path: `systemctl restart tako-server` on systemd hosts, or `rc-service tako-server restart` on OpenRC hosts.
 - On systemd hosts, installer configures `KillMode=control-group` and `TimeoutStopSec=30min`, allowing all app processes in the service cgroup time to handle graceful shutdown before forced termination.
 - On OpenRC hosts, installer configures `retry="TERM/1800/KILL/5"` in the init script so restart/stop waits up to 30 minutes before forced termination.
 
-`tako-server` persists app runtime registration (app config and routes) in SQLite under the data directory and restores it on startup so app routing/config survives process restarts and crashes. Env vars are stored in `app.json` in the release directory; secrets are stored encrypted (AES-256-GCM) in the same SQLite database using a per-device key. Secrets are pushed to app instances via `POST /secrets` on `Host: tako` over the instance's private TCP endpoint with the per-instance internal token header — they never touch disk as plaintext.
+`tako-server` persists app runtime registration (app config and routes) in SQLite under the data directory and restores it on startup so app routing/config survives reloads, restarts, and crashes. Env vars are stored in `app.json` in the release directory; secrets are stored encrypted (AES-256-GCM) in the same SQLite database using a per-device key. Secrets are pushed to app instances via `POST /secrets` on `Host: tako` over the instance's private TCP endpoint with the per-instance internal token header — they never touch disk as plaintext. Each deployed app also gets a persistent runtime data tree under `{data_dir}/apps/{app}/data/`:
+
+- `app/` — app-owned data exposed to the process as `TAKO_DATA_DIR`
+- `tako/` — Tako-owned per-app internal state
+
+Deleting an app removes the entire `{data_dir}/apps/{app}` tree after the app is drained and stopped.
 
 During single-host upgrade orchestration, `tako-server` may enter an internal `upgrading` server mode that temporarily rejects mutating management commands (`deploy`, `stop`, `delete`, `update-secrets`) until the upgrade window ends.
 Upgrade mode transitions are guarded by a durable single-owner upgrade lock in SQLite so only one upgrade controller can hold the upgrade window at a time.
@@ -656,7 +666,7 @@ Upgrade `tako-server` on one or all configured servers via service-manager reloa
 4. CLI signals the primary service with:
    - `systemctl reload tako-server` on systemd hosts, or
    - `rc-service tako-server reload` on OpenRC hosts.
-     Both paths send SIGHUP for graceful in-place reload and run with root privileges (root login or sudo-capable user).
+     Both paths send `SIGHUP` for graceful reload, start a replacement process before the old process exits, and run with root privileges (root login or sudo-capable user).
 5. CLI waits for the primary management socket to report ready.
 6. CLI releases upgrade mode (`exit_upgrading`).
 
@@ -665,6 +675,7 @@ Upgrade `tako-server` on one or all configured servers via service-manager reloa
 Failure behavior:
 
 - If failure happens before the reload signal, CLI performs best-effort cleanup (exits upgrade mode).
+- Upgrade keeps the previous on-disk `tako-server` binary until the replacement process reports ready. If readiness does not arrive, the previous binary is restored.
 - If the reload was sent but the socket did not become ready within the timeout, CLI warns that upgrade mode may remain enabled until the primary recovers.
 
 ### tako servers implode [name] [-y|--yes]
@@ -818,14 +829,14 @@ Deploy flow helpers:
 3. Resolve app subdirectory from the selected config file's parent directory relative to source bundle root
 4. Resolve deploy runtime `main` (`main` from `tako.toml`; otherwise preset `main`, with JS index fallback order: `index.<ext>` then `src/index.<ext>` for `ts`/`tsx`/`js`/`jsx` when applicable)
 5. Resolve app preset (top-level `preset` in `tako.toml`), fetching unpinned official aliases from `master`
-6. Prepare workdir: copy project from source root (respecting `.gitignore`), symlink `node_modules/` directories from original tree
-7. Run build commands in workdir:
+6. Prepare `build_dir`: copy project from source root into `.tako/build_dir` (respecting `.gitignore`), symlink `node_modules/` directories from original tree
+7. Run build commands in `build_dir`:
    - If `[build]` is used: run `build.install` (if set), then `build.run`
    - If `[[build_stages]]` is used: run stages in declaration order (`install` then `run` per stage)
    - Merge configured assets into app `public/`
    - Verify resolved runtime `main` exists in the built app directory
    - Save resolved runtime version into `app.json` (`runtime_version` field) for server-side version pinning
-8. Archive workdir (excluding `node_modules/`) as deploy artifact
+8. Archive `build_dir` (excluding `node_modules/`) as deploy artifact
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
    - Best-effort local artifact cache prune runs before builds (retention: 90 target artifacts; orphan target metadata is removed)
    - Package filtered artifact tarball using include/exclude rules and store in local cache
@@ -834,7 +845,7 @@ Deploy flow helpers:
    - Upload and extract target-specific artifact
    - Query server for the app's current secrets hash; if it matches the local secrets hash, skip sending secrets (server keeps existing). If hashes differ (or app is new), include decrypted secrets in the deploy command.
    - Send deploy command with routes and optional secrets payload
-   - `tako-server` acquires a per-app deploy lock in memory, reads non-secret runtime/app config from release `app.json`, injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`) when spawning instances, runs the runtime plugin's production install command, and performs first start or rolling update
+   - `tako-server` acquires a per-app deploy lock in memory, reads non-secret runtime/app config from release `app.json`, injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`, `TAKO_DATA_DIR`) when spawning instances, creates per-app runtime data directories, runs the runtime plugin's production install command, and performs first start or rolling update
    - If another deploy for the same app environment is already running on that server, the deploy command fails immediately with a retry message
    - Update `current` symlink and clean up old releases (>30 days)
 
@@ -848,10 +859,10 @@ Deploy flow helpers:
 
 - Deploy archive source is the app's source bundle root (git root when available; otherwise selected-config parent directory).
 - Deploy target app path is the selected config file's parent directory relative to the source bundle root.
-- Build uses a workdir: copies project from source root (respecting `.gitignore`), symlinks `node_modules/` from the original tree (build tools read but don't modify), runs build commands in the workdir, then archives the result excluding `node_modules/`.
+- Build uses a `build_dir`: copies project from source root into `.tako/build_dir` (respecting `.gitignore`), symlinks `node_modules/` from the original tree (build tools read but don't modify), runs build commands in the `build_dir`, then archives the result excluding `node_modules/`.
 - These paths are always force-excluded from the deploy archive: `.git/`, `.tako/`, `.env*`, `node_modules/`. Additional exclusions come from `[build].exclude` and `.gitignore`.
 - Servers receive prebuilt artifacts and do not run app build steps during deploy. After extracting the artifact, `tako-server` runs the runtime plugin's production install command (e.g. `bun install --production`) before starting instances.
-- Build logic runs in the workdir: `[build].install` then `[build].run` (simple mode), or `[[build_stages]]` in declaration order (multi-stage mode).
+- Build logic runs in the `build_dir`: `[build].install` then `[build].run` (simple mode), or `[[build_stages]]` in declaration order (multi-stage mode).
 - Deploy uses `runtime_version` from `tako.toml` when set. Otherwise it resolves runtime version by running `<tool> --version` directly, falling back to `latest`.
 - Artifact include precedence: in simple build mode, `build.include` -> `**/*`. In multi-stage mode, `**/*` is used (stages control output via `exclude` patterns only).
 - Asset roots are preset `assets` plus top-level `assets` (deduplicated), merged into app `public/` after build with ordered overwrite.
@@ -859,7 +870,7 @@ Deploy flow helpers:
 - Cached artifacts are validated by checksum/size before reuse; invalid cache entries are rebuilt automatically.
 - Deploy artifacts include the canonical `app.json` used by `tako-server` at runtime.
 - Release `app.json` contains resolved runtime metadata (`runtime`, `main`, `package_manager`), non-secret env vars, environment idle timeout, and optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
-- Deploy does not write a release `.env` file; non-secret env vars live in release `app.json`, secrets are stored encrypted in SQLite on the server, and `tako-server` injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`) when spawning instances.
+- Deploy does not write a release `.env` file; non-secret env vars live in release `app.json`, secrets are stored encrypted in SQLite on the server, and `tako-server` injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`, `TAKO_DATA_DIR`) when spawning instances.
 - Deploy queries each server's secrets hash before sending the deploy command. If the hash matches the local secrets, secrets are omitted from the payload and the server keeps its existing secrets. This avoids unnecessary secret transmission and ensures new servers or servers with stale secrets are automatically provisioned.
 - Deploy requires valid `arch` and `libc` metadata in each selected `[[servers]]` entry.
 - Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
@@ -1132,7 +1143,8 @@ Reference scripts in this repo:
 
 ### Zero-Downtime Operation
 
-- `tako servers upgrade` performs an in-place upgrade via service-manager reload (`systemctl reload tako-server` on systemd, `rc-service tako-server reload` on OpenRC) with root privileges (root login or sudo-capable user), with no temporary candidate process or port overlap required.
+- `tako servers restart` performs a zero-downtime control-plane reload by default (`systemctl reload tako-server` on systemd, `rc-service tako-server reload` on OpenRC). `--force` performs a full service restart instead.
+- `tako servers upgrade` performs an in-place upgrade via service-manager reload (`systemctl reload tako-server` on systemd, `rc-service tako-server reload` on OpenRC) with root privileges (root login or sudo-capable user). Reload uses temporary process and listener overlap until the replacement process reports ready.
 - Management socket uses a symlink-based path: the active server creates a PID-specific socket (`tako-{pid}.sock`) and atomically updates the `tako.sock` symlink on ready, so clients always connect to the current process.
 - Restart/stop still honor graceful shutdown semantics from the host service manager (systemd or OpenRC as described above).
 
@@ -1151,13 +1163,15 @@ Reference scripts in this repo:
 │   │   ├── fullchain.pem
 │   │   └── privkey.pem
 └── apps/
-    └── {app-name}/
-        └── {env-name}/
-            ├── current -> releases/{version}
-            ├── releases/{version}/
-            │   └── build files...
-            └── shared/
-                └── logs/
+    └── {deployment-id}/
+        ├── current -> releases/{version}
+        ├── data/
+        │   ├── app/
+        │   └── tako/
+        ├── logs/
+        │   └── current.log
+        └── releases/{version}/
+            └── build files...
 ```
 
 ## Communication Protocol
@@ -1182,9 +1196,12 @@ Reference scripts in this repo:
 
 | Name                  | Used by         | Meaning                                              | Typical source                                                                                                      |
 | --------------------- | --------------- | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `ENV`                 | app             | Active environment name                              | Set by Tako in both dev and deploy (`development`, `production`, `staging`, etc.).                                  |
 | `PORT`                | app             | Listen port for HTTP server                          | Set by `tako dev` for the local app process; `0` on deploys (SDK binds to OS-assigned port and reports via stdout). |
 | `HOST`                | app             | Listen host for HTTP server                          | `127.0.0.1` in both dev and deploy.                                                                                 |
 | `TAKO_ENV`            | app             | Environment name                                     | Set during deploy manifest generation (`production`, `staging`, etc.).                                              |
+| `TAKO_DATA_DIR`       | app             | Persistent app-owned runtime data directory          | Set by Tako in both dev and deploy; points to the app's `data/app` directory.                                       |
+| `TAKO_APP_LOG_LEVEL`  | app             | Resolved app log verbosity                           | Set from the merged Tako config for the active environment.                                                         |
 | `NODE_ENV`            | app             | Node.js convention env                               | Set by runtime adapter / server (`development` or `production`).                                                    |
 | `BUN_ENV`             | app             | Bun convention env                                   | Set by runtime adapter (`development` or `production`).                                                             |
 | `DENO_ENV`            | app             | Deno convention env                                  | Set by runtime adapter (`development` or `production`).                                                             |

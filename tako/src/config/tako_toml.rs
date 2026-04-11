@@ -136,6 +136,7 @@ fn default_idle_timeout() -> u32 {
 
 /// Allowed values for the `log_level` config field.
 const ALLOWED_LOG_LEVELS: &[&str] = &["debug", "info", "warn", "error"];
+const RESERVED_DERIVED_ENV_VARS: &[&str] = &["ENV"];
 
 /// Resolve the effective app log level for an environment.
 /// Explicit `log_level` in config takes precedence; otherwise:
@@ -422,7 +423,36 @@ impl Config {
         if let Some(env_vars) = self.vars_per_env.get(env_name) {
             merged.extend(env_vars.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
+        for reserved in RESERVED_DERIVED_ENV_VARS {
+            merged.remove(*reserved);
+        }
         merged
+    }
+
+    pub fn ignored_reserved_var_warnings(&self) -> Vec<String> {
+        let mut warnings = Vec::new();
+
+        for reserved in RESERVED_DERIVED_ENV_VARS {
+            if self.vars.contains_key(*reserved) {
+                warnings.push(format!(
+                    "[vars].{reserved} is ignored. Tako derives {reserved} automatically."
+                ));
+            }
+
+            for env_name in self.vars_per_env.keys() {
+                if self
+                    .vars_per_env
+                    .get(env_name)
+                    .is_some_and(|vars| vars.contains_key(*reserved))
+                {
+                    warnings.push(format!(
+                        "[vars.{env_name}].{reserved} is ignored. Tako derives {reserved} automatically."
+                    ));
+                }
+            }
+        }
+
+        warnings
     }
 
     /// Check if tako.toml exists in a directory
@@ -1931,6 +1961,31 @@ DATABASE_URL = "postgres://prod"
             merged.get("DATABASE_URL"),
             Some(&"postgres://prod".to_string())
         ); // env-specific
+    }
+
+    #[test]
+    fn test_get_merged_vars_ignores_reserved_env_variable() {
+        let toml = r#"
+[vars]
+ENV = "custom-global"
+API_URL = "https://api.example.com"
+
+[vars.production]
+ENV = "custom-production"
+DATABASE_URL = "postgres://prod"
+"#;
+        let config = Config::parse(toml).unwrap();
+
+        let merged = config.get_merged_vars("production");
+        assert!(!merged.contains_key("ENV"));
+        assert_eq!(
+            merged.get("API_URL"),
+            Some(&"https://api.example.com".to_string())
+        );
+        assert_eq!(
+            merged.get("DATABASE_URL"),
+            Some(&"postgres://prod".to_string())
+        );
     }
 
     #[test]

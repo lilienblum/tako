@@ -335,6 +335,20 @@ pub async fn run(
                 };
 
                 let mut new_env = compute_dev_env(&cfg);
+                for warning in cfg.ignored_reserved_var_warnings() {
+                    let _ = log_tx
+                        .send(ScopedLog::warn("tako", format!("Validation: {}", warning)))
+                        .await;
+                }
+                if let Err(msg) = inject_dev_data_dir(&project_dir, &mut new_env) {
+                    let _ = log_tx
+                        .send(ScopedLog::error(
+                            "tako",
+                            format!("Failed to prepare TAKO_DATA_DIR: {msg}"),
+                        ))
+                        .await;
+                    continue;
+                }
 
                 if let Err(msg) = inject_dev_secrets(&project_dir, &app_name, &mut new_env)
                     .map_err(|e| e.to_string())
