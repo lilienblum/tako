@@ -310,15 +310,15 @@ Runtime binaries are downloaded directly from upstream releases by `tako-server`
 
 Tako-server exposes Prometheus metrics at `http://127.0.0.1:9898/` (localhost only, configurable with `--metrics-port`):
 
-| Metric                               | Type      | Description                        |
-| ------------------------------------ | --------- | ---------------------------------- |
-| `tako_http_requests_total`           | Counter   | Proxied requests by status class   |
-| `tako_http_request_duration_seconds` | Histogram | Request latency distribution       |
-| `tako_http_active_connections`       | Gauge     | Currently active connections       |
-| `tako_cold_starts_total`             | Counter   | Cold starts triggered              |
-| `tako_cold_start_duration_seconds`   | Histogram | Cold start duration distribution   |
-| `tako_instance_health`               | Gauge     | Instance health (1=healthy, 0=not) |
-| `tako_instances_running`             | Gauge     | Number of running instances        |
+| Metric                               | Type      | Description                              |
+| ------------------------------------ | --------- | ---------------------------------------- |
+| `tako_http_requests_total`           | Counter   | Proxied requests by status class         |
+| `tako_http_request_duration_seconds` | Histogram | Request latency distribution             |
+| `tako_http_active_connections`       | Gauge     | Currently active connections             |
+| `tako_cold_starts_total`             | Counter   | Cold starts triggered                    |
+| `tako_cold_start_duration_seconds`   | Histogram | Cold start duration distribution         |
+| `tako_instance_health`               | Gauge     | Instance health (1=healthy, 0=unhealthy) |
+| `tako_instances_running`             | Gauge     | Number of running instances              |
 
 All metrics carry `server` and `app` labels. Only proxied requests are measured -- ACME challenges, static asset responses, and unmatched 404s are excluded.
 

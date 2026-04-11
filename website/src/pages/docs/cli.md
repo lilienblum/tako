@@ -20,7 +20,7 @@ tako [--version] [-v|--verbose] [--ci] [--dry-run] [-c|--config <CONFIG>] <comma
 
 These flags work with any command.
 
-`--version` prints the current version and exits. Stable builds print a semver string (e.g. `0.3.1`). Canary builds print `<semver>-canary-<sha7>`.
+`--version` prints the current version and exits. Stable builds print a semver string (e.g. `0.3.1`). Canary builds print `canary-<sha7>`, where `<sha7>` is the 7-character source commit.
 
 `-v`, `--verbose` switches to verbose output -- an append-only execution transcript with timestamps, log levels, and technical detail like file paths and per-host transport context.
 
@@ -741,7 +741,7 @@ Show version information.
 tako version
 ```
 
-Same as `--version` flag. Stable builds print a semver string; canary builds print `<semver>-canary-<sha7>`.
+Same as `--version` flag. Stable builds print a semver string; canary builds print `canary-<sha7>`.
 
 ---
 

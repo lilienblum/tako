@@ -49,4 +49,4 @@ import { withTako } from "tako.sh/nextjs";
 export default withTako({});
 ```
 
-This enables Next.js standalone output, installs the Tako adapter, and generates `.next/tako-entry.mjs` for deploys. In `tako.toml`, use the `nextjs` preset or point `main` at `.next/tako-entry.mjs`. If Next emits standalone output, Tako uses it; otherwise the wrapper falls back to `next start`.
+This enables Next.js standalone output, installs the Tako adapter, adds `*.test` and `*.tako.test` to `allowedDevOrigins` so `next dev` accepts requests from Tako's dev hostnames, and generates `.next/tako-entry.mjs` for deploys. In `tako.toml`, use the `nextjs` preset or point `main` at `.next/tako-entry.mjs`. If Next emits standalone output, Tako uses it; otherwise the wrapper falls back to `next start`.
