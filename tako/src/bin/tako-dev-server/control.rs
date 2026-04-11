@@ -728,10 +728,32 @@ async fn handle_toggle_lan(state: &Arc<Mutex<State>>, enabled: bool) -> Response
             }
         };
 
+        // Snapshot log buffers ahead of the await so we don't hold the state
+        // lock across it.
+        let log_buffers: Vec<state::LogBuffer> = {
+            let s = state.lock().unwrap();
+            s.apps.values().map(|app| app.log_buffer.clone()).collect()
+        };
+
+        // If the first bind attempt in the dev proxy succeeds, enable_lan
+        // returns in ~5-20ms and the user never sees a progress line. The
+        // retry loop only kicks in after a 100ms backoff on EADDRINUSE, so an
+        // 80ms delayed "Starting LAN mode..." log fires only when we hit the
+        // retry path and have a real 100ms+ wait to explain.
+        let progress_buffers = log_buffers.clone();
+        let progress_task = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            for buffer in &progress_buffers {
+                push_scoped_log(buffer, "Info", "tako", "Starting LAN mode...");
+            }
+        });
+
         // Bind the concrete LAN interface so the wildcard dev proxy listener on
         // loopback does not conflict with LAN exposure on macOS.
         let command = build_enable_lan_command(&lan_ip);
-        if let Err(e) = send_dev_proxy_command(&command).await {
+        let result = send_dev_proxy_command(&command).await;
+        progress_task.abort();
+        if let Err(e) = result {
             return Response::Error {
                 message: format!("failed to enable LAN on dev proxy: {e}"),
             };

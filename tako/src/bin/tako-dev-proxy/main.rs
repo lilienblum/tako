@@ -16,7 +16,11 @@ fn should_retry_lan_bind(error: &std::io::Error) -> bool {
 }
 
 async fn bind_lan_listener(addr: &str, label: &str) -> Result<tokio::net::TcpListener, String> {
-    const MAX_ATTEMPTS: usize = 10;
+    // Give the bind up to ~3s to succeed. Real-world LAN teardown + rebind can
+    // race with the just-shut-down listener dropping its socket under load,
+    // and the client already shows "Starting LAN mode..." during this window
+    // so the delay is explained.
+    const MAX_ATTEMPTS: usize = 30;
     const RETRY_DELAY: Duration = Duration::from_millis(100);
 
     let mut last_error = None;
@@ -282,6 +286,13 @@ mod macos {
         ) {
             return Ok(());
         }
+
+        // Clear the "enabled" flags up-front so a bind failure mid-rebind
+        // leaves state consistent with reality (no listener → not enabled).
+        // They're restored to `true` at the bottom only after both listeners
+        // are successfully bound and the accept task is spawned.
+        state.enabled = false;
+        state.addr = None;
 
         // Tear down existing LAN listener if any
         if let Some(tx) = state.shutdown_tx.take() {
@@ -798,6 +809,13 @@ mod linux {
         ) {
             return Ok(());
         }
+
+        // Clear the "enabled" flags up-front so a bind failure mid-rebind
+        // leaves state consistent with reality (no listener → not enabled).
+        // They're restored to `true` at the bottom only after both listeners
+        // are successfully bound and the accept task is spawned.
+        state.enabled = false;
+        state.addr = None;
 
         if let Some(tx) = state.shutdown_tx.take() {
             let _ = tx.send(true);
