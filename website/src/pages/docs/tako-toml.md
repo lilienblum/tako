@@ -278,12 +278,16 @@ For any target environment, variables are merged in this order (later overrides 
 
 1. **`[vars]`** -- base variables shared by all environments
 2. **`[vars.<environment>]`** -- environment-specific overrides
-3. **Auto-set by Tako** -- injected automatically during deploy:
-   - `TAKO_ENV=<environment>`
-   - `TAKO_BUILD=<version>`
+3. **Auto-set by Tako** -- injected automatically at runtime:
+   - `ENV=<environment>` (set in both dev and deploy)
+   - `TAKO_ENV=<environment>` (deploy only)
+   - `TAKO_BUILD=<version>` (deploy only)
+   - `TAKO_DATA_DIR=<app data dir>` (set in both dev and deploy)
    - Runtime convention vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
 
 Since auto-set variables are applied last, they override any manually set values for those keys.
+
+If you set `ENV` in `[vars]` or `[vars.<environment>]`, Tako ignores it and prints a warning.
 
 ---
 
@@ -410,7 +414,7 @@ Commands that support `-c/--config`: `init`, `dev`, `logs`, `deploy`, `releases`
 
 ## Build and Deploy Behavior
 
-- Build uses a workdir approach: copies the project from the source root (respecting `.gitignore`), symlinks `node_modules/` directories from the original tree, runs build commands, then archives the result without `node_modules/`.
+- Build uses a `build_dir` approach: copies the project from the source root into `.tako/build_dir` (respecting `.gitignore`), symlinks `node_modules/` directories from the original tree, runs build commands, then archives the result without `node_modules/`.
 - Source bundle root is the git root when available, otherwise the app directory.
 - The app subdirectory is the selected config file's parent directory relative to the source bundle root.
 - Deploy always force-excludes `.git/`, `.tako/`, `.env*`, and `node_modules/` from the deploy archive.

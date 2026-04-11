@@ -2,7 +2,7 @@
 title: "Secrets Without .env Files"
 date: "2026-04-06T11:39"
 description: "How Tako encrypts secrets at rest, injects them via fd 3 at runtime, and generates typed accessors — so plaintext never touches disk."
-image: 40472f83be0e
+image: 8f2cb3d41b80
 ---
 
 Every deploy tool has a secrets story. Most of them end with "add it to your `.env` file." The `.env` file sits in `.gitignore`, gets copy-pasted between teammates over Slack, and lives as plaintext on every server it touches. If someone commits it by accident — and someone always does — you're rotating every key in the file.
@@ -107,7 +107,7 @@ The SDK wraps secrets in a Proxy that redacts on `toString()` and `toJSON()` —
 
 ### Typed secrets with `tako typegen`
 
-Run [`tako typegen`](/docs/cli) and Tako reads your encrypted secrets file to generate type definitions — without decrypting the values (remember, names are plaintext).
+Run [`tako typegen`](/docs/cli) and Tako reads your encrypted secrets file to generate type definitions — without decrypting the values (remember, names are plaintext). In JS/TS projects, the generated `tako.d.ts` also types the standard Tako/runtime env vars such as `TAKO_DATA_DIR`, `TAKO_ENV`, and `ENV`.
 
 **TypeScript** gets a `tako.d.ts`:
 

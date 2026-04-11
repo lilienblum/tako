@@ -2,7 +2,7 @@
 title: "Local Dev with Real HTTPS, Real DNS, and Zero Config"
 date: "2026-04-04T14:24"
 description: "Stop fighting localhost:3000 and self-signed cert warnings. Tako dev gives you real HTTPS, real domains, and a local proxy — automatically."
-image: a760afa12136
+image: d04d42a4e0e8
 ---
 
 You open your laptop, run one command, and your app is live at `https://myapp.test/`. Real HTTPS. Real domain. No port number. No browser warning. No config file you had to write.

@@ -145,15 +145,15 @@ Use `--dry-run` to preview the deploy without performing any side effects -- val
 tako deploy --dry-run
 ```
 
-Non-dry-run deploys also take a project-local `.tako/deploy.lock` before server checks and build work begin. If another local deploy is already running for the same project, Tako fails fast and shows the owning PID instead of racing on the shared local workdir/cache state.
+Non-dry-run deploys also take a project-local `.tako/deploy.lock` before server checks and build work begin. If another local deploy is already running for the same project, Tako fails fast and shows the owning PID instead of racing on the shared local build-dir/cache state.
 
 ### What happens during deploy
 
 1. **Pre-validation** -- Checks that secrets are present, server target metadata exists for all selected servers, and routes are valid.
-2. **Workdir setup** -- Copies project files into a clean workdir (respecting `.gitignore`), symlinks `node_modules/` from the original tree for JS projects so build tools can resolve dependencies without a full install, and restores local JS build caches from workspace `.turbo/` and app `.next/cache/` when present. `.git/`, `.tako/`, and `.env*` are always excluded.
+2. **Build dir setup** -- Copies project files into a clean `.tako/build_dir` (respecting `.gitignore`), symlinks `node_modules/` from the original tree for JS projects so build tools can resolve dependencies without a full install, and restores local JS build caches from workspace `.turbo/` and app `.next/cache/` when present. `.git/`, `.tako/`, and `.env*` are always excluded.
 3. **Entrypoint resolution** -- Resolves the deploy `main` file from `tako.toml`, then preset defaults, with JS-specific fallback order (`index.<ext>`, then `src/index.<ext>`). For Go, the default main is `app` (the compiled binary name).
 4. **Preset resolution** -- Resolves the app preset from `tako.toml` `preset` or the adapter base preset. Unpinned official presets are refreshed from `master` on each deploy; if refresh fails, Tako falls back to cached content. Pinned presets use the explicit `@commit`.
-5. **Artifact build** -- Runs your build commands (`[build]` or `[[build_stages]]`) in the workdir. Uses local cache when build inputs are unchanged. For JS projects, the resulting artifact excludes `node_modules/` and local build cache directories like `.turbo/` and `.next/cache` -- the server installs its own production dependencies after extracting the artifact. For Go, the build produces a self-contained binary (default: `CGO_ENABLED=0 go build -o app .`) and Tako auto-injects `GOOS=linux` and the target `GOARCH` for cross-compilation. No production install step is needed.
+5. **Artifact build** -- Runs your build commands (`[build]` or `[[build_stages]]`) in the `build_dir`. Uses local cache when build inputs are unchanged. For JS projects, the resulting artifact excludes `node_modules/` and local build cache directories like `.turbo/` and `.next/cache` -- the server installs its own production dependencies after extracting the artifact. For Go, the build produces a self-contained binary (default: `CGO_ENABLED=0 go build -o app .`) and Tako auto-injects `GOOS=linux` and the target `GOARCH` for cross-compilation. No production install step is needed.
 6. **Parallel deploy** -- Deploys to all target servers simultaneously. Each server is handled independently, so partial success is possible.
 
 ### Per-server deploy steps
@@ -242,7 +242,7 @@ Built target artifacts are cached locally under `.tako/artifacts/` using a deter
 
 Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
 
-For JavaScript apps, Tako also restores local build-tool caches into the temporary workdir before the build when they exist. Today that covers workspace `.turbo/` and app `.next/cache/`. Those directories are never shipped in the final deploy artifact.
+For JavaScript apps, Tako also restores local build-tool caches into the temporary `.tako/build_dir` before the build when they exist. Today that covers workspace `.turbo/` and app `.next/cache/`. Those directories are never shipped in the final deploy artifact.
 
 On every deploy, local artifact cache is pruned automatically (best-effort): keep 90 most recent target artifacts and remove orphan target metadata files.
 
@@ -549,26 +549,28 @@ The upgrade process:
 5. Waits for the management socket to report ready
 6. Releases the upgrade lock
 
-A supported service manager (systemd or OpenRC) is required. The reload uses `SIGHUP` for graceful in-place restart.
+A supported service manager (systemd or OpenRC) is required. The reload uses `SIGHUP`, starts a replacement process before the old one exits, and keeps the previous on-disk binary until the replacement process reports ready.
 
 If you override `TAKO_DOWNLOAD_BASE_URL`, it must use `https://` unless you also set `TAKO_ALLOW_INSECURE_DOWNLOAD_BASE=1` for a local test environment.
 
-If the reload was sent but the socket does not become ready in time, the CLI warns that upgrade mode may remain active until the server recovers.
+If the reload was sent but the socket does not become ready in time, the CLI restores the previous binary on disk and warns that upgrade mode may remain active until the server recovers.
 
 ## Server restart
 
-Restart `tako-server` entirely (causes brief downtime for all apps on the server):
+Reload `tako-server` without downtime by default:
 
 ```bash
 tako servers restart la
+tako servers restart la --force
 ```
 
-Use for: binary updates outside the normal upgrade flow, major configuration changes, system recovery.
+Default restart performs a graceful reload (`SIGHUP`) so the current process can hand off to a replacement process. Use `--force` to do a full service restart when graceful reload is not appropriate; that path may cause brief downtime.
 
-`tako-server` persists app runtime registration (app config and routes) in SQLite and restores it on startup, so app routing and config survive restarts and crashes. Secrets remain encrypted in the same SQLite database.
+`tako-server` persists app runtime registration (app config and routes) in SQLite and restores it on startup, so app routing and config survive reloads, restarts, and crashes. Secrets remain encrypted in the same SQLite database. Each app also gets a persistent data tree under `.../apps/{app}/data/` with app-owned storage exposed as `TAKO_DATA_DIR` and Tako-owned storage under `data/tako`.
 
 Graceful shutdown semantics:
 
+- Default reload: starts a replacement process, hands over listeners and the management socket, then drains and exits the old process
 - On systemd: `KillMode=control-group` and `TimeoutStopSec=30min`, allowing all app processes time to handle shutdown before forced termination
 - On OpenRC: `retry="TERM/1800/KILL/5"` waits up to 30 minutes before forced termination
 

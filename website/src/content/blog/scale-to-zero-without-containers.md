@@ -2,7 +2,7 @@
 title: "Scale-to-Zero Without Containers"
 date: "2026-04-05T05:17"
 description: "How Tako scales apps to zero and cold-starts them on demand — without Docker, containers, or a cloud platform."
-image: d83bdd033b41
+image: 0ae9be74aa80
 ---
 
 Scale-to-zero is usually a cloud or container thing. Google Cloud Run, AWS Lambda, Fly.io Machines — they all do it by pausing or destroying containers. If you're running apps on your own servers with native processes, you're expected to keep them running 24/7.

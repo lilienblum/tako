@@ -188,14 +188,33 @@ const pageStructuredData = structuredData
 
       .header-inner {
         padding: 11px 14px;
-        border: 2px solid var(--line);
+        border: 2px solid transparent;
         border-radius: var(--panel-radius);
-        background: rgba(255, 255, 255, 0.76);
-        backdrop-filter: blur(8px);
+        background: transparent;
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 16px;
+        transition:
+          background 180ms ease,
+          border-color 180ms ease,
+          backdrop-filter 180ms ease;
+      }
+
+      .header.is-scrolled .header-inner {
+        background: rgba(255, 255, 255, 0.76);
+        border-color: var(--line);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+      }
+
+      .header-sentinel {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 1px;
+        height: 1px;
+        pointer-events: none;
       }
 
       .logo {
@@ -232,19 +251,30 @@ const pageStructuredData = structuredData
       .nav-links a {
         text-decoration: none;
         color: var(--ink);
-        padding: 7px 14px;
-        border-radius: 999px;
-        border: 1px solid var(--line);
-        background: rgba(255, 255, 255, 0.8);
+        padding: 7px 8px;
         font-family: "Nunito", sans-serif;
         font-size: 16px;
         font-weight: 600;
         line-height: 1;
+        transition: color 0.15s;
       }
 
       .nav-links a:hover {
-        transform: translateY(-1px);
-        background: rgba(232, 135, 131, 0.18);
+        color: var(--accent);
+      }
+
+      .nav-links a:not(.github-star) {
+        text-decoration: underline;
+        text-decoration-color: transparent;
+        transition: color 0.15s, text-decoration-color 180ms ease;
+      }
+
+      .nav-links a:not(.github-star):hover {
+        text-decoration-color: currentColor;
+      }
+
+      .header.is-scrolled .nav-links a:not(.github-star):hover {
+        text-decoration-color: transparent;
       }
 
       .nav-links a:focus-visible,
@@ -266,7 +296,9 @@ const pageStructuredData = structuredData
         display: inline-flex;
         align-items: center;
         gap: 7px;
-        border-color: rgba(214, 166, 62, 0.88);
+        padding: 7px 14px;
+        border: 1px solid rgba(214, 166, 62, 0.88);
+        border-radius: 999px;
         background: rgba(255, 224, 149, 0.24);
         color: #6f4d16;
         box-shadow: inset 0 0 0 1px rgba(255, 245, 210, 0.45);
@@ -325,17 +357,18 @@ const pageStructuredData = structuredData
       }
 
       .footer-inner a {
-        text-decoration: none;
+        text-decoration: underline;
+        text-decoration-color: transparent;
         color: var(--muted);
         font-family: "Nunito", sans-serif;
         font-size: 15px;
         font-weight: 600;
-        transition: color 0.15s;
+        transition: color 0.15s, text-decoration-color 180ms ease;
       }
 
       .footer-inner a:hover {
         color: var(--ink);
-        text-decoration: underline;
+        text-decoration-color: currentColor;
       }
 
       .footer-inner a:focus-visible {
@@ -452,6 +485,10 @@ const pageStructuredData = structuredData
       @media (max-width: 640px) {
         .header-inner {
           padding: 10px;
+          background: rgba(255, 255, 255, 0.76);
+          border-color: var(--line);
+          backdrop-filter: blur(8px);
+          -webkit-backdrop-filter: blur(8px);
         }
 
         .desktop-nav {
@@ -468,6 +505,7 @@ const pageStructuredData = structuredData
   </head>
   <body>
     <div class="site">
+      <div class="header-sentinel" aria-hidden="true"></div>
       <header class="header">
         <div class="container">
           <div class="header-inner">
@@ -536,6 +574,17 @@ const pageStructuredData = structuredData
             mobileMenu.setAttribute('aria-hidden', 'true');
           }
         });
+      })();
+    </script>
+    <script is:inline>
+      (function() {
+        var sentinel = document.querySelector('.header-sentinel');
+        var header = document.querySelector('.header');
+        if (!sentinel || !header || typeof IntersectionObserver === 'undefined') return;
+        var io = new IntersectionObserver(function(entries) {
+          header.classList.toggle('is-scrolled', !entries[0].isIntersecting);
+        });
+        io.observe(sentinel);
       })();
     </script>
     <script is:inline>

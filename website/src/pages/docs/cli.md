@@ -463,17 +463,19 @@ If no servers are configured interactively, offers to run the add-server wizard.
 
 ### `tako servers restart`
 
-Restart `tako-server` on a remote host.
+Reload `tako-server` on a remote host without downtime by default.
 
 ```bash
 tako servers restart <NAME>
+tako servers restart <NAME> --force
 ```
 
-| Argument | Description |
-| -------- | ----------- |
-| `<NAME>` | Server name |
+| Argument/Flag | Description                                        |
+| ------------- | -------------------------------------------------- |
+| `<NAME>`      | Server name                                        |
+| `--force`     | Perform a full service restart with brief downtime |
 
-Restarts the entire `tako-server` process, which causes brief downtime for all apps on that server. Use for binary updates, major configuration changes, or system recovery.
+Without `--force`, this sends a graceful reload so the current process can hand off to a replacement process without downtime. `--force` does a full service restart, which may cause brief downtime for all apps on that server.
 
 ### `tako servers upgrade`
 
@@ -491,7 +493,7 @@ tako servers upgrade [SERVER_NAME] [--canary|--stable]
 
 Without channel flags, uses the persisted `upgrade_channel` from global config (default: `stable`). The `--canary` and `--stable` flags are mutually exclusive.
 
-Upgrade verifies the signed `tako-server-sha256s.txt` release manifest, enforces the matching SHA-256 on the downloaded archive, installs the new binary, acquires an upgrade lock, signals a service-manager reload (`systemctl reload` on systemd, `rc-service reload` on OpenRC), waits for the management socket to report ready, then releases the lock. Requires a supported service manager and root privileges (root login or sudo-capable user).
+Upgrade verifies the signed `tako-server-sha256s.txt` release manifest, enforces the matching SHA-256 on the downloaded archive, installs the new binary, acquires an upgrade lock, signals a service-manager reload (`systemctl reload` on systemd, `rc-service reload` on OpenRC), waits for the management socket to report ready, then releases the lock. Reload uses temporary process/listener overlap until the replacement process reports ready, and Tako keeps the previous on-disk binary until then so it can restore it if readiness fails. Requires a supported service manager and root privileges (root login or sudo-capable user).
 
 Custom `TAKO_DOWNLOAD_BASE_URL` overrides must use `https://`. For local testbeds, an explicit `TAKO_ALLOW_INSECURE_DOWNLOAD_BASE=1` override is required before a non-HTTPS base is accepted.
 
@@ -721,13 +723,13 @@ If nothing exists to remove, reports that and exits.
 
 ## `tako typegen`
 
-Generate typed secret accessors for the current project.
+Generate typed accessors for the current project.
 
 ```bash
 tako typegen
 ```
 
-Generates `tako.d.ts` for JavaScript/TypeScript projects and `tako_secrets.go` for Go projects, providing typed access to your Tako-managed secrets.
+Generates `tako.d.ts` for JavaScript/TypeScript projects and `tako_secrets.go` for Go projects. In JS/TS projects, `tako.d.ts` types both `Tako.secrets` and the stable app env surface exposed through `process.env` and `import.meta.env` (for example `ENV`, `TAKO_ENV`, `TAKO_BUILD`, and `TAKO_DATA_DIR`).
 
 ---
 
@@ -774,7 +776,7 @@ Running `tako` with no arguments also prints help.
 | `tako servers rm`              | Remove a server                           |
 | `tako servers ls`              | List servers                              |
 | `tako servers status`          | Show deployment status                    |
-| `tako servers restart <NAME>`  | Restart tako-server                       |
+| `tako servers restart <NAME>`  | Reload tako-server (`--force` to restart) |
 | `tako servers upgrade [NAME]`  | Upgrade tako-server                       |
 | `tako servers implode [NAME]`  | Remove tako-server and all data           |
 | `tako servers setup-wildcard`  | Configure DNS-01 wildcard support         |

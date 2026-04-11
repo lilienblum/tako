@@ -31,18 +31,10 @@ img file="":
     max_w=1400
     tmp_src=$(mktemp /tmp/blog-img-XXXXXX).png
     cp "$src" "$tmp_src"
-    # Resize width to max if needed
+    # Resize width to max if needed (preserves original aspect ratio)
     cur_w=$(sips -g pixelWidth "$tmp_src" | tail -1 | awk '{print $2}')
     if [ "$cur_w" -gt "$max_w" ]; then
         sips --resampleWidth "$max_w" "$tmp_src" --out "$tmp_src" >/dev/null 2>&1
-    fi
-    # Center-crop to 5:2 ratio
-    cur_w=$(sips -g pixelWidth "$tmp_src" | tail -1 | awk '{print $2}')
-    cur_h=$(sips -g pixelHeight "$tmp_src" | tail -1 | awk '{print $2}')
-    target_h=$(( cur_w * 2 / 5 ))
-    if [ "$cur_h" -gt "$target_h" ]; then
-        crop_y=$(( (cur_h - target_h) / 2 ))
-        sips --cropOffset "$crop_y" 0 --cropToHeightWidth "$target_h" "$cur_w" "$tmp_src" --out "$tmp_src" >/dev/null 2>&1
     fi
     # Convert to webp
     tmp=$(mktemp /tmp/blog-img-XXXXXX).webp
@@ -58,8 +50,14 @@ img file="":
     if [ -n "$post" ]; then
         # Insert hash into image: frontmatter
         sed -i '' 's/^image:.*$/image: '"$id"'/' "$post"
-        # Remove IMAGE PROMPT comment block
-        sed -i '' '/^<!-- IMAGE PROMPT/,/^-->/d' "$post"
+        # Remove IMAGE PROMPT comment block (and the blank line that follows it)
+        awk '
+            /^<!-- IMAGE PROMPT/ { in_block = 1; next }
+            in_block && /^-->$/ { in_block = 0; skip_blank = 1; next }
+            in_block { next }
+            skip_blank && /^$/ { skip_blank = 0; next }
+            { skip_blank = 0; print }
+        ' "$post" > "$post.tmp" && mv "$post.tmp" "$post"
         echo "$id → $(basename "$post")"
     else
         echo -n "$id" | pbcopy

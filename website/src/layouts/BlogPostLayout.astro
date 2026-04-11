@@ -66,7 +66,7 @@ const formatted = date
   <script is:inline slot="head" type="application/ld+json" set:html={jsonLd} />
   <section class={`blog-sheet ${image ? "has-hero" : ""}`}>
     {image && (
-      <div class="blog-hero"><img src={image} alt={imageAlt} width="1200" height="480" loading="eager" fetchpriority="high" /></div>
+      <div class="blog-hero"><img src={image} alt={imageAlt} loading="eager" fetchpriority="high" /></div>
     )}
     <div class="blog-top">
       <a href="/blog" class="blog-back">&larr; back</a>
@@ -391,7 +391,6 @@ const formatted = date
 
 <style is:global>
   .blog-sheet {
-    border: 2px solid var(--line);
     border-radius: var(--panel-radius);
     background: rgba(255, 255, 255, 0.8);
     box-shadow: 0 18px 45px rgba(47, 42, 68, 0.1);
@@ -401,30 +400,17 @@ const formatted = date
   }
 
   .blog-hero {
-    width: 100%;
+    margin-bottom: clamp(-80px, -6vw, -48px);
+    pointer-events: none;
   }
 
   .blog-hero img {
-    width: 100%;
-    height: auto;
     display: block;
-    -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 50px), transparent 100%);
-    mask-image: linear-gradient(to bottom, black calc(100% - 50px), transparent 100%);
-  }
-
-  .has-hero .blog-top {
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 1;
-  }
-
-  .has-hero .blog-back {
-    background: rgba(255, 255, 255, 0.7);
-    backdrop-filter: blur(4px);
-    padding: 5px 12px;
-    border-radius: 999px;
+    width: 100%;
+    height: clamp(280px, 42vw, 520px);
+    object-fit: cover;
+    -webkit-mask-image: linear-gradient(to bottom, black 78%, transparent 100%);
+    mask-image: linear-gradient(to bottom, black 78%, transparent 100%);
   }
 
   .blog-top,
@@ -434,14 +420,24 @@ const formatted = date
 
   .blog-top {
     padding-top: clamp(18px, 4vw, 36px);
+    margin-bottom: 12px;
   }
 
   .blog-article {
     padding-bottom: clamp(18px, 4vw, 36px);
   }
 
-  .blog-top {
-    margin-bottom: 12px;
+  .blog-sheet.has-hero .blog-top {
+    position: absolute;
+    top: clamp(14px, 3vw, 24px);
+    left: clamp(14px, 3vw, 24px);
+    padding: 0;
+    margin: 0;
+    z-index: 2;
+  }
+
+  .blog-sheet.has-hero .blog-article {
+    padding-top: clamp(22px, 4vw, 36px);
   }
 
   .blog-back {
@@ -451,8 +447,25 @@ const formatted = date
     text-decoration: none;
   }
 
+  .blog-sheet.has-hero .blog-back {
+    display: inline-flex;
+    align-items: center;
+    padding: 7px 14px;
+    border-radius: 999px;
+    background: rgba(255, 252, 248, 0.82);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    color: var(--ink);
+    border: 1px solid rgba(47, 42, 68, 0.1);
+    box-shadow: 0 2px 8px rgba(47, 42, 68, 0.12);
+  }
+
   .blog-back:hover {
     color: var(--accent);
+  }
+
+  .blog-sheet.has-hero .blog-back:hover {
+    background: rgba(255, 252, 248, 0.95);
   }
 
   .blog-back:focus-visible {
@@ -521,8 +534,6 @@ const formatted = date
 
   .blog-article.content h1 {
     font-size: clamp(28px, 4.2vw, 36px);
-    border-bottom: 2px solid var(--line);
-    padding-bottom: 8px;
   }
 
   .blog-article.content h2 {
@@ -587,10 +598,9 @@ const formatted = date
   }
 
   .blog-article.content blockquote {
-    border-left: 4px solid var(--secondary);
     background: var(--mint-soft);
-    border-radius: 0 12px 12px 0;
-    padding: 12px 14px;
+    border-radius: 14px;
+    padding: 14px 18px;
     color: var(--ink);
   }
 

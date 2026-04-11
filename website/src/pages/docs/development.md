@@ -270,12 +270,14 @@ For JS apps, this means your `export default function fetch()` or `export defaul
 
 ### Automatically set
 
-| Variable   | Value         | Purpose                              |
-| ---------- | ------------- | ------------------------------------ |
-| `PORT`     | _(ephemeral)_ | The port your app should listen on   |
-| `NODE_ENV` | `development` | Node.js convention (all JS runtimes) |
-| `BUN_ENV`  | `development` | Bun convention (Bun runtime only)    |
-| `DENO_ENV` | `development` | Deno convention (Deno runtime only)  |
+| Variable        | Value            | Purpose                                |
+| --------------- | ---------------- | -------------------------------------- |
+| `ENV`           | `development`    | Generic development environment marker |
+| `PORT`          | _(ephemeral)_    | The port your app should listen on     |
+| `TAKO_DATA_DIR` | `.tako/data/app` | Persistent app-owned local data dir    |
+| `NODE_ENV`      | `development`    | Node.js convention (all JS runtimes)   |
+| `BUN_ENV`       | `development`    | Bun convention (Bun runtime only)      |
+| `DENO_ENV`      | `development`    | Deno convention (Deno runtime only)    |
 
 ### From tako.toml
 

@@ -2,7 +2,7 @@
 title: "Zero-Downtime Deploys Without a Container in Sight"
 date: "2026-04-07T04:43"
 description: "How Tako rolls out new versions with connection draining, health-checked readiness, and automatic rollback — all with native processes."
-image: aab37f099724
+image: b724049be8bd
 ---
 
 Zero-downtime deploys usually mean containers. Kubernetes rolling updates, Docker Swarm service convergence, Fly.io machine replacement. The assumption is that you need an abstraction layer — something that can spin up a fresh container, health-check it, and tear down the old one.

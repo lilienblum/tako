@@ -2,28 +2,8 @@
 title: "The Fetch Handler Pattern: One Function, Every Runtime"
 date: "2026-04-06T11:48"
 description: "Why Tako chose the web-standard fetch handler as its universal app interface — and how the same export runs on Bun, Node, and Deno."
-image:
+image: 8bc5d8514b34
 ---
-
-<!-- IMAGE PROMPT (copy-paste this entire block into ChatGPT):
-
-Generate a wide illustration for a blog post hero image.
-
-Character: A small, simple octopus. Reference: https://tako.sh/assets/logo.svg
-The octopus must match the style of our logo — flat, minimal, no outlines, soft pastel coral pink body with simple dot eyes and a small curved mouth. Not 3D, not shiny, not glossy, not kawaii/cartoonish. Subtle and understated.
-
-Scene: The octopus stands at the center holding a single glowing orb labeled with curly braces { }. Three gentle paths radiate outward from the orb, each leading to a small, distinct platform or pedestal — one mint teal, one soft purple, one warm coral — representing different runtimes. The composition conveys one source flowing to many destinations. Simple and clean, no text on the platforms.
-
-Style requirements:
-- Flat illustration with paper-like grain texture
-- Light, airy, pastel tones — not saturated, not glossy, not 3D
-- Color palette: coral pink (#E88783), mint teal (#9BC4B6), warm beige (#FFF9F4) background, dark purple (#2F2A44) accents
-- Calm, warm, friendly mood — like a watercolor postcard
-- Widescreen landscape format
-- IMPORTANT COMPOSITION: All key objects and the main subject must be concentrated in a horizontal band in the CENTER of the image. Leave generous empty space (just background/sky/ground) at the TOP and BOTTOM edges. The image will be cropped to 5:2 ratio from the center — nothing important should be in the outer edges.
-
-Output: a single image in widescreen landscape format.
--->
 
 Here's a Tako app:
 

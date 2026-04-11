@@ -42,7 +42,7 @@ image: 9q15scNA
 
 The `description` field is **required** — it populates `<meta name="description">`, Open Graph, Twitter cards, and the blog listing page. Write it as a standalone sentence that makes sense in search results and social shares. Keep it under 160 characters.
 
-Hero images go in `website/public/assets/blog/` as `.webp` files. The `image` field is just the ID (no extension). Use `just blog::img` to convert and import from Downloads. Widescreen landscape format. `just blog::img` handles resizing and conversion.. The `image` field is optional — omit it if no image is available.
+Hero images go in `website/public/assets/blog/` as `.webp` files. The `image` field is just the ID (no extension). Use `just blog::img` to convert and import from Downloads. Landscape orientation (roughly 16:9). `just blog::img` handles resizing and conversion — it preserves the original aspect ratio and the site's layout displays the hero in a centered, boxed frame (max 640×360). The `image` field is optional — omit it if no image is available.
 
 Guidelines:
 
@@ -74,7 +74,7 @@ Combined with multi-server environments and Cloudflare Argo smart routing, Tako 
 
 ### Step 2b — Image prompt
 
-Add an HTML comment right after the frontmatter with a ChatGPT image generation prompt. The user will paste it into ChatGPT, download the result, then run `just blog::img` to crop, convert to webp, and import it.
+Add an HTML comment right after the frontmatter with a ChatGPT image generation prompt. The user will paste it into ChatGPT, download the result, then run `just blog::img` to convert to webp and import it.
 
 Format:
 
@@ -111,8 +111,7 @@ Style requirements:
 - Light, airy, pastel tones — not saturated, not glossy, not 3D
 - Color palette: coral pink (#E88783), mint teal (#9BC4B6), warm beige (#FFF9F4) background, dark purple (#2F2A44) accents
 - Playful, characterful, and full of motion — warm and friendly but lively. Think children's book spread or New Yorker cover, not corporate landing page. A soft sense of movement (flying confetti, dust puffs, motion lines, tilted angles) is welcome when it fits.
-- Widescreen landscape format
-- IMPORTANT COMPOSITION: All key objects and the main subject must be concentrated in a horizontal band in the CENTER of the image. Leave generous empty space (just background/sky/ground) at the TOP and BOTTOM edges. The image will be cropped to 5:2 ratio from the center — nothing important should be in the outer edges.
+- Landscape orientation, roughly 16:9. The image will be displayed in a centered, boxed frame at about 640×360 — no cropping, the original aspect ratio is preserved, so compose the whole frame to be presentable.
 
 Output: a single image in widescreen landscape format.
 -->
@@ -152,7 +151,7 @@ If the answer to "what story?" is fuzzy, stop and pick one before writing the sc
 
 After writing the post, copy the image prompt text (everything between the `<!-- IMAGE PROMPT` and `-->` markers, excluding the markers themselves) to the clipboard using `pbcopy`.
 
-After the user downloads the image, they run `just blog::img` which crops to 5:2 from center, converts to webp, and outputs the hash ID to put in the `image:` frontmatter field.
+After the user downloads the image, they run `just blog::img` which resizes (capped at 1400px wide, aspect ratio preserved), converts to webp, and outputs the hash ID to put in the `image:` frontmatter field.
 
 ### Step 3 — Verify
 

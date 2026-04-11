@@ -173,9 +173,9 @@ For Next.js deploys, make sure your build is using `withTako(...)` from `tako.sh
 
 ### Next.js or Turbo cache confusion
 
-**Symptom:** You see `.next/cache` or `.turbo` inside the build workdir locally and are unsure whether they deploy.
+**Symptom:** You see `.next/cache` or `.turbo` inside the local `build_dir` and are unsure whether they deploy.
 
-**Expected behavior:** Tako restores those local caches into the temporary build workdir when present, but strips them back out of the final deploy artifact. They speed up repeated local builds and are not shipped to servers.
+**Expected behavior:** Tako restores those local caches into the temporary `.tako/build_dir` when present, but strips them back out of the final deploy artifact. They speed up repeated local builds and are not shipped to servers.
 
 ### Concurrent deploy already in progress
 
