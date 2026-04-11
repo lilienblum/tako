@@ -82,7 +82,7 @@ Accidental logging? Handled. Serialization into error reports? Handled.
 
 ## Same Code, Dev and Prod
 
-One of the quieter benefits: [`tako dev`](/docs/development) runs your app through the exact same SDK entrypoint as production. Same fetch handler wrapping, same readiness protocol, same health endpoint. The only differences are the ones you'd expect — local HTTPS on `.tako.test` instead of your production domain, debug log level by default.
+One of the quieter benefits: [`tako dev`](/docs/development) runs your app through the exact same SDK entrypoint as production. Same fetch handler wrapping, same readiness protocol, same health endpoint. The only differences are the ones you'd expect — local HTTPS on `.test` instead of your production domain, debug log level by default.
 
 This means if your app starts correctly in dev, it starts correctly in production. No "works on my machine" surprises from a different server setup.
 

@@ -69,7 +69,7 @@ Tako builds locally on your machine and sends the compressed artifact over SFTP.
 
 Coolify is a server-side platform. Local development is up to you.
 
-[`tako dev`](/docs/development) runs your app with real HTTPS, local DNS (`*.tako.test`), and the same [SDK](/blog/why-tako-ships-an-sdk) and process model as production. What works locally works the same way when deployed.
+[`tako dev`](/docs/development) runs your app with real HTTPS, local DNS (`*.test`), and the same [SDK](/blog/why-tako-ships-an-sdk) and process model as production. What works locally works the same way when deployed.
 
 ## Different ambitions
 

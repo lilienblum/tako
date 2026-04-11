@@ -80,7 +80,7 @@ Tako uses [Pingora](/blog/pingora-vs-caddy-vs-traefik), Cloudflare's Rust proxy 
 
 Kamal is a production deployment tool. Local dev is left to Docker Compose or whatever your team uses. There's no `kamal dev`.
 
-Tako treats local dev as a first-class concern. [`tako dev`](/docs/development) gives you real HTTPS with trusted certificates, local DNS routing (`*.tako.test`), and a proxy that matches production behavior. Your app runs the same way locally as it does on the server — same SDK, same process model, same routing.
+Tako treats local dev as a first-class concern. [`tako dev`](/docs/development) gives you real HTTPS with trusted certificates, local DNS routing (`*.test`), and a proxy that matches production behavior. Your app runs the same way locally as it does on the server — same SDK, same process model, same routing.
 
 ### Scale-to-zero
 

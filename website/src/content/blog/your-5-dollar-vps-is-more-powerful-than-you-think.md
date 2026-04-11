@@ -60,7 +60,7 @@ Here's what you get out of the box:
 - **Automatic TLS** — [Let's Encrypt certificates](/docs/how-tako-works) issued and renewed for every route, including [wildcards](/docs/tako-toml)
 - **Routing** — Exact domains, wildcard subdomains, path-based routes, static files — all via [Pingora](/blog/pingora-vs-caddy-vs-traefik), Cloudflare's proxy framework
 - **Secrets** — [Encrypted at rest](/blog/secrets-without-env-files), per-environment, injected via file descriptor (never touch disk on the server)
-- **Local dev** — [`tako dev`](/blog/local-dev-with-real-https) gives you real HTTPS at `https://myapp.tako.test` with zero config
+- **Local dev** — [`tako dev`](/blog/local-dev-with-real-https) gives you real HTTPS at `https://myapp.test` with zero config
 - **Scale to zero** — [Apps sleep when idle](/blog/scale-to-zero-without-containers) and wake on the next request, so one VPS can host many projects
 - **Multi-server** — Deploy across [multiple servers and environments](/blog/one-config-many-servers) from a single `tako.toml`
 
