@@ -634,31 +634,46 @@ pub(super) fn format_lan_block(hosts: &[String], ca_url: &str) -> Vec<String> {
     let warn_color = ansi_rgb(234, 211, 156);
     let mut out = Vec::new();
     out.push(String::new());
-    out.push(format!(
-        "  {DIM}Your app is now available on your local network at these routes{RESET}"
-    ));
-    out.push(String::new());
-    for host in hosts {
-        let local = to_local_route(host);
-        out.push(format!("  {url_color}https://{local}{RESET}"));
-    }
 
     // Wildcard routes cannot be advertised via mDNS (Bonjour/Avahi) — each
-    // concrete subdomain needs its own record. Warn once and suggest a
-    // concrete example derived from one of the app's own wildcard routes
-    // so the user can copy it directly into `[envs.development]`.
-    if let Some(wildcard_host) = hosts
+    // concrete subdomain needs its own record — so they are excluded from
+    // the LAN route list (which would otherwise mislead the user into
+    // trying an unreachable URL). Only concrete hostnames are listed.
+    let concrete_hosts: Vec<&String> = hosts
+        .iter()
+        .filter(|h| !split_route_pattern(h).0.starts_with("*."))
+        .collect();
+    let wildcard_host = hosts
         .iter()
         .map(|h| split_route_pattern(h).0)
-        .find(|h| h.starts_with("*."))
-    {
-        let example = wildcard_host.replacen('*', "api", 1);
+        .find(|h| h.starts_with("*."));
+
+    if concrete_hosts.is_empty() {
+        out.push(format!(
+            "  {DIM}No routes are reachable on your local network{RESET}"
+        ));
+    } else {
+        out.push(format!(
+            "  {DIM}Your app is now available on your local network at these routes{RESET}"
+        ));
+        out.push(String::new());
+        for host in &concrete_hosts {
+            let local = to_local_route(host);
+            out.push(format!("  {url_color}https://{local}{RESET}"));
+        }
+    }
+
+    // If there are any wildcard routes, explain why they were excluded and
+    // suggest a concrete example derived from one of them. `!` is flush-left
+    // so the body text column lines up with the URL text column above.
+    if let Some(wildcard_host) = wildcard_host {
+        let example = wildcard_host.replacen('*', "tenant", 1);
         out.push(String::new());
         out.push(format!(
-            "  {warn_color}! Wildcard routes can't be advertised to devices via mDNS.{RESET}"
+            "{warn_color}! Wildcard routes can't be advertised to devices via mDNS.{RESET}"
         ));
         out.push(format!(
-            "  {DIM}Add a concrete subdomain route (e.g. {example}) to reach it from your phone.{RESET}"
+            "  {warn_color}Use non-wildcard routes (e.g. {example}) to reach it from your phone.{RESET}"
         ));
     }
 
