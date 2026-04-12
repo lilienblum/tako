@@ -171,13 +171,38 @@ Tako limits each client IP to a maximum of 2048 concurrent connections. Requests
 Tako actively monitors every app instance with HTTP health probes:
 
 - **Probe interval**: every 1 second
-- **Probe request**: `GET /status` with `Host: tako` header and `X-Tako-Internal-Token` header
+- **Probe request**: `GET /status` with `Host: tako.internal` header and `X-Tako-Internal-Token` header
 - **Transport**: the instance's private TCP endpoint on loopback
 - **Process exit detection**: before each probe, Tako checks if the process has exited and immediately marks it dead if so
 - **Failure threshold**: 1 failure marks the instance dead and triggers replacement. Once an instance passes its first health check, any single probe failure means something is genuinely wrong.
 - **Recovery**: a single successful probe restores the instance to healthy
 
 The `tako.sh` SDK implements this health endpoint automatically -- you do not need to add it yourself. The SDK also echoes the internal token header for authentication.
+
+## Durable Streams
+
+Tako supports durable streaming on normal app routes without forcing apps to republish chunks into channels.
+
+- The app returns a normal streaming HTTP response.
+- The app opts that response into durability with SDK helpers (`Tako.durableStream(...)` in JS/TS, `tako.MarkDurableStream(...)` in Go).
+- Tako proxies the bytes to the client immediately and stores the same byte stream in the app's Tako-managed data.
+- The client receives `X-Tako-Stream-Id` and `X-Tako-Stream-Resume` headers and can reconnect on the same route with `_tako_stream` and `_tako_after_bytes`.
+
+Resume is byte-based. Tako treats the proxied stream as opaque bytes, so provider-specific formats stay unchanged.
+
+Durable streams are separate from channels:
+
+- durable streams are replayable proxied HTTP responses
+- channels are durable SSE/WebSocket pub-sub streams under `/channels/*`
+
+Channel routes are:
+
+- `POST /channels/<name>/messages`
+- `GET /channels/<name>/history`
+- `GET /channels/<name>/events`
+- `GET /channels/<name>/ws`
+
+WebSocket channel transport uses JSON text frames for both replayed messages and client publish payloads.
 
 ## Scaling
 

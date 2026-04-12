@@ -239,7 +239,7 @@ Deploy fails if the target environment is missing secret keys that are used by o
 
 ### How health checks work
 
-Tako-server probes each instance by sending `GET /status` with `Host: tako` over the instance's private TCP endpoint. The request includes the per-instance internal token header (`X-Tako-Internal-Token`), and the SDK implements and echoes that contract automatically.
+Tako-server probes each instance by sending `GET /status` with `Host: tako.internal` over the instance's private TCP endpoint. The request includes the per-instance internal token header (`X-Tako-Internal-Token`), and the SDK implements and echoes that contract automatically.
 
 - **Probe interval:** 1 second
 - **Process exit fast path:** Before each probe, `try_wait()` checks if the process has exited. If so, the instance is immediately marked dead without waiting for the probe timeout.
@@ -261,6 +261,17 @@ When the desired instance count is `0` (scale-to-zero mode), a deploy still star
 ### Process crash recovery
 
 If an app process crashes, Tako detects it through `try_wait()` before the next health probe and immediately marks the instance dead. Replacement behavior depends on the app's desired instance count and scaling configuration. On-demand apps with desired instances `0` will cold-start when the next request arrives.
+
+## Durable Streams
+
+### Durable stream resume only replays captured bytes
+
+Durable stream resume uses byte offsets against the bytes Tako has already captured from the upstream app response.
+
+- During graceful reload, the draining `tako-server` process keeps serving the in-flight upstream response while the replacement process can serve resume requests from stored bytes.
+- A forced restart or upstream crash can only replay bytes that were captured before the stream stopped.
+
+If you need resumable streaming, make sure the app opts the response into durable capture and reconnect clients using the `X-Tako-Stream-Resume` URL plus `_tako_after_bytes`.
 
 ## Config Issues
 
