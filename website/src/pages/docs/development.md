@@ -287,7 +287,7 @@ Variables from `[vars]` (base) and `[vars.development]` (environment-specific) a
 
 ### App log level
 
-Each `[envs.*]` block can set `log_level` to control the app's log verbosity: `debug`, `info`, `warn`, or `error`. Development defaults to `debug`. The resolved level is passed to your app as `TAKO_APP_LOG_LEVEL`.
+Each `[envs.*]` block can set `log_level` to control the app's log verbosity: `debug`, `info`, `warn`, or `error`. Development defaults to `debug`. The resolved level is passed to your app as `LOG_LEVEL`.
 
 This is independent of `--verbose`, which controls only Tako CLI and dev-server verbosity.
 

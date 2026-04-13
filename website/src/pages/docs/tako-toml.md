@@ -280,7 +280,6 @@ For any target environment, variables are merged in this order (later overrides 
 2. **`[vars.<environment>]`** -- environment-specific overrides
 3. **Auto-set by Tako** -- injected automatically at runtime:
    - `ENV=<environment>` (set in both dev and deploy)
-   - `TAKO_ENV=<environment>` (deploy only)
    - `TAKO_BUILD=<version>` (deploy only)
    - `TAKO_DATA_DIR=<app data dir>` (set in both dev and deploy)
    - Runtime convention vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
@@ -374,7 +373,7 @@ Defaults to `300` (5 minutes). Instances are never stopped while serving in-flig
 
 ### `log_level`
 
-App log verbosity for this environment. Passed to your app as the `TAKO_APP_LOG_LEVEL` environment variable.
+App log verbosity for this environment. Passed to your app as the `LOG_LEVEL` environment variable.
 
 ```toml
 [envs.production]

@@ -107,7 +107,7 @@ The SDK wraps secrets in a Proxy that redacts on `toString()` and `toJSON()` —
 
 ### Typed secrets with `tako typegen`
 
-Run [`tako typegen`](/docs/cli) and Tako reads your encrypted secrets file to generate type definitions — without decrypting the values (remember, names are plaintext). In JS/TS projects, the generated `tako.d.ts` also types the standard Tako/runtime env vars such as `TAKO_DATA_DIR`, `TAKO_ENV`, and `ENV`.
+Run [`tako typegen`](/docs/cli) and Tako reads your encrypted secrets file to generate type definitions — without decrypting the values (remember, names are plaintext). In JS/TS projects, the generated `tako.d.ts` also types the standard Tako/runtime env vars such as `TAKO_DATA_DIR`, `TAKO_BUILD`, and `ENV`.
 
 **TypeScript** gets a `tako.d.ts`:
 
