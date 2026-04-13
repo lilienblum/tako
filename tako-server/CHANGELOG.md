@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0](https://github.com/lilienblum/tako/compare/tako-server-v0.3.0...tako-server-v0.4.0) (2026-04-13)
+
+
+### Features
+
+* **channels:** add durable pub-sub channels across SDKs and server ([dd1ef52](https://github.com/lilienblum/tako/commit/dd1ef52ff0ef623a3d91d4474033c0b3ae700cd4))
+* **runtime:** add app data dirs and graceful restart ([acd1fdd](https://github.com/lilienblum/tako/commit/acd1fdd143e991cb683a3a30292cb613e67fa4b2))
+* **website:** add .local domains and durable workflows cards, regroup feature list ([803f640](https://github.com/lilienblum/tako/commit/803f640e253889c01c60ff40de6a1dd9acc1c724))
+
 ## [0.3.0](https://github.com/lilienblum/tako/compare/tako-server-v0.2.0...tako-server-v0.3.0) (2026-04-10)
 
 ### Features
