@@ -297,6 +297,19 @@ fn format_lan_block_warning_uses_first_wildcard_for_example() {
 }
 
 #[test]
+fn format_lan_block_hints_at_client_isolation_below_qr() {
+    // The muted hint under the QR code explains the most common silent
+    // failure mode (AP client isolation) so users on guest/coffee-shop
+    // Wi-Fi know where to look instead of assuming Tako is broken.
+    let lines = format_lan_block(&["demo.test".to_string()], "http://192.168.1.2/ca.pem");
+    let plain = strip_ansi(&lines.join("\n"));
+    assert!(
+        plain.contains("your Wi-Fi may use client isolation"),
+        "expected client-isolation hint under QR, got:\n{plain}"
+    );
+}
+
+#[test]
 fn format_lan_block_omits_wildcard_warning_when_none_present() {
     let lines = format_lan_block(
         &["demo.test".to_string(), "demo.test/api".to_string()],

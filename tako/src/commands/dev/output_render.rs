@@ -670,10 +670,10 @@ pub(super) fn format_lan_block(hosts: &[String], ca_url: &str) -> Vec<String> {
         let example = wildcard_host.replacen('*', "tenant", 1);
         out.push(String::new());
         out.push(format!(
-            "{warn_color}! Wildcard routes can't be advertised to devices via mDNS.{RESET}"
+            "{warn_color}! Wildcard routes can't be advertised to devices via mDNS{RESET}"
         ));
         out.push(format!(
-            "  {warn_color}Use non-wildcard routes (e.g. {example}) to reach it from your phone.{RESET}"
+            "  {warn_color}Use non-wildcard routes (e.g. {example}) to reach it from your phone{RESET}"
         ));
     }
 
@@ -683,6 +683,9 @@ pub(super) fn format_lan_block(hosts: &[String], ca_url: &str) -> Vec<String> {
     }
     out.push(format!(
         "  {DIM}Scan to install the CA certificate on your device{RESET}"
+    ));
+    out.push(format!(
+        "  {DIM}If the page doesn't load, your Wi-Fi may use client isolation and LAN mode won't work{RESET}"
     ));
     out.push(String::new());
     out
