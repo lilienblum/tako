@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.5.0](https://github.com/lilienblum/tako/compare/tako-v0.4.0...tako-v0.5.0) (2026-04-13)
+
+
+### Features
+
+* **dev:** drop implicit default host when explicit dev routes set ([30c44b1](https://github.com/lilienblum/tako/commit/30c44b1818d68b2863bcdf20791e04cce50cd5ea))
+* **runtime:** add app data dirs and graceful restart ([acd1fdd](https://github.com/lilienblum/tako/commit/acd1fdd143e991cb683a3a30292cb613e67fa4b2))
+* **website:** add .local domains and durable workflows cards, regroup feature list ([803f640](https://github.com/lilienblum/tako/commit/803f640e253889c01c60ff40de6a1dd9acc1c724))
+
+
+### Bug Fixes
+
+* **dev:** add caption below LAN mode QR code ([fdbf073](https://github.com/lilienblum/tako/commit/fdbf0734a3d70dbc02b3c4e07e81dd51efec04ec))
+* **dev:** exclude wildcard routes from LAN route list ([0fd8b72](https://github.com/lilienblum/tako/commit/0fd8b728277889bcf6c82b7c6d18892fdf87f01f))
+* **dev:** recover cleanly from LAN bind races ([25dafa8](https://github.com/lilienblum/tako/commit/25dafa8f4ce5fcfc6a316ed3861e11a687c04d32))
+* **security:** resolve code scanning alerts ([0da11b7](https://github.com/lilienblum/tako/commit/0da11b7e66d95b2d6cda7f9076840a1dbc72a460))
+
 ## [0.4.0](https://github.com/lilienblum/tako/compare/tako-v0.3.0...tako-v0.4.0) (2026-04-10)
 
 ### Features
