@@ -346,7 +346,7 @@ You can use `route` or `routes` in an environment, but not both.
 - Routes must include a hostname (path-only routes like `"/api/*"` are invalid)
 - Empty route lists are rejected for non-development environments
 - Development routes must use `.test` or `.tako.test` -- for example `{app}.test` or a subdomain of it
-- `[envs.development]` may omit routes entirely and defaults to `{app}.test` for `tako dev`
+- `[envs.development]` may omit routes entirely, in which case `tako dev` uses the default `{app}.test`. If explicit dev routes are configured, only those routes are registered — the default `{app}.test` host is not added, leaving that slug available for other apps
 
 ### `servers`
 

@@ -14,19 +14,21 @@ pub(super) fn compute_display_routes(
     default_host: &str,
     base_domain: Option<&str>,
 ) -> Vec<String> {
-    let mut out = vec![default_host.to_string()];
-    if let Some(routes) = cfg.get_routes("development") {
-        for route in routes {
-            let route = if let Some(bd) = base_domain {
-                route.replace(bd, default_host)
-            } else {
-                route
-            };
-            if route.trim_end_matches('/') != default_host {
-                out.push(route);
-            }
-        }
-    }
+    let configured: Vec<String> = cfg
+        .get_routes("development")
+        .unwrap_or_default()
+        .into_iter()
+        .map(|route| match base_domain {
+            Some(bd) => route.replace(bd, default_host),
+            None => route,
+        })
+        .collect();
+
+    let mut out = if configured.is_empty() {
+        vec![default_host.to_string()]
+    } else {
+        configured
+    };
 
     let mut seen = std::collections::HashSet::new();
     out.retain(|r| seen.insert(r.clone()));
@@ -106,7 +108,7 @@ pub(super) fn compute_dev_hosts(
         _ => return Ok(vec![default_host.to_string()]),
     };
 
-    let mut out = vec![default_host.to_string()];
+    let mut out: Vec<String> = Vec::new();
     for r in routes {
         validate_dev_route(&r, app_name).map_err(|e| e.to_string())?;
         let r = if let Some(bd) = base_domain {

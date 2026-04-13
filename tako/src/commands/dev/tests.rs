@@ -788,15 +788,15 @@ fn display_routes_always_includes_default() {
 }
 
 #[test]
-fn display_routes_includes_default_plus_all_configured() {
+fn display_routes_omit_default_when_explicit_routes_configured() {
     let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.test/bun\", \"*.app.test\"]\n")
         .unwrap();
     let routes = compute_display_routes(&cfg, "app.test", None);
-    assert_eq!(routes, vec!["app.test", "app.test/bun", "*.app.test"]);
+    assert_eq!(routes, vec!["app.test/bun", "*.app.test"]);
 }
 
 #[test]
-fn display_routes_deduplicates_default_when_route_matches() {
+fn display_routes_use_user_configured_default_as_sole_route() {
     let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.test\"]\n").unwrap();
     let routes = compute_display_routes(&cfg, "app.test", None);
     assert_eq!(routes, vec!["app.test"]);
@@ -809,18 +809,11 @@ fn display_routes_rewrite_wildcard_for_variant() {
     )
     .unwrap();
     let routes = compute_display_routes(&cfg, "example-foo.test", Some("example.test"));
-    assert_eq!(
-        routes,
-        vec![
-            "example-foo.test",
-            "some-app.test/bun",
-            "*.example-foo.test",
-        ]
-    );
+    assert_eq!(routes, vec!["some-app.test/bun", "*.example-foo.test",]);
 }
 
 #[test]
-fn display_routes_variant_deduplicates_rewritten_default() {
+fn display_routes_variant_rewrites_base_domain_in_user_routes() {
     let cfg = TakoToml::parse("[envs.development]\nroutes = [\"example.test\"]\n").unwrap();
     let routes = compute_display_routes(&cfg, "example-foo.test", Some("example.test"));
     assert_eq!(routes, vec!["example-foo.test"]);
@@ -849,21 +842,21 @@ fn falls_back_to_default_host_when_development_routes_are_empty() {
 }
 
 #[test]
-fn always_includes_default_host_with_explicit_routes() {
+fn explicit_routes_omit_default_host() {
     let cfg = TakoToml::parse("[envs.development]\nroutes = [\"api.app.test\"]\n").unwrap();
     let hosts = compute_dev_hosts("app", &cfg, "app.test", None).unwrap();
-    assert_eq!(hosts, vec!["app.test", "api.app.test"]);
+    assert_eq!(hosts, vec!["api.app.test"]);
 }
 
 #[test]
-fn always_includes_default_host_with_wildcard_routes() {
+fn wildcard_only_routes_omit_default_host() {
     let cfg = TakoToml::parse("[envs.development]\nroutes = [\"*.app.test\"]\n").unwrap();
     let hosts = compute_dev_hosts("app", &cfg, "app.test", None).unwrap();
-    assert_eq!(hosts, vec!["app.test", "*.app.test"]);
+    assert_eq!(hosts, vec!["*.app.test"]);
 }
 
 #[test]
-fn default_host_deduped_when_already_in_routes() {
+fn user_default_host_as_sole_route_passes_through() {
     let cfg = TakoToml::parse("[envs.development]\nroutes = [\"app.test\"]\n").unwrap();
     let hosts = compute_dev_hosts("app", &cfg, "app.test", None).unwrap();
     assert_eq!(hosts, vec!["app.test"]);
@@ -882,14 +875,7 @@ fn dev_hosts_rewrite_wildcard_for_variant() {
         Some("example.test"),
     )
     .unwrap();
-    assert_eq!(
-        hosts,
-        vec![
-            "example-foo.test",
-            "some-app.test/bun",
-            "*.example-foo.test",
-        ]
-    );
+    assert_eq!(hosts, vec!["some-app.test/bun", "*.example-foo.test",]);
 }
 
 #[test]
