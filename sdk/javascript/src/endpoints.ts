@@ -1,15 +1,18 @@
 /**
  * Tako Internal Endpoints
  *
- * These endpoints are handled by the SDK automatically on Host: tako.
+ * These endpoints are handled by the SDK automatically on Host: tako.internal.
  *
  * - GET  /status — Health/status check
+ * - POST /channels/authorize — Channel auth callback
  */
 
-import type { TakoStatus } from "./types";
+import { Tako } from "./tako";
+import type { ChannelAuthorizeInput, TakoStatus } from "./types";
 
-export const TAKO_INTERNAL_HOST = "tako";
+export const TAKO_INTERNAL_HOST = "tako.internal";
 export const TAKO_INTERNAL_STATUS_PATH = "/status";
+export const TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH = "/channels/authorize";
 export const TAKO_INTERNAL_TOKEN_ENV = "TAKO_INTERNAL_TOKEN";
 export const TAKO_INTERNAL_TOKEN_HEADER = "x-tako-internal-token";
 const LOOPBACK_INTERNAL_HOSTS = new Set(["127.0.0.1", "localhost", "0.0.0.0"]);
@@ -79,7 +82,10 @@ function internalResponse(
  *
  * Returns a Response for internal requests, or null for non-internal requests.
  */
-export function handleTakoEndpoint(request: Request, status: TakoStatus): Response | null {
+export async function handleTakoEndpoint(
+  request: Request,
+  status: TakoStatus,
+): Promise<Response | null> {
   // Fast path: check Host header before parsing the URL (avoids allocation for normal traffic)
   const hostHeader = normalizeHost(request.headers.get("host"));
   if (hostHeader && !isInternalHost(hostHeader)) {
@@ -104,6 +110,8 @@ export function handleTakoEndpoint(request: Request, status: TakoStatus): Respon
   switch (path) {
     case TAKO_INTERNAL_STATUS_PATH:
       return handleStatus(status, token);
+    case TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH:
+      return await handleChannelAuthorize(request, token);
 
     default:
       return internalResponse({ error: "Not found" }, 404, token);
@@ -111,8 +119,36 @@ export function handleTakoEndpoint(request: Request, status: TakoStatus): Respon
 }
 
 /**
- * GET /status on Host: tako — Full status information
+ * GET /status on Host: tako.internal — Full status information
  */
 function handleStatus(status: TakoStatus, token: string): Response {
   return internalResponse(status, 200, token);
+}
+
+async function handleChannelAuthorize(request: Request, token: string): Promise<Response> {
+  if (request.method !== "POST") {
+    return internalResponse({ error: "Method not allowed" }, 405, token);
+  }
+
+  let input: ChannelAuthorizeInput;
+  try {
+    input = (await request.json()) as ChannelAuthorizeInput;
+  } catch {
+    return internalResponse({ error: "Invalid JSON", ok: false }, 400, token);
+  }
+
+  if (!input.channel || !input.operation || !input.request?.url) {
+    return internalResponse({ error: "Invalid request", ok: false }, 400, token);
+  }
+
+  const result = await Tako.channels.authorize(input);
+  if (!result.ok) {
+    const hasDefinition = Tako.channels.resolveDefinition(input.channel) !== null;
+    if (!hasDefinition) {
+      return internalResponse({ error: "Channel not defined", ok: false }, 404, token);
+    }
+    return internalResponse({ error: "Forbidden", ok: false }, 403, token);
+  }
+
+  return internalResponse(result, 200, token);
 }

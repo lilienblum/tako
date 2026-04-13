@@ -262,17 +262,6 @@ When the desired instance count is `0` (scale-to-zero mode), a deploy still star
 
 If an app process crashes, Tako detects it through `try_wait()` before the next health probe and immediately marks the instance dead. Replacement behavior depends on the app's desired instance count and scaling configuration. On-demand apps with desired instances `0` will cold-start when the next request arrives.
 
-## Durable Streams
-
-### Durable stream resume only replays captured bytes
-
-Durable stream resume uses byte offsets against the bytes Tako has already captured from the upstream app response.
-
-- During graceful reload, the draining `tako-server` process keeps serving the in-flight upstream response while the replacement process can serve resume requests from stored bytes.
-- A forced restart or upstream crash can only replay bytes that were captured before the stream stopped.
-
-If you need resumable streaming, make sure the app opts the response into durable capture and reconnect clients using the `X-Tako-Stream-Resume` URL plus `_tako_after_bytes`.
-
 ## Config Issues
 
 ### tako.toml parse errors

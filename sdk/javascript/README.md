@@ -7,8 +7,11 @@ Package name: `tako.sh`
 ## What It Provides
 
 - `Tako` class with secrets management and build info
+- App-declared channel handles via `Tako.channels.create()`
+- Channel policy definitions via `Tako.channels.define()`
 - Vite plugin for SSR framework builds
-- Built-in internal status endpoint (`GET /status` on `Host: tako`)
+- Built-in internal status endpoint (`GET /status` on `Host: tako.internal`)
+- Built-in internal channel auth endpoint (`POST /channels/authorize` on `Host: tako.internal`)
 
 ## Install
 
@@ -23,6 +26,48 @@ export default function fetch(req: Request, env: Record<string, string>) {
   return new Response("ok");
 }
 ```
+
+## Channels
+
+Define channel auth policy inside the app:
+
+```ts
+import { Tako } from "tako.sh";
+
+Tako.channels.define("chat:*", {
+  auth(request, ctx) {
+    const session = request.headers.get("authorization");
+    return session ? { subject: "user-123" } : false;
+  },
+});
+```
+
+Use channel handles from the global `Tako` API:
+
+```ts
+export const chatRoom = Tako.channels.create("chat:room-123");
+```
+
+Use channel handles elsewhere in the app:
+
+```ts
+import { chatRoom } from "./channels";
+
+await chatRoom.publish(
+  { type: "message", data: { text: "hi" } },
+  { baseUrl: "https://app.example.com" },
+);
+
+chatRoom.subscribe({
+  baseUrl: "https://app.example.com",
+});
+```
+
+`channel.subscribe()` opens the durable SSE channel stream on `GET /channels/<name>`.
+
+`channel.connect()` opens the WebSocket channel transport. When you call
+`connection.send({ type, data })`, the SDK sends a JSON text frame that Tako
+parses as a channel publish payload for that channel.
 
 ## Vite Plugin
 

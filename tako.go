@@ -210,3 +210,7 @@ func GetSecret(name string) string {
 	}
 	return os.Getenv(name)
 }
+
+func int64ToString(value int64) string {
+	return fmt.Sprintf("%d", value)
+}

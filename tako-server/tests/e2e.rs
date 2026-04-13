@@ -109,7 +109,7 @@ Bun.serve({{
     const url = new URL(request.url);
     const path = url.pathname;
     const requestHost = (request.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (requestHost === "tako" && path === "/status") {{
+    if (requestHost === "tako.internal" && path === "/status") {{
       if (request.headers.get("x-tako-internal-token") !== internalToken) {{
         return new Response(JSON.stringify({{ error: "forbidden" }}), {{
           status: 403,

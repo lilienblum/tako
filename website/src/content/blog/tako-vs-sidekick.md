@@ -11,20 +11,20 @@ Tako does the same job — get your app running on your own server — but makes
 
 ## At a glance
 
-|                        | **Sidekick**                          | **Tako**                                               |
-| ---------------------- | ------------------------------------- | ------------------------------------------------------ |
-| **Deploy method**      | Docker build → SSH transfer           | Build locally → SFTP upload                            |
-| **Server requirement** | Ubuntu + Docker + Traefik             | Any Linux box with SSH                                 |
-| **Proxy**              | Traefik (Go)                          | Pingora (Rust, Cloudflare)                             |
-| **CLI language**       | Go                                    | Rust                                                   |
-| **Config format**      | Dockerfile + CLI prompts              | TOML ([`tako.toml`](/docs/tako-toml))                  |
-| **Local dev**          | None                                  | Built-in HTTPS + DNS ([`tako dev`](/docs/development)) |
-| **SDK**                | None                                  | [JS/TS and Go SDKs](/docs)                             |
-| **Scale-to-zero**      | No                                    | Yes, with cold start                                   |
-| **Multi-server**       | Recent addition (select at deploy)    | Declarative per-environment                            |
-| **Secrets**            | sops + age encryption                 | AES-256-GCM, delivered via fd 3                        |
-| **Preview envs**       | Yes (git-hash subdomains)             | Yes (per-environment routing)                          |
-| **Stars**              | ~7.3k                                 | New kid on the block                                   |
+|                        | **Sidekick**                       | **Tako**                                               |
+| ---------------------- | ---------------------------------- | ------------------------------------------------------ |
+| **Deploy method**      | Docker build → SSH transfer        | Build locally → SFTP upload                            |
+| **Server requirement** | Ubuntu + Docker + Traefik          | Any Linux box with SSH                                 |
+| **Proxy**              | Traefik (Go)                       | Pingora (Rust, Cloudflare)                             |
+| **CLI language**       | Go                                 | Rust                                                   |
+| **Config format**      | Dockerfile + CLI prompts           | TOML ([`tako.toml`](/docs/tako-toml))                  |
+| **Local dev**          | None                               | Built-in HTTPS + DNS ([`tako dev`](/docs/development)) |
+| **SDK**                | None                               | [JS/TS and Go SDKs](/docs)                             |
+| **Scale-to-zero**      | No                                 | Yes, with cold start                                   |
+| **Multi-server**       | Recent addition (select at deploy) | Declarative per-environment                            |
+| **Secrets**            | sops + age encryption              | AES-256-GCM, delivered via fd 3                        |
+| **Preview envs**       | Yes (git-hash subdomains)          | Yes (per-environment routing)                          |
+| **Stars**              | ~7.3k                              | New kid on the block                                   |
 
 ## Where Sidekick shines
 

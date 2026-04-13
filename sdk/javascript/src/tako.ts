@@ -4,6 +4,7 @@
  * Provides optional features for Tako apps.
  */
 
+import { ChannelRegistry } from "./channels";
 import type { TakoOptions } from "./types";
 import { loadSecrets } from "./secrets";
 
@@ -21,6 +22,7 @@ import { loadSecrets } from "./secrets";
  */
 export class Tako {
   private static instance: Tako | null = null;
+  static readonly channels = new ChannelRegistry();
   private options: TakoOptions;
 
   /**

@@ -83,9 +83,9 @@ Autocompletion in your editor. Compile-time errors if you typo a secret name. No
 
 In dev mode, `GetSecret` falls back to `os.Getenv` — same code works locally and deployed, no conditional logic needed.
 
-## Channels and Durable Streams
+## Channels
 
-The Go SDK ships with the same real-time primitives as the JavaScript SDK — [channels](/docs/how-tako-works) for WebSocket/SSE communication and durable streams for persistent streaming responses:
+The Go SDK ships with the same channel primitive as the JavaScript SDK — [channels](/docs/how-tako-works) for WebSocket/SSE communication:
 
 ```go
 tako.Channels.Define("chat:*", tako.ChannelDefinition{

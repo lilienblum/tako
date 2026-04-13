@@ -179,30 +179,12 @@ Tako actively monitors every app instance with HTTP health probes:
 
 The `tako.sh` SDK implements this health endpoint automatically -- you do not need to add it yourself. The SDK also echoes the internal token header for authentication.
 
-## Durable Streams
+Channel reads/connects use one route:
 
-Tako supports durable streaming on normal app routes without forcing apps to republish chunks into channels.
+- `GET /channels/<name>` with `Accept: text/event-stream` for SSE
+- `GET /channels/<name>` with `Upgrade: websocket` for WebSocket
 
-- The app returns a normal streaming HTTP response.
-- The app opts that response into durability with SDK helpers (`Tako.durableStream(...)` in JS/TS, `tako.MarkDurableStream(...)` in Go).
-- Tako proxies the bytes to the client immediately and stores the same byte stream in the app's Tako-managed data.
-- The client receives `X-Tako-Stream-Id` and `X-Tako-Stream-Resume` headers and can reconnect on the same route with `_tako_stream` and `_tako_after_bytes`.
-
-Resume is byte-based. Tako treats the proxied stream as opaque bytes, so provider-specific formats stay unchanged.
-
-Durable streams are separate from channels:
-
-- durable streams are replayable proxied HTTP responses
-- channels are durable SSE/WebSocket pub-sub streams under `/channels/*`
-
-Channel routes are:
-
-- `POST /channels/<name>/messages`
-- `GET /channels/<name>/history`
-- `GET /channels/<name>/events`
-- `GET /channels/<name>/ws`
-
-WebSocket channel transport uses JSON text frames for both replayed messages and client publish payloads.
+Channels keep a bounded replay window for reconnects and reloads. SSE resumes from `Last-Event-ID`, and WebSocket resumes from `last_message_id` in the query string. WebSocket frames stay JSON text frames for both replayed messages and client publish payloads.
 
 ## Scaling
 

@@ -14,7 +14,7 @@ type Config struct {
 	Host string
 	// Port is the TCP port to listen on. Defaults to "3000".
 	Port string
-	// InternalToken authenticates Host:tako requests from tako-server.
+	// InternalToken authenticates Host:tako.internal requests from tako-server.
 	// Set via TAKO_INTERNAL_TOKEN env var. Empty in dev mode (no auth required).
 	InternalToken string
 }

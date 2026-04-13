@@ -640,7 +640,7 @@ Service-manager reload/restart behavior:
 - On systemd hosts, installer configures `KillMode=control-group` and `TimeoutStopSec=30min`, allowing all app processes in the service cgroup time to handle graceful shutdown before forced termination.
 - On OpenRC hosts, installer configures `retry="TERM/1800/KILL/5"` in the init script so restart/stop waits up to 30 minutes before forced termination.
 
-`tako-server` persists app runtime registration (app config and routes) in SQLite under the data directory and restores it on startup so app routing/config survives reloads, restarts, and crashes. Env vars are stored in `app.json` in the release directory; secrets are stored encrypted (AES-256-GCM) in the same SQLite database using a per-device key. Secrets are pushed to app instances via `POST /secrets` on `Host: tako` over the instance's private TCP endpoint with the per-instance internal token header — they never touch disk as plaintext. Each deployed app also gets a persistent runtime data tree under `{data_dir}/apps/{app}/data/`:
+`tako-server` persists app runtime registration (app config and routes) in SQLite under the data directory and restores it on startup so app routing/config survives reloads, restarts, and crashes. Env vars are stored in `app.json` in the release directory; secrets are stored encrypted (AES-256-GCM) in the same SQLite database using a per-device key. Secrets are pushed to app instances via `POST /secrets` on `Host: tako.internal` over the instance's private TCP endpoint with the per-instance internal token header — they never touch disk as plaintext. Each deployed app also gets a persistent runtime data tree under `{data_dir}/apps/{app}/data/`:
 
 - `app/` — app-owned data exposed to the process as `TAKO_DATA_DIR`
 - `tako/` — Tako-owned per-app internal state
@@ -1368,7 +1368,7 @@ Server-side validation on `deploy` and app-scoped commands:
 Active HTTP probing is the source of truth for instance health:
 
 - **Probe interval**: 1 second by default (configurable)
-- **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako`
+- **Probe endpoint**: App's configured health check path (default: `/status`) with `Host: tako.internal`
 - **Transport**: Probes use the instance's private TCP endpoint.
 - **Process exit fast path**: Before each probe, `try_wait()` checks if the process has exited. If so, the instance is immediately marked dead without waiting for the probe timeout.
 - **Failure threshold**: 1 failure → mark dead, trigger replacement. After the first successful probe confirms the app is healthy, any single probe failure means something is genuinely wrong.
@@ -1380,7 +1380,7 @@ Tako-server performs health checks against the deployed app process:
 
 ```
 GET /status
-Host: tako
+Host: tako.internal
 X-Tako-Internal-Token: <instance-token>
 ```
 
@@ -1397,7 +1397,7 @@ Expected response:
 }
 ```
 
-The SDK wrappers implement this endpoint automatically. The edge proxy does not reserve or bypass `Host: tako` routes.
+The SDK wrappers implement this endpoint automatically. The edge proxy does not reserve or bypass `Host: tako.internal` routes.
 The expected response includes the same `X-Tako-Internal-Token` header value. The SDK wrappers enforce and echo this token automatically.
 
 ### Prometheus Metrics
@@ -1545,7 +1545,7 @@ func main() {
 
 - Go compiles to a native binary — no runtime download needed on the server.
 - The compiled binary runs directly (`launch_args: ["{main}"]`), no SDK entrypoint wrapper.
-- `tako.ListenAndServe()` handles the full protocol: CLI arg parsing (`--instance`, `--version`), TCP serving, `Host: tako` endpoint interception.
+- `tako.ListenAndServe()` handles the full protocol: CLI arg parsing (`--instance`, `--version`), TCP serving, `Host: tako.internal` endpoint interception.
 - Deploy auto-injects `GOOS=linux` and `GOARCH` for cross-compilation to the target server.
 - Default build: `CGO_ENABLED=0 go build -o app .` producing a static binary.
 - Secrets: `tako.GetSecret("name")` provides access to Tako-managed secrets. Run `tako typegen` to generate a typed `Secrets` struct in `tako_secrets.go`.
@@ -1580,12 +1580,14 @@ import { withTako } from "tako.sh/nextjs";
 - Internal fetch handler adapters for Bun/Node/Deno runtimes (used by entrypoint binaries)
 - Go SDK with `tako.ListenAndServe()` for native http.Handler support
 - Deployed app serving over private TCP with `PORT`/`HOST`; `tako dev` also uses TCP (`PORT`)
-- Internal status endpoint (`Host: tako` + `/status`)
+- Internal status endpoint (`Host: tako.internal` + `/status`)
+- Internal channel auth endpoint (`Host: tako.internal` + `POST /channels/authorize`)
+- Public durable channel read/connect route at `GET /channels/<name>`
 - Graceful shutdown handling
 
 ### Built-in Endpoints
 
-**`GET /status` with `Host: tako`**
+**`GET /status` with `Host: tako.internal`**
 
 ```json
 {
@@ -1599,6 +1601,29 @@ import { withTako } from "tako.sh/nextjs";
 ```
 
 Used for health checks during rolling updates and monitoring.
+
+**`POST /channels/authorize` with `Host: tako.internal`**
+
+Used by `tako-server` to ask the app SDK whether a channel operation is allowed and which lifecycle settings apply. The SDK returns `ok`, optional `subject`, optional `transport`, and channel lifecycle settings such as `replayWindowMs`, `inactivityTtlMs`, `keepaliveIntervalMs`, and `maxConnectionLifetimeMs`.
+
+### Channels
+
+Channels are Tako-owned durable pub-sub streams on public app routes:
+
+- `GET /channels/<name>` with `Accept: text/event-stream` serves SSE with replay + live tail
+- `GET /channels/<name>` with `Upgrade: websocket` upgrades to WebSocket
+
+Channels keep a bounded replay window so reconnecting clients can resume across disconnects and `tako-server` reloads. They are not a permanent history API.
+
+- SSE resumes from `Last-Event-ID`
+- WebSocket resumes from `last_message_id` in the query string
+- If no cursor is provided, Tako starts from the latest retained message
+- If the requested cursor is older than the retained replay window, Tako returns `410 Gone`
+
+Channel WebSocket transport uses JSON text frames:
+
+- server-to-client text frames are serialized `ChannelMessage` objects
+- client-to-server text frames are parsed as `ChannelPublishPayload` objects and appended to the same channel
 
 ## Edge Cases & Error Handling
 

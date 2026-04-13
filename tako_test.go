@@ -141,7 +141,7 @@ func TestFullProtocol(t *testing.T) {
 
 	// Health check (with token)
 	req, _ := http.NewRequest("GET", "http://"+addr+"/status", nil)
-	req.Host = "tako"
+	req.Host = "tako.internal"
 	req.Header.Set("x-tako-internal-token", "test-token")
 	resp, err := client.Do(req)
 	if err != nil {

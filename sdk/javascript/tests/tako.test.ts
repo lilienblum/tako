@@ -5,10 +5,12 @@ describe("Tako", () => {
   beforeEach(() => {
     // Reset singleton
     (Tako as any).instance = null;
+    Tako.channels.clear();
   });
 
   afterEach(() => {
     delete process.env.TAKO_BUILD;
+    Tako.channels.clear();
   });
 
   test("creates instance with default options", () => {

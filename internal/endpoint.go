@@ -4,12 +4,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 )
 
 const internalTokenHeader = "x-tako-internal-token"
+const internalHost = "tako.internal"
+const internalChannelAuthorizePath = "/channels/authorize"
 
-// StatusResponse is the JSON shape returned by GET /status on Host: tako.
+// StatusResponse is the JSON shape returned by GET /status on Host: tako.internal.
 type StatusResponse struct {
 	Status        string `json:"status"`
 	InstanceID    string `json:"instance_id"`
@@ -18,7 +21,7 @@ type StatusResponse struct {
 	UptimeSeconds int64  `json:"uptime_seconds"`
 }
 
-// EndpointHandler intercepts Host: tako requests for internal endpoints.
+// EndpointHandler intercepts Host: tako.internal requests for internal endpoints.
 type EndpointHandler struct {
 	startTime     time.Time
 	instanceID    string
@@ -27,7 +30,7 @@ type EndpointHandler struct {
 	userApp       http.Handler
 }
 
-// NewEndpointHandler creates a handler that intercepts tako internal requests.
+// NewEndpointHandler creates a handler that intercepts Tako internal requests.
 func NewEndpointHandler(instanceID, version, internalToken string, userApp http.Handler) *EndpointHandler {
 	return &EndpointHandler{
 		startTime:     time.Now(),
@@ -40,7 +43,7 @@ func NewEndpointHandler(instanceID, version, internalToken string, userApp http.
 
 // ServeHTTP dispatches to internal endpoints or the user's app.
 func (h *EndpointHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.Host == "tako" {
+	if normalizeHost(r.Host) == internalHost {
 		h.handleInternal(w, r)
 		return
 	}
@@ -49,7 +52,7 @@ func (h *EndpointHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *EndpointHandler) handleInternal(w http.ResponseWriter, r *http.Request) {
 	// Verify internal token when set (production mode).
-	// In dev mode (no token), all Host:tako requests are allowed.
+	// In dev mode (no token), all Host:tako.internal requests are allowed.
 	if h.internalToken != "" {
 		if r.Header.Get(internalTokenHeader) != h.internalToken {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -60,6 +63,8 @@ func (h *EndpointHandler) handleInternal(w http.ResponseWriter, r *http.Request)
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/status":
 		h.handleStatus(w)
+	case r.Method == http.MethodPost && r.URL.Path == internalChannelAuthorizePath:
+		h.handleChannelAuthorize(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -78,4 +83,41 @@ func (h *EndpointHandler) handleStatus(w http.ResponseWriter) {
 		w.Header().Set(internalTokenHeader, h.internalToken)
 	}
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (h *EndpointHandler) handleChannelAuthorize(w http.ResponseWriter, r *http.Request) {
+	var input ChannelAuthorizeInput
+	if err := json.NewDecoder(r.Body).Decode(&input); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if input.Channel == "" || input.Operation == "" || input.Request.URL == "" {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+
+	response, defined, allowed := Channels.Authorize(input)
+	if !defined {
+		http.Error(w, "channel not defined", http.StatusNotFound)
+		return
+	}
+	if !allowed {
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if h.internalToken != "" {
+		w.Header().Set(internalTokenHeader, h.internalToken)
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+func normalizeHost(host string) string {
+	host = strings.TrimSpace(strings.ToLower(host))
+	if host == "" {
+		return ""
+	}
+	parts := strings.Split(host, ":")
+	return parts[0]
 }

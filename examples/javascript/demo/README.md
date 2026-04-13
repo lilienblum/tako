@@ -26,7 +26,7 @@ This runs the example through `tako dev` (HTTPS local ingress + routing).
   - In `tako dev`, this uses the runtime-default Bun command with resolved `main`.
   - For local direct runs, `bun run dev` uses `bun run index.ts`.
 - The app starts Bun on `0.0.0.0:$PORT` (default `3000`) and serves HTTP directly.
-- Internal health checks use `Host: tako` with path `/status` via the Tako SDK wrapper.
+- Internal health checks use `Host: tako.internal` with path `/status` via the Tako SDK wrapper.
 - Development routes in `tako.toml` are:
   - `tako-demo.test/foobar`
   - `*.tako-demo.test`

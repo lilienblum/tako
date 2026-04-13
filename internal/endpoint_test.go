@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -12,7 +13,7 @@ func TestStatusEndpoint(t *testing.T) {
 	handler := NewEndpointHandler("test1234", "v1.0", "", http.NotFoundHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
-	req.Host = "tako"
+	req.Host = "tako.internal"
 	w := httptest.NewRecorder()
 
 	handler.ServeHTTP(w, req)
@@ -40,7 +41,7 @@ func TestTokenVerification(t *testing.T) {
 
 	// Valid token → 200 + token echoed back
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
-	req.Host = "tako"
+	req.Host = "tako.internal"
 	req.Header.Set("x-tako-internal-token", "secret-token")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -54,7 +55,7 @@ func TestTokenVerification(t *testing.T) {
 
 	// Wrong token → 401
 	req2 := httptest.NewRequest(http.MethodGet, "/status", nil)
-	req2.Host = "tako"
+	req2.Host = "tako.internal"
 	req2.Header.Set("x-tako-internal-token", "wrong")
 	w2 := httptest.NewRecorder()
 	handler.ServeHTTP(w2, req2)
@@ -65,7 +66,7 @@ func TestTokenVerification(t *testing.T) {
 
 	// Missing token → 401
 	req3 := httptest.NewRequest(http.MethodGet, "/status", nil)
-	req3.Host = "tako"
+	req3.Host = "tako.internal"
 	w3 := httptest.NewRecorder()
 	handler.ServeHTTP(w3, req3)
 
@@ -79,12 +80,87 @@ func TestNoTokenInDevMode(t *testing.T) {
 	handler := NewEndpointHandler("test1234", "v1.0", "", http.NotFoundHandler())
 
 	req := httptest.NewRequest(http.MethodGet, "/status", nil)
-	req.Host = "tako"
+	req.Host = "tako.internal"
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("dev mode (no token): status = %d, want 200", w.Code)
+	}
+}
+
+func TestChannelAuthorizeEndpoint(t *testing.T) {
+	called := false
+	handler := NewEndpointHandler("test1234", "v1.0", "secret-token", http.NotFoundHandler())
+	Channels.Clear()
+	defer Channels.Clear()
+
+	Channels.Define("chat:*", ChannelDefinition{
+		Auth: func(r *http.Request, ctx ChannelAuthContext) ChannelAuthDecision {
+			called = true
+			if got := r.Header.Get("Authorization"); got != "Bearer test" {
+				t.Fatalf("authorization header = %q, want %q", got, "Bearer test")
+			}
+			if ctx.Channel != "chat:room-123" {
+				t.Fatalf("ctx.Channel = %q, want %q", ctx.Channel, "chat:room-123")
+			}
+			if ctx.Operation != ChannelOperationSubscribe {
+				t.Fatalf("ctx.Operation = %q, want %q", ctx.Operation, ChannelOperationSubscribe)
+			}
+			return AllowChannel(ChannelGrant{
+				Subject: "user-123",
+				ChannelLifecycleConfig: ChannelLifecycleConfig{
+					ReplayWindowMs:          86_400_000,
+					InactivityTtlMs:         0,
+					KeepaliveIntervalMs:     25_000,
+					MaxConnectionLifetimeMs: 7_200_000,
+				},
+			})
+		},
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/channels/authorize", strings.NewReader(`{
+		"channel":"chat:room-123",
+		"operation":"subscribe",
+		"request":{
+			"url":"https://app.example.com/channels/chat%3Aroom-123",
+			"method":"GET",
+			"headers":{"authorization":"Bearer test"}
+		}
+	}`))
+	req.Host = "tako.internal"
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-tako-internal-token", "secret-token")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want 200", w.Code)
+	}
+	if !called {
+		t.Fatal("channel auth callback should be called")
+	}
+
+	var resp struct {
+		OK                      bool   `json:"ok"`
+		Subject                 string `json:"subject"`
+		ReplayWindowMs          int64  `json:"replayWindowMs"`
+		InactivityTtlMs         int64  `json:"inactivityTtlMs"`
+		KeepaliveIntervalMs     int64  `json:"keepaliveIntervalMs"`
+		MaxConnectionLifetimeMs int64  `json:"maxConnectionLifetimeMs"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.OK {
+		t.Fatal("expected ok response")
+	}
+	if resp.Subject != "user-123" {
+		t.Fatalf("subject = %q, want %q", resp.Subject, "user-123")
+	}
+	if resp.ReplayWindowMs != 86_400_000 {
+		t.Fatalf("replayWindowMs = %d, want %d", resp.ReplayWindowMs, 86_400_000)
 	}
 }
 

@@ -64,13 +64,13 @@ If the new instance fails to start or its health check times out, Tako kills it 
 
 ## The numbers
 
-| Phase | Typical time |
-|---|---|
-| Build | 1–5s (runs locally) |
-| Upload | 2–5s (Zstandard over SFTP) |
-| Prepare | 0s (cached) to ~10s (fresh install) |
-| Instance swap | 100–500ms per instance |
-| **Total** | **~5–15s** |
+| Phase         | Typical time                        |
+| ------------- | ----------------------------------- |
+| Build         | 1–5s (runs locally)                 |
+| Upload        | 2–5s (Zstandard over SFTP)          |
+| Prepare       | 0s (cached) to ~10s (fresh install) |
+| Instance swap | 100–500ms per instance              |
+| **Total**     | **~5–15s**                          |
 
 After the swap, a few housekeeping tasks run in the background: the `current` symlink atomically points to the new release, and release directories older than 30 days get pruned.
 

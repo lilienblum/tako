@@ -9,6 +9,8 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 mod app_command;
 mod boot;
+mod channels;
+mod channels_ws;
 mod defaults;
 mod instances;
 mod lb;

@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import type { FetchHandler, TakoOptions, TakoStatus } from "../src/types";
+import type {
+  ChannelConnection,
+  ChannelDefinition,
+  ChannelOperation,
+  ChannelSubscription,
+  FetchHandler,
+  TakoOptions,
+  TakoStatus,
+} from "../src/types";
 
 describe("Types", () => {
   describe("FetchHandler", () => {
@@ -50,6 +58,45 @@ describe("Types", () => {
         };
         expect(status.status).toBe(s);
       }
+    });
+  });
+
+  describe("channel types", () => {
+    test("accepts channel operations", () => {
+      const operations: ChannelOperation[] = ["subscribe", "publish", "connect"];
+      expect(operations).toContain("publish");
+    });
+
+    test("accepts channel definitions", () => {
+      const definition: ChannelDefinition = {
+        auth() {
+          return true;
+        },
+        transport: "ws",
+        replayWindowMs: 86_400_000,
+        keepaliveIntervalMs: 25_000,
+      };
+
+      expect(definition.transport).toBe("ws");
+      expect(definition.replayWindowMs).toBe(86_400_000);
+      expect(definition.keepaliveIntervalMs).toBe(25_000);
+    });
+
+    test("distinguishes read-only subscriptions from send-capable connections", () => {
+      const subscription: ChannelSubscription = {
+        transport: "sse",
+        raw: {},
+        close() {},
+      };
+      const connection: ChannelConnection = {
+        transport: "ws",
+        raw: {},
+        close() {},
+        send() {},
+      };
+
+      expect(subscription.transport).toBe("sse");
+      expect(connection.transport).toBe("ws");
     });
   });
 });

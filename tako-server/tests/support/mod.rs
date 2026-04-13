@@ -300,7 +300,7 @@ const server = Bun.serve({{
   fetch(req) {{
     const url = new URL(req.url);
     const requestHost = (req.headers.get("host") ?? url.host).split(":")[0]?.toLowerCase();
-    if (requestHost === "tako" && url.pathname === "/status") {{
+    if (requestHost === "tako.internal" && url.pathname === "/status") {{
       if (req.headers.get("x-tako-internal-token") !== internalToken) {{
         return new Response(JSON.stringify({{ error: "forbidden" }}), {{
           status: 403,

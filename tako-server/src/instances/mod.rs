@@ -33,7 +33,7 @@ fn now_unix_millis() -> u64 {
         .as_millis() as u64
 }
 
-pub const INTERNAL_STATUS_HOST: &str = "tako";
+pub const INTERNAL_STATUS_HOST: &str = "tako.internal";
 pub const INTERNAL_TOKEN_ENV: &str = "TAKO_INTERNAL_TOKEN";
 pub const INTERNAL_TOKEN_HEADER: &str = "X-Tako-Internal-Token";
 
@@ -539,6 +539,10 @@ impl AppManager {
     /// Get an app by name
     pub fn get_app(&self, name: &str) -> Option<Arc<App>> {
         self.apps.get(name).map(|entry| entry.value().clone())
+    }
+
+    pub fn data_dir(&self) -> &PathBuf {
+        &self.data_dir
     }
 
     /// Remove an app

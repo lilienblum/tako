@@ -15,4 +15,23 @@
  */
 
 export { Tako } from "./tako";
-export type { FetchHandler, TakoOptions, TakoStatus } from "./types";
+export { Channel, ChannelRegistry, TAKO_CHANNELS_BASE_PATH } from "./channels";
+export type {
+  ChannelAuthContext,
+  ChannelAuthorizeInput,
+  ChannelAuthorizeResponse,
+  ChannelConnectOptions,
+  ChannelDefinition,
+  ChannelDefinitionTransport,
+  ChannelGrant,
+  ChannelMessage,
+  ChannelOperation,
+  ChannelConnection,
+  ChannelPublishInput,
+  ChannelPublishOptions,
+  ChannelSubscribeOptions,
+  ChannelSubscription,
+  FetchHandler,
+  TakoOptions,
+  TakoStatus,
+} from "./types";
