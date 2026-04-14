@@ -300,6 +300,43 @@ mod tests {
     }
 
     #[test]
+    fn validate_tako_toml_warns_when_log_level_env_var_is_reserved() {
+        let mut config = TakoToml {
+            name: Some("demo".to_string()),
+            ..Default::default()
+        };
+        config
+            .vars
+            .insert("LOG_LEVEL".to_string(), "warn".to_string());
+        config.vars_per_env.insert(
+            "production".to_string(),
+            std::collections::HashMap::from([("LOG_LEVEL".to_string(), "error".to_string())]),
+        );
+        config.envs.insert(
+            "production".to_string(),
+            EnvConfig {
+                route: Some("demo.example.com".to_string()),
+                servers: vec!["prod".to_string()],
+                ..Default::default()
+            },
+        );
+
+        let result = validate_tako_toml(&config);
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("[vars].LOG_LEVEL") && w.contains("ignored"))
+        );
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("[vars.production].LOG_LEVEL") && w.contains("ignored"))
+        );
+    }
+
+    #[test]
     fn validate_tako_toml_allows_duplicate_server_membership_across_non_development_envs() {
         let mut tako_config = TakoToml::default();
         tako_config.envs.insert(

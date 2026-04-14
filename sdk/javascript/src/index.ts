@@ -14,7 +14,7 @@
  * @packageDocumentation
  */
 
-export { Tako } from "./tako";
+export { Tako, installTakoGlobal } from "./tako";
 export { Channel, ChannelRegistry, TAKO_CHANNELS_BASE_PATH } from "./channels";
 export type {
   ChannelAuthContext,
@@ -32,6 +32,5 @@ export type {
   ChannelSubscribeOptions,
   ChannelSubscription,
   FetchHandler,
-  TakoOptions,
   TakoStatus,
 } from "./types";

@@ -7,13 +7,13 @@ run = "bun run build"
 cwd = "../../../sdk/javascript"
 
 [vars.development]
-WIDLCARD_SUFFIX = ".tako-demo.test"
+WIDLCARD_SUFFIX = ".demo.test"
 
 [vars.production]
 WIDLCARD_SUFFIX = ".demo.tako.sh"
 
 [envs.development]
-routes = ["tako-demo.test/foobar", "*.tako-demo.test"]
+routes = ["demo.test/foobar", "*.demo.test"]
 
 [envs.production]
 routes = ["demo.tako.sh/foobar", "*.demo.tako.sh"]

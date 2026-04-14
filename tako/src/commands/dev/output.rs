@@ -415,6 +415,17 @@ pub async fn run_dev_output(
                 };
                 match event {
                     DevEvent::AppStarted => {
+                        fs.status = "starting...".to_string();
+                        fs.refresh(
+                            &mut footer,
+                            &app_name,
+                            &adapter_name,
+                            &hosts,
+                            port,
+                            app_port,
+                        );
+                    }
+                    DevEvent::AppReady => {
                         fs.status = "running".to_string();
                         if let Some(pid) = app_pid {
                             sys.refresh_processes(ProcessesToUpdate::All, false);
@@ -431,6 +442,10 @@ pub async fn run_dev_output(
                             port,
                             app_port,
                         );
+                        footer.println(&format_log(&ScopedLog::info(
+                            "tako",
+                            "App started".to_string(),
+                        )));
                     }
                     DevEvent::AppLaunching => {
                         fs.status = "launching...".to_string();

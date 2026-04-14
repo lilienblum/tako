@@ -219,12 +219,17 @@ fn compute_dev_env_ignores_configured_env_and_derives_development() {
         r#"
 [vars]
 ENV = "custom"
+LOG_LEVEL = "error"
+
+[envs.development]
+log_level = "debug"
 "#,
     )
     .unwrap();
 
     let env = compute_dev_env(&cfg);
     assert_eq!(env.get("ENV").map(String::as_str), Some("development"));
+    assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("debug"));
 }
 
 #[tokio::test]
@@ -446,6 +451,15 @@ fn stored_log_line_parses_app_started_marker() {
     assert!(matches!(
         decoded,
         LogStreamEvent::AppEvent(DevEvent::AppStarted)
+    ));
+}
+
+#[test]
+fn stored_log_line_parses_app_ready_marker() {
+    let decoded = parse_log_line(r#"{"type":"app_event","event":"ready"}"#).unwrap();
+    assert!(matches!(
+        decoded,
+        LogStreamEvent::AppEvent(DevEvent::AppReady)
     ));
 }
 

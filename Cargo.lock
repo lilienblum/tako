@@ -4970,6 +4970,7 @@ dependencies = [
  "russh-sftp",
  "rustls",
  "rustls-pemfile",
+ "security-framework",
  "serde",
  "serde_json",
  "sha2 0.10.9",

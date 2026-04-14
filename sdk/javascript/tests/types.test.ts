@@ -5,7 +5,6 @@ import type {
   ChannelOperation,
   ChannelSubscription,
   FetchHandler,
-  TakoOptions,
   TakoStatus,
 } from "../src/types";
 
@@ -22,13 +21,6 @@ describe("Types", () => {
       const handler: FetchHandler = (_request: Request, _env: Record<string, string>) =>
         new Response("Hello");
       expect(typeof handler).toBe("function");
-    });
-  });
-
-  describe("TakoOptions", () => {
-    test("accepts empty options", () => {
-      const options: TakoOptions = {};
-      expect(options).toEqual({});
     });
   });
 

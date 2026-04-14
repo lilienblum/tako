@@ -4,14 +4,16 @@
 //! Apps are accessible at `https://{app-name}.test` (with `.tako.test` as a
 //! fallback) using certificates signed by the local CA.
 //!
-//! Security model:
-//! - Root CA private key stored in system keychain (encrypted)
-//! - Root CA public cert installed in system trust store
-//! - Leaf certificates generated on-the-fly, stored in memory only
-//! - No unencrypted key material on disk
+//! Storage model:
+//! - Root CA cert  → `<tako-data>/ca/ca.crt` (0644, public).
+//! - Root CA key   → `<tako-data>/ca/ca.key` (0600, paired with the cert).
+//! - Root CA trust → system trust store (installed once via sudo).
+//!
+//! Cert and key live side-by-side and are always written/regenerated
+//! together. On load, the pair is validated (see `validate_keypair`) so a
+//! mismatched cert/key combination errors out loudly rather than silently
+//! signing leafs that browsers will reject.
 
-#[cfg(target_os = "macos")]
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use rcgen::{
     BasicConstraints, CertificateParams, DistinguishedName, DnType, ExtendedKeyUsagePurpose, IsCa,
     Issuer, KeyPair, KeyUsagePurpose, SanType,
@@ -37,17 +39,6 @@ const CA_COMMON_NAME: &str = "Tako Development";
 const CA_ORGANIZATION: &str = "Tako";
 const LOCAL_CA_CERT_FILENAME: &str = "ca.crt";
 
-fn keychain_account_for_home(home: &std::path::Path) -> String {
-    // Namespace keychain entries by TAKO_HOME so switching homes cannot pair a
-    // cert from one home with a private key from another.
-    let mut hash: u64 = 0xcbf29ce484222325; // FNV-1a offset basis
-    for b in home.to_string_lossy().as_bytes() {
-        hash ^= u64::from(*b);
-        hash = hash.wrapping_mul(0x100000001b3); // FNV-1a prime
-    }
-    format!("tako-{hash:016x}")
-}
-
 /// Errors that can occur during CA operations
 #[derive(Debug, Error)]
 pub enum CaError {
@@ -66,8 +57,8 @@ pub enum CaError {
     #[error("Failed to write file {0}: {1}")]
     FileWrite(PathBuf, std::io::Error),
 
-    #[error("Keychain operation failed: {0}")]
-    Keychain(String),
+    #[error("System trust store operation failed: {0}")]
+    TrustStore(String),
 
     #[error("Validation error: {0}")]
     Validation(String),
@@ -88,7 +79,7 @@ pub struct Certificate {
 pub struct LocalCA {
     /// Root CA certificate (PEM)
     ca_cert_pem: String,
-    /// Root CA private key (PEM) - loaded from keychain
+    /// Root CA private key (PEM)
     ca_key_pem: String,
 }
 
@@ -306,58 +297,6 @@ impl LocalCA {
 pub struct LocalCAStore {
     /// Path to the CA certificate file
     ca_cert_path: PathBuf,
-    /// Keychain service name for the CA private key
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    keychain_service: String,
-    /// Keychain account name
-    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
-    keychain_account: String,
-}
-
-#[cfg(target_os = "macos")]
-fn trim_ascii_leading_whitespace(input: &[u8]) -> &[u8] {
-    let idx = input
-        .iter()
-        .position(|b| !b.is_ascii_whitespace())
-        .unwrap_or(input.len());
-    &input[idx..]
-}
-
-#[cfg(target_os = "macos")]
-fn extract_pem_der_bundle(pem_bundle: &str) -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut remaining = pem_bundle.as_bytes();
-
-    loop {
-        remaining = trim_ascii_leading_whitespace(remaining);
-        if remaining.is_empty() {
-            break;
-        }
-
-        match x509_parser::pem::parse_x509_pem(remaining) {
-            Ok((next, pem)) => {
-                out.push(pem.contents);
-                if next.len() >= remaining.len() {
-                    break;
-                }
-                remaining = next;
-            }
-            Err(_) => break,
-        }
-    }
-
-    out
-}
-
-#[cfg(target_os = "macos")]
-fn system_keychain_output_contains_cert(system_keychain_bundle: &str, cert_pem: &str) -> bool {
-    let Some(target_der) = extract_pem_der_bundle(cert_pem).into_iter().next() else {
-        return false;
-    };
-
-    extract_pem_der_bundle(system_keychain_bundle)
-        .into_iter()
-        .any(|der| der == target_der)
 }
 
 impl LocalCAStore {
@@ -370,11 +309,7 @@ impl LocalCAStore {
         let ca_dir = data_dir.join("ca");
         let ca_cert_path = ca_dir.join(LOCAL_CA_CERT_FILENAME);
 
-        Ok(Self {
-            ca_cert_path,
-            keychain_service: "tako-local-ca".to_string(),
-            keychain_account: keychain_account_for_home(&data_dir),
-        })
+        Ok(Self { ca_cert_path })
     }
 
     /// Get path to CA certificate
@@ -386,183 +321,119 @@ impl LocalCAStore {
         self.ca_cert_path.with_extension("key")
     }
 
-    fn save_ca_key_to_file(&self, key_pem: &str) -> Result<()> {
+    fn write_ca_key(&self, key_pem: &str) -> Result<()> {
         let key_path = self.ca_key_path();
-
         fs::write(&key_path, key_pem).map_err(|e| CaError::FileWrite(key_path.clone(), e))?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(0o600);
-            fs::set_permissions(&key_path, permissions)
+            fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
                 .map_err(|e| CaError::FileWrite(key_path.clone(), e))?;
         }
-
         Ok(())
     }
 
-    fn load_ca_key_from_file(&self) -> Result<String> {
-        let primary = self.ca_key_path();
-        fs::read_to_string(&primary).map_err(|e| CaError::FileRead(primary.clone(), e))
+    fn read_ca_key(&self) -> Result<String> {
+        let path = self.ca_key_path();
+        fs::read_to_string(&path).map_err(|e| CaError::FileRead(path.clone(), e))
     }
 
-    /// Check if the CA exists
+    /// Check if the CA exists (both cert and key present on disk).
     pub fn ca_exists(&self) -> bool {
-        self.ca_cert_path.exists()
-            && (self.load_ca_key_from_keychain().is_ok() || self.load_ca_key_from_file().is_ok())
+        self.ca_cert_path.exists() && self.ca_key_path().exists()
     }
 
-    /// Get or create the local CA
+    /// Get or create the local CA. If an existing CA is found but its cert
+    /// and key don't pair up (a state that used to arise from the
+    /// keychain-backed storage; see `validate_keypair`), the broken pair
+    /// is replaced with a freshly generated CA.
     pub fn get_or_create_ca(&self) -> Result<LocalCA> {
-        if self.ca_exists() {
-            self.load_ca()
-        } else {
-            let ca = LocalCA::generate()?;
-            self.save_ca(&ca)?;
-            Ok(ca)
+        match self.load_ca() {
+            Ok(ca) => Ok(ca),
+            Err(CaError::FileRead(_, _)) | Err(CaError::Validation(_)) => {
+                let ca = LocalCA::generate()?;
+                self.save_ca(&ca)?;
+                Ok(ca)
+            }
+            Err(err) => Err(err),
         }
     }
 
-    /// Load existing CA
+    /// Load the existing CA, verifying that the cert and key form a
+    /// valid pair. A mismatch returns `CaError::Validation` so callers
+    /// can regenerate rather than silently sign with a broken keypair.
     pub fn load_ca(&self) -> Result<LocalCA> {
         let ca_cert_pem = fs::read_to_string(&self.ca_cert_path)
             .map_err(|e| CaError::FileRead(self.ca_cert_path.clone(), e))?;
-
-        let ca_key_pem = self.load_ca_key_from_keychain()?;
-
+        let ca_key_pem = self.read_ca_key()?;
+        validate_keypair(&ca_cert_pem, &ca_key_pem)?;
         Ok(LocalCA::new(ca_cert_pem, ca_key_pem))
     }
 
-    /// Save CA to storage
+    /// Save CA to storage. Cert and key are written together; if either
+    /// write fails the partial state is cleaned up so a subsequent load
+    /// doesn't see a mismatched pair.
     pub fn save_ca(&self, ca: &LocalCA) -> Result<()> {
-        // Ensure directory exists
         if let Some(parent) = self.ca_cert_path.parent() {
             fs::create_dir_all(parent).map_err(|e| CaError::FileWrite(parent.to_path_buf(), e))?;
         }
 
-        // Save certificate (public, can be on disk)
         fs::write(&self.ca_cert_path, &ca.ca_cert_pem)
             .map_err(|e| CaError::FileWrite(self.ca_cert_path.clone(), e))?;
 
-        // Save private key to keychain
-        self.save_ca_key_to_keychain(&ca.ca_key_pem)?;
+        if let Err(err) = self.write_ca_key(&ca.ca_key_pem) {
+            // Partial write: remove the cert so ca_exists() stays false
+            // and the next run regenerates cleanly.
+            let _ = fs::remove_file(&self.ca_cert_path);
+            return Err(err);
+        }
 
         Ok(())
     }
 
-    /// Save CA private key to system keychain
-    #[cfg(target_os = "macos")]
-    fn save_ca_key_to_keychain(&self, key_pem: &str) -> Result<()> {
-        // Encode the key as base64 for storage
-        let encoded = BASE64.encode(key_pem.as_bytes());
-
-        // Use security command to add to keychain
-        let output = Command::new("security")
-            .args([
-                "add-generic-password",
-                "-U", // Update if exists
-                "-s",
-                &self.keychain_service,
-                "-a",
-                &self.keychain_account,
-                "-w",
-                &encoded,
-            ])
-            .output();
-
-        match output {
-            Ok(out) if out.status.success() => {
-                let key_path = self.ca_key_path();
-                if key_path.exists() {
-                    let _ = fs::remove_file(key_path);
-                }
-                Ok(())
-            }
-            _ => self.save_ca_key_to_file(key_pem),
-        }
-    }
-
-    /// Save CA private key - Linux fallback (file-based with restricted permissions)
-    #[cfg(not(target_os = "macos"))]
-    fn save_ca_key_to_keychain(&self, key_pem: &str) -> Result<()> {
-        self.save_ca_key_to_file(key_pem)
-    }
-
-    /// Load CA private key from system keychain
-    #[cfg(target_os = "macos")]
-    fn load_ca_key_from_keychain(&self) -> Result<String> {
-        let output = Command::new("security")
-            .args([
-                "find-generic-password",
-                "-s",
-                &self.keychain_service,
-                "-a",
-                &self.keychain_account,
-                "-w", // Output password only
-            ])
-            .output();
-
-        if let Ok(out) = output
-            && out.status.success()
-            && let Ok(encoded) = String::from_utf8(out.stdout)
-            && let Ok(decoded) = BASE64.decode(encoded.trim())
-            && let Ok(key) = String::from_utf8(decoded)
-        {
-            return Ok(key);
-        }
-
-        self.load_ca_key_from_file()
-    }
-
-    /// Load CA private key - Linux fallback
-    #[cfg(not(target_os = "macos"))]
-    fn load_ca_key_from_keychain(&self) -> Result<String> {
-        self.load_ca_key_from_file()
-    }
-
-    /// Check if CA is installed in system trust store
+    /// Check whether the local CA cert has a usable SSL trust policy in
+    /// macOS's admin trust domain.
+    ///
+    /// Mere presence in the keychain is NOT enough: `add-trusted-cert -d
+    /// -r trustRoot` writes both a keychain entry AND a trust-settings
+    /// entry, and the two can diverge (e.g. if the settings were cleared
+    /// via Keychain Access, or the cert was imported with a non-trust
+    /// command). A cert sitting in the keychain with no trust settings
+    /// is accepted by `security verify-cert` but rejected by browsers —
+    /// this check mirrors the browser's behavior by querying the admin
+    /// trust domain directly via SecTrustSettingsCopyTrustSettings, and
+    /// only returning true when the settings resolve to TrustRoot or
+    /// TrustAsRoot for the SSL policy.
     #[cfg(target_os = "macos")]
     pub fn is_ca_trusted(&self) -> bool {
-        let cert_path = self.ca_cert_path.clone();
-        if !cert_path.exists() {
+        use security_framework::certificate::SecCertificate;
+        use security_framework::trust_settings::{
+            Domain, TrustSettings, TrustSettingsForCertificate,
+        };
+
+        if !self.ca_cert_path.exists() {
             return false;
         }
 
-        let local_cert = match fs::read_to_string(&cert_path) {
-            Ok(cert) => cert,
+        let pem_str = match fs::read_to_string(&self.ca_cert_path) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let der = match pem::parse(pem_str.as_bytes()) {
+            Ok(p) => p.contents().to_vec(),
+            Err(_) => return false,
+        };
+        let cert = match SecCertificate::from_der(&der) {
+            Ok(c) => c,
             Err(_) => return false,
         };
 
-        // Prefer exact cert match in the macOS System keychain.
-        let in_system_keychain = Command::new("security")
-            .args([
-                "find-certificate",
-                "-c",
-                CA_COMMON_NAME,
-                "-p",
-                "/Library/Keychains/System.keychain",
-            ])
-            .output();
-
-        if let Ok(out) = in_system_keychain
-            && out.status.success()
-        {
-            let pem_bundle = String::from_utf8_lossy(&out.stdout);
-            if system_keychain_output_contains_cert(&pem_bundle, &local_cert) {
-                return true;
-            }
-        }
-
-        // Fallback verifier check.
-        let verify = Command::new("security")
-            .args(["verify-cert", "-c", cert_path.to_str().unwrap_or("")])
-            .output();
-
-        match verify {
-            Ok(out) => out.status.success(),
-            Err(_) => false,
-        }
+        matches!(
+            TrustSettings::new(Domain::Admin).tls_trust_settings_for_certificate(&cert),
+            Ok(Some(TrustSettingsForCertificate::TrustRoot))
+                | Ok(Some(TrustSettingsForCertificate::TrustAsRoot))
+        )
     }
 
     /// Check if CA is trusted - Linux
@@ -607,13 +478,16 @@ impl LocalCAStore {
                 "/Library/Keychains/System.keychain",
                 cert_path.to_str().unwrap_or(""),
             ])
-            .status()
-            .map_err(|e| CaError::Keychain(format!("Failed to run security command: {}", e)))?;
+            .output()
+            .map_err(|e| CaError::TrustStore(format!("Failed to run security command: {}", e)))?;
 
-        if !output.success() {
-            return Err(CaError::Keychain(
-                "Failed to install CA in trust store".to_string(),
-            ));
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            return Err(CaError::TrustStore(if detail.is_empty() {
+                "Failed to install CA in trust store".to_string()
+            } else {
+                format!("Failed to install CA in trust store: {detail}")
+            }));
         }
         Ok(())
     }
@@ -640,48 +514,23 @@ impl LocalCAStore {
 
         if debian_dir.exists() {
             let dest = "/usr/local/share/ca-certificates/tako-ca.crt";
-            let copy_status = Command::new("sudo")
-                .args(["cp", cert_str, dest])
-                .status()
-                .map_err(|e| CaError::Keychain(format!("Failed to copy CA cert: {}", e)))?;
-            if !copy_status.success() {
-                return Err(CaError::Keychain(
-                    "Failed to copy CA to system directory".to_string(),
-                ));
-            }
-            let update_status = Command::new("sudo")
-                .args(["update-ca-certificates"])
-                .status()
-                .map_err(|e| {
-                    CaError::Keychain(format!("Failed to run update-ca-certificates: {}", e))
-                })?;
-            if !update_status.success() {
-                return Err(CaError::Keychain(
-                    "Failed to update system CA certificates".to_string(),
-                ));
-            }
+            run_sudo_captured(
+                &["cp", cert_str, dest],
+                "Failed to copy CA to system directory",
+            )?;
+            run_sudo_captured(
+                &["update-ca-certificates"],
+                "Failed to update system CA certificates",
+            )?;
         } else if fedora_dir.exists() {
             let dest = "/etc/pki/ca-trust/source/anchors/tako-ca.crt";
-            let copy_status = Command::new("sudo")
-                .args(["cp", cert_str, dest])
-                .status()
-                .map_err(|e| CaError::Keychain(format!("Failed to copy CA cert: {}", e)))?;
-            if !copy_status.success() {
-                return Err(CaError::Keychain(
-                    "Failed to copy CA to system directory".to_string(),
-                ));
-            }
-            let update_status = Command::new("sudo")
-                .args(["update-ca-trust"])
-                .status()
-                .map_err(|e| CaError::Keychain(format!("Failed to run update-ca-trust: {}", e)))?;
-            if !update_status.success() {
-                return Err(CaError::Keychain(
-                    "Failed to update system CA trust".to_string(),
-                ));
-            }
+            run_sudo_captured(
+                &["cp", cert_str, dest],
+                "Failed to copy CA to system directory",
+            )?;
+            run_sudo_captured(&["update-ca-trust"], "Failed to update system CA trust")?;
         } else {
-            return Err(CaError::Keychain(
+            return Err(CaError::TrustStore(
                 "Could not find system CA trust store. Manually trust the CA at: ".to_string()
                     + cert_str,
             ));
@@ -690,42 +539,75 @@ impl LocalCAStore {
         Ok(())
     }
 
-    /// Delete the CA (removes from keychain and disk)
+    /// Delete the CA from disk. The cert remains in the system trust
+    /// store until explicitly removed via `security delete-certificate`
+    /// (macOS) or `update-ca-trust` (Linux) — that's a sudo operation
+    /// and not done here.
     pub fn delete_ca(&self) -> Result<()> {
-        // Remove certificate file
         if self.ca_cert_path.exists() {
             fs::remove_file(&self.ca_cert_path)
                 .map_err(|e| CaError::FileWrite(self.ca_cert_path.clone(), e))?;
         }
-
-        // Remove from keychain
-        #[cfg(target_os = "macos")]
-        {
-            let _ = Command::new("security")
-                .args([
-                    "delete-generic-password",
-                    "-s",
-                    &self.keychain_service,
-                    "-a",
-                    &self.keychain_account,
-                ])
-                .output();
-
-            let key_path = self.ca_key_path();
-            if key_path.exists() {
-                fs::remove_file(&key_path).map_err(|e| CaError::FileWrite(key_path.clone(), e))?;
-            }
+        let key_path = self.ca_key_path();
+        if key_path.exists() {
+            fs::remove_file(&key_path).map_err(|e| CaError::FileWrite(key_path.clone(), e))?;
         }
-
-        #[cfg(not(target_os = "macos"))]
-        {
-            let key_path = self.ca_key_path();
-            if key_path.exists() {
-                fs::remove_file(&key_path).map_err(|e| CaError::FileWrite(key_path.clone(), e))?;
-            }
-        }
-
         Ok(())
+    }
+}
+
+/// Run a sudo command with stdout/stderr captured. Surfaces captured stderr
+/// in the error message on failure so diagnostics aren't lost.
+#[cfg(not(target_os = "macos"))]
+fn run_sudo_captured(args: &[&str], failure_message: &str) -> Result<()> {
+    let output = Command::new("sudo")
+        .args(args)
+        .output()
+        .map_err(|e| CaError::TrustStore(format!("Failed to run sudo {}: {}", args[0], e)))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(CaError::TrustStore(if detail.is_empty() {
+            failure_message.to_string()
+        } else {
+            format!("{failure_message}: {detail}")
+        }));
+    }
+    Ok(())
+}
+
+/// Verify that the CA cert's public key matches the private key.
+///
+/// Without this check, a cert/key divergence (e.g. the user regenerated
+/// one file but not the other) goes unnoticed: the dev-server happily
+/// signs leafs with the private key, but browsers reject them because
+/// the signature doesn't verify against the trusted root's public key.
+/// This surfaces the mismatch at load time as `CaError::Validation`.
+fn validate_keypair(cert_pem: &str, key_pem: &str) -> Result<()> {
+    // Parse the cert and extract its SubjectPublicKeyInfo bytes.
+    let (_, pem) = x509_parser::pem::parse_x509_pem(cert_pem.as_bytes())
+        .map_err(|e| CaError::Parse(format!("ca.crt: {e}")))?;
+    let cert = pem
+        .parse_x509()
+        .map_err(|e| CaError::Parse(format!("ca.crt x509: {e}")))?;
+    let cert_spki = cert.tbs_certificate.subject_pki.raw;
+
+    // Derive SPKI from the private key by re-serializing via rcgen, then
+    // decode the emitted PEM back to DER so we can byte-compare against
+    // the cert's raw SPKI bytes.
+    let key = KeyPair::from_pem(key_pem).map_err(|e| CaError::Parse(format!("ca.key: {e}")))?;
+    let key_spki_pem = key.public_key_pem();
+    let key_spki = pem::parse(key_spki_pem.as_bytes())
+        .map_err(|e| CaError::Parse(format!("ca.key spki: {e}")))?;
+    let key_spki = key_spki.contents();
+
+    if cert_spki == key_spki {
+        Ok(())
+    } else {
+        Err(CaError::Validation(
+            "CA cert and key don't pair (public keys differ). \
+             The CA will be regenerated."
+                .to_string(),
+        ))
     }
 }
 
@@ -777,12 +659,20 @@ mod tests {
     }
 
     #[test]
-    fn keychain_account_is_stable_and_home_scoped() {
-        let a1 = keychain_account_for_home(std::path::Path::new("/tmp/a"));
-        let a2 = keychain_account_for_home(std::path::Path::new("/tmp/a"));
-        let b = keychain_account_for_home(std::path::Path::new("/tmp/b"));
-        assert_eq!(a1, a2);
-        assert_ne!(a1, b);
+    fn validate_keypair_accepts_matching_pair() {
+        let ca = LocalCA::generate().unwrap();
+        validate_keypair(&ca.ca_cert_pem, &ca.ca_key_pem).unwrap();
+    }
+
+    #[test]
+    fn validate_keypair_rejects_mismatched_pair() {
+        let a = LocalCA::generate().unwrap();
+        let b = LocalCA::generate().unwrap();
+        let err = validate_keypair(&a.ca_cert_pem, &b.ca_key_pem).unwrap_err();
+        assert!(
+            matches!(err, CaError::Validation(_)),
+            "expected Validation, got {err:?}"
+        );
     }
 
     #[test]
@@ -790,26 +680,11 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let ca_cert_path = temp_dir.path().join("ca").join("ca.crt");
 
-        let store = LocalCAStore {
-            ca_cert_path,
-            keychain_service: "tako-test-ca".to_string(),
-            keychain_account: "tako-test".to_string(),
-        };
+        let store = LocalCAStore { ca_cert_path };
 
-        // Generate and save CA
         let ca = LocalCA::generate().unwrap();
-        match store.save_ca(&ca) {
-            Ok(()) => {}
-            Err(CaError::Keychain(_)) => return,
-            Err(e) => panic!("failed to save CA: {e}"),
-        }
-
-        // Load CA back
-        let loaded = match store.load_ca() {
-            Ok(loaded) => loaded,
-            Err(CaError::Keychain(_)) => return,
-            Err(e) => panic!("failed to load CA: {e}"),
-        };
+        store.save_ca(&ca).unwrap();
+        let loaded = store.load_ca().unwrap();
 
         assert_eq!(ca.ca_cert_pem, loaded.ca_cert_pem);
         assert_eq!(ca.ca_key_pem, loaded.ca_key_pem);
@@ -822,25 +697,39 @@ mod tests {
 
         let store = LocalCAStore {
             ca_cert_path: ca_cert_path.clone(),
-            keychain_service: "tako-test-ca2".to_string(),
-            keychain_account: "tako-test2".to_string(),
         };
 
-        // First call creates CA
-        let ca1 = match store.get_or_create_ca() {
-            Ok(ca) => ca,
-            Err(CaError::Keychain(_)) => return,
-            Err(e) => panic!("failed to create CA: {e}"),
-        };
+        let ca1 = store.get_or_create_ca().unwrap();
         assert!(ca_cert_path.exists());
 
-        // Second call loads existing CA
-        let ca2 = match store.get_or_create_ca() {
-            Ok(ca) => ca,
-            Err(CaError::Keychain(_)) => return,
-            Err(e) => panic!("failed to load existing CA: {e}"),
-        };
+        let ca2 = store.get_or_create_ca().unwrap();
         assert_eq!(ca1.ca_cert_pem, ca2.ca_cert_pem);
+    }
+
+    #[test]
+    fn test_ca_store_regenerates_on_mismatched_pair() {
+        let temp_dir = TempDir::new().unwrap();
+        let ca_cert_path = temp_dir.path().join("ca").join("ca.crt");
+        let store = LocalCAStore {
+            ca_cert_path: ca_cert_path.clone(),
+        };
+
+        // Plant a cert from one CA next to a key from a DIFFERENT CA —
+        // exactly the split-brain the old keychain-backed storage could
+        // produce. `get_or_create_ca` should detect the mismatch and
+        // regenerate rather than silently sign leafs with the wrong key.
+        let a = LocalCA::generate().unwrap();
+        let b = LocalCA::generate().unwrap();
+        std::fs::create_dir_all(ca_cert_path.parent().unwrap()).unwrap();
+        std::fs::write(&ca_cert_path, &a.ca_cert_pem).unwrap();
+        std::fs::write(ca_cert_path.with_extension("key"), &b.ca_key_pem).unwrap();
+
+        let recovered = store.get_or_create_ca().unwrap();
+        // Should not be either of the original halves — must be a fresh pair.
+        assert_ne!(recovered.ca_cert_pem, a.ca_cert_pem);
+        assert_ne!(recovered.ca_cert_pem, b.ca_cert_pem);
+        // And the new pair itself must validate.
+        validate_keypair(&recovered.ca_cert_pem, &recovered.ca_key_pem).unwrap();
     }
 
     #[test]
@@ -899,14 +788,11 @@ mod tests {
     }
 
     #[test]
-    fn test_ca_store_loads_from_file_fallback() {
+    fn test_ca_store_loads_from_disk() {
         let temp_dir = TempDir::new().unwrap();
         let ca_cert_path = temp_dir.path().join("ca").join("ca.crt");
-
         let store = LocalCAStore {
             ca_cert_path: ca_cert_path.clone(),
-            keychain_service: "tako-test-ca-fallback-load".to_string(),
-            keychain_account: "tako-test-fallback-load".to_string(),
         };
 
         let ca = LocalCA::generate().unwrap();
@@ -920,34 +806,33 @@ mod tests {
     }
 
     #[test]
-    fn test_ca_exists_with_file_fallback_key() {
+    fn test_ca_exists_requires_both_cert_and_key_on_disk() {
         let temp_dir = TempDir::new().unwrap();
         let ca_cert_path = temp_dir.path().join("ca").join("ca.crt");
-
         let store = LocalCAStore {
             ca_cert_path: ca_cert_path.clone(),
-            keychain_service: "tako-test-ca-fallback-exists".to_string(),
-            keychain_account: "tako-test-fallback-exists".to_string(),
         };
 
-        let ca = LocalCA::generate().unwrap();
         std::fs::create_dir_all(ca_cert_path.parent().unwrap()).unwrap();
-        std::fs::write(&ca_cert_path, ca.ca_cert_pem()).unwrap();
-        std::fs::write(ca_cert_path.with_extension("key"), &ca.ca_key_pem).unwrap();
+        let ca = LocalCA::generate().unwrap();
 
+        // Only cert on disk → not present.
+        std::fs::write(&ca_cert_path, ca.ca_cert_pem()).unwrap();
+        assert!(!store.ca_exists());
+
+        // Both present → present.
+        std::fs::write(ca_cert_path.with_extension("key"), &ca.ca_key_pem).unwrap();
         assert!(store.ca_exists());
     }
 
     #[test]
-    fn test_delete_ca_removes_file_fallback_key() {
+    fn test_delete_ca_removes_both_files() {
         let temp_dir = TempDir::new().unwrap();
         let ca_cert_path = temp_dir.path().join("ca").join("ca.crt");
         let ca_key_path = ca_cert_path.with_extension("key");
 
         let store = LocalCAStore {
             ca_cert_path: ca_cert_path.clone(),
-            keychain_service: "tako-test-ca-fallback-delete".to_string(),
-            keychain_account: "tako-test-fallback-delete".to_string(),
         };
 
         let ca = LocalCA::generate().unwrap();
@@ -969,8 +854,6 @@ mod tests {
 
         let store = LocalCAStore {
             ca_cert_path: current_ca_cert_path.clone(),
-            keychain_service: "tako-test-ca-old-load".to_string(),
-            keychain_account: "tako-test-old-load".to_string(),
         };
 
         let ca = LocalCA::generate().unwrap();
@@ -988,26 +871,16 @@ mod tests {
         }
     }
 
+    /// Manual diagnostic — inspects the real Tako CA state on this
+    /// machine. Never runs in CI (gated by `#[ignore]`). Useful when
+    /// debugging trust problems:
+    /// `cargo test -p tako check_real_trust_state -- --ignored --nocapture`
     #[cfg(target_os = "macos")]
     #[test]
-    fn system_keychain_output_contains_matching_cert() {
-        let ca = LocalCA::generate().unwrap();
-        let other = LocalCA::generate().unwrap();
-        let bundle = format!("{}\n{}", other.ca_cert_pem(), ca.ca_cert_pem());
-        assert!(system_keychain_output_contains_cert(
-            &bundle,
-            ca.ca_cert_pem()
-        ));
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn system_keychain_output_rejects_non_matching_cert() {
-        let ca = LocalCA::generate().unwrap();
-        let other = LocalCA::generate().unwrap();
-        assert!(!system_keychain_output_contains_cert(
-            other.ca_cert_pem(),
-            ca.ca_cert_pem()
-        ));
+    #[ignore = "manual — reads the real user's Tako CA"]
+    fn check_real_trust_state() {
+        let store = LocalCAStore::new().unwrap();
+        println!("ca_exists: {}", store.ca_exists());
+        println!("is_ca_trusted: {}", store.is_ca_trusted());
     }
 }

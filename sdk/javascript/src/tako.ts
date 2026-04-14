@@ -1,71 +1,165 @@
 /**
- * Tako SDK Main Class
+ * Tako SDK surface.
  *
- * Provides optional features for Tako apps.
+ * The `Tako` export is what users import from `tako.sh` at module-load
+ * time to register channel handlers and define channel policies. Env
+ * vars (`env`, `port`, etc.) are exposed on the ambient `globalThis.Tako`
+ * installed by `installTakoGlobal`; see the `declare global` block below.
  */
 
 import { ChannelRegistry } from "./channels";
-import type { TakoOptions } from "./types";
 import { loadSecrets } from "./secrets";
 
+type LogLevel = "debug" | "info" | "warn" | "error";
+
+function parsePort(raw: string | undefined): number | undefined {
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 /**
- * Tako SDK class for optional app features
+ * Module-load-time accessors. Use `Tako.channels` to define and register
+ * channel handlers, `Tako.secrets` for typed secret reads.
  *
  * @example
  * ```typescript
- * import { Tako } from 'tako.sh';
+ * import { Tako } from "tako.sh";
  *
- * export default function fetch(request: Request, env: Record<string, string>) {
- *   return new Response("Hello!");
- * }
+ * Tako.channels.define("chat:*", { auth: async () => ({ allow: true }) });
  * ```
  */
-export class Tako {
-  private static instance: Tako | null = null;
-  static readonly channels = new ChannelRegistry();
-  private options: TakoOptions;
+export const Tako = {
+  channels: new ChannelRegistry(),
+  secrets: loadSecrets(),
+} as const;
+
+type RuntimeState = {
+  env: string | undefined;
+  port: number | undefined;
+  host: string | undefined;
+  build: string;
+  dataDir: string | undefined;
+  appDir: string;
+  logLevel: LogLevel | undefined;
+};
+
+const runtimeState: RuntimeState = {
+  env: undefined,
+  port: undefined,
+  host: undefined,
+  build: "unknown",
+  dataDir: undefined,
+  appDir: process.cwd(),
+  logLevel: undefined,
+};
+
+const globalTako = Object.freeze(
+  Object.defineProperties(
+    {},
+    {
+      secrets: {
+        value: Tako.secrets,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      },
+      channels: {
+        value: Tako.channels,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      },
+      env: { get: () => runtimeState.env, configurable: false, enumerable: false },
+      isDev: {
+        get: () => runtimeState.env === "development",
+        configurable: false,
+        enumerable: false,
+      },
+      isProd: {
+        get: () => runtimeState.env === "production",
+        configurable: false,
+        enumerable: false,
+      },
+      port: { get: () => runtimeState.port, configurable: false, enumerable: false },
+      host: { get: () => runtimeState.host, configurable: false, enumerable: false },
+      build: { get: () => runtimeState.build, configurable: false, enumerable: false },
+      dataDir: { get: () => runtimeState.dataDir, configurable: false, enumerable: false },
+      appDir: { get: () => runtimeState.appDir, configurable: false, enumerable: false },
+      logLevel: {
+        get: () => runtimeState.logLevel,
+        configurable: false,
+        enumerable: false,
+      },
+    },
+  ),
+);
+
+function refreshRuntimeState(): void {
+  runtimeState.env = process.env["ENV"];
+  runtimeState.port = parsePort(process.env["PORT"]);
+  runtimeState.host = process.env["HOST"];
+  runtimeState.build = process.env["TAKO_BUILD"] || "unknown";
+  runtimeState.dataDir = process.env["TAKO_DATA_DIR"];
+  runtimeState.appDir = process.cwd();
+  runtimeState.logLevel = process.env["LOG_LEVEL"] as LogLevel | undefined;
+}
+
+declare global {
+  /**
+   * Project-specific secret names are augmented onto this interface by the
+   * generated `tako.d.ts`. The empty placeholder here lets the global
+   * `Tako.secrets` type resolve even before the generator has run.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+  interface TakoSecrets {}
 
   /**
-   * Secrets loaded from the Tako runtime. Access individual secrets
-   * as properties: `Tako.secrets.DATABASE_URL`
-   *
-   * The secrets object resists serialization — `JSON.stringify(Tako.secrets)`
-   * and `console.log(Tako.secrets)` return "[REDACTED]".
+   * Global Tako runtime surface — installed by the Tako entrypoint before
+   * your app's module is imported. Accessible anywhere in your app without
+   * an import statement.
    */
-  static readonly secrets: Record<string, string> = loadSecrets();
+  const Tako: {
+    /** Current environment. */
+    readonly env?: string;
+    /** `true` when `env === "development"`. */
+    readonly isDev: boolean;
+    /** `true` when `env === "production"`. */
+    readonly isProd: boolean;
+    /** Port Tako assigned to this app instance. */
+    readonly port?: number;
+    /** Host/address Tako bound this app instance to. */
+    readonly host?: string;
+    /** Build identifier injected by Tako at deploy time. */
+    readonly build: string;
+    /** Persistent app-owned data directory. Writes survive restarts. */
+    readonly dataDir?: string;
+    /** Directory the app is running from (equivalent to `process.cwd()`). */
+    readonly appDir: string;
+    /** Resolved app log verbosity, as configured in `tako.toml`. */
+    readonly logLevel?: "debug" | "info" | "warn" | "error";
+    /** Typed secret accessor. */
+    readonly secrets: TakoSecrets;
+  };
+}
 
-  constructor(options: TakoOptions = {}) {
-    this.options = options;
+/**
+ * Attach a frozen `Tako` object to `globalThis` so user modules — including
+ * transitively imported ones — can reach secrets, channels, and build info
+ * without importing from `tako.sh`.
+ *
+ * Repeated calls refresh the runtime snapshot, so tests and multi-entry
+ * setups do not depend on first-install wins behavior.
+ */
+export function installTakoGlobal(): void {
+  refreshRuntimeState();
 
-    // Store as singleton for the entrypoint to access
-    Tako.instance = this;
-  }
+  if (Object.getOwnPropertyDescriptor(globalThis, "Tako")) return;
 
-  /**
-   * Get the singleton instance
-   */
-  static getInstance(): Tako | null {
-    return Tako.instance;
-  }
-
-  /**
-   * Get the options
-   */
-  getOptions(): TakoOptions {
-    return this.options;
-  }
-
-  /**
-   * Get the Tako build version (set via TAKO_BUILD env var in deploy manifest).
-   */
-  static get build(): string {
-    return process.env["TAKO_BUILD"] || "unknown";
-  }
-
-  /**
-   * Check if running in Tako environment.
-   */
-  static isRunningInTako(): boolean {
-    return !!process.env["TAKO_BUILD"];
-  }
+  Object.defineProperty(globalThis, "Tako", {
+    value: globalTako,
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  });
 }

@@ -684,8 +684,6 @@ pub(crate) fn ensure_local_dns_resolver_configured(
         .into());
     }
 
-    crate::output::info("Configuring local DNS resolver (sudo)...");
-
     sudo_run_checked(
         &["install", "-d", "-m", "755", super::super::RESOLVER_DIR],
         "creating /etc/resolver",
@@ -728,18 +726,12 @@ pub(crate) fn ensure_local_dns_resolver_configured(
         false
     };
 
-    if short_active {
-        crate::output::success("Local DNS resolver configured for *.test and *.tako.test.");
-    } else {
-        crate::output::success("Local DNS resolver configured for *.tako.test.");
-    }
-
     Ok(short_active)
 }
 
 #[cfg(any(target_os = "macos", test))]
 pub(crate) fn local_dns_sudo_action_line() -> &'static str {
-    "Configure local DNS for *.test and *.tako.test"
+    "Configure DNS"
 }
 
 #[cfg(any(target_os = "macos", test))]
@@ -777,10 +769,14 @@ pub(crate) fn explain_pending_sudo_setup(port: u16) -> Result<(), Box<dyn std::e
         return Ok(());
     }
 
-    crate::output::warning("One-time sudo is required for:");
-    for item in items {
-        crate::output::bullet(&item);
+    crate::output::warning("sudo access required");
+    if crate::output::is_pretty() {
+        eprintln!("Tako needs this to set up your development environment:");
+        for item in items {
+            eprintln!("- {item}");
+        }
     }
+    eprintln!();
 
     let status = std::process::Command::new("sudo")
         .arg("-v")

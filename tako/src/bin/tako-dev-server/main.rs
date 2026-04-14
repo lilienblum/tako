@@ -1,7 +1,6 @@
 mod bootstrap;
 mod control;
 mod lan;
-mod local_ca;
 mod local_dns;
 mod paths;
 mod process;

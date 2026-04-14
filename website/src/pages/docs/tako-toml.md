@@ -286,7 +286,7 @@ For any target environment, variables are merged in this order (later overrides 
 
 Since auto-set variables are applied last, they override any manually set values for those keys.
 
-If you set `ENV` in `[vars]` or `[vars.<environment>]`, Tako ignores it and prints a warning.
+If you set `ENV` or `LOG_LEVEL` in `[vars]` or `[vars.<environment>]`, Tako ignores it and prints a warning.
 
 ---
 
@@ -373,7 +373,7 @@ Defaults to `300` (5 minutes). Instances are never stopped while serving in-flig
 
 ### `log_level`
 
-App log verbosity for this environment. Passed to your app as the `LOG_LEVEL` environment variable.
+App log verbosity for this environment. Tako derives the `LOG_LEVEL` environment variable from this setting at runtime.
 
 ```toml
 [envs.production]

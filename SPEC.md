@@ -67,7 +67,7 @@ install = "bun install"   # Optional pre-build install command
 # exclude = ["**/*.map"]
 
 [vars]
-TAKO_APP_LOG_LEVEL = "info"        # Base variables (all environments)
+API_URL = "https://api.example.com" # Base variables (all environments)
 
 [vars.production]
 API_URL = "https://api.example.com"
@@ -95,15 +95,15 @@ log_level = "debug"        # App log level (default: "debug" for development, "i
 
 **Environment `log_level`:**
 
-Each `[envs.*]` block can set `log_level` to control the application's log verbosity: `debug`, `info`, `warn`, or `error`. Defaults: `debug` for `development`, `info` for all other environments. This is independent of `--verbose`, which controls only Tako CLI and dev-server logs. The resolved level is passed to the app as the `TAKO_APP_LOG_LEVEL` environment variable.
+Each `[envs.*]` block can set `log_level` to control the application's log verbosity: `debug`, `info`, `warn`, or `error`. Defaults: `debug` for `development`, `info` for all other environments. This is independent of `--verbose`, which controls only Tako CLI and dev-server logs. The resolved level is passed to the app as the `LOG_LEVEL` environment variable.
 
 **Variable merging order (later overrides earlier):**
 
 1. `[vars]` - base
 2. `[vars.{environment}]` - environment-specific
-3. Auto-set by Tako at runtime: `ENV={environment}` in both dev and deploy, `TAKO_ENV={environment}` and `TAKO_BUILD={version}` on deploys, `TAKO_DATA_DIR=<app data dir>` in both deploy and dev, plus runtime env vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
+3. Auto-set by Tako at runtime: `ENV={environment}` and `LOG_LEVEL=<resolved level>` in both dev and deploy, `TAKO_BUILD={version}` on deploys, `TAKO_DATA_DIR=<app data dir>` in both deploy and dev, plus runtime env vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
 
-`ENV` is reserved. If you set `ENV` in `[vars]` or `[vars.{environment}]`, Tako ignores it and prints a warning.
+`ENV` and `LOG_LEVEL` are reserved. If you set either one in `[vars]` or `[vars.{environment}]`, Tako ignores it and prints a warning.
 
 **Build/deploy behavior:**
 
@@ -381,7 +381,7 @@ Show version information (same as `--version` flag).
 
 ### tako typegen
 
-Generate typed accessors for the current project: `tako.d.ts` for JS/TS apps (typed `Tako.secrets` plus standard Tako/runtime env vars) and `tako_secrets.go` for Go apps.
+Generate typed accessors for the current project: `tako.d.ts` for JS/TS apps (typed `Tako.secrets` plus standard Tako/runtime env vars) and `tako_secrets.go` for Go apps. For JS/TS projects, `tako.d.ts` is written next to any existing copy if one is found, otherwise placed inside `src/` or `app/` when those directories exist, or at the project root — so TypeScript's default `include` picks it up without tsconfig edits.
 
 ### tako upgrade [--canary|--stable]
 
@@ -425,6 +425,7 @@ Start (or connect to) a local development session for the current app, backed by
   - When a new owning session starts, Tako truncates that shared stream before writing fresh logs for the new session.
   - Attached clients replay the existing file contents, then follow new lines from the same stream.
   - App lifecycle state (`starting`, `running`, `stopped`, app PID, and startup errors) is persisted to the same shared stream, so attached sessions reconstruct the same status/CPU/RAM view as the owning session.
+  - The CLI prints `App started` once the daemon has confirmed the app is live. Active routes are shown in the status footer, not in this message.
 - The daemon supports **multiple concurrent apps** and maintains hostname-based routing for `*.test` (and `*.tako.test` as a fallback).
   - When LAN mode is enabled from the interactive UI (`l`), the same registered dev routes are also reachable via `.local` aliases. Hostnames are rewritten only at the suffix, so subdomains, wildcard hosts, and path-prefixed routes keep the same shape.
     - Concrete hostnames are advertised to the LAN via mDNS (Bonjour on macOS, Avahi on Linux) so phones and tablets resolve them by name.
@@ -845,7 +846,7 @@ Deploy flow helpers:
    - Upload and extract target-specific artifact
    - Query server for the app's current secrets hash; if it matches the local secrets hash, skip sending secrets (server keeps existing). If hashes differ (or app is new), include decrypted secrets in the deploy command.
    - Send deploy command with routes and optional secrets payload
-   - `tako-server` acquires a per-app deploy lock in memory, reads non-secret runtime/app config from release `app.json`, injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`, `TAKO_DATA_DIR`) when spawning instances, creates per-app runtime data directories, runs the runtime plugin's production install command, and performs first start or rolling update
+   - `tako-server` acquires a per-app deploy lock in memory, reads non-secret runtime/app config from release `app.json`, injects runtime vars (`TAKO_BUILD`, `TAKO_DATA_DIR`) when spawning instances, creates per-app runtime data directories, runs the runtime plugin's production install command, and performs first start or rolling update
    - If another deploy for the same app environment is already running on that server, the deploy command fails immediately with a retry message
    - Update `current` symlink and clean up old releases (>30 days)
 
@@ -870,7 +871,7 @@ Deploy flow helpers:
 - Cached artifacts are validated by checksum/size before reuse; invalid cache entries are rebuilt automatically.
 - Deploy artifacts include the canonical `app.json` used by `tako-server` at runtime.
 - Release `app.json` contains resolved runtime metadata (`runtime`, `main`, `package_manager`), non-secret env vars, environment idle timeout, and optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
-- Deploy does not write a release `.env` file; non-secret env vars live in release `app.json`, secrets are stored encrypted in SQLite on the server, and `tako-server` injects runtime vars (`TAKO_BUILD`, `TAKO_ENV`, `TAKO_DATA_DIR`) when spawning instances.
+- Deploy does not write a release `.env` file; non-secret env vars live in release `app.json`, secrets are stored encrypted in SQLite on the server, and `tako-server` injects runtime vars (`TAKO_BUILD`, `TAKO_DATA_DIR`) when spawning instances.
 - Deploy queries each server's secrets hash before sending the deploy command. If the hash matches the local secrets, secrets are omitted from the payload and the server keeps its existing secrets. This avoids unnecessary secret transmission and ensures new servers or servers with stale secrets are automatically provisioned.
 - Deploy requires valid `arch` and `libc` metadata in each selected `[[servers]]` entry.
 - Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
@@ -1199,9 +1200,8 @@ Reference scripts in this repo:
 | `ENV`                 | app             | Active environment name                              | Set by Tako in both dev and deploy (`development`, `production`, `staging`, etc.).                                               |
 | `PORT`                | app             | Listen port for HTTP server                          | Set by `tako dev` for the local app process; `0` on deploys (SDK binds to an OS-assigned port and reports it via fd 4).          |
 | `HOST`                | app             | Listen host for HTTP server                          | `127.0.0.1` in both dev and deploy.                                                                                              |
-| `TAKO_ENV`            | app             | Environment name                                     | Set during deploy manifest generation (`production`, `staging`, etc.).                                                           |
 | `TAKO_DATA_DIR`       | app             | Persistent app-owned runtime data directory          | Set by Tako in both dev and deploy; points to the app's `data/app` directory.                                                    |
-| `TAKO_APP_LOG_LEVEL`  | app             | Resolved app log verbosity                           | Set from the merged Tako config for the active environment.                                                                      |
+| `LOG_LEVEL`           | app             | Resolved app log verbosity                           | Derived from `[envs.<environment>].log_level` (or Tako's default) and set by Tako in both dev and deploy.                        |
 | `NODE_ENV`            | app             | Node.js convention env                               | Set by runtime adapter / server (`development` or `production`).                                                                 |
 | `BUN_ENV`             | app             | Bun convention env                                   | Set by runtime adapter (`development` or `production`).                                                                          |
 | `DENO_ENV`            | app             | Deno convention env                                  | Set by runtime adapter (`development` or `production`).                                                                          |

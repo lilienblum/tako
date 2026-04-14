@@ -159,20 +159,34 @@ func Listener() (net.Listener, error) {
 }
 
 func signalReadyPort(port int) {
+	// Only touch fd 4 when we know we're under tako-server. The server
+	// sets PORT=0 and HOST=127.0.0.1 when spawning; outside that
+	// contract, fd 4 may belong to the Go runtime (e.g. kqueue on
+	// macOS) and writing/closing it crashes the process.
+	if os.Getenv("PORT") != "0" {
+		return
+	}
 	signalReadyPortToFD(port, 4)
 }
 
 func signalReadyPortToFD(port int, fd uintptr) {
+	// Stat through the syscall layer so we do NOT give the fd to Go's
+	// file-finalizer machinery unless we know it's a FIFO. Wrapping a
+	// non-Tako fd (like Go's kqueue/epoll fd) in os.NewFile would let
+	// a stray GC close it and break the runtime.
+	var st syscall.Stat_t
+	if err := syscall.Fstat(int(fd), &st); err != nil {
+		return
+	}
+	if st.Mode&syscall.S_IFMT != syscall.S_IFIFO {
+		return
+	}
+
 	ready := os.NewFile(fd, "tako-ready")
 	if ready == nil {
 		return
 	}
 	defer ready.Close()
-
-	info, err := ready.Stat()
-	if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
-		return
-	}
 
 	_, _ = fmt.Fprintf(ready, "%d\n", port)
 }

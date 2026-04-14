@@ -80,10 +80,6 @@ pub fn theme_accent<D: Display>(value: D) -> String {
     rgb_fg(value, ACCENT)
 }
 
-pub fn theme_secondary<D: Display>(value: D) -> String {
-    rgb_fg(value, ACCENT)
-}
-
 pub fn theme_fg<D: Display>(value: D) -> String {
     value.to_string()
 }
@@ -389,11 +385,7 @@ pub fn info(message: &str) {
 
 pub fn bullet(message: &str) {
     if is_pretty() {
-        emit(&format!(
-            "  {} {}",
-            bold(&theme_secondary("•")),
-            theme_fg(message)
-        ));
+        emit(&format!("  - {}", theme_fg(message)));
     }
 }
 
@@ -447,7 +439,7 @@ pub fn warning(message: &str) {
         emit(&format!(
             "{} {}",
             bold(&theme_warning("!")),
-            theme_fg(message)
+            theme_warning(message)
         ));
     }
 }

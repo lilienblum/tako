@@ -167,6 +167,7 @@ pub(super) fn build_deploy_archive_manifest(
     runtime_name: &str,
     main: &str,
     idle_timeout: u32,
+    app_log_level: &str,
     package_manager: Option<String>,
     commit_message: Option<String>,
     git_dirty: Option<bool>,
@@ -181,8 +182,13 @@ pub(super) fn build_deploy_archive_manifest(
         .unwrap_or_default();
     secret_names.sort();
 
-    let mut env_vars =
-        build_manifest_env_vars(app_env_vars, runtime_env_vars, environment, runtime_name);
+    let mut env_vars = build_manifest_env_vars(
+        app_env_vars,
+        runtime_env_vars,
+        environment,
+        runtime_name,
+        app_log_level,
+    );
     // TAKO_BUILD is a non-secret env var derived from the version.
     // It's stored in app.json so the server can read it without the CLI.
     env_vars.insert("TAKO_BUILD".to_string(), version.to_string());
@@ -230,6 +236,7 @@ pub(super) fn build_manifest_env_vars(
     runtime_env_vars: HashMap<String, String>,
     environment: &str,
     runtime_name: &str,
+    app_log_level: &str,
 ) -> BTreeMap<String, String> {
     let mut merged = BTreeMap::new();
 
@@ -254,7 +261,7 @@ pub(super) fn build_manifest_env_vars(
 
     // 4. Derived env markers always set (highest priority)
     merged.insert("ENV".to_string(), environment.to_string());
-    merged.insert("TAKO_ENV".to_string(), environment.to_string());
+    merged.insert("LOG_LEVEL".to_string(), app_log_level.to_string());
     merged
 }
 
@@ -282,6 +289,7 @@ mod tests {
             "bun",
             "server/index.ts",
             300,
+            "info",
             Some("bun".to_string()),
             Some("feat: ship it".to_string()),
             Some(false),
@@ -298,7 +306,7 @@ mod tests {
         );
         assert_eq!(manifest.package_manager, Some("bun".to_string()));
         assert_eq!(
-            manifest.env_vars.get("TAKO_ENV"),
+            manifest.env_vars.get("ENV"),
             Some(&"production".to_string())
         );
         assert_eq!(manifest.commit_message.as_deref(), Some("feat: ship it"));
@@ -342,6 +350,7 @@ mod tests {
             "bun",
             "server/index.mjs",
             600,
+            "warn",
             None,
             None,
             Some(true),
@@ -365,16 +374,16 @@ mod tests {
                 "A_KEY".to_string(),
                 "BUN_ENV".to_string(),
                 "ENV".to_string(),
+                "LOG_LEVEL".to_string(),
                 "NODE_ENV".to_string(),
                 "TAKO_BUILD".to_string(),
-                "TAKO_ENV".to_string(),
                 "Z_KEY".to_string()
             ]
         );
         assert_eq!(manifest.env_vars.get("ENV"), Some(&"staging".to_string()));
         assert_eq!(
-            manifest.env_vars.get("TAKO_ENV"),
-            Some(&"staging".to_string())
+            manifest.env_vars.get("LOG_LEVEL"),
+            Some(&"warn".to_string())
         );
         assert_eq!(
             manifest.env_vars.get("NODE_ENV"),
@@ -393,14 +402,18 @@ mod tests {
     #[test]
     fn build_manifest_env_vars_overrides_configured_env_with_derived_environment() {
         let env_vars = build_manifest_env_vars(
-            HashMap::from([("ENV".to_string(), "custom".to_string())]),
+            HashMap::from([
+                ("ENV".to_string(), "custom".to_string()),
+                ("LOG_LEVEL".to_string(), "error".to_string()),
+            ]),
             HashMap::new(),
             "production",
             "bun",
+            "warn",
         );
 
         assert_eq!(env_vars.get("ENV"), Some(&"production".to_string()));
-        assert_eq!(env_vars.get("TAKO_ENV"), Some(&"production".to_string()));
+        assert_eq!(env_vars.get("LOG_LEVEL"), Some(&"warn".to_string()));
     }
 
     #[test]

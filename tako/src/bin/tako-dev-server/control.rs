@@ -417,6 +417,13 @@ pub(crate) async fn handle_client(
                     match spawn_and_monitor_app(spawn_state.clone(), &spawn_config).await {
                         Ok(pid) => {
                             tracing::info!(config_path = %spawn_config, pid = pid, "spawned app process");
+                            let log_buffer = {
+                                let s = spawn_state.lock().unwrap();
+                                s.apps.get(&spawn_config).map(|a| a.log_buffer.clone())
+                            };
+                            if let Some(buf) = log_buffer {
+                                push_app_event(&buf, "ready", None);
+                            }
                             broadcast_app_status(&spawn_state, &spawn_config, "running");
                         }
                         Err(e) => {
@@ -512,6 +519,13 @@ pub(crate) async fn handle_client(
                     match spawn_and_monitor_app(spawn_state.clone(), &spawn_config).await {
                         Ok(pid) => {
                             tracing::info!(config_path = %spawn_config, pid = pid, "restarted app process");
+                            let log_buffer = {
+                                let s = spawn_state.lock().unwrap();
+                                s.apps.get(&spawn_config).map(|a| a.log_buffer.clone())
+                            };
+                            if let Some(buf) = log_buffer {
+                                push_app_event(&buf, "ready", None);
+                            }
                             broadcast_app_status(&spawn_state, &spawn_config, "running");
                         }
                         Err(e) => {

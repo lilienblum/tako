@@ -37,6 +37,7 @@ fn parse_app_event_marker(v: &serde_json::Value) -> Option<DevEvent> {
     match event {
         "launching" => Some(DevEvent::AppLaunching),
         "started" => Some(DevEvent::AppStarted),
+        "ready" => Some(DevEvent::AppReady),
         "stopped" => Some(DevEvent::AppStopped),
         "lan_mode_changed" => Some(DevEvent::LanModeChanged {
             enabled: v.get("enabled").and_then(|x| x.as_bool())?,
@@ -146,8 +147,8 @@ pub(super) async fn run_connected_dev_client(
 
     if let Some(pid) = session.pid {
         let _ = event_tx.send(DevEvent::AppPid(pid)).await;
+        let _ = event_tx.send(DevEvent::AppReady).await;
     }
-    let _ = event_tx.send(DevEvent::AppStarted).await;
     let (control_tx, mut control_rx) = mpsc::channel::<output::ControlCmd>(32);
     let (stop_tx, stop_rx) = watch::channel(false);
 
@@ -356,6 +357,7 @@ pub(super) async fn run_connected_dev_client(
                                 }
                                 DevEvent::AppLaunching
                                 | DevEvent::AppStarted
+                                | DevEvent::AppReady
                                 | DevEvent::AppPid(_)
                                 | DevEvent::AppProcessExited(_)
                                 | DevEvent::LanModeChanged { .. } => {}

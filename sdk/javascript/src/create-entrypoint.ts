@@ -11,7 +11,7 @@
 import { readFileSync, closeSync, fstatSync, writeSync } from "node:fs";
 import { handleTakoEndpoint } from "./endpoints";
 import { injectSecrets } from "./secrets";
-import { Tako } from "./tako";
+import { installTakoGlobal } from "./tako";
 import type { FetchFunction, ReadyableFetchHandler, TakoStatus } from "./types";
 
 function readSecretsFromFd(): void {
@@ -91,6 +91,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 
 export function createEntrypoint() {
   readSecretsFromFd();
+  installTakoGlobal();
   const parsed = parseArgs(process.argv);
   const port = parseInt(process.env["PORT"] || "3000", 10);
   const host = process.env["HOST"] || "127.0.0.1";
@@ -159,8 +160,6 @@ export function createEntrypoint() {
         process.exit(1);
       }
     }
-
-    Tako.getInstance();
 
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {

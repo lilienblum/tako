@@ -387,10 +387,14 @@ pub(crate) fn explain_pending_sudo_setup() -> Result<(), Box<dyn std::error::Err
         return Ok(());
     }
 
-    crate::output::warning("One-time sudo is required for:");
-    for item in &items {
-        crate::output::bullet(item);
+    crate::output::warning("sudo access required");
+    if crate::output::is_pretty() {
+        eprintln!("Tako needs this to set up your development environment:");
+        for item in &items {
+            eprintln!("- {item}");
+        }
     }
+    eprintln!();
 
     let status = std::process::Command::new("sudo")
         .arg("-v")

@@ -4,7 +4,7 @@ use crate::build::{
     BuildAdapter, BuildPreset, PresetReference, infer_adapter_from_preset_reference,
     parse_preset_reference, qualify_runtime_local_preset_ref,
 };
-use crate::config::TakoToml;
+use crate::config::{TakoToml, resolve_app_log_level};
 use crate::validation::validate_dev_route;
 
 const TAKO_APP_DATA_DIR_ENV: &str = "TAKO_DATA_DIR";
@@ -146,6 +146,10 @@ pub(super) fn route_hostname_matches(route_pattern: &str, request_host: &str) ->
 pub(super) fn compute_dev_env(cfg: &TakoToml) -> std::collections::HashMap<String, String> {
     let mut env = cfg.get_merged_vars("development");
     env.insert("ENV".to_string(), "development".to_string());
+    env.insert(
+        "LOG_LEVEL".to_string(),
+        resolve_app_log_level(cfg.envs.get("development"), "development").to_string(),
+    );
     env
 }
 

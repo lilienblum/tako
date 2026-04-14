@@ -9,38 +9,26 @@ use crate::output;
 
 // ── CA setup ─────────────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CaSource {
-    Existing,
-    Generated,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct CaSetupPlan {
-    source: CaSource,
-    install_trust: bool,
-}
-
 fn sudo_action_line() -> &'static str {
-    "Trust the Tako local CA for trusted https://*.test"
+    "Enable HTTPS"
 }
 
-fn plan_ca_setup(ca_exists: bool, ca_trusted: bool) -> CaSetupPlan {
-    CaSetupPlan {
-        source: if ca_exists {
-            CaSource::Existing
-        } else {
-            CaSource::Generated
-        },
-        install_trust: !ca_trusted,
+fn trust_install_required(has_usable_ca: bool, ca_trusted: bool) -> bool {
+    if has_usable_ca {
+        !ca_trusted
+    } else {
+        // If the current CA cannot be loaded, `tako dev` will regenerate it.
+        // That new root always needs a trust-store install.
+        true
     }
 }
 
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) fn pending_sudo_action() -> Result<Option<&'static str>, Box<dyn std::error::Error>> {
     let store = LocalCAStore::new()?;
-    let plan = plan_ca_setup(store.ca_exists(), store.is_ca_trusted());
-    Ok(plan.install_trust.then_some(sudo_action_line()))
+    let has_usable_ca = store.load_ca().is_ok();
+    let install_trust = trust_install_required(has_usable_ca, store.is_ca_trusted());
+    Ok(install_trust.then_some(sudo_action_line()))
 }
 
 /// Setup the local CA for development.
@@ -49,54 +37,44 @@ pub(crate) fn pending_sudo_action() -> Result<Option<&'static str>, Box<dyn std:
 /// 2. Install trust in the system store if needed (requires sudo)
 pub async fn setup_local_ca() -> Result<LocalCA, Box<dyn std::error::Error>> {
     let store = LocalCAStore::new()?;
+    let existing_ca = store.load_ca().ok();
+    let install_trust = trust_install_required(existing_ca.is_some(), store.is_ca_trusted());
 
-    let ca_exists = store.ca_exists();
-    let ca_trusted = store.is_ca_trusted();
-    let plan = plan_ca_setup(ca_exists, ca_trusted);
-
-    if plan.install_trust && !output::is_interactive() && !output::is_root() {
+    if install_trust && !output::is_interactive() && !output::is_root() {
         return Err(
             "local CA is not trusted; run `tako dev` interactively once to install it".into(),
         );
     }
 
-    let ca = match plan.source {
-        CaSource::Existing => {
+    let ca = match existing_ca {
+        Some(ca) => {
             tracing::debug!("Loading existing Tako CA from store…");
             let _t = output::timed("Load existing CA");
-            store.load_ca()?
+            ca
         }
-        CaSource::Generated => {
-            tracing::debug!("No existing CA found, generating new Tako CA…");
+        None => {
+            tracing::debug!("Generating new Tako CA…");
             let ca = {
                 let _t = output::timed("Generate CA");
-                output::with_spinner(
-                    "Generating new Tako CA",
-                    "Tako CA generated",
-                    LocalCA::generate,
-                )
-                .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?
+                LocalCA::generate().map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?
             };
-            tracing::debug!("Saving generated CA to secure storage…");
+            tracing::debug!("Saving Tako CA to secure storage…");
             {
                 let _t = output::timed("Save CA to store");
-                output::with_spinner("Saving Tako CA to secure storage", "Tako CA saved", || {
-                    store.save_ca(&ca)
-                })
-                .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
+                store
+                    .save_ca(&ca)
+                    .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
             }
             ca
         }
     };
 
-    if plan.install_trust {
-        tracing::debug!("CA not yet trusted in system store, installing trust…");
-        output::info("Installing Tako CA in system trust store (sudo)...");
+    if install_trust {
+        tracing::debug!("Installing Tako CA in system trust store…");
         let _t = output::timed("Install CA trust");
         store
             .install_ca_trust()
             .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
-        output::success("Tako CA trusted by system.");
     }
 
     Ok(ca)
@@ -219,45 +197,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn plan_existing_and_trusted_does_nothing() {
-        let plan = plan_ca_setup(true, true);
-        assert_eq!(
-            plan,
-            CaSetupPlan {
-                source: CaSource::Existing,
-                install_trust: false
-            }
-        );
+    fn trust_install_not_required_for_usable_trusted_ca() {
+        assert!(!trust_install_required(true, true));
     }
 
     #[test]
-    fn plan_existing_but_untrusted_installs_trust_without_prompting() {
-        let plan = plan_ca_setup(true, false);
-        assert_eq!(
-            plan,
-            CaSetupPlan {
-                source: CaSource::Existing,
-                install_trust: true
-            }
-        );
+    fn trust_install_required_for_usable_but_untrusted_ca() {
+        assert!(trust_install_required(true, false));
     }
 
     #[test]
-    fn plan_missing_ca_generates_and_installs_trust() {
-        let plan = plan_ca_setup(false, false);
-        assert_eq!(
-            plan,
-            CaSetupPlan {
-                source: CaSource::Generated,
-                install_trust: true
-            }
-        );
+    fn trust_install_required_when_ca_will_be_regenerated() {
+        assert!(trust_install_required(false, false));
+        assert!(trust_install_required(false, true));
     }
 
     #[test]
-    fn sudo_action_line_mentions_trusted_local_domains() {
+    fn sudo_action_line_mentions_https() {
         let line = sudo_action_line();
-        assert!(line.contains("local CA"));
-        assert!(line.contains("https://*.test"));
+        assert!(line.contains("HTTPS"));
     }
 }

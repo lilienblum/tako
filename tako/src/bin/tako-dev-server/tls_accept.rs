@@ -1,4 +1,3 @@
-use crate::local_ca;
 use async_trait::async_trait;
 use openssl::pkey::PKey;
 use openssl::ssl::SslRef;
@@ -6,20 +5,21 @@ use openssl::x509::X509;
 use pingora_core::listeners::TlsAccept;
 use std::collections::HashMap;
 use std::sync::Mutex;
+use tako::dev::{LocalCA, LocalCAStore};
 
-pub(super) fn load_or_create_ca() -> Result<local_ca::LocalCA, Box<dyn std::error::Error>> {
-    let store = local_ca::LocalCAStore::new()?;
+pub(super) fn load_or_create_ca() -> Result<LocalCA, Box<dyn std::error::Error>> {
+    let store = LocalCAStore::new()?;
     Ok(store.get_or_create_ca()?)
 }
 
 /// Dynamic TLS certificate resolver for development.
 pub(crate) struct DevCertResolver {
-    ca: local_ca::LocalCA,
+    ca: LocalCA,
     cache: Mutex<HashMap<String, (X509, PKey<openssl::pkey::Private>)>>,
 }
 
 impl DevCertResolver {
-    pub(crate) fn new(ca: local_ca::LocalCA) -> Self {
+    pub(crate) fn new(ca: LocalCA) -> Self {
         Self {
             ca,
             cache: Mutex::new(HashMap::new()),

@@ -3,6 +3,7 @@ use super::redirect::redirect_location;
 use super::*;
 
 use openssl::x509::X509;
+use tako::dev::LocalCA;
 use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;
@@ -595,7 +596,7 @@ fn ensure_tcp_listener_can_bind_reports_error_when_port_in_use() {
 /// OpenSSL rejecting `*.tako` wildcards (single-label TLD).
 #[test]
 fn dev_cert_resolver_generates_cert_matching_hostname() {
-    let ca = local_ca::LocalCA::generate().unwrap();
+    let ca = LocalCA::generate().unwrap();
     let resolver = DevCertResolver::new(ca);
 
     let (x509, _pkey) = resolver
@@ -639,7 +640,7 @@ fn dev_cert_resolver_generates_cert_matching_hostname() {
 /// Chrome/BoringSSL performs during the TLS handshake.
 #[test]
 fn dev_cert_resolver_cert_is_signed_by_ca() {
-    let ca = local_ca::LocalCA::generate().unwrap();
+    let ca = LocalCA::generate().unwrap();
     let ca_x509 = X509::from_pem(ca.ca_cert_pem().as_bytes()).unwrap();
     let resolver = DevCertResolver::new(ca);
 
@@ -657,7 +658,7 @@ fn dev_cert_resolver_cert_is_signed_by_ca() {
 
 #[test]
 fn dev_cert_resolver_caches_certs() {
-    let ca = local_ca::LocalCA::generate().unwrap();
+    let ca = LocalCA::generate().unwrap();
     let resolver = DevCertResolver::new(ca);
 
     let (first, _) = resolver.get_or_create_cert("bar.test").unwrap();

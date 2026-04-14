@@ -136,7 +136,7 @@ fn default_idle_timeout() -> u32 {
 
 /// Allowed values for the `log_level` config field.
 const ALLOWED_LOG_LEVELS: &[&str] = &["debug", "info", "warn", "error"];
-const RESERVED_DERIVED_ENV_VARS: &[&str] = &["ENV"];
+const RESERVED_DERIVED_ENV_VARS: &[&str] = &["ENV", "LOG_LEVEL"];
 
 /// Resolve the effective app log level for an environment.
 /// Explicit `log_level` in config takes precedence; otherwise:
@@ -1384,14 +1384,11 @@ preset = "bun"
     fn test_parse_global_vars() {
         let toml = r#"
 [vars]
-TAKO_APP_LOG_LEVEL = "info"
+LOG_LEVEL = "info"
 API_URL = "https://api.example.com"
 "#;
         let config = Config::parse(toml).unwrap();
-        assert_eq!(
-            config.vars.get("TAKO_APP_LOG_LEVEL"),
-            Some(&"info".to_string())
-        );
+        assert_eq!(config.vars.get("LOG_LEVEL"), Some(&"info".to_string()));
         assert_eq!(
             config.vars.get("API_URL"),
             Some(&"https://api.example.com".to_string())
@@ -1522,7 +1519,7 @@ include = ["dist/**"]
 exclude = ["**/*.map"]
 
 [vars]
-TAKO_APP_LOG_LEVEL = "info"
+LOG_LEVEL = "info"
 
 [envs.production]
 route = "api.example.com"
@@ -1543,10 +1540,7 @@ routes = ["staging.example.com", "*.staging.example.com"]
             config.assets,
             vec!["public".to_string(), ".output/public".to_string()]
         );
-        assert_eq!(
-            config.vars.get("TAKO_APP_LOG_LEVEL"),
-            Some(&"info".to_string())
-        );
+        assert_eq!(config.vars.get("LOG_LEVEL"), Some(&"info".to_string()));
 
         let prod = config.envs.get("production").unwrap();
         assert_eq!(prod.route, Some("api.example.com".to_string()));
@@ -1903,10 +1897,10 @@ name = 123
     fn test_parse_per_env_vars() {
         let toml = r#"
 [vars]
-TAKO_APP_LOG_LEVEL = "info"
+LOG_LEVEL = "info"
 
 [vars.production]
-TAKO_APP_LOG_LEVEL = "warn"
+LOG_LEVEL = "warn"
 DATABASE_URL = "postgres://prod"
 
 [vars.staging]
@@ -1915,17 +1909,11 @@ DATABASE_URL = "postgres://staging"
         let config = Config::parse(toml).unwrap();
 
         // Global var
-        assert_eq!(
-            config.vars.get("TAKO_APP_LOG_LEVEL"),
-            Some(&"info".to_string())
-        );
+        assert_eq!(config.vars.get("LOG_LEVEL"), Some(&"info".to_string()));
 
         // Per-env vars
         let prod_vars = config.vars_per_env.get("production").unwrap();
-        assert_eq!(
-            prod_vars.get("TAKO_APP_LOG_LEVEL"),
-            Some(&"warn".to_string())
-        );
+        assert_eq!(prod_vars.get("LOG_LEVEL"), Some(&"warn".to_string()));
         assert_eq!(
             prod_vars.get("DATABASE_URL"),
             Some(&"postgres://prod".to_string())
@@ -1942,25 +1930,22 @@ DATABASE_URL = "postgres://staging"
     fn test_get_merged_vars() {
         let toml = r#"
 [vars]
-TAKO_APP_LOG_LEVEL = "info"
 API_URL = "https://api.example.com"
 
 [vars.production]
-TAKO_APP_LOG_LEVEL = "warn"
 DATABASE_URL = "postgres://prod"
 "#;
         let config = Config::parse(toml).unwrap();
 
         let merged = config.get_merged_vars("production");
-        assert_eq!(merged.get("TAKO_APP_LOG_LEVEL"), Some(&"warn".to_string())); // overridden
         assert_eq!(
             merged.get("API_URL"),
             Some(&"https://api.example.com".to_string())
-        ); // inherited
+        );
         assert_eq!(
             merged.get("DATABASE_URL"),
             Some(&"postgres://prod".to_string())
-        ); // env-specific
+        );
     }
 
     #[test]
@@ -1992,13 +1977,41 @@ DATABASE_URL = "postgres://prod"
     fn test_get_merged_vars_nonexistent_env() {
         let toml = r#"
 [vars]
-TAKO_APP_LOG_LEVEL = "info"
+API_URL = "https://api.example.com"
 "#;
         let config = Config::parse(toml).unwrap();
 
         let merged = config.get_merged_vars("nonexistent");
-        assert_eq!(merged.get("TAKO_APP_LOG_LEVEL"), Some(&"info".to_string()));
+        assert_eq!(
+            merged.get("API_URL"),
+            Some(&"https://api.example.com".to_string())
+        );
         assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn test_get_merged_vars_ignores_reserved_log_level_variable() {
+        let toml = r#"
+[vars]
+LOG_LEVEL = "warn"
+API_URL = "https://api.example.com"
+
+[vars.production]
+LOG_LEVEL = "error"
+DATABASE_URL = "postgres://prod"
+"#;
+        let config = Config::parse(toml).unwrap();
+
+        let merged = config.get_merged_vars("production");
+        assert!(!merged.contains_key("LOG_LEVEL"));
+        assert_eq!(
+            merged.get("API_URL"),
+            Some(&"https://api.example.com".to_string())
+        );
+        assert_eq!(
+            merged.get("DATABASE_URL"),
+            Some(&"postgres://prod".to_string())
+        );
     }
 
     // ==================== Environment Server Mapping Tests ====================

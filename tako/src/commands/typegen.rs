@@ -25,7 +25,7 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
 
     match adapter.preset_group() {
         PresetGroup::Js => {
-            let written = build::js::write_types(&ctx.project_dir)?;
+            let written = build::js::write_types_for_adapter(&ctx.project_dir, adapter)?;
             if written {
                 output::success("Generated tako.d.ts");
             } else {

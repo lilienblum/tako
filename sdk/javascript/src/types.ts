@@ -113,11 +113,6 @@ export interface ChannelConnection {
 }
 
 /**
- * Options for Tako SDK
- */
-export type TakoOptions = Record<string, never>;
-
-/**
  * Tako status response
  */
 export interface TakoStatus {

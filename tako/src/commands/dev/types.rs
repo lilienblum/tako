@@ -122,6 +122,7 @@ pub(super) fn app_log_scope() -> String {
 pub enum DevEvent {
     AppLaunching,
     AppStarted,
+    AppReady,
     AppStopped,
     AppProcessExited(String),
     AppPid(u32),

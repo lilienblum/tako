@@ -25,7 +25,7 @@ Pretty output renders — persistent task lists, spinners where still applicable
 - Show the whole known plan up front when the command already knows future work
 - Waiting tasks use muted `○`
 - Single-line state transitions: spinner → result (double space before elapsed)
-- `✔` success, `✘` failure, `!` warnings, `•` bullets
+- `✔` success, `✘` failure, `!` warnings, `-` bullets
 - Section headings in bold+accent (2-space indent in interactive mode)
 - Prompts use diamond style; vanish after the user answers
 
@@ -95,7 +95,7 @@ These functions print in normal mode, no-op in verbose/CI. Use `output::is_prett
 | `section(title)` | blank line + bold accent title (padded) | no-op |
 | `heading(title)` | blank line + bold title (padded) | no-op |
 | `info(message)` | Default-color text (padded) | no-op |
-| `bullet(message)` | `  • message` | no-op |
+| `bullet(message)` | `  - message` | no-op |
 | `success(message)` | `✔ message` | no-op |
 | `warning(message)` | `! message` | no-op |
 | `error(message)` | `✘ message` | no-op |

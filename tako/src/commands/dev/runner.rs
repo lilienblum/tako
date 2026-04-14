@@ -579,6 +579,9 @@ pub async fn run(
                         Some(event) = event_rx.recv() => {
                             match event {
                                 DevEvent::AppStarted => {}
+                                DevEvent::AppReady => {
+                                    println!("App started");
+                                }
                                 DevEvent::AppLaunching => {
                                     println!("Starting app...");
                                 }

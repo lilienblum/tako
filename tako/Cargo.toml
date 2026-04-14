@@ -90,6 +90,11 @@ rusqlite = { version = "0.39", features = ["bundled"] }
 # QR code generation for LAN mode CA cert URL
 qrcode = { version = "0.14", default-features = false }
 
+# macOS: inspect trust settings and evaluate trust via Security.framework
+# so local HTTPS checks match browser trust behavior without shelling out.
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+
 
 [dev-dependencies]
 tempfile = "3.27"
