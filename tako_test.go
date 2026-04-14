@@ -52,8 +52,13 @@ func TestGetSecret(t *testing.T) {
 func TestMetadata(t *testing.T) {
 	configOnce = syncOnce()
 	origArgs := os.Args
-	os.Args = []string{"test", "--instance", "meta1234", "--version", "v5.0"}
-	defer func() { os.Args = origArgs }()
+	origBuild := os.Getenv("TAKO_BUILD")
+	os.Args = []string{"test", "--instance", "meta1234"}
+	os.Setenv("TAKO_BUILD", "v5.0")
+	defer func() {
+		os.Args = origArgs
+		setOrUnset("TAKO_BUILD", origBuild)
+	}()
 
 	if got := InstanceID(); got != "meta1234" {
 		t.Errorf("InstanceID() = %q, want %q", got, "meta1234")
@@ -105,15 +110,18 @@ func TestListenerTCP(t *testing.T) {
 func TestFullProtocol(t *testing.T) {
 	configOnce = syncOnce()
 	origArgs := os.Args
-	os.Args = []string{"test", "--instance", "full1234", "--version", "v3"}
+	origBuild := os.Getenv("TAKO_BUILD")
+	os.Args = []string{"test", "--instance", "full1234"}
 	origPort := os.Getenv("PORT")
 	origHost := os.Getenv("HOST")
 	origToken := os.Getenv("TAKO_INTERNAL_TOKEN")
+	os.Setenv("TAKO_BUILD", "v3")
 	os.Setenv("HOST", "127.0.0.1")
 	os.Setenv("PORT", "0")
 	os.Setenv("TAKO_INTERNAL_TOKEN", "test-token")
 	defer func() {
 		os.Args = origArgs
+		setOrUnset("TAKO_BUILD", origBuild)
 		setOrUnset("PORT", origPort)
 		setOrUnset("HOST", origHost)
 		setOrUnset("TAKO_INTERNAL_TOKEN", origToken)

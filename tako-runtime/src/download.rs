@@ -49,13 +49,20 @@ impl DownloadManager {
             .ok_or_else(|| format!("runtime '{id}' has no download url"))?;
         let url = apply_template(url, version, &os, &arch);
 
+        // Integrity verification is mandatory: a runtime with a [download]
+        // section must also declare a checksum_url. Downloading a binary into
+        // the release install dir without verification gives a compromised
+        // mirror or hijacked redirect chain arbitrary code execution on the
+        // deployment host.
+        let checksum_url = download.checksum_url.as_ref().ok_or_else(|| {
+            format!("runtime '{id}' has no checksum_url; integrity verification is required")
+        })?;
+
         let archive_bytes = download_bytes(&url).await?;
 
-        if let Some(checksum_url) = &download.checksum_url {
-            let checksum_url = apply_template(checksum_url, version, &os, &arch);
-            let checksum_format = download.checksum_format.as_deref().unwrap_or("shasums");
-            verify_checksum(&archive_bytes, &checksum_url, checksum_format, &url).await?;
-        }
+        let checksum_url = apply_template(checksum_url, version, &os, &arch);
+        let checksum_format = download.checksum_format.as_deref().unwrap_or("shasums");
+        verify_checksum(&archive_bytes, &checksum_url, checksum_format, &url).await?;
 
         // Atomic install: extract to temp dir, then rename to final path.
         // Prevents partial/corrupted installs from concurrent deploys.
@@ -291,10 +298,16 @@ async fn download_bytes(url: &str) -> Result<Vec<u8>, String> {
     download_bytes_limited(url, MAX_ARCHIVE_BYTES).await
 }
 
+/// Cap on redirect hops when downloading a runtime archive. Integrity is
+/// enforced by the mandatory checksum, not the redirect target, so this exists
+/// purely to bound the number of round trips per download.
+const MAX_DOWNLOAD_REDIRECTS: usize = 10;
+
 async fn download_bytes_limited(url: &str, max_bytes: u64) -> Result<Vec<u8>, String> {
     let client = reqwest::Client::builder()
         .connect_timeout(std::time::Duration::from_secs(30))
         .timeout(std::time::Duration::from_secs(300))
+        .redirect(reqwest::redirect::Policy::limited(MAX_DOWNLOAD_REDIRECTS))
         .build()
         .map_err(|e| format!("failed to build HTTP client: {e}"))?;
     let response = client
@@ -721,6 +734,63 @@ mod tests {
         let mgr = DownloadManager::new(dir.path().to_path_buf());
         let def = crate::runtime_def_for("bun", None).unwrap();
         assert!(mgr.resolve_bin("bun", "1.0.0", &def).is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn install_rejects_download_without_checksum_url() {
+        use crate::types::{
+            DownloadDef, EntrypointDef, EnvsDef, PackageManagerDef, PresetDef, RuntimeDef,
+            ServerDef,
+        };
+
+        let dir = TempDir::new().unwrap();
+        let mgr = DownloadManager::new(dir.path().to_path_buf());
+
+        let def = RuntimeDef {
+            id: "fakert".into(),
+            language: "fake".into(),
+            entrypoint: EntrypointDef {
+                candidates: vec!["main.js".into()],
+                manifest: None,
+            },
+            preset: PresetDef::default(),
+            server: ServerDef {
+                entrypoint_path: None,
+                launch_args: vec![],
+            },
+            envs: EnvsDef::default(),
+            package_manager: PackageManagerDef {
+                id: "fake".into(),
+                name: None,
+                lockfiles: vec![],
+                add: None,
+                install: None,
+                development: None,
+            },
+            download: Some(DownloadDef {
+                version_source: None,
+                url: Some("https://example.com/fake-{version}.tar.gz".into()),
+                format: Some("tar.gz".into()),
+                checksum_url: None,
+                checksum_format: None,
+                os_map: std::collections::HashMap::from([
+                    ("macos".into(), "darwin".into()),
+                    ("linux".into(), "linux".into()),
+                ]),
+                arch_map: std::collections::HashMap::from([
+                    ("x64".into(), "x64".into()),
+                    ("arm64".into(), "arm64".into()),
+                ]),
+                arch_variants: Default::default(),
+                extract: None,
+            }),
+        };
+
+        let err = mgr.install("fakert", "1.0.0", &def).await.unwrap_err();
+        assert!(
+            err.contains("checksum_url"),
+            "expected checksum_url requirement error, got: {err}"
+        );
     }
 
     #[test]
