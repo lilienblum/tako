@@ -290,6 +290,33 @@ pub enum DevServerEvent {
         lan_ip: Option<String>,
         ca_url: Option<String>,
     },
+    AppLaunching {
+        config_path: String,
+        app_name: String,
+    },
+    AppPid {
+        config_path: String,
+        app_name: String,
+        pid: u32,
+    },
+    AppStarted {
+        config_path: String,
+        app_name: String,
+    },
+    AppReady {
+        config_path: String,
+        app_name: String,
+    },
+    AppProcessExited {
+        config_path: String,
+        app_name: String,
+        message: String,
+    },
+    AppError {
+        config_path: String,
+        app_name: String,
+        message: String,
+    },
 }
 
 fn parse_event_line(line: &str) -> Option<DevServerEvent> {
@@ -337,6 +364,33 @@ fn parse_event_line(line: &str) -> Option<DevServerEvent> {
                 .get("ca_url")
                 .and_then(|v| v.as_str())
                 .map(String::from),
+        }),
+        "AppLaunching" => Some(DevServerEvent::AppLaunching {
+            config_path: event.get("config_path")?.as_str()?.to_string(),
+            app_name: event.get("app_name")?.as_str()?.to_string(),
+        }),
+        "AppPid" => Some(DevServerEvent::AppPid {
+            config_path: event.get("config_path")?.as_str()?.to_string(),
+            app_name: event.get("app_name")?.as_str()?.to_string(),
+            pid: event.get("pid")?.as_u64()? as u32,
+        }),
+        "AppStarted" => Some(DevServerEvent::AppStarted {
+            config_path: event.get("config_path")?.as_str()?.to_string(),
+            app_name: event.get("app_name")?.as_str()?.to_string(),
+        }),
+        "AppReady" => Some(DevServerEvent::AppReady {
+            config_path: event.get("config_path")?.as_str()?.to_string(),
+            app_name: event.get("app_name")?.as_str()?.to_string(),
+        }),
+        "AppProcessExited" => Some(DevServerEvent::AppProcessExited {
+            config_path: event.get("config_path")?.as_str()?.to_string(),
+            app_name: event.get("app_name")?.as_str()?.to_string(),
+            message: event.get("message")?.as_str()?.to_string(),
+        }),
+        "AppError" => Some(DevServerEvent::AppError {
+            config_path: event.get("config_path")?.as_str()?.to_string(),
+            app_name: event.get("app_name")?.as_str()?.to_string(),
+            message: event.get("message")?.as_str()?.to_string(),
         }),
         _ => None,
     }

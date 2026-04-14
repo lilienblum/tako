@@ -161,7 +161,6 @@ pub async fn run(
 
     {
         let log_tx = log_tx.clone();
-        let event_tx = event_tx.clone();
         let config_key = config_key.clone();
         tokio::spawn(async move {
             let Ok(mut rx) = crate::dev_server_client::subscribe_logs(&config_key, None).await
@@ -171,14 +170,8 @@ pub async fn run(
             while let Some(entry) = rx.recv().await {
                 match entry {
                     crate::dev_server_client::LogStreamEntry::Entry { line, .. } => {
-                        match parse_log_line(&line) {
-                            Some(LogStreamEvent::Log(log)) => {
-                                let _ = log_tx.send(log).await;
-                            }
-                            Some(LogStreamEvent::AppEvent(ev)) => {
-                                let _ = event_tx.send(ev).await;
-                            }
-                            None => {}
+                        if let Some(log) = parse_log_line(&line) {
+                            let _ = log_tx.send(log).await;
                         }
                     }
                     crate::dev_server_client::LogStreamEntry::Truncated => {
@@ -436,9 +429,10 @@ pub async fn run(
 
         if let Some(mut ev_rx) = ev_rx.take() {
             tokio::spawn(async move {
+                use crate::dev_server_client::DevServerEvent;
                 while let Some(ev) = ev_rx.recv().await {
                     match ev {
-                        crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                        DevServerEvent::AppStatusChanged {
                             ref config_path,
                             ref status,
                             ..
@@ -453,7 +447,7 @@ pub async fn run(
                                 break;
                             }
                         }
-                        crate::dev_server_client::DevServerEvent::ClientConnected {
+                        DevServerEvent::ClientConnected {
                             ref config_path,
                             client_id,
                             ..
@@ -467,7 +461,7 @@ pub async fn run(
                                     .await;
                             }
                         }
-                        crate::dev_server_client::DevServerEvent::ClientDisconnected {
+                        DevServerEvent::ClientDisconnected {
                             ref config_path,
                             client_id,
                             ..
@@ -477,6 +471,57 @@ pub async fn run(
                                     .send(DevEvent::ClientDisconnected { client_id })
                                     .await;
                             }
+                        }
+                        DevServerEvent::AppLaunching {
+                            ref config_path, ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppLaunching).await;
+                        }
+                        DevServerEvent::AppStarted {
+                            ref config_path, ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppStarted).await;
+                        }
+                        DevServerEvent::AppReady {
+                            ref config_path, ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppReady).await;
+                        }
+                        DevServerEvent::AppPid {
+                            ref config_path,
+                            pid,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppPid(pid)).await;
+                        }
+                        DevServerEvent::AppProcessExited {
+                            ref config_path,
+                            ref message,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx
+                                .send(DevEvent::AppProcessExited(message.clone()))
+                                .await;
+                        }
+                        DevServerEvent::AppError {
+                            ref config_path,
+                            ref message,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppError(message.clone())).await;
+                        }
+                        DevServerEvent::LanModeChanged {
+                            enabled,
+                            ref lan_ip,
+                            ref ca_url,
+                        } => {
+                            let _ = event_tx
+                                .send(DevEvent::LanModeChanged {
+                                    enabled,
+                                    lan_ip: lan_ip.clone(),
+                                    ca_url: ca_url.clone(),
+                                })
+                                .await;
                         }
                         _ => {}
                     }

@@ -11,8 +11,6 @@ use super::{
     resolve_dev_preset_ref,
 };
 
-const DEV_LOG_APP_EVENT_MARKER_TYPE: &str = "app_event";
-
 #[derive(Debug, Clone)]
 pub(super) struct ConnectedDevClient {
     pub(super) config_key: String,
@@ -22,72 +20,17 @@ pub(super) struct ConnectedDevClient {
     pub(super) pid: Option<u32>,
 }
 
-#[derive(Debug)]
-pub(super) enum LogStreamEvent {
-    Log(ScopedLog),
-    AppEvent(DevEvent),
-}
-
-fn parse_app_event_marker(v: &serde_json::Value) -> Option<DevEvent> {
-    if v.get("type").and_then(|x| x.as_str()) != Some(DEV_LOG_APP_EVENT_MARKER_TYPE) {
-        return None;
-    }
-
-    let event = v.get("event").and_then(|x| x.as_str())?;
-    match event {
-        "launching" => Some(DevEvent::AppLaunching),
-        "started" => Some(DevEvent::AppStarted),
-        "ready" => Some(DevEvent::AppReady),
-        "stopped" => Some(DevEvent::AppStopped),
-        "lan_mode_changed" => Some(DevEvent::LanModeChanged {
-            enabled: v.get("enabled").and_then(|x| x.as_bool())?,
-            lan_ip: v
-                .get("lan_ip")
-                .and_then(|x| x.as_str())
-                .map(|s| s.to_string()),
-            ca_url: v
-                .get("ca_url")
-                .and_then(|x| x.as_str())
-                .map(|s| s.to_string()),
-        }),
-        "pid" => v
-            .get("pid")
-            .and_then(|x| x.as_u64())
-            .and_then(|pid| u32::try_from(pid).ok())
-            .map(DevEvent::AppPid),
-        "exited" => v
-            .get("message")
-            .and_then(|x| x.as_str())
-            .map(|msg| DevEvent::AppProcessExited(msg.to_string())),
-        "error" => v
-            .get("message")
-            .and_then(|x| x.as_str())
-            .map(|msg| DevEvent::AppError(msg.to_string())),
-        _ => None,
-    }
-}
-
-pub(super) fn parse_log_line(line: &str) -> Option<LogStreamEvent> {
+pub(super) fn parse_log_line(line: &str) -> Option<ScopedLog> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return None;
     }
 
     if let Ok(log) = serde_json::from_str::<ScopedLog>(trimmed) {
-        return Some(LogStreamEvent::Log(log));
+        return Some(log);
     }
 
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed)
-        && let Some(marker_type) = v.get("type").and_then(|x| x.as_str())
-        && marker_type == DEV_LOG_APP_EVENT_MARKER_TYPE
-    {
-        return parse_app_event_marker(&v).map(LogStreamEvent::AppEvent);
-    }
-
-    Some(LogStreamEvent::Log(ScopedLog::info(
-        "app",
-        trimmed.to_string(),
-    )))
+    Some(ScopedLog::info("app", trimmed.to_string()))
 }
 
 pub(super) fn host_and_port_from_url(url: &str) -> Option<(String, u16)> {
@@ -171,8 +114,9 @@ pub(super) async fn run_connected_dev_client(
                     .ok();
 
                 while let Some(ev) = ev_rx.recv().await {
+                    use crate::dev_server_client::DevServerEvent;
                     match ev {
-                        crate::dev_server_client::DevServerEvent::AppStatusChanged {
+                        DevServerEvent::AppStatusChanged {
                             ref config_path,
                             ref status,
                             ..
@@ -180,7 +124,7 @@ pub(super) async fn run_connected_dev_client(
                             got_stop = true;
                             break;
                         }
-                        crate::dev_server_client::DevServerEvent::ClientConnected {
+                        DevServerEvent::ClientConnected {
                             ref config_path,
                             client_id,
                             ..
@@ -192,13 +136,64 @@ pub(super) async fn run_connected_dev_client(
                                 })
                                 .await;
                         }
-                        crate::dev_server_client::DevServerEvent::ClientDisconnected {
+                        DevServerEvent::ClientDisconnected {
                             ref config_path,
                             client_id,
                             ..
                         } if config_path == &config_key => {
                             let _ = event_tx
                                 .send(DevEvent::ClientDisconnected { client_id })
+                                .await;
+                        }
+                        DevServerEvent::AppLaunching {
+                            ref config_path, ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppLaunching).await;
+                        }
+                        DevServerEvent::AppStarted {
+                            ref config_path, ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppStarted).await;
+                        }
+                        DevServerEvent::AppReady {
+                            ref config_path, ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppReady).await;
+                        }
+                        DevServerEvent::AppPid {
+                            ref config_path,
+                            pid,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppPid(pid)).await;
+                        }
+                        DevServerEvent::AppProcessExited {
+                            ref config_path,
+                            ref message,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx
+                                .send(DevEvent::AppProcessExited(message.clone()))
+                                .await;
+                        }
+                        DevServerEvent::AppError {
+                            ref config_path,
+                            ref message,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppError(message.clone())).await;
+                        }
+                        DevServerEvent::LanModeChanged {
+                            enabled,
+                            ref lan_ip,
+                            ref ca_url,
+                        } => {
+                            let _ = event_tx
+                                .send(DevEvent::LanModeChanged {
+                                    enabled,
+                                    lan_ip: lan_ip.clone(),
+                                    ca_url: ca_url.clone(),
+                                })
                                 .await;
                         }
                         _ => {}
@@ -218,7 +213,6 @@ pub(super) async fn run_connected_dev_client(
 
     {
         let log_tx = log_tx.clone();
-        let real_event_tx = event_tx.clone();
         let config_key_for_logs = session.config_key.clone();
         tokio::spawn(async move {
             let Ok(mut rx) =
@@ -229,14 +223,8 @@ pub(super) async fn run_connected_dev_client(
             while let Some(entry) = rx.recv().await {
                 match entry {
                     crate::dev_server_client::LogStreamEntry::Entry { line, .. } => {
-                        match parse_log_line(&line) {
-                            Some(LogStreamEvent::Log(log)) => {
-                                let _ = log_tx.send(log).await;
-                            }
-                            Some(LogStreamEvent::AppEvent(ev)) => {
-                                let _ = real_event_tx.send(ev).await;
-                            }
-                            None => {}
+                        if let Some(log) = parse_log_line(&line) {
+                            let _ = log_tx.send(log).await;
                         }
                     }
                     crate::dev_server_client::LogStreamEntry::Truncated => {
@@ -637,23 +625,5 @@ mod tests {
         let status = child.try_wait().unwrap();
         assert!(status.is_some(), "child should have exited");
         assert!(status.unwrap().success());
-    }
-
-    #[test]
-    fn parse_log_line_parses_lan_mode_marker() {
-        let line = r#"{"type":"app_event","event":"lan_mode_changed","enabled":true,"lan_ip":"192.168.1.42","ca_url":"http://192.168.1.42/ca.pem"}"#;
-        let event = parse_log_line(line).expect("marker should parse");
-        match event {
-            LogStreamEvent::AppEvent(DevEvent::LanModeChanged {
-                enabled,
-                lan_ip,
-                ca_url,
-            }) => {
-                assert!(enabled);
-                assert_eq!(lan_ip.as_deref(), Some("192.168.1.42"));
-                assert_eq!(ca_url.as_deref(), Some("http://192.168.1.42/ca.pem"));
-            }
-            other => panic!("unexpected event: {other:?}"),
-        }
     }
 }

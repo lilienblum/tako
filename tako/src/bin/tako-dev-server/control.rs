@@ -7,8 +7,8 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use crate::process::{
-    broadcast_app_status, kill_app_process, monitor_handoff_pid, push_app_event, push_divider,
-    push_lan_mode_event, push_scoped_log, spawn_and_monitor_app,
+    app_name_for, broadcast_app_status, broadcast_dev_event, kill_app_process, monitor_handoff_pid,
+    push_divider, push_scoped_log, spawn_and_monitor_app,
 };
 use crate::protocol::{self, AppInfo, Request, Response};
 use crate::route_pattern::split_route_pattern;
@@ -50,16 +50,14 @@ fn lan_mode_message(enabled: bool, lan_ip: Option<&str>) -> String {
     }
 }
 
-fn write_lan_mode_records(
+fn write_lan_mode_log(
     log_buffers: impl IntoIterator<Item = state::LogBuffer>,
     enabled: bool,
     lan_ip: Option<&str>,
-    ca_url: Option<&str>,
 ) {
     let message = lan_mode_message(enabled, lan_ip);
     for log_buffer in log_buffers {
         push_scoped_log(&log_buffer, "Info", "tako", &message);
-        push_lan_mode_event(&log_buffer, enabled, lan_ip, ca_url);
     }
 }
 
@@ -360,7 +358,7 @@ pub(crate) async fn handle_client(
                         a.log_buffer.clone()
                     })
                     .unwrap_or_else(state::LogBuffer::new);
-                let lan_log_buffer = log_buffer.clone();
+                let lan_banner_buffer = log_buffer.clone();
 
                 s.apps.insert(
                     config_path.clone(),
@@ -390,13 +388,7 @@ pub(crate) async fn handle_client(
                     }
                 }
                 if s.lan_enabled {
-                    let ca_url = s.lan_ip.as_ref().map(|ip| format!("http://{ip}/ca.pem"));
-                    write_lan_mode_records(
-                        [lan_log_buffer],
-                        true,
-                        s.lan_ip.as_deref(),
-                        ca_url.as_deref(),
-                    );
+                    write_lan_mode_log([lan_banner_buffer], true, s.lan_ip.as_deref());
                 }
 
                 let host = hosts
@@ -417,13 +409,13 @@ pub(crate) async fn handle_client(
                     match spawn_and_monitor_app(spawn_state.clone(), &spawn_config).await {
                         Ok(pid) => {
                             tracing::info!(config_path = %spawn_config, pid = pid, "spawned app process");
-                            let log_buffer = {
-                                let s = spawn_state.lock().unwrap();
-                                s.apps.get(&spawn_config).map(|a| a.log_buffer.clone())
-                            };
-                            if let Some(buf) = log_buffer {
-                                push_app_event(&buf, "ready", None);
-                            }
+                            broadcast_dev_event(
+                                &spawn_state,
+                                protocol::DevEvent::AppReady {
+                                    config_path: spawn_config.clone(),
+                                    app_name: app_name_for(&spawn_state, &spawn_config),
+                                },
+                            );
                             broadcast_app_status(&spawn_state, &spawn_config, "running");
                         }
                         Err(e) => {
@@ -433,15 +425,18 @@ pub(crate) async fn handle_client(
                                 s.apps.get(&spawn_config).map(|a| a.log_buffer.clone())
                             };
                             broadcast_app_status(&spawn_state, &spawn_config, "idle");
+                            let msg = format!("failed to start app: {e}");
                             if let Some(buf) = log_buffer {
-                                let msg = format!("failed to start app: {e}");
                                 push_scoped_log(&buf, "Error", "tako", &msg);
-                                push_app_event(
-                                    &buf,
-                                    "error",
-                                    Some(("message", serde_json::json!(msg))),
-                                );
                             }
+                            broadcast_dev_event(
+                                &spawn_state,
+                                protocol::DevEvent::AppError {
+                                    config_path: spawn_config.clone(),
+                                    app_name: app_name_for(&spawn_state, &spawn_config),
+                                    message: msg,
+                                },
+                            );
                         }
                     }
                 });
@@ -519,13 +514,13 @@ pub(crate) async fn handle_client(
                     match spawn_and_monitor_app(spawn_state.clone(), &spawn_config).await {
                         Ok(pid) => {
                             tracing::info!(config_path = %spawn_config, pid = pid, "restarted app process");
-                            let log_buffer = {
-                                let s = spawn_state.lock().unwrap();
-                                s.apps.get(&spawn_config).map(|a| a.log_buffer.clone())
-                            };
-                            if let Some(buf) = log_buffer {
-                                push_app_event(&buf, "ready", None);
-                            }
+                            broadcast_dev_event(
+                                &spawn_state,
+                                protocol::DevEvent::AppReady {
+                                    config_path: spawn_config.clone(),
+                                    app_name: app_name_for(&spawn_state, &spawn_config),
+                                },
+                            );
                             broadcast_app_status(&spawn_state, &spawn_config, "running");
                         }
                         Err(e) => {
@@ -534,15 +529,18 @@ pub(crate) async fn handle_client(
                                 let s = spawn_state.lock().unwrap();
                                 s.apps.get(&spawn_config).map(|a| a.log_buffer.clone())
                             };
+                            let msg = format!("restart failed: {e}");
                             if let Some(buf) = log_buffer {
-                                let msg = format!("restart failed: {e}");
                                 push_scoped_log(&buf, "Error", "tako", &msg);
-                                push_app_event(
-                                    &buf,
-                                    "error",
-                                    Some(("message", serde_json::json!(msg))),
-                                );
                             }
+                            broadcast_dev_event(
+                                &spawn_state,
+                                protocol::DevEvent::AppError {
+                                    config_path: spawn_config.clone(),
+                                    app_name: app_name_for(&spawn_state, &spawn_config),
+                                    message: msg,
+                                },
+                            );
                         }
                     }
                 });
@@ -789,7 +787,7 @@ async fn handle_toggle_lan(state: &Arc<Mutex<State>>, enabled: bool) -> Response
         s.mdns = Some(mdns);
         s.lan_enabled = true;
         s.lan_ip = Some(lan_ip.clone());
-        write_lan_mode_records(log_buffers, true, Some(&lan_ip), Some(&ca_url));
+        write_lan_mode_log(log_buffers, true, Some(&lan_ip));
         s.events.broadcast(Response::Event {
             event: protocol::DevEvent::LanModeChanged {
                 enabled: true,
@@ -814,7 +812,7 @@ async fn handle_toggle_lan(state: &Arc<Mutex<State>>, enabled: bool) -> Response
         s.mdns = None;
         s.lan_enabled = false;
         s.lan_ip = None;
-        write_lan_mode_records(log_buffers, false, None, None);
+        write_lan_mode_log(log_buffers, false, None);
         s.events.broadcast(Response::Event {
             event: protocol::DevEvent::LanModeChanged {
                 enabled: false,
@@ -877,7 +875,7 @@ async fn write_resp(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_enable_lan_command, write_lan_mode_records};
+    use super::{build_enable_lan_command, write_lan_mode_log};
     use crate::state::LogBuffer;
 
     #[test]
@@ -890,25 +888,17 @@ mod tests {
     }
 
     #[test]
-    fn write_lan_mode_records_appends_log_and_event_entries() {
+    fn write_lan_mode_log_appends_banner_only() {
         let buffer = LogBuffer::new();
-        write_lan_mode_records(
-            [buffer.clone()],
-            true,
-            Some("192.168.1.42"),
-            Some("http://192.168.1.42/ca.pem"),
-        );
+        write_lan_mode_log([buffer.clone()], true, Some("192.168.1.42"));
 
         let (entries, _, truncated) = buffer.subscribe(None);
         assert!(!truncated);
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 1);
         assert!(
             entries[0]
                 .line
                 .contains(r#""message":"LAN mode enabled (192.168.1.42)""#)
         );
-        assert!(entries[1].line.contains(r#""event":"lan_mode_changed""#));
-        assert!(entries[1].line.contains(r#""enabled":true"#));
-        assert!(entries[1].line.contains(r#""lan_ip":"192.168.1.42""#));
     }
 }

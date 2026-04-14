@@ -68,39 +68,17 @@ pub(crate) fn kill_app_process(pid: u32) {
     }
 }
 
-pub(crate) fn push_app_event(
-    buf: &state::LogBuffer,
-    event_name: &str,
-    extra: Option<(&str, serde_json::Value)>,
-) {
-    let mut payload = serde_json::json!({
-        "type": "app_event",
-        "event": event_name,
-    });
-    if let Some((key, value)) = extra {
-        payload[key] = value;
-    }
-    buf.push(payload.to_string());
+pub(crate) fn broadcast_dev_event(state: &Arc<Mutex<State>>, event: DevEvent) {
+    let s = state.lock().unwrap();
+    s.events.broadcast(Response::Event { event });
 }
 
-pub(crate) fn push_lan_mode_event(
-    buf: &state::LogBuffer,
-    enabled: bool,
-    lan_ip: Option<&str>,
-    ca_url: Option<&str>,
-) {
-    let mut payload = serde_json::json!({
-        "type": "app_event",
-        "event": "lan_mode_changed",
-        "enabled": enabled,
-    });
-    if let Some(lan_ip) = lan_ip {
-        payload["lan_ip"] = serde_json::json!(lan_ip);
-    }
-    if let Some(ca_url) = ca_url {
-        payload["ca_url"] = serde_json::json!(ca_url);
-    }
-    buf.push(payload.to_string());
+pub(crate) fn app_name_for(state: &Arc<Mutex<State>>, config_path: &str) -> String {
+    let s = state.lock().unwrap();
+    s.apps
+        .get(config_path)
+        .map(|a| a.name.clone())
+        .unwrap_or_default()
 }
 
 pub(crate) fn push_divider(buf: &state::LogBuffer, label: &str) {
@@ -134,8 +112,15 @@ pub(crate) async fn spawn_and_monitor_app(
         let app = s.apps.get(config_path).ok_or("app not found")?;
         (app.project_dir.clone(), app.clone(), app.log_buffer.clone())
     };
+    let app_name = app_clone.name.clone();
 
-    push_app_event(&log_buffer, "launching", None);
+    broadcast_dev_event(
+        &state,
+        DevEvent::AppLaunching {
+            config_path: config_path.to_string(),
+            app_name: app_name.clone(),
+        },
+    );
 
     let mut child = spawn_app(&project_dir, &app_clone).await?;
     let pid = child.id().ok_or("failed to get child PID")?;
@@ -151,7 +136,14 @@ pub(crate) async fn spawn_and_monitor_app(
     }
 
     state::write_pid_file(&project_dir, config_path, pid);
-    push_app_event(&log_buffer, "pid", Some(("pid", serde_json::json!(pid))));
+    broadcast_dev_event(
+        &state,
+        DevEvent::AppPid {
+            config_path: config_path.to_string(),
+            app_name: app_name.clone(),
+            pid,
+        },
+    );
 
     let state_for_monitor = state.clone();
     let config_for_monitor = config_path.to_string();
@@ -175,7 +167,7 @@ pub(crate) async fn spawn_and_monitor_app(
                 "signal".to_string()
             });
 
-        let still_current = {
+        let (still_current, exit_app_name) = {
             let mut s = state_for_monitor.lock().unwrap();
             let current = s
                 .apps
@@ -183,6 +175,12 @@ pub(crate) async fn spawn_and_monitor_app(
                 .and_then(|a| a.pid)
                 .map(|p| p == pid)
                 .unwrap_or(false);
+
+            let app_name = s
+                .apps
+                .get(&config_for_monitor)
+                .map(|a| a.name.clone())
+                .unwrap_or_default();
 
             if current {
                 if let Some(app) = s.apps.get_mut(&config_for_monitor) {
@@ -192,36 +190,40 @@ pub(crate) async fn spawn_and_monitor_app(
                 let route_id = format!("reg:{}", config_for_monitor);
                 s.routes.set_active(&route_id, false);
                 state::remove_pid_file(&dir_for_monitor, &config_for_monitor);
-                let app_name = s
-                    .apps
-                    .get(&config_for_monitor)
-                    .map(|a| a.name.clone())
-                    .unwrap_or_default();
                 s.events.broadcast(Response::Event {
                     event: DevEvent::AppStatusChanged {
                         config_path: config_for_monitor.clone(),
-                        app_name,
+                        app_name: app_name.clone(),
                         status: "idle".to_string(),
                     },
                 });
             }
-            current
+            (current, app_name)
         };
 
         if still_current {
             let msg = format!("app exited ({code_str})");
             push_scoped_log(&buf_for_monitor, "Fatal", "tako", &msg);
-            push_app_event(
-                &buf_for_monitor,
-                "exited",
-                Some(("message", serde_json::json!(msg))),
+            broadcast_dev_event(
+                &state_for_monitor,
+                DevEvent::AppProcessExited {
+                    config_path: config_for_monitor.clone(),
+                    app_name: exit_app_name,
+                    message: msg,
+                },
             );
 
             tracing::info!(config_path = %config_for_monitor, pid = pid, "app process exited, marking idle");
         }
     });
 
-    push_app_event(&log_buffer, "started", None);
+    broadcast_dev_event(
+        &state,
+        DevEvent::AppStarted {
+            config_path: config_path.to_string(),
+            app_name,
+        },
+    );
 
     Ok(pid)
 }
@@ -367,31 +369,41 @@ pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: Strin
                         .map(|c| format!("exit code {c}"))
                         .unwrap_or_else(|| "signal".to_string());
 
-                    let mut s = state.lock().unwrap();
-                    let still_current = s
-                        .apps
-                        .get(&config_path)
-                        .and_then(|a| a.pid)
-                        .map(|p| p == pid)
-                        .unwrap_or(false);
-                    if still_current {
-                        if let Some(rt) = s.apps.get_mut(&config_path) {
-                            rt.is_idle = true;
-                            rt.pid = None;
+                    let (still_current, exit_app_name) = {
+                        let mut s = state.lock().unwrap();
+                        let current = s
+                            .apps
+                            .get(&config_path)
+                            .and_then(|a| a.pid)
+                            .map(|p| p == pid)
+                            .unwrap_or(false);
+                        let app_name = s
+                            .apps
+                            .get(&config_path)
+                            .map(|a| a.name.clone())
+                            .unwrap_or_default();
+                        if current {
+                            if let Some(rt) = s.apps.get_mut(&config_path) {
+                                rt.is_idle = true;
+                                rt.pid = None;
+                            }
+                            let route_id = format!("reg:{}", config_path);
+                            s.routes.set_active(&route_id, false);
+                            state::remove_pid_file(&project_dir, &config_path);
                         }
-                        let route_id = format!("reg:{}", config_path);
-                        s.routes.set_active(&route_id, false);
-                        state::remove_pid_file(&project_dir, &config_path);
-                    }
-                    drop(s);
+                        (current, app_name)
+                    };
 
                     if still_current {
                         let msg = format!("app exited ({code_str})");
                         push_scoped_log(&log_buffer, "Fatal", "tako", &msg);
-                        push_app_event(
-                            &log_buffer,
-                            "exited",
-                            Some(("message", serde_json::json!(msg))),
+                        broadcast_dev_event(
+                            &state,
+                            DevEvent::AppProcessExited {
+                                config_path: config_path.clone(),
+                                app_name: exit_app_name,
+                                message: msg,
+                            },
                         );
                     }
                     tracing::info!(config_path = %config_path, project_dir = %project_dir, pid = pid, still_current = still_current, "wake-spawned process exited");

@@ -152,6 +152,33 @@ pub enum DevEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ca_url: Option<String>,
     },
+    AppLaunching {
+        config_path: String,
+        app_name: String,
+    },
+    AppPid {
+        config_path: String,
+        app_name: String,
+        pid: u32,
+    },
+    AppStarted {
+        config_path: String,
+        app_name: String,
+    },
+    AppReady {
+        config_path: String,
+        app_name: String,
+    },
+    AppProcessExited {
+        config_path: String,
+        app_name: String,
+        message: String,
+    },
+    AppError {
+        config_path: String,
+        app_name: String,
+        message: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -430,6 +457,43 @@ mod tests {
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+    }
+
+    #[test]
+    fn serde_roundtrip_app_lifecycle_events() {
+        for event in [
+            DevEvent::AppLaunching {
+                config_path: "/proj/tako.toml".to_string(),
+                app_name: "app".to_string(),
+            },
+            DevEvent::AppPid {
+                config_path: "/proj/tako.toml".to_string(),
+                app_name: "app".to_string(),
+                pid: 4242,
+            },
+            DevEvent::AppStarted {
+                config_path: "/proj/tako.toml".to_string(),
+                app_name: "app".to_string(),
+            },
+            DevEvent::AppReady {
+                config_path: "/proj/tako.toml".to_string(),
+                app_name: "app".to_string(),
+            },
+            DevEvent::AppProcessExited {
+                config_path: "/proj/tako.toml".to_string(),
+                app_name: "app".to_string(),
+                message: "exit code 1".to_string(),
+            },
+            DevEvent::AppError {
+                config_path: "/proj/tako.toml".to_string(),
+                app_name: "app".to_string(),
+                message: "spawn failed".to_string(),
+            },
+        ] {
+            let resp = Response::Event { event };
+            let json = serde_json::to_string(&resp).unwrap();
+            assert_eq!(serde_json::from_str::<Response>(&json).unwrap(), resp);
+        }
     }
 
     #[test]

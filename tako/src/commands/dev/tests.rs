@@ -414,10 +414,6 @@ fn stored_log_line_round_trips_json() {
     assert!(!encoded.contains(r#""s":"#));
     let decoded = parse_log_line(&encoded).unwrap();
 
-    let LogStreamEvent::Log(decoded) = decoded else {
-        panic!("expected log event");
-    };
-
     assert_eq!(decoded.timestamp, "12:03:07");
     assert_eq!(decoded.scope, "app");
     assert_eq!(decoded.message, "hello");
@@ -433,9 +429,6 @@ fn stored_log_line_round_trips_fatal_level() {
     };
     let encoded = serde_json::to_string(&line).unwrap();
     let decoded = parse_log_line(&encoded).unwrap();
-    let LogStreamEvent::Log(decoded) = decoded else {
-        panic!("expected log event");
-    };
     assert!(matches!(decoded.level, LogLevel::Fatal));
 }
 
@@ -444,41 +437,10 @@ fn stored_log_line_preserves_unrecognized_json_log_shape_as_message() {
     let raw_line = r#"{"h":12,"m":3,"s":7,"level":"Info","scope":"app","message":"hello"}"#;
     let decoded = parse_log_line(raw_line).unwrap();
 
-    let LogStreamEvent::Log(decoded) = decoded else {
-        panic!("expected log event");
-    };
-
     assert_ne!(decoded.timestamp, "12:03:07");
     assert!(matches!(decoded.level, LogLevel::Info));
     assert_eq!(decoded.scope, "app");
     assert_eq!(decoded.message, raw_line);
-}
-
-#[test]
-fn stored_log_line_parses_app_started_marker() {
-    let decoded = parse_log_line(r#"{"type":"app_event","event":"started"}"#).unwrap();
-    assert!(matches!(
-        decoded,
-        LogStreamEvent::AppEvent(DevEvent::AppStarted)
-    ));
-}
-
-#[test]
-fn stored_log_line_parses_app_ready_marker() {
-    let decoded = parse_log_line(r#"{"type":"app_event","event":"ready"}"#).unwrap();
-    assert!(matches!(
-        decoded,
-        LogStreamEvent::AppEvent(DevEvent::AppReady)
-    ));
-}
-
-#[test]
-fn stored_log_line_parses_app_pid_marker() {
-    let decoded = parse_log_line(r#"{"type":"app_event","event":"pid","pid":4242}"#).unwrap();
-    assert!(matches!(
-        decoded,
-        LogStreamEvent::AppEvent(DevEvent::AppPid(4242))
-    ));
 }
 
 #[test]

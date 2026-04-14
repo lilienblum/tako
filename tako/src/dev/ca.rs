@@ -414,7 +414,10 @@ impl LocalCAStore {
             }
         });
 
-        effective_trust_by_precedence(&domain_states)
+        match effective_trust_by_precedence(&domain_states) {
+            Some(explicit) => explicit,
+            None => security_verify_cert(&self.ca_cert_path),
+        }
     }
 
     /// Check if CA is trusted - Linux
@@ -649,15 +652,30 @@ enum TrustState {
     Denied,
 }
 
-fn effective_trust_by_precedence(states: &[TrustState]) -> bool {
+fn effective_trust_by_precedence(states: &[TrustState]) -> Option<bool> {
     for state in states {
         match state {
-            TrustState::Trusted => return true,
-            TrustState::Denied => return false,
+            TrustState::Trusted => return Some(true),
+            TrustState::Denied => return Some(false),
             TrustState::Unspecified => {}
         }
     }
-    false
+    None
+}
+
+#[cfg(target_os = "macos")]
+fn security_verify_cert(cert_path: &PathBuf) -> bool {
+    Command::new("security")
+        .args([
+            "verify-cert",
+            "-c",
+            cert_path.to_str().unwrap_or(""),
+            "-p",
+            "ssl",
+        ])
+        .output()
+        .map(|output| output.status.success())
+        .unwrap_or(false)
 }
 
 impl Default for LocalCAStore {
@@ -961,22 +979,74 @@ mod tests {
 
     #[test]
     fn effective_trust_prefers_first_explicit_result() {
-        assert!(effective_trust_by_precedence(&[
-            TrustState::Unspecified,
-            TrustState::Trusted
-        ]));
-        assert!(!effective_trust_by_precedence(&[
-            TrustState::Denied,
-            TrustState::Trusted
-        ]));
-        assert!(effective_trust_by_precedence(&[
-            TrustState::Trusted,
-            TrustState::Denied
-        ]));
-        assert!(!effective_trust_by_precedence(&[
-            TrustState::Unspecified,
-            TrustState::Unspecified
-        ]));
+        assert_eq!(
+            effective_trust_by_precedence(&[TrustState::Unspecified, TrustState::Trusted]),
+            Some(true)
+        );
+        assert_eq!(
+            effective_trust_by_precedence(&[TrustState::Denied, TrustState::Trusted]),
+            Some(false)
+        );
+        assert_eq!(
+            effective_trust_by_precedence(&[TrustState::Trusted, TrustState::Denied]),
+            Some(true)
+        );
+        assert_eq!(
+            effective_trust_by_precedence(&[TrustState::Unspecified, TrustState::Unspecified]),
+            None
+        );
+    }
+
+    #[test]
+    fn effective_trust_returns_none_when_only_unspecified() {
+        assert_eq!(
+            effective_trust_by_precedence(&[
+                TrustState::Unspecified,
+                TrustState::Unspecified,
+                TrustState::Unspecified
+            ]),
+            None
+        );
+    }
+
+    #[test]
+    fn effective_trust_returns_some_for_explicit_values() {
+        assert_eq!(
+            effective_trust_by_precedence(&[
+                TrustState::Unspecified,
+                TrustState::Trusted,
+                TrustState::Denied
+            ]),
+            Some(true)
+        );
+        assert_eq!(
+            effective_trust_by_precedence(&[
+                TrustState::Unspecified,
+                TrustState::Denied,
+                TrustState::Trusted
+            ]),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn effective_trust_prefers_first_explicit_result_legacy_assertions() {
+        assert_eq!(
+            effective_trust_by_precedence(&[TrustState::Unspecified, TrustState::Trusted]),
+            Some(true)
+        );
+        assert_eq!(
+            effective_trust_by_precedence(&[TrustState::Denied, TrustState::Trusted]),
+            Some(false)
+        );
+        assert_eq!(
+            effective_trust_by_precedence(&[TrustState::Trusted, TrustState::Denied]),
+            Some(true)
+        );
+        assert_eq!(
+            effective_trust_by_precedence(&[TrustState::Unspecified, TrustState::Unspecified]),
+            None
+        );
     }
 
     fn generate_custom_ca(common_name: &str, organization: &str) -> LocalCA {

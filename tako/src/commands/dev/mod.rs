@@ -23,7 +23,7 @@ use std::time::Duration;
 use crate::app::resolve_app_name_from_config_path;
 use crate::build::{PresetGroup, apply_adapter_base_runtime_defaults, js};
 use crate::dev::LocalCA;
-use client::{ConnectedDevClient, LogStreamEvent, parse_log_line, run_connected_dev_client};
+use client::{ConnectedDevClient, parse_log_line, run_connected_dev_client};
 #[cfg(test)]
 use prepare::local::tcp_probe;
 use prepare::local::{local_https_probe_host, wait_for_https_host_reachable_via_ip};
