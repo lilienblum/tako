@@ -255,12 +255,7 @@ fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String
 
 /// Build the extra CLI args for the entrypoint (internal protocol, not env vars).
 fn build_instance_args(instance: &Instance) -> Vec<String> {
-    vec![
-        "--instance".to_string(),
-        instance.id.clone(),
-        "--version".to_string(),
-        instance.build_version().to_string(),
-    ]
+    vec!["--instance".to_string(), instance.id.clone()]
 }
 
 /// Resolve a binary name against the app's PATH env, falling back to the bare name.
@@ -715,7 +710,7 @@ mod tests {
     }
 
     #[test]
-    fn build_instance_args_has_instance_and_version() {
+    fn build_instance_args_has_instance_only() {
         let (instance_tx, _instance_rx) = mpsc::channel(4);
         let app = App::new(
             AppConfig {
@@ -731,8 +726,7 @@ mod tests {
         let args = build_instance_args(&instance);
         assert!(args.contains(&"--instance".to_string()));
         assert!(args.contains(&instance.id));
-        assert!(args.contains(&"--version".to_string()));
-        assert!(args.contains(&"v42".to_string()));
+        assert_eq!(args.len(), 2);
     }
 
     #[test]
@@ -792,8 +786,7 @@ mod tests {
         let args = build_instance_args(&instance);
         assert!(!args.contains(&"--socket".to_string()));
         assert!(args.contains(&"--instance".to_string()));
-        assert!(args.contains(&"--version".to_string()));
-        assert!(args.contains(&"v42".to_string()));
+        assert_eq!(args.len(), 2);
     }
 
     #[tokio::test]

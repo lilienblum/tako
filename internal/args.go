@@ -8,7 +8,7 @@ import (
 type Config struct {
 	// InstanceID is the 8-char instance identifier assigned by tako-server.
 	InstanceID string
-	// Version is the deploy version string.
+	// Version is the deploy version string from TAKO_BUILD.
 	Version string
 	// Host is the address to bind to. Defaults to "0.0.0.0".
 	Host string
@@ -31,7 +31,7 @@ func ParseConfigFrom(args []string, getenv func(string) string) Config {
 		Port: "3000",
 	}
 
-	// Parse CLI args: --instance <id> --version <ver>
+	// Parse CLI args: --instance <id>
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--instance":
@@ -39,14 +39,10 @@ func ParseConfigFrom(args []string, getenv func(string) string) Config {
 				i++
 				cfg.InstanceID = args[i]
 			}
-		case "--version":
-			if i+1 < len(args) {
-				i++
-				cfg.Version = args[i]
-			}
 		}
 	}
 
+	cfg.Version = getenv("TAKO_BUILD")
 	if host := getenv("HOST"); host != "" {
 		cfg.Host = host
 	}

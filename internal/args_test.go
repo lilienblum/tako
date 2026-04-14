@@ -4,9 +4,16 @@ import (
 	"testing"
 )
 
-func TestParseConfigFromArgs(t *testing.T) {
-	args := []string{"--instance", "abcd1234", "--version", "v1.0"}
-	cfg := ParseConfigFrom(args, func(string) string { return "" })
+func TestParseConfigFromArgsAndEnv(t *testing.T) {
+	args := []string{"--instance", "abcd1234"}
+	cfg := ParseConfigFrom(args, func(key string) string {
+		switch key {
+		case "TAKO_BUILD":
+			return "v1.0"
+		default:
+			return ""
+		}
+	})
 
 	if cfg.InstanceID != "abcd1234" {
 		t.Errorf("InstanceID = %q, want %q", cfg.InstanceID, "abcd1234")

@@ -5,7 +5,7 @@
  * and only provides the server binding layer.
  *
  * CLI args (appended by tako-server):
- *   <main> --instance <id> --version <ver>
+ *   <main> --instance <id>
  */
 
 import { readFileSync, closeSync, fstatSync, writeSync } from "node:fs";
@@ -59,24 +59,19 @@ function signalReadyPort(port: number): void {
 interface ParsedArgs {
   main: string;
   instance: string;
-  version: string;
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  // argv: [runtime, entrypoint, main, --instance, id, --version, ver]
+  // argv: [runtime, entrypoint, main, --instance, id]
   // Skip argv[0] (runtime) and argv[1] (entrypoint script)
   const args = argv.slice(2);
   let main = "";
   let instance = "unknown";
-  let version = "unknown";
 
   for (let i = 0; i < args.length; i++) {
     switch (args[i]) {
       case "--instance":
         instance = args[++i] ?? "unknown";
-        break;
-      case "--version":
-        version = args[++i] ?? "unknown";
         break;
       default:
         if (!main && !args[i]?.startsWith("--")) {
@@ -86,7 +81,7 @@ function parseArgs(argv: string[]): ParsedArgs {
     }
   }
 
-  return { main, instance, version };
+  return { main, instance };
 }
 
 export function createEntrypoint() {
@@ -103,7 +98,7 @@ export function createEntrypoint() {
     return {
       status: currentStatus,
       app: "app",
-      version: parsed.version,
+      version: process.env["TAKO_BUILD"] || "unknown",
       instance_id: parsed.instance,
       pid: process.pid,
       uptime_seconds: Math.floor((Date.now() - startedAt) / 1000),
@@ -120,7 +115,7 @@ export function createEntrypoint() {
     ) => number | void | Promise<number | void>,
   ): Promise<void> {
     if (!parsed.main) {
-      console.error("Usage: <runtime> entrypoint <main> [--instance <id>] [--version <ver>]");
+      console.error("Usage: <runtime> entrypoint <main> [--instance <id>]");
       process.exit(1);
     }
 

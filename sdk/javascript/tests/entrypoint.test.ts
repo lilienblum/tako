@@ -44,7 +44,7 @@ test("createEntrypoint installs frozen globalThis.Tako visible to imported user 
       "utf8",
     );
 
-    process.argv = ["node", "entrypoint", entryModule, "--instance", "i-1", "--version", "v-1"];
+    process.argv = ["node", "entrypoint", entryModule, "--instance", "i-1"];
 
     const { run } = createEntrypoint();
     await run(async () => 4321);
@@ -161,7 +161,7 @@ test("createEntrypoint awaits optional ready hook before starting server", async
       "utf8",
     );
 
-    process.argv = ["node", "entrypoint", entryModule, "--instance", "i-1", "--version", "v-1"];
+    process.argv = ["node", "entrypoint", entryModule, "--instance", "i-1"];
 
     const { run } = createEntrypoint();
     await run(async () => {
@@ -173,6 +173,39 @@ test("createEntrypoint awaits optional ready hook before starting server", async
   } finally {
     delete (globalThis as typeof globalThis & { __takoEntrypointLifecycle?: string[] })
       .__takoEntrypointLifecycle;
+    await rm(rootDir, { recursive: true, force: true });
+  }
+});
+
+test("internal status uses TAKO_BUILD and instance arg for runtime identity", async () => {
+  const rootDir = await mkdtemp(path.join(tmpdir(), "tako-status-"));
+  const entryModule = path.join(rootDir, "entry.mjs");
+
+  try {
+    process.env["TAKO_BUILD"] = "build-123";
+    process.env["TAKO_INTERNAL_TOKEN"] = "token-123";
+    await writeFile(entryModule, 'export default () => new Response("ok");\n', "utf8");
+
+    process.argv = ["node", "entrypoint", entryModule, "--instance", "i-1"];
+
+    const { run } = createEntrypoint();
+    await run(async (handleRequest) => {
+      const response = await handleRequest(
+        new Request("http://tako.internal/status", {
+          headers: { "x-tako-internal-token": "token-123" },
+        }),
+      );
+      const body = (await response.json()) as {
+        version: string;
+        instance_id: string;
+      };
+      expect(body.version).toBe("build-123");
+      expect(body.instance_id).toBe("i-1");
+      return 4321;
+    });
+  } finally {
+    delete process.env["TAKO_BUILD"];
+    delete process.env["TAKO_INTERNAL_TOKEN"];
     await rm(rootDir, { recursive: true, force: true });
   }
 });
