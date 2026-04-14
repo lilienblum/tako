@@ -83,7 +83,6 @@ void run(
       server.listen(port, host, () => {
         const addr = server.address();
         const actualPort = typeof addr === "object" && addr ? addr.port : port;
-        console.log(`Application listening on http://${host}:${actualPort}`);
         resolve(actualPort);
       });
 

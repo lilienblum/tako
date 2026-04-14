@@ -288,7 +288,7 @@ App instances do not connect to this management socket. Instead, `tako-server` m
 
 ### Instance Transport
 
-Deployed app instances bind to `127.0.0.1` on an OS-assigned port (`PORT=0`, `HOST=127.0.0.1`). The SDK signals readiness to `tako-server` by printing a `TAKO:READY:<port>` line on stdout once listening. The server then routes traffic and health probes to that loopback endpoint.
+Deployed app instances bind to `127.0.0.1` on an OS-assigned port (`PORT=0`, `HOST=127.0.0.1`). The SDK signals readiness to `tako-server` by writing the bound port to fd 4 once listening. The server then routes traffic and health probes to that loopback endpoint.
 
 Secrets are passed to instances via file descriptor 3 at spawn time -- the server writes JSON-serialized secrets to a pipe, and the child process reads fd 3 before any user code runs. Secrets never touch disk as plaintext.
 

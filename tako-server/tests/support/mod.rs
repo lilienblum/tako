@@ -287,11 +287,22 @@ impl Drop for TestServer {
 
 fn bun_app_source(body: &str) -> String {
     format!(
-        r#"const port = Number(process.env.PORT ?? "3000");
+        r#"import {{ closeSync, fstatSync, writeSync }} from "node:fs";
+
+const port = Number(process.env.PORT ?? "3000");
 const host = process.env.HOST ?? "127.0.0.1";
 const internalToken = process.env.TAKO_INTERNAL_TOKEN;
 if (!internalToken) {{
   throw new Error("TAKO_INTERNAL_TOKEN is required");
+}}
+
+function signalReady(port) {{
+  try {{
+    const stat = fstatSync(4);
+    if (!stat.isFIFO()) return;
+    writeSync(4, `${{port}}\n`);
+    closeSync(4);
+  }} catch {{}}
 }}
 
 const server = Bun.serve({{
@@ -321,8 +332,7 @@ const server = Bun.serve({{
   }},
 }});
 
-// Signal readiness to tako-server (SDK protocol)
-process.stdout.write(`TAKO:READY:${{server.port}}\n`);
+signalReady(server.port);
 "#
     )
 }

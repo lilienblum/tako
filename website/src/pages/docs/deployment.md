@@ -344,7 +344,7 @@ Instances are never stopped while serving in-flight requests.
 
 ### Upstream transport
 
-Production instances bind to `127.0.0.1` on an OS-assigned port. The SDK signals readiness to `tako-server` via a `TAKO:READY:<port>` line on stdout once listening, and the server routes traffic to that loopback endpoint.
+Production instances bind to `127.0.0.1` on an OS-assigned port. The SDK signals readiness to `tako-server` by writing the bound port to fd 4 once listening, and the server routes traffic to that loopback endpoint.
 
 ## Secrets management
 

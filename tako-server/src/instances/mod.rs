@@ -285,39 +285,8 @@ impl Instance {
         }
     }
 
-    /// Take the stdout pipe from the child process for startup readiness reading.
-    pub fn take_stdout(&self) -> Option<tokio::process::ChildStdout> {
-        let mut process = self.process.write();
-        process.as_mut().and_then(|child| child.stdout.take())
-    }
-
-    /// Drain remaining stdout lines (after readiness) and stderr,
-    /// forwarding output to the app logger.
-    pub fn drain_remaining_stdout<R: tokio::io::AsyncRead + Unpin + Send + 'static>(
-        &self,
-        lines: tokio::io::Lines<tokio::io::BufReader<R>>,
-    ) {
-        let lh = self.log_handle.clone();
-        let id = self.id.clone();
-        // Forward remaining buffered stdout lines
-        tokio::spawn(async move {
-            let reader = lines.into_inner();
-            log_pipe(reader, lh, id, LogStream::Stdout).await;
-        });
-        // Forward stderr
-        let mut process = self.process.write();
-        if let Some(ref mut child) = *process
-            && let Some(stderr) = child.stderr.take()
-        {
-            let lh2 = self.log_handle.clone();
-            let id2 = self.id.clone();
-            tokio::spawn(log_pipe(stderr, lh2, id2, LogStream::Stderr));
-        }
-    }
-
     /// Start forwarding stdout/stderr to the app logger.
-    /// Called after the instance becomes healthy — before this point, the pipes
-    /// are kept readable for startup_exit_detail error reporting.
+    /// Called after the instance becomes healthy.
     pub fn drain_pipes(&self) {
         let mut process = self.process.write();
         if let Some(ref mut child) = *process {

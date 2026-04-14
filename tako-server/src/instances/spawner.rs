@@ -16,8 +16,6 @@ use tokio::io::AsyncBufReadExt;
 use tokio::process::Command;
 use tokio::time::timeout;
 
-const READY_PREFIX: &str = "TAKO:READY:";
-
 /// Spawns and monitors app instances
 pub struct Spawner {
     /// UID/GID of the `tako-app` user for process isolation when running privileged (Unix only)
@@ -77,8 +75,9 @@ impl Spawner {
 
         let app_user = self.app_user;
 
-        let child = spawn_child_process(&config, &env, &extra_args, app_user, &config.secrets)
-            .map_err(InstanceError::from)?;
+        let (child, readiness_fd) =
+            spawn_child_process(&config, &env, &extra_args, app_user, &config.secrets)
+                .map_err(InstanceError::from)?;
 
         instance.set_process(child);
         instance.set_state(InstanceState::Starting);
@@ -92,15 +91,16 @@ impl Spawner {
             })
             .await;
 
-        // Wait for the SDK to signal readiness via stdout (TAKO:READY:<port>).
-        match timeout(config.startup_timeout, wait_for_ready(instance.clone())).await {
+        // Wait for the SDK to report the bound port on fd 4.
+        match timeout(
+            config.startup_timeout,
+            wait_for_ready(instance.clone(), readiness_fd),
+        )
+        .await
+        {
             Ok(Ok(())) => {
                 instance.set_state(InstanceState::Healthy);
 
-                // Now that the instance is healthy, drain stdout/stderr so the
-                // OS pipe buffer never fills (which would block the app process).
-                // We keep pipes open during startup so startup_exit_detail can
-                // read error output if the process crashes before becoming healthy.
                 instance.drain_pipes();
 
                 tracing::info!(
@@ -175,65 +175,49 @@ impl Spawner {
     }
 }
 
-/// Wait for the SDK to signal readiness via a `TAKO:READY:<port>` line on stdout.
+/// Wait for the SDK to report the bound port on fd 4.
 /// Sets the instance upstream once the port is learned.
-async fn wait_for_ready(instance: Arc<Instance>) -> Result<(), InstanceError> {
-    let stdout = instance
-        .take_stdout()
-        .ok_or_else(|| InstanceError::HealthCheckFailed("no stdout pipe available".to_string()))?;
-    let mut lines = tokio::io::BufReader::new(stdout).lines();
-    const MAX_STARTUP_OUTPUT_LINES: usize = 500;
-    let mut startup_output = Vec::new();
+async fn wait_for_ready(
+    instance: Arc<Instance>,
+    readiness_fd: Option<OwnedFd>,
+) -> Result<(), InstanceError> {
+    let readiness_fd = readiness_fd.ok_or_else(|| {
+        InstanceError::HealthCheckFailed("no readiness pipe available".to_string())
+    })?;
+    let readiness_file = tokio::fs::File::from_std(std::fs::File::from(readiness_fd));
+    let mut lines = tokio::io::BufReader::new(readiness_file).lines();
 
     loop {
         tokio::select! {
             line = lines.next_line() => {
                 match line {
                     Ok(Some(line)) => {
-                        if let Some(port_str) = line.strip_prefix(READY_PREFIX) {
-                            let port: u16 = port_str.trim().parse().map_err(|_| {
-                                InstanceError::HealthCheckFailed(
-                                    format!("invalid port in readiness signal: {line}"),
-                                )
-                            })?;
-                            instance.set_port(port);
-                            instance.set_state(InstanceState::Ready);
-                            // Spawn a drain task for remaining stdout
-                            instance.drain_remaining_stdout(lines);
-                            return Ok(());
-                        }
-                        if startup_output.len() < MAX_STARTUP_OUTPUT_LINES {
-                            startup_output.push(line);
-                        }
+                        let port: u16 = line.trim().parse().map_err(|_| {
+                            InstanceError::HealthCheckFailed(
+                                format!("invalid port in readiness signal: {line}"),
+                            )
+                        })?;
+                        instance.set_port(port);
+                        instance.set_state(InstanceState::Ready);
+                        return Ok(());
                     }
                     Ok(None) => {
-                        // stdout closed — process exited
-                        let detail = if startup_output.is_empty() {
-                            startup_exit_detail(instance).await
+                        let detail = if instance.is_alive().await {
+                            "Process closed readiness pipe before reporting a port".to_string()
                         } else {
-                            format!(
-                                "Process exited during startup: {}",
-                                startup_output.join("\n"),
-                            )
+                            startup_exit_detail(instance).await
                         };
                         return Err(InstanceError::HealthCheckFailed(detail));
                     }
                     Err(error) => {
                         return Err(InstanceError::HealthCheckFailed(
-                            format!("failed to read stdout: {error}"),
+                            format!("failed to read readiness pipe: {error}"),
                         ));
                     }
                 }
             }
             _ = check_process_alive(&instance) => {
-                let detail = if startup_output.is_empty() {
-                    startup_exit_detail(instance).await
-                } else {
-                    format!(
-                        "Process exited during startup: {}",
-                        startup_output.join("\n"),
-                    )
-                };
+                let detail = startup_exit_detail(instance).await;
                 return Err(InstanceError::HealthCheckFailed(detail));
             }
         }
@@ -255,7 +239,7 @@ fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String
     let mut env = config.env_vars.clone();
 
     // PORT=0 tells the SDK to bind to an OS-assigned port and report it back
-    // via the TAKO:READY:<port> stdout protocol.
+    // over the fd 4 readiness pipe.
     env.insert("PORT".to_string(), "0".to_string());
     env.insert("HOST".to_string(), "127.0.0.1".to_string());
     env.insert(
@@ -327,6 +311,16 @@ fn create_secrets_pipe(secrets: &HashMap<String, String>) -> std::io::Result<Own
     Ok(read_end)
 }
 
+#[cfg(unix)]
+fn create_fd_pipe() -> std::io::Result<(OwnedFd, OwnedFd)> {
+    let mut fds = [0i32; 2];
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+}
+
 fn build_child_command(
     config: &AppConfig,
     env: &HashMap<String, String>,
@@ -334,6 +328,7 @@ fn build_child_command(
     app_user: Option<(u32, u32)>,
     use_app_user: bool,
     secrets_fd: Option<RawFd>,
+    readiness_fd: Option<RawFd>,
 ) -> std::io::Result<Command> {
     // Resolve the binary using the app's env PATH (not the server's PATH).
     let binary = resolve_binary_from_env(&config.command[0], env);
@@ -353,11 +348,7 @@ fn build_child_command(
         .stderr(std::process::Stdio::piped())
         .kill_on_drop(true);
 
-    // Pass secrets to the child via fd 3 (Tako runtime ABI).
-    // pre_exec runs in the child after fork, before exec — dup2 the pipe
-    // read end to fd 3 so it survives exec (no CLOEXEC).
-    // When there are no secrets, close fd 3 so stray inherited fds
-    // don't cause the entrypoint to block.
+    // Pass internal runtime ABI pipes to the child.
     #[cfg(unix)]
     unsafe {
         child_cmd.pre_exec(move || {
@@ -370,6 +361,16 @@ fn build_child_command(
                 }
             } else {
                 libc::close(3);
+            }
+            if let Some(fd) = readiness_fd {
+                if fd != 4 {
+                    if libc::dup2(fd, 4) == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    libc::close(fd);
+                }
+            } else {
+                libc::close(4);
             }
             Ok(())
         });
@@ -391,7 +392,7 @@ fn spawn_child_process(
     extra_args: &[String],
     app_user: Option<(u32, u32)>,
     secrets: &HashMap<String, String>,
-) -> std::io::Result<tokio::process::Child> {
+) -> std::io::Result<(tokio::process::Child, Option<OwnedFd>)> {
     // Create a pipe with secrets JSON for the child to read on fd 3.
     // The OwnedFd must stay alive until after spawn (fork copies the fd table).
     #[cfg(unix)]
@@ -405,23 +406,64 @@ fn spawn_child_process(
     #[cfg(not(unix))]
     let raw_fd = None;
 
-    let mut child_cmd = build_child_command(config, env, extra_args, app_user, true, raw_fd)?;
+    #[cfg(unix)]
+    let (readiness_read_end, readiness_write_end) = create_fd_pipe()?;
+    #[cfg(unix)]
+    let readiness_raw_fd = Some(readiness_write_end.as_raw_fd());
+    #[cfg(not(unix))]
+    let readiness_raw_fd = None;
+
+    let mut child_cmd = build_child_command(
+        config,
+        env,
+        extra_args,
+        app_user,
+        true,
+        raw_fd,
+        readiness_raw_fd,
+    )?;
     match child_cmd.spawn() {
-        Ok(child) => Ok(child),
+        Ok(child) => {
+            #[cfg(unix)]
+            {
+                drop(readiness_write_end);
+                Ok((child, Some(readiness_read_end)))
+            }
+            #[cfg(not(unix))]
+            {
+                Ok((child, None))
+            }
+        }
         Err(error) if should_retry_spawn_without_app_user(&error, app_user) => {
             tracing::warn!(
                 error = %error,
                 "Failed to switch to tako-app user; retrying spawn as service user"
             );
             // Pipe is still valid — fork either failed or the child exited before reading.
-            let mut fallback =
-                build_child_command(config, env, extra_args, app_user, false, raw_fd)?;
-            fallback.spawn()
+            let mut fallback = build_child_command(
+                config,
+                env,
+                extra_args,
+                app_user,
+                false,
+                raw_fd,
+                readiness_raw_fd,
+            )?;
+            let child = fallback.spawn()?;
+            #[cfg(unix)]
+            {
+                drop(readiness_write_end);
+                Ok((child, Some(readiness_read_end)))
+            }
+            #[cfg(not(unix))]
+            {
+                Ok((child, None))
+            }
         }
         Err(error) => Err(error),
     }
-    // secrets_pipe dropped here — parent's copy of the read end is closed.
-    // The child already has its own copy from fork.
+    // The parent-owned pipe ends drop here after spawn, leaving the child with
+    // only the ABI fds it needs across exec.
 }
 
 async fn probe_endpoint_tcp(
@@ -913,5 +955,75 @@ mod tests {
 
         let spawner = Spawner::new();
         assert!(spawner.health_check(&app, &instance).await);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn wait_for_ready_reads_port_from_fd4_pipe() {
+        use std::io::Write;
+
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+
+        let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let app = App::new(
+            AppConfig {
+                name: "test-app".to_string(),
+                ..Default::default()
+            },
+            instance_tx,
+            noop_log_handle(),
+        );
+        let instance = app.allocate_instance();
+
+        tokio::task::spawn_blocking(move || {
+            let mut writer = std::fs::File::from(write_end);
+            writer.write_all(b"43123\n").unwrap();
+        })
+        .await
+        .unwrap();
+
+        wait_for_ready(instance.clone(), Some(read_end))
+            .await
+            .unwrap();
+
+        assert_eq!(instance.port(), Some(43123));
+        assert_eq!(instance.state(), InstanceState::Ready);
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn wait_for_ready_rejects_invalid_fd4_payload() {
+        use std::io::Write;
+
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+
+        let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let app = App::new(
+            AppConfig {
+                name: "test-app".to_string(),
+                ..Default::default()
+            },
+            instance_tx,
+            noop_log_handle(),
+        );
+        let instance = app.allocate_instance();
+
+        tokio::task::spawn_blocking(move || {
+            let mut writer = std::fs::File::from(write_end);
+            writer.write_all(b"not-a-port\n").unwrap();
+        })
+        .await
+        .unwrap();
+
+        let err = wait_for_ready(instance, Some(read_end)).await.unwrap_err();
+        assert!(err.to_string().contains("invalid port"));
     }
 }

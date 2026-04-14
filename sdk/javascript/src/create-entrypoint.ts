@@ -8,7 +8,7 @@
  *   <main> --instance <id> --version <ver>
  */
 
-import { readFileSync, closeSync, fstatSync } from "node:fs";
+import { readFileSync, closeSync, fstatSync, writeSync } from "node:fs";
 import { handleTakoEndpoint } from "./endpoints";
 import { injectSecrets } from "./secrets";
 import { Tako } from "./tako";
@@ -38,6 +38,22 @@ function readSecretsFromFd(): void {
   } catch {
     // Any error (EBADF, ENXIO, etc.) = not running under Tako
   }
+}
+
+export function signalReadyPortOnFd(fd: number, port: number): void {
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFIFO()) return;
+
+    writeSync(fd, `${port}\n`);
+    closeSync(fd);
+  } catch {
+    // Not running under Tako or readiness pipe unavailable.
+  }
+}
+
+function signalReadyPort(port: number): void {
+  signalReadyPortOnFd(4, port);
 }
 
 interface ParsedArgs {
@@ -107,8 +123,6 @@ export function createEntrypoint() {
       process.exit(1);
     }
 
-    console.log("Starting application");
-
     let userFetch: FetchFunction;
     let userReady: (() => void | Promise<void>) | null = null;
     try {
@@ -174,12 +188,9 @@ export function createEntrypoint() {
 
     const actualPort = await startServer(handleRequest);
     currentStatus = "healthy";
-    // Signal readiness to tako-server with the actual port the app bound to.
-    // The server watches stdout for this line during startup.
     if (actualPort != null) {
-      process.stdout.write(`TAKO:READY:${actualPort}\n`);
+      signalReadyPort(actualPort);
     }
-    console.log("Entrypoint initialized successfully");
   }
 
   return { run, host, port, setDraining };

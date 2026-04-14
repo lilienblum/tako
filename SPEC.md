@@ -138,7 +138,7 @@ Each `[envs.*]` block can set `log_level` to control the application's log verbo
 - Server membership is declared per environment with `[envs.<name>].servers`.
 - The same server name may be assigned to multiple non-development environments in one project. Each environment deploys to its own server-side app identity and filesystem path under `/opt/tako/apps/{app}/{env}`.
 - `development` is for `tako dev`; `servers` declared there are ignored by deploy validation.
-- Deployed app instances bind to `127.0.0.1` on an OS-assigned port. The SDK signals readiness to `tako-server` via a `TAKO:READY:<port>` line on stdout once listening. The server then routes traffic to that loopback endpoint.
+- Deployed app instances bind to `127.0.0.1` on an OS-assigned port. The SDK signals readiness to `tako-server` by writing the bound port to fd 4 (file descriptor 4) once listening. The server then routes traffic to that loopback endpoint.
 - `tako dev` resolves the dev command with this priority:
   1. `dev` in `tako.toml` (user override, e.g. `dev = ["custom", "cmd"]`)
   2. Preset `dev` command (e.g. vite preset uses `vite dev`)
@@ -1188,7 +1188,7 @@ Reference scripts in this repo:
 
 - TCP over loopback
   - `tako-server` sets `PORT=0` and `HOST=127.0.0.1`; the SDK binds to an OS-assigned port
-  - The SDK signals readiness via a `TAKO:READY:<port>` line on stdout
+  - The SDK signals readiness by writing the bound port to fd 4
   - `tako-server` also sets a per-instance `TAKO_INTERNAL_TOKEN` for health probing
   - Used by: tako-server to proxy HTTP requests and probe health
 
@@ -1197,7 +1197,7 @@ Reference scripts in this repo:
 | Name                  | Used by         | Meaning                                              | Typical source                                                                                                                   |
 | --------------------- | --------------- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 | `ENV`                 | app             | Active environment name                              | Set by Tako in both dev and deploy (`development`, `production`, `staging`, etc.).                                               |
-| `PORT`                | app             | Listen port for HTTP server                          | Set by `tako dev` for the local app process; `0` on deploys (SDK binds to OS-assigned port and reports via stdout).              |
+| `PORT`                | app             | Listen port for HTTP server                          | Set by `tako dev` for the local app process; `0` on deploys (SDK binds to an OS-assigned port and reports it via fd 4).          |
 | `HOST`                | app             | Listen host for HTTP server                          | `127.0.0.1` in both dev and deploy.                                                                                              |
 | `TAKO_ENV`            | app             | Environment name                                     | Set during deploy manifest generation (`production`, `staging`, etc.).                                                           |
 | `TAKO_DATA_DIR`       | app             | Persistent app-owned runtime data directory          | Set by Tako in both dev and deploy; points to the app's `data/app` directory.                                                    |
@@ -1358,8 +1358,8 @@ Server-side validation on `deploy` and app-scoped commands:
 **Instance communication model:**
 
 - App processes do not connect to the management socket.
-- `tako-server` controls lifecycle directly (spawn/stop/rolling update). Startup readiness is signaled by the SDK via a `TAKO:READY:<port>` stdout line; ongoing health is verified via active HTTP probing.
-- App processes receive `PORT=0` and `HOST=127.0.0.1`, bind to an OS-assigned loopback port, and signal the actual port via stdout. The server then routes traffic and health probes to that endpoint.
+- `tako-server` controls lifecycle directly (spawn/stop/rolling update). Startup readiness is signaled by the SDK via fd 4; ongoing health is verified via active HTTP probing.
+- App processes receive `PORT=0` and `HOST=127.0.0.1`, bind to an OS-assigned loopback port, and write the actual port to fd 4. The server then routes traffic and health probes to that endpoint.
 - Secrets are passed to instances via fd 3 (file descriptor 3) at spawn time. The server creates a pipe, writes JSON-serialized secrets to the write end, and the child process reads fd 3 at startup before any user code runs. EBADF on fd 3 means the process is not running under Tako (dev mode).
 - Secret updates (`update_secrets` command) store new secrets in SQLite and trigger a rolling restart; fresh instances receive updated secrets via fd 3.
 

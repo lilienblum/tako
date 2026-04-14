@@ -12,7 +12,6 @@ void run((handleRequest) => {
   const server = Deno.serve({ hostname: host, port }, handleRequest);
   // @ts-ignore - Deno server addr
   const actualPort: number = server.addr?.port ?? port;
-  console.log(`Application listening on http://${host}:${actualPort}`);
 
   // @ts-ignore - Deno global
   Deno.addSignalListener?.("SIGTERM", () => {

@@ -151,13 +151,30 @@ func Listener() (net.Listener, error) {
 		return nil, fmt.Errorf("tako: failed to listen on %s: %w", addr, err)
 	}
 
-	// Signal readiness to tako-server with the actual port the app bound to.
-	// The server watches stdout for this line during startup.
 	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
-		fmt.Fprintf(os.Stdout, "TAKO:READY:%d\n", tcpAddr.Port)
+		signalReadyPort(tcpAddr.Port)
 	}
 
 	return ln, nil
+}
+
+func signalReadyPort(port int) {
+	signalReadyPortToFD(port, 4)
+}
+
+func signalReadyPortToFD(port int, fd uintptr) {
+	ready := os.NewFile(fd, "tako-ready")
+	if ready == nil {
+		return
+	}
+	defer ready.Close()
+
+	info, err := ready.Stat()
+	if err != nil || info.Mode()&os.ModeNamedPipe == 0 {
+		return
+	}
+
+	_, _ = fmt.Fprintf(ready, "%d\n", port)
 }
 
 // InstanceID returns the Tako instance identifier assigned by tako-server.
