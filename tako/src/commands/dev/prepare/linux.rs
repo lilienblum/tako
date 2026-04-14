@@ -580,7 +580,7 @@ pub(crate) fn ensure_installed() -> Result<(), Box<dyn std::error::Error>> {
 
     match plan {
         LinuxRepairPlan::SetupAll => {
-            crate::output::info("Setting up loopback alias and port redirects (sudo)...");
+            crate::output::info("Setting up loopback alias and port redirects (sudo)…");
             setup_loopback_alias()?;
             setup_iptables_redirects()?;
 
@@ -614,7 +614,7 @@ pub(crate) fn ensure_installed() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         LinuxRepairPlan::RepairRedirects => {
-            crate::output::info("Restoring port redirect rules (sudo)...");
+            crate::output::info("Restoring port redirect rules (sudo)…");
             setup_loopback_alias()?;
             setup_iptables_redirects()?;
             crate::output::success("Port redirect rules restored.");

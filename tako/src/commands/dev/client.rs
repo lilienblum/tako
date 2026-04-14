@@ -6,6 +6,7 @@ use tokio::sync::watch;
 #[cfg(test)]
 use tokio::time::timeout;
 
+use super::runner::bootstrap_dev_events;
 use super::{
     DevEvent, ScopedLog, infer_preset_name_from_ref, load_dev_tako_toml, output,
     resolve_dev_preset_ref,
@@ -88,9 +89,8 @@ pub(super) async fn run_connected_dev_client(
     let (log_tx, log_rx) = mpsc::channel::<ScopedLog>(1000);
     let (event_tx, event_rx) = mpsc::channel::<DevEvent>(32);
 
-    if let Some(pid) = session.pid {
-        let _ = event_tx.send(DevEvent::AppPid(pid)).await;
-        let _ = event_tx.send(DevEvent::AppReady).await;
+    for event in bootstrap_dev_events("running", session.pid) {
+        let _ = event_tx.send(event).await;
     }
     let (control_tx, mut control_rx) = mpsc::channel::<output::ControlCmd>(32);
     let (stop_tx, stop_rx) = watch::channel(false);

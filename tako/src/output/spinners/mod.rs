@@ -156,7 +156,7 @@ where
 /// Spinner that shows only if work takes >= 1s, then clears on completion.
 ///
 /// - Fast (<1s):  prints result directly, no spinner, no elapsed
-/// - Slow (≥1s):  `⠋ {loading}...` → `{success} (elapsed)` or `✘ {loading} failed`
+/// - Slow (≥1s):  `⠋ {loading}…` → `{success} (elapsed)` or `✘ {loading} failed`
 ///
 /// In verbose mode: prints start/end log lines instead of spinner.
 pub fn with_spinner<T, E, F>(loading: &str, success: &str, work: F) -> Result<T, E>
@@ -212,7 +212,7 @@ where
             shown_clone.store(true, Ordering::Relaxed);
             hide_cursor();
             register_active_progress_bar(&pb_clone);
-            pb_clone.set_message(format!("{loading_str}..."));
+            pb_clone.set_message(format!("{loading_str}…"));
             pb_clone.enable_steady_tick(Duration::from_millis(80));
         }
     });
@@ -310,7 +310,7 @@ where
     hide_cursor();
     let pb = ProgressBar::new_spinner();
     pb.set_style(spinner_style());
-    pb.set_message(format!("{loading}..."));
+    pb.set_message(format!("{loading}…"));
     pb.enable_steady_tick(Duration::from_millis(80));
     register_active_progress_bar(&pb);
 
@@ -351,7 +351,7 @@ where
     hide_cursor();
     let pb = ProgressBar::new_spinner();
     pb.set_style(spinner_style());
-    pb.set_message(format!("{message}..."));
+    pb.set_message(format!("{message}…"));
     pb.enable_steady_tick(Duration::from_millis(80));
     register_active_progress_bar(&pb);
 

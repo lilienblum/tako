@@ -18,7 +18,7 @@ fn should_retry_lan_bind(error: &std::io::Error) -> bool {
 async fn bind_lan_listener(addr: &str, label: &str) -> Result<tokio::net::TcpListener, String> {
     // Give the bind up to ~3s to succeed. Real-world LAN teardown + rebind can
     // race with the just-shut-down listener dropping its socket under load,
-    // and the client already shows "Starting LAN mode..." during this window
+    // and the client already shows "Starting LAN mode…" during this window
     // so the delay is explained.
     const MAX_ATTEMPTS: usize = 30;
     const RETRY_DELAY: Duration = Duration::from_millis(100);

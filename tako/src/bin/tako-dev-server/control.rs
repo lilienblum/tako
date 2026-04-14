@@ -750,13 +750,13 @@ async fn handle_toggle_lan(state: &Arc<Mutex<State>>, enabled: bool) -> Response
         // If the first bind attempt in the dev proxy succeeds, enable_lan
         // returns in ~5-20ms and the user never sees a progress line. The
         // retry loop only kicks in after a 100ms backoff on EADDRINUSE, so an
-        // 80ms delayed "Starting LAN mode..." log fires only when we hit the
+        // 80ms delayed "Starting LAN mode…" log fires only when we hit the
         // retry path and have a real 100ms+ wait to explain.
         let progress_buffers = log_buffers.clone();
         let progress_task = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(80)).await;
             for buffer in &progress_buffers {
-                push_scoped_log(buffer, "Info", "tako", "Starting LAN mode...");
+                push_scoped_log(buffer, "Info", "tako", "Starting LAN mode…");
             }
         });
 

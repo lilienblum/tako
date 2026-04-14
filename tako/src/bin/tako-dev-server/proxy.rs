@@ -303,7 +303,7 @@ impl ProxyHttp for DevProxy {
                     .write_response_header(Box::new(header), false)
                     .await?;
                 session
-                    .write_response_body(Some("Starting...".into()), true)
+                    .write_response_body(Some("Starting…".into()), true)
                     .await?;
                 return Ok(true);
             }

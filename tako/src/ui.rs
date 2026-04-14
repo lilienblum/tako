@@ -538,7 +538,7 @@ fn task_icon(state: &TaskState, frame_index: usize) -> &'static str {
 
 fn pending_task_label(label: &str, state: &TaskState) -> String {
     match state {
-        TaskState::Pending => format!("{label}..."),
+        TaskState::Pending => format!("{label}…"),
         TaskState::Running { .. } | TaskState::Cancelled { .. } => format!("{label}…"),
         _ => label.to_string(),
     }
@@ -748,7 +748,7 @@ mod tests {
         })];
 
         let lines = render_plain_lines(&tree);
-        assert_eq!(lines[0], "○ Checks...");
+        assert_eq!(lines[0], "○ Checks…");
         assert_eq!(lines[1], "  ✔ prod-a 2.0s");
         assert_eq!(lines[2], "  ✘ prod-b 1.0s");
         assert_eq!(lines[3], "    boom");
@@ -788,7 +788,7 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                "○ Deploying...".to_string(),
+                "○ Deploying…".to_string(),
                 String::new(),
                 "Operation cancelled".to_string()
             ]

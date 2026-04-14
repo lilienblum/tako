@@ -12,7 +12,7 @@ pub(crate) async fn certificate_renewal_task(acme_client: Arc<AcmeClient>, inter
 
     loop {
         tokio::time::sleep(interval).await;
-        tracing::info!("Checking for certificates needing renewal...");
+        tracing::info!("Checking for certificates needing renewal…");
 
         let results = acme_client.check_renewals().await;
         for result in results {

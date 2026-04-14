@@ -9,6 +9,14 @@ use tokio::sync::watch;
 use super::prepare::{DevSession, PrepareOutcome, prepare};
 use super::*;
 
+pub(super) fn bootstrap_dev_events(status: &str, pid: Option<u32>) -> Vec<DevEvent> {
+    match (status, pid) {
+        ("running", Some(pid)) => vec![DevEvent::AppPid(pid), DevEvent::AppReady],
+        ("idle" | "stopped", _) => vec![DevEvent::AppStopped],
+        _ => Vec::new(),
+    }
+}
+
 /// Run the dev server
 pub async fn stop(
     name: Option<String>,
@@ -136,6 +144,128 @@ pub async fn run(
 
     drop(reserve_listener);
 
+    {
+        let config_key = config_key.clone();
+        let event_tx = event_tx.clone();
+        let should_exit_tx = should_exit_tx.clone();
+        let log_tx = log_tx.clone();
+
+        let mut ev_rx = match crate::dev_server_client::subscribe_events().await {
+            Ok(rx) => Some(rx),
+            Err(e) => {
+                let _ = log_tx
+                    .send(ScopedLog::warn(
+                        "tako",
+                        format!("failed to subscribe to dev server events: {}", e),
+                    ))
+                    .await;
+                None
+            }
+        };
+
+        if let Some(mut ev_rx) = ev_rx.take() {
+            tokio::spawn(async move {
+                use crate::dev_server_client::DevServerEvent;
+                while let Some(ev) = ev_rx.recv().await {
+                    match ev {
+                        DevServerEvent::AppStatusChanged {
+                            ref config_path,
+                            ref status,
+                            ..
+                        } => {
+                            if config_path == &config_key && status == "stopped" {
+                                let _ = event_tx
+                                    .send(DevEvent::ExitWithMessage(
+                                        "stopped by another client".to_string(),
+                                    ))
+                                    .await;
+                                let _ = should_exit_tx.send(true);
+                                break;
+                            }
+                        }
+                        DevServerEvent::ClientConnected {
+                            ref config_path,
+                            client_id,
+                            ..
+                        } => {
+                            if config_path == &config_key {
+                                let _ = event_tx
+                                    .send(DevEvent::ClientConnected {
+                                        is_self: false,
+                                        client_id,
+                                    })
+                                    .await;
+                            }
+                        }
+                        DevServerEvent::ClientDisconnected {
+                            ref config_path,
+                            client_id,
+                            ..
+                        } => {
+                            if config_path == &config_key {
+                                let _ = event_tx
+                                    .send(DevEvent::ClientDisconnected { client_id })
+                                    .await;
+                            }
+                        }
+                        DevServerEvent::AppLaunching {
+                            ref config_path, ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppLaunching).await;
+                        }
+                        DevServerEvent::AppStarted {
+                            ref config_path, ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppStarted).await;
+                        }
+                        DevServerEvent::AppReady {
+                            ref config_path, ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppReady).await;
+                        }
+                        DevServerEvent::AppPid {
+                            ref config_path,
+                            pid,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppPid(pid)).await;
+                        }
+                        DevServerEvent::AppProcessExited {
+                            ref config_path,
+                            ref message,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx
+                                .send(DevEvent::AppProcessExited(message.clone()))
+                                .await;
+                        }
+                        DevServerEvent::AppError {
+                            ref config_path,
+                            ref message,
+                            ..
+                        } if config_path == &config_key => {
+                            let _ = event_tx.send(DevEvent::AppError(message.clone())).await;
+                        }
+                        DevServerEvent::LanModeChanged {
+                            enabled,
+                            ref lan_ip,
+                            ref ca_url,
+                        } => {
+                            let _ = event_tx
+                                .send(DevEvent::LanModeChanged {
+                                    enabled,
+                                    lan_ip: lan_ip.clone(),
+                                    ca_url: ca_url.clone(),
+                                })
+                                .await;
+                        }
+                        _ => {}
+                    }
+                }
+            });
+        }
+    }
+
     let reg_hosts = hosts_state.lock().await.clone();
     let env_snapshot = env_state.lock().await.clone();
     let reg_url = crate::dev_server_client::register_app(
@@ -245,7 +375,7 @@ pub async fn run(
 
     if verbose && !interactive {
         println!(
-            "Starting server at {}...",
+            "Starting server at {}…",
             dev_url(&primary_host, public_url_port)
         );
         println!("Press Ctrl+c or q to stop");
@@ -410,133 +540,12 @@ pub async fn run(
     }
 
     {
-        let config_key = config_key.clone();
-        let event_tx = event_tx.clone();
-        let should_exit_tx = should_exit_tx.clone();
-
-        let mut ev_rx = match crate::dev_server_client::subscribe_events().await {
-            Ok(rx) => Some(rx),
-            Err(e) => {
-                let _ = log_tx
-                    .send(ScopedLog::warn(
-                        "tako",
-                        format!("failed to subscribe to dev server events: {}", e),
-                    ))
-                    .await;
-                None
-            }
-        };
-
-        if let Some(mut ev_rx) = ev_rx.take() {
-            tokio::spawn(async move {
-                use crate::dev_server_client::DevServerEvent;
-                while let Some(ev) = ev_rx.recv().await {
-                    match ev {
-                        DevServerEvent::AppStatusChanged {
-                            ref config_path,
-                            ref status,
-                            ..
-                        } => {
-                            if config_path == &config_key && status == "stopped" {
-                                let _ = event_tx
-                                    .send(DevEvent::ExitWithMessage(
-                                        "stopped by another client".to_string(),
-                                    ))
-                                    .await;
-                                let _ = should_exit_tx.send(true);
-                                break;
-                            }
-                        }
-                        DevServerEvent::ClientConnected {
-                            ref config_path,
-                            client_id,
-                            ..
-                        } => {
-                            if config_path == &config_key {
-                                let _ = event_tx
-                                    .send(DevEvent::ClientConnected {
-                                        is_self: false,
-                                        client_id,
-                                    })
-                                    .await;
-                            }
-                        }
-                        DevServerEvent::ClientDisconnected {
-                            ref config_path,
-                            client_id,
-                            ..
-                        } => {
-                            if config_path == &config_key {
-                                let _ = event_tx
-                                    .send(DevEvent::ClientDisconnected { client_id })
-                                    .await;
-                            }
-                        }
-                        DevServerEvent::AppLaunching {
-                            ref config_path, ..
-                        } if config_path == &config_key => {
-                            let _ = event_tx.send(DevEvent::AppLaunching).await;
-                        }
-                        DevServerEvent::AppStarted {
-                            ref config_path, ..
-                        } if config_path == &config_key => {
-                            let _ = event_tx.send(DevEvent::AppStarted).await;
-                        }
-                        DevServerEvent::AppReady {
-                            ref config_path, ..
-                        } if config_path == &config_key => {
-                            let _ = event_tx.send(DevEvent::AppReady).await;
-                        }
-                        DevServerEvent::AppPid {
-                            ref config_path,
-                            pid,
-                            ..
-                        } if config_path == &config_key => {
-                            let _ = event_tx.send(DevEvent::AppPid(pid)).await;
-                        }
-                        DevServerEvent::AppProcessExited {
-                            ref config_path,
-                            ref message,
-                            ..
-                        } if config_path == &config_key => {
-                            let _ = event_tx
-                                .send(DevEvent::AppProcessExited(message.clone()))
-                                .await;
-                        }
-                        DevServerEvent::AppError {
-                            ref config_path,
-                            ref message,
-                            ..
-                        } if config_path == &config_key => {
-                            let _ = event_tx.send(DevEvent::AppError(message.clone())).await;
-                        }
-                        DevServerEvent::LanModeChanged {
-                            enabled,
-                            ref lan_ip,
-                            ref ca_url,
-                        } => {
-                            let _ = event_tx
-                                .send(DevEvent::LanModeChanged {
-                                    enabled,
-                                    lan_ip: lan_ip.clone(),
-                                    ca_url: ca_url.clone(),
-                                })
-                                .await;
-                        }
-                        _ => {}
-                    }
-                }
-            });
-        }
-    }
-
-    {
         let should_exit_tx_ctrlc = should_exit_tx.clone();
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
                 let _ = should_exit_tx_ctrlc.send(true);
                 if verbose {
-                    println!("\nShutting down...");
+                    println!("\nShutting down…");
                 }
             }
         });
@@ -553,7 +562,7 @@ pub async fn run(
                 terminate_requested.store(true, Ordering::Relaxed);
                 let _ = should_exit_tx_term.send(true);
                 if verbose {
-                    println!("\nTerminating...");
+                    println!("\nTerminating…");
                 }
             }
         });
@@ -628,7 +637,7 @@ pub async fn run(
                                     println!("App started");
                                 }
                                 DevEvent::AppLaunching => {
-                                    println!("Starting app...");
+                                    println!("Starting app…");
                                 }
                                 DevEvent::AppStopped => {
                                     println!("○ App stopped (idle)");

@@ -114,13 +114,13 @@ fn deploy_task_tree_initial_lines_include_known_future_work() {
     assert_eq!(
         lines,
         vec![
-            "○ Building...".to_string(),
+            "○ Building…".to_string(),
             String::new(),
-            "○ Deploying to tako-demo...".to_string(),
-            "  ○ Preflight...".to_string(),
-            "  ○ Uploading...".to_string(),
-            "  ○ Preparing...".to_string(),
-            "  ○ Starting...".to_string(),
+            "○ Deploying to tako-demo…".to_string(),
+            "  ○ Preflight…".to_string(),
+            "  ○ Uploading…".to_string(),
+            "  ○ Preparing…".to_string(),
+            "  ○ Starting…".to_string(),
         ]
     );
 }
@@ -134,37 +134,37 @@ fn deploy_task_tree_initial_lines_include_multi_target_builds_and_multi_server_c
     let snapshot = controller.snapshot();
     let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
 
-    assert!(!lines.iter().any(|line| line == "○ Preflight..."));
-    assert!(lines.iter().any(|line| line == "○ Building..."));
-    assert!(lines.iter().any(|line| line == "  ○ linux-aarch64-musl..."));
-    assert!(lines.iter().any(|line| line == "  ○ linux-x86_64-glibc..."));
-    assert!(lines.iter().any(|line| line == "○ Deploying to prod-a..."));
-    assert!(lines.iter().any(|line| line == "○ Deploying to prod-b..."));
+    assert!(!lines.iter().any(|line| line == "○ Preflight…"));
+    assert!(lines.iter().any(|line| line == "○ Building…"));
+    assert!(lines.iter().any(|line| line == "  ○ linux-aarch64-musl…"));
+    assert!(lines.iter().any(|line| line == "  ○ linux-x86_64-glibc…"));
+    assert!(lines.iter().any(|line| line == "○ Deploying to prod-a…"));
+    assert!(lines.iter().any(|line| line == "○ Deploying to prod-b…"));
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.contains("○ Preflight..."))
+            .filter(|line| line.contains("○ Preflight…"))
             .count(),
         2
     );
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.contains("○ Uploading..."))
+            .filter(|line| line.contains("○ Uploading…"))
             .count(),
         2
     );
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.contains("○ Preparing..."))
+            .filter(|line| line.contains("○ Preparing…"))
             .count(),
         2
     );
     assert_eq!(
         lines
             .iter()
-            .filter(|line| line.contains("○ Starting..."))
+            .filter(|line| line.contains("○ Starting…"))
             .count(),
         2
     );
@@ -227,9 +227,9 @@ fn deploy_task_tree_cache_hit_appends_completed_cached_artifact_step() {
     assert_eq!(lines.get(built_index + 1), Some(&String::new()));
     assert_eq!(
         lines.get(built_index + 2),
-        Some(&"○ Deploying to prod-a...".to_string())
+        Some(&"○ Deploying to prod-a…".to_string())
     );
-    assert_eq!(lines.last(), Some(&"  ○ Starting...".to_string()));
+    assert_eq!(lines.last(), Some(&"  ○ Starting…".to_string()));
 }
 
 #[test]

@@ -1,4 +1,5 @@
 use super::client::host_and_port_from_url;
+use super::runner::bootstrap_dev_events;
 use super::*;
 use crate::build::{BuildAdapter, parse_and_validate_preset};
 use crate::config::TakoToml;
@@ -257,6 +258,33 @@ async fn tcp_probe_detects_open_port() {
 #[tokio::test]
 async fn tcp_probe_detects_closed_port() {
     assert!(!tcp_probe(("127.0.0.1", 0), 50).await);
+}
+
+#[test]
+fn bootstrap_dev_events_marks_running_app_ready_when_pid_is_known() {
+    let events = bootstrap_dev_events("running", Some(4242));
+
+    assert_eq!(events.len(), 2);
+    match &events[0] {
+        DevEvent::AppPid(pid) => assert_eq!(pid, &4242),
+        other => panic!("expected AppPid, got {other:?}"),
+    }
+    assert!(matches!(events[1], DevEvent::AppReady));
+}
+
+#[test]
+fn bootstrap_dev_events_marks_idle_app_stopped() {
+    let events = bootstrap_dev_events("idle", None);
+
+    assert_eq!(events.len(), 1);
+    assert!(matches!(events[0], DevEvent::AppStopped));
+}
+
+#[test]
+fn bootstrap_dev_events_waits_for_pid_before_marking_running() {
+    let events = bootstrap_dev_events("running", None);
+
+    assert!(events.is_empty());
 }
 
 #[tokio::test]

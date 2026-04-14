@@ -556,7 +556,7 @@ fn ensure_pnpm(project_dir: &Path) {
     if has_pnpm {
         return;
     }
-    output::info("Installing pnpm...");
+    output::info("Installing pnpm…");
     let _ = std::process::Command::new("npm")
         .args(["install", "-g", "pnpm"])
         .current_dir(project_dir)
