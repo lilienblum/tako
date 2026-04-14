@@ -90,7 +90,7 @@ If you see certificate errors after reinstalling Tako or changing `TAKO_HOME`, t
 
 ### iOS still shows "Not Private" after installing the CA
 
-Installing the Tako CA profile on iOS is only step one — iOS does not trust newly installed root CAs by default. Open **Settings → General → About → Certificate Trust Settings** and enable full trust for `Tako Development`. The `Certificate Trust Settings` screen only appears once a CA profile is installed, which is why it is easy to miss.
+Installing the Tako CA profile on iOS is only step one — iOS does not trust newly installed root CAs by default. Open **Settings → General → About → Certificate Trust Settings** and enable full trust for `Tako Development CA`. The `Certificate Trust Settings` screen only appears once a CA profile is installed, which is why it is easy to miss.
 
 ### Wildcard subdomain routes don't work from my phone on LAN mode
 

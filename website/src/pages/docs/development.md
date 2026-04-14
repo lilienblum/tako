@@ -133,7 +133,7 @@ If your browser still shows certificate warnings after setup, try quitting and r
 
 ### Trusting the CA on iOS devices
 
-Scanning the LAN mode QR code installs the Tako CA as a **configuration profile**. That is only step one — iOS does not trust newly installed root CAs by default. Open **Settings → General → About → Certificate Trust Settings** and enable full trust for `Tako Development`. Without that toggle, Safari on your phone will still show "This Connection Is Not Private" because the certificate chain ends at an untrusted root.
+Scanning the LAN mode QR code installs the Tako CA as a **configuration profile**. That is only step one — iOS does not trust newly installed root CAs by default. Open **Settings → General → About → Certificate Trust Settings** and enable full trust for `Tako Development CA`. Without that toggle, Safari on your phone will still show "This Connection Is Not Private" because the certificate chain ends at an untrusted root.
 
 ## LAN mode
 

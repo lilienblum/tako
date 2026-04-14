@@ -33,7 +33,7 @@ const CA_VALIDITY_DAYS: i64 = 3650;
 const LEAF_VALIDITY_DAYS: i64 = 365;
 
 /// Root CA common name
-const CA_COMMON_NAME: &str = "Tako Development";
+const CA_COMMON_NAME: &str = "Tako Development CA";
 
 /// Root CA organization
 const CA_ORGANIZATION: &str = "Tako";
@@ -144,22 +144,8 @@ impl LocalCA {
         let ca_key = KeyPair::from_pem(&self.ca_key_pem)
             .map_err(|e| CaError::Parse(format!("Failed to parse CA private key: {}", e)))?;
 
-        // Recreate CA cert params to get a signable certificate
-        let mut ca_params = CertificateParams::default();
-        let mut ca_dn = DistinguishedName::new();
-        ca_dn.push(DnType::CommonName, CA_COMMON_NAME);
-        ca_dn.push(DnType::OrganizationName, CA_ORGANIZATION);
-        ca_params.distinguished_name = ca_dn;
-        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        ca_params.key_usages = vec![
-            KeyUsagePurpose::KeyCertSign,
-            KeyUsagePurpose::CrlSign,
-            KeyUsagePurpose::DigitalSignature,
-        ];
         let now = OffsetDateTime::now_utc();
-        ca_params.not_before = now - Duration::days(1); // Allow for clock skew
-        ca_params.not_after = now + Duration::days(CA_VALIDITY_DAYS);
-
+        let ca_params = ca_issuer_params(now);
         let issuer = Issuer::new(ca_params, ca_key);
 
         // Create leaf certificate parameters
@@ -229,22 +215,8 @@ impl LocalCA {
         let ca_key = KeyPair::from_pem(&self.ca_key_pem)
             .map_err(|e| CaError::Parse(format!("Failed to parse CA private key: {}", e)))?;
 
-        // Recreate CA cert params to get a signable certificate
-        let mut ca_params = CertificateParams::default();
-        let mut ca_dn = DistinguishedName::new();
-        ca_dn.push(DnType::CommonName, CA_COMMON_NAME);
-        ca_dn.push(DnType::OrganizationName, CA_ORGANIZATION);
-        ca_params.distinguished_name = ca_dn;
-        ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        ca_params.key_usages = vec![
-            KeyUsagePurpose::KeyCertSign,
-            KeyUsagePurpose::CrlSign,
-            KeyUsagePurpose::DigitalSignature,
-        ];
         let now = OffsetDateTime::now_utc();
-        ca_params.not_before = now - Duration::days(1); // Allow for clock skew
-        ca_params.not_after = now + Duration::days(CA_VALIDITY_DAYS);
-
+        let ca_params = ca_issuer_params(now);
         let issuer = Issuer::new(ca_params, ca_key);
 
         // Create leaf certificate parameters
@@ -368,6 +340,7 @@ impl LocalCAStore {
             .map_err(|e| CaError::FileRead(self.ca_cert_path.clone(), e))?;
         let ca_key_pem = self.read_ca_key()?;
         validate_keypair(&ca_cert_pem, &ca_key_pem)?;
+        validate_ca_identity(&ca_cert_pem)?;
         Ok(LocalCA::new(ca_cert_pem, ca_key_pem))
     }
 
@@ -393,7 +366,7 @@ impl LocalCAStore {
     }
 
     /// Check whether the local CA cert has a usable SSL trust policy in
-    /// macOS's admin trust domain.
+    /// macOS's trust settings domains.
     ///
     /// Mere presence in the keychain is NOT enough: `add-trusted-cert -d
     /// -r trustRoot` writes both a keychain entry AND a trust-settings
@@ -401,10 +374,10 @@ impl LocalCAStore {
     /// via Keychain Access, or the cert was imported with a non-trust
     /// command). A cert sitting in the keychain with no trust settings
     /// is accepted by `security verify-cert` but rejected by browsers —
-    /// this check mirrors the browser's behavior by querying the admin
-    /// trust domain directly via SecTrustSettingsCopyTrustSettings, and
-    /// only returning true when the settings resolve to TrustRoot or
-    /// TrustAsRoot for the SSL policy.
+    /// this check mirrors the browser's behavior by querying trust
+    /// settings directly via SecTrustSettingsCopyTrustSettings. We
+    /// evaluate domains in effective precedence order (User → Admin →
+    /// System) and use the first explicit result.
     #[cfg(target_os = "macos")]
     pub fn is_ca_trusted(&self) -> bool {
         use security_framework::certificate::SecCertificate;
@@ -429,11 +402,19 @@ impl LocalCAStore {
             Err(_) => return false,
         };
 
-        matches!(
-            TrustSettings::new(Domain::Admin).tls_trust_settings_for_certificate(&cert),
-            Ok(Some(TrustSettingsForCertificate::TrustRoot))
-                | Ok(Some(TrustSettingsForCertificate::TrustAsRoot))
-        )
+        let domain_states = [Domain::User, Domain::Admin, Domain::System].map(|domain| {
+            match TrustSettings::new(domain).tls_trust_settings_for_certificate(&cert) {
+                Ok(Some(TrustSettingsForCertificate::TrustRoot))
+                | Ok(Some(TrustSettingsForCertificate::TrustAsRoot)) => TrustState::Trusted,
+                Ok(Some(TrustSettingsForCertificate::Deny)) => TrustState::Denied,
+                Ok(Some(TrustSettingsForCertificate::Unspecified))
+                | Ok(Some(TrustSettingsForCertificate::Invalid))
+                | Ok(None)
+                | Err(_) => TrustState::Unspecified,
+            }
+        });
+
+        effective_trust_by_precedence(&domain_states)
     }
 
     /// Check if CA is trusted - Linux
@@ -609,6 +590,74 @@ fn validate_keypair(cert_pem: &str, key_pem: &str) -> Result<()> {
                 .to_string(),
         ))
     }
+}
+
+fn validate_ca_identity(cert_pem: &str) -> Result<()> {
+    let (_, pem) = x509_parser::pem::parse_x509_pem(cert_pem.as_bytes())
+        .map_err(|e| CaError::Parse(format!("ca.crt: {e}")))?;
+    let cert = pem
+        .parse_x509()
+        .map_err(|e| CaError::Parse(format!("ca.crt x509: {e}")))?;
+    let subject = cert.tbs_certificate.subject;
+
+    let common_name = subject
+        .iter_common_name()
+        .next()
+        .and_then(|attr| attr.as_str().ok());
+    if common_name != Some(CA_COMMON_NAME) {
+        return Err(CaError::Validation(format!(
+            "Unexpected CA common name {:?}; expected {:?}. The CA will be regenerated.",
+            common_name, CA_COMMON_NAME
+        )));
+    }
+
+    let organization = subject
+        .iter_organization()
+        .next()
+        .and_then(|attr| attr.as_str().ok());
+    if organization != Some(CA_ORGANIZATION) {
+        return Err(CaError::Validation(format!(
+            "Unexpected CA organization {:?}; expected {:?}. The CA will be regenerated.",
+            organization, CA_ORGANIZATION
+        )));
+    }
+
+    Ok(())
+}
+
+fn ca_issuer_params(now: OffsetDateTime) -> CertificateParams {
+    let mut ca_params = CertificateParams::default();
+    let mut ca_dn = DistinguishedName::new();
+    ca_dn.push(DnType::CommonName, CA_COMMON_NAME);
+    ca_dn.push(DnType::OrganizationName, CA_ORGANIZATION);
+    ca_params.distinguished_name = ca_dn;
+    ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params.key_usages = vec![
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::CrlSign,
+        KeyUsagePurpose::DigitalSignature,
+    ];
+    ca_params.not_before = now - Duration::days(1); // Allow for clock skew
+    ca_params.not_after = now + Duration::days(CA_VALIDITY_DAYS);
+    ca_params
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TrustState {
+    Unspecified,
+    Trusted,
+    Denied,
+}
+
+fn effective_trust_by_precedence(states: &[TrustState]) -> bool {
+    for state in states {
+        match state {
+            TrustState::Trusted => return true,
+            TrustState::Denied => return false,
+            TrustState::Unspecified => {}
+        }
+    }
+    false
 }
 
 impl Default for LocalCAStore {
@@ -869,6 +918,86 @@ mod tests {
             CaError::FileRead(path, _) => assert_eq!(path, current_ca_cert_path),
             other => panic!("expected FileRead error, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn load_ca_rejects_unexpected_ca_identity() {
+        let temp_dir = TempDir::new().unwrap();
+        let ca_cert_path = temp_dir.path().join("ca").join("ca.crt");
+        let store = LocalCAStore {
+            ca_cert_path: ca_cert_path.clone(),
+        };
+
+        std::fs::create_dir_all(ca_cert_path.parent().unwrap()).unwrap();
+        let wrong = generate_custom_ca("Tako Local Development CA", "Tako");
+        std::fs::write(&ca_cert_path, &wrong.ca_cert_pem).unwrap();
+        std::fs::write(ca_cert_path.with_extension("key"), &wrong.ca_key_pem).unwrap();
+
+        let err = match store.load_ca() {
+            Ok(_) => panic!("invalid CA identity should fail to load"),
+            Err(err) => err,
+        };
+        assert!(matches!(err, CaError::Validation(_)));
+    }
+
+    #[test]
+    fn get_or_create_ca_regenerates_on_identity_mismatch() {
+        let temp_dir = TempDir::new().unwrap();
+        let ca_cert_path = temp_dir.path().join("ca").join("ca.crt");
+        let store = LocalCAStore {
+            ca_cert_path: ca_cert_path.clone(),
+        };
+
+        std::fs::create_dir_all(ca_cert_path.parent().unwrap()).unwrap();
+        let wrong = generate_custom_ca("Tako Local Development CA", "Tako");
+        std::fs::write(&ca_cert_path, &wrong.ca_cert_pem).unwrap();
+        std::fs::write(ca_cert_path.with_extension("key"), &wrong.ca_key_pem).unwrap();
+
+        let recovered = store.get_or_create_ca().unwrap();
+        assert_ne!(recovered.ca_cert_pem, wrong.ca_cert_pem);
+        validate_keypair(&recovered.ca_cert_pem, &recovered.ca_key_pem).unwrap();
+        validate_ca_identity(&recovered.ca_cert_pem).unwrap();
+    }
+
+    #[test]
+    fn effective_trust_prefers_first_explicit_result() {
+        assert!(effective_trust_by_precedence(&[
+            TrustState::Unspecified,
+            TrustState::Trusted
+        ]));
+        assert!(!effective_trust_by_precedence(&[
+            TrustState::Denied,
+            TrustState::Trusted
+        ]));
+        assert!(effective_trust_by_precedence(&[
+            TrustState::Trusted,
+            TrustState::Denied
+        ]));
+        assert!(!effective_trust_by_precedence(&[
+            TrustState::Unspecified,
+            TrustState::Unspecified
+        ]));
+    }
+
+    fn generate_custom_ca(common_name: &str, organization: &str) -> LocalCA {
+        let mut params = CertificateParams::default();
+        let mut dn = DistinguishedName::new();
+        dn.push(DnType::CommonName, common_name);
+        dn.push(DnType::OrganizationName, organization);
+        params.distinguished_name = dn;
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.key_usages = vec![
+            KeyUsagePurpose::KeyCertSign,
+            KeyUsagePurpose::CrlSign,
+            KeyUsagePurpose::DigitalSignature,
+        ];
+        let now = OffsetDateTime::now_utc();
+        params.not_before = now;
+        params.not_after = now + Duration::days(CA_VALIDITY_DAYS);
+
+        let key_pair = KeyPair::generate().unwrap();
+        let cert = params.self_signed(&key_pair).unwrap();
+        LocalCA::new(cert.pem(), key_pair.serialize_pem())
     }
 
     /// Manual diagnostic — inspects the real Tako CA state on this
