@@ -10,8 +10,6 @@
 import { ChannelRegistry } from "./channels";
 import { loadSecrets } from "./secrets";
 
-type LogLevel = "debug" | "info" | "warn" | "error";
-
 function parsePort(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
   const n = Number(raw);
@@ -41,7 +39,6 @@ type RuntimeState = {
   build: string;
   dataDir: string | undefined;
   appDir: string;
-  logLevel: LogLevel | undefined;
 };
 
 const runtimeState: RuntimeState = {
@@ -51,7 +48,6 @@ const runtimeState: RuntimeState = {
   build: "unknown",
   dataDir: undefined,
   appDir: process.cwd(),
-  logLevel: undefined,
 };
 
 const globalTako = Object.freeze(
@@ -86,11 +82,6 @@ const globalTako = Object.freeze(
       build: { get: () => runtimeState.build, configurable: false, enumerable: false },
       dataDir: { get: () => runtimeState.dataDir, configurable: false, enumerable: false },
       appDir: { get: () => runtimeState.appDir, configurable: false, enumerable: false },
-      logLevel: {
-        get: () => runtimeState.logLevel,
-        configurable: false,
-        enumerable: false,
-      },
     },
   ),
 );
@@ -102,7 +93,6 @@ function refreshRuntimeState(): void {
   runtimeState.build = process.env["TAKO_BUILD"] || "unknown";
   runtimeState.dataDir = process.env["TAKO_DATA_DIR"];
   runtimeState.appDir = process.cwd();
-  runtimeState.logLevel = process.env["LOG_LEVEL"] as LogLevel | undefined;
 }
 
 declare global {
@@ -136,8 +126,6 @@ declare global {
     readonly dataDir?: string;
     /** Directory the app is running from (equivalent to `process.cwd()`). */
     readonly appDir: string;
-    /** Resolved app log verbosity, as configured in `tako.toml`. */
-    readonly logLevel?: "debug" | "info" | "warn" | "error";
     /** Typed secret accessor. */
     readonly secrets: TakoSecrets;
   };

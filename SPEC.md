@@ -88,22 +88,15 @@ routes = [
 ]
 servers = ["staging"]
 idle_timeout = 120
-
-[envs.development]
-log_level = "debug"        # App log level (default: "debug" for development, "info" for others)
 ```
-
-**Environment `log_level`:**
-
-Each `[envs.*]` block can set `log_level` to control the application's log verbosity: `debug`, `info`, `warn`, or `error`. Defaults: `debug` for `development`, `info` for all other environments. This is independent of `--verbose`, which controls only Tako CLI and dev-server logs. The resolved level is passed to the app as the `LOG_LEVEL` environment variable.
 
 **Variable merging order (later overrides earlier):**
 
 1. `[vars]` - base
 2. `[vars.{environment}]` - environment-specific
-3. Auto-set by Tako at runtime: `ENV={environment}` and `LOG_LEVEL=<resolved level>` in both dev and deploy, `TAKO_BUILD={version}` on deploys, `TAKO_DATA_DIR=<app data dir>` in both deploy and dev, plus runtime env vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
+3. Auto-set by Tako at runtime: `ENV={environment}` in both dev and deploy, `TAKO_BUILD={version}` on deploys, `TAKO_DATA_DIR=<app data dir>` in both deploy and dev, plus runtime env vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
 
-`ENV` and `LOG_LEVEL` are reserved. If you set either one in `[vars]` or `[vars.{environment}]`, Tako ignores it and prints a warning.
+`ENV` is reserved. If you set `ENV` in `[vars]` or `[vars.{environment}]`, Tako ignores it and prints a warning. `LOG_LEVEL` (and any other log-verbosity env var your framework reads) is owned by you — set it in `[vars]` / `[vars.<env>]` if you want it per environment.
 
 **Build/deploy behavior:**
 
@@ -1201,7 +1194,6 @@ Reference scripts in this repo:
 | `PORT`                | app             | Listen port for HTTP server                          | Set by `tako dev` for the local app process; `0` on deploys (SDK binds to an OS-assigned port and reports it via fd 4).          |
 | `HOST`                | app             | Listen host for HTTP server                          | `127.0.0.1` in both dev and deploy.                                                                                              |
 | `TAKO_DATA_DIR`       | app             | Persistent app-owned runtime data directory          | Set by Tako in both dev and deploy; points to the app's `data/app` directory.                                                    |
-| `LOG_LEVEL`           | app             | Resolved app log verbosity                           | Derived from `[envs.<environment>].log_level` (or Tako's default) and set by Tako in both dev and deploy.                        |
 | `NODE_ENV`            | app             | Node.js convention env                               | Set by runtime adapter / server (`development` or `production`).                                                                 |
 | `BUN_ENV`             | app             | Bun convention env                                   | Set by runtime adapter (`development` or `production`).                                                                          |
 | `DENO_ENV`            | app             | Deno convention env                                  | Set by runtime adapter (`development` or `production`).                                                                          |

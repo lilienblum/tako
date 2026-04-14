@@ -286,7 +286,7 @@ For any target environment, variables are merged in this order (later overrides 
 
 Since auto-set variables are applied last, they override any manually set values for those keys.
 
-If you set `ENV` or `LOG_LEVEL` in `[vars]` or `[vars.<environment>]`, Tako ignores it and prints a warning.
+If you set `ENV` in `[vars]` or `[vars.<environment>]`, Tako ignores it and prints a warning. Log-level env vars like `LOG_LEVEL` are owned by you — set them in `[vars]` / `[vars.<environment>]` if you want them per environment.
 
 ---
 
@@ -299,19 +299,14 @@ Environment sections declare routes, server membership, and runtime settings. Ea
 route = "api.example.com"
 servers = ["la", "nyc"]
 idle_timeout = 300
-log_level = "info"
 
 [envs.staging]
 routes = ["staging.example.com", "www.staging.example.com"]
 servers = ["staging"]
 idle_timeout = 120
-log_level = "debug"
-
-[envs.development]
-log_level = "debug"
 ```
 
-Environment sections accept only `route`/`routes`, `servers`, `idle_timeout`, and `log_level`. Put env vars in `[vars]` / `[vars.<environment>]`.
+Environment sections accept only `route`/`routes`, `servers`, and `idle_timeout`. Put env vars — including log-level env vars like `LOG_LEVEL` — in `[vars]` / `[vars.<environment>]`.
 
 ### `route` / `routes`
 
@@ -371,20 +366,19 @@ idle_timeout = 300
 
 Defaults to `300` (5 minutes). Instances are never stopped while serving in-flight requests.
 
-### `log_level`
+### App log level
 
-App log verbosity for this environment. Tako derives the `LOG_LEVEL` environment variable from this setting at runtime.
+Tako does not own `LOG_LEVEL` or any other logging env var — set them yourself in `[vars]` / `[vars.<environment>]` if your logger reads them:
 
 ```toml
-[envs.production]
-log_level = "info"
+[vars.production]
+LOG_LEVEL = "info"
+
+[vars.development]
+LOG_LEVEL = "debug"
 ```
 
-Accepted values: `debug`, `info`, `warn`, `error`.
-
-Defaults: `debug` for `development`, `info` for all other environments.
-
-This is independent of `--verbose`, which controls only Tako CLI and dev-server logs.
+Most logging libraries (pino, winston, tracing-subscriber, zap) read `LOG_LEVEL` directly from env. Tako's own `--verbose` flag controls only CLI and dev-server logs.
 
 ---
 
@@ -449,7 +443,7 @@ Tako validates your `tako.toml` and reports clear errors when something is wrong
 
 - **Top-level keys**: Only `name`, `main`, `runtime`, `runtime_version`, `package_manager`, `preset`, `dev`, `assets`, `[build]`, `[[build_stages]]`, `[vars]`, and `[envs]` are allowed at the top level.
 - **Mutual exclusion**: `[build]` with a `run` field and `[[build_stages]]` cannot both be present. `[build].include`/`[build].exclude` also cannot be used alongside `[[build_stages]]`.
-- **Environment sections**: `[envs.<env>]` accepts only `route`/`routes`, `servers`, `idle_timeout`, and `log_level`. Env vars belong in `[vars]` / `[vars.<env>]`.
+- **Environment sections**: `[envs.<env>]` accepts only `route`/`routes`, `servers`, and `idle_timeout`. Env vars belong in `[vars]` / `[vars.<env>]`.
 - **Route exclusivity**: Each environment can set `route` or `routes`, but not both.
 - **Non-development routes required**: Every non-development environment must have `route` or `routes` defined (empty lists are rejected).
 - **Development route restrictions**: Must use `.test` or `.tako.test` -- for example `{app}.test` or a subdomain of it.
@@ -531,17 +525,14 @@ LOG_FORMAT = "text"
 routes = ["api.example.com", "www.api.example.com"]
 servers = ["primary", "secondary"]
 idle_timeout = 300
-log_level = "info"
 
 [envs.staging]
 route = "staging.example.com"
 servers = ["staging"]
 idle_timeout = 120
-log_level = "debug"
 
 # Development environment (used by tako dev, not deployable)
 [envs.development]
-log_level = "debug"
 # route defaults to {name}.test
 ```
 

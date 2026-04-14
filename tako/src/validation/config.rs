@@ -300,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn validate_tako_toml_warns_when_log_level_env_var_is_reserved() {
+    fn validate_tako_toml_does_not_warn_when_user_sets_log_level_var() {
         let mut config = TakoToml {
             name: Some("demo".to_string()),
             ..Default::default()
@@ -308,10 +308,6 @@ mod tests {
         config
             .vars
             .insert("LOG_LEVEL".to_string(), "warn".to_string());
-        config.vars_per_env.insert(
-            "production".to_string(),
-            std::collections::HashMap::from([("LOG_LEVEL".to_string(), "error".to_string())]),
-        );
         config.envs.insert(
             "production".to_string(),
             EnvConfig {
@@ -322,18 +318,7 @@ mod tests {
         );
 
         let result = validate_tako_toml(&config);
-        assert!(
-            result
-                .warnings
-                .iter()
-                .any(|w| w.contains("[vars].LOG_LEVEL") && w.contains("ignored"))
-        );
-        assert!(
-            result
-                .warnings
-                .iter()
-                .any(|w| w.contains("[vars.production].LOG_LEVEL") && w.contains("ignored"))
-        );
+        assert!(!result.warnings.iter().any(|w| w.contains("LOG_LEVEL")));
     }
 
     #[test]

@@ -23,7 +23,6 @@ test("createEntrypoint installs frozen globalThis.Tako visible to imported user 
     process.env["PORT"] = "3456";
     process.env["HOST"] = "127.0.0.1";
     process.env["TAKO_DATA_DIR"] = "/tmp/tako-test-data";
-    process.env["LOG_LEVEL"] = "info";
     await writeFile(
       entryModule,
       [
@@ -36,7 +35,6 @@ test("createEntrypoint installs frozen globalThis.Tako visible to imported user 
         "  build: globalThis.Tako?.build,",
         "  dataDir: globalThis.Tako?.dataDir,",
         "  appDirIsString: typeof globalThis.Tako?.appDir === 'string',",
-        "  logLevel: globalThis.Tako?.logLevel,",
         "  hasSecrets: 'secrets' in (globalThis.Tako ?? {}),",
         "  hasChannels: 'channels' in (globalThis.Tako ?? {}),",
         "};",
@@ -63,7 +61,6 @@ test("createEntrypoint installs frozen globalThis.Tako visible to imported user 
       build: "unknown",
       dataDir: "/tmp/tako-test-data",
       appDirIsString: true,
-      logLevel: "info",
       hasSecrets: true,
       hasChannels: true,
     });
@@ -72,7 +69,6 @@ test("createEntrypoint installs frozen globalThis.Tako visible to imported user 
     delete process.env["PORT"];
     delete process.env["HOST"];
     delete process.env["TAKO_DATA_DIR"];
-    delete process.env["LOG_LEVEL"];
     delete (globalThis as unknown as Record<string, unknown>)[observedKey];
     await rm(rootDir, { recursive: true, force: true });
   }
@@ -82,33 +78,28 @@ test("installTakoGlobal refreshes runtime fields on subsequent entrypoint setup"
   process.env["ENV"] = "staging";
   process.env["PORT"] = "3456";
   process.env["HOST"] = "127.0.0.1";
-  process.env["LOG_LEVEL"] = "warn";
   createEntrypoint();
 
   const takoGlobal = (globalThis as unknown as { Tako: Record<string, unknown> }).Tako;
   expect(takoGlobal.env).toBe("staging");
   expect(takoGlobal.port).toBe(3456);
-  expect(takoGlobal.logLevel).toBe("warn");
   expect(takoGlobal.isDev).toBe(false);
   expect(takoGlobal.isProd).toBe(false);
 
   process.env["ENV"] = "production";
   process.env["PORT"] = "4567";
   process.env["HOST"] = "0.0.0.0";
-  process.env["LOG_LEVEL"] = "error";
   createEntrypoint();
 
   expect(takoGlobal.env).toBe("production");
   expect(takoGlobal.port).toBe(4567);
   expect(takoGlobal.host).toBe("0.0.0.0");
-  expect(takoGlobal.logLevel).toBe("error");
   expect(takoGlobal.isDev).toBe(false);
   expect(takoGlobal.isProd).toBe(true);
 
   delete process.env["ENV"];
   delete process.env["PORT"];
   delete process.env["HOST"];
-  delete process.env["LOG_LEVEL"];
 });
 
 test("createEntrypoint returns run function and config", () => {

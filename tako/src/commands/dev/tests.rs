@@ -219,16 +219,25 @@ fn compute_dev_env_ignores_configured_env_and_derives_development() {
         r#"
 [vars]
 ENV = "custom"
-LOG_LEVEL = "error"
-
-[envs.development]
-log_level = "debug"
 "#,
     )
     .unwrap();
 
     let env = compute_dev_env(&cfg);
     assert_eq!(env.get("ENV").map(String::as_str), Some("development"));
+}
+
+#[test]
+fn compute_dev_env_passes_through_user_log_level_from_vars() {
+    let cfg = TakoToml::parse(
+        r#"
+[vars.development]
+LOG_LEVEL = "debug"
+"#,
+    )
+    .unwrap();
+
+    let env = compute_dev_env(&cfg);
     assert_eq!(env.get("LOG_LEVEL").map(String::as_str), Some("debug"));
 }
 

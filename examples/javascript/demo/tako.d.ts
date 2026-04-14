@@ -24,8 +24,6 @@ interface TakoBaseEnv {
   readonly TAKO_BUILD?: string;
   /** Per-app persistent data directory provided by Tako. Writes survive restarts. */
   readonly TAKO_DATA_DIR?: string;
-  /** Resolved log verbosity for this environment, as configured in `tako.toml`. */
-  readonly LOG_LEVEL?: "debug" | "info" | "warn" | "error";
 }
 
 declare namespace NodeJS {

@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 
 use crate::build::{BuildAdapter, BuildCache, BuildExecutor, BuildPreset};
-use crate::config::{TakoToml, resolve_app_log_level};
+use crate::config::TakoToml;
 use crate::output;
 
 use super::BuildPhaseResult;
@@ -160,7 +160,6 @@ pub(super) async fn prepare_build_phase(
         runtime_adapter.id(),
         &manifest_main,
         env_idle_timeout,
-        resolve_app_log_level(tako_config.envs.get(&env), &env),
         deploy_pm,
         git_commit_message.clone(),
         git_dirty,

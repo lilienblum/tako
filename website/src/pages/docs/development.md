@@ -283,18 +283,20 @@ For JS apps, this means your `export default function fetch()` or `export defaul
 
 Variables from `[vars]` (base) and `[vars.development]` (environment-specific) are merged and injected into the app process. Later values override earlier ones.
 
+`ENV` is reserved. If you set `ENV` in `[vars]` or `[vars.development]`, Tako ignores it and prints a warning.
+
 `tako dev` always uses loopback TCP via `PORT`.
 
 ### App log level
 
-Each `[envs.*]` block can set `log_level` to control the app's log verbosity: `debug`, `info`, `warn`, or `error`. Development defaults to `debug`. The resolved level is passed to your app as `LOG_LEVEL`.
-
-This is independent of `--verbose`, which controls only Tako CLI and dev-server verbosity.
+Tako does not set `LOG_LEVEL` or any other logging env var. Set one yourself in `[vars.development]` if your logger reads it — most do (pino, winston, tracing-subscriber, zap):
 
 ```toml
-[envs.development]
-log_level = "debug"  # default for development
+[vars.development]
+LOG_LEVEL = "debug"
 ```
+
+This is independent of `--verbose`, which controls only Tako CLI and dev-server verbosity.
 
 ## Hot reload
 
