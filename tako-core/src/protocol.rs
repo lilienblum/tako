@@ -127,31 +127,39 @@ pub enum Command {
     },
 
     /// Worker: atomically claim the oldest eligible run for one of `names`.
-    /// Bumps `attempts`. Returns null when nothing is due.
+    /// Bumps `attempts`. Returns null when nothing is due. `app` selects
+    /// which app's queue this worker is claiming from.
     ClaimRun {
+        app: String,
         worker_id: String,
         names: Vec<String>,
         lease_ms: u64,
     },
 
     /// Worker: extend the lease on a running run.
-    HeartbeatRun { id: String, lease_ms: u64 },
+    HeartbeatRun {
+        app: String,
+        id: String,
+        lease_ms: u64,
+    },
 
     /// Worker: persist a single completed step's result. First-write-wins
     /// on `(run_id, step_name)` — duplicate saves are ignored so a retried
     /// RPC after a successful insert doesn't overwrite.
     SaveStep {
+        app: String,
         id: String,
         step_name: String,
         result: serde_json::Value,
     },
 
     /// Worker: mark a run succeeded.
-    CompleteRun { id: String },
+    CompleteRun { app: String, id: String },
 
     /// Worker: cancel a run cleanly (status becomes `cancelled`). Triggered
     /// by the user via `ctx.bail(reason?)`.
     CancelRun {
+        app: String,
         id: String,
         #[serde(default)]
         reason: Option<String>,
@@ -161,6 +169,7 @@ pub enum Command {
     /// dead; otherwise it goes back to pending with `next_run_at_ms` as the
     /// new `run_at`.
     FailRun {
+        app: String,
         id: String,
         error: String,
         #[serde(default)]
@@ -172,6 +181,7 @@ pub enum Command {
     /// `step.waitFor`). When `wake_at_ms` is None the run is parked until a
     /// matching `Signal` arrives. Does not consume retry budget.
     DeferRun {
+        app: String,
         id: String,
         #[serde(default)]
         wake_at_ms: Option<i64>,
@@ -179,6 +189,7 @@ pub enum Command {
 
     /// Worker: park a run waiting for a named event. Resumed by `Signal`.
     WaitForEvent {
+        app: String,
         id: String,
         step_name: String,
         event_name: String,

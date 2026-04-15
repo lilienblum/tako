@@ -49,7 +49,7 @@
     "@tsconfig/strictest": "catalog:dev",
     "@types/bun": "catalog:dev",
     "@types/node": "catalog:dev",
-    "tsdown": "^0.21.7",
+    "tsdown": "^0.21.8",
     "typescript": "catalog:dev",
     "vite": "catalog:dev"
   }

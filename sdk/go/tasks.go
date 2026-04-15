@@ -1,8 +1,9 @@
 // Package tako provides the runtime SDK for Tako-deployed Go applications.
 //
-// All durable-task state is owned by tako-server. The SDK is a thin RPC
-// client over the per-app unix socket (path in TAKO_ENQUEUE_SOCKET). The
-// SDK itself has no SQLite dependency.
+// All durable-run state is owned by tako-server. The SDK is a thin RPC
+// client over a shared unix socket (path in TAKO_WORKFLOW_SOCKET); every
+// command carries the app name (TAKO_APP_NAME) so one socket handles
+// every deployed app. The SDK has no SQLite dependency.
 package tako
 
 import (
@@ -16,9 +17,11 @@ import (
 	"time"
 )
 
-// EnqueueSocketEnv is the env var tako-server sets to point SDK clients at
-// the per-app enqueue unix socket.
-const EnqueueSocketEnv = "TAKO_ENQUEUE_SOCKET"
+// Env vars set by tako-server when it spawns the app/worker process.
+const (
+	WorkflowSocketEnv = "TAKO_WORKFLOW_SOCKET"
+	AppNameEnv        = "TAKO_APP_NAME"
+)
 
 // EnqueueOpts controls per-enqueue behavior. Nil fields fall back to
 // server-side defaults (runAt = now, maxAttempts = 3, no dedup).
@@ -26,7 +29,7 @@ type EnqueueOpts struct {
 	RunAt       *time.Time
 	MaxAttempts *uint32
 	// UniqueKey, if set, collapses this enqueue onto any existing
-	// non-terminal task with the same key. Used for cron idempotency.
+	// non-terminal run with the same key. Used for cron idempotency.
 	UniqueKey *string
 }
 
@@ -36,7 +39,7 @@ type EnqueueResult struct {
 	Deduplicated bool
 }
 
-// Enqueue dispatches a task to the named workflow.
+// Enqueue dispatches a run of the named workflow.
 func Enqueue(ctx context.Context, name string, payload any, opts EnqueueOpts) (*EnqueueResult, error) {
 	client, err := ClientFromEnv()
 	if err != nil {
@@ -45,23 +48,30 @@ func Enqueue(ctx context.Context, name string, payload any, opts EnqueueOpts) (*
 	return client.Enqueue(ctx, name, payload, opts)
 }
 
-// Client is a thin RPC wrapper over the per-app enqueue socket.
+// Client is a thin RPC wrapper over the shared workflow socket. All
+// outbound commands include the app name so one socket can route for many
+// apps.
 type Client struct {
 	socketPath string
+	app        string
 }
 
-// NewClient constructs a client rooted at the given socket path.
-func NewClient(socketPath string) *Client {
-	return &Client{socketPath: socketPath}
+// NewClient constructs a client rooted at the given socket path and app.
+func NewClient(socketPath, app string) *Client {
+	return &Client{socketPath: socketPath, app: app}
 }
 
-// ClientFromEnv reads TAKO_ENQUEUE_SOCKET.
+// ClientFromEnv reads TAKO_WORKFLOW_SOCKET and TAKO_APP_NAME.
 func ClientFromEnv() (*Client, error) {
-	sock := os.Getenv(EnqueueSocketEnv)
+	sock := os.Getenv(WorkflowSocketEnv)
 	if sock == "" {
-		return nil, errors.New("tako: " + EnqueueSocketEnv + " is not set")
+		return nil, errors.New("tako: " + WorkflowSocketEnv + " is not set")
 	}
-	return NewClient(sock), nil
+	app := os.Getenv(AppNameEnv)
+	if app == "" {
+		return nil, errors.New("tako: " + AppNameEnv + " is not set")
+	}
+	return NewClient(sock, app), nil
 }
 
 func (c *Client) Enqueue(ctx context.Context, name string, payload any, opts EnqueueOpts) (*EnqueueResult, error) {
@@ -70,7 +80,7 @@ func (c *Client) Enqueue(ctx context.Context, name string, payload any, opts Enq
 	}
 	cmd := map[string]any{
 		"command": "enqueue_run",
-		"app":     "",
+		"app":     c.app,
 		"name":    name,
 		"payload": payload,
 		"opts":    optsToWire(opts),
@@ -93,7 +103,7 @@ func (c *Client) Enqueue(ctx context.Context, name string, payload any, opts Enq
 func (c *Client) RegisterSchedules(ctx context.Context, schedules []ScheduleSpec) error {
 	_, err := c.call(ctx, map[string]any{
 		"command":   "register_schedules",
-		"app":       "",
+		"app":       c.app,
 		"schedules": schedules,
 	})
 	return err
@@ -105,7 +115,7 @@ type ScheduleSpec struct {
 	Cron string `json:"cron"`
 }
 
-// Task is the server-returned task payload from ClaimTask.
+// Run is the server-returned run payload from ClaimRun.
 type Run struct {
 	ID          string          `json:"id"`
 	Name        string          `json:"name"`
@@ -117,11 +127,12 @@ type Run struct {
 	StepState   map[string]any  `json:"step_state"`
 }
 
-// Claim atomically claims the oldest eligible task and bumps attempts.
+// Claim atomically claims the oldest eligible run and bumps attempts.
 // Returns nil when nothing is due.
 func (c *Client) Claim(ctx context.Context, workerID string, names []string, leaseMs uint64) (*Run, error) {
 	data, err := c.call(ctx, map[string]any{
 		"command":   "claim_run",
+		"app":       c.app,
 		"worker_id": workerID,
 		"names":     names,
 		"lease_ms":  leaseMs,
@@ -134,7 +145,7 @@ func (c *Client) Claim(ctx context.Context, workerID string, names []string, lea
 	}
 	var t Run
 	if err := json.Unmarshal(data, &t); err != nil {
-		return nil, fmt.Errorf("tako: parse task: %w", err)
+		return nil, fmt.Errorf("tako: parse run: %w", err)
 	}
 	if t.StepState == nil {
 		t.StepState = map[string]any{}
@@ -142,10 +153,11 @@ func (c *Client) Claim(ctx context.Context, workerID string, names []string, lea
 	return &t, nil
 }
 
-// Heartbeat extends the lease on a running task.
+// Heartbeat extends the lease on a running run.
 func (c *Client) Heartbeat(ctx context.Context, id string, leaseMs uint64) error {
 	_, err := c.call(ctx, map[string]any{
 		"command":  "heartbeat_run",
+		"app":      c.app,
 		"id":       id,
 		"lease_ms": leaseMs,
 	})
@@ -157,6 +169,7 @@ func (c *Client) Heartbeat(ctx context.Context, id string, leaseMs uint64) error
 func (c *Client) SaveStep(ctx context.Context, id, stepName string, result any) error {
 	_, err := c.call(ctx, map[string]any{
 		"command":   "save_step",
+		"app":       c.app,
 		"id":        id,
 		"step_name": stepName,
 		"result":    result,
@@ -166,13 +179,13 @@ func (c *Client) SaveStep(ctx context.Context, id, stepName string, result any) 
 
 // Complete marks the run succeeded.
 func (c *Client) Complete(ctx context.Context, id string) error {
-	_, err := c.call(ctx, map[string]any{"command": "complete_run", "id": id})
+	_, err := c.call(ctx, map[string]any{"command": "complete_run", "app": c.app, "id": id})
 	return err
 }
 
 // Cancel ends the run cleanly as `cancelled` (no retries).
 func (c *Client) Cancel(ctx context.Context, id string, reason *string) error {
-	body := map[string]any{"command": "cancel_run", "id": id, "reason": nil}
+	body := map[string]any{"command": "cancel_run", "app": c.app, "id": id, "reason": nil}
 	if reason != nil {
 		body["reason"] = *reason
 	}
@@ -183,7 +196,7 @@ func (c *Client) Cancel(ctx context.Context, id string, reason *string) error {
 // Defer parks the run for later. nil wakeAt = parked indefinitely.
 // Does not consume retry budget.
 func (c *Client) Defer(ctx context.Context, id string, wakeAt *time.Time) error {
-	body := map[string]any{"command": "defer_run", "id": id, "wake_at_ms": nil}
+	body := map[string]any{"command": "defer_run", "app": c.app, "id": id, "wake_at_ms": nil}
 	if wakeAt != nil {
 		body["wake_at_ms"] = wakeAt.UnixMilli()
 	}
@@ -198,6 +211,7 @@ func (c *Client) WaitForEvent(
 ) error {
 	body := map[string]any{
 		"command":       "wait_for_event",
+		"app":           c.app,
 		"id":            id,
 		"step_name":     stepName,
 		"event_name":    eventName,
@@ -215,7 +229,7 @@ func (c *Client) WaitForEvent(
 func (c *Client) Signal(ctx context.Context, eventName string, payload any) (uint64, error) {
 	data, err := c.call(ctx, map[string]any{
 		"command":    "signal",
-		"app":        "",
+		"app":        c.app,
 		"event_name": eventName,
 		"payload":    payload,
 	})
@@ -245,6 +259,7 @@ func Signal(ctx context.Context, eventName string, payload any) (uint64, error) 
 func (c *Client) Fail(ctx context.Context, id, errMsg string, nextRunAt *time.Time, finalize bool) error {
 	body := map[string]any{
 		"command":  "fail_run",
+		"app":      c.app,
 		"id":       id,
 		"error":    errMsg,
 		"finalize": finalize,
@@ -282,7 +297,7 @@ func (c *Client) call(ctx context.Context, cmd map[string]any) (json.RawMessage,
 	d := net.Dialer{Timeout: 5 * time.Second}
 	conn, err := d.DialContext(ctx, "unix", c.socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("tako: dial enqueue socket: %w", err)
+		return nil, fmt.Errorf("tako: dial workflow socket: %w", err)
 	}
 	defer conn.Close()
 	if deadline, ok := ctx.Deadline(); ok {

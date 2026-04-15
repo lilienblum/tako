@@ -512,20 +512,27 @@ impl super::ServerState {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("bun"));
 
+        // Bring up the shared workflow socket the first time we ensure any
+        // app. Idempotent — start_socket short-circuits if already running.
+        if let Err(e) = self.workflows.start_socket() {
+            tracing::warn!(error = %e, "Failed to start workflow socket");
+            return;
+        }
+        let workflow_socket = self.workflows.socket_path();
+
         let app = app_name.to_string();
         let app_for_spec = app.clone();
         let release = release_path.to_path_buf();
         let worker_bin = worker_entry;
         let manager = self.workflows.clone();
         let result = manager
-            .ensure(&app, move |db_path, sock_path| {
+            .ensure(&app, move |_db_path| {
                 crate::workflows::worker_spec_for_bun(
                     &app_for_spec,
                     0,       // workers (scale-to-zero)
                     10,      // concurrency
                     300_000, // idle_timeout_ms (5 min)
-                    &db_path,
-                    &sock_path,
+                    &workflow_socket,
                     &runtime_bin,
                     &worker_bin,
                     &release,

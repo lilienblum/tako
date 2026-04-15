@@ -1757,8 +1757,13 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 
 ### Communication model
 
-- SDK (HTTP app) → tako-server: per-app unix socket at `{tako_data_dir}/apps/<app>/enqueue.sock`. Commands: `EnqueueRun`, `Signal`.
-- Worker process → tako-server: same socket. Commands: `ClaimRun`, `HeartbeatRun`, `SaveStep`, `CompleteRun`, `CancelRun`, `FailRun`, `DeferRun`, `WaitForEvent`, `RegisterSchedules`. JSONL protocol.
+- Single shared workflow socket at `{tako_data_dir}/workflows.sock` (symlink → `workflows-{pid}.sock`, atomically swapped during upgrades for zero-downtime handoff — same pattern as the mgmt socket).
+- Every command carries an `app` field so one socket routes for every deployed app.
+- Auth: filesystem permissions only (`chmod 0600`, owned by the service user).
+- SDKs read `TAKO_WORKFLOW_SOCKET` and `TAKO_APP_NAME` env vars (set by tako-server when spawning app/worker processes).
+- From any process: `EnqueueRun`, `Signal`.
+- From worker processes: `ClaimRun`, `HeartbeatRun`, `SaveStep`, `CompleteRun`, `CancelRun`, `FailRun`, `DeferRun`, `WaitForEvent`, `RegisterSchedules`.
+- JSONL protocol, per-call connection (connect → send → read → close).
 - Server → Worker for drain: SIGTERM + grace period (120s), then SIGKILL.
 
 ### Dev mode

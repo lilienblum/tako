@@ -8,7 +8,8 @@
  * serves all state via the per-app enqueue socket.
  *
  * Env vars (set by tako-server when it spawns the worker):
- *   TAKO_ENQUEUE_SOCKET        — path to the per-app unix socket
+ *   TAKO_WORKFLOW_SOCKET       — path to the shared workflow unix socket
+ *   TAKO_APP_NAME              — app name the worker belongs to
  *   TAKO_WORKER_CONCURRENCY    — max parallel tasks per worker (default 10)
  *   TAKO_WORKER_IDLE_TIMEOUT_MS — scale-to-zero idle timeout; 0 = never
  *   TAKO_INSTANCE_ID           — unique id used as the claim leaseholder
@@ -37,7 +38,11 @@ export async function bootstrapWorker(
   const appDir = opts.appDir ?? process.cwd();
   const client = WorkflowsClient.fromEnv();
   if (!client) {
-    return { started: false, reason: "TAKO_ENQUEUE_SOCKET is not set", workflowCount: 0 };
+    return {
+      started: false,
+      reason: "TAKO_WORKFLOW_SOCKET / TAKO_APP_NAME not set",
+      workflowCount: 0,
+    };
   }
 
   const concurrency = parseIntEnv("TAKO_WORKER_CONCURRENCY", 10);

@@ -58,12 +58,15 @@ describe("WorkflowEngine enqueue (RPC)", () => {
 
   test("throws when no RPC client is configured or discoverable", async () => {
     const engine = new WorkflowEngine();
-    const prev = process.env["TAKO_ENQUEUE_SOCKET"];
-    delete process.env["TAKO_ENQUEUE_SOCKET"];
+    const prevSock = process.env["TAKO_WORKFLOW_SOCKET"];
+    const prevApp = process.env["TAKO_APP_NAME"];
+    delete process.env["TAKO_WORKFLOW_SOCKET"];
+    delete process.env["TAKO_APP_NAME"];
     try {
       await expect(engine.enqueue("w", {})).rejects.toThrow(/RPC client/);
     } finally {
-      if (prev !== undefined) process.env["TAKO_ENQUEUE_SOCKET"] = prev;
+      if (prevSock !== undefined) process.env["TAKO_WORKFLOW_SOCKET"] = prevSock;
+      if (prevApp !== undefined) process.env["TAKO_APP_NAME"] = prevApp;
     }
   });
 
@@ -73,7 +76,7 @@ describe("WorkflowEngine enqueue (RPC)", () => {
       data: { id: "srv-1", deduplicated: false },
     });
     const engine = new WorkflowEngine();
-    engine.setClient(new WorkflowsClient(sock));
+    engine.setClient(new WorkflowsClient(sock, "test-app"));
     expect(await engine.enqueue("w", { hi: 1 })).toBe("srv-1");
   });
 
@@ -93,7 +96,7 @@ describe("WorkflowEngine enqueue (RPC)", () => {
     });
 
     const engine = new WorkflowEngine();
-    engine.setClient(new WorkflowsClient(sock));
+    engine.setClient(new WorkflowsClient(sock, "test-app"));
     engine.register("w", () => {}, { maxAttempts: 7 });
     await engine.enqueue("w", {});
     const opts = (received as unknown as Record<string, Record<string, unknown>>)["opts"];

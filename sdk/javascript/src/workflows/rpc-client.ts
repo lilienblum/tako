@@ -5,14 +5,18 @@
  * `Tako.workflows.signal`) and in the worker process (for claim, heartbeat,
  * saveStep, complete, cancel, fail, defer, waitForEvent). The SDK never
  * touches SQLite — tako-server owns the queue file; everything reaches it
- * via the per-app unix socket.
+ * via the shared unix socket at `TAKO_WORKFLOW_SOCKET`.
+ *
+ * Every command carries the app name (from `TAKO_APP_NAME`), so one
+ * tako-server socket can route for every deployed app.
  */
 
 import { createConnection } from "node:net";
 import type { EnqueueOptions } from "./engine";
 import type { Run, RunId, RunStatus, StepState } from "./types";
 
-const ENQUEUE_SOCKET_ENV = "TAKO_ENQUEUE_SOCKET";
+const WORKFLOW_SOCKET_ENV = "TAKO_WORKFLOW_SOCKET";
+const APP_NAME_ENV = "TAKO_APP_NAME";
 
 export class WorkflowsError extends Error {
   constructor(message: string) {
@@ -34,14 +38,23 @@ interface RpcResponse {
 
 export class WorkflowsClient {
   private readonly socketPath: string;
+  private readonly app: string;
 
-  constructor(socketPath: string) {
+  constructor(socketPath: string, app: string) {
     this.socketPath = socketPath;
+    this.app = app;
   }
 
+  /**
+   * Build a client from env vars set by tako-server when spawning the
+   * app/worker process. Returns null when the app isn't running under Tako
+   * (e.g. local unit tests) — callers should fall back or error.
+   */
   static fromEnv(): WorkflowsClient | null {
-    const path = process.env[ENQUEUE_SOCKET_ENV];
-    return path ? new WorkflowsClient(path) : null;
+    const path = process.env[WORKFLOW_SOCKET_ENV];
+    const app = process.env[APP_NAME_ENV];
+    if (!path || !app) return null;
+    return new WorkflowsClient(path, app);
   }
 
   // --- Enqueue / signal: usable from any process ---
@@ -55,7 +68,7 @@ export class WorkflowsClient {
     }
     const data = await this.call({
       command: "enqueue_run",
-      app: "",
+      app: this.app,
       name,
       payload: payload ?? null,
       opts: wire,
@@ -70,7 +83,7 @@ export class WorkflowsClient {
   async signal(eventName: string, payload: unknown): Promise<number> {
     const data = await this.call({
       command: "signal",
-      app: "",
+      app: this.app,
       event_name: eventName,
       payload: payload ?? null,
     });
@@ -81,12 +94,13 @@ export class WorkflowsClient {
   // --- Worker-only: registration + run lifecycle ---
 
   async registerSchedules(schedules: Array<{ name: string; cron: string }>): Promise<void> {
-    await this.call({ command: "register_schedules", app: "", schedules });
+    await this.call({ command: "register_schedules", app: this.app, schedules });
   }
 
   async claim(workerId: string, names: string[], leaseMs: number): Promise<Run | null> {
     const data = await this.call({
       command: "claim_run",
+      app: this.app,
       worker_id: workerId,
       names,
       lease_ms: leaseMs,
@@ -96,12 +110,13 @@ export class WorkflowsClient {
   }
 
   async heartbeat(id: RunId, leaseMs: number): Promise<void> {
-    await this.call({ command: "heartbeat_run", id, lease_ms: leaseMs });
+    await this.call({ command: "heartbeat_run", app: this.app, id, lease_ms: leaseMs });
   }
 
   async saveStep(id: RunId, stepName: string, result: unknown): Promise<void> {
     await this.call({
       command: "save_step",
+      app: this.app,
       id,
       step_name: stepName,
       result: result ?? null,
@@ -109,16 +124,17 @@ export class WorkflowsClient {
   }
 
   async complete(id: RunId): Promise<void> {
-    await this.call({ command: "complete_run", id });
+    await this.call({ command: "complete_run", app: this.app, id });
   }
 
   async cancel(id: RunId, reason?: string | null): Promise<void> {
-    await this.call({ command: "cancel_run", id, reason: reason ?? null });
+    await this.call({ command: "cancel_run", app: this.app, id, reason: reason ?? null });
   }
 
   async fail(id: RunId, error: string, nextRunAt: Date | null, finalize: boolean): Promise<void> {
     await this.call({
       command: "fail_run",
+      app: this.app,
       id,
       error,
       next_run_at_ms: nextRunAt ? nextRunAt.getTime() : null,
@@ -129,6 +145,7 @@ export class WorkflowsClient {
   async defer(id: RunId, wakeAt: Date | null): Promise<void> {
     await this.call({
       command: "defer_run",
+      app: this.app,
       id,
       wake_at_ms: wakeAt ? wakeAt.getTime() : null,
     });
@@ -142,6 +159,7 @@ export class WorkflowsClient {
   ): Promise<void> {
     await this.call({
       command: "wait_for_event",
+      app: this.app,
       id,
       step_name: stepName,
       event_name: eventName,
