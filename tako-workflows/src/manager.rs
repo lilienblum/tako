@@ -46,6 +46,10 @@ pub struct WorkflowManager {
     data_dir: PathBuf,
     apps: Arc<RwLock<HashMap<String, AppWorkflow>>>,
     socket: parking_lot::Mutex<Option<EnqueueSocketHandle>>,
+    /// Serializes `ensure` calls so two concurrent deploys of the same app
+    /// can't each start their own supervisor + cron ticker and then have
+    /// one silently overwrite the other (leaking the loser's children).
+    ensure_gate: tokio::sync::Mutex<()>,
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -64,6 +68,7 @@ impl WorkflowManager {
             data_dir: data_dir.into(),
             apps: Arc::new(RwLock::new(HashMap::new())),
             socket: parking_lot::Mutex::new(None),
+            ensure_gate: tokio::sync::Mutex::new(()),
         }
     }
 
@@ -109,6 +114,13 @@ impl WorkflowManager {
         app: &str,
         spec_fn: impl FnOnce(PathBuf) -> WorkerSpec,
     ) -> Result<(), WorkflowManagerError> {
+        // Serialize concurrent ensures of the same app (rare, but a deploy
+        // race can otherwise start two supervisors + two cron tickers and
+        // silently drop the first when the second inserts). Held across
+        // the DB open + supervisor.start().await so the re-check below
+        // sees the first winner's entry.
+        let _gate = self.ensure_gate.lock().await;
+
         if self.apps.read().contains_key(app) {
             return Ok(());
         }

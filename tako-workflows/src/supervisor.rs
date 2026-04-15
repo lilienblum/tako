@@ -93,34 +93,32 @@ impl WorkerSupervisor {
         if self.spec.workers == 0 {
             return Ok(());
         }
+        let mut state = self.state.lock();
         for _ in 0..self.spec.workers {
-            self.spawn_one()?;
+            self.spawn_one_locked(&mut state)?;
         }
         Ok(())
     }
 
     /// Called on enqueue/cron tick. For scale-to-zero (`workers == 0`),
-    /// spawns a worker if none is running. For always-on, no-op —
-    /// the worker is already there.
+    /// spawns a worker if none is running. For always-on, respawns any
+    /// that died. Holds the state lock across the spawn calls so two
+    /// concurrent wakes can't both see an empty slot and over-spawn.
     pub fn wake(&self) -> Result<(), SupervisorError> {
-        let target = {
-            let mut state = self.state.lock();
-            if state.shutting_down {
-                return Ok(());
-            }
-            // Reap any exited children first.
-            state
-                .children
-                .retain_mut(|c| matches!(c.try_wait(), Ok(None)));
-            if self.spec.workers == 0 {
-                if state.children.is_empty() { 1 } else { 0 }
-            } else {
-                (self.spec.workers as usize).saturating_sub(state.children.len())
-            }
+        let mut state = self.state.lock();
+        if state.shutting_down {
+            return Ok(());
+        }
+        state
+            .children
+            .retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+        let target = if self.spec.workers == 0 {
+            if state.children.is_empty() { 1 } else { 0 }
+        } else {
+            (self.spec.workers as usize).saturating_sub(state.children.len())
         };
-
         for _ in 0..target {
-            self.spawn_one()?;
+            self.spawn_one_locked(&mut state)?;
         }
         Ok(())
     }
@@ -175,7 +173,9 @@ impl WorkerSupervisor {
         }
     }
 
-    fn spawn_one(&self) -> Result<(), SupervisorError> {
+    /// Caller must hold `self.state` so the spawn + push is atomic with
+    /// the slot-availability check.
+    fn spawn_one_locked(&self, state: &mut State) -> Result<(), SupervisorError> {
         let mut iter = self.spec.command.iter();
         let program = iter.next().ok_or(SupervisorError::EmptyCommand)?;
         let args: Vec<&OsString> = iter.collect();
@@ -204,7 +204,7 @@ impl WorkerSupervisor {
         );
 
         let child = cmd.spawn()?;
-        self.state.lock().children.push(child);
+        state.children.push(child);
         Ok(())
     }
 }
