@@ -17,6 +17,9 @@
     "url": "git+https://github.com/lilienblum/tako.git",
     "directory": "sdk/javascript"
   },
+  "bin": {
+    "tako-worker": "./dist/entrypoints/bun-worker.mjs"
+  },
   "files": [
     "dist",
     "skills"

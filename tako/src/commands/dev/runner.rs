@@ -642,7 +642,10 @@ pub async fn run(
                                 DevEvent::AppStopped => {
                                     println!("○ App stopped (idle)");
                                 }
-                                DevEvent::AppPid(_) | DevEvent::AppProcessExited(_) => {}
+                                DevEvent::AppPid(pid) => {
+                                    println!("App pid {}", pid);
+                                }
+                                DevEvent::AppProcessExited(_) => {}
                                 DevEvent::AppError(e) => {
                                     eprintln!("App error: {}", e);
                                 }

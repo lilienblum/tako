@@ -56,6 +56,14 @@ pub struct Config {
     /// [envs.*] sections - environment configurations
     #[serde(default)]
     pub envs: HashMap<String, EnvConfig>,
+
+    /// [servers.*] sections - per-app-per-server configuration.
+    ///
+    /// The reserved key `workflows` under `[servers]` is the default workflows
+    /// config inherited by all servers. Any other key under `[servers]` is a
+    /// per-server override that can itself contain a `[workflows]` sub-section.
+    #[serde(default)]
+    pub servers: ServersConfig,
 }
 
 /// Backward-compatible alias.
@@ -127,6 +135,64 @@ pub struct EnvConfig {
 
 fn default_idle_timeout() -> u32 {
     300
+}
+
+fn default_workers() -> u32 {
+    0
+}
+
+fn default_concurrency() -> u32 {
+    10
+}
+
+/// [servers] section — defaults + per-server overrides.
+///
+/// The reserved key `workflows` holds the default workflows config for all
+/// servers; any other key is a per-server override.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ServersConfig {
+    /// Default workflows config applied to every server unless a per-server
+    /// override is present. Populated from `[servers.workflows]`.
+    #[serde(default)]
+    pub workflows: Option<WorkflowsConfig>,
+
+    /// Per-server overrides. Keyed by server name. Populated from
+    /// `[servers.<name>]`. The key `workflows` is reserved for the default
+    /// and will not appear here.
+    #[serde(default, flatten)]
+    pub per_server: HashMap<String, ServerConfig>,
+}
+
+/// Per-server configuration: `[servers.<name>]`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ServerConfig {
+    /// Per-server workflows override.
+    #[serde(default)]
+    pub workflows: Option<WorkflowsConfig>,
+}
+
+/// Workflows configuration (cron/task engine).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct WorkflowsConfig {
+    /// Number of always-on worker processes. `0` means scale-to-zero:
+    /// spawn on enqueue/cron tick, exit after `worker_idle_timeout`.
+    #[serde(default = "default_workers")]
+    pub workers: u32,
+
+    /// Max parallel task slots per worker. Default `10`.
+    #[serde(default = "default_concurrency")]
+    pub concurrency: u32,
+}
+
+impl Default for WorkflowsConfig {
+    fn default() -> Self {
+        Self {
+            workers: default_workers(),
+            concurrency: default_concurrency(),
+        }
+    }
 }
 
 const RESERVED_DERIVED_ENV_VARS: &[&str] = &["ENV"];
@@ -219,8 +285,42 @@ impl Config {
             }
         }
 
+        // Parse [servers.*] sections.
+        //
+        // The reserved key `workflows` under `[servers]` holds the default
+        // workflows config; all other keys are per-server overrides.
+        if let Some(servers) = raw.get("servers")
+            && let Some(table) = servers.as_table()
+        {
+            for (key, value) in table {
+                if key == "workflows" {
+                    let wf: WorkflowsConfig = toml::from_str(&toml::to_string(value)?)?;
+                    config.servers.workflows = Some(wf);
+                } else {
+                    let server_config: ServerConfig = toml::from_str(&toml::to_string(value)?)?;
+                    config.servers.per_server.insert(key.clone(), server_config);
+                }
+            }
+        }
+
         config.validate()?;
         Ok(config)
+    }
+
+    /// Return the effective workflows config for a given server name.
+    ///
+    /// Precedence: `[servers.<name>.workflows]` > `[servers.workflows]` > defaults
+    /// (`workers = 0`, `concurrency = 10`).
+    pub fn workflows_for_server(&self, name: &str) -> WorkflowsConfig {
+        if let Some(server) = self.servers.per_server.get(name)
+            && let Some(wf) = &server.workflows
+        {
+            return wf.clone();
+        }
+        if let Some(wf) = &self.servers.workflows {
+            return wf.clone();
+        }
+        WorkflowsConfig::default()
     }
 
     /// Validate the configuration
@@ -589,6 +689,7 @@ fn validate_top_level_keys(raw: &toml::Value) -> Result<()> {
                 | "build_stages"
                 | "vars"
                 | "envs"
+                | "servers"
         ) {
             return Err(ConfigError::Validation(format!("Unknown key '{}'", key)));
         }
@@ -1038,6 +1139,133 @@ mod tests {
         assert_eq!(config, Config::default());
     }
 
+    // ==================== [servers.*] / Workflows Tests ====================
+
+    #[test]
+    fn test_parse_servers_workflows_default_only() {
+        let toml = r#"
+name = "app"
+
+[servers.workflows]
+workers = 3
+concurrency = 20
+"#;
+        let config = Config::parse(toml).unwrap();
+        let wf = config.servers.workflows.as_ref().unwrap();
+        assert_eq!(wf.workers, 3);
+        assert_eq!(wf.concurrency, 20);
+        assert!(config.servers.per_server.is_empty());
+    }
+
+    #[test]
+    fn test_parse_servers_per_server_override() {
+        let toml = r#"
+name = "app"
+
+[servers.lax.workflows]
+workers = 2
+"#;
+        let config = Config::parse(toml).unwrap();
+        assert!(config.servers.workflows.is_none());
+        let lax = config.servers.per_server.get("lax").unwrap();
+        let wf = lax.workflows.as_ref().unwrap();
+        assert_eq!(wf.workers, 2);
+        assert_eq!(wf.concurrency, 10); // default
+    }
+
+    #[test]
+    fn test_workflows_for_server_prefers_per_server_override() {
+        let toml = r#"
+[servers.workflows]
+workers = 1
+concurrency = 5
+
+[servers.lax.workflows]
+workers = 4
+concurrency = 15
+"#;
+        let config = Config::parse(toml).unwrap();
+        let lax = config.workflows_for_server("lax");
+        assert_eq!(lax.workers, 4);
+        assert_eq!(lax.concurrency, 15);
+    }
+
+    #[test]
+    fn test_workflows_for_server_falls_back_to_default() {
+        let toml = r#"
+[servers.workflows]
+workers = 1
+concurrency = 5
+
+[servers.lax]
+# no workflows override
+"#;
+        let config = Config::parse(toml).unwrap();
+        let lax = config.workflows_for_server("lax");
+        assert_eq!(lax.workers, 1);
+        assert_eq!(lax.concurrency, 5);
+    }
+
+    #[test]
+    fn test_workflows_for_server_falls_back_to_zero_config() {
+        let config = Config::parse("name = \"x\"").unwrap();
+        let wf = config.workflows_for_server("any");
+        assert_eq!(wf.workers, 0); // scale-to-zero default
+        assert_eq!(wf.concurrency, 10);
+    }
+
+    #[test]
+    fn test_workflows_defaults_when_section_is_empty() {
+        let toml = r#"
+[servers.workflows]
+"#;
+        let config = Config::parse(toml).unwrap();
+        let wf = config.servers.workflows.as_ref().unwrap();
+        assert_eq!(wf.workers, 0);
+        assert_eq!(wf.concurrency, 10);
+    }
+
+    #[test]
+    fn test_parse_multiple_server_overrides() {
+        let toml = r#"
+[servers.workflows]
+workers = 1
+
+[servers.lax.workflows]
+workers = 2
+
+[servers.nyc.workflows]
+workers = 3
+concurrency = 50
+"#;
+        let config = Config::parse(toml).unwrap();
+        assert_eq!(config.workflows_for_server("lax").workers, 2);
+        assert_eq!(config.workflows_for_server("nyc").workers, 3);
+        assert_eq!(config.workflows_for_server("nyc").concurrency, 50);
+        assert_eq!(config.workflows_for_server("unknown").workers, 1);
+    }
+
+    #[test]
+    fn test_parse_server_with_unknown_field_errors() {
+        let toml = r#"
+[servers.lax]
+unknown_field = 1
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("unknown"));
+    }
+
+    #[test]
+    fn test_parse_workflows_with_unknown_field_errors() {
+        let toml = r#"
+[servers.workflows]
+workers = 1
+bogus = true
+"#;
+        let err = Config::parse(toml).unwrap_err();
+        assert!(err.to_string().to_lowercase().contains("bogus"));
+    }
+
     #[test]
     fn test_parse_top_level_metadata_fields() {
         let toml = r#"
@@ -1302,12 +1530,13 @@ dist = ".tako/dist"
         let err = Config::parse(top_level_dist).unwrap_err();
         assert!(err.to_string().contains("Unknown key 'dist'"));
 
-        let top_level_servers = r#"
-[servers]
-production = ["prod-1"]
+        // `servers` is now a valid top-level key (hosts `[servers.X.workflows]`).
+        // Use a different unknown key to confirm rejection still happens.
+        let top_level_broker = r#"
+broker = "redis"
 "#;
-        let err = Config::parse(top_level_servers).unwrap_err();
-        assert!(err.to_string().contains("Unknown key 'servers'"));
+        let err = Config::parse(top_level_broker).unwrap_err();
+        assert!(err.to_string().contains("Unknown key 'broker'"));
     }
 
     #[test]

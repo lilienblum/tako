@@ -79,6 +79,7 @@ pub struct ServerState {
     pub(crate) state_store: Arc<SqliteStateStore>,
     pub(crate) server_mode: RwLock<UpgradeMode>,
     pub(crate) runtime: ServerRuntimeConfig,
+    pub(crate) workflows: Arc<crate::workflows::WorkflowManager>,
 }
 
 impl ServerState {
@@ -119,6 +120,8 @@ impl ServerState {
         }
         let server_mode = UpgradeMode::Normal;
 
+        let workflows = Arc::new(crate::workflows::WorkflowManager::new(data_dir.clone()));
+
         Ok(Self {
             app_manager,
             load_balancer,
@@ -133,7 +136,13 @@ impl ServerState {
             state_store,
             server_mode: RwLock::new(server_mode),
             runtime,
+            workflows,
         })
+    }
+
+    /// Access the per-server workflow manager.
+    pub(crate) fn workflows(&self) -> Arc<crate::workflows::WorkflowManager> {
+        self.workflows.clone()
     }
 
     pub(crate) fn app_manager(&self) -> Arc<AppManager> {

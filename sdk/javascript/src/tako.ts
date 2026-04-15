@@ -8,7 +8,11 @@
  */
 
 import { ChannelRegistry } from "./channels";
-import { loadSecrets } from "./secrets";
+import { loadSecrets } from "./tako/secrets";
+import { workflowsEngine } from "./workflows/engine";
+import type { EnqueueOptions } from "./workflows/engine";
+import type { RunId, WorkflowConfig } from "./workflows/types";
+import type { WorkflowHandler } from "./workflows/worker";
 
 function parsePort(raw: string | undefined): number | undefined {
   if (!raw) return undefined;
@@ -27,9 +31,26 @@ function parsePort(raw: string | undefined): number | undefined {
  * Tako.channels.define("chat:*", { auth: async () => ({ allow: true }) });
  * ```
  */
+/**
+ * User-facing workflows surface. `enqueue` schedules a run; `register` is
+ * the imperative alternative to the `workflows/` directory convention.
+ */
+const workflows = {
+  enqueue(name: string, payload: unknown, opts?: EnqueueOptions): Promise<RunId> {
+    return workflowsEngine.enqueue(name, payload, opts);
+  },
+  register(name: string, handler: WorkflowHandler, config?: WorkflowConfig): void {
+    workflowsEngine.register(name, handler, config);
+  },
+  signal(eventName: string, payload?: unknown): Promise<number> {
+    return workflowsEngine.signal(eventName, payload);
+  },
+} as const;
+
 export const Tako = {
   channels: new ChannelRegistry(),
   secrets: loadSecrets(),
+  workflows,
 } as const;
 
 type RuntimeState = {
@@ -62,6 +83,12 @@ const globalTako = Object.freeze(
       },
       channels: {
         value: Tako.channels,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      },
+      workflows: {
+        value: Tako.workflows,
         writable: false,
         configurable: false,
         enumerable: false,
@@ -128,6 +155,15 @@ declare global {
     readonly appDir: string;
     /** Typed secret accessor. */
     readonly secrets: TakoSecrets;
+    /** Durable workflow engine. */
+    readonly workflows: {
+      /** Enqueue a run of the named workflow. */
+      enqueue(name: string, payload: unknown, opts?: EnqueueOptions): Promise<RunId>;
+      /** Imperative workflow registration (alternative to the workflows/ dir). */
+      register(name: string, handler: WorkflowHandler, config?: WorkflowConfig): void;
+      /** Deliver an event payload to every parked `step.waitFor(name)`. */
+      signal(eventName: string, payload?: unknown): Promise<number>;
+    };
   };
 }
 

@@ -17,6 +17,20 @@
 export { Tako, installTakoGlobal } from "./tako";
 export { Channel, ChannelRegistry, TAKO_CHANNELS_BASE_PATH } from "./channels";
 export type {
+  EnqueueOptions,
+  EnqueueResult,
+  Run,
+  RunId,
+  RunSpec,
+  RunStatus,
+  StepAPI,
+  StepState,
+  WorkflowConfig,
+  WorkflowContext,
+  WorkflowHandler,
+} from "./workflows";
+export { WorkflowsClient, WorkflowsError } from "./workflows";
+export type {
   ChannelAuthContext,
   ChannelAuthorizeInput,
   ChannelAuthorizeResponse,

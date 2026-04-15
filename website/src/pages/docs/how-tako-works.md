@@ -331,6 +331,27 @@ All metrics carry `server` and `app` labels. Only proxied requests are measured 
 
 Scrape with Prometheus, Grafana Cloud, Datadog, or any compatible platform. For remote scraping, expose port 9898 on a private network interface (e.g. via Tailscale or WireGuard).
 
+## Workflows
+
+Apps can run durable background tasks alongside their HTTP instances. Drop a file in `workflows/` (JS/TS) or register handlers in a separate `cmd/worker/main.go` binary (Go), then enqueue from any request handler:
+
+```ts
+await Tako.workflows.enqueue("send-email", { to: "user@example.com" });
+```
+
+Tako runs each app's workers in a **separate process** from HTTP instances (so heavy workflow deps — image libs, ML bindings — don't inflate the HTTP binary). The worker is scale-to-zero by default: it spawns on the first enqueue or cron tick, exits after 5 minutes idle, and respawns on demand.
+
+Features:
+
+- **Retries with exponential backoff** (1s base, capped at 1h, ±20% jitter)
+- **Delayed runs** (`runAt: new Date(...)`) and **cron schedules** (`export const schedule = "0 9 * * *"`)
+- **Multi-step workflows** with `ctx.step.run("name", fn)` — step results are checkpointed to SQLite, so a crashed workflow resumes from the last completed step on retry
+- **Graceful drain** — `tako stop` and `tako delete` wait for in-flight tasks (up to 120s) before tearing down
+
+Queue state lives in `{tako_data_dir}/apps/<app>/runs.db` (SQLite with WAL). tako-server owns the file; the worker process polls it. Enqueues from the SDK go over a per-app unix socket — no external queue service, no Redis, no Postgres required.
+
+See [`tako.toml` → Workflows](/docs/tako-toml#workflows) for `[servers.X.workflows]` config details.
+
 ## What to Read Next
 
 - [CLI Reference](/docs/cli) for command details and flags

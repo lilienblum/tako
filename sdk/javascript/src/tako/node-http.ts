@@ -1,15 +1,13 @@
-#!/usr/bin/env node
 /**
- * Tako Node.js Entrypoint — run via `npx tako-node <main>`
+ * Shared helpers for the Node.js HTTP entrypoints (`node-server` and
+ * `node-dev`): bridge `node:http` request/response objects to the Fetch
+ * API `Request`/`Response` the Tako runtime expects.
  */
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { Readable } from "node:stream";
-import { createEntrypoint } from "../create-entrypoint";
 
-const { run, host, port, setDraining } = createEntrypoint();
-
-function incomingMessageToRequest(req: IncomingMessage): Request {
+export function incomingMessageToRequest(req: IncomingMessage): Request {
   const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
   const method = req.method || "GET";
   const headers = new Headers();
@@ -36,7 +34,7 @@ function incomingMessageToRequest(req: IncomingMessage): Request {
   return new Request(url.href, { method, headers, body, duplex: "half" } as RequestInit);
 }
 
-async function writeResponse(webResponse: Response, res: ServerResponse): Promise<void> {
+export async function writeResponse(webResponse: Response, res: ServerResponse): Promise<void> {
   const headers: Record<string, string | string[]> = {};
   webResponse.headers.forEach((value, key) => {
     const existing = headers[key];
@@ -63,32 +61,31 @@ async function writeResponse(webResponse: Response, res: ServerResponse): Promis
   });
 }
 
-void run(
-  (handleRequest) =>
-    new Promise<number>((resolve) => {
-      const server = createServer(async (req, res) => {
-        try {
-          const request = incomingMessageToRequest(req);
-          const response = await handleRequest(request);
-          await writeResponse(response, res);
-        } catch (err) {
-          console.error("Error handling request:", err);
-          if (!res.headersSent) {
-            res.writeHead(500, { "Content-Type": "application/json" });
-          }
-          res.end(JSON.stringify({ error: "Internal Server Error" }));
+/** Start a Node http.Server wired to the given fetch-style handler. */
+export function startNodeServer(
+  host: string,
+  port: number,
+  handleRequest: (req: Request) => Promise<Response>,
+): Promise<{ actualPort: number; close: () => void }> {
+  return new Promise((resolve) => {
+    const server = createServer(async (req, res) => {
+      try {
+        const request = incomingMessageToRequest(req);
+        const response = await handleRequest(request);
+        await writeResponse(response, res);
+      } catch (err) {
+        console.error("Error handling request:", err);
+        if (!res.headersSent) {
+          res.writeHead(500, { "Content-Type": "application/json" });
         }
-      });
+        res.end(JSON.stringify({ error: "Internal Server Error" }));
+      }
+    });
 
-      server.listen(port, host, () => {
-        const addr = server.address();
-        const actualPort = typeof addr === "object" && addr ? addr.port : port;
-        resolve(actualPort);
-      });
-
-      process.on("SIGTERM", () => {
-        setDraining();
-        server.close();
-      });
-    }),
-);
+    server.listen(port, host, () => {
+      const addr = server.address();
+      const actualPort = typeof addr === "object" && addr ? addr.port : port;
+      resolve({ actualPort, close: () => server.close() });
+    });
+  });
+}

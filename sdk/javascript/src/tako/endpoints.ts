@@ -7,8 +7,8 @@
  * - POST /channels/authorize — Channel auth callback
  */
 
-import { Tako } from "./tako";
-import type { ChannelAuthorizeInput, TakoStatus } from "./types";
+import { Tako } from "../tako";
+import type { ChannelAuthorizeInput, TakoStatus } from "../types";
 
 export const TAKO_INTERNAL_HOST = "tako.internal";
 export const TAKO_INTERNAL_STATUS_PATH = "/status";

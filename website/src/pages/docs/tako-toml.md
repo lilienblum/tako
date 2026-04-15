@@ -628,3 +628,27 @@ Manage secrets with:
 - `tako secrets rm [--env <env>] <name>` -- remove a secret
 - `tako secrets ls` -- list all secrets across environments
 - `tako secrets sync [--env <env>]` -- push local secrets to servers
+
+## Workflows
+
+Durable task engine config. Controls whether your app runs worker processes alongside HTTP instances.
+
+```toml
+[servers.workflows]           # default for every server in the env
+workers = 1
+concurrency = 10
+
+[servers.lax.workflows]       # per-server override
+workers = 2
+```
+
+Fields:
+
+- **`workers`** — always-on worker processes per server. `0` = scale-to-zero (tako-server spawns the worker on enqueue/cron tick, worker exits after 5 minutes idle). Default `0`.
+- **`concurrency`** — parallel task slots per worker. Default `10`.
+
+Precedence: per-server (`[servers.<name>.workflows]`) > default (`[servers.workflows]`) > zero-config (`workers = 0`, `concurrency = 10`).
+
+If your app has a `workflows/` directory (JS) but no `[servers.*.workflows]` block, you get scale-to-zero on every server automatically — no extra config needed.
+
+The name `workflows` under `[servers]` is reserved and cannot be used as a server name.

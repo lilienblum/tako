@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import path from "node:path";
 import { tmpdir } from "node:os";
 
-import { createEntrypoint, signalReadyPortOnFd } from "../src/create-entrypoint";
+import { createEntrypoint, signalReadyPortOnFd } from "../src/tako/create-entrypoint";
 
 const originalArgv = [...process.argv];
 

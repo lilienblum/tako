@@ -518,7 +518,7 @@ mod tests {
 
         fs::create_dir_all(source.join("node_modules/tako.sh/dist/entrypoints")).unwrap();
         fs::write(
-            source.join("node_modules/tako.sh/dist/entrypoints/bun.mjs"),
+            source.join("node_modules/tako.sh/dist/entrypoints/bun-server.mjs"),
             "export {}",
         )
         .unwrap();
@@ -527,7 +527,7 @@ mod tests {
 
         BuildExecutor::extract_archive(&archive, &dest).unwrap();
         assert!(
-            dest.join("node_modules/tako.sh/dist/entrypoints/bun.mjs")
+            dest.join("node_modules/tako.sh/dist/entrypoints/bun-server.mjs")
                 .exists()
         );
     }

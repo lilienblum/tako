@@ -1308,7 +1308,7 @@ HTTPServer(("127.0.0.1", port), Handler).serve_forever()
     std::fs::write(release_dir.join("index.ts"), "export default {};\n").unwrap();
     std::fs::create_dir_all(release_dir.join("node_modules/tako.sh/dist/entrypoints")).unwrap();
     std::fs::write(
-        release_dir.join("node_modules/tako.sh/dist/entrypoints/bun.mjs"),
+        release_dir.join("node_modules/tako.sh/dist/entrypoints/bun-server.mjs"),
         "export default {};",
     )
     .unwrap();

@@ -30,6 +30,8 @@ mod state_store;
 mod tls;
 mod version_manager;
 
+use tako_workflows as workflows;
+
 use crate::boot::install_rustls_crypto_provider;
 use clap::Parser;
 use std::path::Path;

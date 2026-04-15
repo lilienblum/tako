@@ -346,7 +346,7 @@ pub fn write_bun_app(app_dir: &Path, body: &str) {
     )
     .unwrap();
     fs::write(
-        app_dir.join("node_modules/tako.sh/dist/entrypoints/bun.mjs"),
+        app_dir.join("node_modules/tako.sh/dist/entrypoints/bun-server.mjs"),
         "await import(process.argv[2]);",
     )
     .unwrap();

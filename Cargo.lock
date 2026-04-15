@@ -742,6 +742,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "790eea4361631c5e7d22598ecd5723ff611904e3344ce8720784c93e3d83d40b"
 
 [[package]]
+name = "cron"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6f8c3e73077b4b4a6ab1ea5047c37c57aee77657bc8ecd6f29b0af082d0b0c07"
+dependencies = [
+ "chrono",
+ "nom",
+ "once_cell",
+]
+
+[[package]]
 name = "crossbeam-channel"
 version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5052,6 +5063,7 @@ dependencies = [
  "tako-core",
  "tako-runtime",
  "tako-socket",
+ "tako-workflows",
  "tar",
  "tempfile",
  "thiserror 2.0.18",
@@ -5070,6 +5082,26 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "tako-workflows"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "cron",
+ "libc",
+ "nanoid",
+ "parking_lot",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "tako-core",
+ "tako-socket",
+ "tempfile",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

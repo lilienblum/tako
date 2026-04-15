@@ -183,6 +183,20 @@ impl super::ServerState {
                     "token": token
                 }))
             }
+            Command::EnqueueRun { .. }
+            | Command::RegisterSchedules { .. }
+            | Command::ClaimRun { .. }
+            | Command::HeartbeatRun { .. }
+            | Command::SaveStep { .. }
+            | Command::CompleteRun { .. }
+            | Command::CancelRun { .. }
+            | Command::FailRun { .. }
+            | Command::DeferRun { .. }
+            | Command::WaitForEvent { .. }
+            | Command::Signal { .. } => Response::error(
+                "workflow commands must be sent over the per-app enqueue socket, not the management socket"
+                    .to_string(),
+            ),
         }
     }
 
@@ -342,6 +356,13 @@ impl super::ServerState {
             self.ensure_route_certificate(app_name, domain).await;
         }
 
+        // Bring up the workflow engine for this app if it ships a `workflows/`
+        // directory. Scale-to-zero by default — no worker process spawns until
+        // the first enqueue or cron tick. Idempotent: a re-deploy of an app
+        // already under management is a no-op here.
+        self.ensure_app_workflows(app_name, &release_path, runtime_bin_path.as_deref())
+            .await;
+
         if app.get_instances().is_empty() {
             if deploy_config.min_instances == 0 {
                 match self.start_on_demand_warm_instance(&app).await {
@@ -448,8 +469,87 @@ impl super::ServerState {
         }
     }
 
+    /// Opt an app into the workflow engine when it ships a `workflows/`
+    /// directory. Called at the end of a successful deploy.
+    ///
+    /// v1 defaults: `workers = 0` (scale-to-zero), `concurrency = 10`,
+    /// `idle_timeout_ms = 300_000` (5 min). Per-server config from
+    /// `[servers.X.workflows]` in `tako.toml` is *not yet* plumbed through
+    /// the Deploy command — tracked as a follow-up.
+    ///
+    /// `runtime_bin_path` is the bun/node/deno binary resolved by
+    /// `resolve_release_runtime_bin` — the same path the instance spawner
+    /// uses, so workers share the pinned runtime version. Falls back to
+    /// `bun` on `PATH` when unresolved (e.g. a source-build app in dev).
+    async fn ensure_app_workflows(
+        &self,
+        app_name: &str,
+        release_path: &std::path::Path,
+        runtime_bin_path: Option<&str>,
+    ) {
+        let workflows_dir = release_path.join("workflows");
+        if !workflows_dir.is_dir() {
+            return;
+        }
+
+        let worker_entry = release_path
+            .join("node_modules")
+            .join("tako.sh")
+            .join("dist")
+            .join("tako")
+            .join("entrypoints")
+            .join("bun-worker.mjs");
+        if !worker_entry.exists() {
+            tracing::warn!(
+                app = app_name,
+                path = %worker_entry.display(),
+                "Skipping workflow engine: worker entrypoint not found in release"
+            );
+            return;
+        }
+
+        let runtime_bin = runtime_bin_path
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("bun"));
+
+        let app = app_name.to_string();
+        let app_for_spec = app.clone();
+        let release = release_path.to_path_buf();
+        let worker_bin = worker_entry;
+        let manager = self.workflows.clone();
+        let result = manager
+            .ensure(&app, move |db_path, sock_path| {
+                crate::workflows::worker_spec_for_bun(
+                    &app_for_spec,
+                    0,       // workers (scale-to-zero)
+                    10,      // concurrency
+                    300_000, // idle_timeout_ms (5 min)
+                    &db_path,
+                    &sock_path,
+                    &runtime_bin,
+                    &worker_bin,
+                    &release,
+                )
+            })
+            .await;
+
+        if let Err(e) = result {
+            tracing::warn!(
+                app = app_name,
+                error = %e,
+                "Failed to bring up workflow engine"
+            );
+        }
+    }
+
     async fn stop_app(&self, app_name: &str) -> Response {
         tracing::info!(app = app_name, "Stopping app");
+
+        // Drain workflow worker first so in-flight tasks get a chance to
+        // finish before HTTP instances are torn down. 120s hard cap.
+        self.workflows
+            .stop(app_name, Duration::from_secs(120))
+            .await;
 
         match self.app_manager.stop_app(app_name).await {
             Ok(()) => Response::ok(serde_json::json!({
@@ -587,6 +687,12 @@ impl super::ServerState {
 
     async fn delete_app(&self, app_name: &str) -> Response {
         tracing::info!(app = app_name, "Deleting app");
+
+        // Drain workflow resources (worker, cron, enqueue socket) + remove
+        // runs.db BEFORE we nuke app_root — the manager owns those files.
+        self.workflows
+            .delete(app_name, Duration::from_secs(120))
+            .await;
 
         let mut existed = false;
         if self.app_manager.get_app(app_name).is_some() {

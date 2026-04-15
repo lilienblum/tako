@@ -270,7 +270,7 @@ fn js_dev_command_bun() -> Vec<String> {
     vec![
         "bun".to_string(),
         "run".to_string(),
-        "node_modules/tako.sh/dist/entrypoints/bun.mjs".to_string(),
+        "node_modules/tako.sh/dist/entrypoints/bun-server.mjs".to_string(),
         "{main}".to_string(),
     ]
 }
@@ -279,7 +279,7 @@ fn js_dev_command_node() -> Vec<String> {
     vec![
         "node".to_string(),
         "--experimental-strip-types".to_string(),
-        "node_modules/tako.sh/dist/entrypoints/node.mjs".to_string(),
+        "node_modules/tako.sh/dist/entrypoints/node-server.mjs".to_string(),
         "{main}".to_string(),
     ]
 }
@@ -293,7 +293,7 @@ fn js_dev_command_deno() -> Vec<String> {
         "--allow-read".to_string(),
         "--allow-write".to_string(),
         "--node-modules-dir=auto".to_string(),
-        "node_modules/tako.sh/dist/entrypoints/deno.mjs".to_string(),
+        "node_modules/tako.sh/dist/entrypoints/deno-server.mjs".to_string(),
         "{main}".to_string(),
     ]
 }
@@ -413,7 +413,7 @@ impl BunPlugin {
                 start: vec![
                     "{bin}".to_string(),
                     "run".to_string(),
-                    "node_modules/tako.sh/dist/entrypoints/bun.mjs".to_string(),
+                    "node_modules/tako.sh/dist/entrypoints/bun-server.mjs".to_string(),
                     "{main}".to_string(),
                 ],
                 build: Some(pm_build_command(pm)),
@@ -423,7 +423,7 @@ impl BunPlugin {
                 launch_args: vec![
                     "{bin}".to_string(),
                     "run".to_string(),
-                    "node_modules/tako.sh/dist/entrypoints/bun.mjs".to_string(),
+                    "node_modules/tako.sh/dist/entrypoints/bun-server.mjs".to_string(),
                     "{main}".to_string(),
                 ],
             },
@@ -478,7 +478,7 @@ impl NodePlugin {
                 start: vec![
                     "{bin}".to_string(),
                     "--experimental-strip-types".to_string(),
-                    "node_modules/tako.sh/dist/entrypoints/node.mjs".to_string(),
+                    "node_modules/tako.sh/dist/entrypoints/node-server.mjs".to_string(),
                     "{main}".to_string(),
                 ],
                 build: Some(pm_build_command(pm)),
@@ -488,7 +488,7 @@ impl NodePlugin {
                 launch_args: vec![
                     "{bin}".to_string(),
                     "--experimental-strip-types".to_string(),
-                    "node_modules/tako.sh/dist/entrypoints/node.mjs".to_string(),
+                    "node_modules/tako.sh/dist/entrypoints/node-server.mjs".to_string(),
                     "{main}".to_string(),
                 ],
             },
@@ -553,7 +553,7 @@ impl DenoPlugin {
                     "--allow-read".to_string(),
                     "--allow-write".to_string(),
                     "--node-modules-dir=auto".to_string(),
-                    "node_modules/tako.sh/dist/entrypoints/deno.mjs".to_string(),
+                    "node_modules/tako.sh/dist/entrypoints/deno-server.mjs".to_string(),
                     "{main}".to_string(),
                 ],
                 build: Some(pm_build_command(pm)),
@@ -568,7 +568,7 @@ impl DenoPlugin {
                     "--allow-read".to_string(),
                     "--allow-write".to_string(),
                     "--node-modules-dir=auto".to_string(),
-                    "node_modules/tako.sh/dist/entrypoints/deno.mjs".to_string(),
+                    "node_modules/tako.sh/dist/entrypoints/deno-server.mjs".to_string(),
                     "{main}".to_string(),
                 ],
             },

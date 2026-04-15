@@ -101,6 +101,149 @@ pub enum Command {
         token: String,
         key_authorization: String,
     },
+
+    /// Enqueue a run of the named workflow.
+    ///
+    /// The server inserts a row into `{data_dir}/apps/{app}/runs.db` and the
+    /// worker process polls it up within ~1s. If `unique_key` collides with
+    /// an existing non-terminal run, this is a no-op and the existing run id
+    /// is returned.
+    EnqueueRun {
+        app: String,
+        name: String,
+        payload: serde_json::Value,
+        #[serde(default)]
+        opts: EnqueueOpts,
+    },
+
+    /// Register (or replace) the full set of cron schedules for an app.
+    ///
+    /// The worker sends this on startup; the server writes rows into
+    /// `schedules` and the cron ticker reads from there. Re-sending is
+    /// idempotent — any schedule not present in the new list is removed.
+    RegisterSchedules {
+        app: String,
+        schedules: Vec<ScheduleSpec>,
+    },
+
+    /// Worker: atomically claim the oldest eligible run for one of `names`.
+    /// Bumps `attempts`. Returns null when nothing is due.
+    ClaimRun {
+        worker_id: String,
+        names: Vec<String>,
+        lease_ms: u64,
+    },
+
+    /// Worker: extend the lease on a running run.
+    HeartbeatRun { id: String, lease_ms: u64 },
+
+    /// Worker: persist a single completed step's result. First-write-wins
+    /// on `(run_id, step_name)` — duplicate saves are ignored so a retried
+    /// RPC after a successful insert doesn't overwrite.
+    SaveStep {
+        id: String,
+        step_name: String,
+        result: serde_json::Value,
+    },
+
+    /// Worker: mark a run succeeded.
+    CompleteRun { id: String },
+
+    /// Worker: cancel a run cleanly (status becomes `cancelled`). Triggered
+    /// by the user via `ctx.bail(reason?)`.
+    CancelRun {
+        id: String,
+        #[serde(default)]
+        reason: Option<String>,
+    },
+
+    /// Worker: record a failure. When `finalize = true` the run becomes
+    /// dead; otherwise it goes back to pending with `next_run_at_ms` as the
+    /// new `run_at`.
+    FailRun {
+        id: String,
+        error: String,
+        #[serde(default)]
+        next_run_at_ms: Option<i64>,
+        finalize: bool,
+    },
+
+    /// Worker: park the run for later resumption (durable `step.sleep` /
+    /// `step.waitFor`). When `wake_at_ms` is None the run is parked until a
+    /// matching `Signal` arrives. Does not consume retry budget.
+    DeferRun {
+        id: String,
+        #[serde(default)]
+        wake_at_ms: Option<i64>,
+    },
+
+    /// Worker: park a run waiting for a named event. Resumed by `Signal`.
+    WaitForEvent {
+        id: String,
+        step_name: String,
+        event_name: String,
+        #[serde(default)]
+        timeout_at_ms: Option<i64>,
+    },
+
+    /// Anyone: deliver an event payload. Wakes every parked waiter with
+    /// matching `event_name`. The payload is materialized as the step
+    /// result for the waiter's `step_name`.
+    Signal {
+        app: String,
+        event_name: String,
+        payload: serde_json::Value,
+    },
+}
+
+/// A single cron schedule for a workflow.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ScheduleSpec {
+    /// Workflow name. Must match a registered handler.
+    pub name: String,
+    /// Cron expression. 6-field format (sec min hour day month dayofweek) per
+    /// the `cron` crate, or 5-field (the worker SDK normalizes).
+    pub cron: String,
+}
+
+/// Options for `Command::EnqueueRun`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct EnqueueOpts {
+    /// Unix-ms timestamp to run at. Defaults to now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_at_ms: Option<i64>,
+
+    /// Max attempts (inclusive of the first). Defaults to 3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_attempts: Option<u32>,
+
+    /// Deduplication key. If another non-terminal task with this key exists,
+    /// enqueue is a no-op and the existing task id is returned.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unique_key: Option<String>,
+}
+
+/// Response payload for `Command::EnqueueRun`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EnqueueRunResponse {
+    /// The run id (newly-created or existing if the request was a dedup hit).
+    pub id: String,
+    /// True when the request collapsed onto a pre-existing run via unique_key.
+    pub deduplicated: bool,
+}
+
+/// Response payload for `Command::ClaimRun`. `None` when nothing is due.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RunPayload {
+    pub id: String,
+    pub name: String,
+    pub payload: serde_json::Value,
+    /// pending | running | succeeded | cancelled | dead
+    pub status: String,
+    pub attempts: u32,
+    pub max_attempts: u32,
+    pub run_at_ms: i64,
+    pub step_state: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -617,6 +760,64 @@ mod tests {
         assert!(!hash.is_empty());
         // Empty map should produce a consistent hash
         assert_eq!(hash, compute_secrets_hash(&HashMap::new()));
+    }
+
+    #[test]
+    fn test_enqueue_run_command_roundtrip() {
+        let cmd = Command::EnqueueRun {
+            app: "my-app".to_string(),
+            name: "send-email".to_string(),
+            payload: serde_json::json!({ "to": "a@b.c" }),
+            opts: EnqueueOpts {
+                run_at_ms: Some(1_700_000_000_000),
+                max_attempts: Some(5),
+                unique_key: Some("cron:send-email:0".to_string()),
+            },
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        assert!(json.contains(r#""command":"enqueue_run""#));
+        assert!(json.contains(r#""unique_key":"cron:send-email:0""#));
+        let parsed: Command = serde_json::from_str(&json).unwrap();
+        match parsed {
+            Command::EnqueueRun {
+                app, name, opts, ..
+            } => {
+                assert_eq!(app, "my-app");
+                assert_eq!(name, "send-email");
+                assert_eq!(opts.max_attempts, Some(5));
+            }
+            _ => panic!("expected EnqueueRun"),
+        }
+    }
+
+    #[test]
+    fn test_enqueue_run_command_defaults_opts_when_missing() {
+        let json = r#"{
+            "command":"enqueue_run",
+            "app":"my-app",
+            "name":"w",
+            "payload":{}
+        }"#;
+        let cmd: Command = serde_json::from_str(json).unwrap();
+        match cmd {
+            Command::EnqueueRun { opts, .. } => {
+                assert!(opts.run_at_ms.is_none());
+                assert!(opts.max_attempts.is_none());
+                assert!(opts.unique_key.is_none());
+            }
+            _ => panic!("expected EnqueueRun"),
+        }
+    }
+
+    #[test]
+    fn test_enqueue_run_response_serialization() {
+        let r = EnqueueRunResponse {
+            id: "01abc".to_string(),
+            deduplicated: true,
+        };
+        let json = serde_json::to_string(&r).unwrap();
+        let parsed: EnqueueRunResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, r);
     }
 
     #[test]

@@ -1,60 +1,30 @@
 /**
  * Creates a Tako entrypoint for any JS runtime.
  *
- * Each runtime-specific entrypoint (bun.ts, node.ts, deno.ts) calls this
- * and only provides the server binding layer.
+ * Each runtime-specific entrypoint (bun-server.ts, node-server.ts,
+ * deno-server.ts) wires its own fd-reading impls for secrets and
+ * readiness signaling, then calls `createEntrypoint` which handles the
+ * runtime-agnostic boot flow.
  *
  * CLI args (appended by tako-server):
  *   <main> --instance <id>
  */
 
-import { readFileSync, closeSync, fstatSync, writeSync } from "node:fs";
 import { handleTakoEndpoint } from "./endpoints";
-import { injectSecrets } from "./secrets";
-import { installTakoGlobal } from "./tako";
-import type { FetchFunction, ReadyableFetchHandler, TakoStatus } from "./types";
+import { writeViaInheritedFd } from "./readiness";
+import { installTakoGlobal } from "../tako";
+import type { FetchFunction, ReadyableFetchHandler, TakoStatus } from "../types";
 
-function readSecretsFromFd(): void {
-  try {
-    // Check fd 3 is a pipe (Tako passes secrets this way).
-    // Without this guard, readFileSync(3) blocks forever if fd 3 is
-    // open but not a Tako pipe (e.g. GitHub Actions runner logging fd).
-    const stat = fstatSync(3);
-    if (!stat.isFIFO()) return;
-
-    const data = readFileSync(3, "utf-8");
-    closeSync(3);
-    try {
-      const secrets = JSON.parse(data);
-      if (typeof secrets !== "object" || secrets === null || Array.isArray(secrets)) {
-        console.error("Tako: secrets on fd 3 must be a JSON object");
-        process.exit(1);
-      }
-      injectSecrets(Object.assign(Object.create(null), secrets));
-    } catch {
-      console.error("Tako: invalid secrets JSON on fd 3");
-      process.exit(1);
-    }
-  } catch {
-    // Any error (EBADF, ENXIO, etc.) = not running under Tako
-  }
+export interface EntrypointOptions {
+  /**
+   * How to signal the resolved port back to tako-server on an inherited
+   * fd. Default works for Bun and Node; Deno overrides via `/proc/self/fd`.
+   */
+  signalReadyPortOnFd?: (fd: number, port: number) => void;
 }
 
-export function signalReadyPortOnFd(fd: number, port: number): void {
-  try {
-    const stat = fstatSync(fd);
-    if (!stat.isFIFO()) return;
-
-    writeSync(fd, `${port}\n`);
-    closeSync(fd);
-  } catch {
-    // Not running under Tako or readiness pipe unavailable.
-  }
-}
-
-function signalReadyPort(port: number): void {
-  signalReadyPortOnFd(4, port);
-}
+/** Exported for tests and for runtime entrypoints that want the default impl. */
+export const signalReadyPortOnFd = writeViaInheritedFd;
 
 interface ParsedArgs {
   main: string;
@@ -62,8 +32,6 @@ interface ParsedArgs {
 }
 
 function parseArgs(argv: string[]): ParsedArgs {
-  // argv: [runtime, entrypoint, main, --instance, id]
-  // Skip argv[0] (runtime) and argv[1] (entrypoint script)
   const args = argv.slice(2);
   let main = "";
   let instance = "unknown";
@@ -84,9 +52,12 @@ function parseArgs(argv: string[]): ParsedArgs {
   return { main, instance };
 }
 
-export function createEntrypoint() {
-  readSecretsFromFd();
+export function createEntrypoint(options: EntrypointOptions = {}) {
+  const signalReadyOnFd = options.signalReadyPortOnFd ?? writeViaInheritedFd;
+  const signalReadyPort = (port: number): void => signalReadyOnFd(4, port);
+
   installTakoGlobal();
+
   const parsed = parseArgs(process.argv);
   const port = parseInt(process.env["PORT"] || "3000", 10);
   const host = process.env["HOST"] || "127.0.0.1";

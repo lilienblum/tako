@@ -90,7 +90,7 @@ main = "src/index.ts"
     .expect("runtime default dev command");
 
     assert_eq!(cmd[0], "bun");
-    assert!(cmd.iter().any(|a| a.contains("entrypoints/bun.mjs")));
+    assert!(cmd.iter().any(|a| a.contains("entrypoints/bun-server.mjs")));
     assert!(cmd.last().unwrap().ends_with("src/index.ts"));
 }
 
@@ -116,7 +116,10 @@ main = "dist/server/tako-entry.mjs"
     .expect("runtime default dev command");
 
     assert_eq!(cmd[0], "node");
-    assert!(cmd.iter().any(|a| a.contains("entrypoints/node.mjs")));
+    assert!(
+        cmd.iter()
+            .any(|a| a.contains("entrypoints/node-server.mjs"))
+    );
     assert!(cmd.last().unwrap().ends_with("src/index.ts"));
 }
 

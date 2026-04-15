@@ -47,15 +47,36 @@ function startDev(pd: string, lf: string) {
   });
 }
 
-async function waitForApp(lf: string, timeoutMs = 60_000): Promise<number> {
+/**
+ * Wait for the dev server to be ready.
+ * Returns the dev URL printed by `tako dev` (e.g. https://bun-e2e.test/).
+ * Readiness is signalled by "App started" in the log.
+ */
+async function waitForApp(lf: string, timeoutMs = 60_000): Promise<string> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const log = safeRead(lf);
-    const m = log.match(/Application listening on http:\/\/[\d.]+:(\d+)/);
-    if (m) return Number(m[1]);
+    if (/App started/.test(log)) {
+      const m = log.match(/^(https?:\/\/\S+)/m);
+      if (m) return m[1];
+    }
     await Bun.sleep(300);
   }
   throw new Error(`App didn't start.\nLog:\n${safeRead(lf)}`);
+}
+
+/**
+ * Wait for the app process PID to appear in the log ("App pid <n>").
+ * The runner emits this line in non-interactive mode.
+ */
+async function waitForAppPid(lf: string, timeoutMs = 30_000): Promise<number> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const m = safeRead(lf).match(/^App pid (\d+)/m);
+    if (m) return Number(m[1]);
+    await Bun.sleep(300);
+  }
+  throw new Error(`App pid never appeared.\nLog:\n${safeRead(lf)}`);
 }
 
 describe.skipIf(SKIP)("tako dev fixtures", () => {
@@ -67,12 +88,12 @@ describe.skipIf(SKIP)("tako dev fixtures", () => {
       const proc = startDev(pd, lf);
 
       try {
-        const port = await waitForApp(lf);
+        const devUrl = await waitForApp(lf);
 
         // Fixtures serve HTML at /.
-        const appName = `${runtime}-e2e`;
-        const resp = await fetch(`http://127.0.0.1:${port}/`, {
-          headers: { Host: `${appName}.test` },
+        const resp = await fetch(devUrl, {
+          // @ts-ignore — Bun extension: skip TLS verification for the self-signed dev CA
+          tls: { rejectUnauthorized: false },
         });
         expect(resp.status).toBe(200);
         const body = await resp.text();
@@ -91,27 +112,13 @@ describe.skipIf(SKIP)("tako dev fixtures", () => {
     const proc = startDev(pd, lf);
 
     try {
-      const port = await waitForApp(lf);
+      await waitForApp(lf);
 
-      // Find the app's PID via lsof and kill it.
-      const lsof = Bun.spawn(["lsof", "-ti", `tcp:${port}`], {
-        stdout: "pipe",
-        stderr: "ignore",
-      });
-      const pids = (await new Response(lsof.stdout).text())
-        .trim()
-        .split("\n")
-        .filter(Boolean)
-        .map(Number)
-        .filter((p) => p !== proc.pid);
-      await lsof.exited;
-
-      expect(pids.length).toBeGreaterThan(0);
-      for (const pid of pids) {
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch {}
-      }
+      // Wait for the app PID to appear in the log, then kill it directly.
+      const appPid = await waitForAppPid(lf);
+      try {
+        process.kill(appPid, "SIGKILL");
+      } catch {}
 
       // Wait for exit detection.
       for (let i = 0; i < 20; i++) {

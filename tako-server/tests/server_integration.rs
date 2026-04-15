@@ -371,7 +371,7 @@ mod instance_management {
         )
         .unwrap();
         fs::write(
-            app_dir.join("node_modules/tako.sh/dist/entrypoints/bun.mjs"),
+            app_dir.join("node_modules/tako.sh/dist/entrypoints/bun-server.mjs"),
             "await import(process.argv[2]);",
         )
         .unwrap();
@@ -559,7 +559,7 @@ mod channels {
         )
         .unwrap();
         fs::write(
-            app_dir.join("node_modules/tako.sh/dist/entrypoints/bun.mjs"),
+            app_dir.join("node_modules/tako.sh/dist/entrypoints/bun-server.mjs"),
             "await import(process.argv[2]);",
         )
         .unwrap();

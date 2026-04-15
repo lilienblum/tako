@@ -135,7 +135,7 @@ idle_timeout = 120
 - `tako dev` resolves the dev command with this priority:
   1. `dev` in `tako.toml` (user override, e.g. `dev = ["custom", "cmd"]`)
   2. Preset `dev` command (e.g. vite preset uses `vite dev`)
-  3. Runtime default: JS runtimes run through the SDK entrypoint (`bun run node_modules/tako.sh/dist/entrypoints/bun.mjs {main}`), Go uses `go run .`
+  3. Runtime default: JS runtimes run through the SDK entrypoint (`bun run node_modules/tako.sh/dist/entrypoints/bun-server.mjs {main}`), Go uses `go run .`
 - JS dev uses the same SDK entrypoint as production — the SDK wraps `export default function fetch()` or `export default { fetch }` into a proper HTTP server on `PORT`.
 - Process exit detection: `tako dev` polls `try_wait()` every 500ms to detect when the app process exits. On exit, the route goes idle (proxy stops forwarding) and the next HTTP request triggers a restart.
 - `tako dev` resolves unpinned official preset aliases from cached or embedded preset data when available and only fetches from the `master` branch as a last resort.
@@ -1615,6 +1615,161 @@ Channel WebSocket transport uses JSON text frames:
 
 - server-to-client text frames are serialized `ChannelMessage` objects
 - client-to-server text frames are parsed as `ChannelPublishPayload` objects and appended to the same channel
+
+## Workflows (Durable Runs)
+
+Tako's workflow engine runs durable background work alongside an app's HTTP
+instances — retries with exponential backoff, delayed/cron schedules, and
+multi-step workflows whose progress survives process restarts via `step.run`
+checkpoints. It positions Tako for the "backend of your backend" use case
+(image processing, email, reindexing, LLM calls) without requiring a separate
+queue service.
+
+**Vocabulary:**
+
+- **workflow** — a named handler (the file in `workflows/*.ts` or a
+  `tako.RegisterWorkflow` call).
+- **run** — one execution of a workflow (the row in the queue that gets
+  claimed, retried, completed, or moved to dead).
+- **step** — a memoized portion inside a run via `ctx.step.run(...)`.
+
+### Architecture
+
+- **Queue file**: `{tako_data_dir}/apps/<app>/runs.db` — per-app SQLite with WAL. tako-server is the only process that reads/writes; SDKs reach it exclusively via the per-app unix socket.
+- **Tables**:
+  - `runs` — one row per run (status, attempts, lease, payload).
+  - `steps` — one row per completed step `(run_id, name, result)`. First-write-wins via `INSERT OR IGNORE` so duplicate saves after a retried RPC don't overwrite.
+  - `event_waiters` — runs parked on `step.waitFor`, indexed by `event_name` for fast lookup on `signal`.
+  - `schedules`, `leader_leases` — cron infrastructure.
+- **tako-server (Rust)** — owns the DB, exposes the per-app unix socket, runs the cron ticker, and supervises the worker subprocess.
+- **Worker process (JS or Go)** — loads user code, claims runs, executes handlers. Separate from HTTP instances so heavy workflow deps don't bloat the request-serving process.
+- **SDK** — `Tako.workflows.enqueue` / `Tako.workflows.signal` (JS), `tako.Enqueue` / `tako.Signal` (Go). Thin RPC client. Workers also use it for claim/heartbeat/save/complete/cancel/fail/defer/wait. **No SQLite in any SDK.**
+
+### Configuration (tako.toml)
+
+```toml
+[servers.workflows]           # default applied to every server in the env
+workers = 1
+concurrency = 10
+
+[servers.lax.workflows]       # per-server override
+workers = 2
+```
+
+Fields:
+
+- **`workers`** — number of always-on worker processes. `0` = scale-to-zero: tako-server spawns the worker on the first enqueue or cron tick, worker exits after `worker_idle_timeout` (default 300s) with no claimed runs. Default `0`.
+- **`concurrency`** — max parallel runs per worker. Default `10`.
+
+Precedence: `[servers.<name>.workflows]` > `[servers.workflows]` > defaults (`workers = 0`, `concurrency = 10`). The name `workflows` under `[servers]` is reserved.
+
+If a JS app has a `workflows/` directory (or a Go app declares a worker binary) but no `[servers.*.workflows]` block anywhere, the app is implicitly scale-to-zero on every server in the env.
+
+### Authoring workflows
+
+**JS/TypeScript** — file-based discovery: drop a handler into `workflows/<name>.ts`. The default export is the handler; named exports populate workflow config (`schedule`, `maxAttempts`, `concurrency`, `timeoutMs`):
+
+```ts
+// workflows/send-email.ts
+export default async function (ctx, payload) {
+  const user = await ctx.step.run("fetch-user", () => db.users.find(payload.id));
+  await ctx.step.run("send", () => mailer.send(user.email));
+}
+export const maxAttempts = 5;
+export const schedule = "0 9 * * *"; // 9am daily
+```
+
+**Go** — explicit registration in a separate `cmd/worker/main.go` binary. Go's separate-binary design is intentional: a single-binary design would link CGO-heavy workflow deps (image libs, ML bindings) into the HTTP server binary.
+
+### Enqueuing
+
+```ts
+await Tako.workflows.enqueue("send-email", { to: "a@b.c" });
+await Tako.workflows.enqueue("send-email", payload, {
+  runAt: new Date(Date.now() + 60_000),
+  maxAttempts: 10,
+  uniqueKey: "daily-digest:2026-04-14",
+});
+```
+
+`uniqueKey` deduplicates: if an existing non-terminal run has the same key, enqueue is a no-op and returns the existing run's id. Cron ticks use this internally (key = `cron:<name>:<bucket_ms>`) so catching up doesn't double-enqueue.
+
+### Step checkpointing
+
+`ctx.step.run(name, fn, opts?)` persists `fn`'s return value as one row in the `steps` table keyed by `(run_id, name)`. On retry, previously-completed steps return their stored value instead of re-executing.
+
+Per-step options:
+
+- `retries: N` — in-step retry budget (default 0). After N+1 in-step attempts the error propagates → run-level retry kicks in.
+- `backoff: { base, max }` — between in-step retries.
+- `retry: false` — short-circuit: any throw fails the run immediately, skipping both in-step and run-level retries.
+
+### At-least-once contract
+
+If the worker crashes between `fn` returning and the SaveStep RPC completing, `fn` runs again on the next claim. The window is one RPC (~1ms) but it's real. **Make step bodies idempotent**: Stripe idempotency keys, `db.users.upsert` not `create`, dedup keys on outbound webhooks. This contract matches every workflow engine in the industry — it's the cost of durability without two-phase commit.
+
+### Durable `step.sleep`
+
+`ctx.step.sleep(name, ms)` waits until the wake time. Short waits (< 30s) run inline; longer waits **defer the run** via `DeferRun` — the worker exits the handler, the run goes back to `pending` with `run_at = wakeAt`, the supervisor wakes the worker on schedule. Crash-safe across days.
+
+### Events: `signal` / `waitFor`
+
+`ctx.step.waitFor(name, { timeout })` parks the run waiting for a named event. The handler exits, the run goes to `pending` with no `run_at`, an `event_waiters` row is inserted, and the worker can release.
+
+`Tako.workflows.signal(name, payload)` (or `tako.Signal` in Go) wakes every parked waiter with matching name. The payload is materialized as the waiter's step result and the run is set runnable.
+
+```ts
+// Worker handler — pause until approval arrives
+const decision = await ctx.step.waitFor<{ approved: boolean }>(`approval:order-${payload.id}`, {
+  timeout: 7 * 24 * 3600 * 1000,
+});
+if (decision === null) ctx.bail("approval timed out");
+```
+
+```ts
+// Anywhere else (HTTP handler, webhook receiver, another workflow)
+await Tako.workflows.signal(`approval:order-abc`, { approved: true });
+```
+
+Routing is by event name only — embed any selectors in the name. No JSON predicates server-side.
+
+### Early exit: `ctx.bail` / `ctx.fail`
+
+- `ctx.bail(reason?)` — end the run cleanly. Status: `cancelled`. No retries.
+- `ctx.fail(error)` — end the run with failure. Status: `dead`. No retries (skips the run-level retry budget).
+
+Both work via sentinel exceptions caught by the worker. Useful for "this work isn't needed anymore" (bail) and "this is permanently broken, don't bother retrying" (fail).
+
+### Run statuses
+
+`pending | running | succeeded | cancelled | dead`. Terminal: `succeeded`, `cancelled`, `dead`.
+
+### Retries / backoff (run level)
+
+- Failed handlers retry with exponential backoff (default base 1s, ±20% jitter, capped at 1h). Override via workflow exports `maxAttempts` and `backoff`.
+- `attempts` bumps on every claim. When `attempts >= maxAttempts` (default 3), the run moves to `dead`.
+- `defer_run` (sleep, waitFor) decrements attempts so parking doesn't consume retry budget.
+
+### Drain on stop / delete
+
+- On `tako stop <app>`: tako-server drains the worker (SIGTERM, waits for in-flight, SIGKILL after 120s).
+- On `tako delete <app>`: drain first, then remove per-app data — in-flight runs get a chance to finish before the DB goes away.
+
+### Communication model
+
+- SDK (HTTP app) → tako-server: per-app unix socket at `{tako_data_dir}/apps/<app>/enqueue.sock`. Commands: `EnqueueRun`, `Signal`.
+- Worker process → tako-server: same socket. Commands: `ClaimRun`, `HeartbeatRun`, `SaveStep`, `CompleteRun`, `CancelRun`, `FailRun`, `DeferRun`, `WaitForEvent`, `RegisterSchedules`. JSONL protocol.
+- Server → Worker for drain: SIGTERM + grace period (120s), then SIGKILL.
+
+### Dev mode
+
+`tako dev` typically runs both HTTP and worker in the **same process** so log output is unified. Opt in by pointing `[dev]` in `tako.toml` at the combined dev entrypoint:
+
+```toml
+dev = ["bun", "run", "node_modules/tako.sh/dist/entrypoints/bun-dev.mjs", "{main}"]
+```
+
+The dev entrypoint boots both the HTTP server and the worker loop (scale-to-zero, in-process). Worker-side logs are prefixed with `[worker]`. The tako-dev-server owns the runs DB and enqueue socket — same architecture as production, just no separate worker subprocess.
 
 ## Edge Cases & Error Handling
 

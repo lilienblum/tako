@@ -1,0 +1,23 @@
+[package]
+name = "tako-workflows"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+tako-core = { path = "../tako-core" }
+tako-socket = { path = "../tako-socket" }
+tokio.workspace = true
+tracing = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+parking_lot = "0.12"
+rusqlite = { version = "0.39", features = ["bundled"] }
+nanoid = "0.4"
+cron = "0.12"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3.27"

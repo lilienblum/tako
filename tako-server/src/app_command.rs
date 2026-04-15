@@ -246,7 +246,7 @@ mod tests {
         let cmd = command_for_release_dir(dir.path()).unwrap();
         assert_eq!(cmd[0], "bun");
         assert_eq!(cmd[1], "run");
-        assert!(cmd[2].contains("tako.sh/dist/entrypoints/bun.mjs"));
+        assert!(cmd[2].contains("tako.sh/dist/entrypoints/bun-server.mjs"));
         assert_eq!(cmd.last().unwrap(), "server/entry.js");
     }
 
@@ -280,7 +280,10 @@ mod tests {
 
         let cmd = command_for_release_dir(dir.path()).unwrap();
         assert_eq!(cmd[0], "node");
-        assert!(cmd.iter().any(|a| a.contains("entrypoints/node.mjs")));
+        assert!(
+            cmd.iter()
+                .any(|a| a.contains("entrypoints/node-server.mjs"))
+        );
         assert_eq!(cmd.last().unwrap(), "server/index.mjs");
     }
 
@@ -295,7 +298,10 @@ mod tests {
 
         let cmd = command_for_release_dir(dir.path()).unwrap();
         assert_eq!(cmd[0], "deno");
-        assert!(cmd.iter().any(|a| a.contains("entrypoints/deno.mjs")));
+        assert!(
+            cmd.iter()
+                .any(|a| a.contains("entrypoints/deno-server.mjs"))
+        );
         assert_eq!(cmd.last().unwrap(), "server/main.ts");
     }
 

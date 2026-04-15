@@ -183,7 +183,7 @@ fn on_demand_startup_failure_does_not_hang() {
     fs::create_dir_all(app_dir.join("node_modules/tako.sh/dist/entrypoints"))
         .expect("create entrypoint dir");
     fs::write(
-        app_dir.join("node_modules/tako.sh/dist/entrypoints/bun.mjs"),
+        app_dir.join("node_modules/tako.sh/dist/entrypoints/bun-server.mjs"),
         "await import(process.argv[2]);",
     )
     .expect("write entrypoint");

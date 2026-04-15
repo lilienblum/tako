@@ -4,7 +4,7 @@ import {
   TAKO_INTERNAL_TOKEN_ENV,
   TAKO_INTERNAL_TOKEN_HEADER,
   handleTakoEndpoint,
-} from "../src/endpoints";
+} from "../src/tako/endpoints";
 import type { TakoStatus } from "../src/types";
 import { Tako } from "../src/tako";
 
