@@ -19,7 +19,8 @@ import {
   DeferSignal,
   FailSignal,
   WaitSignal,
-  type StepAPI,
+  type StepRunOptions,
+  type StepWaitOptions,
 } from "./step";
 import type { Run, StepState } from "./types";
 
@@ -32,7 +33,9 @@ export interface WorkflowContext {
   readonly runId: string;
   readonly workflowName: string;
   readonly attempts: number;
-  readonly step: StepAPI;
+  run<T>(name: string, fn: () => Promise<T> | T, opts?: StepRunOptions): Promise<T>;
+  sleep(name: string, durationMs: number): Promise<void>;
+  waitFor<T = unknown>(name: string, opts?: StepWaitOptions): Promise<T | null>;
   /** End the run cleanly as `cancelled` (no retries). For "this work
    *  isn't needed anymore" cases. To exit successfully early, just
    *  `return` from the handler. */
@@ -178,7 +181,7 @@ export class Worker {
       runId: run.id,
       workflowName: run.name,
       attempts: run.attempts,
-      step: createStepAPI(this.client, run.id, this.workerId, stepState),
+      ...createStepAPI(this.client, run.id, this.workerId, stepState),
       bail: (reason?: string): never => {
         throw new BailSignal(reason);
       },

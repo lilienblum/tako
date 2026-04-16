@@ -23,7 +23,6 @@ export type {
   RunId,
   RunSpec,
   RunStatus,
-  StepAPI,
   StepState,
   WorkflowConfig,
   WorkflowContext,

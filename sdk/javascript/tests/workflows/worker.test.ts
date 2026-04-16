@@ -229,12 +229,12 @@ describe("Worker", () => {
   test("step.run memoizes across retries", async () => {
     const runs: Record<string, number> = { a: 0, b: 0 };
     let forceFail = true;
-    const handler: WorkflowHandler = async (_payload, { step }) => {
-      const v = await step.run("a", () => {
+    const handler: WorkflowHandler = async (_payload, { run }) => {
+      const v = await run("a", () => {
         runs.a += 1;
         return "user-1";
       });
-      await step.run("b", () => {
+      await run("b", () => {
         runs.b += 1;
         if (forceFail) throw new Error("fail-b");
         return v;

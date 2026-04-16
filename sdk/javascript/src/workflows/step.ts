@@ -40,7 +40,7 @@ export interface StepWaitOptions {
   timeout?: number;
 }
 
-export interface StepAPI {
+interface StepAPI {
   run<T>(name: string, fn: () => Promise<T> | T, opts?: StepRunOptions): Promise<T>;
   sleep(name: string, durationMs: number): Promise<void>;
   waitFor<T = unknown>(name: string, opts?: StepWaitOptions): Promise<T | null>;

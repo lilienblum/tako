@@ -8,4 +8,3 @@ export { WorkflowsClient, WorkflowsError } from "./rpc-client";
 export type { EnqueueResult } from "./rpc-client";
 export type { StepState, Run, RunId, RunSpec, RunStatus, WorkflowConfig } from "./types";
 export type { WorkflowContext, WorkflowHandler } from "./worker";
-export type { StepAPI } from "./step";
