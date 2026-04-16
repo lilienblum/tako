@@ -1,7 +1,7 @@
 /**
  * Filesystem discovery for workflows/ directory.
  *
- * Each `<name>.(ts|js|mjs|mts)` file becomes a workflow named `<name>`.
+ * Each `<name>.(ts|tsx|js|mjs|mts)` file becomes a workflow named `<name>`.
  * The default export must be either:
  *   - A `WorkflowDefinition` produced by `defineWorkflow(fn, config?)` — handler
  *     and config are read directly from the object.
