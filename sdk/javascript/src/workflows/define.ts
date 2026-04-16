@@ -18,9 +18,9 @@ export interface WorkflowDefinition<P = unknown> {
  * ```ts
  * import { defineWorkflow } from "tako.sh";
  *
- * export default defineWorkflow(async (ctx, payload: { userId: string }) => {
- *   await ctx.step.run("send", () => sendEmail(payload.userId));
- * }, { maxAttempts: 4, schedule: "0 9 * * *" });
+ * export default defineWorkflow(async (payload: { userId: string }, { step }) => {
+ *   await step.run("send", () => sendEmail(payload.userId));
+ * }, { retries: 4, schedule: "0 9 * * *" });
  * ```
  */
 export function defineWorkflow<P = unknown>(
