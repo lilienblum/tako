@@ -149,18 +149,25 @@ pub enum Command {
     SaveStep {
         app: String,
         id: String,
+        worker_id: String,
         step_name: String,
         result: serde_json::Value,
     },
 
-    /// Worker: mark a run succeeded.
-    CompleteRun { app: String, id: String },
+    /// Worker: mark a run succeeded. Guarded by `worker_id` so a stale
+    /// worker can't silently mark a run succeeded after its lease expired.
+    CompleteRun {
+        app: String,
+        id: String,
+        worker_id: String,
+    },
 
     /// Worker: cancel a run cleanly (status becomes `cancelled`). Triggered
     /// by the user via `ctx.bail(reason?)`.
     CancelRun {
         app: String,
         id: String,
+        worker_id: String,
         #[serde(default)]
         reason: Option<String>,
     },
@@ -171,6 +178,7 @@ pub enum Command {
     FailRun {
         app: String,
         id: String,
+        worker_id: String,
         error: String,
         #[serde(default)]
         next_run_at_ms: Option<i64>,
@@ -183,6 +191,7 @@ pub enum Command {
     DeferRun {
         app: String,
         id: String,
+        worker_id: String,
         #[serde(default)]
         wake_at_ms: Option<i64>,
     },
@@ -191,6 +200,7 @@ pub enum Command {
     WaitForEvent {
         app: String,
         id: String,
+        worker_id: String,
         step_name: String,
         event_name: String,
         #[serde(default)]
