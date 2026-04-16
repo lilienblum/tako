@@ -201,7 +201,7 @@ pub fn write_types_with_secrets(
     adapter: BuildAdapter,
 ) -> std::io::Result<bool> {
     let path = resolve_dts_path(project_dir);
-    let dts_in_subdir = path.parent() != Some(project_dir);
+    let dts_in_subdir = path.parent().map(|p| p != project_dir).unwrap_or(false);
     let content = build_dts(secret_names, workflow_names, adapter, dts_in_subdir);
     if path.is_file() {
         let existing = fs::read_to_string(&path)?;
