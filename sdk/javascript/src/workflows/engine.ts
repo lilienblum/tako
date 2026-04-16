@@ -112,6 +112,7 @@ export class WorkflowEngine {
    * the worker doesn't self-enqueue via its own DB handle, which keeps
    * server ownership of cron-dedup idempotent.
    */
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- intentional open union pattern for WorkflowRegistry augmentation
   async enqueue<N extends keyof WorkflowRegistry | (string & {})>(
     name: N,
     payload: N extends keyof WorkflowRegistry ? WorkflowRegistry[N] : unknown,
