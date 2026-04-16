@@ -1697,6 +1697,31 @@ await Tako.workflows.enqueue("send-email", payload, {
 
 `uniqueKey` deduplicates: if an existing non-terminal run has the same key, enqueue is a no-op and returns the existing run's id. Cron ticks use this internally (key = `cron:<name>:<bucket_ms>`) so catching up doesn't double-enqueue.
 
+### Typed enqueue
+
+`tako typegen` scans `workflows/` and emits a `declare module "tako.sh" { interface Workflows { ... } }` block in `tako.d.ts`. Once generated, `Tako.workflows.enqueue` is type-checked against the payload types inferred from each `defineWorkflow<P>()` call:
+
+```ts
+// tako.d.ts (auto-generated)
+declare module "tako.sh" {
+  interface Workflows {
+    "send-email": import("./workflows/send-email").default extends import("tako.sh").WorkflowDefinition<
+      infer P
+    >
+      ? P
+      : unknown;
+  }
+}
+```
+
+```ts
+// Type-safe enqueue — payload is checked against SendEmailPayload
+await Tako.workflows.enqueue("send-email", { to: "user@example.com" }); // ✅
+await Tako.workflows.enqueue("send-email", { wrong: true }); // ❌ type error
+```
+
+Re-run `tako typegen` (or `tako dev` / `tako deploy`, which run it automatically) whenever you add or rename a workflow.
+
 ### Step checkpointing
 
 `ctx.run(name, fn, opts?)` persists `fn`'s return value as one row in the `steps` table keyed by `(run_id, name)`. On retry, previously-completed steps return their stored value instead of re-executing.

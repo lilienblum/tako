@@ -339,6 +339,8 @@ Apps can run durable background tasks alongside their HTTP instances. Drop a fil
 await Tako.workflows.enqueue("send-email", { to: "user@example.com" });
 ```
 
+Run `tako typegen` to generate type-safe enqueue signatures from your `workflows/` files.
+
 Tako runs each app's workers in a **separate process** from HTTP instances (so heavy workflow deps — image libs, ML bindings — don't inflate the HTTP binary). The worker is scale-to-zero by default: it spawns on the first enqueue or cron tick, exits after 5 minutes idle, and respawns on demand.
 
 Features:
