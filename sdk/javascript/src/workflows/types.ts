@@ -4,7 +4,7 @@
  * Vocabulary:
  *   workflow — a named handler (the thing you write in `workflows/*.ts`)
  *   run      — one execution of a workflow (the row in the queue)
- *   step     — a memoized portion inside a run (via `ctx.step.run`)
+ *   step     — a memoized portion inside a run (via `ctx.run`)
  */
 
 export type RunId = string;
