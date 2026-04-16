@@ -400,14 +400,20 @@ const pageStructuredData = structuredData
         width: 44px;
         height: 44px;
         padding: 8px;
-        border: 1px solid var(--line);
+        border: 1px solid transparent;
         border-radius: 999px;
-        background: rgba(255, 255, 255, 0.8);
+        background: transparent;
         cursor: pointer;
         -webkit-tap-highlight-color: transparent;
+        transition: background 180ms ease, border-color 180ms ease;
       }
 
-      .hamburger:hover {
+      .header.is-scrolled .hamburger {
+        background: rgba(255, 255, 255, 0.8);
+        border-color: var(--line);
+      }
+
+      .header.is-scrolled .hamburger:hover {
         background: rgba(232, 135, 131, 0.18);
       }
 
@@ -485,10 +491,6 @@ const pageStructuredData = structuredData
       @media (max-width: 640px) {
         .header-inner {
           padding: 10px;
-          background: rgba(255, 255, 255, 0.76);
-          border-color: var(--line);
-          backdrop-filter: blur(8px);
-          -webkit-backdrop-filter: blur(8px);
         }
 
         .desktop-nav {
