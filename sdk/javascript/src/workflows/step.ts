@@ -26,17 +26,23 @@ import type { RunId, StepState } from "./types";
 const INLINE_SLEEP_THRESHOLD_MS = 30_000;
 
 export interface StepRunOptions {
-  /** In-step retry attempts before propagating. Default 0. */
+  /**
+   * In-step retry attempts before propagating.
+   * @defaultValue 0
+   */
   retries?: number;
-  /** Backoff between in-step retries. */
+  /** Backoff between in-step retries. `base` defaults to 1 000 ms; `max` to 30 000 ms. */
   backoff?: { base?: number; max?: number };
-  /** When true, any throw inside fn fails the run immediately. */
+  /** When set to `false`, any throw inside fn fails the run immediately (skips in-step retries). */
   retry?: false;
 }
 
 export interface StepWaitOptions {
-  /** Timeout in ms. After this elapses without a matching signal, the
-   *  step resolves to `null`. Default: no timeout (parked indefinitely). */
+  /**
+   * Timeout in ms. After this elapses without a matching signal, the step
+   * resolves to `null`.
+   * @defaultValue Infinity (parked indefinitely)
+   */
   timeout?: number;
 }
 

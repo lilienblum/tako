@@ -32,9 +32,13 @@ export interface NextAdapterShape {
 }
 
 export interface NextjsFetchHandlerOptions {
+  /** @defaultValue "127.0.0.1" */
   hostname?: string;
+  /** @defaultValue 30_000 */
   startupTimeoutMs?: number;
+  /** @defaultValue [] */
   argv?: string[];
+  /** @defaultValue directory of the serverPath argument */
   cwd?: string | URL;
   unstable_testing?: {
     ensureServer?: () => Promise<number>;

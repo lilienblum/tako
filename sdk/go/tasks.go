@@ -26,10 +26,12 @@ const (
 // EnqueueOpts controls per-enqueue behavior. Nil fields fall back to
 // server-side defaults (runAt = now, maxAttempts = 3, no dedup).
 type EnqueueOpts struct {
-	RunAt       *time.Time
+	// Default: now.
+	RunAt *time.Time
+	// Default: 3 (1 initial attempt + 2 retries).
 	MaxAttempts *uint32
-	// UniqueKey, if set, collapses this enqueue onto any existing
-	// non-terminal run with the same key. Used for cron idempotency.
+	// If set, collapses this enqueue onto any existing non-terminal run
+	// with the same key. Used for cron idempotency.
 	UniqueKey *string
 }
 

@@ -47,8 +47,8 @@ export class WorkflowsClient {
 
   /**
    * Build a client from env vars set by tako-server when spawning the
-   * app/worker process. Returns null when the app isn't running under Tako
-   * (e.g. local unit tests) — callers should fall back or error.
+   * app/worker process. Returns null when the env vars are absent (outside
+   * of a Tako-managed process) — callers should fall back or error.
    */
   static fromEnv(): WorkflowsClient | null {
     const path = process.env[WORKFLOW_SOCKET_ENV];

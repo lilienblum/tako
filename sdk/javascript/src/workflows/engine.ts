@@ -27,8 +27,12 @@ interface Registration {
 
 /**
  * Registry of workflow names → payload types. Empty by default.
- * Augmented automatically by `tako typegen` (or manually):
+ * Augmented automatically by `tako typegen` (or manually).
  *
+ * Once augmented, `Tako.workflows.enqueue("send-email", payload)` is
+ * type-checked against the registered payload type.
+ *
+ * @example
  * ```ts
  * // In tako.d.ts or your own .d.ts:
  * declare module "tako.sh" {
@@ -37,16 +41,24 @@ interface Registration {
  *   }
  * }
  * ```
- *
- * Once registered, `Tako.workflows.enqueue("send-email", payload)` is
- * type-checked against `{ to: string; subject: string }`.
  */
 export interface Workflows {}
 
 export interface EnqueueOptions {
+  /**
+   * When to run.
+   * @defaultValue now
+   */
   runAt?: Date;
-  /** Number of retries after the first attempt. Overrides the workflow's default. */
+  /**
+   * Number of retries after the first attempt. Overrides the workflow-level default.
+   * @defaultValue workflow's configured retries
+   */
   retries?: number;
+  /**
+   * Uniqueness key. If a non-terminal run with this key already exists,
+   * enqueue is a no-op and the existing run id is returned.
+   */
   uniqueKey?: string | null;
 }
 

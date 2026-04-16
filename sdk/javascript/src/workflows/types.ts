@@ -14,11 +14,17 @@ export type RunStatus = "pending" | "running" | "succeeded" | "cancelled" | "dea
 export type StepState = Record<string, unknown>;
 
 export interface RunSpec {
-  /** Workflow name — must match a registered handler. */
+  /**
+   * Workflow name — the filename stem of the handler file.
+   * @example "send-welcome" // workflows/send-welcome.ts
+   */
   name: string;
   /** JSON-serializable user payload. */
   payload: unknown;
-  /** When to run. Defaults to now. */
+  /**
+   * When to run.
+   * @defaultValue now
+   */
   runAt?: Date;
   /** Number of retries after the first attempt. */
   retries?: number;
@@ -50,13 +56,22 @@ export interface Run {
 }
 
 export interface WorkflowConfig {
-  /** Number of retries after the first attempt. Default 2 (3 total attempts). */
+  /**
+   * Number of retries after the first attempt.
+   * @defaultValue 2
+   */
   retries?: number;
-  /** Run-level backoff between failed attempts. */
+  /** Run-level backoff between failed attempts. `base` defaults to 1 000 ms; `max` to 3 600 000 ms. */
   backoff?: { base?: number; max?: number };
-  /** Worker concurrency per instance. Default 10. */
+  /**
+   * Worker concurrency per instance.
+   * @defaultValue 10
+   */
   concurrency?: number;
-  /** Handler timeout in ms. Default unbounded. */
+  /**
+   * Handler timeout in ms.
+   * @defaultValue Infinity
+   */
   timeoutMs?: number;
   /**
    * Cron expression (5-field: minute hour day-of-month month day-of-week).

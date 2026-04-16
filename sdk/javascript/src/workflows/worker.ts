@@ -48,7 +48,7 @@ export interface WorkflowContext {
 interface WorkflowRetryConfig {
   /** Run-level retry budget (default 3). */
   maxAttempts?: number;
-  /** Run-level backoff between failed attempts. */
+  /** Run-level backoff between failed attempts. `base` defaults to 1 000 ms; `max` to 3 600 000 ms. */
   backoff?: { base?: number; max?: number };
 }
 

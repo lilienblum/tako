@@ -21,17 +21,6 @@ function parsePort(raw: string | undefined): number | undefined {
 }
 
 /**
- * Module-load-time accessors. Use `Tako.channels` to define and register
- * channel handlers, `Tako.secrets` for typed secret reads.
- *
- * @example
- * ```typescript
- * import { Tako } from "tako.sh";
- *
- * Tako.channels.define("chat:*", { auth: async () => ({ allow: true }) });
- * ```
- */
-/**
  * User-facing workflows surface. `enqueue` schedules a run; `register` is
  * the imperative alternative to the `workflows/` directory convention.
  */
@@ -47,6 +36,17 @@ const workflows = {
   },
 } as const;
 
+/**
+ * Module-load-time accessors. Use `Tako.channels` to define channel handlers,
+ * `Tako.secrets` for typed secret reads, and `Tako.workflows` to enqueue runs.
+ *
+ * @example
+ * ```typescript
+ * import { Tako } from "tako.sh";
+ *
+ * Tako.channels.define("chat:*", { auth: async () => ({ allow: true }) });
+ * ```
+ */
 export const Tako = {
   channels: new ChannelRegistry(),
   secrets: loadSecrets(),

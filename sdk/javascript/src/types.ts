@@ -40,9 +40,13 @@ export interface ChannelGrant {
 export type ChannelAuthResult = boolean | ChannelGrant | Promise<boolean | ChannelGrant>;
 
 export interface ChannelLifecycleConfig {
+  /** @defaultValue 86_400_000 (24 h) */
   replayWindowMs?: number;
+  /** @defaultValue 0 (no inactivity eviction) */
   inactivityTtlMs?: number;
+  /** @defaultValue 25_000 (25 s) */
   keepaliveIntervalMs?: number;
+  /** @defaultValue 7_200_000 (2 h) */
   maxConnectionLifetimeMs?: number;
 }
 
