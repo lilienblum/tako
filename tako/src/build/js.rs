@@ -99,7 +99,7 @@ fn read_workflow_names(project_dir: &Path) -> Vec<String> {
     names
 }
 
-/// Build the `declare module "tako.sh" { interface WorkflowRegistry { ... } }` block.
+/// Build the `declare module "tako.sh" { interface Workflows { ... } }` block.
 ///
 /// `workflow_prefix` is the relative path from the `tako.d.ts` location to the
 /// `workflows/` directory — either `"./workflows/"` (root) or `"../workflows/"` (src/app).
@@ -108,7 +108,7 @@ fn build_workflow_registry_block(names: &[String], workflow_prefix: &str) -> Str
         return String::new();
     }
     let mut out = String::from("\ndeclare module \"tako.sh\" {\n");
-    out.push_str("  interface WorkflowRegistry {\n");
+    out.push_str("  interface Workflows {\n");
     for name in names {
         out.push_str(&format!(
             "    \"{name}\": import(\"{prefix}{name}\").default extends import(\"tako.sh\").WorkflowDefinition<infer P> ? P : unknown;\n",
@@ -534,7 +534,7 @@ mod tests {
         let written = write_types(dir.path()).unwrap();
         assert!(written);
         let content = fs::read_to_string(dir.path().join("tako.d.ts")).unwrap();
-        assert!(!content.contains("WorkflowRegistry"));
+        assert!(!content.contains("Workflows"));
     }
 
     #[test]
@@ -558,7 +558,7 @@ mod tests {
         let written = write_types(dir.path()).unwrap();
         assert!(written);
         let content = fs::read_to_string(dir.path().join("tako.d.ts")).unwrap();
-        assert!(content.contains("WorkflowRegistry"));
+        assert!(content.contains("Workflows"));
         assert!(content.contains("\"send-email\""));
         assert!(content.contains("WorkflowDefinition<infer P>"));
         assert!(!content.contains("_private"));

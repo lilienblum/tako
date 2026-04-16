@@ -32,7 +32,7 @@ interface Registration {
  * ```ts
  * // In tako.d.ts or your own .d.ts:
  * declare module "tako.sh" {
- *   interface WorkflowRegistry {
+ *   interface Workflows {
  *     "send-email": { to: string; subject: string };
  *   }
  * }
@@ -41,7 +41,7 @@ interface Registration {
  * Once registered, `Tako.workflows.enqueue("send-email", payload)` is
  * type-checked against `{ to: string; subject: string }`.
  */
-export interface WorkflowRegistry {}
+export interface Workflows {}
 
 export interface EnqueueOptions {
   runAt?: Date;
@@ -112,10 +112,10 @@ export class WorkflowEngine {
    * the worker doesn't self-enqueue via its own DB handle, which keeps
    * server ownership of cron-dedup idempotent.
    */
-  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- intentional open union pattern for WorkflowRegistry augmentation
-  async enqueue<N extends keyof WorkflowRegistry | (string & {})>(
+  // eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents -- intentional open union pattern for Workflows augmentation
+  async enqueue<N extends keyof Workflows | (string & {})>(
     name: N,
-    payload: N extends keyof WorkflowRegistry ? WorkflowRegistry[N] : unknown,
+    payload: N extends keyof Workflows ? Workflows[N] : unknown,
     opts: EnqueueOptions = {},
   ): Promise<RunId> {
     const client = this.resolveClient();

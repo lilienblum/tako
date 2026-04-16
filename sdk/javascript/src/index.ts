@@ -30,7 +30,7 @@ export type {
   WorkflowContext,
   WorkflowDefinition,
   WorkflowHandler,
-  WorkflowRegistry,
+  Workflows,
 } from "./workflows";
 export { defineWorkflow, isWorkflowDefinition, WorkflowsClient, WorkflowsError } from "./workflows";
 export type {
