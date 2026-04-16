@@ -24,8 +24,8 @@ import {
 import type { Run, StepState } from "./types";
 
 export type WorkflowHandler<P = unknown, R = unknown> = (
-  ctx: WorkflowContext,
   payload: P,
+  ctx: WorkflowContext,
 ) => Promise<R> | R;
 
 export interface WorkflowContext {
@@ -196,7 +196,7 @@ export class Worker {
     }
 
     try {
-      await reg.handler(ctx, run.payload);
+      await reg.handler(run.payload, ctx);
       await this.client.complete(run.id, this.workerId);
     } catch (err) {
       if (err instanceof BailSignal) {

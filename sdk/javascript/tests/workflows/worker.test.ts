@@ -5,11 +5,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { WorkflowsClient } from "../../src/workflows/rpc-client";
 import type { Run } from "../../src/workflows/types";
-import type {
-  RegisteredWorkflow,
-  WorkflowContext,
-  WorkflowHandler,
-} from "../../src/workflows/worker";
+import type { RegisteredWorkflow, WorkflowHandler } from "../../src/workflows/worker";
 import { Worker } from "../../src/workflows/worker";
 
 class MockServer {
@@ -189,7 +185,7 @@ describe("Worker", () => {
       client,
       workerId: "w1",
       registry: registry({
-        echo: (_ctx, p) => {
+        echo: (p) => {
           seen.push(p);
           return "ok";
         },
@@ -233,12 +229,12 @@ describe("Worker", () => {
   test("step.run memoizes across retries", async () => {
     const runs: Record<string, number> = { a: 0, b: 0 };
     let forceFail = true;
-    const handler: WorkflowHandler = async (ctx: WorkflowContext) => {
-      const v = await ctx.step.run("a", () => {
+    const handler: WorkflowHandler = async (_payload, { step }) => {
+      const v = await step.run("a", () => {
         runs.a += 1;
         return "user-1";
       });
-      await ctx.step.run("b", () => {
+      await step.run("b", () => {
         runs.b += 1;
         if (forceFail) throw new Error("fail-b");
         return v;
