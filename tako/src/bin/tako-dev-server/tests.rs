@@ -1,4 +1,4 @@
-use super::process::{kill_all_app_processes, kill_app_process};
+use super::process::{handle_wake_on_request, kill_all_app_processes, kill_app_process};
 use super::redirect::redirect_location;
 use super::*;
 
@@ -1002,4 +1002,86 @@ fn variant_persisted_in_sqlite() {
         .unwrap();
     let app = db.get("/proj/tako.toml").unwrap().unwrap();
     assert!(app.variant.is_none());
+}
+
+/// Concurrent wake-on-request calls must spawn exactly one process.
+///
+/// Before the fix, all callers raced through the `is_idle` check and each
+/// proceeded to spawn, producing N processes for N concurrent requests.
+/// After the fix the check-and-clear is atomic under the same lock, so only
+/// the first caller spawns; the rest bail out immediately.
+#[tokio::test]
+async fn wake_on_request_spawns_exactly_one_process() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (state, _tmp_db) = test_state();
+
+    // Directory where each spawn attempt writes a marker file.
+    let spawn_dir = tmp.path().join("spawns");
+    std::fs::create_dir_all(&spawn_dir).unwrap();
+
+    // The command touches a file named after its own PID, then sleeps.
+    // Each distinct spawn produces a distinct file.
+    let cmd_str = format!("touch {}/$$; sleep 60", spawn_dir.display());
+    let config_path = format!("{}/tako.toml", tmp.path().display());
+
+    {
+        let mut s = state.lock().unwrap();
+        s.apps.insert(
+            config_path.clone(),
+            state::RuntimeApp {
+                project_dir: tmp.path().to_str().unwrap().to_string(),
+                name: "wake-race-test".to_string(),
+                variant: None,
+                hosts: vec!["wake-race.test".to_string()],
+                upstream_port: 0,
+                is_idle: true,
+                command: vec!["sh".to_string(), "-c".to_string(), cmd_str],
+                env: std::collections::HashMap::new(),
+                log_buffer: state::LogBuffer::new(),
+                pid: None,
+                client_pid: None,
+            },
+        );
+        s.routes.set_routes(
+            format!("reg:{config_path}"),
+            vec!["wake-race.test".to_string()],
+            0,
+            false,
+        );
+    }
+
+    // Fire 10 concurrent wake tasks — only one should win the spawn race.
+    let handles: Vec<_> = (0..10)
+        .map(|_| {
+            let state = state.clone();
+            tokio::spawn(async move {
+                handle_wake_on_request(state, "wake-race.test".to_string(), "/".to_string()).await;
+            })
+        })
+        .collect();
+
+    // Give the tasks time to acquire the lock and make their decision.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    // Kill the single spawned process so the readiness wait unblocks.
+    let pid = state
+        .lock()
+        .unwrap()
+        .apps
+        .get(&config_path)
+        .and_then(|a| a.pid);
+    if let Some(pid) = pid {
+        kill_app_process(pid);
+    }
+
+    for h in handles {
+        let _ = tokio::time::timeout(Duration::from_secs(2), h).await;
+    }
+
+    // Exactly one marker file means exactly one spawn.
+    let spawn_count = std::fs::read_dir(&spawn_dir).unwrap().count();
+    assert_eq!(
+        spawn_count, 1,
+        "expected exactly 1 spawn, got {spawn_count}"
+    );
 }

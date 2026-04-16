@@ -378,7 +378,7 @@ pub(crate) async fn handle_client(
                 );
 
                 s.routes
-                    .set_routes(route_id, hosts.clone(), upstream_port, true);
+                    .set_routes(route_id, hosts.clone(), upstream_port, false);
                 if let Some(ref mut mdns) = s.mdns {
                     for host in &old_hosts {
                         mdns.unpublish(split_route_pattern(host).0);

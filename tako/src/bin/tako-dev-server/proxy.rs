@@ -139,6 +139,17 @@ impl Routes {
         }
     }
 
+    /// Mark the route active and update the upstream port atomically.
+    ///
+    /// Called when the app signals its bound port on the readiness pipe.
+    pub fn activate_with_port(&self, app_id: &str, port: u16) {
+        if let Some(r) = self.apps.lock().unwrap().get_mut(app_id) {
+            r.upstream_port = port;
+            r.active = true;
+            r.notify.notify_waiters();
+        }
+    }
+
     /// Find the best matching route for a (host, path) pair.
     pub fn lookup(&self, host: &str, path: &str) -> Option<(String, u16, bool, Arc<Notify>)> {
         let app_id = {
@@ -365,6 +376,19 @@ mod tests {
 
         // Unrelated host should not match.
         assert!(routes.lookup("foo.other.test", "/").is_none());
+    }
+
+    #[test]
+    fn activate_with_port_updates_port_and_marks_active() {
+        let routes = Routes::default();
+        // Register with a placeholder port and inactive.
+        routes.set_routes("app".to_string(), vec!["app.test".to_string()], 0, false);
+
+        routes.activate_with_port("app", 54321);
+
+        let (_, port, active, _) = routes.lookup("app.test", "/").unwrap();
+        assert_eq!(port, 54321);
+        assert!(active);
     }
 
     #[tokio::test]
