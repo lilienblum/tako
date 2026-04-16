@@ -27,7 +27,8 @@ interface Registration {
 
 export interface EnqueueOptions {
   runAt?: Date;
-  maxAttempts?: number;
+  /** Number of retries after the first attempt. Overrides the workflow's default. */
+  retries?: number;
   uniqueKey?: string | null;
 }
 
@@ -75,7 +76,7 @@ export class WorkflowEngine {
   /**
    * Scan `dir` for workflow files and register each one by filename (without
    * extension). Re-exports: `default` is the handler; `schedule`,
-   * `maxAttempts`, `concurrency`, `timeoutMs` are optional named exports
+   * `retries`, `concurrency`, `timeoutMs` are optional named exports
    * that flow into WorkflowConfig.
    */
   async discover(dir: string): Promise<number> {
@@ -96,10 +97,10 @@ export class WorkflowEngine {
   async enqueue(name: string, payload: unknown, opts: EnqueueOptions = {}): Promise<RunId> {
     const client = this.resolveClient();
     const effectiveOpts: EnqueueOptions = { ...opts };
-    if (effectiveOpts.maxAttempts === undefined) {
+    if (effectiveOpts.retries === undefined) {
       const reg = this.registrations.get(name);
-      if (reg?.config.maxAttempts !== undefined) {
-        effectiveOpts.maxAttempts = reg.config.maxAttempts;
+      if (reg?.config.retries !== undefined) {
+        effectiveOpts.retries = reg.config.retries;
       }
     }
     const result = await client.enqueue(name, payload, effectiveOpts);
@@ -138,9 +139,9 @@ export class WorkflowEngine {
     const registry = new Map<string, RegisteredWorkflow>();
     for (const [name, reg] of this.registrations) {
       const entry: RegisteredWorkflow = { handler: reg.handler };
-      if (reg.config.maxAttempts !== undefined || reg.config.backoff !== undefined) {
+      if (reg.config.retries !== undefined || reg.config.backoff !== undefined) {
         entry.retry = {};
-        if (reg.config.maxAttempts !== undefined) entry.retry.maxAttempts = reg.config.maxAttempts;
+        if (reg.config.retries !== undefined) entry.retry.maxAttempts = reg.config.retries + 1;
         if (reg.config.backoff !== undefined) entry.retry.backoff = reg.config.backoff;
       }
       registry.set(name, entry);

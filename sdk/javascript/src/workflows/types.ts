@@ -20,8 +20,8 @@ export interface RunSpec {
   payload: unknown;
   /** When to run. Defaults to now. */
   runAt?: Date;
-  /** Max attempts (inclusive of the first try). Defaults to 3. */
-  maxAttempts?: number;
+  /** Number of retries after the first attempt. */
+  retries?: number;
   /**
    * Uniqueness key. If a run with this key already exists in a
    * non-terminal state, enqueue is a no-op and the existing run id is
@@ -50,14 +50,18 @@ export interface Run {
 }
 
 export interface WorkflowConfig {
-  /** Run-level retry budget. Default 3. */
-  maxAttempts?: number;
+  /** Number of retries after the first attempt. Default 2 (3 total attempts). */
+  retries?: number;
   /** Run-level backoff between failed attempts. */
   backoff?: { base?: number; max?: number };
   /** Worker concurrency per instance. Default 10. */
   concurrency?: number;
   /** Handler timeout in ms. Default unbounded. */
   timeoutMs?: number;
-  /** Cron expression — if present, the workflow is scheduled. */
+  /**
+   * Cron expression (5-field: minute hour day-of-month month day-of-week).
+   * @example "0 9 * * 1-5"    — weekdays at 9am
+   * @example "&#42;/15 * * * *" — every 15 minutes
+   */
   schedule?: string;
 }

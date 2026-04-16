@@ -67,7 +67,7 @@ export class WorkflowsClient {
   async enqueue(name: string, payload: unknown, opts: EnqueueOptions = {}): Promise<EnqueueResult> {
     const wire: Record<string, unknown> = {};
     if (opts.runAt !== undefined) wire["run_at_ms"] = opts.runAt.getTime();
-    if (opts.maxAttempts !== undefined) wire["max_attempts"] = opts.maxAttempts;
+    if (opts.retries !== undefined) wire["max_attempts"] = opts.retries + 1;
     if (opts.uniqueKey !== undefined && opts.uniqueKey !== null) {
       wire["unique_key"] = opts.uniqueKey;
     }

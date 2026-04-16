@@ -4,7 +4,7 @@
  * Each `<name>.(ts|js|mjs|mts)` file becomes a workflow named `<name>`.
  * Default export is the handler. Named exports populate WorkflowConfig:
  *   - `schedule`     → cron expression
- *   - `maxAttempts`  → number
+ *   - `retries`      → number of retries after the first attempt
  *   - `concurrency`  → number (v1: recorded but single-concurrency only)
  *   - `timeoutMs`    → number (v1: recorded, not enforced)
  *
@@ -53,7 +53,7 @@ export async function discoverWorkflows(dir: string): Promise<DiscoveredWorkflow
 function extractConfig(mod: Record<string, unknown>): WorkflowConfig {
   const cfg: WorkflowConfig = {};
   if (typeof mod["schedule"] === "string") cfg.schedule = mod["schedule"];
-  if (typeof mod["maxAttempts"] === "number") cfg.maxAttempts = mod["maxAttempts"];
+  if (typeof mod["retries"] === "number") cfg.retries = mod["retries"];
   if (typeof mod["concurrency"] === "number") cfg.concurrency = mod["concurrency"];
   if (typeof mod["timeoutMs"] === "number") cfg.timeoutMs = mod["timeoutMs"];
   const backoff = mod["backoff"];

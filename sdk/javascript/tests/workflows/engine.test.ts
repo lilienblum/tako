@@ -80,7 +80,7 @@ describe("WorkflowEngine enqueue (RPC)", () => {
     expect(await engine.enqueue("w", { hi: 1 })).toBe("srv-1");
   });
 
-  test("applies per-workflow maxAttempts default when caller omits it", async () => {
+  test("applies per-workflow retries default when caller omits it", async () => {
     let received: Record<string, unknown> | null = null;
     server = await new Promise<Server>((resolve, reject) => {
       const s = createServer((socket) => {
@@ -97,7 +97,7 @@ describe("WorkflowEngine enqueue (RPC)", () => {
 
     const engine = new WorkflowEngine();
     engine.setClient(new WorkflowsClient(sock, "test-app"));
-    engine.register("w", () => {}, { maxAttempts: 7 });
+    engine.register("w", () => {}, { retries: 6 });
     await engine.enqueue("w", {});
     const opts = (received as unknown as Record<string, Record<string, unknown>>)["opts"];
     expect(opts["max_attempts"]).toBe(7);
@@ -109,7 +109,7 @@ describe("discover", () => {
     const dir = await mkdtemp(join("/tmp", "tako-wf-"));
     await writeFile(
       join(dir, "send-email.mjs"),
-      `export default async (ctx, p) => p.to;\nexport const maxAttempts = 5;\nexport const schedule = "*/5 * * * *";`,
+      `export default async (payload, ctx) => payload.to;\nexport const schedule = "*/5 * * * *";`,
     );
     await writeFile(join(dir, "bare.mjs"), `export default function(ctx, p) { return "ok"; }`);
     await writeFile(join(dir, "_ignored.mjs"), `export default () => {};`);
