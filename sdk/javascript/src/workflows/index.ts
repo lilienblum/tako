@@ -3,7 +3,7 @@
  */
 
 export { workflowsEngine, WorkflowEngine } from "./engine";
-export type { EnqueueOptions } from "./engine";
+export type { EnqueueOptions, WorkflowRegistry } from "./engine";
 export { WorkflowsClient, WorkflowsError } from "./rpc-client";
 export type { EnqueueResult } from "./rpc-client";
 export type { StepState, Run, RunId, RunSpec, RunStatus, WorkflowConfig } from "./types";

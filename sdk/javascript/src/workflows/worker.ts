@@ -24,10 +24,10 @@ import {
 } from "./step";
 import type { Run, StepState } from "./types";
 
-export type WorkflowHandler<P = unknown, R = unknown> = (
+export type WorkflowHandler<P = unknown> = (
   payload: P,
   ctx: WorkflowContext,
-) => Promise<R> | R;
+) => Promise<void> | void;
 
 export interface WorkflowContext {
   readonly runId: string;

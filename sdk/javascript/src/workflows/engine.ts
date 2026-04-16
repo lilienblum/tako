@@ -25,6 +25,24 @@ interface Registration {
   config: WorkflowConfig;
 }
 
+/**
+ * Registry of workflow names → payload types. Empty by default.
+ * Augmented automatically by `tako typegen` (or manually):
+ *
+ * ```ts
+ * // In tako.d.ts or your own .d.ts:
+ * declare module "tako.sh" {
+ *   interface WorkflowRegistry {
+ *     "send-email": { to: string; subject: string };
+ *   }
+ * }
+ * ```
+ *
+ * Once registered, `Tako.workflows.enqueue("send-email", payload)` is
+ * type-checked against `{ to: string; subject: string }`.
+ */
+export interface WorkflowRegistry {}
+
 export interface EnqueueOptions {
   runAt?: Date;
   /** Number of retries after the first attempt. Overrides the workflow's default. */
@@ -94,7 +112,11 @@ export class WorkflowEngine {
    * the worker doesn't self-enqueue via its own DB handle, which keeps
    * server ownership of cron-dedup idempotent.
    */
-  async enqueue(name: string, payload: unknown, opts: EnqueueOptions = {}): Promise<RunId> {
+  async enqueue<N extends keyof WorkflowRegistry | (string & {})>(
+    name: N,
+    payload: N extends keyof WorkflowRegistry ? WorkflowRegistry[N] : unknown,
+    opts: EnqueueOptions = {},
+  ): Promise<RunId> {
     const client = this.resolveClient();
     const effectiveOpts: EnqueueOptions = { ...opts };
     if (effectiveOpts.retries === undefined) {

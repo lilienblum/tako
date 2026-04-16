@@ -63,8 +63,71 @@ interface ImportMeta {
 }
 "#;
 
+/// Scan `{project_dir}/workflows/` for workflow files, returning their
+/// stem names (filename without extension), sorted.
+///
+/// Matches the same filter as the JS discovery system: valid extensions
+/// `.ts`, `.tsx`, `.js`, `.mjs`, `.mts`; skips files starting with `.` or `_`.
+fn read_workflow_names(project_dir: &Path) -> Vec<String> {
+    let workflows_dir = project_dir.join("workflows");
+    let Ok(entries) = std::fs::read_dir(&workflows_dir) else {
+        return Vec::new();
+    };
+
+    const VALID_EXTS: &[&str] = &["ts", "tsx", "js", "mjs", "mts"];
+
+    let mut names: Vec<String> = entries
+        .filter_map(|entry| entry.ok())
+        .filter_map(|entry| {
+            let path = entry.path();
+            if !path.is_file() {
+                return None;
+            }
+            let stem = path.file_stem()?.to_str()?;
+            if stem.starts_with('.') || stem.starts_with('_') {
+                return None;
+            }
+            let ext = path.extension()?.to_str()?;
+            if !VALID_EXTS.contains(&ext) {
+                return None;
+            }
+            Some(stem.to_string())
+        })
+        .collect();
+
+    names.sort();
+    names
+}
+
+/// Build the `declare module "tako.sh" { interface WorkflowRegistry { ... } }` block.
+///
+/// `workflow_prefix` is the relative path from the `tako.d.ts` location to the
+/// `workflows/` directory — either `"./workflows/"` (root) or `"../workflows/"` (src/app).
+fn build_workflow_registry_block(names: &[String], workflow_prefix: &str) -> String {
+    if names.is_empty() {
+        return String::new();
+    }
+    let mut out = String::from("\ndeclare module \"tako.sh\" {\n");
+    out.push_str("  interface WorkflowRegistry {\n");
+    for name in names {
+        out.push_str(&format!(
+            "    \"{name}\": import(\"{prefix}{name}\").default extends import(\"tako.sh\").WorkflowDefinition<infer P> ? P : unknown;\n",
+            name = name,
+            prefix = workflow_prefix,
+        ));
+    }
+    out.push_str("  }\n");
+    out.push_str("}\n");
+    out
+}
+
 /// Build the full `tako.d.ts` content, including typed secrets.
-fn build_dts(secret_names: &[String], adapter: BuildAdapter) -> String {
+fn build_dts(
+    secret_names: &[String],
+    workflow_names: &[String],
+    adapter: BuildAdapter,
+    dts_in_subdir: bool,
+) -> String {
     let mut out = String::from(TAKO_DTS_HEADER);
     out.push_str(TAKO_DTS_STANDARD_ENVS_PREFIX);
     if matches!(adapter, BuildAdapter::Bun) {
@@ -99,6 +162,16 @@ interface TakoSecrets {}
         out.push_str("}\n");
     }
 
+    let workflow_prefix = if dts_in_subdir {
+        "../workflows/"
+    } else {
+        "./workflows/"
+    };
+    out.push_str(&build_workflow_registry_block(
+        workflow_names,
+        workflow_prefix,
+    ));
+
     out
 }
 
@@ -116,17 +189,20 @@ pub fn write_types(project_dir: &Path) -> std::io::Result<bool> {
 /// `runtime` field in `tako.toml`) don't re-detect.
 pub fn write_types_for_adapter(project_dir: &Path, adapter: BuildAdapter) -> std::io::Result<bool> {
     let secret_names = read_secret_names(project_dir);
-    write_types_with_secrets(project_dir, &secret_names, adapter)
+    let workflow_names = read_workflow_names(project_dir);
+    write_types_with_secrets(project_dir, &secret_names, &workflow_names, adapter)
 }
 
 /// Write `tako.d.ts` with explicit secret names.
 pub fn write_types_with_secrets(
     project_dir: &Path,
     secret_names: &[String],
+    workflow_names: &[String],
     adapter: BuildAdapter,
 ) -> std::io::Result<bool> {
     let path = resolve_dts_path(project_dir);
-    let content = build_dts(secret_names, adapter);
+    let dts_in_subdir = path.parent() != Some(project_dir);
+    let content = build_dts(secret_names, workflow_names, adapter, dts_in_subdir);
     if path.is_file() {
         let existing = fs::read_to_string(&path)?;
         if existing == content {
@@ -246,7 +322,7 @@ mod tests {
     fn write_types_with_secrets_generates_typed_interface() {
         let dir = TempDir::new().unwrap();
         let names = vec!["API_KEY".to_string(), "DATABASE_URL".to_string()];
-        let written = write_types_with_secrets(dir.path(), &names, BuildAdapter::Bun).unwrap();
+        let written = write_types_with_secrets(dir.path(), &names, &[], BuildAdapter::Bun).unwrap();
         assert!(written);
 
         let content = fs::read_to_string(dir.path().join("tako.d.ts")).unwrap();
@@ -450,5 +526,58 @@ mod tests {
         let content = fs::read_to_string(dir.path().join("tako.d.ts")).unwrap();
         assert!(content.contains("STAGE_KEY"));
         assert!(content.contains("PROD_KEY"));
+    }
+
+    #[test]
+    fn write_types_with_no_workflows_omits_registry() {
+        let dir = TempDir::new().unwrap();
+        let written = write_types(dir.path()).unwrap();
+        assert!(written);
+        let content = fs::read_to_string(dir.path().join("tako.d.ts")).unwrap();
+        assert!(!content.contains("WorkflowRegistry"));
+    }
+
+    #[test]
+    fn write_types_with_workflows_emits_registry_with_conditional_types() {
+        let dir = TempDir::new().unwrap();
+        let workflows_dir = dir.path().join("workflows");
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(
+            workflows_dir.join("send-email.ts"),
+            "export default () => {};",
+        )
+        .unwrap();
+        std::fs::write(
+            workflows_dir.join("_private.ts"),
+            "export default () => {};",
+        )
+        .unwrap();
+        std::fs::write(workflows_dir.join(".hidden.ts"), "export default () => {};").unwrap();
+        std::fs::write(workflows_dir.join("README.md"), "not a workflow").unwrap();
+
+        let written = write_types(dir.path()).unwrap();
+        assert!(written);
+        let content = fs::read_to_string(dir.path().join("tako.d.ts")).unwrap();
+        assert!(content.contains("WorkflowRegistry"));
+        assert!(content.contains("\"send-email\""));
+        assert!(content.contains("WorkflowDefinition<infer P>"));
+        assert!(!content.contains("_private"));
+        assert!(!content.contains(".hidden"));
+        assert!(!content.contains("README"));
+    }
+
+    #[test]
+    fn write_types_workflow_prefix_uses_relative_dotdot_when_dts_in_subdir() {
+        let dir = TempDir::new().unwrap();
+        let workflows_dir = dir.path().join("workflows");
+        std::fs::create_dir_all(&workflows_dir).unwrap();
+        std::fs::write(workflows_dir.join("job.ts"), "export default () => {};").unwrap();
+        // Force dts into src/ so it's in a subdir
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+
+        write_types(dir.path()).unwrap();
+        let content = fs::read_to_string(dir.path().join("src").join("tako.d.ts")).unwrap();
+        assert!(content.contains("\"../workflows/job\""));
+        assert!(!content.contains("\"./workflows/job\""));
     }
 }
