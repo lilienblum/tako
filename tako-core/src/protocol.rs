@@ -136,10 +136,13 @@ pub enum Command {
         lease_ms: u64,
     },
 
-    /// Worker: extend the lease on a running run.
+    /// Worker: extend the lease on a running run. Requires the original
+    /// `worker_id` so a stale worker (past its lease) can't heartbeat a
+    /// run another worker has since claimed.
     HeartbeatRun {
         app: String,
         id: String,
+        worker_id: String,
         lease_ms: u64,
     },
 

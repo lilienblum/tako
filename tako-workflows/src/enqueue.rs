@@ -23,6 +23,10 @@ pub enum RunsDbError {
     Sqlite(#[from] rusqlite::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    /// The run is no longer owned by the caller (lease expired and was
+    /// reclaimed by another worker, or the run already terminated).
+    #[error("stale worker: run is no longer owned by this worker")]
+    StaleWorker,
 }
 
 pub struct RunsDb {
@@ -189,66 +193,109 @@ impl RunsDb {
         Ok(Some(payload))
     }
 
-    pub fn heartbeat(&self, id: &str, lease_ms: u64) -> Result<(), RunsDbError> {
+    /// All of these lifecycle writes are guarded by `worker_id = ?1 AND
+    /// status = 'running'`. If a worker's lease expired and another worker
+    /// already reclaimed the run, the UPDATE affects 0 rows and we return
+    /// `StaleWorker` so the SDK can log/raise rather than silently
+    /// marking the run in a state the new worker didn't intend.
+    pub fn heartbeat(&self, id: &str, worker_id: &str, lease_ms: u64) -> Result<(), RunsDbError> {
         let lease_until = now_ms() + lease_ms as i64;
         let conn = self.conn.lock();
-        conn.execute(
-            "UPDATE runs SET lease_until = ?1 WHERE id = ?2 AND status='running'",
-            params![lease_until, id],
+        let rows = conn.execute(
+            "UPDATE runs SET lease_until = ?1
+             WHERE id = ?2 AND worker_id = ?3 AND status='running'",
+            params![lease_until, id, worker_id],
         )?;
+        if rows == 0 {
+            return Err(RunsDbError::StaleWorker);
+        }
         Ok(())
     }
 
-    /// Persist a single completed step result. First-write-wins on the
-    /// `(run_id, name)` primary key — a duplicate save (e.g. if the worker
-    /// retried after a failed RPC) doesn't overwrite the original.
+    /// Persist a single completed step result. Guarded by the run's
+    /// current `worker_id` so a stale worker that lost its lease can't
+    /// write step results into a different worker's in-flight run.
+    /// First-write-wins on `(run_id, name)` — a duplicate save after a
+    /// failed RPC is silently deduped.
     pub fn save_step(
         &self,
         run_id: &str,
+        worker_id: &str,
         step_name: &str,
         result: &serde_json::Value,
     ) -> Result<(), RunsDbError> {
         let r = serde_json::to_string(result)?;
         let conn = self.conn.lock();
-        conn.execute(
+        let rows = conn.execute(
             "INSERT OR IGNORE INTO steps (run_id, name, result, completed_at)
-             VALUES (?1, ?2, ?3, ?4)",
-            params![run_id, step_name, r, now_ms()],
+             SELECT ?1, ?2, ?3, ?4
+             FROM runs WHERE id = ?1 AND worker_id = ?5 AND status='running'",
+            params![run_id, step_name, r, now_ms(), worker_id],
         )?;
+        // rows == 0 can mean "step already saved (IGNORE)" or "stale
+        // worker". Distinguish by probing the run's worker_id.
+        if rows == 0 {
+            let current: Option<Option<String>> = conn
+                .query_row(
+                    "SELECT worker_id FROM runs WHERE id = ?1 AND status='running'",
+                    params![run_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            match current {
+                Some(Some(wid)) if wid == worker_id => { /* duplicate save, fine */ }
+                _ => return Err(RunsDbError::StaleWorker),
+            }
+        }
         Ok(())
     }
 
-    pub fn complete(&self, id: &str) -> Result<(), RunsDbError> {
+    pub fn complete(&self, id: &str, worker_id: &str) -> Result<(), RunsDbError> {
         let conn = self.conn.lock();
-        conn.execute(
-            "UPDATE runs SET status='succeeded', worker_id=NULL, lease_until=NULL WHERE id = ?1",
-            params![id],
+        let rows = conn.execute(
+            "UPDATE runs SET status='succeeded', worker_id=NULL, lease_until=NULL
+             WHERE id = ?1 AND worker_id = ?2 AND status='running'",
+            params![id, worker_id],
         )?;
+        if rows == 0 {
+            return Err(RunsDbError::StaleWorker);
+        }
         Ok(())
     }
 
-    pub fn cancel(&self, id: &str, reason: Option<&str>) -> Result<(), RunsDbError> {
+    pub fn cancel(
+        &self,
+        id: &str,
+        worker_id: &str,
+        reason: Option<&str>,
+    ) -> Result<(), RunsDbError> {
         let conn = self.conn.lock();
-        conn.execute(
-            "UPDATE runs SET status='cancelled', last_error=?1, worker_id=NULL, lease_until=NULL WHERE id = ?2",
-            params![reason, id],
+        let rows = conn.execute(
+            "UPDATE runs SET status='cancelled', last_error=?1, worker_id=NULL, lease_until=NULL
+             WHERE id = ?2 AND worker_id = ?3 AND status='running'",
+            params![reason, id, worker_id],
         )?;
+        if rows == 0 {
+            return Err(RunsDbError::StaleWorker);
+        }
         Ok(())
     }
 
     pub fn fail(
         &self,
         id: &str,
+        worker_id: &str,
         error: &str,
         next_run_at_ms: Option<i64>,
         finalize: bool,
     ) -> Result<(), RunsDbError> {
         let conn = self.conn.lock();
-        if finalize {
+        let rows = if finalize {
             conn.execute(
-                "UPDATE runs SET status='dead', last_error=?1, worker_id=NULL, lease_until=NULL WHERE id = ?2",
-                params![error, id],
-            )?;
+                "UPDATE runs SET status='dead', last_error=?1, worker_id=NULL, lease_until=NULL
+                 WHERE id = ?2 AND worker_id = ?3 AND status='running'",
+                params![error, id, worker_id],
+            )?
         } else {
             let next = next_run_at_ms.ok_or_else(|| {
                 RunsDbError::Sqlite(rusqlite::Error::ToSqlConversionFailure(Box::new(
@@ -259,9 +306,13 @@ impl RunsDb {
                 )))
             })?;
             conn.execute(
-                "UPDATE runs SET status='pending', last_error=?1, worker_id=NULL, lease_until=NULL, run_at=?2 WHERE id = ?3",
-                params![error, next, id],
-            )?;
+                "UPDATE runs SET status='pending', last_error=?1, worker_id=NULL, lease_until=NULL, run_at=?2
+                 WHERE id = ?3 AND worker_id = ?4 AND status='running'",
+                params![error, next, id, worker_id],
+            )?
+        };
+        if rows == 0 {
+            return Err(RunsDbError::StaleWorker);
         }
         Ok(())
     }
@@ -269,16 +320,23 @@ impl RunsDb {
     /// Reschedule a run for later without bumping attempts (for durable
     /// `step.sleep` and `step.waitFor` parking). When `wake_at_ms` is None
     /// the run is parked indefinitely (waiting for an event).
-    pub fn defer(&self, id: &str, wake_at_ms: Option<i64>) -> Result<(), RunsDbError> {
+    pub fn defer(
+        &self,
+        id: &str,
+        worker_id: &str,
+        wake_at_ms: Option<i64>,
+    ) -> Result<(), RunsDbError> {
         let conn = self.conn.lock();
-        // i64::MAX = "indefinite" — events.rs will rewrite run_at when a
-        // matching signal arrives.
         let run_at = wake_at_ms.unwrap_or(i64::MAX);
-        conn.execute(
-            "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL, run_at=?1, attempts=attempts-1
-             WHERE id = ?2",
-            params![run_at, id],
+        let rows = conn.execute(
+            "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL,
+                              run_at=?1, attempts=attempts-1
+             WHERE id = ?2 AND worker_id = ?3 AND status='running'",
+            params![run_at, id, worker_id],
         )?;
+        if rows == 0 {
+            return Err(RunsDbError::StaleWorker);
+        }
         Ok(())
     }
 
@@ -298,24 +356,26 @@ impl RunsDb {
     pub fn wait_for_event(
         &self,
         run_id: &str,
+        worker_id: &str,
         step_name: &str,
         event_name: &str,
         timeout_at_ms: Option<i64>,
     ) -> Result<(), RunsDbError> {
         let mut conn = self.conn.lock();
         let tx = conn.transaction()?;
+        let rows = tx.execute(
+            "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL,
+                              run_at=?1, attempts=attempts-1
+             WHERE id = ?2 AND worker_id = ?3 AND status='running'",
+            params![timeout_at_ms.unwrap_or(i64::MAX), run_id, worker_id],
+        )?;
+        if rows == 0 {
+            return Err(RunsDbError::StaleWorker);
+        }
         tx.execute(
             "INSERT OR REPLACE INTO event_waiters (run_id, step_name, event_name, expires_at)
              VALUES (?1, ?2, ?3, ?4)",
             params![run_id, step_name, event_name, timeout_at_ms],
-        )?;
-        // Defer: park until timeout or signal arrives. Don't consume retry budget.
-        let run_at = timeout_at_ms.unwrap_or(i64::MAX);
-        tx.execute(
-            "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL,
-                              run_at=?1, attempts=attempts-1
-             WHERE id = ?2",
-            params![run_at, run_id],
         )?;
         tx.commit()?;
         Ok(())
@@ -547,12 +607,12 @@ mod tests {
         assert_eq!(claimed.id, r.id);
         assert_eq!(claimed.step_state, serde_json::json!({}));
 
-        db.save_step(&r.id, "fetch-user", &serde_json::json!({"id":"u1"}))
+        db.save_step(&r.id, "w1", "fetch-user", &serde_json::json!({"id":"u1"}))
             .unwrap();
-        db.save_step(&r.id, "send", &serde_json::json!(true))
+        db.save_step(&r.id, "w1", "send", &serde_json::json!(true))
             .unwrap();
         // Bounce the run back to pending so we can claim it again.
-        db.fail(&r.id, "boom", Some(now_ms()), false).unwrap();
+        db.fail(&r.id, "w1", "boom", Some(now_ms()), false).unwrap();
 
         let claimed2 = db.claim("w2", &["w".into()], 30_000).unwrap().unwrap();
         assert_eq!(claimed2.id, r.id);
@@ -569,13 +629,13 @@ mod tests {
         let db = RunsDb::open_in_memory().unwrap();
         let r = db.enqueue("w", &serde_json::json!({}), &opts()).unwrap();
         db.claim("w1", &["w".into()], 30_000).unwrap();
-        db.save_step(&r.id, "fetch", &serde_json::json!("first"))
+        db.save_step(&r.id, "w1", "fetch", &serde_json::json!("first"))
             .unwrap();
         // Same step name written again — INSERT OR IGNORE keeps the first.
-        db.save_step(&r.id, "fetch", &serde_json::json!("second"))
+        db.save_step(&r.id, "w1", "fetch", &serde_json::json!("second"))
             .unwrap();
 
-        db.fail(&r.id, "x", Some(now_ms()), false).unwrap();
+        db.fail(&r.id, "w1", "x", Some(now_ms()), false).unwrap();
         let claimed = db.claim("w2", &["w".into()], 30_000).unwrap().unwrap();
         assert_eq!(
             claimed.step_state.as_object().unwrap().get("fetch"),
@@ -588,8 +648,9 @@ mod tests {
         let db = RunsDb::open_in_memory().unwrap();
         let r = db.enqueue("w", &serde_json::json!({}), &opts()).unwrap();
         db.claim("w1", &["w".into()], 30_000).unwrap();
-        db.save_step(&r.id, "s", &serde_json::json!("v")).unwrap();
-        db.complete(&r.id).unwrap();
+        db.save_step(&r.id, "w1", "s", &serde_json::json!("v"))
+            .unwrap();
+        db.complete(&r.id, "w1").unwrap();
 
         let conn = db.conn.lock();
         let status: String = conn
@@ -615,7 +676,7 @@ mod tests {
         let db = RunsDb::open_in_memory().unwrap();
         let r = db.enqueue("w", &serde_json::json!({}), &opts()).unwrap();
         db.claim("w1", &["w".into()], 30_000).unwrap();
-        db.cancel(&r.id, Some("user cancelled")).unwrap();
+        db.cancel(&r.id, "w1", Some("user cancelled")).unwrap();
 
         let conn = db.conn.lock();
         let (status, last_error): (String, Option<String>) = conn
@@ -637,7 +698,7 @@ mod tests {
         assert_eq!(claimed.attempts, 1);
 
         let wake = now_ms() + 60_000;
-        db.defer(&r.id, Some(wake)).unwrap();
+        db.defer(&r.id, "w1", Some(wake)).unwrap();
 
         let conn = db.conn.lock();
         let (status, run_at, attempts): (String, i64, i64) = conn
@@ -658,7 +719,7 @@ mod tests {
         let db = RunsDb::open_in_memory().unwrap();
         let r = db.enqueue("w", &serde_json::json!({}), &opts()).unwrap();
         db.claim("w1", &["w".into()], 30_000).unwrap();
-        db.defer(&r.id, None).unwrap();
+        db.defer(&r.id, "w1", None).unwrap();
 
         let conn = db.conn.lock();
         let run_at: i64 = conn

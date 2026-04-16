@@ -209,48 +209,66 @@ fn handle_command(lookup: &AppLookup, cmd: Command) -> Response {
             Ok(None) => Response::ok(serde_json::Value::Null),
             Err(e) => Response::error(format!("claim failed: {e}")),
         },
-        Command::HeartbeatRun { id, lease_ms, .. } => match db.heartbeat(&id, lease_ms) {
+        Command::HeartbeatRun {
+            id,
+            worker_id,
+            lease_ms,
+            ..
+        } => match db.heartbeat(&id, &worker_id, lease_ms) {
             Ok(()) => Response::ok(serde_json::json!({})),
             Err(e) => Response::error(format!("heartbeat failed: {e}")),
         },
         Command::SaveStep {
             id,
+            worker_id,
             step_name,
             result,
             ..
-        } => match db.save_step(&id, &step_name, &result) {
+        } => match db.save_step(&id, &worker_id, &step_name, &result) {
             Ok(()) => Response::ok(serde_json::json!({})),
             Err(e) => Response::error(format!("save_step failed: {e}")),
         },
-        Command::CompleteRun { id, .. } => match db.complete(&id) {
+        Command::CompleteRun { id, worker_id, .. } => match db.complete(&id, &worker_id) {
             Ok(()) => Response::ok(serde_json::json!({})),
             Err(e) => Response::error(format!("complete failed: {e}")),
         },
-        Command::CancelRun { id, reason, .. } => match db.cancel(&id, reason.as_deref()) {
+        Command::CancelRun {
+            id,
+            worker_id,
+            reason,
+            ..
+        } => match db.cancel(&id, &worker_id, reason.as_deref()) {
             Ok(()) => Response::ok(serde_json::json!({})),
             Err(e) => Response::error(format!("cancel failed: {e}")),
         },
         Command::FailRun {
             id,
+            worker_id,
             error,
             next_run_at_ms,
             finalize,
             ..
-        } => match db.fail(&id, &error, next_run_at_ms, finalize) {
+        } => match db.fail(&id, &worker_id, &error, next_run_at_ms, finalize) {
             Ok(()) => Response::ok(serde_json::json!({})),
             Err(e) => Response::error(format!("fail failed: {e}")),
         },
-        Command::DeferRun { id, wake_at_ms, .. } => match db.defer(&id, wake_at_ms) {
+        Command::DeferRun {
+            id,
+            worker_id,
+            wake_at_ms,
+            ..
+        } => match db.defer(&id, &worker_id, wake_at_ms) {
             Ok(()) => Response::ok(serde_json::json!({})),
             Err(e) => Response::error(format!("defer failed: {e}")),
         },
         Command::WaitForEvent {
             id,
+            worker_id,
             step_name,
             event_name,
             timeout_at_ms,
             ..
-        } => match db.wait_for_event(&id, &step_name, &event_name, timeout_at_ms) {
+        } => match db.wait_for_event(&id, &worker_id, &step_name, &event_name, timeout_at_ms) {
             Ok(()) => Response::ok(serde_json::json!({})),
             Err(e) => Response::error(format!("wait_for_event failed: {e}")),
         },
@@ -377,7 +395,7 @@ mod tests {
             .enqueue("w", &serde_json::json!({}), &EnqueueOpts::default())
             .unwrap();
         let _ = db.claim("w1", &["w".into()], 30_000).unwrap();
-        db.wait_for_event(&r.id, "step", "evt", None).unwrap();
+        db.wait_for_event(&r.id, "w1", "step", "evt", None).unwrap();
 
         let stream = UnixStream::connect(&sock).await.unwrap();
         let (_r, mut w) = stream.into_split();

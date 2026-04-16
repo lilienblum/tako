@@ -57,6 +57,11 @@ export class WorkflowsClient {
     return new WorkflowsClient(path, app);
   }
 
+  /** The app name this client sends on every RPC. */
+  get appName(): string {
+    return this.app;
+  }
+
   // --- Enqueue / signal: usable from any process ---
 
   async enqueue(name: string, payload: unknown, opts: EnqueueOptions = {}): Promise<EnqueueResult> {
@@ -109,50 +114,72 @@ export class WorkflowsClient {
     return rawToRun(data as RawRun);
   }
 
-  async heartbeat(id: RunId, leaseMs: number): Promise<void> {
-    await this.call({ command: "heartbeat_run", app: this.app, id, lease_ms: leaseMs });
+  async heartbeat(id: RunId, workerId: string, leaseMs: number): Promise<void> {
+    await this.call({
+      command: "heartbeat_run",
+      app: this.app,
+      id,
+      worker_id: workerId,
+      lease_ms: leaseMs,
+    });
   }
 
-  async saveStep(id: RunId, stepName: string, result: unknown): Promise<void> {
+  async saveStep(id: RunId, workerId: string, stepName: string, result: unknown): Promise<void> {
     await this.call({
       command: "save_step",
       app: this.app,
       id,
+      worker_id: workerId,
       step_name: stepName,
       result: result ?? null,
     });
   }
 
-  async complete(id: RunId): Promise<void> {
-    await this.call({ command: "complete_run", app: this.app, id });
+  async complete(id: RunId, workerId: string): Promise<void> {
+    await this.call({ command: "complete_run", app: this.app, id, worker_id: workerId });
   }
 
-  async cancel(id: RunId, reason?: string | null): Promise<void> {
-    await this.call({ command: "cancel_run", app: this.app, id, reason: reason ?? null });
+  async cancel(id: RunId, workerId: string, reason?: string | null): Promise<void> {
+    await this.call({
+      command: "cancel_run",
+      app: this.app,
+      id,
+      worker_id: workerId,
+      reason: reason ?? null,
+    });
   }
 
-  async fail(id: RunId, error: string, nextRunAt: Date | null, finalize: boolean): Promise<void> {
+  async fail(
+    id: RunId,
+    workerId: string,
+    error: string,
+    nextRunAt: Date | null,
+    finalize: boolean,
+  ): Promise<void> {
     await this.call({
       command: "fail_run",
       app: this.app,
       id,
+      worker_id: workerId,
       error,
       next_run_at_ms: nextRunAt ? nextRunAt.getTime() : null,
       finalize,
     });
   }
 
-  async defer(id: RunId, wakeAt: Date | null): Promise<void> {
+  async defer(id: RunId, workerId: string, wakeAt: Date | null): Promise<void> {
     await this.call({
       command: "defer_run",
       app: this.app,
       id,
+      worker_id: workerId,
       wake_at_ms: wakeAt ? wakeAt.getTime() : null,
     });
   }
 
   async waitForEvent(
     id: RunId,
+    workerId: string,
     stepName: string,
     eventName: string,
     timeoutAt: Date | null,
@@ -161,6 +188,7 @@ export class WorkflowsClient {
       command: "wait_for_event",
       app: this.app,
       id,
+      worker_id: workerId,
       step_name: stepName,
       event_name: eventName,
       timeout_at_ms: timeoutAt ? timeoutAt.getTime() : null,

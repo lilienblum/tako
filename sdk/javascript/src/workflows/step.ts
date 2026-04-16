@@ -83,6 +83,7 @@ export function isControlSignal(err: unknown): boolean {
 export function createStepAPI(
   client: WorkflowsClient,
   runId: RunId,
+  workerId: string,
   stepState: StepState,
 ): StepAPI {
   return {
@@ -100,7 +101,7 @@ export function createStepAPI(
         try {
           const result = await fn();
           stepState[name] = result as unknown;
-          await client.saveStep(runId, name, result ?? null);
+          await client.saveStep(runId, workerId, name, result ?? null);
           return result;
         } catch (err) {
           // Control signals (success/bail/fail/defer/wait) are how the
@@ -127,7 +128,7 @@ export function createStepAPI(
         if (Date.now() >= stored.wakeAt) {
           if (!Object.prototype.hasOwnProperty.call(stepState, name)) {
             stepState[name] = true;
-            await client.saveStep(runId, name, true);
+            await client.saveStep(runId, workerId, name, true);
           }
           return;
         }
@@ -136,12 +137,12 @@ export function createStepAPI(
 
       const wakeAt = Date.now() + durationMs;
       stepState[key] = { wakeAt };
-      await client.saveStep(runId, key, { wakeAt });
+      await client.saveStep(runId, workerId, key, { wakeAt });
 
       if (durationMs < INLINE_SLEEP_THRESHOLD_MS) {
         await new Promise((r) => setTimeout(r, durationMs));
         stepState[name] = true;
-        await client.saveStep(runId, name, true);
+        await client.saveStep(runId, workerId, name, true);
         return;
       }
       throw new DeferSignal(new Date(wakeAt));

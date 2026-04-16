@@ -163,7 +163,13 @@ export class Worker {
   private async execute(run: Run): Promise<void> {
     const reg = this.registry.get(run.name);
     if (!reg) {
-      await this.client.fail(run.id, `no handler registered for '${run.name}'`, null, true);
+      await this.client.fail(
+        run.id,
+        this.workerId,
+        `no handler registered for '${run.name}'`,
+        null,
+        true,
+      );
       return;
     }
 
@@ -172,7 +178,7 @@ export class Worker {
       runId: run.id,
       workflowName: run.name,
       attempts: run.attempts,
-      step: createStepAPI(this.client, run.id, stepState),
+      step: createStepAPI(this.client, run.id, this.workerId, stepState),
       bail: (reason?: string): never => {
         throw new BailSignal(reason);
       },
@@ -185,28 +191,34 @@ export class Worker {
     let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
     if (this.heartbeatIntervalMs > 0) {
       heartbeatTimer = setInterval(() => {
-        this.client.heartbeat(run.id, this.leaseMs).catch(() => {});
+        this.client.heartbeat(run.id, this.workerId, this.leaseMs).catch(() => {});
       }, this.heartbeatIntervalMs);
     }
 
     try {
       await reg.handler(ctx, run.payload);
-      await this.client.complete(run.id);
+      await this.client.complete(run.id, this.workerId);
     } catch (err) {
       if (err instanceof BailSignal) {
-        await this.client.cancel(run.id, err.reason ?? null);
+        await this.client.cancel(run.id, this.workerId, err.reason ?? null);
         return;
       }
       if (err instanceof FailSignal) {
-        await this.client.fail(run.id, err.error.message, null, true);
+        await this.client.fail(run.id, this.workerId, err.error.message, null, true);
         return;
       }
       if (err instanceof DeferSignal) {
-        await this.client.defer(run.id, err.wakeAt);
+        await this.client.defer(run.id, this.workerId, err.wakeAt);
         return;
       }
       if (err instanceof WaitSignal) {
-        await this.client.waitForEvent(run.id, err.stepName, err.eventName, err.timeoutAt);
+        await this.client.waitForEvent(
+          run.id,
+          this.workerId,
+          err.stepName,
+          err.eventName,
+          err.timeoutAt,
+        );
         return;
       }
 
@@ -219,7 +231,7 @@ export class Worker {
       const nextRunAt = finalize
         ? null
         : new Date(Date.now() + expBackoffMs(run.attempts, base, max));
-      await this.client.fail(run.id, message, nextRunAt, finalize);
+      await this.client.fail(run.id, this.workerId, message, nextRunAt, finalize);
     } finally {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
     }

@@ -153,39 +153,55 @@ func (c *Client) Claim(ctx context.Context, workerID string, names []string, lea
 	return &t, nil
 }
 
-// Heartbeat extends the lease on a running run.
-func (c *Client) Heartbeat(ctx context.Context, id string, leaseMs uint64) error {
+// Heartbeat extends the lease on a running run. `workerId` must match the
+// `worker_id` that claimed the run; if the lease was reclaimed by another
+// worker, the call returns an error.
+func (c *Client) Heartbeat(ctx context.Context, id, workerID string, leaseMs uint64) error {
 	_, err := c.call(ctx, map[string]any{
-		"command":  "heartbeat_run",
-		"app":      c.app,
-		"id":       id,
-		"lease_ms": leaseMs,
+		"command":   "heartbeat_run",
+		"app":       c.app,
+		"id":        id,
+		"worker_id": workerID,
+		"lease_ms":  leaseMs,
 	})
 	return err
 }
 
-// SaveStep persists a single completed step result. First-write-wins on
-// (run_id, step_name) — duplicate saves are ignored server-side.
-func (c *Client) SaveStep(ctx context.Context, id, stepName string, result any) error {
+// SaveStep persists a single completed step result. Guarded by `workerId`
+// so a stale worker (past its lease) can't scribble into a different
+// worker's run. First-write-wins on (run_id, step_name).
+func (c *Client) SaveStep(ctx context.Context, id, workerID, stepName string, result any) error {
 	_, err := c.call(ctx, map[string]any{
 		"command":   "save_step",
 		"app":       c.app,
 		"id":        id,
+		"worker_id": workerID,
 		"step_name": stepName,
 		"result":    result,
 	})
 	return err
 }
 
-// Complete marks the run succeeded.
-func (c *Client) Complete(ctx context.Context, id string) error {
-	_, err := c.call(ctx, map[string]any{"command": "complete_run", "app": c.app, "id": id})
+// Complete marks the run succeeded. Guarded by `workerId`.
+func (c *Client) Complete(ctx context.Context, id, workerID string) error {
+	_, err := c.call(ctx, map[string]any{
+		"command":   "complete_run",
+		"app":       c.app,
+		"id":        id,
+		"worker_id": workerID,
+	})
 	return err
 }
 
-// Cancel ends the run cleanly as `cancelled` (no retries).
-func (c *Client) Cancel(ctx context.Context, id string, reason *string) error {
-	body := map[string]any{"command": "cancel_run", "app": c.app, "id": id, "reason": nil}
+// Cancel ends the run cleanly as `cancelled` (no retries). Guarded.
+func (c *Client) Cancel(ctx context.Context, id, workerID string, reason *string) error {
+	body := map[string]any{
+		"command":   "cancel_run",
+		"app":       c.app,
+		"id":        id,
+		"worker_id": workerID,
+		"reason":    nil,
+	}
 	if reason != nil {
 		body["reason"] = *reason
 	}
@@ -194,9 +210,15 @@ func (c *Client) Cancel(ctx context.Context, id string, reason *string) error {
 }
 
 // Defer parks the run for later. nil wakeAt = parked indefinitely.
-// Does not consume retry budget.
-func (c *Client) Defer(ctx context.Context, id string, wakeAt *time.Time) error {
-	body := map[string]any{"command": "defer_run", "app": c.app, "id": id, "wake_at_ms": nil}
+// Does not consume retry budget. Guarded by `workerId`.
+func (c *Client) Defer(ctx context.Context, id, workerID string, wakeAt *time.Time) error {
+	body := map[string]any{
+		"command":    "defer_run",
+		"app":        c.app,
+		"id":         id,
+		"worker_id":  workerID,
+		"wake_at_ms": nil,
+	}
 	if wakeAt != nil {
 		body["wake_at_ms"] = wakeAt.UnixMilli()
 	}
@@ -205,14 +227,15 @@ func (c *Client) Defer(ctx context.Context, id string, wakeAt *time.Time) error 
 }
 
 // WaitForEvent parks the run on a named event. Resumes when a matching
-// Signal arrives or timeoutAt elapses.
+// Signal arrives or timeoutAt elapses. Guarded by `workerId`.
 func (c *Client) WaitForEvent(
-	ctx context.Context, id, stepName, eventName string, timeoutAt *time.Time,
+	ctx context.Context, id, workerID, stepName, eventName string, timeoutAt *time.Time,
 ) error {
 	body := map[string]any{
 		"command":       "wait_for_event",
 		"app":           c.app,
 		"id":            id,
+		"worker_id":     workerID,
 		"step_name":     stepName,
 		"event_name":    eventName,
 		"timeout_at_ms": nil,
@@ -256,13 +279,17 @@ func Signal(ctx context.Context, eventName string, payload any) (uint64, error) 
 
 // Fail records a failure. When finalize is true the run becomes dead;
 // otherwise it goes back to pending with nextRunAt as its new run_at.
-func (c *Client) Fail(ctx context.Context, id, errMsg string, nextRunAt *time.Time, finalize bool) error {
+// Guarded by `workerId`.
+func (c *Client) Fail(
+	ctx context.Context, id, workerID, errMsg string, nextRunAt *time.Time, finalize bool,
+) error {
 	body := map[string]any{
-		"command":  "fail_run",
-		"app":      c.app,
-		"id":       id,
-		"error":    errMsg,
-		"finalize": finalize,
+		"command":   "fail_run",
+		"app":       c.app,
+		"id":        id,
+		"worker_id": workerID,
+		"error":     errMsg,
+		"finalize":  finalize,
 	}
 	if nextRunAt != nil {
 		body["next_run_at_ms"] = nextRunAt.UnixMilli()

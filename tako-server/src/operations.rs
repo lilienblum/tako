@@ -520,6 +520,10 @@ impl super::ServerState {
         }
         let workflow_socket = self.workflows.socket_path();
 
+        // Secrets are handed to the worker over fd 3 (same ABI as HTTP
+        // instances). Fetch once before the closure so `ensure` owns them.
+        let secrets = self.state_store.get_secrets(app_name).unwrap_or_default();
+
         let app = app_name.to_string();
         let app_for_spec = app.clone();
         let release = release_path.to_path_buf();
@@ -536,6 +540,7 @@ impl super::ServerState {
                     &runtime_bin,
                     &worker_bin,
                     &release,
+                    secrets,
                 )
             })
             .await;

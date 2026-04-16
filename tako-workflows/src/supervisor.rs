@@ -14,6 +14,10 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
+#[cfg(unix)]
+use std::io::Write;
+#[cfg(unix)]
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -40,6 +44,11 @@ pub struct WorkerSpec {
     pub cwd: PathBuf,
     /// Extra env vars (merged on top of `build_base_env`).
     pub env: HashMap<String, String>,
+    /// Secrets to hand the worker via fd 3. Mirror of the HTTP
+    /// instance's runtime ABI — the SDK reads JSON from fd 3 at startup
+    /// and populates `Tako.secrets`.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub secrets: HashMap<String, String>,
 }
 
 impl WorkerSpec {
@@ -197,6 +206,36 @@ impl WorkerSupervisor {
             cmd.env(k, v);
         }
 
+        // Secrets ABI: the SDK reads a JSON object from fd 3 at startup
+        // and populates `Tako.secrets`. `secrets_pipe` must stay alive
+        // through `spawn()` so the fork copies a valid fd into the child.
+        #[cfg(unix)]
+        let secrets_pipe = if !self.spec.secrets.is_empty() {
+            Some(create_secrets_pipe(&self.spec.secrets)?)
+        } else {
+            None
+        };
+        #[cfg(unix)]
+        let secrets_fd: Option<RawFd> = secrets_pipe.as_ref().map(|fd| fd.as_raw_fd());
+
+        #[cfg(unix)]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            cmd.pre_exec(move || {
+                if let Some(fd) = secrets_fd {
+                    if fd != 3 {
+                        if libc::dup2(fd, 3) == -1 {
+                            return Err(std::io::Error::last_os_error());
+                        }
+                        libc::close(fd);
+                    }
+                } else {
+                    libc::close(3);
+                }
+                Ok(())
+            });
+        }
+
         tracing::info!(
             app = %self.spec.app,
             workers = self.spec.workers,
@@ -204,9 +243,39 @@ impl WorkerSupervisor {
         );
 
         let child = cmd.spawn()?;
+        // Parent-owned pipe read end drops here after spawn, keeping the
+        // child's fd 3 alive but releasing our end so the child's read
+        // sees EOF after consuming the secrets payload.
+        #[cfg(unix)]
+        drop(secrets_pipe);
         state.children.push(child);
         Ok(())
     }
+}
+
+/// Create a pipe with secrets JSON on the read end. The write end is
+/// closed after the JSON is written, so the child sees EOF once it has
+/// consumed the payload. Caller must keep the returned `OwnedFd` alive
+/// through `spawn()` so the fork copies a valid fd into the child.
+#[cfg(unix)]
+fn create_secrets_pipe(secrets: &HashMap<String, String>) -> std::io::Result<OwnedFd> {
+    let json = serde_json::to_vec(secrets)
+        .map_err(|e| std::io::Error::other(format!("failed to serialize secrets: {e}")))?;
+
+    let mut fds = [0i32; 2];
+    // SAFETY: pipe() is a standard POSIX call; fds is a valid 2-element array.
+    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // SAFETY: pipe() just returned these file descriptors.
+    let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+    let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+    let mut writer = std::fs::File::from(write_end);
+    writer.write_all(&json)?;
+    drop(writer);
+
+    Ok(read_end)
 }
 
 #[cfg(test)]
@@ -224,6 +293,7 @@ mod tests {
             command: vec!["sleep".into(), sleep_secs.into()],
             cwd,
             env: HashMap::new(),
+            secrets: HashMap::new(),
         }
     }
 
@@ -301,6 +371,7 @@ mod tests {
             command: vec!["sleep".into(), "0".into()],
             cwd: ".".into(),
             env: HashMap::from([("FOO".to_string(), "bar".to_string())]),
+            secrets: HashMap::new(),
         };
         let env = spec.effective_env();
         assert_eq!(

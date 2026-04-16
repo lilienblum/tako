@@ -67,11 +67,12 @@ func (w *waitSignal) Error() string { return "tako: wait signal" }
 
 // StepAPI is the checkpointed step runner.
 type StepAPI struct {
-	client *Client
-	ctx    context.Context
-	runID  string
-	state  map[string]any
-	mu     sync.Mutex
+	client   *Client
+	ctx      context.Context
+	runID    string
+	workerID string
+	state    map[string]any
+	mu       sync.Mutex
 }
 
 // StepRunOpts configures a single step.Run invocation.
@@ -124,7 +125,7 @@ func (s *StepAPI) Run(name string, out any, fn func() (any, error), opts ...Step
 			s.mu.Lock()
 			s.state[name] = value
 			s.mu.Unlock()
-			if perr := s.client.SaveStep(s.ctx, s.runID, name, value); perr != nil {
+			if perr := s.client.SaveStep(s.ctx, s.runID, s.workerID, name, value); perr != nil {
 				return fmt.Errorf("persist step state: %w", perr)
 			}
 			return assignCached(value, out)
@@ -170,7 +171,7 @@ func (s *StepAPI) Sleep(name string, d time.Duration) error {
 				if _, hasName := s.state[name]; !hasName {
 					s.state[name] = true
 					s.mu.Unlock()
-					return s.client.SaveStep(s.ctx, s.runID, name, true)
+					return s.client.SaveStep(s.ctx, s.runID, s.workerID, name, true)
 				}
 				s.mu.Unlock()
 				return nil
@@ -186,7 +187,7 @@ func (s *StepAPI) Sleep(name string, d time.Duration) error {
 	s.mu.Lock()
 	s.state[key] = marker
 	s.mu.Unlock()
-	if err := s.client.SaveStep(s.ctx, s.runID, key, marker); err != nil {
+	if err := s.client.SaveStep(s.ctx, s.runID, s.workerID, key, marker); err != nil {
 		return err
 	}
 	if d < inlineSleepThreshold {
@@ -194,7 +195,7 @@ func (s *StepAPI) Sleep(name string, d time.Duration) error {
 		s.mu.Lock()
 		s.state[name] = true
 		s.mu.Unlock()
-		return s.client.SaveStep(s.ctx, s.runID, name, true)
+		return s.client.SaveStep(s.ctx, s.runID, s.workerID, name, true)
 	}
 	return &deferSignal{wakeAt: &wakeAt}
 }
@@ -393,7 +394,7 @@ func (w *worker) run() error {
 func (w *worker) execute(task *Run) {
 	reg, ok := w.handlers[task.Name]
 	if !ok {
-		_ = w.client.Fail(w.ctx, task.ID, fmt.Sprintf("no handler registered for %q", task.Name), nil, true)
+		_ = w.client.Fail(w.ctx, task.ID, w.workerID, fmt.Sprintf("no handler registered for %q", task.Name), nil, true)
 		return
 	}
 
@@ -406,10 +407,11 @@ func (w *worker) execute(task *Run) {
 		WorkflowName: task.Name,
 		Attempts:     task.Attempts,
 		Step: &StepAPI{
-			client: w.client,
-			ctx:    w.ctx,
-			runID:  task.ID,
-			state:  stepState,
+			client:   w.client,
+			ctx:      w.ctx,
+			runID:    task.ID,
+			workerID: w.workerID,
+			state:    stepState,
 		},
 		ctx: w.ctx,
 	}
@@ -431,13 +433,13 @@ func (w *worker) execute(task *Run) {
 			if reason != "" {
 				rp = &reason
 			}
-			_ = w.client.Cancel(w.ctx, task.ID, rp)
+			_ = w.client.Cancel(w.ctx, task.ID, w.workerID, rp)
 		case errors.As(err, &fs):
-			_ = w.client.Fail(w.ctx, task.ID, fs.err.Error(), nil, true)
+			_ = w.client.Fail(w.ctx, task.ID, w.workerID, fs.err.Error(), nil, true)
 		case errors.As(err, &ds):
-			_ = w.client.Defer(w.ctx, task.ID, ds.wakeAt)
+			_ = w.client.Defer(w.ctx, task.ID, w.workerID, ds.wakeAt)
 		case errors.As(err, &ws):
-			_ = w.client.WaitForEvent(w.ctx, task.ID, ws.stepName, ws.eventName, ws.timeoutAt)
+			_ = w.client.WaitForEvent(w.ctx, task.ID, w.workerID, ws.stepName, ws.eventName, ws.timeoutAt)
 		default:
 			maxAttempts := reg.config.maxAttempts
 			if maxAttempts == 0 {
@@ -457,11 +459,11 @@ func (w *worker) execute(task *Run) {
 				t := time.Now().Add(expBackoff(task.Attempts, base, max))
 				next = &t
 			}
-			_ = w.client.Fail(w.ctx, task.ID, err.Error(), next, finalize)
+			_ = w.client.Fail(w.ctx, task.ID, w.workerID, err.Error(), next, finalize)
 		}
 		return
 	}
-	_ = w.client.Complete(w.ctx, task.ID)
+	_ = w.client.Complete(w.ctx, task.ID, w.workerID)
 }
 
 func (w *worker) heartbeatLoop(id string, stop <-chan struct{}) {
@@ -472,7 +474,7 @@ func (w *worker) heartbeatLoop(id string, stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-ticker.C:
-			_ = w.client.Heartbeat(w.ctx, id, w.leaseMs)
+			_ = w.client.Heartbeat(w.ctx, id, w.workerID, w.leaseMs)
 		}
 	}
 }

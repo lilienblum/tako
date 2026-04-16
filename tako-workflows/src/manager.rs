@@ -201,6 +201,7 @@ pub fn worker_spec_for_bun(
     bun_path: &Path,
     worker_entry: &Path,
     app_cwd: &Path,
+    secrets: std::collections::HashMap<String, String>,
 ) -> WorkerSpec {
     let mut env = std::collections::HashMap::new();
     env.insert("TAKO_APP_NAME".into(), app.to_string());
@@ -217,6 +218,7 @@ pub fn worker_spec_for_bun(
         command: vec![bun_path.into(), worker_entry.into()],
         cwd: app_cwd.to_path_buf(),
         env,
+        secrets,
     }
 }
 
@@ -234,6 +236,7 @@ mod tests {
             command: vec!["sleep".into(), "10".into()],
             cwd,
             env: StdHashMap::new(),
+            secrets: StdHashMap::new(),
         }
     }
 
