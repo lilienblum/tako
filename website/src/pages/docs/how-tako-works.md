@@ -179,6 +179,8 @@ Tako actively monitors every app instance with HTTP health probes:
 
 The `tako.sh` SDK implements this health endpoint automatically -- you do not need to add it yourself. The SDK also echoes the internal token header for authentication.
 
+## Channels
+
 Channel reads/connects use one route:
 
 - `GET /channels/<name>` with `Accept: text/event-stream` for SSE
