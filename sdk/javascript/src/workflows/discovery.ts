@@ -2,11 +2,10 @@
  * Filesystem discovery for workflows/ directory.
  *
  * Each `<name>.(ts|js|mjs|mts)` file becomes a workflow named `<name>`.
- * Default export is the handler. Named exports populate WorkflowConfig:
- *   - `schedule`     → cron expression
- *   - `retries`      → number of retries after the first attempt
- *   - `concurrency`  → number (v1: recorded but single-concurrency only)
- *   - `timeoutMs`    → number (v1: recorded, not enforced)
+ * The default export must be either:
+ *   - A `WorkflowDefinition` produced by `defineWorkflow(fn, config?)` — handler
+ *     and config are read directly from the object.
+ *   - A plain function — registered with empty config.
  *
  * Nested directories are not scanned in v1 — flat structure only.
  */
@@ -14,6 +13,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { join, parse } from "node:path";
+import { isWorkflowDefinition } from "./define";
 import type { WorkflowConfig } from "./types";
 import type { WorkflowHandler } from "./worker";
 
@@ -38,33 +38,27 @@ export async function discoverWorkflows(dir: string): Promise<DiscoveredWorkflow
 
     const url = pathToFileURL(join(dir, entry)).href;
     const mod = (await import(url)) as Record<string, unknown>;
+    const defaultExport = mod["default"];
 
-    const handler = mod["default"];
-    if (typeof handler !== "function") {
-      throw new Error(`workflow '${parsed.name}' (${entry}) must default-export a function`);
+    if (isWorkflowDefinition(defaultExport)) {
+      found.push({
+        name: parsed.name,
+        handler: defaultExport.handler,
+        config: defaultExport.config,
+      });
+    } else if (typeof defaultExport === "function") {
+      found.push({
+        name: parsed.name,
+        handler: defaultExport as WorkflowHandler,
+        config: {},
+      });
+    } else {
+      throw new Error(
+        `workflow '${parsed.name}' (${entry}) must default-export a defineWorkflow() result or a plain function`,
+      );
     }
-
-    const config = extractConfig(mod);
-    found.push({ name: parsed.name, handler: handler as WorkflowHandler, config });
   }
   return found;
-}
-
-function extractConfig(mod: Record<string, unknown>): WorkflowConfig {
-  const cfg: WorkflowConfig = {};
-  if (typeof mod["schedule"] === "string") cfg.schedule = mod["schedule"];
-  if (typeof mod["retries"] === "number") cfg.retries = mod["retries"];
-  if (typeof mod["concurrency"] === "number") cfg.concurrency = mod["concurrency"];
-  if (typeof mod["timeoutMs"] === "number") cfg.timeoutMs = mod["timeoutMs"];
-  const backoff = mod["backoff"];
-  if (backoff && typeof backoff === "object") {
-    const b = backoff as { base?: unknown; max?: unknown };
-    const out: { base?: number; max?: number } = {};
-    if (typeof b.base === "number") out.base = b.base;
-    if (typeof b.max === "number") out.max = b.max;
-    cfg.backoff = out;
-  }
-  return cfg;
 }
 
 async function dirExists(dir: string): Promise<boolean> {

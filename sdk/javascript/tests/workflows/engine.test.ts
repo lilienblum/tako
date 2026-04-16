@@ -105,13 +105,19 @@ describe("WorkflowEngine enqueue (RPC)", () => {
 });
 
 describe("discover", () => {
-  test("discovers default exports and named config", async () => {
+  test("discovers defineWorkflow files and plain functions", async () => {
     const dir = await mkdtemp(join("/tmp", "tako-wf-"));
+    const defineUrl = new URL("../../src/workflows/define.ts", import.meta.url).href;
+    // defineWorkflow-style: attach config via the symbol
     await writeFile(
       join(dir, "send-email.mjs"),
-      `export default async (payload, ctx) => payload.to;\nexport const schedule = "*/5 * * * *";`,
+      `
+import { defineWorkflow } from "${defineUrl}";
+export default defineWorkflow(async (payload, ctx) => payload.to, { retries: 4, schedule: "*/5 * * * *" });
+`,
     );
-    await writeFile(join(dir, "bare.mjs"), `export default function(ctx, p) { return "ok"; }`);
+    // plain function — no config
+    await writeFile(join(dir, "bare.mjs"), `export default function(payload) { return "ok"; }`);
     await writeFile(join(dir, "_ignored.mjs"), `export default () => {};`);
 
     const engine = new WorkflowEngine();
@@ -130,6 +136,6 @@ describe("discover", () => {
     const dir = await mkdtemp(join("/tmp", "tako-wf-"));
     await writeFile(join(dir, "bad.mjs"), `export const foo = 1;`);
     const engine = new WorkflowEngine();
-    await expect(engine.discover(dir)).rejects.toThrow(/default-export a function/);
+    await expect(engine.discover(dir)).rejects.toThrow(/defineWorkflow.*or a plain function/);
   });
 });
