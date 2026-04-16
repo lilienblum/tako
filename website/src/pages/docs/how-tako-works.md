@@ -345,7 +345,7 @@ Features:
 
 - **Retries with exponential backoff** (1s base, capped at 1h, ±20% jitter)
 - **Delayed runs** (`runAt: new Date(...)`) and **cron schedules** (`export const schedule = "0 9 * * *"`)
-- **Multi-step workflows** with `ctx.step.run("name", fn)` — step results are checkpointed to SQLite, so a crashed workflow resumes from the last completed step on retry
+- **Multi-step workflows** with `ctx.run("name", fn)` — step results are checkpointed to SQLite, so a crashed workflow resumes from the last completed step on retry
 - **Graceful drain** — `tako stop` and `tako delete` wait for in-flight tasks (up to 120s) before tearing down
 
 Queue state lives in `{tako_data_dir}/apps/<app>/runs.db` (SQLite with WAL). tako-server owns the file; the worker process polls it. Enqueues from the SDK go over a per-app unix socket — no external queue service, no Redis, no Postgres required.

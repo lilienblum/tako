@@ -1667,16 +1667,19 @@ If a JS app has a `workflows/` directory (or a Go app declares a worker binary) 
 
 ### Authoring workflows
 
-**JS/TypeScript** — file-based discovery: drop a handler into `workflows/<name>.ts`. The default export is the handler; named exports populate workflow config (`schedule`, `maxAttempts`, `concurrency`, `timeoutMs`):
+**JS/TypeScript** — file-based discovery: drop a file into `workflows/<name>.ts` with a default export that is either a `defineWorkflow()` result (preferred, supports config) or a plain function (no config):
 
 ```ts
 // workflows/send-email.ts
-export default async function (ctx, payload) {
-  const user = await ctx.step.run("fetch-user", () => db.users.find(payload.id));
-  await ctx.step.run("send", () => mailer.send(user.email));
-}
-export const maxAttempts = 5;
-export const schedule = "0 9 * * *"; // 9am daily
+import { defineWorkflow } from "tako.sh";
+
+export default defineWorkflow(
+  async (payload, { run }) => {
+    const user = await run("fetch-user", () => db.users.find(payload.id));
+    await run("send", () => mailer.send(user.email));
+  },
+  { retries: 4, schedule: "0 9 * * *" },
+); // 9am daily
 ```
 
 **Go** — explicit registration in a separate `cmd/worker/main.go` binary. Go's separate-binary design is intentional: a single-binary design would link CGO-heavy workflow deps (image libs, ML bindings) into the HTTP server binary.
@@ -1687,7 +1690,7 @@ export const schedule = "0 9 * * *"; // 9am daily
 await Tako.workflows.enqueue("send-email", { to: "a@b.c" });
 await Tako.workflows.enqueue("send-email", payload, {
   runAt: new Date(Date.now() + 60_000),
-  maxAttempts: 10,
+  retries: 9,
   uniqueKey: "daily-digest:2026-04-14",
 });
 ```
@@ -1696,7 +1699,7 @@ await Tako.workflows.enqueue("send-email", payload, {
 
 ### Step checkpointing
 
-`ctx.step.run(name, fn, opts?)` persists `fn`'s return value as one row in the `steps` table keyed by `(run_id, name)`. On retry, previously-completed steps return their stored value instead of re-executing.
+`ctx.run(name, fn, opts?)` persists `fn`'s return value as one row in the `steps` table keyed by `(run_id, name)`. On retry, previously-completed steps return their stored value instead of re-executing.
 
 Per-step options:
 
@@ -1710,17 +1713,17 @@ If the worker crashes between `fn` returning and the SaveStep RPC completing, `f
 
 ### Durable `step.sleep`
 
-`ctx.step.sleep(name, ms)` waits until the wake time. Short waits (< 30s) run inline; longer waits **defer the run** via `DeferRun` — the worker exits the handler, the run goes back to `pending` with `run_at = wakeAt`, the supervisor wakes the worker on schedule. Crash-safe across days.
+`ctx.sleep(name, ms)` waits until the wake time. Short waits (< 30s) run inline; longer waits **defer the run** via `DeferRun` — the worker exits the handler, the run goes back to `pending` with `run_at = wakeAt`, the supervisor wakes the worker on schedule. Crash-safe across days.
 
 ### Events: `signal` / `waitFor`
 
-`ctx.step.waitFor(name, { timeout })` parks the run waiting for a named event. The handler exits, the run goes to `pending` with no `run_at`, an `event_waiters` row is inserted, and the worker can release.
+`ctx.waitFor(name, { timeout })` parks the run waiting for a named event. The handler exits, the run goes to `pending` with no `run_at`, an `event_waiters` row is inserted, and the worker can release.
 
 `Tako.workflows.signal(name, payload)` (or `tako.Signal` in Go) wakes every parked waiter with matching name. The payload is materialized as the waiter's step result and the run is set runnable.
 
 ```ts
 // Worker handler — pause until approval arrives
-const decision = await ctx.step.waitFor<{ approved: boolean }>(`approval:order-${payload.id}`, {
+const decision = await ctx.waitFor<{ approved: boolean }>(`approval:order-${payload.id}`, {
   timeout: 7 * 24 * 3600 * 1000,
 });
 if (decision === null) ctx.bail("approval timed out");
@@ -1746,8 +1749,8 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 
 ### Retries / backoff (run level)
 
-- Failed handlers retry with exponential backoff (default base 1s, ±20% jitter, capped at 1h). Override via workflow exports `maxAttempts` and `backoff`.
-- `attempts` bumps on every claim. When `attempts >= maxAttempts` (default 3), the run moves to `dead`.
+- Failed handlers retry with exponential backoff (default base 1s, ±20% jitter, capped at 1h). Override via `defineWorkflow(fn, { retries, backoff })`. Default is 2 retries (3 total attempts).
+- `attempts` bumps on every claim. When attempts reach the budget, the run moves to `dead`.
 - `defer_run` (sleep, waitFor) decrements attempts so parking doesn't consume retry budget.
 
 ### Drain on stop / delete
