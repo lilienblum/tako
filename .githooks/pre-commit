@@ -4,8 +4,17 @@ set -eu
 repo_root="$(git rev-parse --show-toplevel)"
 cd "$repo_root"
 
+originally_staged=$(git diff --cached --name-only)
+
 just fmt
-git add -u
+
+# Re-stage only the files that were originally staged (not all tracked modifications)
+if [ -n "$originally_staged" ]; then
+    printf '%s\n' "$originally_staged" | while IFS= read -r f; do
+        git add -- "$f"
+    done
+fi
+
 just lint
 
 staged=$(git diff --cached --name-only)
