@@ -23,12 +23,15 @@ export type {
   RunId,
   RunSpec,
   RunStatus,
+  StepRunOptions,
   StepState,
+  StepWaitOptions,
   WorkflowConfig,
   WorkflowContext,
+  WorkflowDefinition,
   WorkflowHandler,
 } from "./workflows";
-export { WorkflowsClient, WorkflowsError } from "./workflows";
+export { defineWorkflow, isWorkflowDefinition, WorkflowsClient, WorkflowsError } from "./workflows";
 export type {
   ChannelAuthContext,
   ChannelAuthorizeInput,
