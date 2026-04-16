@@ -93,18 +93,22 @@ Generate a wide illustration for a blog post hero image.
 Character: A small, simple octopus. Reference: https://tako.sh/assets/logo.svg
 The octopus must match the style of our logo — flat, minimal, no outlines, soft pastel coral pink body with simple dot eyes and a small curved mouth. Not 3D, not shiny, not glossy. Expressive and full of personality — eyes can squint, widen, or glance; the mouth can grin, gasp, or smirk; tentacles are always doing something. Stylized, not realistic, and not hyper-kawaii either.
 
-Scene: [This is the most important section. Do not describe a "scene" — describe a STORY MOMENT.
+Scene: [This is the most important section. Do not describe a "scene" — describe a STORY MOMENT, but describe it **purely visually, without naming any source**.
 
-The difference: a scene is decorative ("octopus holding three servers"). A story moment is a single frame from a larger narrative the viewer already half-knows ("the moment the musketeers cross blades above the crown," "the moment Luke looks up at the twin suns," "the moment the heist crew leans over the blueprint"). A story moment arrives pre-loaded with tone, stakes, and meaning because the viewer's brain fills in the rest from memory.
+The difference: a scene is decorative ("octopus holding three servers"). A story moment is a single frame from a larger narrative the viewer already half-knows — it arrives pre-loaded with tone, stakes, and meaning because the viewer's brain fills in the rest from memory.
 
-Anchor the image in a recognizable story, film, painting, myth, or genre trope that actually matches the post's content and mood (see the story menu below). Then pin down:
-  (1) WHAT STORY is this a moment from? (e.g. "The Three Musketeers crossing blades," "Hokusai's Great Wave," "the Ocean's Eleven planning table")
-  (2) WHICH moment inside that story? (the triumphant one, the quiet-before-the-storm one, the "oh no" one)
-  (3) What verb is the octopus (or octopuses) physically doing in that moment?
+**CRITICAL — do not name any real-world source in the scene text.** ChatGPT's image guardrails reject prompts that name copyrighted films, shows, franchises, characters, mascots, living artists, trademarked worlds, or recognizable brand universes — even as "inspired by" or "in the style of." Pick the story moment in your head (and the post draft), then translate it into visual ingredients only: the setting, era, costumes, lighting, poses, props, weather, color of the light. If the reader wouldn't recognize the moment without the name, the description isn't vivid enough — add more specifics rather than bolting the name back on.
+
+Prefer references that live in public domain or genre-trope territory: classical myths (Atlas, Sisyphus, Icarus), pre-1928 paintings and woodblock prints, historical settings (medieval cathedral build, lighthouse in a storm, old switchboard room, 1960s mission control, a smoke-filled noir detective's office), and generic genre scenes (Formula 1 pit stop, safecracker at a vault dial, symphony conductor mid-downbeat, mountaineers on a summit). Avoid modern films, TV shows, animated features, comic universes, named fictional characters, and any specific living author or artist.
+
+Then pin down for the prompt text:
+  (1) WHAT MOMENT is this a frame of? (described in pure visual terms — "four caped figures crossing slim swords at the top of a stone staircase under torchlight" rather than naming the story)
+  (2) WHICH beat of that moment? (the triumphant beat, the quiet-before-the-storm beat, the "oh no" beat)
+  (3) What verb is each octopus physically doing? (not "standing" / "holding next to" — an active verb)
   (4) What emotional beat does each octopus carry? (determined, delighted, mischievous, proud, nervous, triumphant)
   (5) What gesture makes each beat legible? (tentacles raised, pointing, bracing, mid-throw, arms crossed)
 
-Aim for "single frame from a story I recognize," not "mascot standing in a scene." Whimsical props and slightly absurd juxtapositions are encouraged when they fit the story you're borrowing from.]
+Aim for "single frame of something I recognize by its visual grammar," not "mascot standing in a scene." Whimsical props and slightly absurd juxtapositions are encouraged when they fit.]
 
 Style requirements:
 - Flat illustration with paper-like grain texture
@@ -117,37 +121,50 @@ Output: a single image in widescreen landscape format.
 -->
 ```
 
-The prompt should be specific to the post's topic — not generic. The #1 failure mode is a tidy but lifeless "object + object" composition where the octopus just stands next to some props. The fix is not more motion lines or a better pose — the fix is **telling a story**. A hero image works when it borrows a single frame from a story the viewer already knows (a film, a painting, a myth, a genre trope) and the image arrives pre-loaded with tone, stakes, and meaning. Without a story anchor you're just decorating; with one, you're telling.
+The prompt should be specific to the post's topic — not generic. The #1 failure mode is a tidy but lifeless "object + object" composition where the octopus just stands next to some props. The fix is not more motion lines or a better pose — the fix is **telling a story**. A hero image works when it borrows a single frame from a recognizable genre moment and the image arrives pre-loaded with tone, stakes, and meaning. Without a story anchor you're just decorating; with one, you're telling.
 
-**Pick the story before you write the prompt.** Start by asking: _"If this blog post were a movie or a famous painting, which one would it be?"_ Then take one specific frame from that and cast the octopus into it. The reference should actually match the post's content and mood — don't force it, and don't default to the same reference across adjacent posts. Variety matters; context matters more.
+**Pick the moment before you write the prompt.** Start by asking: _"If this blog post were a historical painting or an iconic scene, what would it depict?"_ Then take that one specific frame and cast the octopus into it. The reference should actually match the post's content and mood — don't force it, and don't default to the same reference across adjacent posts. Variety matters; context matters more.
 
-**These next examples are just that — examples.** They're here to unblock you when you're staring at a blank prompt, not to limit you. The right story for a given post is almost never going to be on any pre-made list; it's whatever actually matches the specific angle, tone, and details of _that_ post. Treat the table as a sampler of the _kinds_ of places to look (films, paintings, myths, genre tropes, famous scenes), then go find your own. If none of these feel right, that's expected — invent something.
+**Then describe it without naming it.** ChatGPT's image guardrails frequently reject prompts that name copyrighted films, characters, franchises, mascots, trademarked worlds, or living artists — including "inspired by" and "in the style of" phrasings. You'll see: _"the prompt may violate our guardrails concerning similarity to third-party content."_ The fix isn't to argue with the guardrail — it's to write the description so vividly in visual terms (setting, era, costumes, lighting, poses, props) that the reference lands through recognition of the visual grammar, not through the proper noun. The picks in the table below are intentionally trope- and public-domain-leaning so this is natural; if you find yourself reaching for a modern film or character, translate it to its setting + costume + prop + pose before writing the prompt.
 
-| Post vibe                              | A few example stories in that territory                                                                                    |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Distributed / coordinated / consensus  | The Three Musketeers ("all for one"), Ocean's Eleven planning table, Fellowship of the Ring setting out, Avengers assemble |
-| Scale / resilience / weathering load   | Hokusai's Great Wave, Atlas holding the world, lighthouse keepers in a storm, Moby Dick                                    |
-| Speed / performance / racing           | Mad Max: Fury Road, Wacky Races, Formula 1 pit stop, the Kessel Run                                                        |
-| Local dev / solo craft / quiet focus   | Studio Ghibli workshop scenes, Hopper's _Nighthawks_, Gepetto in his workshop, _Ratatouille_ kitchen                       |
-| Migration / escape from a heavier tool | _The Great Escape_, Exodus, _Shawshank Redemption_ crawling to freedom, Hobbit leaving the Shire                           |
-| Construction / building a system up    | Tower of Babel, medieval cathedral build, ant colony at work, Lego master-builders                                         |
-| Security / secrets / protection        | Indiana Jones temple run, Smaug on his hoard, Gringotts vault, classic safecracker noir                                    |
-| Orchestration / many things in harmony | Symphony conductor, ballet corps, Rube Goldberg machines, _Fantasia_'s Sorcerer's Apprentice                               |
-| Launch / announcement / triumph        | Apollo liftoff, Olympic podium, _Rocky_ on the steps, flag-planting on a mountaintop                                       |
-| Debugging / detective work             | Sherlock Holmes at the crime scene, film noir detective, _Columbo_, _Knives Out_ drawing room                              |
+**Safe tiers to pull from, in priority order:**
 
-Again: the table is a nudge, not a box. A post about WebSocket channels might borrow from a pneumatic-tube mailroom. A post about cold starts might borrow from a sleeping dragon waking up. A post about secrets might borrow from a heist, a spy film, or a children's diary-with-a-lock. Pick whatever actually tells the right story for _this_ post, and don't feel obliged to reach for anything on the list above.
+1. **Japanese anime / manga visual traditions (vibe, not franchise)** — **prefer these first.** They land especially well with a developer audience and translate cleanly to visual ingredients without needing a proper noun. Examples: late-night ramen shop / yatai food stall with lanterns and steam curls, cozy pastoral hand-painted watercolor interiors, shonen action stances with radiating speed lines, pirate-crew camaraderie tableaus on sunlit ship decks, rooftop ninja leaps in moonlight, izakaya dinners under red lanterns, mountain-temple training-arc courtyards at dawn, mecha-hangar assembly bays, school-rooftop lunch scenes with wide skies, bathhouse soaks at dusk, magical-girl transformation sparkles. Describe the **visual conventions** (cel shading, expressive oversized eyes, chunky linework, dramatic low-angle, dust puffs, warm hand-painted watercolor backgrounds, golden-hour skies, Edo-print linework, steam and lantern glow, noren curtains) and the **archetypal setup** — but **do not name the studio, film, series, or character**. "A scrappy crew of seafaring adventurers gathered around a barrel of food on a sunny wooden ship deck, expressive oversized eyes, goofy-heroic poses" lands every time; "One Piece's Straw Hats at dinner" gets rejected.
+
+2. **Universally-recognizable events, myths, and tropes** — stories that most developers across cultures will recognize without a proper noun: David vs Goliath (a tiny figure with a sling facing an armored giant), Trojan horse (a massive wooden horse rolled through stone city gates), Icarus (a winged figure soaring too close to the sun), Tower of Babel, a chariot race, a medieval cathedral build, the Apollo-era moon landing, an Olympic podium moment, a classic Edo-period great-wave woodblock composition, a lighthouse keeper braced against a storm. These work because they're part of world-shared visual vocabulary, not a single franchise.
+
+3. **US media / Hollywood / Disney references** — **least preferred.** Most globally uneven (not all developers share the same media diet), most IP-locked (guardrails are strictest around Disney, Marvel, Star Wars, Pixar, major modern films), and often more nostalgic-to-one-generation than genuinely universal. Avoid reaching for these if tier 1 or tier 2 offers a cleaner fit. If the perfect trope genuinely lives here, translate it to pure visual ingredients and do not name the source.
+
+Anything outside those tiers (modern TV shows, cartoons, comic universes, named fictional characters or studios, current artists) → **do not name it**. Translate it to its visual ingredients or pick a different anchor.
+
+**These next examples are just that — examples.** They're here to unblock you when you're staring at a blank prompt, not to limit you. The right moment for a given post is almost never going to be on any pre-made list; it's whatever actually matches the specific angle, tone, and details of _that_ post. Treat the table as a sampler of the _kinds_ of places to look, then go find your own. If none of these feel right, that's expected — invent something.
+
+| Post vibe                                 | Trope / public-domain moments to evoke (describe visually, don't name)                                                                                                                                                                    |
+| ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Distributed / coordinated / consensus     | Musketeers crossing swords on a staircase, a heist crew leaning over a blueprint table, a ragtag seafaring adventure crew on a sunlit wooden deck (anime pirate-crew tableau — cel-shaded, expressive oversized eyes, goofy-heroic poses) |
+| Scale / resilience / weathering load      | A great cresting wave over a tiny boat (Edo-period woodblock style), a titan holding up the sky, lighthouse keepers in a storm, a lone figure braced against a huge shonen-anime-style energy wall (radiating speed lines, dust clouds)   |
+| Speed / performance / racing              | Formula 1 pit stop mid-swap, a chariot race, a steam locomotive at full tilt, a shonen-anime-style dash pose (low-angle, speed lines, trailing dust, dramatic wind)                                                                       |
+| Local dev / solo craft / quiet focus      | A wood-paneled toymaker's workshop at night, a late-night diner through a rainy window, a hand-painted watercolor pastoral cottage interior at dusk with a stew pot simmering and a cat on a rafter (anime-studio countryside vibe)       |
+| Migration / escape from a heavier tool    | Tunnel-diggers crawling toward a distant light, a caravan crossing a desert at dawn, two small figures with oversized backpacks walking down a grassy slope under drifting clouds (hand-painted anime road-movie frame)                   |
+| Construction / building a system up       | Medieval cathedral build with scaffolding, an ant colony cross-section, a Rube Goldberg machine in progress, a mecha-hangar assembly bay with sparks and catwalks (shonen-mecha panel)                                                    |
+| Security / secrets / protection           | A safecracker at a vault dial under a single bulb, a dragon curled on a pile of gold in a cave, a temple guardian with a torch, a rooftop ninja mid-leap in moonlight (anime stealth frame — inked linework, diagonal composition)        |
+| Orchestration / many things in harmony    | A symphony conductor mid-downbeat, a ballet corps in perfect diagonal, a mechanical orrery turning, a chain of bucket-passers                                                                                                             |
+| Launch / announcement / triumph           | An Apollo-era rocket lift-off, an Olympic podium moment, a flag planted on a mountaintop at dawn, a shonen-style power-up stance with sparks and light rays radiating from a clenched fist                                                |
+| Debugging / detective work                | A noir detective in a smoky office with a single desk lamp, a chalk-outline crime scene, a magnifying glass over a map, a trench-coated detective with exaggerated eyes and a smirk (anime-mystery frame)                                 |
+| Camaraderie / team dinner / slice-of-life | A crew gathered around a steaming stew pot under lantern light, a school-rooftop lunch scene with wide skies and a train passing far below, a bathhouse-at-dusk group soak (all described as cel-shaded hand-painted anime frames)        |
+
+Again: the table is a nudge, not a box. A post about WebSocket channels might borrow from a pneumatic-tube mailroom. A post about cold starts might borrow from a sleeping dragon waking up. A post about secrets might borrow from a classic bank heist or a diary with a lock. Pick whatever actually tells the right story for _this_ post.
 
 **Quick self-check before finalizing the prompt:**
 
-- **What story is this a frame from?** (If you can't name it in one sentence, you don't have one yet.)
-- **What moment inside that story?** (The setup? The triumph? The "oh no" beat?)
-- **Is there a verb?** ("standing," "holding," "next to" don't count.)
+- **What moment is this a frame of?** (If you can't describe it in one sentence, you don't have one yet.)
+- **Did I avoid naming any film, show, book, character, franchise, mascot, brand, or living artist?** (Including "inspired by" / "in the style of.")
+- **Would a reader recognize the moment from the visuals alone — the costumes, lighting, props, pose?**
+- **Is there an active verb per octopus?** ("standing," "holding," "next to" don't count.)
 - **Is there a facial expression per octopus, and do they differ?**
 - **Are the tentacles doing something specific, or just hanging?**
-- **Would a developer glancing at it for half a second think "oh, that's [reference]!" — and smile?**
 
-If the answer to "what story?" is fuzzy, stop and pick one before writing the scene. Everything else flows from that.
+If the answer to "what moment?" is fuzzy, stop and pick one before writing the scene. If the answer to "did I avoid naming anything?" is "no," strip the names and replace them with visual detail.
 
 After writing the post, copy the image prompt text (everything between the `<!-- IMAGE PROMPT` and `-->` markers, excluding the markers themselves) to the clipboard using `pbcopy`.
 
