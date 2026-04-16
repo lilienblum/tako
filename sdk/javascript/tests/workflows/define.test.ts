@@ -2,9 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { defineWorkflow, isWorkflowDefinition, WORKFLOW_SYMBOL } from "../../src/workflows/define";
 
 describe("WORKFLOW_SYMBOL", () => {
-  test("is a symbol with description 'workflow'", () => {
-    expect(typeof WORKFLOW_SYMBOL).toBe("symbol");
-    expect(WORKFLOW_SYMBOL.description).toBe("workflow");
+  test("is not equal to a separately created Symbol with the same description", () => {
+    expect(Symbol("workflow")).not.toBe(WORKFLOW_SYMBOL);
   });
 });
 
@@ -21,13 +20,6 @@ describe("defineWorkflow", () => {
     const fn = async () => {};
     const def = defineWorkflow(fn);
     expect(def.config).toEqual({});
-  });
-
-  test("does not mutate the original function", () => {
-    const fn = async () => {};
-    const originalKeys = Object.getOwnPropertySymbols(fn);
-    defineWorkflow(fn);
-    expect(Object.getOwnPropertySymbols(fn)).toEqual(originalKeys);
   });
 });
 

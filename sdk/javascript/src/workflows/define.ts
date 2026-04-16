@@ -39,6 +39,7 @@ export function isWorkflowDefinition(value: unknown): value is WorkflowDefinitio
     typeof value === "object" &&
     value !== null &&
     "type" in value &&
+    "handler" in value &&
     (value as { type: unknown }).type === WORKFLOW_SYMBOL
   );
 }
