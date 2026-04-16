@@ -32,7 +32,7 @@ class MockServer {
       payload: task.payload ?? {},
       status: "pending",
       attempts: 0,
-      maxAttempts: task.maxAttempts ?? 3,
+      retries: task.retries ?? 2,
       runAt: task.runAt ?? Date.now(),
       leaseUntil: null,
       workerId: null,
@@ -86,7 +86,7 @@ class MockServer {
             payload: task.payload,
             status: task.status,
             attempts: task.attempts,
-            max_attempts: task.maxAttempts,
+            max_attempts: task.retries + 1,
             run_at_ms: task.runAt,
             step_state: task.stepState,
           },
@@ -203,7 +203,7 @@ describe("Worker", () => {
     expect(await worker.processOnce()).toBe(false);
   });
 
-  test("failing handler retries then dies after maxAttempts", async () => {
+  test("failing handler exhausts retries and dies", async () => {
     const worker = new Worker({
       client,
       workerId: "w1",
@@ -216,7 +216,7 @@ describe("Worker", () => {
       }),
     });
 
-    const id = mock.seed({ name: "flaky", maxAttempts: 2 });
+    const id = mock.seed({ name: "flaky", retries: 1 });
     await worker.processOnce();
     expect(mock.find(id)?.status).toBe("pending");
     expect(mock.find(id)?.attempts).toBe(1);
@@ -249,7 +249,7 @@ describe("Worker", () => {
       registry: registry({ multi: handler }),
     });
 
-    const id = mock.seed({ name: "multi", maxAttempts: 5 });
+    const id = mock.seed({ name: "multi", retries: 4 });
     await worker.processOnce();
     expect(mock.find(id)?.status).toBe("pending");
     expect(mock.find(id)?.stepState).toEqual({ a: "user-1" });

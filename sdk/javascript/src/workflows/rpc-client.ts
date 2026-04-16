@@ -262,7 +262,7 @@ function rawToRun(raw: RawRun): Run {
     payload: raw.payload,
     status: raw.status as RunStatus,
     attempts: raw.attempts,
-    maxAttempts: raw.max_attempts,
+    retries: raw.max_attempts - 1,
     runAt: raw.run_at_ms,
     leaseUntil: null,
     workerId: null,

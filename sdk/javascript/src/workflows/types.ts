@@ -36,7 +36,7 @@ export interface Run {
   payload: unknown;
   status: RunStatus;
   attempts: number;
-  maxAttempts: number;
+  retries: number;
   /** Unix ms. */
   runAt: number;
   /** Unix ms; null for non-running runs. */

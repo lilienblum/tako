@@ -42,7 +42,7 @@ export interface WorkflowContext {
   fail(error: Error | string): never;
 }
 
-export interface WorkflowRetryConfig {
+interface WorkflowRetryConfig {
   /** Run-level retry budget (default 3). */
   maxAttempts?: number;
   /** Run-level backoff between failed attempts. */
@@ -224,7 +224,7 @@ export class Worker {
 
       // Regular error → run-level retry path.
       const message = err instanceof Error ? err.message : String(err);
-      const maxAttempts = reg.retry?.maxAttempts ?? run.maxAttempts;
+      const maxAttempts = reg.retry?.maxAttempts ?? run.retries + 1;
       const finalize = run.attempts >= maxAttempts;
       const base = reg.retry?.backoff?.base ?? this.baseBackoffMs;
       const max = reg.retry?.backoff?.max ?? this.maxBackoffMs;
