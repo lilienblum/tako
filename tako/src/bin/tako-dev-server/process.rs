@@ -435,10 +435,10 @@ pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: Strin
             .map(|(config_path, a)| (config_path.clone(), a.clone()));
         // Atomically claim the spawn: mark is_idle=false while still holding the
         // lock so concurrent wake-on-request tasks see the updated state and bail out.
-        if let Some((ref config_path, _)) = found {
-            if let Some(app) = s.apps.get_mut(config_path) {
-                app.is_idle = false;
-            }
+        if let Some((ref config_path, _)) = found
+            && let Some(app) = s.apps.get_mut(config_path)
+        {
+            app.is_idle = false;
         }
         found
     };
