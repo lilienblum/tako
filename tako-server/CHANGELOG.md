@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.0](https://github.com/lilienblum/tako/compare/tako-server-v0.3.0...tako-server-v0.4.0) (2026-04-18)
+
+
+### Features
+
+* **channels:** add durable pub-sub channels across SDKs and server ([dd1ef52](https://github.com/lilienblum/tako/commit/dd1ef52ff0ef623a3d91d4474033c0b3ae700cd4))
+* **channels:** add tako-channels crate and SDK channels module ([0280153](https://github.com/lilienblum/tako/commit/02801535f6b19c200cfadaa98998262bcef3c35b))
+* **runtime:** add app data dirs and graceful restart ([acd1fdd](https://github.com/lilienblum/tako/commit/acd1fdd143e991cb683a3a30292cb613e67fa4b2))
+* **runtime:** signal app readiness over fd 4 instead of stdout ([7ee5f8a](https://github.com/lilienblum/tako/commit/7ee5f8accfe8e886e322d88df2a7dd61bf62bdf0))
+* **website:** add .local domains and durable workflows cards, regroup feature list ([803f640](https://github.com/lilienblum/tako/commit/803f640e253889c01c60ff40de6a1dd9acc1c724))
+* **workflows:** durable workflow engine with runs, steps, signals ([8185013](https://github.com/lilienblum/tako/commit/8185013ba1d92a10905dc0fd1cbb7ad8a8a2004b))
+
+
+### Bug Fixes
+
+* **security:** upgrade nanoid to 0.5 to drop rand 0.8 (GHSA-cq8v-f236-94qc) ([ce1a875](https://github.com/lilienblum/tako/commit/ce1a875c726ae3c79d05dab7708c152396579c5c))
+* **server:** set FD_CLOEXEC on bootstrap pipe write end ([91aaed0](https://github.com/lilienblum/tako/commit/91aaed0eb591c31040570491f888afac090f2626))
+* **workflows:** worker_id guard + secrets via fd 3 ([1675fdd](https://github.com/lilienblum/tako/commit/1675fdd0e22501215db27da653f85c5065d8777c))
+
 ## [0.3.0](https://github.com/lilienblum/tako/compare/tako-server-v0.2.0...tako-server-v0.3.0) (2026-04-10)
 
 ### Features
