@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "bun scripts/sync-agent-skills.ts && astro build && bun scripts/emit-markdown.ts",
     "check": "astro check",
     "preview": "astro preview",
     "deploy": "wrangler deploy",
@@ -23,6 +23,8 @@
     "@tsconfig/strictest": "catalog:dev",
     "@types/bun": "catalog:dev",
     "@types/react": "^19.2.14",
+    "node-html-markdown": "^2.0.0",
+    "node-html-parser": "^7.1.0",
     "react": "^19.2.5",
     "satori": "^0.26.0",
     "typescript": "catalog:dev",

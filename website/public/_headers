@@ -1,0 +1,13 @@
+/*
+  Link: </docs>; rel="service-doc"
+  Link: </llms.txt>; rel="describedby"; type="text/plain"
+  Link: </sitemap-index.xml>; rel="sitemap"; type="application/xml"
+
+/.well-known/http-message-signatures-directory
+  Content-Type: application/http-message-signatures-directory
+
+/.well-known/agent-skills/index.json
+  Content-Type: application/json; charset=utf-8
+
+/.well-known/agent-skills/*/SKILL.md
+  Content-Type: text/markdown; charset=utf-8

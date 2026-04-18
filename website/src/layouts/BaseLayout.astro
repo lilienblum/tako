@@ -650,5 +650,71 @@ const pageStructuredData = structuredData
         });
       })();
     </script>
+    <script is:inline>
+      (function() {
+        if (!('navigator' in window) || !navigator.modelContext || typeof navigator.modelContext.provideContext !== 'function') return;
+        var DOC_PAGES = [
+          'quickstart', 'cli', 'deployment', 'development', 'troubleshooting',
+          'how-tako-works', 'tako-toml', 'framework-guides', 'presets'
+        ];
+        var GETTING_STARTED =
+          '1. Install the CLI:  curl -fsSL https://tako.sh/install.sh | sh\n' +
+          '2. Scaffold a project:  tako init\n' +
+          '3. Run the dev loop:  tako dev';
+        var INSTALL = {
+          cli: 'curl -fsSL https://tako.sh/install.sh | sh',
+          server: 'curl -fsSL https://tako.sh/install-server.sh | sudo sh'
+        };
+        try {
+          navigator.modelContext.provideContext({
+            tools: [
+              {
+                name: 'navigateToDocs',
+                description: 'Navigate the current tab to a tako.sh documentation page.',
+                inputSchema: {
+                  type: 'object',
+                  properties: { page: { type: 'string', enum: DOC_PAGES, description: 'Doc slug under /docs/.' } },
+                  required: ['page']
+                },
+                execute: function(input) {
+                  window.location.assign('/docs/' + input.page);
+                  return 'Navigating to /docs/' + input.page;
+                }
+              },
+              {
+                name: 'searchDocs',
+                description: 'Search the tako.sh docs. Opens /docs with the query in the URL.',
+                inputSchema: {
+                  type: 'object',
+                  properties: { query: { type: 'string', minLength: 1, description: 'Free-text search query.' } },
+                  required: ['query']
+                },
+                execute: function(input) {
+                  var q = encodeURIComponent(String(input.query).slice(0, 256));
+                  window.location.assign('/docs?q=' + q);
+                  return 'Opened docs with query "' + input.query + '".';
+                }
+              },
+              {
+                name: 'getStartedCommand',
+                description: 'Return the three-step tako.sh getting-started commands as plain text.',
+                inputSchema: { type: 'object', properties: {} },
+                execute: function() { return GETTING_STARTED; }
+              },
+              {
+                name: 'getInstallCommand',
+                description: 'Return the one-line curl install command for the tako CLI or the tako server.',
+                inputSchema: {
+                  type: 'object',
+                  properties: { kind: { type: 'string', enum: ['cli', 'server'] } },
+                  required: ['kind']
+                },
+                execute: function(input) { return INSTALL[input.kind]; }
+              }
+            ]
+          });
+        } catch (_e) { /* ignore */ }
+      })();
+    </script>
   </body>
 </html>
