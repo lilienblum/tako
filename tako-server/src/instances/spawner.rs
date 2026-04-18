@@ -341,6 +341,14 @@ fn create_bootstrap_pipe(
     let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
     let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
 
+    // FD_CLOEXEC on the write end: the writer thread drains in parallel with
+    // the child spawn, so it can still be holding the fd at fork time. Without
+    // CLOEXEC, the forked child inherits the write end and never sees EOF on
+    // fd 3 — it hangs forever waiting for a reader that will never close.
+    // With CLOEXEC the inherited copy closes at exec, and the parent's writer
+    // thread closes its own copy after writing, so the child gets EOF.
+    set_cloexec(&write_end)?;
+
     let writer_handle = std::thread::spawn(move || -> std::io::Result<()> {
         use std::io::Write;
         let mut writer = std::fs::File::from(write_end);
@@ -350,6 +358,20 @@ fn create_bootstrap_pipe(
     });
 
     Ok((read_end, writer_handle))
+}
+
+#[cfg(unix)]
+fn set_cloexec(fd: &OwnedFd) -> std::io::Result<()> {
+    let raw = fd.as_raw_fd();
+    // SAFETY: `raw` is owned by `fd` for the duration of this call.
+    let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(raw, libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -872,6 +894,67 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
         assert_eq!(parsed["token"].as_str(), Some(token));
         assert_eq!(parsed["secrets"]["BIG"].as_str(), Some(big_value.as_str()));
+    }
+
+    /// Regression: the bootstrap write end used to leak into the forked child
+    /// because the writer thread owned it past spawn. Without FD_CLOEXEC, the
+    /// child inherited a live write end across exec, so `read()` on fd 3 never
+    /// saw EOF and the child hung — manifesting as `Instance startup timeout`
+    /// on the server side. The fix sets CLOEXEC on the write end so it closes
+    /// at exec, leaving the writer thread's drop as the only remaining closer.
+    #[test]
+    #[cfg(unix)]
+    fn bootstrap_pipe_child_sees_eof_when_write_end_leaks_past_fork() {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::process::CommandExt;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        // Payload must be larger than the pipe buffer (64KB Linux, 16KB macOS
+        // default) so the writer thread is guaranteed to still be holding
+        // write_end at fork time — without that, the writer finishes and drops
+        // write_end before fork, which is the safe path and wouldn't expose a
+        // missing FD_CLOEXEC.
+        let mut secrets = HashMap::new();
+        secrets.insert("BIG".to_string(), "x".repeat(256 * 1024));
+        let token = "eof-check";
+
+        let (read_end, writer) = create_bootstrap_pipe(token, &secrets).expect("create pipe");
+        let raw_read_fd = read_end.as_raw_fd();
+
+        // `cat <&3` drains fd 3 until EOF. EOF requires ALL write ends to be
+        // closed. If the child inherited a write end across exec (CLOEXEC
+        // missing), cat will never see EOF and this hangs forever.
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", "cat <&3 > /dev/null"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        unsafe {
+            cmd.pre_exec(move || {
+                if libc::dup2(raw_read_fd, 3) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let mut child = cmd.spawn().expect("spawn child");
+        drop(read_end);
+
+        let start = Instant::now();
+        let status = loop {
+            match child.try_wait().expect("wait") {
+                Some(status) => break status,
+                None if start.elapsed() > Duration::from_secs(5) => {
+                    let _ = child.kill();
+                    panic!("child hung reading fd 3 — write end leaked past exec");
+                }
+                None => std::thread::sleep(Duration::from_millis(50)),
+            }
+        };
+        assert!(status.success(), "child exited with {status:?}");
+        writer.join().expect("writer thread").expect("write ok");
     }
 
     #[test]
