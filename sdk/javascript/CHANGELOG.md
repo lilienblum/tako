@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.5.0](https://github.com/lilienblum/tako/compare/sdk-js-v0.4.0...sdk-js-v0.5.0) (2026-04-18)
+
+
+### Features
+
+* ambient Tako global, typegen rewrite, LOG_LEVEL, file-based CA ([a39773b](https://github.com/lilienblum/tako/commit/a39773b88cc65fda553bee9dfc378e158674a5b5))
+* **channels:** add durable pub-sub channels across SDKs and server ([dd1ef52](https://github.com/lilienblum/tako/commit/dd1ef52ff0ef623a3d91d4474033c0b3ae700cd4))
+* **channels:** add tako-channels crate and SDK channels module ([0280153](https://github.com/lilienblum/tako/commit/02801535f6b19c200cfadaa98998262bcef3c35b))
+* **runtime:** signal app readiness over fd 4 instead of stdout ([7ee5f8a](https://github.com/lilienblum/tako/commit/7ee5f8accfe8e886e322d88df2a7dd61bf62bdf0))
+* **sdk:** defineWorkflow returns WorkflowDefinition object ([184a5c5](https://github.com/lilienblum/tako/commit/184a5c56b78d534c760ebb1b45d799c15956a3b0))
+* **sdk:** export defineWorkflow, isWorkflowDefinition, WorkflowDefinition ([b1a5884](https://github.com/lilienblum/tako/commit/b1a58841a60661d464b0fa304111a204796c077f))
+* **sdk:** flatten step namespace into WorkflowContext ([326d7ba](https://github.com/lilienblum/tako/commit/326d7baeb064a8f1fb78bfa0cb3515c7b938aa59))
+* **sdk:** flip WorkflowHandler signature to (payload, ctx) ([2994b77](https://github.com/lilienblum/tako/commit/2994b770b3af5ca8f54ead590b7496fa6451b3aa))
+* **sdk:** rename maxAttempts -&gt; retries in user-facing workflow API ([a1c2981](https://github.com/lilienblum/tako/commit/a1c29812cb7e2cd0de9f472c489c1b0fed2432d5))
+* **sdk:** update workflow discovery to use WorkflowDefinition symbol ([28b7722](https://github.com/lilienblum/tako/commit/28b7722bfe20373ebd0781c9d34f032f26e2afe8))
+* **sdk:** WorkflowHandler returns void + WorkflowRegistry typed enqueue + typegen ([9e1d178](https://github.com/lilienblum/tako/commit/9e1d1782380f941addd4bb67116dc0ad3f2185f7))
+* **workflows:** durable workflow engine with runs, steps, signals ([8185013](https://github.com/lilienblum/tako/commit/8185013ba1d92a10905dc0fd1cbb7ad8a8a2004b))
+
+
+### Bug Fixes
+
+* **sdk:** cleanup discover tests + fix tsx in docstring ([0577b97](https://github.com/lilienblum/tako/commit/0577b9730c79a753060b666a2645f2ca434b4ca7))
+* **sdk:** rename Run.maxAttempts -&gt; retries; unexport WorkflowRetryConfig ([588fd0e](https://github.com/lilienblum/tako/commit/588fd0e0ed7cbb0e0d15523bf46f945c26dade9b))
+* **sdk:** strengthen isWorkflowDefinition guard + clean up define tests ([c680837](https://github.com/lilienblum/tako/commit/c680837f9ebd131f1a6dd5bf3bc83c79031d52e5))
+* **sdk:** suppress no-redundant-type-constituents lint on open union enqueue signature ([e0d2fb7](https://github.com/lilienblum/tako/commit/e0d2fb7f94317e453209d1b79002690cc2de365c))
+* **sdk:** update defineWorkflow JSDoc example for new (payload, ctx) signature ([b7e55ad](https://github.com/lilienblum/tako/commit/b7e55adbf2e384827da9d351d76fa851ebcb6f6e))
+* **sdk:** update step.ts and types.ts comments for flat ctx API ([d089b92](https://github.com/lilienblum/tako/commit/d089b92cfbdf2bce9f0a2bbf47805885730a2efb))
+* **workflows:** worker_id guard + secrets via fd 3 ([1675fdd](https://github.com/lilienblum/tako/commit/1675fdd0e22501215db27da653f85c5065d8777c))
+
 ## [0.5.0](https://github.com/lilienblum/tako/compare/sdk-js-v0.4.0...sdk-js-v0.5.0) (2026-04-16)
 
 
