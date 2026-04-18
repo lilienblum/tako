@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/lilienblum/tako/compare/sdk-js-v0.5.0...sdk-js-v0.6.0) (2026-04-18)
+
+
+### Features
+
+* **channels:** add tako-channels crate and SDK channels module ([0280153](https://github.com/lilienblum/tako/commit/02801535f6b19c200cfadaa98998262bcef3c35b))
+
 ## [0.5.0](https://github.com/lilienblum/tako/compare/sdk-js-v0.4.0...sdk-js-v0.5.0) (2026-04-16)
 
 
