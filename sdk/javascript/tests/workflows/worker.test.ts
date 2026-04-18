@@ -153,7 +153,7 @@ class MockServer {
         return { status: "ok", data: {} };
       }
       default:
-        return { status: "error", message: `unknown: ${cmd["command"]}` };
+        return { status: "error", message: `unknown: ${String(cmd["command"])}` };
     }
   }
 }
@@ -229,6 +229,7 @@ describe("Worker", () => {
   test("step.run memoizes across retries", async () => {
     const runs: Record<string, number> = { a: 0, b: 0 };
     let forceFail = true;
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- `run` is a bound closure, not a class method
     const handler: WorkflowHandler = async (_payload, { run }) => {
       const v = await run("a", () => {
         runs.a += 1;

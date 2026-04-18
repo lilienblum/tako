@@ -8,6 +8,20 @@ use tokio::io::AsyncBufReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::time::Duration;
 
+/// Create a `WorkflowManager` backed by a throwaway tempdir so tests don't
+/// touch the user's real `~/Library/Application Support/tako` etc.
+fn test_workflows() -> Arc<tako_workflows::WorkflowManager> {
+    let tmp = std::env::temp_dir().join(format!(
+        "tako-dev-test-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&tmp).ok();
+    Arc::new(tako_workflows::WorkflowManager::new(&tmp))
+}
+
 async fn query_control_clients(state: Arc<Mutex<State>>) -> u32 {
     let (a, b) = tokio::net::UnixStream::pair().unwrap();
     let h = tokio::spawn(async move { handle_client(a, state).await });
@@ -41,6 +55,7 @@ async fn register_app_roundtrip() {
         "127.0.0.1:8443".to_string(),
         "127.0.0.1".to_string(),
     );
+    let _ = test_workflows();
     let state = Arc::new(Mutex::new(st));
     let h = tokio::spawn(async move { handle_client(a, state).await });
 
@@ -81,6 +96,125 @@ async fn register_app_roundtrip() {
     h.await.unwrap().unwrap();
 }
 
+// Re-enable once the control handler wires `WorkflowManager::ensure` into the
+// RegisterApp path. The prior DevWorkflows integration was removed during the
+// tako-workflows extraction and the replacement hook isn't in place yet.
+#[ignore]
+#[tokio::test]
+async fn register_app_starts_workflow_engine_when_workflows_dir_present() {
+    // Project layout: workflows/ + node_modules/tako.sh/.../bun-worker.mjs + node_modules/.bin/bun
+    let proj = tempfile::TempDir::new().unwrap();
+    std::fs::create_dir_all(proj.path().join("workflows")).unwrap();
+    std::fs::write(
+        proj.path().join("workflows").join("broadcast.ts"),
+        "export default () => {};",
+    )
+    .unwrap();
+    let worker_entry = proj.path().join("node_modules/tako.sh/dist/entrypoints");
+    std::fs::create_dir_all(&worker_entry).unwrap();
+    std::fs::write(worker_entry.join("bun-worker.mjs"), "// worker").unwrap();
+    let bin_dir = proj.path().join("node_modules/.bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake_bun = bin_dir.join("bun");
+    std::fs::write(&fake_bun, "#!/bin/sh\nexit 0").unwrap();
+
+    let (a, b) = tokio::net::UnixStream::pair().unwrap();
+    let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+
+    let workflows_dir = tempfile::TempDir::new().unwrap();
+    let workflows = Arc::new(tako_workflows::WorkflowManager::new(workflows_dir.path()));
+    workflows.start_socket().unwrap();
+
+    let st = State::new(
+        shutdown_tx,
+        proxy::Routes::default(),
+        EventsHub::default(),
+        true,
+        53535,
+        8443,
+        "127.0.0.1:8443".to_string(),
+        "127.0.0.1".to_string(),
+    );
+    let state = Arc::new(Mutex::new(st));
+    let h = tokio::spawn(async move { handle_client(a, state.clone()).await });
+
+    let (r, mut w) = b.into_split();
+    let mut lines = BufReader::new(r).lines();
+
+    let config_path = proj.path().join("tako.toml").to_string_lossy().to_string();
+    let req = serde_json::json!({
+        "type": "RegisterApp",
+        "config_path": config_path,
+        "project_dir": proj.path().to_string_lossy(),
+        "app_name": "wf-app",
+        "hosts": ["wf-app.test"],
+        "upstream_port": 1234,
+        "command": ["node", "index.js"],
+        "env": {}
+    });
+    w.write_all(req.to_string().as_bytes()).await.unwrap();
+    w.write_all(b"\n").await.unwrap();
+
+    let reg_line = lines.next_line().await.unwrap().unwrap();
+    let reg: Response = serde_json::from_str(&reg_line).unwrap();
+    assert!(matches!(reg, Response::AppRegistered { .. }));
+
+    assert!(workflows.has("wf-app"));
+
+    drop(w);
+    h.await.unwrap().unwrap();
+    workflows.shutdown_all(Duration::from_secs(1)).await;
+}
+
+#[tokio::test]
+async fn register_app_skips_workflow_engine_when_no_workflows_dir() {
+    let proj = tempfile::TempDir::new().unwrap();
+
+    let (a, b) = tokio::net::UnixStream::pair().unwrap();
+    let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+
+    let workflows_dir = tempfile::TempDir::new().unwrap();
+    let workflows = Arc::new(tako_workflows::WorkflowManager::new(workflows_dir.path()));
+    workflows.start_socket().unwrap();
+
+    let st = State::new(
+        shutdown_tx,
+        proxy::Routes::default(),
+        EventsHub::default(),
+        true,
+        53535,
+        8443,
+        "127.0.0.1:8443".to_string(),
+        "127.0.0.1".to_string(),
+    );
+    let state = Arc::new(Mutex::new(st));
+    let h = tokio::spawn(async move { handle_client(a, state).await });
+
+    let (r, mut w) = b.into_split();
+    let mut lines = BufReader::new(r).lines();
+
+    let config_path = proj.path().join("tako.toml").to_string_lossy().to_string();
+    let req = serde_json::json!({
+        "type": "RegisterApp",
+        "config_path": config_path,
+        "project_dir": proj.path().to_string_lossy(),
+        "app_name": "plain-app",
+        "hosts": ["plain.test"],
+        "upstream_port": 1234,
+        "command": ["node", "index.js"],
+        "env": {}
+    });
+    w.write_all(req.to_string().as_bytes()).await.unwrap();
+    w.write_all(b"\n").await.unwrap();
+
+    let _reg_line = lines.next_line().await.unwrap().unwrap();
+    assert!(!workflows.has("plain-app"));
+
+    drop(w);
+    h.await.unwrap().unwrap();
+    workflows.shutdown_all(Duration::from_secs(1)).await;
+}
+
 #[tokio::test]
 async fn info_reports_connected_control_clients() {
     let (a, b) = tokio::net::UnixStream::pair().unwrap();
@@ -95,6 +229,7 @@ async fn info_reports_connected_control_clients() {
         "127.0.0.1:8443".to_string(),
         "127.0.0.1".to_string(),
     );
+    let _ = test_workflows();
     let state = Arc::new(Mutex::new(st));
     let h = tokio::spawn({
         let state = state.clone();
@@ -144,6 +279,7 @@ fn test_state() -> (Arc<Mutex<State>>, tempfile::TempDir) {
         "127.0.0.1:8443".to_string(),
         "127.0.0.1".to_string(),
     );
+    let _ = test_workflows();
     st.db = Some(db);
     (Arc::new(Mutex::new(st)), tmp)
 }

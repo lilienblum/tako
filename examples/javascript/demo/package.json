@@ -1,8 +1,28 @@
 {
-  "name": "bun-example",
+  "name": "demo",
   "private": true,
   "type": "module",
+  "sideEffects": false,
+  "scripts": {
+    "build": "vite build && tsc --noEmit",
+    "dev": "vite dev",
+    "start": "vite preview"
+  },
   "dependencies": {
+    "@tanstack/react-router": "catalog:",
+    "@tanstack/react-start": "catalog:",
+    "lucide-react": "^1.8.0",
+    "react": "catalog:",
+    "react-dom": "catalog:",
     "tako.sh": "workspace:*"
+  },
+  "devDependencies": {
+    "@tsconfig/strictest": "catalog:dev",
+    "@types/node": "catalog:dev",
+    "@types/react": "catalog:dev",
+    "@types/react-dom": "catalog:dev",
+    "@vitejs/plugin-react": "catalog:dev",
+    "typescript": "catalog:dev",
+    "vite": "catalog:dev"
   }
 }

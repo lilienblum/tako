@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use time::{OffsetDateTime, UtcOffset};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum LogLevel {
     Debug,
     Info,
@@ -31,19 +32,31 @@ pub struct ScopedLog {
     pub level: LogLevel,
     pub scope: String,
     pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
+/// Wire format: SDK emits `{ts: <unix-millis>, level: <lowercase>, scope, msg, fields?}`.
+/// We deserialize that shape and convert `ts` to an HMS string for display.
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
 struct ScopedLogSerde {
-    timestamp: String,
+    ts: i64,
     level: LogLevel,
     scope: String,
-    message: String,
+    msg: String,
+    #[serde(default)]
+    fields: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 fn hms_timestamp(h: u8, m: u8, s: u8) -> String {
     format!("{:02}:{:02}:{:02}", h, m, s)
+}
+
+fn hms_from_unix_millis(ts: i64) -> String {
+    let dt = OffsetDateTime::from_unix_timestamp_nanos((ts as i128) * 1_000_000)
+        .unwrap_or_else(|_| OffsetDateTime::now_utc())
+        .to_offset(local_offset());
+    hms_timestamp(dt.hour() as u8, dt.minute() as u8, dt.second() as u8)
 }
 
 impl<'de> Deserialize<'de> for ScopedLog {
@@ -52,17 +65,12 @@ impl<'de> Deserialize<'de> for ScopedLog {
         D: serde::Deserializer<'de>,
     {
         let raw = ScopedLogSerde::deserialize(deserializer)?;
-        let timestamp = if raw.timestamp.trim().is_empty() {
-            "00:00:00".to_string()
-        } else {
-            raw.timestamp
-        };
-
         Ok(Self {
-            timestamp,
+            timestamp: hms_from_unix_millis(raw.ts),
             level: raw.level,
             scope: raw.scope,
-            message: raw.message,
+            message: raw.msg,
+            fields: raw.fields,
         })
     }
 }
@@ -81,6 +89,7 @@ impl ScopedLog {
             level,
             scope: scope.into(),
             message: message.into(),
+            fields: None,
         }
     }
 
@@ -103,6 +112,7 @@ impl ScopedLog {
             level: LogLevel::Info,
             scope: DIVIDER_SCOPE.to_string(),
             message: label.to_string(),
+            fields: None,
         }
     }
 }

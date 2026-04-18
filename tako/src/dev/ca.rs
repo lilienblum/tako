@@ -19,7 +19,7 @@ use rcgen::{
     Issuer, KeyPair, KeyUsagePurpose, SanType,
 };
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
 use time::{Duration, OffsetDateTime};
@@ -664,7 +664,7 @@ fn effective_trust_by_precedence(states: &[TrustState]) -> Option<bool> {
 }
 
 #[cfg(target_os = "macos")]
-fn security_verify_cert(cert_path: &PathBuf) -> bool {
+fn security_verify_cert(cert_path: &Path) -> bool {
     Command::new("security")
         .args([
             "verify-cert",

@@ -1,6 +1,10 @@
 import { mkdir, writeFile } from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { Plugin, ResolvedConfig, UserConfig } from "vite";
+import { createLogger } from "./logger";
+import { handleTakoEndpoint } from "./tako/endpoints";
+import { writeViaInheritedFd } from "./tako/readiness";
 
 interface ViteEntryChunkLike {
   type: "chunk";
@@ -25,6 +29,7 @@ function toRelativeImportSpecifier(filePath: string): string {
 function renderWrappedEntrySource(compiledMain: string): string {
   const importSpecifier = toRelativeImportSpecifier(compiledMain);
   return `import entryModule, * as entryNamespace from ${JSON.stringify(importSpecifier)};
+import { handleTakoEndpoint } from "tako.sh/server";
 
 const fetchHandler =
   typeof entryModule === "function"
@@ -41,7 +46,18 @@ if (!fetchHandler) {
   );
 }
 
-export default fetchHandler;
+export default async function(request) {
+  const takoResponse = await handleTakoEndpoint(request, {
+    status: "healthy",
+    app: process.env.TAKO_APP_NAME ?? "app",
+    version: process.env.TAKO_BUILD ?? "unknown",
+    instance_id: process.env.TAKO_INSTANCE_ID ?? "unknown",
+    pid: process.pid,
+    uptime_seconds: 0,
+  });
+  if (takoResponse) return takoResponse;
+  return fetchHandler(request);
+};
 `;
 }
 
@@ -72,12 +88,41 @@ function pickCompiledMain(entries: string[]): string {
   );
 }
 
-function parsePortFromEnv(rawPort: string | undefined): number | null {
-  const parsedPort = Number.parseInt((rawPort ?? "").trim(), 10);
-  if (!Number.isInteger(parsedPort) || parsedPort <= 0 || parsedPort > 65535) {
-    return null;
+function nodeRequestToFetch(req: IncomingMessage): Promise<Request> {
+  const host = req.headers.host ?? "localhost";
+  const url = `http://${host}${req.url ?? "/"}`;
+  const headers = new Headers();
+  for (const [key, val] of Object.entries(req.headers)) {
+    if (val === undefined) continue;
+    if (Array.isArray(val)) {
+      for (const v of val) headers.append(key, v);
+    } else {
+      headers.set(key, val);
+    }
   }
-  return parsedPort;
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on("data", (chunk: Buffer) => chunks.push(chunk));
+    req.on("end", () => {
+      const init: RequestInit = {
+        method: req.method ?? "GET",
+        headers,
+      };
+      if (chunks.length > 0) {
+        init.body = Buffer.concat(chunks) as unknown as BodyInit;
+      }
+      resolve(new Request(url, init));
+    });
+    req.on("error", reject);
+  });
+}
+
+async function sendFetchResponse(res: ServerResponse, response: Response): Promise<void> {
+  res.statusCode = response.status;
+  for (const [key, val] of response.headers.entries()) {
+    res.setHeader(key, val);
+  }
+  res.end(Buffer.from(await response.arrayBuffer()));
 }
 
 function mergeServeAllowedHosts(existing: unknown): true | string[] {
@@ -110,6 +155,31 @@ function isViteEntryChunk(chunk: unknown): chunk is ViteEntryChunkLike {
   );
 }
 
+/**
+ * Vite plugin that wires a project up to the Tako build/dev pipeline.
+ *
+ * Responsibilities:
+ * - Marks `tako.sh` as SSR-external so Vite doesn't try to bundle server-only
+ *   modules (secrets, workflow RPC, etc.).
+ * - In dev, swaps Vite's default logger for structured JSON lines so the
+ *   tako dev server can render them alongside other subprocess logs.
+ * - Under `tako dev`, reports the dev server's bound port back to the parent
+ *   over fd 4 and adds `.test` / `.tako.test` to `server.allowedHosts`.
+ * - On build, records the entry chunk filenames so the Tako runtime can find
+ *   the generated entrypoint.
+ *
+ * Add to `vite.config.ts` alongside any framework plugin:
+ *
+ * @example
+ * ```typescript
+ * import { defineConfig } from "vite";
+ * import { tako } from "tako.sh/vite";
+ *
+ * export default defineConfig({ plugins: [tako()] });
+ * ```
+ *
+ * @returns A Vite {@link Plugin} instance.
+ */
 export function tako(): Plugin {
   let resolvedConfig: ResolvedConfig | null = null;
   let entryChunks: string[] = [];
@@ -123,24 +193,66 @@ export function tako(): Plugin {
 
       const config: UserConfig = {};
 
-      // Allow `tako dev` to reserve the local app port and have Vite bind there.
+      // Exclude the SDK from Vite's SSR transform — it's a server-side
+      // dependency with runtime dynamic imports Vite can't statically analyze.
+      config.ssr = { external: ["tako.sh"] };
+
+      // Under the tako dev server, emit structured JSON log lines so the
+      // parent process can render Vite output alongside other subprocess logs.
+      if (process.env["ENV"] === "development") {
+        config.customLogger = createLogger("vite").toViteLogger();
+      }
+
       if (activeCommand === "serve") {
-        const serverConfig: NonNullable<UserConfig["server"]> = {
+        // Let Vite pick its own port — the configureServer hook reports
+        // the actual bound port to Tako via fd 4.
+        config.server = {
           allowedHosts: mergeServeAllowedHosts(userConfig.server?.allowedHosts),
+          host: "127.0.0.1",
         };
-        const parsedPort = parsePortFromEnv(process.env["PORT"]);
-        if (parsedPort !== null) {
-          serverConfig.host = "127.0.0.1";
-          serverConfig.port = parsedPort;
-          serverConfig.strictPort = true;
-        }
-        config.server = serverConfig;
       }
 
       return config;
     },
     configResolved(config) {
       resolvedConfig = config;
+    },
+    configureServer(server) {
+      // Handle Tako internal endpoints (channel auth, health) in dev mode.
+      // Dynamic import so we share the SAME ChannelRegistry / Tako singletons
+      // as the app — a static import gets inlined by the bundler into a
+      // separate copy, breaking singleton state.
+      server.middlewares.use((req: IncomingMessage, res: ServerResponse, next: () => void) => {
+        const host = (req.headers.host ?? "").split(":")[0] ?? "";
+        if (host !== "tako.internal") {
+          next();
+          return;
+        }
+        nodeRequestToFetch(req)
+          .then((fetchReq) =>
+            handleTakoEndpoint(fetchReq, {
+              status: "healthy",
+              app: "dev",
+              version: process.env["TAKO_BUILD"] ?? "dev",
+              instance_id: process.env["TAKO_INSTANCE_ID"] ?? "dev",
+              pid: process.pid,
+              uptime_seconds: 0,
+            }),
+          )
+          .then((response) => {
+            if (response) return sendFetchResponse(res, response);
+            next();
+            return;
+          })
+          .catch(() => next());
+      });
+
+      server.httpServer?.once("listening", () => {
+        const addr = server.httpServer?.address();
+        if (addr && typeof addr === "object") {
+          writeViaInheritedFd(4, addr.port);
+        }
+      });
     },
     generateBundle(_options, bundle) {
       sawBundleGeneration = true;

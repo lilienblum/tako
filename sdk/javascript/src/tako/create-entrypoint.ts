@@ -12,7 +12,8 @@
 
 import { handleTakoEndpoint } from "./endpoints";
 import { writeViaInheritedFd } from "./readiness";
-import { installTakoGlobal } from "../tako";
+import { installTakoGlobal, Tako } from "../tako";
+import { bootstrapChannels } from "../channels/bootstrap";
 import type { FetchFunction, ReadyableFetchHandler, TakoStatus } from "../types";
 
 export interface EntrypointOptions {
@@ -90,10 +91,17 @@ export function createEntrypoint(options: EntrypointOptions = {}) {
       process.exit(1);
     }
 
+    try {
+      await bootstrapChannels({ appDir: process.cwd(), registry: Tako.channels });
+    } catch (err) {
+      console.error("Failed to load channels/ directory:", err);
+      process.exit(1);
+    }
+
     let userFetch: FetchFunction;
     let userReady: (() => void | Promise<void>) | null = null;
     try {
-      const module = await import(parsed.main);
+      const module = await import(/* @vite-ignore */ parsed.main);
       const defaultExport = module.default;
       if (typeof defaultExport === "function") {
         const readyable = defaultExport as ReadyableFetchHandler;
@@ -129,7 +137,7 @@ export function createEntrypoint(options: EntrypointOptions = {}) {
 
     const env: Record<string, string> = {};
     for (const [key, value] of Object.entries(process.env)) {
-      if (value !== undefined && key !== "TAKO_INTERNAL_TOKEN") {
+      if (value !== undefined) {
         env[key] = value;
       }
     }

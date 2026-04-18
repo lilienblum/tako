@@ -1,20 +1,15 @@
 name = "demo"
 runtime = "bun"
+preset = "tanstack-start"
 
 [[build_stages]]
 name = "sdk"
 run = "bun run build"
 cwd = "../../../sdk/javascript"
 
-[vars.development]
-WIDLCARD_SUFFIX = ".demo.test"
-
-[vars.production]
-WIDLCARD_SUFFIX = ".demo.tako.sh"
-
 [envs.development]
-routes = ["demo.test/foobar", "*.demo.test"]
+routes = ["demo.test", "*.demo.test"]
 
 [envs.production]
-routes = ["demo.tako.sh/foobar", "*.demo.tako.sh"]
+routes = ["demo.tako.sh", "*.demo.tako.sh"]
 servers = ["tako-demo"]

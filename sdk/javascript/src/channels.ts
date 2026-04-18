@@ -2,48 +2,33 @@ import type {
   ChannelAuthorizeInput,
   ChannelAuthorizeResponse,
   ChannelConnectOptions,
-  ChannelConnection,
-  ChannelDefinition,
   ChannelDefinitionTransport,
   ChannelMessage,
   ChannelPublishInput,
   ChannelPublishOptions,
+  ChannelSocket,
   ChannelSubscribeOptions,
   ChannelSubscription,
 } from "./types";
+import { comparePatterns, matchPattern } from "./channels/pattern";
+import type { ChannelDefinition } from "./channels/define";
+
+export type ChannelSocketPublisher = <T>(
+  channel: string,
+  message: ChannelPublishInput<T>,
+) => Promise<ChannelMessage<T>>;
+
+let socketPublisher: ChannelSocketPublisher | null = null;
+
+export function setChannelSocketPublisher(fn: ChannelSocketPublisher | null): void {
+  socketPublisher = fn;
+}
 
 export const TAKO_CHANNELS_BASE_PATH = "/channels";
 const DEFAULT_CHANNEL_REPLAY_WINDOW_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_CHANNEL_INACTIVITY_TTL_MS = 0;
 const DEFAULT_CHANNEL_KEEPALIVE_INTERVAL_MS = 25 * 1000;
 const DEFAULT_CHANNEL_MAX_CONNECTION_LIFETIME_MS = 2 * 60 * 60 * 1000;
-
-interface ChannelDefinitionEntry {
-  definition: ChannelDefinition;
-  index: number;
-  pattern: string;
-}
-
-function isExactPattern(pattern: string): boolean {
-  return !pattern.includes("*");
-}
-
-function patternMatches(pattern: string, channel: string): boolean {
-  if (pattern === "*") {
-    return true;
-  }
-  if (isExactPattern(pattern)) {
-    return pattern === channel;
-  }
-  if (pattern.endsWith("*")) {
-    return channel.startsWith(pattern.slice(0, -1));
-  }
-  return false;
-}
-
-function patternSpecificity(pattern: string): number {
-  return pattern.replace(/\*/g, "").length;
-}
 
 function normalizeBaseUrl(baseUrl?: string): URL {
   if (baseUrl) {
@@ -57,7 +42,8 @@ function normalizeBaseUrl(baseUrl?: string): URL {
 
 function channelBaseUrl(channel: string, baseUrl?: string): URL {
   const url = normalizeBaseUrl(baseUrl);
-  url.pathname = `${TAKO_CHANNELS_BASE_PATH}/${encodeURIComponent(channel)}`;
+  const segments = channel.split("/").map(encodeURIComponent).join("/");
+  url.pathname = `${TAKO_CHANNELS_BASE_PATH}/${segments}`;
   url.search = "";
   return url;
 }
@@ -167,6 +153,10 @@ export class Channel {
     message: ChannelPublishInput<T>,
     options: ChannelPublishOptions = {},
   ): Promise<ChannelMessage<T>> {
+    if (socketPublisher && !options.baseUrl) {
+      return socketPublisher(this.name, message);
+    }
+
     const url = channelBaseUrl(this.name, options.baseUrl);
     url.pathname = `${url.pathname}/messages`;
     const response = await fetch(url.toString(), {
@@ -214,7 +204,7 @@ export class Channel {
     };
   }
 
-  connect(options: ChannelConnectOptions = {}): ChannelConnection {
+  connect(options: ChannelConnectOptions = {}): ChannelSocket {
     if (this.transport !== "ws") {
       throw new Error("Channel does not enable WebSocket transport.");
     }
@@ -237,95 +227,82 @@ export class Channel {
   }
 }
 
-export class ChannelRegistry {
-  private definitions: ChannelDefinitionEntry[] = [];
-  private nextIndex = 0;
+interface RegistryEntry {
+  name: string;
+  definition: ChannelDefinition;
+}
 
-  create(name: string, definition?: ChannelDefinition): Channel {
-    if (definition) {
-      this.define(name, definition);
-      return new Channel(name, definition.transport);
-    }
-    return new Channel(name);
+export class ChannelRegistry {
+  private entries: RegistryEntry[] = [];
+
+  get all(): ReadonlyArray<RegistryEntry> {
+    return this.entries;
   }
 
-  define(pattern: string, definition: ChannelDefinition): void {
-    this.definitions.push({
-      definition,
-      index: this.nextIndex++,
-      pattern,
-    });
+  register(name: string, definition: ChannelDefinition): void {
+    if (this.entries.some((e) => e.definition.pattern === definition.pattern)) {
+      throw new Error(`duplicate channel pattern '${definition.pattern}'`);
+    }
+    this.entries.push({ name, definition });
+    this.entries.sort((a, b) => comparePatterns(a.definition.compiled, b.definition.compiled));
   }
 
   clear(): void {
-    this.definitions = [];
-    this.nextIndex = 0;
+    this.entries = [];
+  }
+
+  resolve(
+    channel: string,
+  ): { definition: ChannelDefinition; params: Record<string, string> } | null {
+    for (const entry of this.entries) {
+      const match = matchPattern(entry.definition.compiled, channel);
+      if (match) return { definition: entry.definition, params: match.params };
+    }
+    return null;
   }
 
   async authorize(input: ChannelAuthorizeInput): Promise<ChannelAuthorizeResponse> {
-    const matched = this.resolveDefinition(input.channel);
-    if (!matched) {
-      return { ok: false };
+    const matched = this.resolve(input.channel);
+    if (!matched) return { ok: false };
+
+    if (input.operation === "publish" && matched.definition.handler === undefined) {
+      return { ok: false, reason: "sse_publish_not_allowed" };
     }
 
     const request = new Request(
       input.request.url,
       buildFetchInit(
-        {
-          method: input.request.method ?? "GET",
-        },
-        {
-          ...fetchInitOptions(requestHeaders(flattenHeaders(input.request.headers))),
-        },
+        { method: input.request.method ?? "GET" },
+        { ...fetchInitOptions(requestHeaders(flattenHeaders(input.request.headers))) },
       ),
     );
+
     const verdict = await matched.definition.auth(request, {
       channel: input.channel,
       operation: input.operation,
-      pattern: matched.pattern,
+      pattern: matched.definition.pattern,
+      params: matched.params,
     });
 
+    if (verdict === false) return { ok: false };
+
     const config = definitionLifecycleConfig(matched.definition);
-    if (verdict === false) {
-      return { ok: false };
-    }
-    if (verdict === true) {
-      return { ok: true, ...config };
-    }
+    if (verdict === true) return { ok: true, ...config };
     return verdict.subject === undefined
       ? { ok: true, ...config }
       : { ok: true, ...config, subject: verdict.subject };
   }
-
-  resolveDefinition(channel: string): ChannelDefinitionEntry | null {
-    return (
-      this.definitions
-        .filter((entry) => patternMatches(entry.pattern, channel))
-        .sort((left, right) => {
-          const exactWeight =
-            Number(isExactPattern(right.pattern)) - Number(isExactPattern(left.pattern));
-          if (exactWeight !== 0) {
-            return exactWeight;
-          }
-          const specificity = patternSpecificity(right.pattern) - patternSpecificity(left.pattern);
-          if (specificity !== 0) {
-            return specificity;
-          }
-          return left.index - right.index;
-        })[0] ?? null
-    );
-  }
 }
 
 function definitionLifecycleConfig(definition: ChannelDefinition) {
-  const config: Omit<ChannelAuthorizeResponse, "ok" | "subject"> = {
+  const config: Omit<ChannelAuthorizeResponse, "ok" | "subject" | "reason"> = {
     replayWindowMs: definition.replayWindowMs ?? DEFAULT_CHANNEL_REPLAY_WINDOW_MS,
     inactivityTtlMs: definition.inactivityTtlMs ?? DEFAULT_CHANNEL_INACTIVITY_TTL_MS,
     keepaliveIntervalMs: definition.keepaliveIntervalMs ?? DEFAULT_CHANNEL_KEEPALIVE_INTERVAL_MS,
     maxConnectionLifetimeMs:
       definition.maxConnectionLifetimeMs ?? DEFAULT_CHANNEL_MAX_CONNECTION_LIFETIME_MS,
-  } as ChannelAuthorizeResponse;
-  if (definition.transport === "ws") {
+  };
+  if (definition.handler !== undefined) {
     config.transport = "ws";
   }
   return config;

@@ -3,7 +3,9 @@
  * Tako Deno Worker Entrypoint.
  */
 
-import { initSecretsFromFd, readViaProcSelfFd } from "../secrets";
+import { installConsoleBridge } from "../../console-bridge";
+import { installErrorHooks } from "../../error-hooks";
+import { initBootstrapFromFd, readViaProcSelfFd } from "../secrets";
 import { installTakoGlobal } from "../../tako";
 import { bootstrapWorker } from "../../workflows/bootstrap";
 import { workflowsEngine } from "../../workflows/engine";
@@ -13,24 +15,29 @@ declare const Deno: {
   exit(code?: number): never;
 };
 
+installErrorHooks("worker");
+installConsoleBridge("worker");
+
 async function main(): Promise<void> {
-  initSecretsFromFd(readViaProcSelfFd);
+  initBootstrapFromFd(readViaProcSelfFd);
   installTakoGlobal();
   const result = await bootstrapWorker();
-  const exit = typeof Deno !== "undefined" ? Deno.exit : process.exit;
+  const exit: (code?: number) => never =
+    typeof Deno !== "undefined"
+      ? (code?: number) => Deno.exit(code)
+      : (code?: number) => process.exit(code);
 
   if (!result.started) {
     console.error(`tako-worker: not started (${result.reason ?? "unknown"})`);
     exit(result.reason === "no workflows discovered" ? 0 : 1);
-    return;
   }
-  console.error(`tako-worker: running ${result.workflowCount} workflow(s)`);
+  console.log(`tako-worker: running ${result.workflowCount} workflow(s)`);
 
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.error(`tako-worker: received ${signal}, draining`);
+    console.log(`tako-worker: received ${signal}, draining`);
     await workflowsEngine.drain();
     exit(0);
   };

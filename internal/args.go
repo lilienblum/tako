@@ -15,17 +15,18 @@ type Config struct {
 	// Port is the TCP port to listen on. Defaults to "3000".
 	Port string
 	// InternalToken authenticates Host:tako.internal requests from tako-server.
-	// Set via TAKO_INTERNAL_TOKEN env var. Empty in dev mode (no auth required).
+	// Delivered on the fd 3 bootstrap envelope. Empty in dev mode (no auth required).
 	InternalToken string
 }
 
-// ParseConfig reads configuration from os.Args and environment variables.
-func ParseConfig() Config {
-	return ParseConfigFrom(os.Args[1:], os.Getenv)
+// ParseConfig reads configuration from os.Args, environment variables,
+// and the given bootstrap envelope (may be nil in dev mode).
+func ParseConfig(bootstrap *Bootstrap) Config {
+	return ParseConfigFrom(os.Args[1:], os.Getenv, bootstrap)
 }
 
-// ParseConfigFrom reads configuration from the given args and env lookup function.
-func ParseConfigFrom(args []string, getenv func(string) string) Config {
+// ParseConfigFrom reads configuration from the given args, env lookup, and bootstrap envelope.
+func ParseConfigFrom(args []string, getenv func(string) string, bootstrap *Bootstrap) Config {
 	cfg := Config{
 		Host: "0.0.0.0",
 		Port: "3000",
@@ -50,7 +51,9 @@ func ParseConfigFrom(args []string, getenv func(string) string) Config {
 		cfg.Port = port
 	}
 
-	cfg.InternalToken = getenv("TAKO_INTERNAL_TOKEN")
+	if bootstrap != nil {
+		cfg.InternalToken = bootstrap.Token
+	}
 
 	return cfg
 }

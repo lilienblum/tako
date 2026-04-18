@@ -6,12 +6,12 @@ Package name: `tako.sh`
 
 ## What It Provides
 
-- `Tako` class with secrets management and build info
-- App-declared channel handles via `Tako.channels.create()`
-- Channel policy definitions via `Tako.channels.define()`
+- `Tako` global with secrets management, build info, typed channels, typed workflow enqueue
+- File-based channel definitions via `defineChannel` in `channels/<name>.ts`
+- File-based workflow definitions via `defineWorkflow` in `workflows/<name>.ts`
 - Vite plugin for SSR framework builds
 - Built-in internal status endpoint (`GET /status` on `Host: tako.internal`)
-- Built-in internal channel auth endpoint (`POST /channels/authorize` on `Host: tako.internal`)
+- Built-in internal channel auth + dispatch endpoints on `Host: tako.internal`
 
 ## Install
 
@@ -29,45 +29,47 @@ export default function fetch(req: Request, env: Record<string, string>) {
 
 ## Channels
 
-Define channel auth policy inside the app:
+Declare one channel per file in `channels/<name>.ts`:
 
 ```ts
-import { Tako } from "tako.sh";
+// channels/chat.ts
+import { defineChannel } from "tako.sh";
 
-Tako.channels.define("chat:*", {
-  auth(request, ctx) {
-    const session = request.headers.get("authorization");
-    return session ? { subject: "user-123" } : false;
+type ChatMessages = {
+  msg: { text: string; userId: string };
+  typing: { userId: string };
+};
+
+export default defineChannel<ChatMessages>("chat/:roomId", {
+  auth: async (request, ctx) => {
+    const userId = await getUserId(request);
+    return userId ? { subject: userId } : false;
+  },
+  handler: {
+    msg: async (data, ctx) => {
+      await db.saveMessage(ctx.params.roomId, data);
+      return data;
+    },
+    typing: async (data) => data,
   },
 });
 ```
 
-Use channel handles from the global `Tako` API:
+- Patterns are Hono-style (`:name` captures, trailing `*` wildcard).
+- `auth` is optional — omit for public channels.
+- Presence of `handler` chooses transport: WebSocket when present, SSE otherwise. SSE channels reject client POST publishes.
+
+Send and subscribe with the typed accessor:
 
 ```ts
-export const chatRoom = Tako.channels.create("chat:room-123");
+// Unparameterized channel
+Tako.channels.status.send("ping", { at: Date.now() });
+
+// Parameterized channel — bind params then send/subscribe
+const room = Tako.channels.chat({ roomId: "room1" });
+await room.send("msg", { text: "hi", userId: "u-1" });
+room.subscribe({ msg: (data) => console.log(data.text) });
 ```
-
-Use channel handles elsewhere in the app:
-
-```ts
-import { chatRoom } from "./channels";
-
-await chatRoom.publish(
-  { type: "message", data: { text: "hi" } },
-  { baseUrl: "https://app.example.com" },
-);
-
-chatRoom.subscribe({
-  baseUrl: "https://app.example.com",
-});
-```
-
-`channel.subscribe()` opens the durable SSE channel stream on `GET /channels/<name>`.
-
-`channel.connect()` opens the WebSocket channel transport. When you call
-`connection.send({ type, data })`, the SDK sends a JSON text frame that Tako
-parses as a channel publish payload for that channel.
 
 ## Vite Plugin
 

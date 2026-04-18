@@ -234,6 +234,7 @@ impl Routes {
 pub struct DevProxy {
     pub routes: Routes,
     pub events: tokio::sync::mpsc::UnboundedSender<protocol::DevEvent>,
+    pub channels: crate::dev_channels::DevChannelStore,
 }
 
 #[derive(Default)]
@@ -271,6 +272,12 @@ impl ProxyHttp for DevProxy {
             host: hostname.clone(),
             path: path.clone(),
         });
+
+        // Intercept channel requests before normal routing.
+        if path.starts_with("/channels/") {
+            let method = session.req_header().method.as_str().to_string();
+            return crate::dev_channels::try_handle(session, &self.channels, &path, &method).await;
+        }
 
         let Some((app_id, port, active, _notify)) = self.routes.lookup(&hostname, &path) else {
             let mut header = ResponseHeader::build(421, None)?;

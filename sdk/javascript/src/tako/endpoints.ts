@@ -9,11 +9,13 @@
 
 import { Tako } from "../tako";
 import type { ChannelAuthorizeInput, TakoStatus } from "../types";
+import { dispatchWsMessage } from "../channels/handler";
+import { getInternalToken } from "./secrets";
 
 export const TAKO_INTERNAL_HOST = "tako.internal";
 export const TAKO_INTERNAL_STATUS_PATH = "/status";
 export const TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH = "/channels/authorize";
-export const TAKO_INTERNAL_TOKEN_ENV = "TAKO_INTERNAL_TOKEN";
+export const TAKO_INTERNAL_CHANNELS_DISPATCH_PATH = "/channels/dispatch";
 export const TAKO_INTERNAL_TOKEN_HEADER = "x-tako-internal-token";
 const LOOPBACK_INTERNAL_HOSTS = new Set(["127.0.0.1", "localhost", "0.0.0.0"]);
 
@@ -37,28 +39,7 @@ function isInternalHost(host: string | null): boolean {
 }
 
 function internalToken(): string | null {
-  if (typeof process !== "undefined") {
-    const token = process.env?.[TAKO_INTERNAL_TOKEN_ENV];
-    if (token) {
-      return token;
-    }
-  }
-
-  const maybeDeno = (
-    globalThis as { Deno?: { env?: { get: (key: string) => string | undefined } } }
-  ).Deno;
-  if (maybeDeno?.env) {
-    try {
-      const token = maybeDeno.env.get(TAKO_INTERNAL_TOKEN_ENV);
-      if (token) {
-        return token;
-      }
-    } catch {
-      // ignore env access failures
-    }
-  }
-
-  return null;
+  return getInternalToken();
 }
 
 function internalResponse(
@@ -112,10 +93,48 @@ export async function handleTakoEndpoint(
       return handleStatus(status, token);
     case TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH:
       return await handleChannelAuthorize(request, token);
+    case TAKO_INTERNAL_CHANNELS_DISPATCH_PATH:
+      return await handleChannelDispatch(request, token);
 
     default:
       return internalResponse({ error: "Not found" }, 404, token);
   }
+}
+
+async function handleChannelDispatch(request: Request, token: string): Promise<Response> {
+  if (request.method !== "POST") {
+    return internalResponse({ error: "Method not allowed" }, 405, token);
+  }
+
+  type DispatchBody = {
+    channel?: string;
+    frame?: { type?: string; data?: unknown };
+    subject?: string;
+  };
+
+  let body: DispatchBody;
+  try {
+    body = (await request.json()) as DispatchBody;
+  } catch {
+    return internalResponse({ error: "Invalid JSON" }, 400, token);
+  }
+
+  if (
+    typeof body.channel !== "string" ||
+    !body.frame ||
+    typeof body.frame.type !== "string" ||
+    !("data" in body.frame)
+  ) {
+    return internalResponse({ error: "Invalid request" }, 400, token);
+  }
+
+  const input = {
+    channel: body.channel,
+    frame: { type: body.frame.type, data: body.frame.data },
+    ...(typeof body.subject === "string" && { subject: body.subject }),
+  };
+  const result = await dispatchWsMessage(Tako.channels, input);
+  return internalResponse(result, 200, token);
 }
 
 /**
@@ -143,9 +162,16 @@ async function handleChannelAuthorize(request: Request, token: string): Promise<
 
   const result = await Tako.channels.authorize(input);
   if (!result.ok) {
-    const hasDefinition = Tako.channels.resolveDefinition(input.channel) !== null;
+    const hasDefinition = Tako.channels.resolve(input.channel) !== null;
     if (!hasDefinition) {
       return internalResponse({ error: "Channel not defined", ok: false }, 404, token);
+    }
+    if (result.reason === "sse_publish_not_allowed") {
+      return internalResponse(
+        { error: "Method not allowed", ok: false, reason: result.reason },
+        405,
+        token,
+      );
     }
     return internalResponse({ error: "Forbidden", ok: false }, 403, token);
   }

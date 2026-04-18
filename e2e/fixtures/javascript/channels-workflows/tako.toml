@@ -1,0 +1,5 @@
+name = "cw-e2e"
+runtime = "bun"
+
+[envs.production]
+route = "cw-e2e.example.com"

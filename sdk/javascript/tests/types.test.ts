@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type {
-  ChannelConnection,
-  ChannelDefinition,
   ChannelOperation,
+  ChannelSocket,
   ChannelSubscription,
   FetchHandler,
   TakoStatus,
 } from "../src/types";
+import { defineChannel } from "../src/channels/define";
+import type { ChannelDefinition } from "../src/channels/define";
 
 describe("Types", () => {
   describe("FetchHandler", () => {
@@ -59,28 +60,30 @@ describe("Types", () => {
       expect(operations).toContain("publish");
     });
 
-    test("accepts channel definitions", () => {
-      const definition: ChannelDefinition = {
-        auth() {
-          return true;
+    test("accepts channel definitions built with defineChannel", () => {
+      const definition: ChannelDefinition = defineChannel<{ msg: { text: string } }>(
+        "chat/:roomId",
+        {
+          auth: async () => true,
+          handler: { msg: async (d) => d },
+          replayWindowMs: 86_400_000,
+          keepaliveIntervalMs: 25_000,
         },
-        transport: "ws",
-        replayWindowMs: 86_400_000,
-        keepaliveIntervalMs: 25_000,
-      };
+      );
 
-      expect(definition.transport).toBe("ws");
+      expect(definition.pattern).toBe("chat/:roomId");
+      expect(definition.handler).toBeDefined();
       expect(definition.replayWindowMs).toBe(86_400_000);
       expect(definition.keepaliveIntervalMs).toBe(25_000);
     });
 
-    test("distinguishes read-only subscriptions from send-capable connections", () => {
+    test("distinguishes read-only subscriptions from send-capable sockets", () => {
       const subscription: ChannelSubscription = {
         transport: "sse",
         raw: {},
         close() {},
       };
-      const connection: ChannelConnection = {
+      const socket: ChannelSocket = {
         transport: "ws",
         raw: {},
         close() {},
@@ -88,7 +91,7 @@ describe("Types", () => {
       };
 
       expect(subscription.transport).toBe("sse");
-      expect(connection.transport).toBe("ws");
+      expect(socket.transport).toBe("ws");
     });
   });
 });

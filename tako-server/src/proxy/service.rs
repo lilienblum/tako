@@ -35,6 +35,32 @@ impl TakoProxy {
         self.lb.unregister_app(app_name);
         self.routes.write().await.remove_app_routes(app_name);
         self.static_servers.write().remove(app_name);
+        self.channel_stores.write().remove(app_name);
+    }
+
+    /// Return the cached `ChannelStore` for `app_name`, opening (and
+    /// registering) it on first use. The store holds a single persistent
+    /// SQLite connection — we share it across requests so the 100ms SSE
+    /// poll loop doesn't reopen the DB + rerun PRAGMAs on every tick.
+    fn channel_store_for_app(&self, app_name: &str) -> Result<Arc<ChannelStore>> {
+        if let Some(existing) = self.channel_stores.read().get(app_name) {
+            return Ok(existing.clone());
+        }
+
+        let mut stores = self.channel_stores.write();
+        if let Some(existing) = stores.get(app_name) {
+            return Ok(existing.clone());
+        }
+
+        let path = app_channels_db_path(self.lb.app_manager().data_dir(), app_name);
+        let store = Arc::new(ChannelStore::open(&path).map_err(|error| {
+            Error::explain(
+                ErrorType::InternalError,
+                format!("Failed to open channel store for {app_name}: {error}"),
+            )
+        })?);
+        stores.insert(app_name.to_string(), store.clone());
+        Ok(store)
     }
 
     pub(super) fn static_server_for_app(
@@ -531,10 +557,18 @@ impl TakoProxy {
             Err(error) => return self.write_channel_error(session, error).await,
         };
 
-        let store = ChannelStore::new(app_channels_db_path(
-            self.lb.app_manager().data_dir(),
-            app_name,
-        ));
+        let store = match self.channel_store_for_app(app_name) {
+            Ok(store) => store,
+            Err(error) => {
+                tracing::error!("channel store unavailable for {app_name}: {error}");
+                return self
+                    .write_channel_error(
+                        session,
+                        ChannelError::Storage(format!("open store: {error}")),
+                    )
+                    .await;
+            }
+        };
         if let Err(error) = store.sync_channel(&route.channel, &auth_result) {
             return self.write_channel_error(session, error).await;
         }

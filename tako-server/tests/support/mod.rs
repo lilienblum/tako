@@ -287,13 +287,15 @@ impl Drop for TestServer {
 
 fn bun_app_source(body: &str) -> String {
     format!(
-        r#"import {{ closeSync, fstatSync, writeSync }} from "node:fs";
+        r#"import {{ closeSync, fstatSync, readFileSync, writeSync }} from "node:fs";
 
 const port = Number(process.env.PORT ?? "3000");
 const host = process.env.HOST ?? "127.0.0.1";
-const internalToken = process.env.TAKO_INTERNAL_TOKEN;
+const bootstrap = JSON.parse(readFileSync(3, "utf-8"));
+closeSync(3);
+const internalToken = bootstrap.token;
 if (!internalToken) {{
-  throw new Error("TAKO_INTERNAL_TOKEN is required");
+  throw new Error("bootstrap envelope on fd 3 did not provide a token");
 }}
 
 function signalReady(port) {{

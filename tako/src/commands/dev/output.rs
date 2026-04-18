@@ -234,6 +234,7 @@ fn spawn_key_reader(tx: mpsc::Sender<Event>) {
 
 struct FooterState {
     repo_slug: String,
+    repo_branch: String,
     repo_path: String,
     worktree_name: Option<String>,
     status: String,
@@ -242,9 +243,15 @@ struct FooterState {
 }
 
 impl FooterState {
-    fn new(repo_slug: String, repo_path: String, worktree_name: Option<String>) -> Self {
+    fn new(
+        repo_slug: String,
+        repo_branch: String,
+        repo_path: String,
+        worktree_name: Option<String>,
+    ) -> Self {
         Self {
             repo_slug,
+            repo_branch,
             repo_path,
             worktree_name,
             status: "starting…".to_string(),
@@ -266,6 +273,7 @@ impl FooterState {
             &self.status,
             adapter_name,
             &self.repo_slug,
+            &self.repo_branch,
             &self.repo_path,
             self.worktree_name.as_deref(),
             hosts,
@@ -325,12 +333,12 @@ pub async fn run_dev_output(
     }
     rawln("");
 
-    let (repo_slug, repo_path, worktree_name) = std::env::current_dir()
+    let (repo_slug, repo_branch, repo_path, worktree_name) = std::env::current_dir()
         .map(|cwd| git_info(&cwd))
         .unwrap_or_default();
 
     let mut footer = StickyFooter::new();
-    let mut fs = FooterState::new(repo_slug, repo_path, worktree_name);
+    let mut fs = FooterState::new(repo_slug, repo_branch, repo_path, worktree_name);
     fs.refresh(
         &mut footer,
         &app_name,

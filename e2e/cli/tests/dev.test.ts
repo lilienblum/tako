@@ -123,9 +123,9 @@ describe.skipIf(SKIP)("tako dev fixtures", () => {
       // Wait for exit detection.
       for (let i = 0; i < 20; i++) {
         await Bun.sleep(500);
-        if (/app exited \(killed by signal/.test(safeRead(lf))) break;
+        if (/App exited \(killed by signal/.test(safeRead(lf))) break;
       }
-      expect(safeRead(lf)).toMatch(/app exited \(killed by signal/);
+      expect(safeRead(lf)).toMatch(/App exited \(killed by signal/);
     } finally {
       try {
         process.kill(proc.pid, "SIGKILL");

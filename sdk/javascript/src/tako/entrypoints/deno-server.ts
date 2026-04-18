@@ -10,9 +10,9 @@
 
 import { createEntrypoint } from "../create-entrypoint";
 import { writeViaProcSelfFd } from "../readiness";
-import { initSecretsFromFd, readViaProcSelfFd } from "../secrets";
+import { initBootstrapFromFd, readViaProcSelfFd } from "../secrets";
 
-initSecretsFromFd(readViaProcSelfFd);
+initBootstrapFromFd(readViaProcSelfFd);
 const { run, host, port, setDraining } = createEntrypoint({
   signalReadyPortOnFd: writeViaProcSelfFd,
 });

@@ -8,13 +8,18 @@
  * the SDK itself touches no SQLite.
  */
 
-import { initSecretsFromFd, readViaInheritedFd } from "../secrets";
+import { installConsoleBridge } from "../../console-bridge";
+import { installErrorHooks } from "../../error-hooks";
+import { initBootstrapFromFd, readViaInheritedFd } from "../secrets";
 import { installTakoGlobal } from "../../tako";
 import { bootstrapWorker } from "../../workflows/bootstrap";
 import { workflowsEngine } from "../../workflows/engine";
 
+installErrorHooks("worker");
+installConsoleBridge("worker");
+
 async function main(): Promise<void> {
-  initSecretsFromFd(readViaInheritedFd);
+  initBootstrapFromFd(readViaInheritedFd);
   installTakoGlobal();
   const result = await bootstrapWorker();
 
@@ -23,13 +28,13 @@ async function main(): Promise<void> {
     process.exit(result.reason === "no workflows discovered" ? 0 : 1);
   }
 
-  console.error(`tako-worker: running ${result.workflowCount} workflow(s)`);
+  console.log(`tako-worker: running ${result.workflowCount} workflow(s)`);
 
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.error(`tako-worker: received ${signal}, draining`);
+    console.log(`tako-worker: received ${signal}, draining`);
     await workflowsEngine.drain();
     process.exit(0);
   };

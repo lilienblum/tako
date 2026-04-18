@@ -95,15 +95,21 @@ pub(crate) fn push_divider(buf: &state::LogBuffer, label: &str) {
 }
 
 pub(crate) fn push_scoped_log(buf: &state::LogBuffer, level: &str, scope: &str, message: &str) {
-    let now = time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-    let timestamp = format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second());
     let payload = serde_json::json!({
-        "timestamp": timestamp,
-        "level": level,
+        "ts": now_unix_millis(),
+        "level": level.to_ascii_lowercase(),
         "scope": scope,
-        "message": message,
+        "msg": message,
     });
     buf.push(payload.to_string());
+}
+
+fn now_unix_millis() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 pub(crate) async fn spawn_and_monitor_app(
@@ -210,7 +216,7 @@ pub(crate) async fn spawn_and_monitor_app(
         };
 
         if still_current {
-            let msg = format!("app exited ({code_str})");
+            let msg = format!("App exited ({code_str})");
             push_scoped_log(&buf_for_monitor, "Fatal", "tako", &msg);
             broadcast_dev_event(
                 &state_for_monitor,
@@ -377,33 +383,44 @@ async fn spawn_app(
     if let Some(stdout) = child.stdout.take() {
         let buf = log_buffer.clone();
         tokio::spawn(async move {
-            drain_pipe_to_buffer(stdout, buf).await;
+            drain_pipe_to_buffer(stdout, buf, "info").await;
         });
     }
     if let Some(stderr) = child.stderr.take() {
         let buf = log_buffer.clone();
         tokio::spawn(async move {
-            drain_pipe_to_buffer(stderr, buf).await;
+            drain_pipe_to_buffer(stderr, buf, "warn").await;
         });
     }
 
     Ok((child, readiness_fd))
 }
 
-async fn drain_pipe_to_buffer(pipe: impl tokio::io::AsyncRead + Unpin, buf: state::LogBuffer) {
+/// Forward subprocess output to the log buffer.
+///
+/// Lines that look like JSON objects (start with `{`) are forwarded as-is —
+/// the SDK's structured logger emits them and the renderer parses them.
+/// Anything else is wrapped as a plain `scope=app` log at `default_level`
+/// so raw `console.log` and crash dumps still surface.
+async fn drain_pipe_to_buffer(
+    pipe: impl tokio::io::AsyncRead + Unpin,
+    buf: state::LogBuffer,
+    default_level: &str,
+) {
     let reader = tokio::io::BufReader::new(pipe);
     let mut lines = reader.lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        let now =
-            time::OffsetDateTime::now_local().unwrap_or_else(|_| time::OffsetDateTime::now_utc());
-        let ts = format!("{:02}:{:02}:{:02}", now.hour(), now.minute(), now.second());
-        let json = serde_json::json!({
-            "timestamp": ts,
-            "level": "Info",
-            "scope": "app",
-            "message": line,
-        });
-        buf.push(json.to_string());
+        if line.trim_start().starts_with('{') {
+            buf.push(line);
+        } else {
+            let json = serde_json::json!({
+                "ts": now_unix_millis(),
+                "level": default_level,
+                "scope": "app",
+                "msg": line,
+            });
+            buf.push(json.to_string());
+        }
     }
 }
 
@@ -510,7 +527,7 @@ pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: Strin
                     };
 
                     if still_current {
-                        let msg = format!("app exited ({code_str})");
+                        let msg = format!("App exited ({code_str})");
                         push_scoped_log(&log_buffer, "Fatal", "tako", &msg);
                         broadcast_dev_event(
                             &state,

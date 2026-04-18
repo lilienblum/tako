@@ -1,56 +1,51 @@
-import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import { Tako } from "../src/tako";
+import { afterEach, describe, expect, mock, test } from "bun:test";
+import { Channel, ChannelRegistry } from "../src/channels";
+import { defineChannel } from "../src/channels/define";
 
 describe("channels", () => {
-  beforeEach(() => {
-    Tako.channels.clear();
-  });
-
   afterEach(() => {
-    Tako.channels.clear();
     mock.restore();
   });
 
-  test("creates channel handles from the global Tako API", () => {
-    const channel = Tako.channels.create("chat:room-123");
-
-    expect(channel.name).toBe("chat:room-123");
+  test("creates channel handles with a name", () => {
+    const channel = new Channel("chat/room-123");
+    expect(channel.name).toBe("chat/room-123");
   });
 
-  test("registers an exact auth definition via channels.create", async () => {
-    const channel = Tako.channels.create("chat:room-123", {
-      auth(_request, ctx) {
-        expect(ctx.channel).toBe("chat:room-123");
-        expect(ctx.operation).toBe("subscribe");
-        return true;
-      },
-    });
+  test("authorizes a registered exact channel", async () => {
+    const reg = new ChannelRegistry();
+    reg.register(
+      "chat",
+      defineChannel("chat/room-123", {
+        auth(_req, ctx) {
+          expect(ctx.channel).toBe("chat/room-123");
+          expect(ctx.operation).toBe("subscribe");
+          return true;
+        },
+      }),
+    );
 
-    const result = await Tako.channels.authorize({
-      channel: channel.name,
+    const result = await reg.authorize({
+      channel: "chat/room-123",
       operation: "subscribe",
-      request: { url: "https://app.example.com/chat/room-123" },
+      request: { url: "https://app.example.com/channels/chat/room-123" },
     });
 
     expect(result.ok).toBe(true);
   });
 
-  test("matches the most specific channel definition", async () => {
-    Tako.channels.define("chat:*", {
-      auth() {
-        return false;
-      },
-    });
-    Tako.channels.define("chat:room-123", {
-      auth() {
-        return { subject: "user-123" };
-      },
-    });
+  test("most specific pattern wins over param capture", async () => {
+    const reg = new ChannelRegistry();
+    reg.register("chat-prefix", defineChannel("chat/:roomId", { auth: async () => false }));
+    reg.register(
+      "chat-exact",
+      defineChannel("chat/room-123", { auth: async () => ({ subject: "user-123" }) }),
+    );
 
-    const result = await Tako.channels.authorize({
-      channel: "chat:room-123",
+    const result = await reg.authorize({
+      channel: "chat/room-123",
       operation: "subscribe",
-      request: { url: "https://app.example.com/chat/room-123" },
+      request: { url: "https://app.example.com/channels/chat/room-123" },
     });
 
     expect(result).toEqual({
@@ -63,10 +58,10 @@ describe("channels", () => {
     });
   });
 
-  test("publish still works as an internal implementation detail", async () => {
+  test("publish routes through HTTP when no socket publisher is installed", async () => {
     const fetchMock = mock(() =>
       Promise.resolve(
-        new Response(JSON.stringify({ id: "42", channel: "chat:room-123" }), {
+        new Response(JSON.stringify({ id: "42", channel: "chat/room-123" }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
@@ -76,7 +71,7 @@ describe("channels", () => {
     globalThis.fetch = fetchMock as typeof fetch;
 
     try {
-      const channel = Tako.channels.create("chat:room-123");
+      const channel = new Channel("chat/room-123");
       const response = await channel.publish(
         { type: "message", data: { text: "hi" } },
         { baseUrl: "https://app.example.com" },
@@ -86,7 +81,7 @@ describe("channels", () => {
       expect(fetchMock).toHaveBeenCalledTimes(1);
 
       const [url, init] = fetchMock.mock.calls[0]!;
-      expect(url).toBe("https://app.example.com/channels/chat%3Aroom-123/messages");
+      expect(url).toBe("https://app.example.com/channels/chat/room-123/messages");
       expect(init?.method).toBe("POST");
       expect(init?.headers).toEqual({ "Content-Type": "application/json" });
     } finally {
@@ -97,7 +92,7 @@ describe("channels", () => {
   test("subscribe opens the canonical SSE route", () => {
     const eventSourceFactory = mock((url: string) => ({ url, kind: "eventsource", close() {} }));
     const webSocketFactory = mock((url: string) => ({ url, kind: "websocket" }));
-    const channel = Tako.channels.create("chat:room-123");
+    const channel = new Channel("chat/room-123");
 
     const subscription = channel.subscribe({
       baseUrl: "https://app.example.com",
@@ -108,7 +103,7 @@ describe("channels", () => {
     expect(subscription.transport).toBe("sse");
     expect(subscription.raw).toEqual({
       kind: "eventsource",
-      url: "https://app.example.com/channels/chat%3Aroom-123",
+      url: "https://app.example.com/channels/chat/room-123",
       close: expect.any(Function),
     });
     expect(eventSourceFactory).toHaveBeenCalledTimes(1);
@@ -119,7 +114,7 @@ describe("channels", () => {
     const send = mock((_data: unknown) => {});
     const close = mock((_code?: number, _reason?: string) => {});
     const webSocketFactory = mock((url: string) => ({ url, kind: "websocket", send, close }));
-    const channel = Tako.channels.create("chat:room-123", { transport: "ws" });
+    const channel = new Channel("chat/room-123", "ws");
 
     const connection = channel.connect({
       baseUrl: "https://app.example.com",
@@ -130,7 +125,7 @@ describe("channels", () => {
     expect(connection.transport).toBe("ws");
     expect(connection.raw).toEqual({
       kind: "websocket",
-      url: "wss://app.example.com/channels/chat%3Aroom-123?last_message_id=42",
+      url: "wss://app.example.com/channels/chat/room-123?last_message_id=42",
       send,
       close,
     });
@@ -143,35 +138,31 @@ describe("channels", () => {
     expect(close).toHaveBeenCalledTimes(1);
   });
 
-  test("subscribe remains read-only even when ws transport is enabled", () => {
-    const eventSourceFactory = mock((url: string) => ({ url, kind: "eventsource", close() {} }));
-    const channel = Tako.channels.create("chat:room-123", { transport: "ws" });
-
-    const subscription = channel.subscribe({
-      baseUrl: "https://app.example.com",
-      eventSourceFactory,
-    });
-
-    expect(subscription.transport).toBe("sse");
-    expect("send" in subscription).toBe(false);
+  test("connect throws when channel has no ws transport", () => {
+    const channel = new Channel("status");
+    expect(() => channel.connect({ baseUrl: "https://app.example.com" })).toThrow(
+      /does not enable WebSocket/,
+    );
   });
 
-  test("returns lifecycle config from channel authorization", async () => {
-    Tako.channels.define("chat:*", {
-      auth() {
-        return { subject: "user-123" };
-      },
-      replayWindowMs: 86_400_000,
-      inactivityTtlMs: 0,
-      keepaliveIntervalMs: 25_000,
-      maxConnectionLifetimeMs: 7_200_000,
-      transport: "ws",
-    });
+  test("authorize stamps lifecycle config from definition", async () => {
+    const reg = new ChannelRegistry();
+    reg.register(
+      "chat",
+      defineChannel<{ msg: { text: string } }>("chat/:roomId", {
+        auth: async () => ({ subject: "user-123" }),
+        handler: { msg: async (d) => d },
+        replayWindowMs: 86_400_000,
+        inactivityTtlMs: 0,
+        keepaliveIntervalMs: 25_000,
+        maxConnectionLifetimeMs: 7_200_000,
+      }),
+    );
 
-    const result = await Tako.channels.authorize({
-      channel: "chat:room-123",
+    const result = await reg.authorize({
+      channel: "chat/room-123",
       operation: "subscribe",
-      request: { url: "https://app.example.com/chat/room-123" },
+      request: { url: "https://app.example.com/channels/chat/room-123" },
     });
 
     expect(result).toEqual({

@@ -1,14 +1,13 @@
 //! Instance spawner - spawns and monitors app processes
 
 use super::{
-    App, AppConfig, INTERNAL_TOKEN_ENV, INTERNAL_TOKEN_HEADER, Instance, InstanceError,
-    InstanceEvent, InstanceState,
+    App, AppConfig, INTERNAL_TOKEN_HEADER, Instance, InstanceError, InstanceEvent, InstanceState,
 };
 use std::collections::HashMap;
 use std::net::SocketAddr;
 #[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +20,10 @@ pub struct Spawner {
     /// UID/GID of the `tako-app` user for process isolation when running privileged (Unix only)
     #[cfg(unix)]
     app_user: Option<(u32, u32)>,
+    /// Path to the shared Tako internal socket. When present, injected into
+    /// every spawned instance as `TAKO_INTERNAL_SOCKET` so `Tako.workflows.enqueue`
+    /// and `Tako.channels.publish` from app code work. `None` in tests.
+    internal_socket: Option<PathBuf>,
 }
 
 impl Spawner {
@@ -28,7 +31,13 @@ impl Spawner {
         Self {
             #[cfg(unix)]
             app_user: resolve_app_user(),
+            internal_socket: None,
         }
+    }
+
+    pub fn with_internal_socket(mut self, path: PathBuf) -> Self {
+        self.internal_socket = Some(path);
+        self
     }
 }
 
@@ -70,14 +79,20 @@ impl Spawner {
             "Spawning instance"
         );
 
-        let env = build_instance_env(&config, &instance);
+        let env = build_instance_env(&config, &instance, self.internal_socket.as_deref());
         let extra_args = build_instance_args(&instance);
 
         let app_user = self.app_user;
 
-        let (child, readiness_fd) =
-            spawn_child_process(&config, &env, &extra_args, app_user, &config.secrets)
-                .map_err(InstanceError::from)?;
+        let (child, readiness_fd) = spawn_child_process(
+            &config,
+            &env,
+            &extra_args,
+            app_user,
+            instance.internal_token(),
+            &config.secrets,
+        )
+        .map_err(InstanceError::from)?;
 
         instance.set_process(child);
         instance.set_state(InstanceState::Starting);
@@ -187,39 +202,37 @@ async fn wait_for_ready(
     let readiness_file = tokio::fs::File::from_std(std::fs::File::from(readiness_fd));
     let mut lines = tokio::io::BufReader::new(readiness_file).lines();
 
-    loop {
-        tokio::select! {
-            line = lines.next_line() => {
-                match line {
-                    Ok(Some(line)) => {
-                        let port: u16 = line.trim().parse().map_err(|_| {
-                            InstanceError::HealthCheckFailed(
-                                format!("invalid port in readiness signal: {line}"),
-                            )
-                        })?;
-                        instance.set_port(port);
-                        instance.set_state(InstanceState::Ready);
-                        return Ok(());
-                    }
-                    Ok(None) => {
-                        let detail = if instance.is_alive().await {
-                            "Process closed readiness pipe before reporting a port".to_string()
-                        } else {
-                            startup_exit_detail(instance).await
-                        };
-                        return Err(InstanceError::HealthCheckFailed(detail));
-                    }
-                    Err(error) => {
-                        return Err(InstanceError::HealthCheckFailed(
-                            format!("failed to read readiness pipe: {error}"),
-                        ));
-                    }
+    tokio::select! {
+        line = lines.next_line() => {
+            match line {
+                Ok(Some(line)) => {
+                    let port: u16 = line.trim().parse().map_err(|_| {
+                        InstanceError::HealthCheckFailed(
+                            format!("invalid port in readiness signal: {line}"),
+                        )
+                    })?;
+                    instance.set_port(port);
+                    instance.set_state(InstanceState::Ready);
+                    Ok(())
+                }
+                Ok(None) => {
+                    let detail = if instance.is_alive().await {
+                        "Process closed readiness pipe before reporting a port".to_string()
+                    } else {
+                        startup_exit_detail(instance).await
+                    };
+                    Err(InstanceError::HealthCheckFailed(detail))
+                }
+                Err(error) => {
+                    Err(InstanceError::HealthCheckFailed(
+                        format!("failed to read readiness pipe: {error}"),
+                    ))
                 }
             }
-            _ = check_process_alive(&instance) => {
-                let detail = startup_exit_detail(instance).await;
-                return Err(InstanceError::HealthCheckFailed(detail));
-            }
+        }
+        _ = check_process_alive(&instance) => {
+            let detail = startup_exit_detail(instance).await;
+            Err(InstanceError::HealthCheckFailed(detail))
         }
     }
 }
@@ -235,17 +248,31 @@ async fn check_process_alive(instance: &Instance) {
     }
 }
 
-fn build_instance_env(config: &AppConfig, instance: &Instance) -> HashMap<String, String> {
+fn build_instance_env(
+    config: &AppConfig,
+    _instance: &Instance,
+    internal_socket: Option<&Path>,
+) -> HashMap<String, String> {
     let mut env = config.env_vars.clone();
 
     // PORT=0 tells the SDK to bind to an OS-assigned port and report it back
     // over the fd 4 readiness pipe.
     env.insert("PORT".to_string(), "0".to_string());
     env.insert("HOST".to_string(), "127.0.0.1".to_string());
-    env.insert(
-        INTERNAL_TOKEN_ENV.to_string(),
-        instance.internal_token().to_string(),
-    );
+
+    // The internal auth token is NOT an env var — it travels on fd 3 with
+    // secrets so it doesn't inherit into app-spawned subprocesses.
+
+    // Tako internal socket — used by `Tako.workflows.enqueue` and
+    // `Tako.channels.publish` from server-side app code. App name lets
+    // the socket route the command to the right queue / channel store.
+    if let Some(sock) = internal_socket {
+        env.insert(
+            "TAKO_INTERNAL_SOCKET".to_string(),
+            sock.to_string_lossy().to_string(),
+        );
+        env.insert("TAKO_APP_NAME".to_string(), config.deployment_id());
+    }
 
     env.entry("NODE_ENV".to_string())
         .or_insert_with(|| "production".to_string());
@@ -277,16 +304,32 @@ fn resolve_binary_from_env(binary: &str, env: &HashMap<String, String>) -> Strin
     binary.to_string()
 }
 
-/// Create a pipe with secrets JSON on the read end.
+/// Create the bootstrap pipe on fd 3: the child reads a JSON envelope
+/// `{"token": ..., "secrets": {...}}` and closes the fd.
 ///
-/// The write end is closed after writing so the child gets EOF after reading.
-/// Returns the read-end `OwnedFd`; the caller must keep it alive until after spawn.
+/// The envelope travels on a pipe (not env/args) so the internal auth
+/// token doesn't inherit into subprocesses the app spawns. The pipe is
+/// always created, even with empty secrets — every Tako-managed process
+/// has a bootstrap fd.
+///
+/// The write happens on a dedicated thread that owns the write end, so
+/// parent-side writes that exceed the OS pipe buffer (16 KiB on macOS,
+/// 64 KiB on Linux) don't deadlock waiting for a reader — the child hasn't
+/// started yet when we return. The write end is dropped when the thread
+/// exits, so the child sees EOF once it has drained the payload. Returns
+/// the read-end `OwnedFd` plus a join handle; the caller must keep the fd
+/// alive through spawn and then join the writer to surface write errors.
 #[cfg(unix)]
-fn create_secrets_pipe(secrets: &HashMap<String, String>) -> std::io::Result<OwnedFd> {
-    use std::io::Write;
-
-    let json = serde_json::to_vec(secrets)
-        .map_err(|e| std::io::Error::other(format!("failed to serialize secrets: {e}")))?;
+fn create_bootstrap_pipe(
+    token: &str,
+    secrets: &HashMap<String, String>,
+) -> std::io::Result<(OwnedFd, std::thread::JoinHandle<std::io::Result<()>>)> {
+    let envelope = serde_json::json!({
+        "token": token,
+        "secrets": secrets,
+    });
+    let json = serde_json::to_vec(&envelope)
+        .map_err(|e| std::io::Error::other(format!("failed to serialize bootstrap: {e}")))?;
 
     let mut fds = [0i32; 2];
     // SAFETY: pipe() is a standard POSIX call; fds is a valid 2-element array.
@@ -298,12 +341,15 @@ fn create_secrets_pipe(secrets: &HashMap<String, String>) -> std::io::Result<Own
     let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
     let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
 
-    // Write secrets JSON and close write end so child gets EOF after reading.
-    let mut writer = std::fs::File::from(write_end);
-    writer.write_all(&json)?;
-    drop(writer);
+    let writer_handle = std::thread::spawn(move || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut writer = std::fs::File::from(write_end);
+        writer.write_all(&json)
+        // write_end (now `writer`) drops here, closing the fd and giving the
+        // child EOF once it has drained the payload.
+    });
 
-    Ok(read_end)
+    Ok((read_end, writer_handle))
 }
 
 #[cfg(unix)]
@@ -386,18 +432,17 @@ fn spawn_child_process(
     env: &HashMap<String, String>,
     extra_args: &[String],
     app_user: Option<(u32, u32)>,
+    token: &str,
     secrets: &HashMap<String, String>,
 ) -> std::io::Result<(tokio::process::Child, Option<OwnedFd>)> {
-    // Create a pipe with secrets JSON for the child to read on fd 3.
+    // Bootstrap pipe on fd 3: always present, carries `{token, secrets}`.
     // The OwnedFd must stay alive until after spawn (fork copies the fd table).
+    // The writer thread owns the write end; it drains in parallel with the child
+    // so large envelopes don't deadlock the parent on pipe-buffer backpressure.
     #[cfg(unix)]
-    let secrets_pipe = if !secrets.is_empty() {
-        Some(create_secrets_pipe(secrets)?)
-    } else {
-        None
-    };
+    let (bootstrap_pipe, bootstrap_writer) = create_bootstrap_pipe(token, secrets)?;
     #[cfg(unix)]
-    let raw_fd = secrets_pipe.as_ref().map(|fd| fd.as_raw_fd());
+    let raw_fd = Some(bootstrap_pipe.as_raw_fd());
     #[cfg(not(unix))]
     let raw_fd = None;
 
@@ -417,18 +462,8 @@ fn spawn_child_process(
         raw_fd,
         readiness_raw_fd,
     )?;
-    match child_cmd.spawn() {
-        Ok(child) => {
-            #[cfg(unix)]
-            {
-                drop(readiness_write_end);
-                Ok((child, Some(readiness_read_end)))
-            }
-            #[cfg(not(unix))]
-            {
-                Ok((child, None))
-            }
-        }
+    let spawn_result = match child_cmd.spawn() {
+        Ok(child) => Ok(child),
         Err(error) if should_retry_spawn_without_app_user(&error, app_user) => {
             tracing::warn!(
                 error = %error,
@@ -444,10 +479,20 @@ fn spawn_child_process(
                 raw_fd,
                 readiness_raw_fd,
             )?;
-            let child = fallback.spawn()?;
+            fallback.spawn()
+        }
+        Err(error) => Err(error),
+    };
+
+    match spawn_result {
+        Ok(child) => {
             #[cfg(unix)]
             {
                 drop(readiness_write_end);
+                // Join the bootstrap writer now that the child is draining fd 3.
+                // Surface any write error; otherwise the child would see a short
+                // payload and fail with a confusing parse error at startup.
+                join_bootstrap_writer(bootstrap_writer)?;
                 Ok((child, Some(readiness_read_end)))
             }
             #[cfg(not(unix))]
@@ -455,10 +500,33 @@ fn spawn_child_process(
                 Ok((child, None))
             }
         }
-        Err(error) => Err(error),
+        Err(error) => {
+            // Spawn failed; the writer thread may still be blocked on a full
+            // pipe buffer waiting for a reader that will never come. Dropping
+            // the read end closes the read side, so the writer gets EPIPE and
+            // exits. We then join to reap the thread.
+            #[cfg(unix)]
+            {
+                drop(bootstrap_pipe);
+                drop(readiness_write_end);
+                drop(readiness_read_end);
+                let _ = bootstrap_writer.join();
+            }
+            Err(error)
+        }
     }
     // The parent-owned pipe ends drop here after spawn, leaving the child with
     // only the ABI fds it needs across exec.
+}
+
+#[cfg(unix)]
+fn join_bootstrap_writer(
+    handle: std::thread::JoinHandle<std::io::Result<()>>,
+) -> std::io::Result<()> {
+    match handle.join() {
+        Ok(result) => result,
+        Err(_) => Err(std::io::Error::other("bootstrap writer thread panicked")),
+    }
 }
 
 async fn probe_endpoint_tcp(
@@ -694,19 +762,116 @@ mod tests {
         let instance = app.allocate_instance();
         instance.set_port(48_123);
 
-        let env = build_instance_env(&app.config.read().clone(), &instance);
+        let env = build_instance_env(&app.config.read().clone(), &instance, None);
         assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
-        // Secrets are NOT injected as env vars — they're passed via fd 3 at spawn time.
-        assert!(!env.contains_key("SECRET"));
         assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
         assert!(env.contains_key("PORT"));
+        // Secrets + internal token travel on fd 3, not env. Guard the secret
+        // case so `Tako.secrets.FOO` can't be accidentally replaced by
+        // `process.env.FOO` from a leaked var.
+        assert!(!env.contains_key("SECRET"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn bootstrap_pipe_envelope_has_token_and_secrets() {
+        use std::io::Read;
+        use std::os::fd::IntoRawFd;
+
+        let secrets = HashMap::from([
+            ("DATABASE_URL".to_string(), "postgres://x".to_string()),
+            ("API_KEY".to_string(), "sk-123".to_string()),
+        ]);
+        let token = "test-token-abc";
+
+        let (read_end, writer) = create_bootstrap_pipe(token, &secrets).expect("create pipe");
+
+        let mut buf = String::new();
+        let fd = read_end.into_raw_fd();
+        // SAFETY: fd was just handed over by into_raw_fd; File::from_raw_fd owns it now.
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        file.read_to_string(&mut buf).expect("read pipe");
+        writer.join().expect("writer thread").expect("write ok");
+
+        let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
+        assert_eq!(parsed["token"].as_str(), Some(token));
         assert_eq!(
-            env.get(INTERNAL_TOKEN_ENV).map(String::as_str),
-            Some(instance.internal_token())
+            parsed["secrets"]["DATABASE_URL"].as_str(),
+            Some("postgres://x")
         );
-        // TAKO_ runtime identity vars are passed as CLI args, not env vars.
-        assert!(!env.contains_key("TAKO_INSTANCE"));
-        assert!(!env.contains_key("TAKO_HAS_SECRETS"));
+        assert_eq!(parsed["secrets"]["API_KEY"].as_str(), Some("sk-123"));
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn bootstrap_pipe_is_created_even_with_empty_secrets() {
+        use std::io::Read;
+        use std::os::fd::IntoRawFd;
+
+        let secrets: HashMap<String, String> = HashMap::new();
+        let token = "still-has-a-token";
+
+        let (read_end, writer) = create_bootstrap_pipe(token, &secrets).expect("create pipe");
+
+        let mut buf = String::new();
+        let fd = read_end.into_raw_fd();
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        file.read_to_string(&mut buf).expect("read pipe");
+        writer.join().expect("writer thread").expect("write ok");
+
+        let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
+        assert_eq!(parsed["token"].as_str(), Some(token));
+        assert!(parsed["secrets"].is_object());
+        assert_eq!(parsed["secrets"].as_object().unwrap().len(), 0);
+    }
+
+    /// Regression: a bootstrap envelope larger than the OS pipe buffer
+    /// (16 KiB on macOS, 64 KiB on Linux) used to deadlock the parent
+    /// because the write happened synchronously before spawning any child.
+    /// Now the writer runs on its own thread that owns the write fd; the
+    /// parent reads the read end concurrently and everything drains.
+    #[test]
+    #[cfg(unix)]
+    fn bootstrap_pipe_does_not_deadlock_on_large_payload() {
+        use std::io::Read;
+        use std::os::fd::IntoRawFd;
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        // 128 KiB exceeds both macOS (16 KiB) and Linux (64 KiB) defaults.
+        let big_value = "x".repeat(128 * 1024);
+        let secrets = HashMap::from([("BIG".to_string(), big_value.clone())]);
+        let token = "deadlock-check";
+
+        let start = Instant::now();
+        let (read_end, writer) =
+            create_bootstrap_pipe(token, &secrets).expect("create pipe must not block");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "create_bootstrap_pipe blocked on pipe write"
+        );
+
+        // Drain the read end on a helper thread so this test can time out
+        // cleanly if the fix regresses and creation+read together deadlock.
+        let fd = read_end.into_raw_fd();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            // SAFETY: fd just came from into_raw_fd and is owned by this thread.
+            let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+            let mut buf = String::new();
+            let result = file.read_to_string(&mut buf).map(|_| buf);
+            let _ = tx.send(result);
+        });
+
+        let buf = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("reader did not complete — pipe write deadlocked")
+            .expect("read pipe");
+        writer.join().expect("writer thread").expect("write ok");
+
+        let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
+        assert_eq!(parsed["token"].as_str(), Some(token));
+        assert_eq!(parsed["secrets"]["BIG"].as_str(), Some(big_value.as_str()));
     }
 
     #[test]
@@ -742,13 +907,9 @@ mod tests {
         );
         let instance = app.allocate_instance();
 
-        let env = build_instance_env(&app.config.read().clone(), &instance);
+        let env = build_instance_env(&app.config.read().clone(), &instance, None);
         assert_eq!(env.get("PORT").map(String::as_str), Some("0"));
         assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
-        assert_eq!(
-            env.get(INTERNAL_TOKEN_ENV).map(String::as_str),
-            Some(instance.internal_token())
-        );
     }
 
     #[test]
@@ -765,7 +926,7 @@ mod tests {
         );
         let instance = app.allocate_instance();
 
-        let env = build_instance_env(&app.config.read().clone(), &instance);
+        let env = build_instance_env(&app.config.read().clone(), &instance, None);
         assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
     }
 

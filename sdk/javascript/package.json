@@ -32,6 +32,14 @@
       "types": "./dist/index.d.mts",
       "import": "./dist/index.mjs"
     },
+    "./client": {
+      "types": "./dist/client.d.mts",
+      "import": "./dist/client.mjs"
+    },
+    "./react": {
+      "types": "./dist/react.d.mts",
+      "import": "./dist/react.mjs"
+    },
     "./vite": {
       "types": "./dist/vite.d.mts",
       "import": "./dist/vite.mjs"
@@ -39,6 +47,14 @@
     "./nextjs": {
       "types": "./dist/nextjs.d.mts",
       "import": "./dist/nextjs.mjs"
+    },
+    "./server": {
+      "types": "./dist/server.d.mts",
+      "import": "./dist/server.mjs"
+    },
+    "./internal": {
+      "types": "./dist/internal.d.mts",
+      "import": "./dist/internal.mjs"
     }
   },
   "scripts": {
@@ -46,11 +62,25 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@happy-dom/global-registrator": "^20.9.0",
+    "@testing-library/react": "^16.1.0",
     "@tsconfig/strictest": "catalog:dev",
     "@types/bun": "catalog:dev",
     "@types/node": "catalog:dev",
-    "tsdown": "^0.21.8",
+    "@types/react": "catalog:dev",
+    "@types/react-dom": "catalog:dev",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "tsdown": "^0.21.9",
     "typescript": "catalog:dev",
     "vite": "catalog:dev"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   }
 }

@@ -218,6 +218,16 @@ pub enum Command {
         event_name: String,
         payload: serde_json::Value,
     },
+
+    /// Server-side channel publish. Used by app/workflow code inside a
+    /// Tako-managed process — goes straight to the channel store instead
+    /// of round-tripping through the HTTPS proxy. `payload` mirrors the
+    /// `ChannelPublishPayload` wire shape (`{ type, data }`).
+    ChannelPublish {
+        app: String,
+        channel: String,
+        payload: serde_json::Value,
+    },
 }
 
 /// A single cron schedule for a workflow.

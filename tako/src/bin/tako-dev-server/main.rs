@@ -1,5 +1,6 @@
 mod bootstrap;
 mod control;
+mod dev_channels;
 mod lan;
 mod local_dns;
 mod paths;
@@ -68,6 +69,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Also triggers wake-on-request for idle registered apps.
     let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<DevEvent>();
 
+    // Shared channel store — used both by the proxy (SSE subscribe + HTTP
+    // publish from the outside) and by the internal socket's
+    // `Command::ChannelPublish` handler (server-side publish from app/workflow
+    // code). Same store so both paths see the same messages.
+    let channels_db_path = paths::tako_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("channels.sqlite3");
+    let channels = dev_channels::DevChannelStore::new(channels_db_path);
+
     // Start the Pingora proxy in a dedicated thread.
     // We exit the whole process when the control-plane tells us to shut down.
     {
@@ -77,7 +87,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let proxy = proxy::DevProxy {
             routes: routes.clone(),
             events: ev_tx.clone(),
+            channels: channels.clone(),
         };
+
+        // Workflow manager setup happens below, outside this block, so
+        // registration handlers and the app-spawn path can both use it.
 
         let mut server = Server::new(None)?;
         server.bootstrap();
@@ -150,6 +164,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .and_then(|dir| std::fs::read(dir.join("ca").join("ca.crt")).ok());
     start_http_redirect_server(HTTP_REDIRECT_LISTEN_ADDR, shutdown_rx.clone(), ca_pem).await?;
     tracing::info!(listen = %HTTP_REDIRECT_LISTEN_ADDR, "http redirect server listening");
+    // Bring up the internal socket early (shared for workflows + channels),
+    // so app registrations can call DevWorkflows::ensure() immediately.
+    let data_dir = paths::tako_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let workflows = Arc::new(tako_workflows::WorkflowManager::new(&data_dir));
+
+    // Server-side `Tako.channels.publish()` — goes through the internal
+    // socket straight to the channel store, no HTTPS/auth roundtrip.
+    {
+        let channels = channels.clone();
+        workflows.set_channel_publisher(std::sync::Arc::new(
+            move |_app: &str, channel: &str, payload: serde_json::Value| {
+                let typed: tako_channels::ChannelPublishPayload =
+                    serde_json::from_value(payload).map_err(|e| format!("invalid payload: {e}"))?;
+                channels
+                    .publish(channel, &typed)
+                    .map(|msg| serde_json::to_value(msg).unwrap_or(serde_json::Value::Null))
+                    .map_err(|e| e.to_string())
+            },
+        ));
+    }
+
+    if let Err(e) = workflows.start_socket() {
+        tracing::warn!(error = %e, "failed to start internal socket; Tako.workflows.enqueue / Tako.channels.publish will not work");
+    } else {
+        tracing::info!(socket = %workflows.socket_path().display(), "internal socket listening");
+    }
+
     let events_for_relay = events.clone();
     let mut st = State::new(
         shutdown_tx,
@@ -214,6 +255,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if *shutdown_rx.borrow() {
                     tracing::info!("tako-dev-server shutting down");
                     kill_all_app_processes(&state);
+                    workflows.shutdown_all(std::time::Duration::from_secs(1)).await;
                     let _ = std::fs::remove_file(&sock);
                     std::process::exit(0);
                 }

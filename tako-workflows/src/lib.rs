@@ -24,7 +24,7 @@ pub mod supervisor;
 #[allow(unused_imports)]
 pub use enqueue::RunsDb;
 #[allow(unused_imports)]
-pub use enqueue_socket::{EnqueueSocketHandle, spawn as spawn_enqueue_socket};
+pub use enqueue_socket::{ChannelPublishFn, EnqueueSocketHandle, spawn as spawn_enqueue_socket};
 #[allow(unused_imports)]
 pub use manager::{WorkflowManager, WorkflowManagerError, worker_spec_for_bun};
 #[allow(unused_imports)]

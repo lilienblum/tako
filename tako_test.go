@@ -14,22 +14,16 @@ import (
 	"tako.sh/internal"
 )
 
-func TestGetSecretFallsBackToEnv(t *testing.T) {
-	// When the secret store is empty, GetSecret falls back to os.Getenv.
+func TestGetSecretIgnoresEnv(t *testing.T) {
+	// GetSecret must not fall back to os.Getenv — the store is the only source.
 	secrets.Inject(map[string]string{})
-	key := "TAKO_TEST_SECRET_FALLBACK"
+	key := "TAKO_TEST_SECRET_NO_FALLBACK"
 	origVal := os.Getenv(key)
 	os.Setenv(key, "from-env")
 	defer setOrUnset(key, origVal)
 
-	if got := GetSecret(key); got != "from-env" {
-		t.Errorf("GetSecret(%q) = %q, want %q (env fallback)", key, got, "from-env")
-	}
-
-	// Store value takes priority over env.
-	secrets.Inject(map[string]string{key: "from-store"})
-	if got := GetSecret(key); got != "from-store" {
-		t.Errorf("GetSecret(%q) = %q, want %q (store priority)", key, got, "from-store")
+	if got := GetSecret(key); got != "" {
+		t.Errorf("GetSecret(%q) = %q, want empty (env must not be a fallback)", key, got)
 	}
 }
 
@@ -42,8 +36,6 @@ func TestGetSecret(t *testing.T) {
 	if got := GetSecret("OTHER"); got != "data" {
 		t.Errorf("GetSecret(OTHER) = %q, want %q", got, "data")
 	}
-	// MISSING is not in the store and should not be in env either.
-	os.Unsetenv("MISSING")
 	if got := GetSecret("MISSING"); got != "" {
 		t.Errorf("GetSecret(MISSING) = %q, want empty", got)
 	}
@@ -114,17 +106,17 @@ func TestFullProtocol(t *testing.T) {
 	os.Args = []string{"test", "--instance", "full1234"}
 	origPort := os.Getenv("PORT")
 	origHost := os.Getenv("HOST")
-	origToken := os.Getenv("TAKO_INTERNAL_TOKEN")
+	origBootstrap := bootstrap
+	bootstrap = &internal.Bootstrap{Token: "test-token", Secrets: map[string]string{}}
 	os.Setenv("TAKO_BUILD", "v3")
 	os.Setenv("HOST", "127.0.0.1")
 	os.Setenv("PORT", "0")
-	os.Setenv("TAKO_INTERNAL_TOKEN", "test-token")
 	defer func() {
 		os.Args = origArgs
 		setOrUnset("TAKO_BUILD", origBuild)
 		setOrUnset("PORT", origPort)
 		setOrUnset("HOST", origHost)
-		setOrUnset("TAKO_INTERNAL_TOKEN", origToken)
+		bootstrap = origBootstrap
 	}()
 
 	userHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

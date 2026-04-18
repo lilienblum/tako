@@ -37,7 +37,7 @@ export async function discoverWorkflows(dir: string): Promise<DiscoveredWorkflow
     if (parsed.name.startsWith(".") || parsed.name.startsWith("_")) continue;
 
     const url = pathToFileURL(join(dir, entry)).href;
-    const mod = (await import(url)) as Record<string, unknown>;
+    const mod = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
     const defaultExport = mod["default"];
 
     if (isWorkflowDefinition(defaultExport)) {

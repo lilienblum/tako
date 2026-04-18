@@ -69,14 +69,13 @@ func TestSecretStoreConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
-func TestSecretsFromFdWithPipe(t *testing.T) {
-	// Use secretsFromFd with the pipe's own fd (not fd 3, which the test harness owns).
+func TestBootstrapFromFdWithPipe(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = w.WriteString(`{"DB_URL":"postgres://test","API_KEY":"key123"}`)
+	_, err = w.WriteString(`{"token":"tok-xyz","secrets":{"DB_URL":"postgres://test","API_KEY":"key123"}}`)
 	if err != nil {
 		r.Close()
 		w.Close()
@@ -84,22 +83,43 @@ func TestSecretsFromFdWithPipe(t *testing.T) {
 	}
 	w.Close()
 
-	secrets := secretsFromFd(int(r.Fd()))
-	if secrets == nil {
-		t.Fatal("secretsFromFd() returned nil, want map")
+	b := bootstrapFromFd(int(r.Fd()))
+	if b == nil {
+		t.Fatal("bootstrapFromFd() returned nil, want envelope")
 	}
-	if got := secrets["DB_URL"]; got != "postgres://test" {
+	if b.Token != "tok-xyz" {
+		t.Errorf("Token = %q, want %q", b.Token, "tok-xyz")
+	}
+	if got := b.Secrets["DB_URL"]; got != "postgres://test" {
 		t.Errorf("DB_URL = %q, want %q", got, "postgres://test")
 	}
-	if got := secrets["API_KEY"]; got != "key123" {
+	if got := b.Secrets["API_KEY"]; got != "key123" {
 		t.Errorf("API_KEY = %q, want %q", got, "key123")
 	}
 }
 
-func TestSecretsFromFdReturnsNilOnBadFd(t *testing.T) {
-	// Use a high fd that definitely doesn't exist.
-	secrets := secretsFromFd(9999)
-	if secrets != nil {
-		t.Errorf("secretsFromFd(9999) = %v, want nil (EBADF)", secrets)
+func TestBootstrapFromFdReturnsNilOnBadFd(t *testing.T) {
+	b := bootstrapFromFd(9999)
+	if b != nil {
+		t.Errorf("bootstrapFromFd(9999) = %v, want nil (EBADF)", b)
+	}
+}
+
+func TestBootstrapFromFdEmptySecrets(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = w.WriteString(`{"token":"only","secrets":{}}`)
+	if err != nil {
+		r.Close()
+		w.Close()
+		t.Fatal(err)
+	}
+	w.Close()
+
+	b := bootstrapFromFd(int(r.Fd()))
+	if b == nil || b.Token != "only" || len(b.Secrets) != 0 {
+		t.Fatalf("envelope with empty secrets: got %#v", b)
 	}
 }

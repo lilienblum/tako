@@ -5,7 +5,7 @@
  * `Tako.workflows.signal`) and in the worker process (for claim, heartbeat,
  * saveStep, complete, cancel, fail, defer, waitForEvent). The SDK never
  * touches SQLite — tako-server owns the queue file; everything reaches it
- * via the shared unix socket at `TAKO_WORKFLOW_SOCKET`.
+ * via the shared internal unix socket at `TAKO_INTERNAL_SOCKET`.
  *
  * Every command carries the app name (from `TAKO_APP_NAME`), so one
  * tako-server socket can route for every deployed app.
@@ -15,7 +15,7 @@ import { createConnection } from "node:net";
 import type { EnqueueOptions } from "./engine";
 import type { Run, RunId, RunStatus, StepState } from "./types";
 
-const WORKFLOW_SOCKET_ENV = "TAKO_WORKFLOW_SOCKET";
+const INTERNAL_SOCKET_ENV = "TAKO_INTERNAL_SOCKET";
 const APP_NAME_ENV = "TAKO_APP_NAME";
 
 export class WorkflowsError extends Error {
@@ -51,7 +51,7 @@ export class WorkflowsClient {
    * of a Tako-managed process) — callers should fall back or error.
    */
   static fromEnv(): WorkflowsClient | null {
-    const path = process.env[WORKFLOW_SOCKET_ENV];
+    const path = process.env[INTERNAL_SOCKET_ENV];
     const app = process.env[APP_NAME_ENV];
     if (!path || !app) return null;
     return new WorkflowsClient(path, app);

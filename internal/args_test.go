@@ -13,13 +13,16 @@ func TestParseConfigFromArgsAndEnv(t *testing.T) {
 		default:
 			return ""
 		}
-	})
+	}, &Bootstrap{Token: "tok-xyz"})
 
 	if cfg.InstanceID != "abcd1234" {
 		t.Errorf("InstanceID = %q, want %q", cfg.InstanceID, "abcd1234")
 	}
 	if cfg.Version != "v1.0" {
 		t.Errorf("Version = %q, want %q", cfg.Version, "v1.0")
+	}
+	if cfg.InternalToken != "tok-xyz" {
+		t.Errorf("InternalToken = %q, want %q", cfg.InternalToken, "tok-xyz")
 	}
 }
 
@@ -33,7 +36,7 @@ func TestParseConfigPortAndHostFromEnv(t *testing.T) {
 		default:
 			return ""
 		}
-	})
+	}, nil)
 
 	if cfg.Port != "8080" {
 		t.Errorf("Port = %q, want %q", cfg.Port, "8080")
@@ -44,7 +47,7 @@ func TestParseConfigPortAndHostFromEnv(t *testing.T) {
 }
 
 func TestParseConfigDefaults(t *testing.T) {
-	cfg := ParseConfigFrom(nil, func(string) string { return "" })
+	cfg := ParseConfigFrom(nil, func(string) string { return "" }, nil)
 
 	if cfg.Port != "3000" {
 		t.Errorf("Port = %q, want %q", cfg.Port, "3000")
@@ -55,7 +58,7 @@ func TestParseConfigDefaults(t *testing.T) {
 }
 
 func TestParseConfigDevMode(t *testing.T) {
-	cfg := ParseConfigFrom(nil, func(string) string { return "" })
+	cfg := ParseConfigFrom(nil, func(string) string { return "" }, nil)
 
 	if cfg.InstanceID != "" {
 		t.Errorf("InstanceID should be empty in dev mode, got %q", cfg.InstanceID)

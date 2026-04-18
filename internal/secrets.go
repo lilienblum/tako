@@ -10,19 +10,30 @@ import (
 	"syscall"
 )
 
-// SecretsFromFd3 reads secrets JSON from file descriptor 3 (Tako runtime ABI).
+// Bootstrap is the envelope delivered on fd 3 by tako-server.
+//
+// The token is the per-instance internal auth token used for
+// Host:tako.internal traffic. Secrets are the user-configured secrets
+// for this app. The envelope rides a pipe (not env/args) so neither
+// value inherits into subprocesses the app spawns.
+type Bootstrap struct {
+	Token   string            `json:"token"`
+	Secrets map[string]string `json:"secrets"`
+}
+
+// BootstrapFromFd3 reads the bootstrap envelope from file descriptor 3.
 //
 // Returns nil if fd 3 does not exist (EBADF — not running under Tako).
 // Exits hard on invalid JSON (broken Tako launch path).
-func SecretsFromFd3() map[string]string {
-	return secretsFromFd(3)
+func BootstrapFromFd3() *Bootstrap {
+	return bootstrapFromFd(3)
 }
 
-// secretsFromFd reads secrets JSON from the given file descriptor.
-// Extracted from SecretsFromFd3 for testability (tests can use arbitrary fds
-// without clobbering fd 3 which the Go test harness uses).
-func secretsFromFd(fd int) map[string]string {
-	f := os.NewFile(uintptr(fd), "tako-secrets")
+// bootstrapFromFd reads the bootstrap envelope from the given file descriptor.
+// Extracted for testability (tests can use arbitrary fds without clobbering
+// fd 3 which the Go test harness uses).
+func bootstrapFromFd(fd int) *Bootstrap {
+	f := os.NewFile(uintptr(fd), "tako-bootstrap")
 	if f == nil {
 		return nil
 	}
@@ -33,16 +44,19 @@ func secretsFromFd(fd int) map[string]string {
 		if errors.Is(err, syscall.EBADF) {
 			return nil
 		}
-		fmt.Fprintf(os.Stderr, "tako: failed to read secrets from fd %d: %v\n", fd, err)
+		fmt.Fprintf(os.Stderr, "tako: failed to read bootstrap from fd %d: %v\n", fd, err)
 		os.Exit(1)
 	}
 
-	var secrets map[string]string
-	if err := json.Unmarshal(data, &secrets); err != nil {
-		fmt.Fprintf(os.Stderr, "tako: invalid secrets JSON on fd %d: %v\n", fd, err)
+	var b Bootstrap
+	if err := json.Unmarshal(data, &b); err != nil {
+		fmt.Fprintf(os.Stderr, "tako: invalid bootstrap JSON on fd %d: %v\n", fd, err)
 		os.Exit(1)
 	}
-	return secrets
+	if b.Secrets == nil {
+		b.Secrets = map[string]string{}
+	}
+	return &b
 }
 
 // SecretStore is a thread-safe store for Tako-managed secrets.

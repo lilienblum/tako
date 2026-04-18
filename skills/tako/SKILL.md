@@ -91,11 +91,18 @@ Export the encryption key.
 
 ### `tako typegen`
 
-Generate typed secret accessors from `.tako/secrets.json`.
+Generate typed accessors from local project files. Outputs to `tako.d.ts`.
 
 ```bash
 tako typegen
 ```
+
+Generates:
+
+- **Typed secrets** — reads secret names from `.tako/secrets.json`, emits typed accessors (`Tako.secrets.MY_KEY`).
+- **Typed workflow enqueue** — scans `workflows/` for `defineWorkflow<P>()` exports and emits `interface Workflows { ... }` augmentation so `Tako.workflows.enqueue("name", payload)` is type-checked against each workflow's payload type.
+
+Re-run after adding/removing secrets or workflow files. `tako dev` and `tako deploy` run it automatically.
 
 ## Deployment
 

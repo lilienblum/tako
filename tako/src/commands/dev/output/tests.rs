@@ -43,12 +43,49 @@ fn format_log_fields() {
         level: LogLevel::Info,
         scope: "app".to_string(),
         message: "hello".to_string(),
+        fields: None,
     };
     let out = format_log(&log);
     assert!(out.contains("12:34:56"));
     assert!(out.contains("INFO"));
     assert!(out.contains("app"));
     assert!(out.contains("hello"));
+}
+
+#[test]
+fn format_log_aligns_continuation_lines_under_message_column() {
+    let log = ScopedLog {
+        timestamp: "12:34:56".to_string(),
+        level: LogLevel::Info,
+        scope: "app".to_string(),
+        message: "line1\nline2\nline3".to_string(),
+        fields: None,
+    };
+    let plain = strip_ansi(&format_log(&log));
+    let lines: Vec<&str> = plain.split('\n').collect();
+    assert_eq!(lines.len(), 3);
+
+    let first = lines[0];
+    let msg_col = first.find("line1").expect("first line contains msg");
+
+    assert!(lines[1].starts_with(&" ".repeat(msg_col)));
+    assert_eq!(&lines[1][msg_col..], "line2");
+    assert!(lines[2].starts_with(&" ".repeat(msg_col)));
+    assert_eq!(&lines[2][msg_col..], "line3");
+}
+
+#[test]
+fn format_log_single_line_message_unaffected() {
+    let log = ScopedLog {
+        timestamp: "12:34:56".to_string(),
+        level: LogLevel::Info,
+        scope: "app".to_string(),
+        message: "no newline".to_string(),
+        fields: None,
+    };
+    let out = format_log(&log);
+    assert!(!out.contains('\n'));
+    assert!(out.contains("no newline"));
 }
 
 #[test]
@@ -96,6 +133,7 @@ fn format_panel_has_border_and_app_name_with_runtime() {
         "running",
         "bun",
         "user/myapp",
+        "main",
         "apps/myapp",
         None,
         &["myapp.test".to_string()],
@@ -106,7 +144,7 @@ fn format_panel_has_border_and_app_name_with_runtime() {
     );
     assert!(panel.contains('┌'));
     assert!(panel.contains('└'));
-    assert!(panel.contains("myapp (bun)"));
+    assert!(panel.contains("myapp"));
 }
 
 #[test]
@@ -116,6 +154,7 @@ fn format_panel_shows_routes_label() {
         "running",
         "bun",
         "user/app",
+        "main",
         "apps/app",
         None,
         &["app.test".to_string()],
@@ -133,7 +172,7 @@ fn format_panel_shows_routes_label() {
 fn format_panel_shows_all_urls() {
     let hosts = vec!["a.test".to_string(), "b.test".to_string()];
     let panel = format_panel(
-        "app", "running", "bun", "u/r", "", None, &hosts, 443, 3000, None, None,
+        "app", "running", "bun", "u/r", "main", "", None, &hosts, 443, 3000, None, None,
     );
     let plain = strip_ansi(&panel);
     assert!(plain.contains("https://a.test"));
@@ -152,6 +191,7 @@ fn format_panel_shows_wildcard_and_path_routes() {
         "running",
         "bun",
         "u/r",
+        "main",
         "",
         None,
         &hosts,
@@ -327,6 +367,7 @@ fn format_log_dims_lan_mode_ip_suffix() {
         level: LogLevel::Info,
         scope: "tako".to_string(),
         message: "LAN mode enabled (192.168.1.2)".to_string(),
+        fields: None,
     }));
     assert!(enabled.contains("INFO"));
     assert!(enabled.contains("tako"));
@@ -337,6 +378,7 @@ fn format_log_dims_lan_mode_ip_suffix() {
         level: LogLevel::Info,
         scope: "tako".to_string(),
         message: "LAN mode disabled".to_string(),
+        fields: None,
     }));
     assert!(disabled.contains("INFO"));
     assert!(disabled.contains("tako"));
@@ -350,6 +392,7 @@ fn format_panel_omits_443_port() {
         "running",
         "",
         "",
+        "main",
         "",
         None,
         &["app.test".to_string()],
@@ -368,6 +411,7 @@ fn format_panel_includes_custom_port() {
         "running",
         "",
         "",
+        "main",
         "",
         None,
         &["app.test".to_string()],
@@ -387,6 +431,7 @@ fn format_panel_shows_metrics() {
         "running",
         "",
         "",
+        "main",
         "",
         None,
         &["app.test".to_string()],
@@ -409,6 +454,7 @@ fn format_panel_shows_dash_without_metrics() {
         "running",
         "",
         "",
+        "main",
         "",
         None,
         &["app.test".to_string()],
@@ -427,6 +473,7 @@ fn format_panel_shows_repo_info() {
         "running",
         "bun",
         "myorg/myrepo",
+        "main",
         "apps/myapp",
         None,
         &["app.test".to_string()],
@@ -436,7 +483,8 @@ fn format_panel_shows_repo_info() {
         None,
     );
     let plain = strip_ansi(&panel);
-    assert!(plain.contains("myorg/myrepo"));
+    assert!(plain.contains("myorg/"));
+    assert!(plain.contains("(main)"));
     assert!(plain.contains("apps/myapp"));
 }
 
@@ -447,6 +495,7 @@ fn format_panel_stacked_has_border_and_content() {
         "running",
         "bun",
         "user/repo",
+        "main",
         "projects/app",
         None,
         &["app.test".to_string()],
@@ -534,6 +583,7 @@ fn format_panel_shows_worktree_indicator() {
         "running",
         "bun",
         "user/repo",
+        "main",
         "apps/app",
         Some("wt1"),
         &["app.test".to_string()],
@@ -553,6 +603,7 @@ fn format_panel_omits_worktree_when_none() {
         "running",
         "bun",
         "user/repo",
+        "main",
         "apps/app",
         None,
         &["app.test".to_string()],

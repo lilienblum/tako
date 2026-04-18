@@ -1,25 +1,43 @@
 /**
- * Secrets runtime + fd readers.
+ * Bootstrap runtime + fd readers.
  *
- * Tako spawns each app process with a pipe on fd 3 containing a JSON blob of
- * secrets. Each runtime entrypoint reads them at startup and calls
- * `initSecretsFromFd(reader)` before the user's module is imported. The
- * secrets store is then exposed through the `Tako.secrets` proxy.
+ * Tako spawns each app process with a pipe on fd 3 containing a JSON
+ * envelope `{"token": ..., "secrets": {...}}`. The runtime entrypoint
+ * reads it at startup and calls `initBootstrapFromFd(reader)` before
+ * the user's module is imported.
  *
- * The proxy's `toString`/`toJSON`/inspect return `[REDACTED]` and its
- * property descriptors are non-enumerable, so bulk-spread (`{ ...Tako.secrets }`)
- * returns an empty object — individual access via `Tako.secrets.KEY` still
- * works through the `get` trap.
+ * The token is kept in module scope and used by the SDK to authenticate
+ * server-issued `Host: tako.internal` requests — it is not exposed to
+ * user code, and it does NOT leak to processes the app spawns (unlike
+ * an env var would).
+ *
+ * Secrets are exposed through the `Tako.secrets` proxy. Its
+ * `toString`/`toJSON`/inspect return `[REDACTED]` and its property
+ * descriptors are non-enumerable, so bulk-spread (`{ ...Tako.secrets }`)
+ * returns an empty object — individual access via `Tako.secrets.KEY`
+ * still works through the `get` trap.
  */
 
 import { closeSync, fstatSync, openSync, readFileSync } from "node:fs";
 
-/** Module-level secrets store, populated by initSecretsFromFd / injectSecrets. */
-let secretStore: Record<string, string> = {};
+interface BootstrapEnvelope {
+  token: string | null;
+  secrets: Record<string, string>;
+}
 
-/** Low-level: replace the store directly. */
-export function injectSecrets(raw: Record<string, string>): void {
-  secretStore = raw;
+let bootstrap: BootstrapEnvelope = { token: null, secrets: {} };
+
+/** Low-level: replace the whole bootstrap state (tests + explicit init). */
+export function injectBootstrap(next: BootstrapEnvelope): void {
+  bootstrap = {
+    token: next.token,
+    secrets: Object.assign(Object.create(null), next.secrets ?? {}),
+  };
+}
+
+/** Returns the internal auth token, or `null` when running outside Tako. */
+export function getInternalToken(): string | null {
+  return bootstrap.token;
 }
 
 /** Build the proxy-backed accessor that becomes `Tako.secrets`. */
@@ -29,25 +47,25 @@ export function loadSecrets(): Record<string, string> {
       if (prop === "toString" || prop === "toJSON") return () => "[REDACTED]";
       if (prop === Symbol.for("nodejs.util.inspect.custom")) return () => "[REDACTED]";
       if (prop === Symbol.toPrimitive) return () => "[REDACTED]";
-      if (typeof prop === "string") return secretStore[prop];
+      if (typeof prop === "string") return bootstrap.secrets[prop];
       return undefined;
     },
     ownKeys(): string[] {
-      return Object.keys(secretStore);
+      return Object.keys(bootstrap.secrets);
     },
     getOwnPropertyDescriptor(_target, prop: string | symbol) {
-      if (typeof prop === "string" && prop in secretStore) {
-        return { configurable: true, enumerable: false, value: secretStore[prop] };
+      if (typeof prop === "string" && prop in bootstrap.secrets) {
+        return { configurable: true, enumerable: false, value: bootstrap.secrets[prop] };
       }
       return undefined;
     },
     has(_target, prop: string | symbol): boolean {
-      return typeof prop === "string" && prop in secretStore;
+      return typeof prop === "string" && prop in bootstrap.secrets;
     },
   });
 }
 
-/** Bun + Node: read secrets from the inherited fd 3 directly. */
+/** Bun + Node: read the envelope from the inherited fd 3 directly. */
 export function readViaInheritedFd(): string | null {
   try {
     // Guard against blocking on a non-Tako inherited fd (e.g. GitHub Actions).
@@ -76,19 +94,29 @@ export function readViaProcSelfFd(): string | null {
   return null;
 }
 
-/** Run a reader, parse the JSON, and inject into the secrets store. */
-export function initSecretsFromFd(reader: () => string | null): void {
+/** Run a reader, parse the JSON envelope, and populate token + secrets. */
+export function initBootstrapFromFd(reader: () => string | null): void {
   const data = reader();
   if (data === null) return;
+  let parsed: unknown;
   try {
-    const secrets = JSON.parse(data);
-    if (typeof secrets !== "object" || secrets === null || Array.isArray(secrets)) {
-      console.error("Tako: secrets on fd 3 must be a JSON object");
-      process.exit(1);
-    }
-    injectSecrets(Object.assign(Object.create(null), secrets));
+    parsed = JSON.parse(data);
   } catch {
-    console.error("Tako: invalid secrets JSON on fd 3");
+    console.error("Tako: invalid bootstrap JSON on fd 3");
     process.exit(1);
   }
+  if (
+    typeof parsed !== "object" ||
+    parsed === null ||
+    Array.isArray(parsed) ||
+    typeof (parsed as { token?: unknown }).token !== "string" ||
+    typeof (parsed as { secrets?: unknown }).secrets !== "object" ||
+    (parsed as { secrets: unknown }).secrets === null ||
+    Array.isArray((parsed as { secrets: unknown }).secrets)
+  ) {
+    console.error("Tako: bootstrap on fd 3 must be {token: string, secrets: object}");
+    process.exit(1);
+  }
+  const envelope = parsed as { token: string; secrets: Record<string, string> };
+  injectBootstrap({ token: envelope.token, secrets: envelope.secrets });
 }

@@ -1,14 +1,15 @@
 {
+  "extends": "@tsconfig/strictest/tsconfig.json",
+  "include": ["src/**/*.ts", "src/**/*.tsx", "workflows/**/*.ts"],
   "compilerOptions": {
-    "target": "ESNext",
+    "target": "ES2022",
+    "jsx": "react-jsx",
     "module": "ESNext",
-    "moduleResolution": "bundler",
-    "strict": true,
-    "types": ["bun"],
-    "noEmit": true,
-    "skipLibCheck": true,
-    "jsx": "react",
-    "jsxFactory": "h",
-    "jsxFragmentFactory": "Fragment"
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "types": ["vite/client"],
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "noEmit": true
   }
 }

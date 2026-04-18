@@ -122,6 +122,46 @@ impl ServerState {
 
         let workflows = Arc::new(crate::workflows::WorkflowManager::new(data_dir.clone()));
 
+        // Server-side `Tako.channels.publish()` — writes straight to the
+        // per-app channel store via the shared internal socket. Stores are
+        // opened lazily per app and cached so repeated publishes reuse the
+        // same SQLite connection.
+        {
+            let data_dir = data_dir.clone();
+            let stores: Arc<
+                parking_lot::RwLock<HashMap<String, Arc<tako_channels::ChannelStore>>>,
+            > = Arc::new(parking_lot::RwLock::new(HashMap::new()));
+            workflows.set_channel_publisher(std::sync::Arc::new(
+                move |app: &str, channel: &str, payload: serde_json::Value| {
+                    let typed: tako_channels::ChannelPublishPayload =
+                        serde_json::from_value(payload)
+                            .map_err(|e| format!("invalid payload: {e}"))?;
+
+                    let store = if let Some(existing) = stores.read().get(app) {
+                        existing.clone()
+                    } else {
+                        let mut guard = stores.write();
+                        if let Some(existing) = guard.get(app) {
+                            existing.clone()
+                        } else {
+                            let path = crate::channels::app_channels_db_path(&data_dir, app);
+                            let opened = Arc::new(
+                                tako_channels::ChannelStore::open(&path)
+                                    .map_err(|e| format!("open channel store: {e}"))?,
+                            );
+                            guard.insert(app.to_string(), opened.clone());
+                            opened
+                        }
+                    };
+
+                    store
+                        .append(channel, &typed)
+                        .map(|msg| serde_json::to_value(msg).unwrap_or(serde_json::Value::Null))
+                        .map_err(|e| e.to_string())
+                },
+            ));
+        }
+
         Ok(Self {
             app_manager,
             load_balancer,

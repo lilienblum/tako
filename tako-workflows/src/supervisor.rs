@@ -15,8 +15,6 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 #[cfg(unix)]
-use std::io::Write;
-#[cfg(unix)]
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -24,11 +22,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use parking_lot::Mutex;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
 
+/// Callback invoked once per line of worker stdout/stderr when
+/// [`WorkerSpec::log_sink`] is set. `is_stderr` is `true` for stderr.
+pub type WorkerLogSink = Arc<dyn Fn(&str, bool) + Send + Sync>;
+
 /// Static configuration for a single app's workers.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkerSpec {
     /// Human-readable app identifier (for logs).
     pub app: String,
@@ -49,6 +52,11 @@ pub struct WorkerSpec {
     /// and populates `Tako.secrets`.
     #[cfg_attr(not(unix), allow(dead_code))]
     pub secrets: HashMap<String, String>,
+    /// Optional per-line log sink. When `Some`, the supervisor pipes
+    /// stdout/stderr and forwards each line. When `None`, inherits the
+    /// parent's stdio (production default — lets journald/systemd capture
+    /// it).
+    pub log_sink: Option<WorkerLogSink>,
 }
 
 impl WorkerSpec {
@@ -190,10 +198,19 @@ impl WorkerSupervisor {
         let args: Vec<&OsString> = iter.collect();
 
         let mut cmd = Command::new(program);
+        let piped = self.spec.log_sink.is_some();
         cmd.args(args)
             .current_dir(&self.spec.cwd)
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::inherit())
+            .stdout(if piped {
+                Stdio::piped()
+            } else {
+                Stdio::inherit()
+            })
+            .stderr(if piped {
+                Stdio::piped()
+            } else {
+                Stdio::inherit()
+            })
             .stdin(Stdio::null())
             .env_clear();
         // Preserve PATH (needed to find `bun`/`node`/etc.) + inherit HOME.
@@ -207,20 +224,23 @@ impl WorkerSupervisor {
         }
 
         // Secrets ABI: the SDK reads a JSON object from fd 3 at startup
-        // and populates `Tako.secrets`. `secrets_pipe` must stay alive
-        // through `spawn()` so the fork copies a valid fd into the child.
+        // and populates `Tako.secrets`. `secrets_pipe` (read end) must stay
+        // alive through `spawn()` so the fork copies a valid fd into the
+        // child. The write side runs on a dedicated thread so the parent
+        // doesn't deadlock when secrets exceed the OS pipe buffer.
         #[cfg(unix)]
-        let secrets_pipe = if !self.spec.secrets.is_empty() {
+        let secrets_handles = if !self.spec.secrets.is_empty() {
             Some(create_secrets_pipe(&self.spec.secrets)?)
         } else {
             None
         };
         #[cfg(unix)]
-        let secrets_fd: Option<RawFd> = secrets_pipe.as_ref().map(|fd| fd.as_raw_fd());
+        let secrets_fd: Option<RawFd> = secrets_handles
+            .as_ref()
+            .map(|(read_end, _)| read_end.as_raw_fd());
 
         #[cfg(unix)]
         unsafe {
-            use std::os::unix::process::CommandExt;
             cmd.pre_exec(move || {
                 if let Some(fd) = secrets_fd {
                     if fd != 3 {
@@ -242,23 +262,71 @@ impl WorkerSupervisor {
             "Spawning worker process"
         );
 
-        let child = cmd.spawn()?;
-        // Parent-owned pipe read end drops here after spawn, keeping the
-        // child's fd 3 alive but releasing our end so the child's read
-        // sees EOF after consuming the secrets payload.
+        let spawn_result = cmd.spawn();
+        // Parent-owned read end drops here after spawn, keeping the child's
+        // fd 3 alive but releasing our end. The writer thread owns the write
+        // end; we join it to surface write errors (or reap it on spawn
+        // failure once the read end is dropped and the writer sees EPIPE).
         #[cfg(unix)]
-        drop(secrets_pipe);
+        let mut child = match spawn_result {
+            Ok(child) => {
+                if let Some((read_end, writer)) = secrets_handles {
+                    drop(read_end);
+                    join_secrets_writer(writer)?;
+                }
+                child
+            }
+            Err(error) => {
+                // Dropping the read end gives the writer thread EPIPE so it
+                // exits instead of wedging on a full pipe buffer. Detaching
+                // the JoinHandle is fine — the thread will exit on its own.
+                drop(secrets_handles);
+                return Err(SupervisorError::Spawn(error));
+            }
+        };
+        #[cfg(not(unix))]
+        let mut child = spawn_result?;
+
+        if let Some(sink) = &self.spec.log_sink {
+            if let Some(stdout) = child.stdout.take() {
+                let sink = sink.clone();
+                tokio::spawn(async move {
+                    let mut lines = BufReader::new(stdout).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        (sink)(&line, false);
+                    }
+                });
+            }
+            if let Some(stderr) = child.stderr.take() {
+                let sink = sink.clone();
+                tokio::spawn(async move {
+                    let mut lines = BufReader::new(stderr).lines();
+                    while let Ok(Some(line)) = lines.next_line().await {
+                        (sink)(&line, true);
+                    }
+                });
+            }
+        }
+
         state.children.push(child);
         Ok(())
     }
 }
 
-/// Create a pipe with secrets JSON on the read end. The write end is
-/// closed after the JSON is written, so the child sees EOF once it has
-/// consumed the payload. Caller must keep the returned `OwnedFd` alive
-/// through `spawn()` so the fork copies a valid fd into the child.
+/// Create a pipe with secrets JSON streamed from a dedicated writer
+/// thread. The thread owns the write end and drops it when done, so the
+/// child sees EOF once it has consumed the payload. The write happens
+/// off-thread so payloads larger than the OS pipe buffer (16 KiB on
+/// macOS, 64 KiB on Linux) don't deadlock the parent — the child hasn't
+/// been spawned yet when this returns.
+///
+/// Caller must keep the returned `OwnedFd` alive through `spawn()` so
+/// the fork copies a valid fd into the child, then join the writer
+/// handle after spawn to surface any write error.
 #[cfg(unix)]
-fn create_secrets_pipe(secrets: &HashMap<String, String>) -> std::io::Result<OwnedFd> {
+fn create_secrets_pipe(
+    secrets: &HashMap<String, String>,
+) -> std::io::Result<(OwnedFd, std::thread::JoinHandle<std::io::Result<()>>)> {
     let json = serde_json::to_vec(secrets)
         .map_err(|e| std::io::Error::other(format!("failed to serialize secrets: {e}")))?;
 
@@ -271,11 +339,27 @@ fn create_secrets_pipe(secrets: &HashMap<String, String>) -> std::io::Result<Own
     let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
     let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
 
-    let mut writer = std::fs::File::from(write_end);
-    writer.write_all(&json)?;
-    drop(writer);
+    let writer_handle = std::thread::spawn(move || -> std::io::Result<()> {
+        use std::io::Write;
+        let mut writer = std::fs::File::from(write_end);
+        writer.write_all(&json)
+        // write_end (now `writer`) drops here, closing the fd and giving the
+        // child EOF once it has drained the payload.
+    });
 
-    Ok(read_end)
+    Ok((read_end, writer_handle))
+}
+
+#[cfg(unix)]
+fn join_secrets_writer(
+    handle: std::thread::JoinHandle<std::io::Result<()>>,
+) -> Result<(), SupervisorError> {
+    match handle.join() {
+        Ok(result) => result.map_err(SupervisorError::Spawn),
+        Err(_) => Err(SupervisorError::Spawn(std::io::Error::other(
+            "secrets writer thread panicked",
+        ))),
+    }
 }
 
 #[cfg(test)]
@@ -294,6 +378,7 @@ mod tests {
             cwd,
             env: HashMap::new(),
             secrets: HashMap::new(),
+            log_sink: None,
         }
     }
 
@@ -361,6 +446,49 @@ mod tests {
         sup.shutdown(Duration::from_secs(1)).await;
     }
 
+    /// Regression: a secrets payload larger than the OS pipe buffer
+    /// (16 KiB on macOS, 64 KiB on Linux) used to deadlock the parent
+    /// because the write happened synchronously before any child was
+    /// spawned to drain it. The writer thread now owns the write end so
+    /// `create_secrets_pipe` returns immediately regardless of size.
+    #[test]
+    #[cfg(unix)]
+    fn secrets_pipe_does_not_deadlock_on_large_payload() {
+        use std::io::Read;
+        use std::os::fd::IntoRawFd;
+        use std::sync::mpsc;
+        use std::time::Instant;
+
+        let big_value = "x".repeat(128 * 1024);
+        let secrets = HashMap::from([("BIG".to_string(), big_value.clone())]);
+
+        let start = Instant::now();
+        let (read_end, writer) = create_secrets_pipe(&secrets).expect("create pipe must not block");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "create_secrets_pipe blocked on pipe write"
+        );
+
+        let fd = read_end.into_raw_fd();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            // SAFETY: fd just came from into_raw_fd and is owned by this thread.
+            let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+            let mut buf = String::new();
+            let result = file.read_to_string(&mut buf).map(|_| buf);
+            let _ = tx.send(result);
+        });
+
+        let buf = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("reader did not complete — pipe write deadlocked")
+            .expect("read pipe");
+        writer.join().expect("writer thread").expect("write ok");
+
+        let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
+        assert_eq!(parsed["BIG"].as_str(), Some(big_value.as_str()));
+    }
+
     #[tokio::test]
     async fn effective_env_sets_concurrency_and_idle_timeout() {
         let spec = WorkerSpec {
@@ -372,6 +500,7 @@ mod tests {
             cwd: ".".into(),
             env: HashMap::from([("FOO".to_string(), "bar".to_string())]),
             secrets: HashMap::new(),
+            log_sink: None,
         };
         let env = spec.effective_env();
         assert_eq!(

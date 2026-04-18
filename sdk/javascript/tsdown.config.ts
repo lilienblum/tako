@@ -3,7 +3,11 @@ import { defineConfig } from "tsdown";
 export default defineConfig({
   entry: {
     index: "src/index.ts",
+    client: "src/client.ts",
+    react: "src/react.ts",
     vite: "src/vite.ts",
+    server: "src/server.ts",
+    internal: "src/internal.ts",
     nextjs: "src/nextjs/index.ts",
     "entrypoints/bun-server": "src/tako/entrypoints/bun-server.ts",
     "entrypoints/node-server": "src/tako/entrypoints/node-server.ts",
@@ -24,6 +28,6 @@ export default defineConfig({
   clean: true,
   deps: {
     onlyBundle: false,
-    neverBundle: ["vite", "postcss"],
+    neverBundle: ["vite", "react", "react-dom"],
   },
 });

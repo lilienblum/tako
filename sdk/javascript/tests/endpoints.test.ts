@@ -1,15 +1,17 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import {
   TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH,
-  TAKO_INTERNAL_TOKEN_ENV,
+  TAKO_INTERNAL_CHANNELS_DISPATCH_PATH,
   TAKO_INTERNAL_TOKEN_HEADER,
   handleTakoEndpoint,
 } from "../src/tako/endpoints";
+import { injectBootstrap } from "../src/tako/secrets";
 import type { TakoStatus } from "../src/types";
 import { Tako } from "../src/tako";
+import { defineChannel } from "../src/channels/define";
 
 describe("handleTakoEndpoint", () => {
-  process.env[TAKO_INTERNAL_TOKEN_ENV] = "test-token";
+  injectBootstrap({ token: "test-token", secrets: {} });
 
   beforeEach(() => {
     Tako.channels.clear();
@@ -118,14 +120,17 @@ describe("handleTakoEndpoint", () => {
 
   describe("internal host channel auth", () => {
     test("authorizes a matching channel definition", async () => {
-      Tako.channels.define("chat:*", {
-        auth(request, ctx) {
-          expect(request.headers.get("authorization")).toBe("Bearer test");
-          expect(ctx.channel).toBe("chat:room-123");
-          expect(ctx.operation).toBe("subscribe");
-          return { subject: "user-123" };
-        },
-      });
+      Tako.channels.register(
+        "chat",
+        defineChannel("chat/:roomId", {
+          auth(request, ctx) {
+            expect(request.headers.get("authorization")).toBe("Bearer test");
+            expect(ctx.channel).toBe("chat/room-123");
+            expect(ctx.operation).toBe("subscribe");
+            return { subject: "user-123" };
+          },
+        }),
+      );
 
       const request = new Request(`http://tako.internal${TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH}`, {
         method: "POST",
@@ -134,10 +139,10 @@ describe("handleTakoEndpoint", () => {
           [TAKO_INTERNAL_TOKEN_HEADER]: "test-token",
         },
         body: JSON.stringify({
-          channel: "chat:room-123",
+          channel: "chat/room-123",
           operation: "subscribe",
           request: {
-            url: "https://app.example.com/chat/room-123",
+            url: "https://app.example.com/channels/chat/room-123",
             method: "GET",
             headers: {
               authorization: "Bearer test",
@@ -160,11 +165,14 @@ describe("handleTakoEndpoint", () => {
     });
 
     test("returns 403 when channel auth denies access", async () => {
-      Tako.channels.define("chat:*", {
-        auth() {
-          return false;
-        },
-      });
+      Tako.channels.register(
+        "chat",
+        defineChannel("chat/:roomId", {
+          auth() {
+            return false;
+          },
+        }),
+      );
 
       const request = new Request(`http://tako.internal${TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH}`, {
         method: "POST",
@@ -173,10 +181,10 @@ describe("handleTakoEndpoint", () => {
           [TAKO_INTERNAL_TOKEN_HEADER]: "test-token",
         },
         body: JSON.stringify({
-          channel: "chat:room-123",
+          channel: "chat/room-123",
           operation: "subscribe",
           request: {
-            url: "https://app.example.com/chat/room-123",
+            url: "https://app.example.com/channels/chat/room-123",
           },
         }),
       });
@@ -216,16 +224,19 @@ describe("handleTakoEndpoint", () => {
     });
 
     test("returns channel lifecycle config in authorize responses", async () => {
-      Tako.channels.define("chat:*", {
-        auth() {
-          return { subject: "user-123" };
-        },
-        replayWindowMs: 86_400_000,
-        inactivityTtlMs: 0,
-        keepaliveIntervalMs: 25_000,
-        maxConnectionLifetimeMs: 7_200_000,
-        transport: "ws",
-      });
+      Tako.channels.register(
+        "chat",
+        defineChannel<{ msg: { text: string } }>("chat/:roomId", {
+          auth() {
+            return { subject: "user-123" };
+          },
+          handler: { msg: async (d) => d },
+          replayWindowMs: 86_400_000,
+          inactivityTtlMs: 0,
+          keepaliveIntervalMs: 25_000,
+          maxConnectionLifetimeMs: 7_200_000,
+        }),
+      );
 
       const request = new Request(`http://tako.internal${TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH}`, {
         method: "POST",
@@ -234,7 +245,7 @@ describe("handleTakoEndpoint", () => {
           [TAKO_INTERNAL_TOKEN_HEADER]: "test-token",
         },
         body: JSON.stringify({
-          channel: "chat:room-123",
+          channel: "chat/room-123",
           operation: "subscribe",
           request: {
             url: "https://app.example.com/chat/room-123",
@@ -254,6 +265,69 @@ describe("handleTakoEndpoint", () => {
         maxConnectionLifetimeMs: 7_200_000,
         transport: "ws",
       });
+    });
+  });
+
+  describe("internal host channel dispatch", () => {
+    test("returns fanout data for a handled type", async () => {
+      Tako.channels.register(
+        "chat",
+        defineChannel<{ msg: { text: string } }>("chat/:roomId", {
+          auth: async () => true,
+          handler: { msg: async (data) => ({ text: data.text.toUpperCase() }) },
+        }),
+      );
+
+      const request = new Request(`http://tako.internal${TAKO_INTERNAL_CHANNELS_DISPATCH_PATH}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          [TAKO_INTERNAL_TOKEN_HEADER]: "test-token",
+        },
+        body: JSON.stringify({
+          channel: "chat/r1",
+          frame: { type: "msg", data: { text: "hi" } },
+          subject: "u1",
+        }),
+      });
+
+      const response = await handleTakoEndpoint(request, mockStatus);
+      expect(response).not.toBeNull();
+      expect(response!.status).toBe(200);
+      expect(await response!.json()).toEqual({
+        action: "fanout",
+        data: { text: "HI" },
+      });
+    });
+
+    test("returns reject for unknown channel", async () => {
+      const request = new Request(`http://tako.internal${TAKO_INTERNAL_CHANNELS_DISPATCH_PATH}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          [TAKO_INTERNAL_TOKEN_HEADER]: "test-token",
+        },
+        body: JSON.stringify({
+          channel: "nope",
+          frame: { type: "msg", data: {} },
+        }),
+      });
+
+      const response = await handleTakoEndpoint(request, mockStatus);
+      expect(response!.status).toBe(200);
+      expect(await response!.json()).toEqual({
+        action: "reject",
+        reason: "channel_not_defined",
+      });
+    });
+
+    test("rejects non-POST methods", async () => {
+      const request = new Request(`http://tako.internal${TAKO_INTERNAL_CHANNELS_DISPATCH_PATH}`, {
+        method: "GET",
+        headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
+      });
+      const response = await handleTakoEndpoint(request, mockStatus);
+      expect(response!.status).toBe(405);
     });
   });
 });

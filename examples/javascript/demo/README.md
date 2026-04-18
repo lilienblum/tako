@@ -1,8 +1,10 @@
 # Demo App
 
-Minimal Bun HTTP app for trying `tako` and `tako.sh` together.
+TanStack Start app for trying `tako` and `tako.sh` together. Shows tenant-aware content using wildcard subdomain routing.
 
-## Local Runtime Only (No Tako Proxy)
+Live at [demo.tako.sh](https://demo.tako.sh).
+
+## Local Dev (Vite)
 
 ```bash
 cd examples/javascript/demo
@@ -18,21 +20,18 @@ From repository root:
 just tako examples/javascript/demo dev
 ```
 
-This runs the example through `tako dev` (HTTPS local ingress + routing).
+## Build
+
+```bash
+cd examples/javascript/demo
+bun run build
+```
 
 ## Notes
 
-- `tako.toml` sets `runtime = "bun"` with no top-level `preset`.
-  - In `tako dev`, this uses the runtime-default Bun command with resolved `main`.
-  - For local direct runs, `bun run dev` uses `bun run index.ts`.
-- The app starts Bun on `0.0.0.0:$PORT` (default `3000`) and serves HTTP directly.
-- Internal health checks use `Host: tako.internal` with path `/status` via the Tako SDK wrapper.
-- Development routes in `tako.toml` are:
-  - `tako-demo.test/foobar`
-  - `*.tako-demo.test`
-- Staging routes:
-  - `https://tako-testbed.orb.local/bun`
-  - `https://<tenant>.bun.tako-testbed.orb.local/`
-- Production routes:
-  - `https://demo.tako.sh/foobar`
-  - `https://<tenant>.demo.tako.sh/`
+- `tako.toml` sets `preset = "tanstack-start"` with `runtime = "bun"`.
+- Tenant is detected server-side from the `Host` header — no env var needed.
+  - `foo.demo.tako.sh` → tenant `foo`
+  - `demo.tako.sh` → no tenant
+- Development routes: `demo.test`, `*.demo.test`
+- Production routes: `demo.tako.sh`, `*.demo.tako.sh`

@@ -17,6 +17,10 @@ const ROUTES_LABEL_W: usize = 8;
 const SCOPE_MIN: usize = 4;
 const SCOPE_MAX: usize = 12;
 
+fn muted(s: &str) -> String {
+    format!("{DIM}{s}{RESET}")
+}
+
 fn ansi_rgb(r: u8, g: u8, b: u8) -> String {
     format!("\x1b[38;2;{r};{g};{b}m")
 }
@@ -122,7 +126,7 @@ pub(super) fn extract_repo_slug(url: &str) -> String {
     }
 }
 
-pub(super) fn git_info(dir: &std::path::Path) -> (String, String, Option<String>) {
+pub(super) fn git_info(dir: &std::path::Path) -> (String, String, String, Option<String>) {
     let dir_str = dir.to_string_lossy();
 
     let root_out = std::process::Command::new("git")
@@ -131,7 +135,7 @@ pub(super) fn git_info(dir: &std::path::Path) -> (String, String, Option<String>
 
     let git_root = match root_out {
         Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
-        _ => return (String::new(), fmt_path(&dir_str), None),
+        _ => return (String::new(), String::new(), fmt_path(&dir_str), None),
     };
 
     let rel = dir
@@ -156,17 +160,9 @@ pub(super) fn git_info(dir: &std::path::Path) -> (String, String, Option<String>
         .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
         .unwrap_or_default();
 
-    let slug_with_branch = if !slug.is_empty() && !branch.is_empty() {
-        format!("{slug} ({branch})")
-    } else if !branch.is_empty() {
-        format!("({branch})")
-    } else {
-        slug
-    };
-
     let worktree_name = detect_worktree(dir);
 
-    (slug_with_branch, rel, worktree_name)
+    (slug, branch, rel, worktree_name)
 }
 
 fn detect_worktree(dir: &std::path::Path) -> Option<String> {
@@ -203,6 +199,7 @@ pub(super) fn format_panel(
     status: &str,
     adapter_name: &str,
     repo_slug: &str,
+    repo_branch: &str,
     repo_path: &str,
     worktree_name: Option<&str>,
     hosts: &[String],
@@ -218,6 +215,7 @@ pub(super) fn format_panel(
             status,
             adapter_name,
             repo_slug,
+            repo_branch,
             repo_path,
             worktree_name,
             hosts,
@@ -233,6 +231,7 @@ pub(super) fn format_panel(
             status,
             adapter_name,
             repo_slug,
+            repo_branch,
             repo_path,
             worktree_name,
             hosts,
@@ -249,8 +248,9 @@ pub(super) fn format_panel(
 pub(super) fn format_panel_wide(
     app_name: &str,
     status: &str,
-    adapter_name: &str,
+    _adapter_name: &str,
     repo_slug: &str,
+    repo_branch: &str,
     repo_path: &str,
     worktree_name: Option<&str>,
     hosts: &[String],
@@ -278,34 +278,45 @@ pub(super) fn format_panel_wide(
     let col1_w = (shared / 3).max(10);
     let col2_w = shared.saturating_sub(col1_w).max(10);
 
-    let title_text = if adapter_name.trim().is_empty() {
-        app_name.to_string()
-    } else {
-        format!("{app_name} ({adapter_name})")
-    };
+    let title_text = app_name.to_string();
     let title_seg = format!("─ {title_text} ");
     let tail = inner_w.saturating_sub(measure_text_width(&title_seg));
     let top = format!(
-        "{BORDER}┌─ {PRIMARY}{title_text}{BORDER} {}┐{RESET}",
+        "{BORDER}┌─ {RESET}{title_text}{BORDER} {}┐{RESET}",
         "─".repeat(tail)
     );
     let bot = format!("{BORDER}└{}┘{RESET}", "─".repeat(inner_w));
 
     let (dot_color, dot_char) = status_dot(status);
-    let l0 = format!("{dot_color}{dot_char}{RESET} {DIM}{status}{RESET}");
+    let l0 = format!("{dot_color}{dot_char} {status}{RESET}");
     let mut left = vec![l0];
     if let Some(wt) = worktree_name {
         let wt_label = format!("worktree ({wt})");
         let wt_t = truncate_str(&wt_label, col1_w, "…");
-        left.push(format!("{DIM}{wt_t}{RESET}"));
+        left.push(muted(&wt_t));
     }
     if !repo_slug.is_empty() {
-        let slug_t = truncate_str(repo_slug, col1_w, "…");
-        left.push(format!("{DIM}{slug_t}{RESET}"));
+        if !repo_branch.is_empty() {
+            let branch_part = format!("({repo_branch})");
+            let slug_avail = col1_w.saturating_sub(branch_part.len() + 3);
+            let slug_t = truncate_str(repo_slug, slug_avail, "…");
+            left.push(format!(
+                "{} {slug_t} {PRIMARY}{branch_part}{RESET}",
+                muted("\u{e0a0}")
+            ));
+        } else {
+            let slug_t = truncate_str(repo_slug, col1_w.saturating_sub(2), "…");
+            left.push(format!("{} {slug_t}", muted("\u{e0a0}")));
+        }
+    } else if !repo_branch.is_empty() {
+        left.push(format!(
+            "{} {PRIMARY}({repo_branch}){RESET}",
+            muted("\u{e0a0}")
+        ));
     }
     if !repo_path.is_empty() {
-        let path_t = truncate_str(repo_path, col1_w, "…");
-        left.push(format!("{DIM}{path_t}{RESET}"));
+        let path_t = truncate_str(repo_path, col1_w.saturating_sub(2), "…");
+        left.push(format!("{} {path_t}", muted("\u{f07b}")));
     }
 
     let url_avail = col2_w.saturating_sub(ROUTES_LABEL_W);
@@ -315,7 +326,7 @@ pub(super) fn format_panel_wide(
         .map(|(i, url)| {
             let url_t = truncate_str(url, url_avail, "…");
             if i == 0 {
-                format!("{DIM}routes{RESET}  {url_color}{url_t}{RESET}")
+                format!("{}  {url_color}{url_t}{RESET}", muted("routes"))
             } else {
                 format!("{}{url_color}{url_t}{RESET}", " ".repeat(ROUTES_LABEL_W))
             }
@@ -324,16 +335,16 @@ pub(super) fn format_panel_wide(
 
     let r0 = if let Some(c) = cpu {
         let bar = progress_bar(c / 100.0, BAR_W);
-        format!("{DIM}cpu  {RESET}{bar} {:.0}%", c)
+        format!("{}  {bar} {:.0}%", muted("cpu"), c)
     } else {
-        format!("{DIM}cpu  {RESET}—")
+        format!("{}  —", muted("cpu"))
     };
     let r1 = if let Some(m) = mem_bytes {
-        format!("{DIM}ram  {RESET}{}", fmt_bytes(m))
+        format!("{}  {}", muted("ram"), fmt_bytes(m))
     } else {
-        format!("{DIM}ram  {RESET}—")
+        format!("{}  —", muted("ram"))
     };
-    let r2 = format!("{DIM}port {RESET}{app_port}");
+    let r2 = format!("{} {app_port}", muted("port"));
     let right = [r0, r1, r2];
 
     let data_rows = left.len().max(mid.len()).max(right.len());
@@ -352,8 +363,9 @@ pub(super) fn format_panel_wide(
 pub(super) fn format_panel_stacked(
     app_name: &str,
     status: &str,
-    adapter_name: &str,
+    _adapter_name: &str,
     repo_slug: &str,
+    repo_branch: &str,
     repo_path: &str,
     worktree_name: Option<&str>,
     hosts: &[String],
@@ -366,15 +378,11 @@ pub(super) fn format_panel_stacked(
     let url_color = ansi_rgb(240, 175, 95);
     let inner_w = cols.saturating_sub(2);
 
-    let title_text = if adapter_name.trim().is_empty() {
-        app_name.to_string()
-    } else {
-        format!("{app_name} ({adapter_name})")
-    };
+    let title_text = app_name.to_string();
     let title_seg = format!("─ {title_text} ");
     let tail = inner_w.saturating_sub(measure_text_width(&title_seg));
     let top = format!(
-        "{BORDER}┌─ {PRIMARY}{title_text}{BORDER} {}┐{RESET}",
+        "{BORDER}┌─ {RESET}{title_text}{BORDER} {}┐{RESET}",
         "─".repeat(tail)
     );
     let bot = format!("{BORDER}└{}┘{RESET}", "─".repeat(inner_w));
@@ -383,7 +391,7 @@ pub(super) fn format_panel_stacked(
 
     let (dot_color, dot_char) = status_dot(status);
     rows.push(stacked_row(
-        &format!("{dot_color}{dot_char}{RESET} {DIM}{status}{RESET}"),
+        &format!("{dot_color}{dot_char} {status}{RESET}"),
         inner_w,
     ));
 
@@ -391,16 +399,40 @@ pub(super) fn format_panel_stacked(
     if let Some(wt) = worktree_name {
         let wt_label = format!("worktree ({wt})");
         let wt_t = truncate_str(&wt_label, avail, "…");
-        rows.push(stacked_row(&format!("{DIM}{wt_t}{RESET}"), inner_w));
+        rows.push(stacked_row(&muted(&wt_t), inner_w));
     }
 
     if !repo_slug.is_empty() {
-        let slug_t = truncate_str(repo_slug, avail, "…");
-        rows.push(stacked_row(&format!("{DIM}{slug_t}{RESET}"), inner_w));
+        if !repo_branch.is_empty() {
+            let branch_part = format!("({repo_branch})");
+            let slug_avail = avail.saturating_sub(branch_part.len() + 3);
+            let slug_t = truncate_str(repo_slug, slug_avail, "…");
+            rows.push(stacked_row(
+                &format!(
+                    "{} {slug_t} {PRIMARY}{branch_part}{RESET}",
+                    muted("\u{e0a0}")
+                ),
+                inner_w,
+            ));
+        } else {
+            let slug_t = truncate_str(repo_slug, avail.saturating_sub(2), "…");
+            rows.push(stacked_row(
+                &format!("{} {slug_t}", muted("\u{e0a0}")),
+                inner_w,
+            ));
+        }
+    } else if !repo_branch.is_empty() {
+        rows.push(stacked_row(
+            &format!("{} {PRIMARY}({repo_branch}){RESET}", muted("\u{e0a0}")),
+            inner_w,
+        ));
     }
     if !repo_path.is_empty() {
-        let path_t = truncate_str(repo_path, avail, "…");
-        rows.push(stacked_row(&format!("{DIM}{path_t}{RESET}"), inner_w));
+        let path_t = truncate_str(repo_path, avail.saturating_sub(2), "…");
+        rows.push(stacked_row(
+            &format!("{} {path_t}", muted("\u{f07b}")),
+            inner_w,
+        ));
     }
 
     let url_avail = inner_w.saturating_sub(2 + ROUTES_LABEL_W);
@@ -412,7 +444,7 @@ pub(super) fn format_panel_stacked(
         };
         let url_t = truncate_str(&url, url_avail, "…");
         let line = if i == 0 {
-            format!("{DIM}routes{RESET}  {url_color}{url_t}{RESET}")
+            format!("{}  {url_color}{url_t}{RESET}", muted("routes"))
         } else {
             format!("{}{url_color}{url_t}{RESET}", " ".repeat(ROUTES_LABEL_W))
         };
@@ -420,18 +452,18 @@ pub(super) fn format_panel_stacked(
     }
 
     let cpu_str = if let Some(c) = cpu {
-        format!("{DIM}cpu{RESET} {:.0}%", c)
+        format!("{} {:.0}%", muted("cpu"), c)
     } else {
-        format!("{DIM}cpu{RESET} —")
+        format!("{} —", muted("cpu"))
     };
     let ram_str = if let Some(m) = mem_bytes {
-        format!("{DIM}ram{RESET} {}", fmt_bytes(m))
+        format!("{} {}", muted("ram"), fmt_bytes(m))
     } else {
-        format!("{DIM}ram{RESET} —")
+        format!("{} —", muted("ram"))
     };
     rows.push(stacked_row(&format!("{cpu_str}  {ram_str}"), inner_w));
     rows.push(stacked_row(
-        &format!("{DIM}port{RESET} {app_port}"),
+        &format!("{} {app_port}", muted("port")),
         inner_w,
     ));
 
@@ -464,11 +496,19 @@ pub(super) fn format_keymap() -> String {
     let cols = terminal_cols().max(20);
     let text = if cols < 60 {
         format!(
-            "l {DIM}lan{RESET}   r {DIM}restart{RESET}   b {DIM}background{RESET}   ^c/q {DIM}stop{RESET}"
+            "l {}   r {}   b {}   ^c/q {}",
+            muted("lan"),
+            muted("restart"),
+            muted("background"),
+            muted("stop")
         )
     } else {
         format!(
-            "l {DIM}lan{RESET}   r {DIM}restart{RESET}   b {DIM}background{RESET}   ctrl+c/q {DIM}stop{RESET}"
+            "l {}   r {}   b {}   ctrl+c/q {}",
+            muted("lan"),
+            muted("restart"),
+            muted("background"),
+            muted("stop")
         )
     };
     let plain = if cols < 60 {
@@ -496,7 +536,7 @@ pub(super) fn format_log(log: &ScopedLog) -> String {
         } else {
             &log.message
         };
-        return format!("{DIM}──── {label} ────{RESET}");
+        return muted(&format!("──── {label} ────"));
     }
     if let Some(ip) = log
         .scope
@@ -516,18 +556,44 @@ pub(super) fn format_log(log: &ScopedLog) -> String {
     if matches!(log.level, LogLevel::Debug) {
         let scope = fit_scope(&log.scope);
         let scope_color = scope_color(&log.scope);
-        return format!(
-            "{DIM}{} {:>5}{RESET} {scope_color}{scope}{RESET} {DIM}{}{RESET}",
-            log.timestamp, log.level, log.message
+        let pad_width = message_column_width(scope.len());
+        let mut lines = log.message.split('\n');
+        let first = lines.next().unwrap_or("");
+        let mut out = format!(
+            "{DIM}{} {:>5}{RESET} {scope_color}{scope}{RESET} {DIM}{first}{RESET}",
+            log.timestamp, log.level
         );
+        for line in lines {
+            out.push('\n');
+            out.push_str(&" ".repeat(pad_width));
+            out.push_str(&format!("{DIM}{line}{RESET}"));
+        }
+        return out;
     }
     let color = level_color(&log.level);
     let scope = fit_scope(&log.scope);
     let scope_color = scope_color(&log.scope);
-    format!(
-        "{DIM}{}{RESET} {color}{:>5}{RESET} {scope_color}{scope}{RESET} {}",
-        log.timestamp, log.level, log.message
-    )
+    let pad_width = message_column_width(scope.len());
+    let mut lines = log.message.split('\n');
+    let first = lines.next().unwrap_or("");
+    let mut out = format!(
+        "{DIM}{}{RESET} {color}{:>5}{RESET} {scope_color}{scope}{RESET} {first}",
+        log.timestamp, log.level
+    );
+    for line in lines {
+        out.push('\n');
+        out.push_str(&" ".repeat(pad_width));
+        out.push_str(line);
+    }
+    out
+}
+
+/// Visible width of the timestamp/level/scope prefix up to where the message
+/// starts, used to indent continuation lines of multi-line messages so they
+/// align under the first line's message column.
+fn message_column_width(scope_visible_width: usize) -> usize {
+    // "HH:MM:SS" (8) + " " + level right-aligned to 5 + " " + scope + " "
+    8 + 1 + 5 + 1 + scope_visible_width + 1
 }
 
 fn level_color(level: &LogLevel) -> &'static str {
@@ -650,11 +716,13 @@ pub(super) fn format_lan_block(hosts: &[String], ca_url: &str) -> Vec<String> {
 
     if concrete_hosts.is_empty() {
         out.push(format!(
-            "  {DIM}No routes are reachable on your local network{RESET}"
+            "  {}",
+            muted("No routes are reachable on your local network")
         ));
     } else {
         out.push(format!(
-            "  {DIM}Your app is now available on your local network at these routes{RESET}"
+            "  {}",
+            muted("Your app is now available on your local network at these routes")
         ));
         out.push(String::new());
         for host in &concrete_hosts {
@@ -682,10 +750,14 @@ pub(super) fn format_lan_block(hosts: &[String], ca_url: &str) -> Vec<String> {
         out.push(format!("  {line}"));
     }
     out.push(format!(
-        "  {DIM}Scan to install the CA certificate on your device{RESET}"
+        "  {}",
+        muted("Scan to install the CA certificate on your device")
     ));
     out.push(format!(
-        "  {DIM}If the page doesn't load, your Wi-Fi may use client isolation and LAN mode won't work{RESET}"
+        "  {}",
+        muted(
+            "If the page doesn't load, your Wi-Fi may use client isolation and LAN mode won't work"
+        )
     ));
     out.push(String::new());
     out

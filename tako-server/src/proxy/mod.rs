@@ -17,6 +17,7 @@ pub use server::{ProxyBuilder, TlsConfig, build_server, build_server_with_acme};
 #[allow(unused_imports)]
 pub use static_files::*;
 
+use crate::channels::ChannelStore;
 use crate::lb::LoadBalancer;
 use crate::routing::RouteTable;
 use crate::scaling::ColdStartManager;
@@ -61,6 +62,10 @@ pub struct TakoProxy {
     response_cache: Option<ResponseCacheRuntime>,
     /// Reused per-app static file server state for hot path requests
     static_servers: SyncRwLock<HashMap<String, Arc<AppStaticServer>>>,
+    /// Reused per-app channel stores. Keyed by app name; opened lazily
+    /// the first time an app's channel route is hit and dropped when the
+    /// app is unregistered.
+    channel_stores: SyncRwLock<HashMap<String, Arc<ChannelStore>>>,
     /// Per-IP concurrent request limiter (DDoS mitigation)
     ip_tracker: IpRequestTracker,
 }
@@ -84,6 +89,7 @@ impl TakoProxy {
             cold_start,
             response_cache,
             static_servers: SyncRwLock::new(HashMap::new()),
+            channel_stores: SyncRwLock::new(HashMap::new()),
             ip_tracker: IpRequestTracker::new(),
         }
     }
@@ -108,6 +114,7 @@ impl TakoProxy {
             cold_start,
             response_cache,
             static_servers: SyncRwLock::new(HashMap::new()),
+            channel_stores: SyncRwLock::new(HashMap::new()),
             ip_tracker: IpRequestTracker::new(),
         }
     }

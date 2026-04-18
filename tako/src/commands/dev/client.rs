@@ -250,7 +250,7 @@ pub(super) async fn run_connected_dev_client(
                             .map_err(|e| e.to_string());
                         if let Err(msg) = result {
                             let _ = log_tx
-                                .send(ScopedLog::error("tako", format!("restart failed: {}", msg)))
+                                .send(ScopedLog::error("tako", format!("Restart failed: {}", msg)))
                                 .await;
                         }
                     }

@@ -8,7 +8,7 @@
  * serves all state via the per-app enqueue socket.
  *
  * Env vars (set by tako-server when it spawns the worker):
- *   TAKO_WORKFLOW_SOCKET       — path to the shared workflow unix socket
+ *   TAKO_INTERNAL_SOCKET       — path to the shared Tako internal unix socket
  *   TAKO_APP_NAME              — app name the worker belongs to
  *   TAKO_WORKER_CONCURRENCY    — max parallel tasks per worker (default 10)
  *   TAKO_WORKER_IDLE_TIMEOUT_MS — scale-to-zero idle timeout; 0 = never
@@ -40,7 +40,7 @@ export async function bootstrapWorker(
   if (!client) {
     return {
       started: false,
-      reason: "TAKO_WORKFLOW_SOCKET / TAKO_APP_NAME not set",
+      reason: "TAKO_INTERNAL_SOCKET / TAKO_APP_NAME not set",
       workflowCount: 0,
     };
   }

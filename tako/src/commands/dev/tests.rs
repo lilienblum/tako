@@ -431,47 +431,75 @@ fn child_log_message_trim_drops_whitespace_only_lines() {
 }
 
 #[test]
-fn stored_log_line_round_trips_json() {
-    let line = ScopedLog {
-        timestamp: "12:03:07".to_string(),
-        level: LogLevel::Info,
-        scope: "app".to_string(),
-        message: "hello".to_string(),
-    };
-    let encoded = serde_json::to_string(&line).unwrap();
-    assert!(encoded.contains(r#""timestamp":"12:03:07""#));
-    assert!(!encoded.contains(r#""h":"#));
-    assert!(!encoded.contains(r#""m":"#));
-    assert!(!encoded.contains(r#""s":"#));
-    let decoded = parse_log_line(&encoded).unwrap();
+fn parse_log_line_accepts_sdk_schema_with_lowercase_level() {
+    let line = r#"{"ts":1700000000000,"level":"info","scope":"vite","msg":"hello"}"#;
+    let decoded = parse_log_line(line).unwrap();
 
-    assert_eq!(decoded.timestamp, "12:03:07");
-    assert_eq!(decoded.scope, "app");
+    assert_eq!(decoded.scope, "vite");
     assert_eq!(decoded.message, "hello");
-}
-
-#[test]
-fn stored_log_line_round_trips_fatal_level() {
-    let line = ScopedLog {
-        timestamp: "12:03:07".to_string(),
-        level: LogLevel::Fatal,
-        scope: "tako".to_string(),
-        message: "fatal issue".to_string(),
-    };
-    let encoded = serde_json::to_string(&line).unwrap();
-    let decoded = parse_log_line(&encoded).unwrap();
-    assert!(matches!(decoded.level, LogLevel::Fatal));
-}
-
-#[test]
-fn stored_log_line_preserves_unrecognized_json_log_shape_as_message() {
-    let raw_line = r#"{"h":12,"m":3,"s":7,"level":"Info","scope":"app","message":"hello"}"#;
-    let decoded = parse_log_line(raw_line).unwrap();
-
-    assert_ne!(decoded.timestamp, "12:03:07");
     assert!(matches!(decoded.level, LogLevel::Info));
+}
+
+#[test]
+fn parse_log_line_accepts_all_levels_lowercase() {
+    for (level_str, expected) in [
+        ("debug", LogLevel::Debug),
+        ("info", LogLevel::Info),
+        ("warn", LogLevel::Warn),
+        ("error", LogLevel::Error),
+    ] {
+        let line = format!(
+            r#"{{"ts":1700000000000,"level":"{}","scope":"x","msg":"y"}}"#,
+            level_str
+        );
+        let decoded = parse_log_line(&line).unwrap();
+        assert!(
+            std::mem::discriminant(&decoded.level) == std::mem::discriminant(&expected),
+            "level {} did not parse",
+            level_str
+        );
+    }
+}
+
+#[test]
+fn parse_log_line_converts_ts_millis_to_hms() {
+    let line = r#"{"ts":1700000000000,"level":"info","scope":"x","msg":"y"}"#;
+    let decoded = parse_log_line(line).unwrap();
+    // Format is "HH:MM:SS"
+    assert_eq!(decoded.timestamp.len(), 8);
+    assert_eq!(decoded.timestamp.chars().nth(2), Some(':'));
+    assert_eq!(decoded.timestamp.chars().nth(5), Some(':'));
+}
+
+#[test]
+fn parse_log_line_captures_fields_payload() {
+    let line = r#"{"ts":1700000000000,"level":"info","scope":"vite","msg":"bound","fields":{"port":5173,"build":"abc"}}"#;
+    let decoded = parse_log_line(line).unwrap();
+    let fields = decoded.fields.as_ref().expect("fields should be present");
+    assert_eq!(fields.get("port").and_then(|v| v.as_u64()), Some(5173));
+    assert_eq!(fields.get("build").and_then(|v| v.as_str()), Some("abc"));
+}
+
+#[test]
+fn parse_log_line_accepts_log_with_no_fields_key() {
+    let line = r#"{"ts":1700000000000,"level":"info","scope":"vite","msg":"hi"}"#;
+    let decoded = parse_log_line(line).unwrap();
+    assert!(decoded.fields.is_none());
+}
+
+#[test]
+fn parse_log_line_falls_back_to_app_scope_for_plain_text() {
+    let decoded = parse_log_line("not json").unwrap();
     assert_eq!(decoded.scope, "app");
-    assert_eq!(decoded.message, raw_line);
+    assert_eq!(decoded.message, "not json");
+    assert!(matches!(decoded.level, LogLevel::Info));
+}
+
+#[test]
+fn parse_log_line_falls_back_for_malformed_json_starting_with_brace() {
+    let decoded = parse_log_line("{not valid json").unwrap();
+    assert_eq!(decoded.scope, "app");
+    assert_eq!(decoded.message, "{not valid json");
 }
 
 #[test]

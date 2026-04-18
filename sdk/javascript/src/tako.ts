@@ -8,6 +8,7 @@
  */
 
 import { ChannelRegistry } from "./channels";
+import { createLogger } from "./logger";
 import { loadSecrets } from "./tako/secrets";
 import { workflowsEngine } from "./workflows/engine";
 import type { EnqueueOptions } from "./workflows/engine";
@@ -40,17 +41,26 @@ const workflows = {
  * Module-load-time accessors. Use `Tako.channels` to define channel handlers,
  * `Tako.secrets` for typed secret reads, and `Tako.workflows` to enqueue runs.
  *
+ * Server-only. Transitively imports `node:fs` (for reading secrets off fd 3)
+ * and the workflow engine's unix-socket RPC client — neither of which Vite
+ * can bundle for the browser. Use `tako.sh/client` or `tako.sh/react` for
+ * anything that ships to the browser.
+ *
  * @example
  * ```typescript
- * import { Tako } from "tako.sh";
+ * // channels/chat.ts
+ * import { defineChannel } from "tako.sh";
  *
- * Tako.channels.define("chat:*", { auth: async () => ({ allow: true }) });
+ * export default defineChannel("chat/:roomId", {
+ *   auth: async (_req, ctx) => ({ subject: ctx.params.roomId }),
+ * });
  * ```
  */
 export const Tako = {
   channels: new ChannelRegistry(),
   secrets: loadSecrets(),
   workflows,
+  logger: createLogger("app"),
 } as const;
 
 type RuntimeState = {
@@ -89,6 +99,12 @@ const globalTako = Object.freeze(
       },
       workflows: {
         value: Tako.workflows,
+        writable: false,
+        configurable: false,
+        enumerable: false,
+      },
+      logger: {
+        value: Tako.logger,
         writable: false,
         configurable: false,
         enumerable: false,
@@ -135,6 +151,11 @@ declare global {
    * Global Tako runtime surface — installed by the Tako entrypoint before
    * your app's module is imported. Accessible anywhere in your app without
    * an import statement.
+   *
+   * Server-only. This global is installed on the Node/Bun/Deno process that
+   * runs your entrypoint; the browser has its own `globalThis`, so on the
+   * client `Tako` is `undefined`. Don't reference it from code that ships to
+   * the browser — use `tako.sh/client` or `tako.sh/react` instead.
    */
   const Tako: {
     /** Current environment. */
@@ -164,6 +185,8 @@ declare global {
       /** Deliver an event payload to every parked `step.waitFor(name)`. */
       signal(eventName: string, payload?: unknown): Promise<number>;
     };
+    /** Structured logger. Emits JSON lines to stdout for the tako log pipeline. */
+    readonly logger: import("./logger").Logger;
   };
 }
 

@@ -17,7 +17,7 @@ use parking_lot::RwLock;
 use super::cron::{self, CronTickerHandle};
 use super::enqueue::{RunsDb, RunsDbError};
 use super::enqueue_socket::{
-    AppLookup, EnqueueSocketHandle, OnEnqueue, spawn as spawn_workflow_socket,
+    AppLookup, ChannelPublishFn, EnqueueSocketHandle, OnEnqueue, spawn as spawn_workflow_socket,
 };
 use super::supervisor::{WorkerSpec, WorkerSupervisor};
 
@@ -46,6 +46,9 @@ pub struct WorkflowManager {
     data_dir: PathBuf,
     apps: Arc<RwLock<HashMap<String, AppWorkflow>>>,
     socket: parking_lot::Mutex<Option<EnqueueSocketHandle>>,
+    /// Server-side `Tako.channels.publish` relay. Snapshotted at
+    /// `start_socket` time and passed into the socket's accept loop.
+    channel_publish: parking_lot::Mutex<Option<ChannelPublishFn>>,
     /// Serializes `ensure` calls so two concurrent deploys of the same app
     /// can't each start their own supervisor + cron ticker and then have
     /// one silently overwrite the other (leaking the loser's children).
@@ -68,8 +71,16 @@ impl WorkflowManager {
             data_dir: data_dir.into(),
             apps: Arc::new(RwLock::new(HashMap::new())),
             socket: parking_lot::Mutex::new(None),
+            channel_publish: parking_lot::Mutex::new(None),
             ensure_gate: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// Install the channel-publish relay used by `Tako.channels.publish()`
+    /// calls arriving on the workflow socket. Must be called before
+    /// `start_socket` — the publisher is snapshotted at that point.
+    pub fn set_channel_publisher(&self, publisher: ChannelPublishFn) {
+        *self.channel_publish.lock() = Some(publisher);
     }
 
     pub fn app_dir(&self, app: &str) -> PathBuf {
@@ -103,7 +114,12 @@ impl WorkflowManager {
                 (entry.db.clone(), on_enqueue)
             })
         });
-        *guard = Some(spawn_workflow_socket(self.socket_path(), lookup)?);
+        let publisher = self.channel_publish.lock().clone();
+        *guard = Some(spawn_workflow_socket(
+            self.socket_path(),
+            lookup,
+            publisher,
+        )?);
         Ok(())
     }
 
@@ -183,7 +199,8 @@ impl WorkflowManager {
         for (_, entry) in apps {
             entry.shutdown(drain_timeout).await;
         }
-        if let Some(handle) = self.socket.lock().take() {
+        let socket = self.socket.lock().take();
+        if let Some(handle) = socket {
             handle.shutdown().await;
         }
     }
@@ -192,6 +209,7 @@ impl WorkflowManager {
 /// Build a Bun worker spec. The shared socket path comes from the manager
 /// (`socket_path()`); we pass it via env var so the SDK's `WorkflowsClient`
 /// can connect.
+#[allow(clippy::too_many_arguments)]
 pub fn worker_spec_for_bun(
     app: &str,
     workers: u32,
@@ -219,6 +237,7 @@ pub fn worker_spec_for_bun(
         cwd: app_cwd.to_path_buf(),
         env,
         secrets,
+        log_sink: None,
     }
 }
 
@@ -237,6 +256,7 @@ mod tests {
             cwd,
             env: StdHashMap::new(),
             secrets: StdHashMap::new(),
+            log_sink: None,
         }
     }
 

@@ -33,8 +33,16 @@ pub type OnEnqueue = Arc<dyn Fn() + Send + Sync>;
 /// closure for that app, or `None` if the app isn't registered.
 pub type AppLookup = Arc<dyn Fn(&str) -> Option<(Arc<RunsDb>, OnEnqueue)> + Send + Sync>;
 
+/// Closure that appends a `ChannelPublishPayload` to an app's channel
+/// store. Returns the stored message as a JSON value on success, or an
+/// error string on failure. Abstracted this way so `tako-workflows`
+/// doesn't need a direct dep on `tako-channels`.
+pub type ChannelPublishFn =
+    Arc<dyn Fn(&str, &str, serde_json::Value) -> Result<serde_json::Value, String> + Send + Sync>;
+
 /// Handle to the running socket. Drop to stop accepting + remove files.
 pub struct EnqueueSocketHandle {
+    #[allow(dead_code)]
     symlink_path: PathBuf,
     actual_path: PathBuf,
     shutdown_tx: Option<oneshot::Sender<()>>,
@@ -71,6 +79,7 @@ impl Drop for EnqueueSocketHandle {
 pub fn spawn(
     symlink_path: impl AsRef<Path>,
     lookup: AppLookup,
+    channel_publish: Option<ChannelPublishFn>,
 ) -> std::io::Result<EnqueueSocketHandle> {
     let symlink_path = symlink_path.as_ref().to_path_buf();
     let dir = symlink_path
@@ -112,7 +121,7 @@ pub fn spawn(
 
     let listener = UnixListener::from_std(std_listener)?;
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let join = tokio::spawn(run(listener, lookup, shutdown_rx));
+    let join = tokio::spawn(run(listener, lookup, channel_publish, shutdown_rx));
 
     Ok(EnqueueSocketHandle {
         symlink_path,
@@ -122,7 +131,12 @@ pub fn spawn(
     })
 }
 
-async fn run(listener: UnixListener, lookup: AppLookup, shutdown_rx: oneshot::Receiver<()>) {
+async fn run(
+    listener: UnixListener,
+    lookup: AppLookup,
+    channel_publish: Option<ChannelPublishFn>,
+    shutdown_rx: oneshot::Receiver<()>,
+) {
     tokio::pin!(shutdown_rx);
     loop {
         tokio::select! {
@@ -131,12 +145,14 @@ async fn run(listener: UnixListener, lookup: AppLookup, shutdown_rx: oneshot::Re
                 match accept {
                     Ok((stream, _addr)) => {
                         let lookup = lookup.clone();
+                        let channel_publish = channel_publish.clone();
                         tokio::spawn(async move {
                             let _ = serve_jsonl_connection(
                                 stream,
                                 move |cmd: Command| {
                                     let lookup = lookup.clone();
-                                    async move { handle_command(&lookup, cmd) }
+                                    let channel_publish = channel_publish.clone();
+                                    async move { handle_command(&lookup, channel_publish.as_ref(), cmd) }
                                 },
                                 |e| Response::error(format!("invalid request: {e}")),
                             )
@@ -144,7 +160,7 @@ async fn run(listener: UnixListener, lookup: AppLookup, shutdown_rx: oneshot::Re
                         });
                     }
                     Err(e) => {
-                        tracing::warn!(?e, "workflow socket accept error");
+                        tracing::warn!(?e, "internal socket accept error");
                     }
                 }
             }
@@ -152,8 +168,9 @@ async fn run(listener: UnixListener, lookup: AppLookup, shutdown_rx: oneshot::Re
     }
 }
 
-/// Extract the app from any workflow command. Returns None for commands
-/// that don't carry an app (none currently — every workflow command does).
+/// Extract the app from any command the internal socket accepts. Returns
+/// None for commands that don't carry an app (none currently — every
+/// supported command carries it).
 fn command_app(cmd: &Command) -> Option<&str> {
     match cmd {
         Command::EnqueueRun { app, .. }
@@ -166,19 +183,46 @@ fn command_app(cmd: &Command) -> Option<&str> {
         | Command::FailRun { app, .. }
         | Command::DeferRun { app, .. }
         | Command::WaitForEvent { app, .. }
-        | Command::Signal { app, .. } => Some(app),
+        | Command::Signal { app, .. }
+        | Command::ChannelPublish { app, .. } => Some(app),
         _ => None,
     }
 }
 
-fn handle_command(lookup: &AppLookup, cmd: Command) -> Response {
-    let Some(app) = command_app(&cmd) else {
-        return Response::error(format!(
-            "command {:?} not accepted on the workflow socket",
-            std::mem::discriminant(&cmd)
-        ));
+fn handle_command(
+    lookup: &AppLookup,
+    channel_publish: Option<&ChannelPublishFn>,
+    cmd: Command,
+) -> Response {
+    let app = match command_app(&cmd) {
+        Some(app) => app.to_string(),
+        None => {
+            return Response::error(format!(
+                "command {:?} not accepted on the internal socket",
+                std::mem::discriminant(&cmd)
+            ));
+        }
     };
-    let Some((db, on_enqueue)) = lookup(app) else {
+
+    // Channel publish takes a different route — the channel store lives
+    // outside the workflow manager, so we hand the payload to the
+    // caller-provided closure and skip the workflow app lookup.
+    if let Command::ChannelPublish {
+        channel, payload, ..
+    } = cmd
+    {
+        let Some(publish) = channel_publish else {
+            return Response::error(
+                "channel publish is not configured on this internal socket".to_string(),
+            );
+        };
+        return match publish(&app, &channel, payload) {
+            Ok(message) => Response::ok(message),
+            Err(e) => Response::error(format!("channel publish failed: {e}")),
+        };
+    }
+
+    let Some((db, on_enqueue)) = lookup(&app) else {
         return Response::error(format!("unknown app: {app}"));
     };
 
@@ -316,7 +360,7 @@ mod tests {
         let mut map = std::collections::HashMap::new();
         map.insert("a".to_string(), db_a.clone());
         map.insert("b".to_string(), db_b.clone());
-        let handle = spawn(&sock, lookup_for(map)).unwrap();
+        let handle = spawn(&sock, lookup_for(map), None).unwrap();
 
         let stream = UnixStream::connect(&sock).await.unwrap();
         let (r, mut w) = stream.into_split();
@@ -343,7 +387,7 @@ mod tests {
     async fn unknown_app_returns_error() {
         let tmp = tempfile::tempdir().unwrap();
         let sock = tmp.path().join("workflows.sock");
-        let handle = spawn(&sock, lookup_for(Default::default())).unwrap();
+        let handle = spawn(&sock, lookup_for(Default::default()), None).unwrap();
 
         let stream = UnixStream::connect(&sock).await.unwrap();
         let (r, mut w) = stream.into_split();
@@ -376,7 +420,7 @@ mod tests {
         let db_for_lookup = db.clone();
         let lookup: AppLookup =
             Arc::new(move |_app: &str| Some((db_for_lookup.clone(), on_enq.clone())));
-        let handle = spawn(&sock, lookup).unwrap();
+        let handle = spawn(&sock, lookup, None).unwrap();
 
         // Signal with no waiters → should NOT fire on_enqueue.
         let stream = UnixStream::connect(&sock).await.unwrap();
@@ -415,7 +459,7 @@ mod tests {
     async fn shutdown_removes_pid_socket_file() {
         let tmp = tempfile::tempdir().unwrap();
         let sock = tmp.path().join("workflows.sock");
-        let handle = spawn(&sock, lookup_for(Default::default())).unwrap();
+        let handle = spawn(&sock, lookup_for(Default::default()), None).unwrap();
         assert!(sock.exists() || sock.is_symlink());
         handle.shutdown().await;
     }

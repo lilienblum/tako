@@ -57,84 +57,121 @@ describe("tako Vite entry plugin", () => {
     expect(wrapper).toContain(
       "default fetch function, a default object with fetch, or a named fetch export",
     );
-    expect(wrapper).toContain("export default fetchHandler;");
+    expect(wrapper).toContain("export default async function");
+    expect(wrapper).toContain("handleTakoEndpoint");
+    expect(wrapper).toContain("fetchHandler(request)");
   });
 
-  test("does not force SSR bundling options", () => {
+  test("externalizes tako.sh from SSR transform", () => {
     const plugin = tako();
-    expect(plugin.config?.({}, { command: "build" })).toEqual({});
+    const result = plugin.config?.({}, { command: "build" });
+    expect(result).toMatchObject({ ssr: { external: ["tako.sh"] } });
   });
 
-  test("uses PORT env for dev server binding", () => {
-    process.env.PORT = "47831";
+  test("binds to 127.0.0.1 with .test hosts in serve mode", () => {
     const plugin = tako();
-    expect(plugin.config?.({}, { command: "serve" })).toEqual({
+    expect(plugin.config?.({}, { command: "serve" })).toMatchObject({
       server: {
         allowedHosts: [".test", ".tako.test"],
         host: "127.0.0.1",
-        port: 47831,
-        strictPort: true,
-      },
-    });
-  });
-
-  test("adds tako host allowance in serve mode without PORT", () => {
-    const plugin = tako();
-    expect(plugin.config?.({}, { command: "serve" })).toEqual({
-      server: {
-        allowedHosts: [".test", ".tako.test"],
       },
     });
   });
 
   test("merges user allowedHosts in serve mode", () => {
-    process.env.PORT = "47831";
     const plugin = tako();
     expect(
-      plugin.config?.(
-        {
-          server: {
-            allowedHosts: ["localhost"],
-          },
-        },
-        { command: "serve" },
-      ),
-    ).toEqual({
-      server: {
-        allowedHosts: ["localhost", ".test", ".tako.test"],
-        host: "127.0.0.1",
-        port: 47831,
-        strictPort: true,
-      },
+      plugin.config?.({ server: { allowedHosts: ["localhost"] } }, { command: "serve" }),
+    ).toMatchObject({
+      server: { allowedHosts: ["localhost", ".test", ".tako.test"] },
     });
   });
 
-  test("keeps allowedHosts true in serve mode", () => {
-    process.env.PORT = "47831";
+  test("does not set server config in build mode", () => {
     const plugin = tako();
-    expect(
-      plugin.config?.(
-        {
-          server: {
-            allowedHosts: true,
-          },
-        },
-        { command: "serve" },
-      ),
-    ).toEqual({
-      server: {
-        allowedHosts: true,
-        host: "127.0.0.1",
-        port: 47831,
-        strictPort: true,
-      },
-    });
+    const result = plugin.config?.({}, { command: "build" });
+    expect(result).not.toHaveProperty("server");
   });
 
-  test("ignores PORT env in build mode", () => {
-    process.env.PORT = "47831";
+  test("installs a JSON customLogger when ENV=development", () => {
+    const original = process.env.ENV;
+    process.env.ENV = "development";
+    try {
+      const plugin = tako();
+      const result = plugin.config?.({}, { command: "serve" }) as {
+        customLogger?: { info?: unknown; warn?: unknown; error?: unknown };
+      };
+      expect(result.customLogger).toBeDefined();
+      expect(typeof result.customLogger?.info).toBe("function");
+      expect(typeof result.customLogger?.warn).toBe("function");
+      expect(typeof result.customLogger?.error).toBe("function");
+    } finally {
+      if (original === undefined) delete process.env.ENV;
+      else process.env.ENV = original;
+    }
+  });
+
+  test("does not install customLogger outside development", () => {
+    const original = process.env.ENV;
+    process.env.ENV = "production";
+    try {
+      const plugin = tako();
+      const result = plugin.config?.({}, { command: "serve" });
+      expect(result).not.toHaveProperty("customLogger");
+    } finally {
+      if (original === undefined) delete process.env.ENV;
+      else process.env.ENV = original;
+    }
+  });
+
+  test("configureServer registers listening handler that reads bound port", () => {
     const plugin = tako();
-    expect(plugin.config?.({}, { command: "build" })).toEqual({});
+    plugin.config?.({}, { command: "serve" });
+
+    const listeners: (() => void)[] = [];
+    const mockHttpServer = {
+      once(_event: string, cb: () => void) {
+        listeners.push(cb);
+      },
+      address() {
+        return { address: "127.0.0.1", family: "IPv4", port: 54321 };
+      },
+    };
+
+    plugin.configureServer?.({
+      httpServer: mockHttpServer,
+      middlewares: { use: () => {} },
+    } as never);
+
+    expect(listeners).toHaveLength(1);
+    // Firing the listener should not throw (writeViaInheritedFd catches fd errors silently)
+    expect(() => listeners[0]!()).not.toThrow();
+  });
+
+  test("configureServer handles null httpServer gracefully", () => {
+    const plugin = tako();
+    plugin.config?.({}, { command: "serve" });
+    expect(() =>
+      plugin.configureServer?.({ httpServer: null, middlewares: { use: () => {} } } as never),
+    ).not.toThrow();
+  });
+
+  test("configureServer installs a middleware that handles tako.internal requests", async () => {
+    const plugin = tako();
+    plugin.config?.({}, { command: "serve" });
+
+    const installedMiddlewares: ((req: unknown, res: unknown, next: () => void) => void)[] = [];
+    const mockServer = {
+      httpServer: null,
+      middlewares: {
+        use(fn: (req: unknown, res: unknown, next: () => void) => void) {
+          installedMiddlewares.push(fn);
+        },
+      },
+    };
+
+    plugin.configureServer?.(mockServer as never);
+    expect(installedMiddlewares).toHaveLength(1);
   });
 
   test("prefers entry paths under server when multiple entry chunks exist", async () => {

@@ -58,14 +58,14 @@ describe("WorkflowEngine enqueue (RPC)", () => {
 
   test("throws when no RPC client is configured or discoverable", async () => {
     const engine = new WorkflowEngine();
-    const prevSock = process.env["TAKO_WORKFLOW_SOCKET"];
+    const prevSock = process.env["TAKO_INTERNAL_SOCKET"];
     const prevApp = process.env["TAKO_APP_NAME"];
-    delete process.env["TAKO_WORKFLOW_SOCKET"];
+    delete process.env["TAKO_INTERNAL_SOCKET"];
     delete process.env["TAKO_APP_NAME"];
     try {
       await expect(engine.enqueue("w", {})).rejects.toThrow(/RPC client/);
     } finally {
-      if (prevSock !== undefined) process.env["TAKO_WORKFLOW_SOCKET"] = prevSock;
+      if (prevSock !== undefined) process.env["TAKO_INTERNAL_SOCKET"] = prevSock;
       if (prevApp !== undefined) process.env["TAKO_APP_NAME"] = prevApp;
     }
   });

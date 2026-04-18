@@ -34,7 +34,6 @@ fn now_unix_millis() -> u64 {
 }
 
 pub const INTERNAL_STATUS_HOST: &str = "tako.internal";
-pub const INTERNAL_TOKEN_ENV: &str = "TAKO_INTERNAL_TOKEN";
 pub const INTERNAL_TOKEN_HEADER: &str = "X-Tako-Internal-Token";
 
 /// Generate a short random instance ID
@@ -481,9 +480,11 @@ pub struct AppManager {
 impl AppManager {
     pub fn new(data_dir: PathBuf) -> Self {
         let (tx, rx) = mpsc::channel(1024);
+        // Keep the socket path in sync with `WorkflowManager::socket_path`.
+        let internal_socket = data_dir.join("internal.sock");
         Self {
             apps: DashMap::new(),
-            spawner: Arc::new(Spawner::new()),
+            spawner: Arc::new(Spawner::new().with_internal_socket(internal_socket)),
             event_tx: tx,
             event_rx: RwLock::new(Some(rx)),
             data_dir,

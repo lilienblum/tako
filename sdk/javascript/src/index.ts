@@ -1,11 +1,8 @@
 /**
  * tako.sh - Official SDK for Tako development, deployment, and runtime platform
  *
- * Runtime SDK for Tako apps. Provides optional features for apps deployed with Tako.
- *
  * @example
  * ```typescript
- * // Basic usage - no SDK needed!
  * export default function fetch(request: Request, env: Record<string, string>) {
  *   return new Response("Hello World!");
  * }
@@ -14,40 +11,43 @@
  * @packageDocumentation
  */
 
-export { Tako, installTakoGlobal } from "./tako";
-export { Channel, ChannelRegistry, TAKO_CHANNELS_BASE_PATH } from "./channels";
-export type {
-  EnqueueOptions,
-  EnqueueResult,
-  Run,
-  RunId,
-  RunSpec,
-  RunStatus,
-  StepRunOptions,
-  StepState,
-  StepWaitOptions,
-  WorkflowConfig,
-  WorkflowContext,
-  WorkflowDefinition,
-  WorkflowHandler,
-  Workflows,
-} from "./workflows";
-export { defineWorkflow, isWorkflowDefinition, WorkflowsClient, WorkflowsError } from "./workflows";
-export type {
-  ChannelAuthContext,
-  ChannelAuthorizeInput,
-  ChannelAuthorizeResponse,
-  ChannelConnectOptions,
-  ChannelDefinition,
-  ChannelDefinitionTransport,
-  ChannelGrant,
-  ChannelMessage,
-  ChannelOperation,
-  ChannelConnection,
-  ChannelPublishInput,
-  ChannelPublishOptions,
-  ChannelSubscribeOptions,
-  ChannelSubscription,
-  FetchHandler,
-  TakoStatus,
-} from "./types";
+import { setChannelSocketPublisher } from "./channels";
+import type { ChannelMessage } from "./types";
+import { callInternal, internalSocketFromEnv } from "./internal-socket";
+
+// Install the server-side publisher so `new Channel("x").publish(...)`
+// from app/workflow code goes over the Tako internal unix socket
+// instead of round-tripping through HTTPS + auth.
+setChannelSocketPublisher(async <T>(channel: string, message: unknown) => {
+  const internal = internalSocketFromEnv();
+  if (!internal) {
+    throw new Error(
+      "Tako.channels.publish called outside a Tako-managed process (TAKO_INTERNAL_SOCKET + TAKO_APP_NAME not set).",
+    );
+  }
+  const data = await callInternal(internal.socketPath, {
+    command: "channel_publish",
+    app: internal.app,
+    channel,
+    payload: message,
+  });
+  return data as ChannelMessage<T>;
+});
+
+export { Tako } from "./tako";
+export { Channel } from "./channels";
+export { defineChannel } from "./channels/define";
+export { defineWorkflow, WorkflowsError } from "./workflows";
+
+/**
+ * Extract the payload type from a workflow definition.
+ * Used by the generated `tako.d.ts` to type `Tako.workflows.enqueue`.
+ *
+ * @example
+ * ```ts
+ * type P = InferWorkflowPayload<typeof import("./workflows/send-email").default>;
+ * ```
+ */
+export type InferWorkflowPayload<T> = T extends import("./workflows").WorkflowDefinition<infer P>
+  ? P
+  : unknown;

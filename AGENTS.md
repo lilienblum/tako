@@ -247,7 +247,7 @@ Integration tests in `{crate}/tests/` directory for command-level behavior.
 
 ## Performance Targets
 
-- Proxy: On par with Nginx, faster than Caddy
+- Proxy: low overhead, should not be the bottleneck on the request path
 - Cold start: ~100-500ms
 - Health detection: <3s
 - Deploy time: <1 min per rolling update

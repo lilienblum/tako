@@ -81,7 +81,7 @@ var Secrets = struct {
 
 Autocompletion in your editor. Compile-time errors if you typo a secret name. No more `os.Getenv("DATABSE_URL")` bugs that only surface in production.
 
-In dev mode, `GetSecret` falls back to `os.Getenv` — same code works locally and deployed, no conditional logic needed.
+Secrets come from one place: the fd 3 bootstrap envelope Tako hands to your process at startup. The same `tako secret set …` values work in `tako dev` and `tako deploy`, with no environment-variable ambiguity.
 
 ## Channels
 

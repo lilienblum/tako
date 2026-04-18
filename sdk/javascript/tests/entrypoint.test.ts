@@ -180,10 +180,11 @@ test("createEntrypoint awaits optional ready hook before starting server", async
 test("internal status uses TAKO_BUILD and instance arg for runtime identity", async () => {
   const rootDir = await mkdtemp(path.join(tmpdir(), "tako-status-"));
   const entryModule = path.join(rootDir, "entry.mjs");
+  const { injectBootstrap } = await import("../src/tako/secrets");
 
   try {
     process.env["TAKO_BUILD"] = "build-123";
-    process.env["TAKO_INTERNAL_TOKEN"] = "token-123";
+    injectBootstrap({ token: "token-123", secrets: {} });
     await writeFile(entryModule, 'export default () => new Response("ok");\n', "utf8");
 
     process.argv = ["node", "entrypoint", entryModule, "--instance", "i-1"];
@@ -205,7 +206,7 @@ test("internal status uses TAKO_BUILD and instance arg for runtime identity", as
     });
   } finally {
     delete process.env["TAKO_BUILD"];
-    delete process.env["TAKO_INTERNAL_TOKEN"];
+    injectBootstrap({ token: null, secrets: {} });
     await rm(rootDir, { recursive: true, force: true });
   }
 });

@@ -193,8 +193,9 @@ impl super::ServerState {
             | Command::FailRun { .. }
             | Command::DeferRun { .. }
             | Command::WaitForEvent { .. }
-            | Command::Signal { .. } => Response::error(
-                "workflow commands must be sent over the per-app enqueue socket, not the management socket"
+            | Command::Signal { .. }
+            | Command::ChannelPublish { .. } => Response::error(
+                "workflow/channel commands must be sent over the workflow socket, not the management socket"
                     .to_string(),
             ),
         }

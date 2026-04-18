@@ -153,7 +153,7 @@ export class WorkflowEngine {
     }
     if (!this.client) {
       throw new Error(
-        "Workflow engine has no RPC client. Set TAKO_WORKFLOW_SOCKET + TAKO_APP_NAME or call setClient().",
+        "Workflow engine has no RPC client. Set TAKO_INTERNAL_SOCKET + TAKO_APP_NAME or call setClient().",
       );
     }
     return this.client;

@@ -1244,13 +1244,16 @@ async fn deploy_on_demand_keeps_one_warm_instance_after_successful_deploy() {
     let fake_server_py = temp.path().join("server.py");
     std::fs::write(
         &fake_server_py,
-        r#"import os
+        r#"import json
+import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 port = int(os.environ.get("PORT") or "0")
-internal_token = os.environ.get("TAKO_INTERNAL_TOKEN") or ""
+with os.fdopen(3, "r") as _bootstrap_fd:
+    _bootstrap = json.load(_bootstrap_fd)
+internal_token = _bootstrap.get("token") or ""
 if not port or not internal_token:
-raise SystemExit("PORT and TAKO_INTERNAL_TOKEN are required")
+raise SystemExit("PORT and fd 3 bootstrap token are required")
 
 class Handler(BaseHTTPRequestHandler):
 def do_GET(self):

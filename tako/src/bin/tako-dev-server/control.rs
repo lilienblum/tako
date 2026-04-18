@@ -898,7 +898,7 @@ mod tests {
         assert!(
             entries[0]
                 .line
-                .contains(r#""message":"LAN mode enabled (192.168.1.42)""#)
+                .contains(r#""msg":"LAN mode enabled (192.168.1.42)""#)
         );
     }
 }

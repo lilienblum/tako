@@ -5,9 +5,9 @@
 
 import { createEntrypoint } from "../create-entrypoint";
 import { startNodeServer } from "../node-http";
-import { initSecretsFromFd, readViaInheritedFd } from "../secrets";
+import { initBootstrapFromFd, readViaInheritedFd } from "../secrets";
 
-initSecretsFromFd(readViaInheritedFd);
+initBootstrapFromFd(readViaInheritedFd);
 const { run, host, port, setDraining } = createEntrypoint();
 
 void run(async (handleRequest) => {

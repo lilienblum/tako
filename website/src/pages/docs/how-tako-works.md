@@ -186,6 +186,10 @@ Channel reads/connects use one route:
 - `GET /channels/<name>` with `Accept: text/event-stream` for SSE
 - `GET /channels/<name>` with `Upgrade: websocket` for WebSocket
 
+Channel names are hierarchical: everything after `/channels/` (up to the optional `/messages` suffix for publishes) is the channel name. `chat/room-123` is a valid channel; it lives at `/channels/chat/room-123`.
+
+Channels are declared as files under `channels/<name>.ts`, each default-exporting `defineChannel(pattern, config)`. Patterns are Hono-style paths with `:param` captures and optional trailing `*` wildcards. The presence of `handler` in the config determines transport: with `handler` the channel is WebSocket (client frames route through the handler and its return value fans out), without it the channel is SSE (broadcast-only; client POSTs are rejected with 405).
+
 Channels keep a bounded replay window for reconnects and reloads. SSE resumes from `Last-Event-ID`, and WebSocket resumes from `last_message_id` in the query string. WebSocket frames stay JSON text frames for both replayed messages and client publish payloads.
 
 ## Scaling

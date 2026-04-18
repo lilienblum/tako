@@ -47,12 +47,14 @@ import (
 )
 
 var (
-	// secrets is populated from fd 3 at init time (Tako runtime ABI).
-	// In dev mode (no fd 3), GetSecret falls back to os.Getenv.
+	// bootstrap is the fd 3 envelope, read once at init. Nil in dev mode
+	// (no Tako-managed fd 3).
+	bootstrap = internal.BootstrapFromFd3()
+	// secrets is populated from the bootstrap envelope.
 	secrets = func() *internal.SecretStore {
 		s := internal.NewSecretStore()
-		if fd3Secrets := internal.SecretsFromFd3(); fd3Secrets != nil {
-			s.Inject(fd3Secrets)
+		if bootstrap != nil {
+			s.Inject(bootstrap.Secrets)
 		}
 		return s
 	}()
@@ -63,7 +65,7 @@ var (
 
 func config() internal.Config {
 	configOnce.Do(func() {
-		configVal = internal.ParseConfig()
+		configVal = internal.ParseConfig(bootstrap)
 	})
 	return configVal
 }
@@ -225,8 +227,8 @@ func Uptime() time.Duration {
 // in tako_secrets.go — use the typed Secrets struct instead of calling this
 // directly.
 //
-// In production, secrets are loaded from fd 3 at process startup.
-// In dev mode (no fd 3), falls back to os.Getenv.
+// Secrets are loaded from fd 3 at process startup in both dev and production.
+// If a secret is not defined, GetSecret returns an empty string.
 //
 // Run `tako typegen` to generate the Secrets struct:
 //
@@ -236,10 +238,7 @@ func Uptime() time.Duration {
 //	// Instead of this:
 //	db := tako.GetSecret("DATABASE_URL")
 func GetSecret(name string) string {
-	if v := secrets.Get(name); v != "" {
-		return v
-	}
-	return os.Getenv(name)
+	return secrets.Get(name)
 }
 
 func int64ToString(value int64) string {
