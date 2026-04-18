@@ -113,9 +113,18 @@ export class Logger {
   toViteLogger(): ViteLogger {
     const seenWarnings = new Set<string>();
     const seenErrors = new WeakSet<object>();
+    // CodeQL[js/polynomial-redos]: split/join avoids the \s/\n overlap that
+    // makes anchored regexes like /^\s*\n|\n\s*$/g polynomial on all-newline
+    // input. Strips fully blank outer lines while preserving intra-line
+    // indentation on the first/last content lines.
     const normalize = (msg: string): string | null => {
-      const trimmed = msg.replace(/^\s*\n|\n\s*$/g, "");
-      return trimmed.trim().length === 0 ? null : trimmed;
+      const lines = msg.split("\n");
+      let first = 0;
+      while (first < lines.length && lines[first]!.trim() === "") first++;
+      if (first === lines.length) return null;
+      let last = lines.length - 1;
+      while (lines[last]!.trim() === "") last--;
+      return lines.slice(first, last + 1).join("\n");
     };
     const self: ViteLogger = {
       hasWarned: false,

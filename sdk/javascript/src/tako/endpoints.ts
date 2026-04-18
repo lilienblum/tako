@@ -42,6 +42,11 @@ function internalToken(): string | null {
   return getInternalToken();
 }
 
+// CodeQL[js/stack-trace-exposure]: body may carry `err.message` (not stack)
+// from user handler exceptions via DispatchResult. This endpoint is gated on
+// Host: tako.internal + internal token — only the tako-server infra reaches
+// it, and the server uses the error string for operator logging, never
+// forwarding it to external WS clients.
 function internalResponse(
   body: unknown,
   status: number,
