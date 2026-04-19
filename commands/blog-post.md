@@ -107,6 +107,7 @@ Then pin down for the prompt text:
   (3) What verb is each octopus physically doing? (not "standing" / "holding next to" — an active verb)
   (4) What emotional beat does each octopus carry? (determined, delighted, mischievous, proud, nervous, triumphant)
   (5) What gesture makes each beat legible? (tentacles raised, pointing, bracing, mid-throw, arms crossed)
+  (6) Does the frame contain the post's literal subject, or only a metaphorical stand-in? If someone couldn't guess the post's topic from the image + title, pick a more literal moment (workflows → an actual multi-step assembly line; routing → an actual switchboard; secrets → an actual vault).
 
 Aim for "single frame of something I recognize by its visual grammar," not "mascot standing in a scene." Whimsical props and slightly absurd juxtapositions are encouraged when they fit.]
 
@@ -124,6 +125,8 @@ Output: a single image in widescreen landscape format.
 The prompt should be specific to the post's topic — not generic. The #1 failure mode is a tidy but lifeless "object + object" composition where the octopus just stands next to some props. The fix is not more motion lines or a better pose — the fix is **telling a story**. A hero image works when it borrows a single frame from a recognizable genre moment and the image arrives pre-loaded with tone, stakes, and meaning. Without a story anchor you're just decorating; with one, you're telling.
 
 **Pick the moment before you write the prompt.** Start by asking: _"If this blog post were a historical painting or an iconic scene, what would it depict?"_ Then take that one specific frame and cast the octopus into it. The reference should actually match the post's content and mood — don't force it, and don't default to the same reference across adjacent posts. Variety matters; context matters more.
+
+**The image must be guessable, not decodable.** A reader should see the hero, glance at the title, and feel "yeah, that fits" — not need a paragraph of explanation to connect the visuals to the post's subject. The most common failure is picking a moment whose relevance only lands after you explain the metaphor (e.g. "the octopus has eight arms, so a solo chef represents a single process running many concurrent steps"). That's one hop too many. Prefer moments that contain the post's literal subject (workflows → an actual multi-step assembly line or switchboard; routing → an actual sorting room; secrets → an actual vault). Metaphor is fine; metaphor that needs a decoder ring is not. If you'd need to say "it's about X because Y," start over — the Y should already be visible.
 
 **Then describe it without naming it.** ChatGPT's image guardrails frequently reject prompts that name copyrighted films, characters, franchises, mascots, trademarked worlds, or living artists — including "inspired by" and "in the style of" phrasings. You'll see: _"the prompt may violate our guardrails concerning similarity to third-party content."_ The fix isn't to argue with the guardrail — it's to write the description so vividly in visual terms (setting, era, costumes, lighting, poses, props) that the reference lands through recognition of the visual grammar, not through the proper noun. The picks in the table below are intentionally trope- and public-domain-leaning so this is natural; if you find yourself reaching for a modern film or character, translate it to its setting + costume + prop + pose before writing the prompt.
 
@@ -158,13 +161,14 @@ Again: the table is a nudge, not a box. A post about WebSocket channels might bo
 **Quick self-check before finalizing the prompt:**
 
 - **What moment is this a frame of?** (If you can't describe it in one sentence, you don't have one yet.)
+- **Can someone guess the post's topic from the image + title alone?** Squint test: if a reader would need you to explain the metaphor to see the link, the image isn't doing its job. Try to get the post's literal subject into the frame (workflow steps → an actual assembly line; routing → an actual switchboard), not just a thematic stand-in.
 - **Did I avoid naming any film, show, book, character, franchise, mascot, brand, or living artist?** (Including "inspired by" / "in the style of.")
 - **Would a reader recognize the moment from the visuals alone — the costumes, lighting, props, pose?**
 - **Is there an active verb per octopus?** ("standing," "holding," "next to" don't count.)
 - **Is there a facial expression per octopus, and do they differ?**
 - **Are the tentacles doing something specific, or just hanging?**
 
-If the answer to "what moment?" is fuzzy, stop and pick one before writing the scene. If the answer to "did I avoid naming anything?" is "no," strip the names and replace them with visual detail.
+If the answer to "what moment?" is fuzzy, stop and pick one before writing the scene. If the squint test fails, pick a moment that shows the post's subject more literally. If the answer to "did I avoid naming anything?" is "no," strip the names and replace them with visual detail.
 
 After writing the post, copy the image prompt text (everything between the `<!-- IMAGE PROMPT` and `-->` markers, excluding the markers themselves) to the clipboard using `pbcopy`.
 

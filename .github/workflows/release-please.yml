@@ -34,7 +34,22 @@ jobs:
       matrix:
         pr: ${{ fromJson(needs.release-please.outputs.prs) }}
     steps:
+      # Skip if the release PR was merged (and branch deleted) between when
+      # release-please-action computed its output and when this job runs.
+      - name: Check branch still exists
+        id: branch
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          if gh api "repos/${{ github.repository }}/branches/${{ matrix.pr.headBranchName }}" >/dev/null 2>&1; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Branch ${{ matrix.pr.headBranchName }} no longer exists (PR likely merged). Skipping."
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Checkout PR branch
+        if: steps.branch.outputs.exists == 'true'
         uses: actions/checkout@v6
         with:
           ref: ${{ matrix.pr.headBranchName }}
@@ -42,6 +57,7 @@ jobs:
 
       - name: Check for Cargo.toml changes
         id: check
+        if: steps.branch.outputs.exists == 'true'
         run: |
           git fetch origin master --depth=1
           if git diff origin/master --name-only | grep -q 'Cargo.toml'; then
