@@ -731,4 +731,52 @@ mod tests {
             .unwrap();
         assert_eq!(run_at, i64::MAX);
     }
+
+    #[test]
+    fn reclaim_expired_moves_past_due_leases_back_to_pending() {
+        let db = RunsDb::open_in_memory().unwrap();
+        let r = db.enqueue("w", &serde_json::json!({}), &opts()).unwrap();
+        // Claim then rewrite lease_until into the past to simulate a worker
+        // that died mid-run and never completed / heartbeated.
+        db.claim("w1", &["w".into()], 30_000).unwrap();
+        {
+            let conn = db.conn.lock();
+            conn.execute(
+                "UPDATE runs SET lease_until = ?1 WHERE id = ?2",
+                params![now_ms() - 1_000, r.id],
+            )
+            .unwrap();
+        }
+
+        let reclaimed = db.reclaim_expired().unwrap();
+        assert_eq!(reclaimed, 1);
+
+        // The row is pending again, with no lease owner — and claimable.
+        let next = db.claim("w2", &["w".into()], 30_000).unwrap().unwrap();
+        assert_eq!(next.id, r.id);
+    }
+
+    #[test]
+    fn reclaim_expired_leaves_runs_with_valid_lease_alone() {
+        let db = RunsDb::open_in_memory().unwrap();
+        db.enqueue("w", &serde_json::json!({}), &opts()).unwrap();
+        // Claim with a long lease; it must not be reclaimed.
+        db.claim("w1", &["w".into()], 60_000).unwrap();
+
+        assert_eq!(db.reclaim_expired().unwrap(), 0);
+        // Still held by w1 — a fresh claim finds nothing.
+        assert!(db.claim("w2", &["w".into()], 30_000).unwrap().is_none());
+    }
+
+    #[test]
+    fn reclaim_expired_ignores_terminal_runs() {
+        // A succeeded / dead / cancelled row has lease_until=NULL, but we
+        // still want to be explicit: only status='running' is reclaimed.
+        let db = RunsDb::open_in_memory().unwrap();
+        let r = db.enqueue("w", &serde_json::json!({}), &opts()).unwrap();
+        db.claim("w1", &["w".into()], 30_000).unwrap();
+        db.complete(&r.id, "w1").unwrap();
+
+        assert_eq!(db.reclaim_expired().unwrap(), 0);
+    }
 }

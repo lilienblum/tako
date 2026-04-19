@@ -19,12 +19,17 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::Mutex;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::time::timeout;
+
+/// After a worker crashes (non-zero exit before claiming any runs), refuse
+/// to respawn or accept enqueues until this window elapses. Gives the user
+/// a clear error at the next enqueue instead of a silent crash loop.
+const UNHEALTHY_COOLDOWN: Duration = Duration::from_secs(5);
 
 /// Callback invoked once per line of worker stdout/stderr when
 /// [`WorkerSpec::log_sink`] is set. `is_stderr` is `true` for stderr.
@@ -82,6 +87,8 @@ pub enum SupervisorError {
     EmptyCommand,
     #[error("spawn failed: {0}")]
     Spawn(#[from] std::io::Error),
+    #[error("worker unhealthy: {0}")]
+    Unhealthy(String),
 }
 
 pub struct WorkerSupervisor {
@@ -89,9 +96,32 @@ pub struct WorkerSupervisor {
     state: Arc<Mutex<State>>,
 }
 
+struct ChildEntry {
+    child: Child,
+    spawned_at: Instant,
+    /// Value of `health.runs_claimed_total` at spawn time. If the child
+    /// exits and this counter hasn't advanced, the worker never managed
+    /// to claim a single run — a strong signal its bootstrap is broken.
+    claimed_snapshot: u64,
+}
+
+#[derive(Default)]
+struct WorkerHealth {
+    /// Monotonically-increasing count of `notify_claimed()` calls — bumped
+    /// by the enqueue-socket handler whenever a worker successfully claims
+    /// a run.
+    runs_claimed_total: u64,
+    /// When `Some(t)` and `now < t`, the supervisor refuses to spawn new
+    /// workers and the enqueue RPC returns an error. Cleared on the next
+    /// successful claim.
+    unhealthy_until: Option<Instant>,
+    last_error: Option<String>,
+}
+
 struct State {
-    children: Vec<Child>,
+    children: Vec<ChildEntry>,
     shutting_down: bool,
+    health: WorkerHealth,
 }
 
 impl WorkerSupervisor {
@@ -101,11 +131,13 @@ impl WorkerSupervisor {
             state: Arc::new(Mutex::new(State {
                 children: Vec::new(),
                 shutting_down: false,
+                health: WorkerHealth::default(),
             })),
         }
     }
 
-    /// Launch all always-on workers. No-op when `workers == 0`.
+    /// Launch all always-on workers. No-op when `workers == 0`
+    /// (scale-to-zero: `wake()` spawns on demand).
     pub async fn start(&self) -> Result<(), SupervisorError> {
         if self.spec.workers == 0 {
             return Ok(());
@@ -121,21 +153,35 @@ impl WorkerSupervisor {
     /// spawns a worker if none is running. For always-on, respawns any
     /// that died. Holds the state lock across the spawn calls so two
     /// concurrent wakes can't both see an empty slot and over-spawn.
+    ///
+    /// Returns `Unhealthy` during the cooldown window after a crash-loop
+    /// detection — caller should surface this to the user instead of
+    /// silently respawning.
     pub fn wake(&self) -> Result<(), SupervisorError> {
         let mut state = self.state.lock();
         if state.shutting_down {
             return Ok(());
         }
-        state
-            .children
-            .retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+        Self::process_exits(&mut state, self.spec.log_sink.as_ref());
+        if let Some(reason) = Self::unhealthy_reason(&state) {
+            return Err(SupervisorError::Unhealthy(reason));
+        }
         let target = if self.spec.workers == 0 {
             if state.children.is_empty() { 1 } else { 0 }
         } else {
             (self.spec.workers as usize).saturating_sub(state.children.len())
         };
         for _ in 0..target {
-            self.spawn_one_locked(&mut state)?;
+            if let Err(e) = self.spawn_one_locked(&mut state) {
+                // Spawn itself failed (program-not-found, fork error, etc.).
+                // Mark unhealthy so the next enqueue surfaces a clear error
+                // instead of retrying the same broken command endlessly.
+                let msg = format!("worker spawn failed: {e}");
+                state.health.unhealthy_until = Some(Instant::now() + UNHEALTHY_COOLDOWN);
+                state.health.last_error = Some(msg.clone());
+                Self::emit_health_error(self.spec.log_sink.as_ref(), &msg);
+                return Err(e);
+            }
         }
         Ok(())
     }
@@ -143,10 +189,102 @@ impl WorkerSupervisor {
     /// Returns true while at least one child is running.
     pub fn is_running(&self) -> bool {
         let mut state = self.state.lock();
-        state
-            .children
-            .retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+        Self::process_exits(&mut state, self.spec.log_sink.as_ref());
         !state.children.is_empty()
+    }
+
+    /// Pre-enqueue probe. Returns `Err` with a user-facing message if the
+    /// worker is in the post-crash cooldown window. Called by the internal
+    /// socket's `EnqueueRun` handler before writing to the DB — lets the
+    /// SDK `Tako.workflows.enqueue` reject loudly when the worker can't
+    /// possibly process the job.
+    pub fn check_startup_health(&self) -> Result<(), String> {
+        let mut state = self.state.lock();
+        Self::process_exits(&mut state, self.spec.log_sink.as_ref());
+        match Self::unhealthy_reason(&state) {
+            Some(reason) => Err(reason),
+            None => Ok(()),
+        }
+    }
+
+    /// Record that a worker successfully claimed a run. Resets any
+    /// crash-loop cooldown — a worker that claims work is by definition
+    /// healthy enough to process the queue.
+    pub fn notify_claimed(&self) {
+        let mut state = self.state.lock();
+        state.health.runs_claimed_total = state.health.runs_claimed_total.saturating_add(1);
+        state.health.unhealthy_until = None;
+        state.health.last_error = None;
+    }
+
+    /// Drain exited children and update health accordingly. Must be called
+    /// with the state lock held. A child that exits non-zero without
+    /// claiming any runs flips the supervisor into the unhealthy cooldown
+    /// state; a clean exit (code 0) or an exit after at least one claim
+    /// is treated as normal idle-out.
+    fn process_exits(state: &mut State, log_sink: Option<&WorkerLogSink>) {
+        let entries: Vec<ChildEntry> = state.children.drain(..).collect();
+        let mut still_live = Vec::with_capacity(entries.len());
+        let mut cold_crashes: Vec<(Option<i32>, Duration)> = Vec::new();
+        for mut entry in entries {
+            match entry.child.try_wait() {
+                Ok(None) => still_live.push(entry),
+                Ok(Some(status)) => {
+                    let code = status.code();
+                    let crashed = code != Some(0);
+                    let claimed = state
+                        .health
+                        .runs_claimed_total
+                        .saturating_sub(entry.claimed_snapshot)
+                        > 0;
+                    if crashed && !claimed && !state.shutting_down {
+                        cold_crashes.push((code, entry.spawned_at.elapsed()));
+                    }
+                }
+                Err(_) => {}
+            }
+        }
+        state.children = still_live;
+        for (code, ran_for) in cold_crashes {
+            let code_str = code
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string());
+            let msg = format!(
+                "worker exited with status {code_str} after {}ms without claiming any runs",
+                ran_for.as_millis()
+            );
+            state.health.unhealthy_until = Some(Instant::now() + UNHEALTHY_COOLDOWN);
+            state.health.last_error = Some(msg.clone());
+            Self::emit_health_error(log_sink, &msg);
+        }
+    }
+
+    fn unhealthy_reason(state: &State) -> Option<String> {
+        let until = state.health.unhealthy_until?;
+        if Instant::now() < until {
+            Some(
+                state
+                    .health
+                    .last_error
+                    .clone()
+                    .unwrap_or_else(|| "worker unhealthy".to_string()),
+            )
+        } else {
+            None
+        }
+    }
+
+    fn emit_health_error(log_sink: Option<&WorkerLogSink>, msg: &str) {
+        if let Some(sink) = log_sink {
+            let payload = serde_json::json!({
+                "ts": unix_millis_now(),
+                "level": "error",
+                "scope": "tako",
+                "msg": msg,
+            });
+            (sink)(&payload.to_string(), true);
+        }
+        tracing::warn!("{msg}");
     }
 
     /// SIGTERM all children, wait for exit, SIGKILL after `drain_timeout`.
@@ -154,7 +292,11 @@ impl WorkerSupervisor {
         let pids: Vec<u32> = {
             let mut state = self.state.lock();
             state.shutting_down = true;
-            state.children.iter_mut().filter_map(|c| c.id()).collect()
+            state
+                .children
+                .iter_mut()
+                .filter_map(|entry| entry.child.id())
+                .collect()
         };
 
         for pid in &pids {
@@ -171,7 +313,8 @@ impl WorkerSupervisor {
             loop {
                 {
                     let mut s = state.lock();
-                    s.children.retain_mut(|c| matches!(c.try_wait(), Ok(None)));
+                    s.children
+                        .retain_mut(|entry| matches!(entry.child.try_wait(), Ok(None)));
                     if s.children.is_empty() {
                         return;
                     }
@@ -184,8 +327,8 @@ impl WorkerSupervisor {
         if waited.is_err() {
             // Force-kill stragglers.
             let mut state = self.state.lock();
-            for child in state.children.iter_mut() {
-                let _ = child.start_kill();
+            for entry in state.children.iter_mut() {
+                let _ = entry.child.start_kill();
             }
         }
     }
@@ -308,9 +451,21 @@ impl WorkerSupervisor {
             }
         }
 
-        state.children.push(child);
+        state.children.push(ChildEntry {
+            child,
+            spawned_at: Instant::now(),
+            claimed_snapshot: state.health.runs_claimed_total,
+        });
         Ok(())
     }
+}
+
+fn unix_millis_now() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// Create a pipe with secrets JSON streamed from a dedicated writer
@@ -487,6 +642,89 @@ mod tests {
 
         let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
         assert_eq!(parsed["BIG"].as_str(), Some(big_value.as_str()));
+    }
+
+    fn failing_spec(cwd: PathBuf) -> WorkerSpec {
+        // `false` exits immediately with status 1. Simulates a worker whose
+        // bootstrap throws (bad code, missing entrypoint, etc.) — exits
+        // non-zero without claiming any runs.
+        WorkerSpec {
+            app: "test".into(),
+            workers: 0,
+            concurrency: 1,
+            idle_timeout_ms: 0,
+            command: vec!["false".into()],
+            cwd,
+            env: HashMap::new(),
+            secrets: HashMap::new(),
+            log_sink: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn health_check_ok_before_any_spawn() {
+        let dir = tempdir().unwrap();
+        let sup = WorkerSupervisor::new(sleep_spec(dir.path().into(), 0, "10"));
+        assert!(sup.check_startup_health().is_ok());
+    }
+
+    #[tokio::test]
+    async fn health_check_fails_after_worker_exits_without_claiming() {
+        let dir = tempdir().unwrap();
+        let sup = WorkerSupervisor::new(failing_spec(dir.path().into()));
+        sup.wake().unwrap();
+        // Let the child exit.
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // Re-poll: this call processes exits and flips the health flag.
+        let err = sup.check_startup_health().expect_err("should be unhealthy");
+        assert!(
+            err.contains("worker exited"),
+            "error should describe cold exit, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn notify_claimed_clears_unhealthy_state() {
+        let dir = tempdir().unwrap();
+        let sup = WorkerSupervisor::new(failing_spec(dir.path().into()));
+        sup.wake().unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        sup.check_startup_health().unwrap_err();
+        sup.notify_claimed();
+        assert!(sup.check_startup_health().is_ok());
+    }
+
+    #[tokio::test]
+    async fn wake_returns_error_while_in_unhealthy_cooldown() {
+        let dir = tempdir().unwrap();
+        let sup = WorkerSupervisor::new(failing_spec(dir.path().into()));
+        sup.wake().unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        // First wake after cold-exit observation must refuse to respawn.
+        sup.check_startup_health().unwrap_err();
+        let err = sup.wake().expect_err("wake during cooldown should error");
+        assert!(matches!(err, SupervisorError::Unhealthy(_)));
+    }
+
+    #[tokio::test]
+    async fn clean_idle_exit_does_not_mark_unhealthy() {
+        // `true` exits 0 immediately — simulates a clean idle-out.
+        let dir = tempdir().unwrap();
+        let spec = WorkerSpec {
+            app: "test".into(),
+            workers: 0,
+            concurrency: 1,
+            idle_timeout_ms: 0,
+            command: vec!["true".into()],
+            cwd: dir.path().into(),
+            env: HashMap::new(),
+            secrets: HashMap::new(),
+            log_sink: None,
+        };
+        let sup = WorkerSupervisor::new(spec);
+        sup.wake().unwrap();
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(sup.check_startup_health().is_ok());
     }
 
     #[tokio::test]

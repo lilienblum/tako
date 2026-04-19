@@ -17,7 +17,8 @@ use parking_lot::RwLock;
 use super::cron::{self, CronTickerHandle};
 use super::enqueue::{RunsDb, RunsDbError};
 use super::enqueue_socket::{
-    AppLookup, ChannelPublishFn, EnqueueSocketHandle, OnEnqueue, spawn as spawn_workflow_socket,
+    AppHandlers, AppLookup, ChannelPublishFn, EnqueueSocketHandle, HealthCheck, OnClaimed,
+    OnEnqueue, spawn as spawn_workflow_socket,
 };
 use super::supervisor::{WorkerSpec, WorkerSupervisor};
 
@@ -108,10 +109,26 @@ impl WorkflowManager {
             let apps = apps.read();
             apps.get(app).map(|entry| {
                 let sup = entry.supervisor.clone();
+                let sup_for_enqueue = sup.clone();
+                let sup_for_health = sup.clone();
+                let sup_for_claim = sup.clone();
                 let on_enqueue: OnEnqueue = Arc::new(move || {
-                    let _ = sup.wake();
+                    // wake() errors surface via health_check on the next
+                    // enqueue; the log_sink inside the supervisor carries
+                    // any human-readable detail.
+                    let _ = sup_for_enqueue.wake();
                 });
-                (entry.db.clone(), on_enqueue)
+                let health_check: HealthCheck =
+                    Arc::new(move || sup_for_health.check_startup_health());
+                let on_claimed: OnClaimed = Arc::new(move || {
+                    sup_for_claim.notify_claimed();
+                });
+                AppHandlers {
+                    db: entry.db.clone(),
+                    on_enqueue,
+                    health_check,
+                    on_claimed,
+                }
             })
         });
         let publisher = self.channel_publish.lock().clone();
@@ -222,9 +239,12 @@ pub fn worker_spec_for_bun(
     secrets: std::collections::HashMap<String, String>,
 ) -> WorkerSpec {
     let mut env = std::collections::HashMap::new();
-    env.insert("TAKO_APP_NAME".into(), app.to_string());
     env.insert(
-        "TAKO_WORKFLOW_SOCKET".into(),
+        tako_core::instance_env::TAKO_APP_NAME_ENV.into(),
+        app.to_string(),
+    );
+    env.insert(
+        tako_core::instance_env::TAKO_INTERNAL_SOCKET_ENV.into(),
         workflow_socket.to_string_lossy().to_string(),
     );
 

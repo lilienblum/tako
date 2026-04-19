@@ -135,8 +135,8 @@ idle_timeout = 120
 - `tako dev` resolves the dev command with this priority:
   1. `dev` in `tako.toml` (user override, e.g. `dev = ["custom", "cmd"]`)
   2. Preset `dev` command (e.g. vite preset uses `vite dev`)
-  3. Runtime default: JS runtimes run through the SDK entrypoint (`bun run node_modules/tako.sh/dist/entrypoints/bun-server.mjs {main}`), Go uses `go run .`
-- JS dev uses the same SDK entrypoint as production — the SDK wraps `export default function fetch()` or `export default { fetch }` into a proper HTTP server on `PORT`.
+  3. Runtime default: JS runtimes run through the SDK dev entrypoint (`bun run node_modules/tako.sh/dist/entrypoints/bun-dev.mjs {main}`, or the `node-dev.mjs` / `deno-dev.mjs` equivalents), Go uses `go run .`
+- The dev entrypoints host the HTTP server. Workflow workers run as a **separate, scale-to-zero subprocess** managed by tako-dev-server's embedded `WorkflowManager` — same architecture as production, but `workers: 0` with a 3s idle timeout so the worker only exists while there's real work. The SDK wraps `export default function fetch()` or `export default { fetch }` into a proper HTTP server on `PORT`; worker stdout/stderr is tee'd into the CLI log stream with `scope: "worker"`.
 - Process exit detection: `tako dev` polls `try_wait()` every 500ms to detect when the app process exits. On exit, the route goes idle (proxy stops forwarding) and the next HTTP request triggers a restart.
 - `tako dev` resolves unpinned official preset aliases from cached or embedded preset data when available and only fetches from the `master` branch as a last resort.
 - `tako deploy` resolves unpinned official preset aliases from the `master` branch on each deploy; if the refresh fails, it falls back to cached content.
@@ -1712,7 +1712,7 @@ queue service.
   - `steps` — one row per completed step `(run_id, name, result)`. First-write-wins via `INSERT OR IGNORE` so duplicate saves after a retried RPC don't overwrite.
   - `event_waiters` — runs parked on `step.waitFor`, indexed by `event_name` for fast lookup on `signal`.
   - `schedules`, `leader_leases` — cron infrastructure.
-- **tako-server (Rust)** — owns the DB, exposes the per-app unix socket, runs the cron ticker, and supervises the worker subprocess.
+- **tako-server (Rust)** — owns the DB, exposes the per-app unix socket, runs the cron ticker, and supervises the worker subprocess. The ticker also calls `reclaim_expired()` every second: any run stuck in `status='running'` past its `lease_until` is moved back to `pending` and the supervisor is woken so a fresh worker picks it up. This is how runs recover from a worker that died mid-execution (SIGKILL, OOM, host crash, server-level restart without graceful drain).
 - **Worker process (JS or Go)** — loads user code, claims runs, executes handlers. Separate from HTTP instances so heavy workflow deps don't bloat the request-serving process.
 - **SDK** — `Tako.workflows.enqueue` / `Tako.workflows.signal` (JS), `tako.Enqueue` / `tako.Signal` (Go). Thin RPC client. Workers also use it for claim/heartbeat/save/complete/cancel/fail/defer/wait. **No SQLite in any SDK.**
 
@@ -1859,7 +1859,7 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 - Single shared workflow socket at `{tako_data_dir}/workflows.sock` (symlink → `workflows-{pid}.sock`, atomically swapped during upgrades for zero-downtime handoff — same pattern as the mgmt socket).
 - Every command carries an `app` field so one socket routes for every deployed app.
 - Auth: filesystem permissions only (`chmod 0600`, owned by the service user).
-- SDKs read `TAKO_WORKFLOW_SOCKET` and `TAKO_APP_NAME` env vars (set by tako-server when spawning app/worker processes).
+- SDKs read `TAKO_INTERNAL_SOCKET` and `TAKO_APP_NAME` env vars. Both spawners (tako-server in production and tako-dev-server in `tako dev`) share one env contract defined in `tako-core::instance_env::TakoRuntimeEnv` so the dev and prod runtimes can't drift. The SDK asserts the pair is set together at import time — a half-set env (one var without the other) is a platform bug and crashes the process on boot rather than silently failing at the first `Tako.workflows.enqueue` or `Tako.channels.publish`.
 - From any process: `EnqueueRun`, `Signal`.
 - From worker processes: `ClaimRun`, `HeartbeatRun`, `SaveStep`, `CompleteRun`, `CancelRun`, `FailRun`, `DeferRun`, `WaitForEvent`, `RegisterSchedules`.
 - JSONL protocol, per-call connection (connect → send → read → close).
@@ -1867,13 +1867,11 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 
 ### Dev mode
 
-`tako dev` typically runs both HTTP and worker in the **same process** so log output is unified. Opt in by pointing `[dev]` in `tako.toml` at the combined dev entrypoint:
+`tako dev` uses the same workflow architecture as production: tako-dev-server owns the runs DB, enqueue socket, and a `WorkerSupervisor` that spawns a worker subprocess on demand. The worker is **scale-to-zero** (`workers: 0`, `idle_timeout_ms: 3_000`) so it only runs while there's real work, and every wake re-spawns it fresh — so code edits take effect on the next enqueue without restarting `tako dev`. Worker stdout/stderr is tee'd into the same log stream as the app process, with `scope: "worker"` so the CLI can prefix it.
 
-```toml
-dev = ["bun", "run", "node_modules/tako.sh/dist/entrypoints/bun-dev.mjs", "{main}"]
-```
+On every `RegisterApp`, the dev-server registers the app with its embedded `WorkflowManager` — same `ensure()` call as production — so the first `Tako.workflows.enqueue` / `Tako.channels.publish` from user code doesn't race the registration.
 
-The dev entrypoint boots both the HTTP server and the worker loop (scale-to-zero, in-process). Worker-side logs are prefixed with `[worker]`. The tako-dev-server owns the runs DB and enqueue socket — same architecture as production, just no separate worker subprocess.
+**Fail-fast on broken workers.** If the worker subprocess exits non-zero without claiming any run (typical for import errors, missing workflow module, crash on boot), the supervisor marks the app unhealthy for 5s. During that window, `EnqueueRun` returns `worker unhealthy: <reason>` instead of silently queuing work that will never execute. The SDK surfaces this to the caller as a normal error so broken dev code is loud instead of hanging. Clean idle-out (exit 0 after `idle_timeout_ms`) never marks unhealthy.
 
 ## Edge Cases & Error Handling
 

@@ -5,6 +5,7 @@
 
 import { installConsoleBridge } from "../../console-bridge";
 import { installErrorHooks } from "../../error-hooks";
+import { createLogger } from "../../logger";
 import { initBootstrapFromFd, readViaInheritedFd } from "../secrets";
 import { installTakoGlobal } from "../../tako";
 import { bootstrapWorker } from "../../workflows/bootstrap";
@@ -13,21 +14,22 @@ import { workflowsEngine } from "../../workflows/engine";
 installErrorHooks("worker");
 installConsoleBridge("worker");
 
+const log = createLogger("worker");
+
 async function main(): Promise<void> {
   initBootstrapFromFd(readViaInheritedFd);
   installTakoGlobal();
   const result = await bootstrapWorker();
   if (!result.started) {
-    console.error(`tako-worker: not started (${result.reason ?? "unknown"})`);
+    log.error("Worker not started", { reason: result.reason ?? "unknown" });
     process.exit(result.reason === "no workflows discovered" ? 0 : 1);
   }
-  console.log(`tako-worker: running ${result.workflowCount} workflow(s)`);
 
   let shuttingDown = false;
-  const shutdown = async (signal: string): Promise<void> => {
+  const shutdown = async (reason: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
-    console.log(`tako-worker: received ${signal}, draining`);
+    log.info("Shutting down", { reason });
     await workflowsEngine.drain();
     process.exit(0);
   };

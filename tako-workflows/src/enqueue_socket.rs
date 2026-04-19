@@ -29,9 +29,28 @@ use super::enqueue::RunsDb;
 /// Used to wake the supervisor (so `workers = 0` scale-to-zero spawns).
 pub type OnEnqueue = Arc<dyn Fn() + Send + Sync>;
 
-/// Lookup: given an app name, return the `RunsDb` + `OnEnqueue` wake
-/// closure for that app, or `None` if the app isn't registered.
-pub type AppLookup = Arc<dyn Fn(&str) -> Option<(Arc<RunsDb>, OnEnqueue)> + Send + Sync>;
+/// Pre-enqueue probe: returns `Err(reason)` when the worker can't currently
+/// process jobs (e.g. crash-looping after bootstrap failure). Gives the SDK
+/// `Tako.workflows.enqueue` a chance to reject loudly instead of queuing
+/// into a black hole.
+pub type HealthCheck = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
+
+/// Fired whenever a worker successfully claims a run. Signals to the
+/// supervisor's crash-loop guard that the current process is making
+/// forward progress.
+pub type OnClaimed = Arc<dyn Fn() + Send + Sync>;
+
+/// Per-app handlers the workflow socket needs to service one connection.
+pub struct AppHandlers {
+    pub db: Arc<RunsDb>,
+    pub on_enqueue: OnEnqueue,
+    pub health_check: HealthCheck,
+    pub on_claimed: OnClaimed,
+}
+
+/// Lookup: given an app name, return the handlers for that app, or
+/// `None` if the app isn't registered.
+pub type AppLookup = Arc<dyn Fn(&str) -> Option<AppHandlers> + Send + Sync>;
 
 /// Closure that appends a `ChannelPublishPayload` to an app's channel
 /// store. Returns the stored message as a JSON value on success, or an
@@ -222,9 +241,15 @@ fn handle_command(
         };
     }
 
-    let Some((db, on_enqueue)) = lookup(&app) else {
+    let Some(handlers) = lookup(&app) else {
         return Response::error(format!("unknown app: {app}"));
     };
+    let AppHandlers {
+        db,
+        on_enqueue,
+        health_check,
+        on_claimed,
+    } = handlers;
 
     match cmd {
         Command::EnqueueRun {
@@ -232,13 +257,18 @@ fn handle_command(
             payload,
             opts,
             ..
-        } => match db.enqueue(&name, &payload, &opts) {
-            Ok(r) => {
-                (on_enqueue)();
-                Response::ok(r)
+        } => {
+            if let Err(reason) = (health_check)() {
+                return Response::error(format!("worker unhealthy: {reason}"));
             }
-            Err(e) => Response::error(format!("enqueue failed: {e}")),
-        },
+            match db.enqueue(&name, &payload, &opts) {
+                Ok(r) => {
+                    (on_enqueue)();
+                    Response::ok(r)
+                }
+                Err(e) => Response::error(format!("enqueue failed: {e}")),
+            }
+        }
         Command::RegisterSchedules { schedules, .. } => match register_schedules(&db, &schedules) {
             Ok(()) => Response::ok(serde_json::json!({ "count": schedules.len() })),
             Err(e) => Response::error(format!("register_schedules failed: {e}")),
@@ -249,7 +279,10 @@ fn handle_command(
             lease_ms,
             ..
         } => match db.claim(&worker_id, &names, lease_ms) {
-            Ok(Some(run)) => Response::ok(run),
+            Ok(Some(run)) => {
+                (on_claimed)();
+                Response::ok(run)
+            }
             Ok(None) => Response::ok(serde_json::Value::Null),
             Err(e) => Response::error(format!("claim failed: {e}")),
         },
@@ -343,9 +376,11 @@ mod tests {
 
     fn lookup_for(map: std::collections::HashMap<String, Arc<RunsDb>>) -> AppLookup {
         Arc::new(move |app: &str| {
-            map.get(app).map(|db| {
-                let noop: OnEnqueue = Arc::new(|| {});
-                (db.clone(), noop)
+            map.get(app).map(|db| AppHandlers {
+                db: db.clone(),
+                on_enqueue: Arc::new(|| {}),
+                health_check: Arc::new(|| Ok(())),
+                on_claimed: Arc::new(|| {}),
             })
         })
     }
@@ -379,6 +414,87 @@ mod tests {
         // App 'a' should have one pending run; app 'b' should have zero.
         assert_eq!(db_a.pending_count().unwrap(), 1);
         assert_eq!(db_b.pending_count().unwrap(), 0);
+
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn enqueue_rejects_when_health_check_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("workflows.sock");
+        let db = Arc::new(RunsDb::open_in_memory().unwrap());
+
+        let db_for_lookup = db.clone();
+        let lookup: AppLookup = Arc::new(move |_app: &str| {
+            Some(AppHandlers {
+                db: db_for_lookup.clone(),
+                on_enqueue: Arc::new(|| {}),
+                health_check: Arc::new(|| Err("bootstrap crashed".to_string())),
+                on_claimed: Arc::new(|| {}),
+            })
+        });
+        let handle = spawn(&sock, lookup, None).unwrap();
+
+        let stream = UnixStream::connect(&sock).await.unwrap();
+        let (r, mut w) = stream.into_split();
+        let mut r = BufReader::new(r);
+
+        let cmd = Command::EnqueueRun {
+            app: "a".into(),
+            name: "w".into(),
+            payload: serde_json::json!({}),
+            opts: EnqueueOpts::default(),
+        };
+        write_json_line(&mut w, &cmd).await.unwrap();
+        let resp: Response = read_json_line(&mut r).await.unwrap().unwrap();
+        let err = resp.error_message().unwrap();
+        assert!(
+            err.contains("worker unhealthy") && err.contains("bootstrap crashed"),
+            "expected unhealthy error with reason, got: {err}"
+        );
+        // DB must stay empty — enqueue short-circuited before db.enqueue().
+        assert_eq!(db.pending_count().unwrap(), 0);
+
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn claim_run_fires_on_claimed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("workflows.sock");
+        let db = Arc::new(RunsDb::open_in_memory().unwrap());
+        db.enqueue("w", &serde_json::json!({}), &EnqueueOpts::default())
+            .unwrap();
+
+        let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = count.clone();
+        let on_claimed: OnClaimed = Arc::new(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        });
+        let db_for_lookup = db.clone();
+        let lookup: AppLookup = Arc::new(move |_app: &str| {
+            Some(AppHandlers {
+                db: db_for_lookup.clone(),
+                on_enqueue: Arc::new(|| {}),
+                health_check: Arc::new(|| Ok(())),
+                on_claimed: on_claimed.clone(),
+            })
+        });
+        let handle = spawn(&sock, lookup, None).unwrap();
+
+        let stream = UnixStream::connect(&sock).await.unwrap();
+        let (r, mut w) = stream.into_split();
+        let mut r = BufReader::new(r);
+
+        let cmd = Command::ClaimRun {
+            app: "a".into(),
+            worker_id: "w1".into(),
+            names: vec!["w".into()],
+            lease_ms: 30_000,
+        };
+        write_json_line(&mut w, &cmd).await.unwrap();
+        let _resp: Response = read_json_line(&mut r).await.unwrap().unwrap();
+        assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
 
         handle.shutdown().await;
     }
@@ -418,8 +534,14 @@ mod tests {
             counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         });
         let db_for_lookup = db.clone();
-        let lookup: AppLookup =
-            Arc::new(move |_app: &str| Some((db_for_lookup.clone(), on_enq.clone())));
+        let lookup: AppLookup = Arc::new(move |_app: &str| {
+            Some(AppHandlers {
+                db: db_for_lookup.clone(),
+                on_enqueue: on_enq.clone(),
+                health_check: Arc::new(|| Ok(())),
+                on_claimed: Arc::new(|| {}),
+            })
+        });
         let handle = spawn(&sock, lookup, None).unwrap();
 
         // Signal with no waiters → should NOT fire on_enqueue.

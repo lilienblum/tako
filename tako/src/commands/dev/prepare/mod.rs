@@ -31,6 +31,10 @@ pub(super) struct DevSession {
     pub reserve_listener: TcpListener,
     pub cfg: crate::config::TakoToml,
     pub cmd: Vec<String>,
+    /// Command to spawn the workflow worker subprocess on demand. `None`
+    /// when the project ships no `workflows/` directory or the runtime
+    /// doesn't support workflows.
+    pub worker_command: Option<Vec<String>>,
     pub dev_hosts: Vec<String>,
     pub env: HashMap<String, String>,
     pub interactive: bool,
@@ -187,6 +191,7 @@ pub(super) async fn prepare(
         &project_dir,
     )
     .map_err(|e| format!("Invalid dev start command: {}", e))?;
+    let worker_command = resolve_dev_worker_command(&project_dir, runtime_adapter);
 
     // Start (or connect to) the dev server daemon.
     if let Err(e) = crate::dev_server_client::ensure_running(&listen_addr, daemon_dns_ip).await {
@@ -289,6 +294,7 @@ pub(super) async fn prepare(
         reserve_listener,
         cfg,
         cmd,
+        worker_command,
         dev_hosts,
         env,
         interactive,

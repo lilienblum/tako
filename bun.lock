@@ -74,7 +74,7 @@
     },
     "sdk/javascript": {
       "name": "tako.sh",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "bin": {
         "tako-worker": "./dist/entrypoints/bun-worker.mjs",
       },
@@ -88,6 +88,7 @@
         "@types/react-dom": "catalog:dev",
         "react": "catalog:",
         "react-dom": "catalog:",
+        "tako.sh": "workspace:*",
         "tsdown": "^0.21.9",
         "typescript": "catalog:dev",
         "vite": "catalog:dev",

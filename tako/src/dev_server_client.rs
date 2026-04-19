@@ -497,6 +497,7 @@ pub async fn register_app(
     upstream_port: u16,
     command: &[String],
     env: &std::collections::HashMap<String, String>,
+    worker_command: Option<&[String]>,
 ) -> Result<String, Box<dyn std::error::Error>> {
     let sock = socket_path()?;
     let stream = UnixStream::connect(&sock).await?;
@@ -514,6 +515,9 @@ pub async fn register_app(
     });
     if let Some(v) = variant {
         req["variant"] = serde_json::Value::String(v.to_string());
+    }
+    if let Some(wc) = worker_command {
+        req["worker_command"] = serde_json::json!(wc);
     }
     c.send_line(&req.to_string()).await?;
     let line = c.read_line().await?;

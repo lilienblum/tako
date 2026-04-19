@@ -123,6 +123,7 @@ pub async fn run(
         reserve_listener,
         cfg,
         cmd,
+        worker_command,
         dev_hosts,
         env,
         interactive,
@@ -277,6 +278,7 @@ pub async fn run(
         upstream_port,
         &cmd,
         &env_snapshot,
+        worker_command.as_deref(),
     )
     .await?;
     let initial_lan_enabled = crate::dev_server_client::info()
@@ -518,6 +520,7 @@ pub async fn run(
                         upstream_port,
                         &cmd,
                         &new_env,
+                        worker_command.as_deref(),
                     )
                     .await
                     .map_err(|e| e.to_string());

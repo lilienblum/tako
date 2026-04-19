@@ -13,7 +13,18 @@
 
 import { setChannelSocketPublisher } from "./channels";
 import type { ChannelMessage } from "./types";
-import { callInternal, internalSocketFromEnv } from "./internal-socket";
+import {
+  assertInternalSocketEnvConsistency,
+  callInternal,
+  internalSocketFromEnv,
+} from "./internal-socket";
+
+// Fail loud at import time if the Tako runtime env contract is half-set
+// (e.g. TAKO_APP_NAME present but TAKO_INTERNAL_SOCKET missing). This turns
+// what used to be a runtime-only error on the first `enqueue` / `publish`
+// into a boot-time crash, so misconfigured spawns surface in server logs
+// immediately instead of hiding until a user clicks a button.
+assertInternalSocketEnvConsistency();
 
 // Install the server-side publisher so `new Channel("x").publish(...)`
 // from app/workflow code goes over the Tako internal unix socket

@@ -43,6 +43,32 @@ export function internalSocketFromEnv(): { socketPath: string; app: string } | n
   return { socketPath, app };
 }
 
+/**
+ * Validate the Tako runtime env contract: `TAKO_INTERNAL_SOCKET` and
+ * `TAKO_APP_NAME` must be set together or not at all.
+ *
+ * Called once at SDK init so a misconfigured spawn (one var set, the other
+ * missing) crashes the process on boot instead of hiding until the first
+ * `Tako.workflows.enqueue` or `Tako.channels.publish`. Both spawners
+ * (`tako-server`, `tako-dev-server`) always set the pair, so a half-set
+ * state is a platform bug worth failing loud.
+ */
+export function assertInternalSocketEnvConsistency(): void {
+  const envObj = typeof process !== "undefined" ? process.env : undefined;
+  if (!envObj) return;
+  const hasSocket = Boolean(envObj[INTERNAL_SOCKET_ENV]);
+  const hasApp = Boolean(envObj[APP_NAME_ENV]);
+  if (hasSocket === hasApp) return;
+  const missing = hasSocket ? APP_NAME_ENV : INTERNAL_SOCKET_ENV;
+  const present = hasSocket ? INTERNAL_SOCKET_ENV : APP_NAME_ENV;
+  throw new Error(
+    `Tako SDK: ${present} is set but ${missing} is missing. ` +
+      `Both env vars must be set together (or neither — when running ` +
+      `outside a Tako-managed process). This usually means the spawner ` +
+      `forgot to inject the full Tako runtime contract.`,
+  );
+}
+
 /** Send a single JSONL command and resolve to `data` (or throw on error). */
 export async function callInternal(socketPath: string, cmd: unknown): Promise<unknown> {
   const resp = await roundTrip(socketPath, cmd);

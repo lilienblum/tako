@@ -342,7 +342,7 @@ func newWorker(ctx context.Context, client *Client, handlers map[string]workflow
 		ctx:         ctx,
 		client:      client,
 		handlers:    handlers,
-		workerID:    envOr("TAKO_INSTANCE_ID", fmt.Sprintf("worker-%d", os.Getpid())),
+		workerID:    fmt.Sprintf("worker-%d", os.Getpid()),
 		leaseMs:     60_000,
 		heartbeatMs: 20_000,
 		pollMs:      1_000,
@@ -493,13 +493,6 @@ func expBackoff(attempts uint32, base, max time.Duration) time.Duration {
 		result = 0
 	}
 	return result
-}
-
-func envOr(key, fallback string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return fallback
 }
 
 func parseIdleTimeout() time.Duration {

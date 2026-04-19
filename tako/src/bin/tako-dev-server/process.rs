@@ -116,10 +116,15 @@ pub(crate) async fn spawn_and_monitor_app(
     state: Arc<Mutex<State>>,
     config_path: &str,
 ) -> Result<u32, Box<dyn std::error::Error + Send + Sync>> {
-    let (project_dir, app_clone, log_buffer) = {
+    let (project_dir, app_clone, log_buffer, internal_socket) = {
         let s = state.lock().unwrap();
         let app = s.apps.get(config_path).ok_or("app not found")?;
-        (app.project_dir.clone(), app.clone(), app.log_buffer.clone())
+        (
+            app.project_dir.clone(),
+            app.clone(),
+            app.log_buffer.clone(),
+            s.internal_socket.clone(),
+        )
     };
     let app_name = app_clone.name.clone();
 
@@ -131,7 +136,8 @@ pub(crate) async fn spawn_and_monitor_app(
         },
     );
 
-    let (mut child, readiness_fd) = spawn_app(&project_dir, &app_clone).await?;
+    let (mut child, readiness_fd) =
+        spawn_app(&project_dir, &app_clone, internal_socket.as_deref()).await?;
     let pid = child.id().ok_or("failed to get child PID")?;
 
     // Store the PID and clear the idle flag immediately so management commands
@@ -310,9 +316,29 @@ async fn activate_after_readiness(
     state.lock().unwrap().routes.set_active(route_id, true);
 }
 
+/// Merge user-supplied env with Tako's runtime contract.
+///
+/// The contract (`PORT`, `HOST`, `TAKO_APP_NAME`, and — when available —
+/// `TAKO_INTERNAL_SOCKET`) must always win over user env so a stray
+/// `HOST=0.0.0.0` or `TAKO_APP_NAME=impostor` can't silently break the
+/// proxy route or SDK RPC fanout.
+pub(crate) fn build_spawn_env(
+    app: &state::RuntimeApp,
+    internal_socket: Option<&std::path::Path>,
+) -> std::collections::HashMap<String, String> {
+    let mut env = app.env.clone();
+    tako_core::instance_env::TakoRuntimeEnv {
+        app_name: &app.name,
+        internal_socket,
+    }
+    .apply(&mut env);
+    env
+}
+
 async fn spawn_app(
     project_dir: &str,
     app: &state::RuntimeApp,
+    internal_socket: Option<&std::path::Path>,
 ) -> Result<(tokio::process::Child, Option<OwnedFd>), Box<dyn std::error::Error + Send + Sync>> {
     if app.command.is_empty() {
         return Err("app has empty command".into());
@@ -329,9 +355,6 @@ async fn spawn_app(
         cmd.args(&app.command[1..]);
     }
     cmd.current_dir(project_dir)
-        // PORT=0: the app binds to an OS-assigned port and reports it on fd 4.
-        .env("PORT", "0")
-        .env("HOST", "127.0.0.1")
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
@@ -366,7 +389,7 @@ async fn spawn_app(
         cmd.env("PATH", format!("{}:{current_path}", bin_dir.display()));
     }
 
-    for (k, v) in &app.env {
+    for (k, v) in build_spawn_env(app, internal_socket) {
         cmd.env(k, v);
     }
 
@@ -400,7 +423,7 @@ async fn spawn_app(
 ///
 /// Lines that look like JSON objects (start with `{`) are forwarded as-is —
 /// the SDK's structured logger emits them and the renderer parses them.
-/// Anything else is wrapped as a plain `scope=app` log at `default_level`
+/// Anything else is wrapped as a plain scoped log at `default_level`
 /// so raw `console.log` and crash dumps still surface.
 async fn drain_pipe_to_buffer(
     pipe: impl tokio::io::AsyncRead + Unpin,
@@ -410,26 +433,40 @@ async fn drain_pipe_to_buffer(
     let reader = tokio::io::BufReader::new(pipe);
     let mut lines = reader.lines();
     while let Ok(Some(line)) = lines.next_line().await {
-        if line.trim_start().starts_with('{') {
-            buf.push(line);
-        } else {
-            let json = serde_json::json!({
-                "ts": now_unix_millis(),
-                "level": default_level,
-                "scope": "app",
-                "msg": line,
-            });
-            buf.push(json.to_string());
-        }
+        forward_child_log_line(&buf, line, default_level, "app");
+    }
+}
+
+/// Push a single child-process output line into a `LogBuffer`, passing
+/// structured JSON (`{...}`) through verbatim and wrapping anything else
+/// as a scoped log at `default_level`. Shared by the HTTP-app stdio drainer
+/// and the worker-supervisor log sink.
+pub(crate) fn forward_child_log_line(
+    buf: &state::LogBuffer,
+    line: String,
+    default_level: &str,
+    scope: &str,
+) {
+    if line.trim_start().starts_with('{') {
+        buf.push(line);
+    } else {
+        let payload = serde_json::json!({
+            "ts": now_unix_millis(),
+            "level": default_level,
+            "scope": scope,
+            "msg": line,
+        });
+        buf.push(payload.to_string());
     }
 }
 
 pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: String, path: String) {
-    let app_info: Option<(String, state::RuntimeApp)> = {
+    let app_info: Option<(String, state::RuntimeApp, Option<std::path::PathBuf>)> = {
         let mut s = state.lock().unwrap();
         if s.routes.lookup(&host, &path).is_some_and(|(_, _, a, _)| a) {
             return;
         }
+        let internal_socket = s.internal_socket.clone();
         let found = s
             .apps
             .iter()
@@ -449,10 +486,10 @@ pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: Strin
                     }
                 })
             })
-            .map(|(config_path, a)| (config_path.clone(), a.clone()));
+            .map(|(config_path, a)| (config_path.clone(), a.clone(), internal_socket.clone()));
         // Atomically claim the spawn: mark is_idle=false while still holding the
         // lock so concurrent wake-on-request tasks see the updated state and bail out.
-        if let Some((ref config_path, _)) = found
+        if let Some((ref config_path, _, _)) = found
             && let Some(app) = s.apps.get_mut(config_path)
         {
             app.is_idle = false;
@@ -460,7 +497,7 @@ pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: Strin
         found
     };
 
-    let Some((config_path, app)) = app_info else {
+    let Some((config_path, app, internal_socket)) = app_info else {
         return;
     };
 
@@ -470,7 +507,7 @@ pub(crate) async fn handle_wake_on_request(state: Arc<Mutex<State>>, host: Strin
         "waking idle app on request"
     );
 
-    match spawn_app(&app.project_dir, &app).await {
+    match spawn_app(&app.project_dir, &app, internal_socket.as_deref()).await {
         Ok((mut child, readiness_fd)) => {
             let pid = child.id();
 

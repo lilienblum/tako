@@ -19,6 +19,14 @@ pub enum Request {
         env: std::collections::HashMap<String, String>,
         #[serde(default)]
         client_pid: Option<u32>,
+        /// Command to spawn the workflow worker subprocess on demand (first
+        /// `program`, rest are args). Present iff the project has a
+        /// `workflows/` directory — the client resolves the runtime-specific
+        /// entrypoint (e.g. `bun run .../bun-worker.mjs`) and hands it over
+        /// so the daemon doesn't need to re-do runtime detection. Omitted
+        /// when there are no workflows to run.
+        #[serde(default)]
+        worker_command: Option<Vec<String>>,
     },
     /// Unregister (stop) an app by config path.
     UnregisterApp {
@@ -319,6 +327,11 @@ mod tests {
                 "development".to_string(),
             )]),
             client_pid: Some(1234),
+            worker_command: Some(vec![
+                "bun".to_string(),
+                "run".to_string(),
+                "node_modules/tako.sh/dist/entrypoints/bun-worker.mjs".to_string(),
+            ]),
         };
         let json = serde_json::to_string(&req).unwrap();
         assert_eq!(serde_json::from_str::<Request>(&json).unwrap(), req);

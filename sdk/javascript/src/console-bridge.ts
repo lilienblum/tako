@@ -22,6 +22,8 @@ const originals: Partial<Record<ConsoleMethod, (...args: unknown[]) => void>> = 
  * Idempotent: calling twice leaves the console as it was after the first call.
  *
  * @param scope - Log scope used on emitted lines (e.g. `"app"`, `"worker"`).
+ *   Sub-scoping per workflow is an explicit concern — use `Logger.child(scope)`
+ *   from inside a handler if you want `worker:<workflow-name>` tagging.
  */
 export function installConsoleBridge(scope: string): void {
   if (installed) return;

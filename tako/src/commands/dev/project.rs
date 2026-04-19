@@ -282,6 +282,47 @@ fn resolve_runtime_default_dev_command(
         .collect())
 }
 
+/// Build the command that spawns the workflow worker subprocess in dev.
+/// Returns `None` when the project has no `workflows/` directory (nothing
+/// to run) or the runtime isn't JS (only JS workflows are supported).
+///
+/// The worker entrypoint path mirrors production: it lives in the linked
+/// SDK under `node_modules/tako.sh/dist/entrypoints/{runtime}-worker.mjs`.
+/// The worker takes no CLI args — it reads `TAKO_APP_NAME` and
+/// `TAKO_INTERNAL_SOCKET` from env.
+pub(super) fn resolve_dev_worker_command(
+    project_dir: &Path,
+    runtime_adapter: BuildAdapter,
+) -> Option<Vec<String>> {
+    if !project_dir.join("workflows").is_dir() {
+        return None;
+    }
+    let base = "node_modules/tako.sh/dist/entrypoints";
+    match runtime_adapter {
+        BuildAdapter::Bun => Some(vec![
+            "bun".to_string(),
+            "run".to_string(),
+            format!("{base}/bun-worker.mjs"),
+        ]),
+        BuildAdapter::Node => Some(vec![
+            "node".to_string(),
+            "--experimental-strip-types".to_string(),
+            format!("{base}/node-worker.mjs"),
+        ]),
+        BuildAdapter::Deno => Some(vec![
+            "deno".to_string(),
+            "run".to_string(),
+            "--allow-net".to_string(),
+            "--allow-env".to_string(),
+            "--allow-read".to_string(),
+            "--allow-write".to_string(),
+            "--node-modules-dir=auto".to_string(),
+            format!("{base}/deno-worker.mjs"),
+        ]),
+        BuildAdapter::Go | BuildAdapter::Unknown => None,
+    }
+}
+
 pub(super) fn has_explicit_dev_preset(cfg: &TakoToml) -> bool {
     cfg.preset
         .as_deref()

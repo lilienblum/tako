@@ -1,4 +1,4 @@
 {
   "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "ignorePatterns": ["routeTree.gen.ts", ".claude/", ".agents/", "sdk/javascript/CHANGELOG.md"]
+  "ignorePatterns": ["routeTree.gen.ts", ".claude/", ".agents/", "CHANGELOG.md"]
 }

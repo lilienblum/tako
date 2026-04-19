@@ -7,8 +7,9 @@ use tokio::sync::mpsc;
 use tokio::sync::watch;
 
 use crate::process::{
-    app_name_for, broadcast_app_status, broadcast_dev_event, kill_app_process, monitor_handoff_pid,
-    push_scoped_log, push_user_action, spawn_and_monitor_app,
+    app_name_for, broadcast_app_status, broadcast_dev_event, forward_child_log_line,
+    kill_app_process, monitor_handoff_pid, push_scoped_log, push_user_action,
+    spawn_and_monitor_app,
 };
 use crate::protocol::{self, AppInfo, Request, Response};
 use crate::route_pattern::split_route_pattern;
@@ -100,6 +101,20 @@ pub(crate) struct State {
 
     pub(crate) db: Option<state::DevStateStore>,
     pub(crate) apps: std::collections::HashMap<String, RuntimeApp>,
+
+    /// Path to the shared Tako internal unix socket. `Some` once
+    /// `workflows.start_socket()` succeeds in main; injected into every
+    /// spawned app process as `TAKO_INTERNAL_SOCKET` so
+    /// `Tako.workflows.enqueue` / `Tako.channels.publish` work the same
+    /// way in dev as they do on deployed servers.
+    pub(crate) internal_socket: Option<std::path::PathBuf>,
+
+    /// Shared workflow manager. `Some` once `main` constructs it. On each
+    /// `RegisterApp` we call `ensure()` with a `workers: 0` scale-to-zero
+    /// spec and a short idle timeout — so the worker subprocess only
+    /// exists while there's real work, and every wake re-spawns it
+    /// (picking up whatever code the user just edited, no watcher needed).
+    pub(crate) workflows: Option<Arc<tako_workflows::WorkflowManager>>,
 }
 
 impl State {
@@ -130,6 +145,8 @@ impl State {
             mdns: None,
             db: None,
             apps: std::collections::HashMap::new(),
+            internal_socket: None,
+            workflows: None,
         }
     }
 
@@ -319,6 +336,7 @@ pub(crate) async fn handle_client(
                 command,
                 env,
                 client_pid,
+                worker_command,
             } => {
                 let app_name = sanitize_app_name(&app_name);
                 let route_id = format!("reg:{}", config_path);
@@ -332,76 +350,145 @@ pub(crate) async fn handle_client(
                     }
                 }
 
-                let mut s = state.lock().unwrap();
-                s.cancel_idle_exit();
-                let old_hosts = s
-                    .apps
-                    .get(&config_path)
-                    .map(|app| app.hosts.clone())
-                    .unwrap_or_default();
+                // Everything before the await must happen under the
+                // `std::sync::Mutex` guard; scope the guard so the
+                // compiler sees it dropped before we `await` below.
+                let (url, workflows, internal_socket, worker_log_buffer) = {
+                    let mut s = state.lock().unwrap();
+                    s.cancel_idle_exit();
+                    let old_hosts = s
+                        .apps
+                        .get(&config_path)
+                        .map(|app| app.hosts.clone())
+                        .unwrap_or_default();
 
-                let hosts = if hosts.is_empty() {
-                    default_hosts(&app_name)
-                } else {
-                    hosts
+                    let hosts = if hosts.is_empty() {
+                        default_hosts(&app_name)
+                    } else {
+                        hosts
+                    };
+
+                    if let Some(db) = &s.db {
+                        let _ =
+                            db.register(&config_path, &project_dir, &app_name, variant.as_deref());
+                    }
+
+                    let log_buffer = s
+                        .apps
+                        .get(&config_path)
+                        .map(|a| {
+                            a.log_buffer.clear();
+                            a.log_buffer.clone()
+                        })
+                        .unwrap_or_else(state::LogBuffer::new);
+                    let lan_banner_buffer = log_buffer.clone();
+
+                    s.apps.insert(
+                        config_path.clone(),
+                        RuntimeApp {
+                            project_dir: project_dir.clone(),
+                            name: app_name.clone(),
+                            variant: variant.clone(),
+                            hosts: hosts.clone(),
+                            upstream_port,
+                            is_idle: false,
+                            command,
+                            env,
+                            log_buffer,
+                            pid: None,
+                            client_pid,
+                        },
+                    );
+
+                    s.routes
+                        .set_routes(route_id, hosts.clone(), upstream_port, false);
+                    if let Some(ref mut mdns) = s.mdns {
+                        for host in &old_hosts {
+                            mdns.unpublish(split_route_pattern(host).0);
+                        }
+                        for host in &hosts {
+                            mdns.publish(split_route_pattern(host).0);
+                        }
+                    }
+                    if s.lan_enabled {
+                        write_lan_mode_log([lan_banner_buffer], true, s.lan_ip.as_deref());
+                    }
+
+                    let host = hosts
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| app_short_host(&app_name));
+                    let public_port = advertised_https_port(&s);
+                    let url = if public_port == 443 {
+                        format!("https://{}/", host)
+                    } else {
+                        format!("https://{}:{}/", host, public_port)
+                    };
+                    let worker_log_buffer = s.apps.get(&config_path).map(|a| a.log_buffer.clone());
+                    (
+                        url,
+                        s.workflows.clone(),
+                        s.internal_socket.clone(),
+                        worker_log_buffer,
+                    )
                 };
 
-                if let Some(db) = &s.db {
-                    let _ = db.register(&config_path, &project_dir, &app_name, variant.as_deref());
-                }
-
-                let log_buffer = s
-                    .apps
-                    .get(&config_path)
-                    .map(|a| {
-                        a.log_buffer.clear();
-                        a.log_buffer.clone()
-                    })
-                    .unwrap_or_else(state::LogBuffer::new);
-                let lan_banner_buffer = log_buffer.clone();
-
-                s.apps.insert(
-                    config_path.clone(),
-                    RuntimeApp {
-                        project_dir: project_dir.clone(),
-                        name: app_name.clone(),
-                        variant: variant.clone(),
-                        hosts: hosts.clone(),
-                        upstream_port,
-                        is_idle: false,
-                        command,
-                        env,
-                        log_buffer,
-                        pid: None,
-                        client_pid,
-                    },
-                );
-
-                s.routes
-                    .set_routes(route_id, hosts.clone(), upstream_port, false);
-                if let Some(ref mut mdns) = s.mdns {
-                    for host in &old_hosts {
-                        mdns.unpublish(split_route_pattern(host).0);
+                // Register the app with the workflow manager before
+                // spawning the app process, so the very first
+                // `Tako.workflows.enqueue` / `Tako.channels.publish` from
+                // user code lands on a known app (prevents
+                // `unknown app: <name>` errors on the internal socket).
+                //
+                // Dev uses scale-to-zero (`workers: 0`) with a short idle
+                // timeout: the worker subprocess is spawned on enqueue,
+                // processes the queue, and exits after ~3s idle. Every
+                // wake re-execs the worker, so source edits are picked up
+                // with no watcher or `--hot` involved.
+                if let (Some(workflows), Some(worker_cmd), Some(socket)) =
+                    (workflows, worker_command, internal_socket)
+                    && !worker_cmd.is_empty()
+                {
+                    let app = app_name.clone();
+                    let cwd = std::path::PathBuf::from(&project_dir);
+                    let cmd_os: Vec<std::ffi::OsString> =
+                        worker_cmd.iter().map(std::ffi::OsString::from).collect();
+                    let log_sink: Option<tako_workflows::WorkerLogSink> =
+                        worker_log_buffer.map(|buf| {
+                            std::sync::Arc::new(move |line: &str, is_stderr: bool| {
+                                let level = if is_stderr { "warn" } else { "info" };
+                                forward_child_log_line(&buf, line.to_string(), level, "worker");
+                            }) as tako_workflows::WorkerLogSink
+                        });
+                    let spec_fn = move |_db_path: std::path::PathBuf| {
+                        let mut env = std::collections::HashMap::new();
+                        env.insert(
+                            tako_core::instance_env::TAKO_APP_NAME_ENV.into(),
+                            app.clone(),
+                        );
+                        env.insert(
+                            tako_core::instance_env::TAKO_INTERNAL_SOCKET_ENV.into(),
+                            socket.to_string_lossy().to_string(),
+                        );
+                        tako_workflows::WorkerSpec {
+                            app: app.clone(),
+                            workers: 0,
+                            concurrency: 10,
+                            idle_timeout_ms: 3_000,
+                            command: cmd_os,
+                            cwd,
+                            env,
+                            secrets: std::collections::HashMap::new(),
+                            log_sink,
+                        }
+                    };
+                    if let Err(e) = workflows.ensure(&app_name, spec_fn).await {
+                        tracing::warn!(
+                            app = %app_name,
+                            error = %e,
+                            "failed to register app with workflow manager; workflows / channel publish will not work",
+                        );
                     }
-                    for host in &hosts {
-                        mdns.publish(split_route_pattern(host).0);
-                    }
                 }
-                if s.lan_enabled {
-                    write_lan_mode_log([lan_banner_buffer], true, s.lan_ip.as_deref());
-                }
-
-                let host = hosts
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| app_short_host(&app_name));
-                let public_port = advertised_https_port(&s);
-                let url = if public_port == 443 {
-                    format!("https://{}/", host)
-                } else {
-                    format!("https://{}:{}/", host, public_port)
-                };
-                drop(s);
 
                 let spawn_state = state.clone();
                 let spawn_config = config_path.clone();

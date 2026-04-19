@@ -1,4 +1,4 @@
-//! Cron ticker + schedule registration.
+//! Cron ticker + schedule registration + lease reclaim.
 //!
 //! Workers send `Command::RegisterSchedules` on startup; we persist into the
 //! `schedules` table. The ticker task wakes every second, walks the schedules,
@@ -6,6 +6,11 @@
 //! `cron:<name>:<bucket_unix_ms>` prevents a single boundary from enqueuing
 //! twice even if the ticker runs twice for the same second or the worker
 //! re-registers mid-tick.
+//!
+//! The same tick also calls `RunsDb::reclaim_expired()` so runs whose worker
+//! died holding a lease (SIGKILL, OOM, host crash, server-side drop without
+//! graceful drain) come back to `pending` once `lease_until` passes — and the
+//! wake callback spins the supervisor up to re-run them.
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -169,9 +174,33 @@ impl Drop for CronTickerHandle {
     }
 }
 
-/// Start a cron ticker for an app. Optional `on_enqueue` is called whenever
-/// a tick enqueues at least one task — the supervisor wires this to `wake()`
-/// so scale-to-zero workers spin up.
+/// Fire one tick: enqueue due cron schedules + reclaim any leases that
+/// expired since the last tick. Fires `on_enqueue` when either produced
+/// work so the supervisor wakes up. Extracted from the spawn loop so
+/// tests can drive it without waiting on wall-clock time.
+pub fn tick_and_reclaim(db: &RunsDb, now_ms: i64, on_enqueue: &(dyn Fn() + Send + Sync)) {
+    let cron_enqueued = match tick_once(db, now_ms) {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!(error = %e, "cron tick failed");
+            0
+        }
+    };
+    let reclaimed = match db.reclaim_expired() {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!(error = %e, "reclaim expired leases failed");
+            0
+        }
+    };
+    if cron_enqueued > 0 || reclaimed > 0 {
+        on_enqueue();
+    }
+}
+
+/// Start a cron ticker for an app. `on_enqueue` fires whenever a tick
+/// enqueued a scheduled task or reclaimed an expired lease — the
+/// supervisor wires this to `wake()` so scale-to-zero workers spin up.
 pub fn spawn(db: Arc<RunsDb>, on_enqueue: Arc<dyn Fn() + Send + Sync>) -> CronTickerHandle {
     let (tx, mut rx) = oneshot::channel::<()>();
     let join = tokio::spawn(async move {
@@ -180,11 +209,7 @@ pub fn spawn(db: Arc<RunsDb>, on_enqueue: Arc<dyn Fn() + Send + Sync>) -> CronTi
                 _ = &mut rx => break,
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {
                     let now_ms = chrono::Utc::now().timestamp_millis();
-                    match tick_once(&db, now_ms) {
-                        Ok(n) if n > 0 => (on_enqueue)(),
-                        Ok(_) => {}
-                        Err(e) => tracing::warn!(error = %e, "cron tick failed"),
-                    }
+                    tick_and_reclaim(&db, now_ms, &*on_enqueue);
                 }
             }
         }
@@ -318,5 +343,63 @@ mod tests {
         // Second tick shouldn't enqueue again for the same bucket — the
         // unique_key dedup catches it and last_run_at was advanced.
         assert_eq!(second, 0);
+    }
+
+    #[test]
+    fn tick_and_reclaim_recovers_orphan_runs_and_wakes_supervisor() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use tako_core::EnqueueOpts;
+
+        let db = db();
+        let r = db
+            .enqueue("w", &serde_json::json!({}), &EnqueueOpts::default())
+            .unwrap();
+        // Simulate a worker that claimed the run and then died — lease is
+        // in the past, run is still `running`.
+        db.claim("dead-worker", &["w".into()], 30_000).unwrap();
+        {
+            let conn = db.lock_conn();
+            conn.execute(
+                "UPDATE runs SET lease_until = ?1 WHERE id = ?2",
+                rusqlite::params![chrono::Utc::now().timestamp_millis() - 1_000, r.id],
+            )
+            .unwrap();
+        }
+
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let w = wakes.clone();
+        let on_enqueue = move || {
+            w.fetch_add(1, Ordering::SeqCst);
+        };
+
+        tick_and_reclaim(&db, chrono::Utc::now().timestamp_millis(), &on_enqueue);
+
+        assert_eq!(
+            wakes.load(Ordering::SeqCst),
+            1,
+            "wake should fire on reclaim"
+        );
+        let next = db.claim("new-worker", &["w".into()], 30_000).unwrap();
+        assert_eq!(
+            next.map(|r| r.id),
+            Some(r.id),
+            "reclaimed run should be claimable"
+        );
+    }
+
+    #[test]
+    fn tick_and_reclaim_does_not_wake_when_nothing_to_do() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let db = db();
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let w = wakes.clone();
+        let on_enqueue = move || {
+            w.fetch_add(1, Ordering::SeqCst);
+        };
+
+        tick_and_reclaim(&db, chrono::Utc::now().timestamp_millis(), &on_enqueue);
+
+        assert_eq!(wakes.load(Ordering::SeqCst), 0);
     }
 }

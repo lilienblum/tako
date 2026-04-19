@@ -255,24 +255,16 @@ fn build_instance_env(
 ) -> HashMap<String, String> {
     let mut env = config.env_vars.clone();
 
-    // PORT=0 tells the SDK to bind to an OS-assigned port and report it back
-    // over the fd 4 readiness pipe.
-    env.insert("PORT".to_string(), "0".to_string());
-    env.insert("HOST".to_string(), "127.0.0.1".to_string());
-
-    // The internal auth token is NOT an env var — it travels on fd 3 with
-    // secrets so it doesn't inherit into app-spawned subprocesses.
-
-    // Tako internal socket — used by `Tako.workflows.enqueue` and
-    // `Tako.channels.publish` from server-side app code. App name lets
-    // the socket route the command to the right queue / channel store.
-    if let Some(sock) = internal_socket {
-        env.insert(
-            "TAKO_INTERNAL_SOCKET".to_string(),
-            sock.to_string_lossy().to_string(),
-        );
-        env.insert("TAKO_APP_NAME".to_string(), config.deployment_id());
+    // The Tako runtime contract (PORT=0, HOST loopback, TAKO_APP_NAME, and
+    // TAKO_INTERNAL_SOCKET when available) is defined in tako-core so dev and
+    // prod spawners can't drift. The internal auth token is NOT in env — it
+    // travels on fd 3 with secrets so it doesn't inherit into subprocesses.
+    let app_name = config.deployment_id();
+    tako_core::instance_env::TakoRuntimeEnv {
+        app_name: &app_name,
+        internal_socket,
     }
+    .apply(&mut env);
 
     env.entry("NODE_ENV".to_string())
         .or_insert_with(|| "production".to_string());
@@ -1011,6 +1003,58 @@ mod tests {
 
         let env = build_instance_env(&app.config.read().clone(), &instance, None);
         assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
+    }
+
+    #[test]
+    fn build_instance_env_sets_tako_runtime_vars_when_socket_available() {
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let app = App::new(
+            AppConfig {
+                name: "my-app".to_string(),
+                ..Default::default()
+            },
+            instance_tx,
+            noop_log_handle(),
+        );
+        let instance = app.allocate_instance();
+        let sock = std::path::Path::new("/tmp/tako.sock");
+
+        let env = build_instance_env(&app.config.read().clone(), &instance, Some(sock));
+        assert_eq!(
+            env.get("TAKO_INTERNAL_SOCKET").map(String::as_str),
+            Some("/tmp/tako.sock"),
+        );
+        assert!(
+            env.get("TAKO_APP_NAME")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
+            "TAKO_APP_NAME must be set whenever the app is spawned"
+        );
+    }
+
+    #[test]
+    fn build_instance_env_always_sets_app_name_even_without_socket() {
+        // Apps may run with no internal socket in tests, but the app name
+        // is always a known, required identity — set it regardless so
+        // any tooling that reads `TAKO_APP_NAME` gets a valid value.
+        let (instance_tx, _instance_rx) = mpsc::channel(4);
+        let app = App::new(
+            AppConfig {
+                name: "my-app".to_string(),
+                ..Default::default()
+            },
+            instance_tx,
+            noop_log_handle(),
+        );
+        let instance = app.allocate_instance();
+
+        let env = build_instance_env(&app.config.read().clone(), &instance, None);
+        assert!(
+            env.get("TAKO_APP_NAME")
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
+        );
+        assert!(!env.contains_key("TAKO_INTERNAL_SOCKET"));
     }
 
     #[test]

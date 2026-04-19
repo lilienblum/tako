@@ -172,6 +172,56 @@ main = "src/index.ts"
 }
 
 #[test]
+fn resolve_dev_worker_command_returns_none_without_workflows_dir() {
+    let temp = TempDir::new().unwrap();
+    let cmd = resolve_dev_worker_command(temp.path(), BuildAdapter::Bun);
+    assert!(cmd.is_none());
+}
+
+#[test]
+fn resolve_dev_worker_command_returns_none_for_non_js_runtime() {
+    let temp = TempDir::new().unwrap();
+    std::fs::create_dir_all(temp.path().join("workflows")).unwrap();
+    assert!(resolve_dev_worker_command(temp.path(), BuildAdapter::Go).is_none());
+    assert!(resolve_dev_worker_command(temp.path(), BuildAdapter::Unknown).is_none());
+}
+
+#[test]
+fn resolve_dev_worker_command_bun_points_at_sdk_worker_entrypoint() {
+    let temp = TempDir::new().unwrap();
+    std::fs::create_dir_all(temp.path().join("workflows")).unwrap();
+    let cmd = resolve_dev_worker_command(temp.path(), BuildAdapter::Bun).unwrap();
+    assert_eq!(cmd[0], "bun");
+    assert!(cmd.iter().any(|a| a.contains("entrypoints/bun-worker.mjs")));
+    assert!(!cmd.iter().any(|a| a.contains("{main}")));
+}
+
+#[test]
+fn resolve_dev_worker_command_node_uses_strip_types_and_worker_entrypoint() {
+    let temp = TempDir::new().unwrap();
+    std::fs::create_dir_all(temp.path().join("workflows")).unwrap();
+    let cmd = resolve_dev_worker_command(temp.path(), BuildAdapter::Node).unwrap();
+    assert_eq!(cmd[0], "node");
+    assert!(cmd.iter().any(|a| a == "--experimental-strip-types"));
+    assert!(
+        cmd.iter()
+            .any(|a| a.contains("entrypoints/node-worker.mjs"))
+    );
+}
+
+#[test]
+fn resolve_dev_worker_command_deno_points_at_deno_worker() {
+    let temp = TempDir::new().unwrap();
+    std::fs::create_dir_all(temp.path().join("workflows")).unwrap();
+    let cmd = resolve_dev_worker_command(temp.path(), BuildAdapter::Deno).unwrap();
+    assert_eq!(cmd[0], "deno");
+    assert!(
+        cmd.iter()
+            .any(|a| a.contains("entrypoints/deno-worker.mjs"))
+    );
+}
+
+#[test]
 fn dev_startup_lines_quiet_is_short() {
     let lines = dev_startup_lines(
         false,

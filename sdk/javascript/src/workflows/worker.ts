@@ -11,6 +11,7 @@
  * any in-flight run for the platform drain hook.
  */
 
+import { createLogger, type Logger } from "../logger";
 import { expBackoffMs } from "./backoff";
 import type { WorkflowsClient } from "./rpc-client";
 import {
@@ -65,6 +66,8 @@ export interface WorkerOptions {
   idleTimeoutMs?: number;
   /** Reserved for multi-slot parallelism; v1 ignores. */
   concurrency?: number;
+  /** Base logger. Per-run children are tagged `worker:<workflowName>`. */
+  logger?: Logger;
 }
 
 export interface RegisteredWorkflow {
@@ -90,6 +93,7 @@ export class Worker {
   private readonly baseBackoffMs: number;
   private readonly maxBackoffMs: number;
   private readonly idleTimeoutMs: number;
+  private readonly log: Logger;
 
   private draining = false;
   private idledOut = false;
@@ -107,6 +111,7 @@ export class Worker {
     this.baseBackoffMs = opts.baseBackoffMs ?? DEFAULTS.baseBackoffMs;
     this.maxBackoffMs = opts.maxBackoffMs ?? DEFAULTS.maxBackoffMs;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULTS.idleTimeoutMs;
+    this.log = opts.logger ?? createLogger("worker");
     this.lastClaimAt = Date.now();
   }
 
@@ -164,8 +169,10 @@ export class Worker {
   }
 
   private async execute(run: Run): Promise<void> {
+    const runLog = this.log.child(`worker:${run.name}`, { runId: run.id });
     const reg = this.registry.get(run.name);
     if (!reg) {
+      runLog.error("Workflow failed", { error: `no handler registered for '${run.name}'` });
       await this.client.fail(
         run.id,
         this.workerId,
@@ -181,7 +188,7 @@ export class Worker {
       runId: run.id,
       workflowName: run.name,
       attempts: run.attempts,
-      ...createStepAPI(this.client, run.id, this.workerId, stepState),
+      ...createStepAPI(this.client, run.id, this.workerId, stepState, runLog),
       bail: (reason?: string): never => {
         throw new BailSignal(reason);
       },
@@ -198,20 +205,25 @@ export class Worker {
       }, this.heartbeatIntervalMs);
     }
 
+    runLog.info("Workflow started", { attempt: run.attempts, payload: run.payload });
     try {
       await reg.handler(run.payload, ctx);
       await this.client.complete(run.id, this.workerId);
+      runLog.info("Workflow completed");
     } catch (err) {
       if (err instanceof BailSignal) {
         await this.client.cancel(run.id, this.workerId, err.reason ?? null);
+        runLog.info("Workflow cancelled", { reason: err.reason ?? null });
         return;
       }
       if (err instanceof FailSignal) {
         await this.client.fail(run.id, this.workerId, err.error.message, null, true);
+        runLog.error("Workflow failed", { error: err.error });
         return;
       }
       if (err instanceof DeferSignal) {
         await this.client.defer(run.id, this.workerId, err.wakeAt);
+        runLog.debug("Workflow deferred", { wakeAt: err.wakeAt });
         return;
       }
       if (err instanceof WaitSignal) {
@@ -222,6 +234,7 @@ export class Worker {
           err.eventName,
           err.timeoutAt,
         );
+        runLog.debug("Workflow waiting", { event: err.eventName, timeoutAt: err.timeoutAt });
         return;
       }
 
@@ -235,6 +248,16 @@ export class Worker {
         ? null
         : new Date(Date.now() + expBackoffMs(run.attempts, base, max));
       await this.client.fail(run.id, this.workerId, message, nextRunAt, finalize);
+      const errField = err instanceof Error ? err : message;
+      if (finalize) {
+        runLog.error("Workflow failed", { attempt: run.attempts, error: errField });
+      } else {
+        runLog.warn("Workflow failed, retrying", {
+          attempt: run.attempts,
+          nextRunAt,
+          error: errField,
+        });
+      }
     } finally {
       if (heartbeatTimer) clearInterval(heartbeatTimer);
     }

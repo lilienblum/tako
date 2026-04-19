@@ -497,7 +497,6 @@ impl super::ServerState {
             .join("node_modules")
             .join("tako.sh")
             .join("dist")
-            .join("tako")
             .join("entrypoints")
             .join("bun-worker.mjs");
         if !worker_entry.exists() {

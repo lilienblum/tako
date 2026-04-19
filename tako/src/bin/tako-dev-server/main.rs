@@ -185,11 +185,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         ));
     }
 
-    if let Err(e) = workflows.start_socket() {
-        tracing::warn!(error = %e, "failed to start internal socket; Tako.workflows.enqueue / Tako.channels.publish will not work");
-    } else {
-        tracing::info!(socket = %workflows.socket_path().display(), "internal socket listening");
-    }
+    let internal_socket_path = match workflows.start_socket() {
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to start internal socket; Tako.workflows.enqueue / Tako.channels.publish will not work");
+            None
+        }
+        Ok(()) => {
+            let path = workflows.socket_path();
+            tracing::info!(socket = %path.display(), "internal socket listening");
+            Some(path)
+        }
+    };
 
     let events_for_relay = events.clone();
     let mut st = State::new(
@@ -202,6 +208,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         listen_addr,
         args.dns_ip,
     );
+    st.internal_socket = internal_socket_path;
+    st.workflows = Some(workflows.clone());
 
     // Open the SQLite state store (persistent registrations only; runtime state is in-memory).
     let db_path = paths::tako_data_dir()

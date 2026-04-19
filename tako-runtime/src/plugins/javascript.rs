@@ -263,8 +263,10 @@ fn pm_build_command(pm: &PackageManager) -> String {
     }
 }
 
-/// Default dev command for JS runtimes: run through the SDK entrypoint,
-/// same as production but locally. Framework presets (vite, tanstack-start)
+/// Default dev command for JS runtimes: run through the SDK HTTP
+/// entrypoint, same as production. The workflow worker is a separate
+/// subprocess spawned by `tako-dev-server` via `WorkerSupervisor`
+/// (scale-to-zero, short idle). Framework presets (vite, tanstack-start)
 /// override this with their own dev server.
 fn js_dev_command_bun() -> Vec<String> {
     vec![

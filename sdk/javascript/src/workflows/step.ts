@@ -19,6 +19,7 @@
  * idempotent (Stripe idempotency keys, upsert not insert, etc.).
  */
 
+import type { Logger } from "../logger";
 import { expBackoffMs } from "./backoff";
 import type { WorkflowsClient } from "./rpc-client";
 import type { RunId, StepState } from "./types";
@@ -91,10 +92,12 @@ export function createStepAPI(
   runId: RunId,
   workerId: string,
   stepState: StepState,
+  log: Logger,
 ): StepAPI {
   return {
     async run<T>(name: string, fn: () => Promise<T> | T, opts?: StepRunOptions): Promise<T> {
       if (Object.prototype.hasOwnProperty.call(stepState, name)) {
+        log.debug("Step cached", { step: name });
         return stepState[name] as T;
       }
 
@@ -103,11 +106,13 @@ export function createStepAPI(
       const max = opts?.backoff?.max ?? 30_000;
 
       let lastErr: unknown;
+      const startedAt = Date.now();
       for (let attempt = 1; attempt <= attempts; attempt++) {
         try {
           const result = await fn();
           stepState[name] = result as unknown;
           await client.saveStep(runId, workerId, name, result ?? null);
+          log.info("Step completed", { step: name, ms: Date.now() - startedAt });
           return result;
         } catch (err) {
           // Control signals (success/bail/fail/defer/wait) are how the
@@ -135,6 +140,9 @@ export function createStepAPI(
           if (!Object.prototype.hasOwnProperty.call(stepState, name)) {
             stepState[name] = true;
             await client.saveStep(runId, workerId, name, true);
+            log.info("Sleep completed", { step: name, ms: durationMs });
+          } else {
+            log.debug("Sleep cached", { step: name });
           }
           return;
         }
@@ -149,6 +157,7 @@ export function createStepAPI(
         await new Promise((r) => setTimeout(r, durationMs));
         stepState[name] = true;
         await client.saveStep(runId, workerId, name, true);
+        log.info("Sleep completed", { step: name, ms: durationMs });
         return;
       }
       throw new DeferSignal(new Date(wakeAt));
@@ -156,6 +165,7 @@ export function createStepAPI(
 
     async waitFor<T = unknown>(name: string, opts?: StepWaitOptions): Promise<T | null> {
       if (Object.prototype.hasOwnProperty.call(stepState, name)) {
+        log.debug("Step cached", { step: name });
         return stepState[name] as T | null;
       }
       const timeoutAt = opts?.timeout != null ? new Date(Date.now() + opts.timeout) : null;

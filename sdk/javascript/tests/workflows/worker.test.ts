@@ -226,6 +226,89 @@ describe("Worker", () => {
     expect(mock.find(id)?.status).toBe("dead");
   });
 
+  test("emits run/step lifecycle log lines", async () => {
+    const writes: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown): boolean => {
+      writes.push(typeof chunk === "string" ? chunk : String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      const worker = new Worker({
+        client,
+        workerId: "w1",
+        registry: registry({
+          // eslint-disable-next-line @typescript-eslint/unbound-method -- `run` is a bound closure
+          greet: async (_p, { run }) => {
+            await run("fetch", () => "ok");
+          },
+        }),
+      });
+      mock.seed({ name: "greet" });
+      await worker.processOnce();
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    const lines = writes
+      .flatMap((c) => c.split("\n"))
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+
+    const find = (msg: string): Record<string, unknown> | undefined =>
+      lines.find((l) => l["msg"] === msg);
+    expect(find("Workflow started")).toMatchObject({ level: "info", scope: "worker:greet" });
+    expect(find("Step completed")).toMatchObject({ level: "info", scope: "worker:greet" });
+    expect(find("Step completed")!["fields"]).toMatchObject({ step: "fetch" });
+    expect(find("Workflow completed")).toMatchObject({ level: "info", scope: "worker:greet" });
+  });
+
+  test("emits Step cached on replay and Workflow cancelled on bail", async () => {
+    const writes: string[] = [];
+    const originalWrite = process.stdout.write.bind(process.stdout);
+    process.stdout.write = ((chunk: unknown): boolean => {
+      writes.push(typeof chunk === "string" ? chunk : String(chunk));
+      return true;
+    }) as typeof process.stdout.write;
+
+    try {
+      let pass = 0;
+      const worker = new Worker({
+        client,
+        workerId: "w1",
+        baseBackoffMs: 1,
+        maxBackoffMs: 2,
+        registry: registry({
+          // eslint-disable-next-line @typescript-eslint/unbound-method -- bound closures
+          quit: async (_p, { run, bail }) => {
+            await run("prep", () => "v");
+            pass += 1;
+            if (pass === 1) throw new Error("retry");
+            bail("done");
+          },
+        }),
+      });
+      mock.seed({ name: "quit", retries: 2 });
+      await worker.processOnce();
+      await new Promise((r) => setTimeout(r, 10));
+      await worker.processOnce();
+    } finally {
+      process.stdout.write = originalWrite;
+    }
+
+    const lines = writes
+      .flatMap((c) => c.split("\n"))
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
+    const msgs = lines.map((l) => l["msg"]);
+    expect(msgs).toContain("Step cached");
+    expect(msgs).toContain("Workflow cancelled");
+    const cancelled = lines.find((l) => l["msg"] === "Workflow cancelled");
+    expect(cancelled).toMatchObject({ level: "info" });
+    expect(cancelled!["fields"]).toMatchObject({ reason: "done" });
+  });
+
   test("step.run memoizes across retries", async () => {
     const runs: Record<string, number> = { a: 0, b: 0 };
     let forceFail = true;

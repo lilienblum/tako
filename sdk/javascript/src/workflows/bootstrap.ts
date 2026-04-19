@@ -12,7 +12,11 @@
  *   TAKO_APP_NAME              — app name the worker belongs to
  *   TAKO_WORKER_CONCURRENCY    — max parallel tasks per worker (default 10)
  *   TAKO_WORKER_IDLE_TIMEOUT_MS — scale-to-zero idle timeout; 0 = never
- *   TAKO_INSTANCE_ID           — unique id used as the claim leaseholder
+ *
+ * The claim leaseholder id is always `worker-<pid>` — the PID is the
+ * useful forensic when a run goes orphaned (matches the process that
+ * died in host logs), and there's no platform-level need for a separate
+ * identifier.
  */
 
 import { join } from "node:path";
@@ -47,9 +51,9 @@ export async function bootstrapWorker(
 
   const concurrency = parseIntEnv("TAKO_WORKER_CONCURRENCY", 10);
   const idleTimeoutMs = parseIntEnv("TAKO_WORKER_IDLE_TIMEOUT_MS", 0);
-  const instanceId = process.env["TAKO_INSTANCE_ID"] ?? `worker-${process.pid}`;
+  const workerId = `worker-${process.pid}`;
 
-  workflowsEngine.configure({ client, workerId: instanceId });
+  workflowsEngine.configure({ client, workerId });
 
   const workflowsDir = join(appDir, WORKFLOWS_DIRNAME);
   const count = await workflowsEngine.discover(workflowsDir);

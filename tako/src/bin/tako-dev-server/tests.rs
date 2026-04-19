@@ -1,5 +1,6 @@
 use super::process::{
-    handle_wake_on_request, kill_all_app_processes, kill_app_process, push_user_action,
+    build_spawn_env, forward_child_log_line, handle_wake_on_request, kill_all_app_processes,
+    kill_app_process, push_user_action,
 };
 use super::redirect::redirect_location;
 use super::*;
@@ -98,13 +99,11 @@ async fn register_app_roundtrip() {
     h.await.unwrap().unwrap();
 }
 
-// Re-enable once the control handler wires `WorkflowManager::ensure` into the
-// RegisterApp path. The prior DevWorkflows integration was removed during the
-// tako-workflows extraction and the replacement hook isn't in place yet.
-#[ignore]
 #[tokio::test]
-async fn register_app_starts_workflow_engine_when_workflows_dir_present() {
-    // Project layout: workflows/ + node_modules/tako.sh/.../bun-worker.mjs + node_modules/.bin/bun
+async fn register_app_starts_workflow_engine_when_worker_command_provided() {
+    // Project layout: workflows/ + a fake worker entrypoint + fake bun.
+    // We use `true` (exits 0) as the worker command so `ensure()` succeeds
+    // without actually running a real worker.
     let proj = tempfile::TempDir::new().unwrap();
     std::fs::create_dir_all(proj.path().join("workflows")).unwrap();
     std::fs::write(
@@ -112,13 +111,6 @@ async fn register_app_starts_workflow_engine_when_workflows_dir_present() {
         "export default () => {};",
     )
     .unwrap();
-    let worker_entry = proj.path().join("node_modules/tako.sh/dist/entrypoints");
-    std::fs::create_dir_all(&worker_entry).unwrap();
-    std::fs::write(worker_entry.join("bun-worker.mjs"), "// worker").unwrap();
-    let bin_dir = proj.path().join("node_modules/.bin");
-    std::fs::create_dir_all(&bin_dir).unwrap();
-    let fake_bun = bin_dir.join("bun");
-    std::fs::write(&fake_bun, "#!/bin/sh\nexit 0").unwrap();
 
     let (a, b) = tokio::net::UnixStream::pair().unwrap();
     let (shutdown_tx, _shutdown_rx) = watch::channel(false);
@@ -126,6 +118,7 @@ async fn register_app_starts_workflow_engine_when_workflows_dir_present() {
     let workflows_dir = tempfile::TempDir::new().unwrap();
     let workflows = Arc::new(tako_workflows::WorkflowManager::new(workflows_dir.path()));
     workflows.start_socket().unwrap();
+    let internal_socket = workflows.socket_path();
 
     let st = State::new(
         shutdown_tx,
@@ -138,7 +131,15 @@ async fn register_app_starts_workflow_engine_when_workflows_dir_present() {
         "127.0.0.1".to_string(),
     );
     let state = Arc::new(Mutex::new(st));
-    let h = tokio::spawn(async move { handle_client(a, state.clone()).await });
+    {
+        let mut s = state.lock().unwrap();
+        s.workflows = Some(workflows.clone());
+        s.internal_socket = Some(internal_socket);
+    }
+    let h = tokio::spawn({
+        let state = state.clone();
+        async move { handle_client(a, state).await }
+    });
 
     let (r, mut w) = b.into_split();
     let mut lines = BufReader::new(r).lines();
@@ -152,7 +153,8 @@ async fn register_app_starts_workflow_engine_when_workflows_dir_present() {
         "hosts": ["wf-app.test"],
         "upstream_port": 1234,
         "command": ["node", "index.js"],
-        "env": {}
+        "env": {},
+        "worker_command": ["true"],
     });
     w.write_all(req.to_string().as_bytes()).await.unwrap();
     w.write_all(b"\n").await.unwrap();
@@ -1240,4 +1242,115 @@ fn push_user_action_emits_sdk_wire_format_with_kind() {
     assert_eq!(v.get("level").and_then(|x| x.as_str()), Some("info"));
     let ts = v.get("ts").and_then(|x| x.as_i64()).expect("numeric ts");
     assert!(ts > 0, "ts should be filled with unix millis, got {ts}");
+}
+
+#[test]
+fn forward_child_log_line_passes_structured_json_through_verbatim() {
+    let buf = state::LogBuffer::new();
+    let (_backlog, mut rx, _truncated) = buf.subscribe(None);
+
+    let line = r#"{"ts":42,"level":"info","scope":"worker","msg":"hi"}"#;
+    forward_child_log_line(&buf, line.to_string(), "info", "worker");
+
+    let entry = rx.try_recv().expect("line forwarded");
+    assert_eq!(entry.line, line);
+}
+
+#[test]
+fn forward_child_log_line_wraps_plain_text_as_scoped_log() {
+    let buf = state::LogBuffer::new();
+    let (_backlog, mut rx, _truncated) = buf.subscribe(None);
+
+    forward_child_log_line(&buf, "raw worker output".to_string(), "warn", "worker");
+
+    let entry = rx.try_recv().expect("line forwarded");
+    let v: serde_json::Value = serde_json::from_str(&entry.line).expect("valid JSON");
+    assert_eq!(v.get("scope").and_then(|x| x.as_str()), Some("worker"));
+    assert_eq!(v.get("level").and_then(|x| x.as_str()), Some("warn"));
+    assert_eq!(
+        v.get("msg").and_then(|x| x.as_str()),
+        Some("raw worker output")
+    );
+    let ts = v.get("ts").and_then(|x| x.as_i64()).expect("numeric ts");
+    assert!(ts > 0);
+}
+
+fn runtime_app_with_env(
+    name: &str,
+    env: std::collections::HashMap<String, String>,
+) -> state::RuntimeApp {
+    state::RuntimeApp {
+        project_dir: "/tmp/proj".to_string(),
+        name: name.to_string(),
+        variant: None,
+        hosts: vec![format!("{name}.test")],
+        upstream_port: 0,
+        is_idle: false,
+        command: vec!["bun".to_string()],
+        env,
+        log_buffer: state::LogBuffer::new(),
+        pid: None,
+        client_pid: None,
+    }
+}
+
+#[test]
+fn build_spawn_env_injects_tako_runtime_contract_when_socket_available() {
+    // Regression: dev used to spawn apps without TAKO_INTERNAL_SOCKET /
+    // TAKO_APP_NAME, so `Tako.workflows.enqueue` blew up only when a user
+    // clicked a button. Both must be present whenever the dev-server has
+    // a live internal socket.
+    let app = runtime_app_with_env("demo", std::collections::HashMap::new());
+    let sock = std::path::PathBuf::from("/tmp/tako.sock");
+
+    let env = build_spawn_env(&app, Some(&sock));
+
+    assert_eq!(env.get("TAKO_APP_NAME").map(String::as_str), Some("demo"));
+    assert_eq!(
+        env.get("TAKO_INTERNAL_SOCKET").map(String::as_str),
+        Some("/tmp/tako.sock"),
+    );
+    assert_eq!(env.get("PORT").map(String::as_str), Some("0"));
+    assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
+}
+
+#[test]
+fn build_spawn_env_omits_socket_but_still_sets_app_name_when_socket_missing() {
+    // start_socket can fail (permissions, etc). In that case TAKO_APP_NAME
+    // is still informative; TAKO_INTERNAL_SOCKET stays unset so the SDK's
+    // fail-early check pairs cleanly.
+    let app = runtime_app_with_env("demo", std::collections::HashMap::new());
+
+    let env = build_spawn_env(&app, None);
+
+    assert_eq!(env.get("TAKO_APP_NAME").map(String::as_str), Some("demo"));
+    assert!(!env.contains_key("TAKO_INTERNAL_SOCKET"));
+}
+
+#[test]
+fn build_spawn_env_contract_wins_over_user_env() {
+    // User-supplied env must never shadow Tako's wiring. A stray
+    // `HOST=0.0.0.0` would make the app unreachable via the proxy; a
+    // stray `TAKO_APP_NAME=impostor` would mis-route every RPC.
+    let mut user_env = std::collections::HashMap::new();
+    user_env.insert("HOST".to_string(), "0.0.0.0".to_string());
+    user_env.insert("TAKO_APP_NAME".to_string(), "impostor".to_string());
+    user_env.insert(
+        "TAKO_INTERNAL_SOCKET".to_string(),
+        "/tmp/wrong.sock".to_string(),
+    );
+    user_env.insert("FOO".to_string(), "bar".to_string());
+    let app = runtime_app_with_env("demo", user_env);
+    let sock = std::path::PathBuf::from("/tmp/tako.sock");
+
+    let env = build_spawn_env(&app, Some(&sock));
+
+    assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
+    assert_eq!(env.get("TAKO_APP_NAME").map(String::as_str), Some("demo"));
+    assert_eq!(
+        env.get("TAKO_INTERNAL_SOCKET").map(String::as_str),
+        Some("/tmp/tako.sock"),
+    );
+    // Unrelated user env passes through untouched.
+    assert_eq!(env.get("FOO").map(String::as_str), Some("bar"));
 }
