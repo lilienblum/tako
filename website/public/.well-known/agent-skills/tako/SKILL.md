@@ -168,7 +168,7 @@ Show status of all servers and deployed apps.
 
 Remove a server.
 
-### `tako servers upgrade [<name>] [--canary|--stable]`
+### `tako servers upgrade [<name>]`
 
 Upgrade Tako on a server.
 
@@ -178,7 +178,7 @@ Upgrade Tako on a server.
 
 Show CLI version.
 
-### `tako upgrade [--canary|--stable]`
+### `tako upgrade`
 
 Upgrade the Tako CLI.
 

@@ -260,39 +260,25 @@ Install the CLI on your local machine:
 curl -fsSL https://tako.sh/install.sh | sh
 ```
 
-The hosted installer installs `tako` and `tako-dev-server` from the same channel/archive. On macOS, the archive also includes `tako-dev-proxy`.
-
-Install canary CLI artifacts directly:
-
-```bash
-curl -fsSL https://tako.sh/install-canary.sh | sh
-```
+The hosted installer installs `tako` and `tako-dev-server` from the same archive. On macOS, the archive also includes `tako-dev-proxy`.
 
 Upgrade local CLI:
 
 ```bash
 tako upgrade
-tako upgrade --canary
-tako upgrade --stable
 ```
 
 `tako upgrade` upgrades only the local CLI installation.
 
-Canary distribution model:
+Rolling release model:
 
-- `canary` is a single moving GitHub prerelease tag updated by CI on each `master` push.
-- Canary CLI artifacts report `canary-<sha7>` in `tako --version` output, where `<sha7>` is the 7-character source commit.
-- Stable versioned releases remain maintainer-driven and are published from local release flows.
-
-Upgrade channel state:
-
-- The default upgrade channel (`stable` or `canary`) is stored in a separate `upgrade_channel.toml` file in the platform config directory.
-- Explicit channel flags update this file.
-- Upgrade commands print the active channel before execution (`You're on {channel} channel`).
+- `latest` is a single moving GitHub release updated by CI on each `master` push. There are no versioned releases and no stable/canary distinction; every build is a rolling build while Tako's protocol is v0.
+- CLI and server artifacts report `<base>-<sha7>` in `--version` output, where `<base>` is the package version (always `0.0.0`) and `<sha7>` is the 7-character source commit.
+- The npm-published SDK (`tako.sh`) uses `0.0.0-<sha7>` version strings and is published under the `latest` dist-tag on every push.
 
 ### Global options
 
-- `--version`: Print version and exit (`<semver>` on stable builds, `canary-<sha7>` on canary builds).
+- `--version`: Print version and exit (format: `<base>-<sha7>`).
 - `-v, --verbose`: Show verbose output as an append-only execution transcript with timestamps and log levels.
 - `--ci`: Deterministic non-interactive output (no colors, no spinners, no prompts). Can be combined with `--verbose`.
 - `--dry-run`: Show what would happen without performing any side effects. Skips SSH connections, file uploads, config writes, and remote commands. Prints `⏭ ... (dry run)` for each skipped action. Production deploy confirmation is auto-skipped. Supported by: `deploy`, `servers add`, `servers rm`, `delete`.
@@ -376,17 +362,14 @@ Show version information (same as `--version` flag).
 
 Generate typed accessors for the current project: `tako.d.ts` for JS/TS apps (typed `Tako.secrets` plus standard Tako/runtime env vars) and `tako_secrets.go` for Go apps. For JS/TS projects, `tako.d.ts` is written next to any existing copy if one is found, otherwise placed inside `src/` or `app/` when those directories exist, or at the project root — so TypeScript's default `include` picks it up without tsconfig edits.
 
-### tako upgrade [--canary|--stable]
+### tako upgrade
 
-Upgrade the local `tako` CLI binary to the latest available release.
+Upgrade the local `tako` CLI binary to the latest available build.
 
 CLI upgrade strategy:
 
 - Homebrew install detection: runs `brew upgrade tako`
 - Default/fallback: downloads and runs hosted installer (`https://tako.sh/install.sh`) via `curl`/`wget`
-- `--canary`: always uses hosted installer mode and sets `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary`
-- `--stable`: forces stable channel and persists it as default
-- Without channel flags, `tako upgrade` uses the persisted upgrade channel (default: `stable`)
 
 ### tako dev [--variant {variant}]
 
@@ -644,16 +627,12 @@ Deleting an app removes the entire `{data_dir}/apps/{app}` tree after the app is
 During single-host upgrade orchestration, `tako-server` may enter an internal `upgrading` server mode that temporarily rejects mutating management commands (`deploy`, `stop`, `delete`, `update-secrets`) until the upgrade window ends.
 Upgrade mode transitions are guarded by a durable single-owner upgrade lock in SQLite so only one upgrade controller can hold the upgrade window at a time.
 
-### tako servers upgrade [server-name] [--canary|--stable]
+### tako servers upgrade [server-name]
 
 Upgrade `tako-server` on one or all configured servers via service-manager reload. When `server-name` is omitted, all servers are upgraded.
 
 1. CLI verifies `tako-server` is active on the host.
 2. CLI installs the new server binary on the host.
-   - default: latest stable installer artifact
-   - `--canary`: installer uses canary prerelease assets via `TAKO_DOWNLOAD_BASE_URL=https://github.com/lilienblum/tako/releases/download/canary-latest`
-   - `--stable`: installer uses stable artifacts and persists stable as default channel
-   - without channel flags: uses the persisted upgrade channel (default: `stable`)
    - CLI verifies the signed `tako-server-sha256s.txt` release manifest with an embedded public key, selects the expected SHA-256 for the target archive, and the remote host verifies that SHA-256 before extracting the archive into `/usr/local/bin/tako-server`
    - custom `TAKO_DOWNLOAD_BASE_URL` overrides must use `https://`; non-HTTPS overrides are rejected unless `TAKO_ALLOW_INSECURE_DOWNLOAD_BASE=1` is set explicitly for local testing
 3. CLI acquires the durable upgrade lock (`enter_upgrading`) and sets server mode to `upgrading`.
@@ -1090,8 +1069,7 @@ Installer SSH key behavior:
 Reference scripts in this repo:
 
 - `scripts/install-tako-server.sh` (source for `/install-server.sh`, alias `/server-install.sh`)
-- `scripts/install-tako-server-canary.sh` (source for `/install-server-canary.sh`)
-- `scripts/install-tako-canary.sh` (source for `/install-canary.sh`)
+- `scripts/install-tako.sh` (source for `/install.sh`)
 
 **Runtime binary download engine:**
 

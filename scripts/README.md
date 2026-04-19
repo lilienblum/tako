@@ -5,10 +5,8 @@ Repository scripts used by installers, CI checks, and local development workflow
 ## Scripts
 
 - `install-tako.sh`: POSIX installer for local `tako`, `tako-dev-server`, and `tako-dev-proxy`.
-- `install-tako-canary.sh`: lightweight wrapper that runs hosted CLI installer with canary artifact base URL.
 - `install-tako-server.sh`: POSIX installer for `tako-server` on Linux hosts.
-- `install-tako-server-canary.sh`: lightweight wrapper that runs hosted server installer with canary artifact base URL.
-  - Both installers resolve component-specific latest tags (`tako-v*`, `tako-server-v*`) via GitHub tags API by default, then download release assets for that tag.
+  - Both installers download assets from the rolling `latest` release (override with `TAKO_RELEASE_TAG`).
   - Hosted installers require HTTPS download overrides by default; set `TAKO_ALLOW_INSECURE_DOWNLOAD_BASE=1` only for local test mirrors.
   - Supports systemd and OpenRC for normal install/start.
   - Supports install-refresh mode via `TAKO_RESTART_SERVICE=0` (refreshes binary/users without restarting service; service definition is updated only when a supported manager is active), used in build/container workflows before init/service managers are running.
@@ -37,7 +35,5 @@ bash scripts/check_critical_coverage.sh
 The install scripts are exposed via website redirect endpoints:
 
 - `/install.sh`
-- `/install-canary.sh`
 - `/install-server.sh`
 - `/server-install.sh`
-- `/install-server-canary.sh`

@@ -20,7 +20,7 @@ tako [--version] [-v|--verbose] [--ci] [--dry-run] [-c|--config <CONFIG>] <comma
 
 These flags work with any command.
 
-`--version` prints the current version and exits. Stable builds print a semver string (e.g. `0.3.1`). Canary builds print `canary-<sha7>`, where `<sha7>` is the 7-character source commit.
+`--version` prints the current version and exits. Versions print as `<base>-<sha7>`, where `<base>` is the package version (always `0.0.0` while Tako is pre-v1) and `<sha7>` is the 7-character source commit.
 
 `-v`, `--verbose` switches to verbose output -- an append-only execution transcript with timestamps, log levels, and technical detail like file paths and per-host transport context.
 
@@ -482,16 +482,12 @@ Without `--force`, this sends a graceful reload so the current process can hand 
 Upgrade `tako-server` on one or all configured remote servers with zero-downtime reload.
 
 ```bash
-tako servers upgrade [SERVER_NAME] [--canary|--stable]
+tako servers upgrade [SERVER_NAME]
 ```
 
-| Argument/Flag | Description                                            |
-| ------------- | ------------------------------------------------------ |
-| `SERVER_NAME` | Server name (omit to upgrade all configured servers)   |
-| `--canary`    | Install canary prerelease build                        |
-| `--stable`    | Install stable build and set default channel to stable |
-
-Without channel flags, uses the persisted `upgrade_channel` from global config (default: `stable`). The `--canary` and `--stable` flags are mutually exclusive.
+| Argument/Flag | Description                                          |
+| ------------- | ---------------------------------------------------- |
+| `SERVER_NAME` | Server name (omit to upgrade all configured servers) |
 
 Upgrade verifies the signed `tako-server-sha256s.txt` release manifest, enforces the matching SHA-256 on the downloaded archive, installs the new binary, acquires an upgrade lock, signals a service-manager reload (`systemctl reload` on systemd, `rc-service reload` on OpenRC), waits for the management socket to report ready, then releases the lock. Reload uses temporary process/listener overlap until the replacement process reports ready, and Tako keeps the previous on-disk binary until then so it can restore it if readiness fails. Requires a supported service manager and root privileges (root login or sudo-capable user).
 
@@ -503,9 +499,6 @@ tako servers upgrade
 
 # Upgrade a specific server
 tako servers upgrade production
-
-# Upgrade to canary
-tako servers upgrade staging --canary
 ```
 
 ### `tako servers implode`
@@ -660,39 +653,16 @@ Reads from `keys/{env}` and copies the base64-encoded key to your clipboard.
 
 ## `tako upgrade`
 
-Upgrade the local `tako` CLI to the latest release.
+Upgrade the local `tako` CLI to the latest build.
 
 ```bash
-tako upgrade [--canary|--stable]
+tako upgrade
 ```
-
-| Flag       | Description                                                   |
-| ---------- | ------------------------------------------------------------- |
-| `--canary` | Install latest canary build                                   |
-| `--stable` | Install latest stable build and set default channel to stable |
-
-The `--canary` and `--stable` flags are mutually exclusive. Without either flag, upgrade uses the persisted `upgrade_channel` from global config (default: `stable`).
-
-Before running, upgrade prints the active channel (`You're on {channel} channel`).
 
 Upgrade strategy is install-aware:
 
 - **Homebrew** installs use `brew upgrade tako`
 - **Hosted installer** (default/fallback) downloads and runs `https://tako.sh/install.sh`
-
-`--canary` always uses the hosted installer path and pulls from the canary release channel.
-
-```bash
-tako upgrade
-tako upgrade --canary
-tako upgrade --stable
-```
-
-You can also install canary directly:
-
-```bash
-curl -fsSL https://tako.sh/install-canary.sh | sh
-```
 
 ---
 
@@ -743,7 +713,7 @@ Show version information.
 tako version
 ```
 
-Same as `--version` flag. Stable builds print a semver string; canary builds print `canary-<sha7>`.
+Same as `--version` flag. Prints `<base>-<sha7>`, where `<base>` is the package version and `<sha7>` is the 7-character source commit.
 
 ---
 

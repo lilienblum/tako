@@ -1,4 +1,4 @@
-name: Canary Release
+name: Release
 
 on:
   workflow_run:
@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: canary-release
+  group: release
   cancel-in-progress: true
 
 permissions:
@@ -16,8 +16,8 @@ permissions:
   actions: read
 
 jobs:
-  publish:
-    name: Publish Canary Prerelease
+  publish-binaries:
+    name: Publish binaries
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment: release
@@ -52,7 +52,7 @@ jobs:
           conclusion=$(gh api "repos/${{ github.repository }}/actions/runs/${{ steps.ci-run.outputs.run_id }}/jobs" \
             --jq '.jobs[] | select(.name == "Build x86_64 (glibc)") | .conclusion')
           if [ "$conclusion" = "skipped" ] || [ -z "$conclusion" ]; then
-            echo "Build jobs were skipped — skipping canary"
+            echo "Build jobs were skipped — skipping release"
             echo "skipped=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -132,24 +132,77 @@ jobs:
           openssl dgst -sha256 -sign "$key_file" -out dist/tako-server-sha256s.txt.sig dist/tako-server-sha256s.txt
 
           # Tag and publish
-          git tag -f canary-latest "$GITHUB_SHA"
-          git push -f origin canary-latest
+          git tag -f latest "$GITHUB_SHA"
+          git push -f origin latest
 
           assets=(dist/*)
           for f in "${assets[@]}"; do test -f "$f"; done
 
           timestamp="$(date -u +'%Y-%m-%d %H:%M UTC')"
           short_sha="$(printf '%s' "$GITHUB_SHA" | cut -c1-7)"
-          title="Canary"
-          notes="Latest canary build from master (${short_sha}) on ${timestamp}."
+          title="Latest"
+          notes="Latest build from master (${short_sha}) on ${timestamp}."
 
-          if ! gh release view canary-latest >/dev/null 2>&1; then
-            gh release create canary-latest \
-              --prerelease \
+          if ! gh release view latest >/dev/null 2>&1; then
+            gh release create latest \
               --target master \
               --title "$title" \
               --notes "$notes"
           fi
 
-          gh release edit canary-latest --title "$title" --notes "$notes"
-          gh release upload canary-latest --clobber "${assets[@]}"
+          gh release edit latest --title "$title" --notes "$notes" --prerelease=false --draft=false
+          gh release upload latest --clobber "${assets[@]}"
+
+  publish-sdk:
+    name: Publish SDK
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 100
+
+      - name: Check for SDK changes
+        id: changes
+        run: |
+          if git fetch origin tag sdk-js-latest --no-tags 2>/dev/null; then
+            if ! git diff --name-only sdk-js-latest -- sdk/javascript/ | grep -q .; then
+              echo "No SDK changes since sdk-js-latest, skipping"
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+            fi
+          fi
+
+      - name: Setup Node
+        if: steps.changes.outputs.skip != 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Setup Bun
+        if: steps.changes.outputs.skip != 'true'
+        uses: oven-sh/setup-bun@v2
+
+      - name: Publish
+        if: steps.changes.outputs.skip != 'true'
+        run: |
+          sha="${{ github.event.workflow_run.head_sha || github.sha }}"
+          short_sha="$(printf '%s' "$sha" | cut -c1-7)"
+          version="0.0.0-${short_sha}"
+          echo "Publishing sdk: $version"
+          cd sdk/javascript
+          npm pkg set version="$version"
+          bun install
+          bun run build
+          npm publish --tag latest --provenance --access public
+
+      - name: Update sdk-js-latest tag
+        if: steps.changes.outputs.skip != 'true'
+        run: |
+          git tag -f sdk-js-latest
+          git push -f origin sdk-js-latest

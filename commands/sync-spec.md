@@ -32,7 +32,7 @@ Systematically read the source code across all components. Do not skip files —
   - `ssh/` — remote communication
   - `paths.rs`, `output.rs` — paths, output modes
 - **sdk/javascript/src/** — SDK (fetch handler, adapters, vite plugin, status endpoint)
-- **scripts/** — install scripts (install-tako-server.sh, install-tako-canary.sh)
+- **scripts/** — install scripts (install-tako.sh, install-tako-server.sh)
 - **tako-runtime/src/** — runtime registry types, download engine, embedded package-manager metadata
 - **registry/** — all TOML definitions:
   - `registry/{language}/runtimes/` — runtime definitions

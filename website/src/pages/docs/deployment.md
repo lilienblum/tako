@@ -19,11 +19,7 @@ Before you can deploy, each target server needs `tako-server` installed and runn
 Run the hosted installer as root on your server:
 
 ```bash
-# Stable channel
 sudo sh -c "$(curl -fsSL https://tako.sh/install-server.sh)"
-
-# Canary channel (latest from master)
-sudo sh -c "$(curl -fsSL https://tako.sh/install-server-canary.sh)"
 ```
 
 The installer handles everything:
@@ -533,9 +529,7 @@ Aliases: `tako rm`, `tako remove`, `tako undeploy`, `tako destroy`.
 Upgrade `tako-server` on a running host without downtime:
 
 ```bash
-tako servers upgrade la               # Upgrade using default channel
-tako servers upgrade la --canary      # Use canary prerelease
-tako servers upgrade la --stable      # Use stable release
+tako servers upgrade la
 ```
 
 When `server-name` is omitted, all configured servers are upgraded.

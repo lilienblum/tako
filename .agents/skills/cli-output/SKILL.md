@@ -114,10 +114,9 @@ These functions print in normal mode, no-op in verbose/CI. Use `output::is_prett
 | `brand_error(v)` | Red text | Status words: "unreachable", "error" |
 | `brand_muted(v)` | Dim text | Elapsed times, metadata |
 
-### Environment & Channel Context
+### Environment Context
 
 - **Environment**: only print it when it adds real clarity. Avoid redundant lines like `Using production environment` when the command already shows the environment in the main summary or task tree.
-- **Channel** (canary): `output::muted()`.
 
 ## Spinners
 
@@ -404,5 +403,4 @@ Human-facing CLI output goes to stderr. Structured data goes to stdout.
 12. **Meaningful internal step** for debugging? → `tracing::debug!()` with `[scope]` prefix
 13. **Noisy/repetitive instrumentation**? → `tracing::trace!()` or `timed()`
 14. **Environment context** (auto-resolved)? → `warning()` with `accent()` env name
-15. **Channel context** (canary)? → `muted()`
-16. **Low-priority info**? → `muted()`
+15. **Low-priority info**? → `muted()`

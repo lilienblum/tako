@@ -302,7 +302,7 @@ jobs:
 
       - name: Build
         env:
-          TAKO_CANARY_SHA: ${{ github.sha }}
+          TAKO_BUILD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           cargo build -p tako-server --release
@@ -348,7 +348,7 @@ jobs:
 
       - name: Build
         env:
-          TAKO_CANARY_SHA: ${{ github.sha }}
+          TAKO_BUILD_SHA: ${{ github.sha }}
         run: cargo build -p tako-server --release --target x86_64-unknown-linux-musl
 
       - name: Upload server binary
@@ -358,7 +358,7 @@ jobs:
           path: target/x86_64-unknown-linux-musl/release/tako-server
           if-no-files-found: error
 
-  # aarch64 glibc — master only (for canary)
+  # aarch64 glibc — master only (for rolling release)
   build-aarch64-glibc:
     name: Build aarch64 (glibc)
     needs: [detect-changes]
@@ -379,7 +379,7 @@ jobs:
 
       - name: Build
         env:
-          TAKO_CANARY_SHA: ${{ github.sha }}
+          TAKO_BUILD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           cargo build -p tako-server --release
@@ -402,7 +402,7 @@ jobs:
             target/release/tako-dev-proxy
           if-no-files-found: error
 
-  # aarch64 musl — master only (for canary)
+  # aarch64 musl — master only (for rolling release)
   build-aarch64-musl:
     name: Build aarch64 (musl)
     needs: [detect-changes]
@@ -426,7 +426,7 @@ jobs:
 
       - name: Build
         env:
-          TAKO_CANARY_SHA: ${{ github.sha }}
+          TAKO_BUILD_SHA: ${{ github.sha }}
         run: cargo build -p tako-server --release --target aarch64-unknown-linux-musl
 
       - name: Upload server binary
@@ -436,7 +436,7 @@ jobs:
           path: target/aarch64-unknown-linux-musl/release/tako-server
           if-no-files-found: error
 
-  # macOS builds — master only (for canary)
+  # macOS builds — master only (for rolling release)
   build-darwin:
     name: Build macOS CLI
     needs: [detect-changes]
@@ -456,7 +456,7 @@ jobs:
 
       - name: Build
         env:
-          TAKO_CANARY_SHA: ${{ github.sha }}
+          TAKO_BUILD_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           cargo build -p tako --bin tako --bin tako-dev-server --bin tako-dev-proxy --release --target aarch64-apple-darwin

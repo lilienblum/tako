@@ -583,16 +583,6 @@ All names and hosts must be globally unique. The `arch` and `libc` fields are de
 - If a key file is passphrase-protected, Tako will prompt for the passphrase when running interactively (or you can provide `TAKO_SSH_KEY_PASSPHRASE`).
 - If no suitable key files are found or usable, Tako falls back to `ssh-agent` via `SSH_AUTH_SOCK` (when available).
 
-## `upgrade_channel.toml`
-
-Stored in the platform config directory alongside `config.toml`. Contains the default upgrade channel (`stable` or `canary`).
-
-- Explicit channel flags on `tako upgrade` (e.g. `--canary`, `--stable`) update this file.
-- Without a channel flag, `tako upgrade` uses the channel saved here (default: `stable`).
-- Upgrade commands print the active channel before execution.
-
-You do not need to edit this file directly -- use `tako upgrade --canary` or `tako upgrade --stable`.
-
 ## `.tako/secrets.json` (Project - Encrypted)
 
 Per-environment encrypted secrets stored in your project's `.tako/` directory. Each environment has a `salt` (base64-encoded Argon2id salt for key derivation) and a `secrets` map. Secret names are plaintext; values are encrypted with AES-256-GCM.

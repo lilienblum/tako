@@ -57,14 +57,6 @@ pub enum ServerCommands {
     Upgrade {
         /// Server name (omit to upgrade all servers)
         name: Option<String>,
-
-        /// Install latest canary build instead of stable release
-        #[arg(long, conflicts_with = "stable")]
-        canary: bool,
-
-        /// Install latest stable build and set default channel to stable
-        #[arg(long, conflicts_with = "canary")]
-        stable: bool,
     },
 
     /// Remove tako-server and all data from a server
@@ -135,11 +127,7 @@ async fn run_async(cmd: ServerCommands) -> Result<(), Box<dyn std::error::Error>
         ServerCommands::Rm { name } => crud::remove_server(name.as_deref()).await,
         ServerCommands::Ls => crud::list_servers().await,
         ServerCommands::Restart { name, force } => crud::restart_server(&name, force).await,
-        ServerCommands::Upgrade {
-            name,
-            canary,
-            stable,
-        } => upgrade::upgrade_servers(name.as_deref(), canary, stable).await,
+        ServerCommands::Upgrade { name } => upgrade::upgrade_servers(name.as_deref()).await,
         ServerCommands::Implode { name, yes } => implode_server_cmd(name.as_deref(), yes).await,
         ServerCommands::Status => crate::commands::status::run().await,
         ServerCommands::SetupWildcard { env } => dns::setup_wildcard(env.as_deref()).await,

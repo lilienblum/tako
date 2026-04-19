@@ -280,7 +280,7 @@ pub fn is_pretty() -> bool {
 // ── Logo ───────────────────────────────────────────────────────────────────
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const CANARY_SHA: Option<&str> = option_env!("TAKO_CANARY_SHA");
+const BUILD_SHA: Option<&str> = option_env!("TAKO_BUILD_SHA");
 
 pub const LOGO_ROWS: [&str; 3] = [
     "▀█▀ ▄▀█ █ █ █▀█   █▀ █ █",
@@ -292,10 +292,10 @@ const LOGO_COLOR_START: (u8, u8, u8) = THEME_TEAL;
 const LOGO_COLOR_END: (u8, u8, u8) = THEME_CORAL;
 
 fn build_version_string() -> String {
-    match CANARY_SHA {
+    match BUILD_SHA {
         Some(sha) if !sha.trim().is_empty() => {
             let short = &sha[..sha.len().min(7)];
-            format!("{VERSION}-canary-{short}")
+            format!("{VERSION}-{short}")
         }
         _ => VERSION.to_owned(),
     }

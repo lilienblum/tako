@@ -1,6 +1,5 @@
 use std::sync::{Arc, Mutex};
 
-use crate::config::UpgradeChannel;
 use crate::output;
 use crate::ui::{TaskItemState, TaskState, TaskTreeSession, TreeNode};
 
@@ -52,9 +51,9 @@ impl UpgradeTaskId {
 }
 
 impl UpgradeTaskTreeController {
-    pub(super) fn new(channel: UpgradeChannel, method: CliUpgradeMethod) -> Self {
+    pub(super) fn new(method: CliUpgradeMethod) -> Self {
         let state = UpgradeTaskTreeState {
-            tasks: build_upgrade_tasks(channel, method),
+            tasks: build_upgrade_tasks(method),
         };
         let tree = build_upgrade_tree(&state);
         let session = should_use_upgrade_task_tree().then(|| TaskTreeSession::new(tree));
@@ -75,10 +74,6 @@ impl UpgradeTaskTreeController {
 
     pub(super) fn succeed(&self, id: UpgradeTaskId, detail: Option<String>) {
         self.complete(id, detail, CompletionKind::Succeeded);
-    }
-
-    pub(super) fn warn(&self, id: UpgradeTaskId, detail: Option<String>) {
-        self.complete(id, detail, CompletionKind::Cancelled);
     }
 
     pub(super) fn fail(&self, id: UpgradeTaskId, detail: Option<String>) {
@@ -123,7 +118,6 @@ impl UpgradeTaskTreeController {
             };
             task.state = match kind {
                 CompletionKind::Succeeded => TaskState::Succeeded { elapsed },
-                CompletionKind::Cancelled => TaskState::Cancelled { elapsed },
                 CompletionKind::Failed => TaskState::Failed { elapsed },
             };
             task.detail = detail;
@@ -140,11 +134,10 @@ impl UpgradeTaskTreeController {
 #[derive(Clone, Copy)]
 enum CompletionKind {
     Succeeded,
-    Cancelled,
     Failed,
 }
 
-fn build_upgrade_tasks(_channel: UpgradeChannel, method: CliUpgradeMethod) -> Vec<TaskItemState> {
+fn build_upgrade_tasks(method: CliUpgradeMethod) -> Vec<TaskItemState> {
     match method {
         CliUpgradeMethod::Installer => {
             vec![

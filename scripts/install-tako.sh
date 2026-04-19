@@ -19,8 +19,7 @@ set -eu
 #                           set 1/true/yes/on to allow non-HTTPS download overrides for local testing
 #   TAKO_REPO_OWNER         default: lilienblum
 #   TAKO_REPO_NAME          default: tako
-#   TAKO_TAG_PREFIX         default: tako-v
-#   TAKO_TAGS_API           override tags API URL (optional)
+#   TAKO_RELEASE_TAG        default: latest
 
 need_cmd() { command -v "$1" >/dev/null 2>&1; }
 
@@ -41,20 +40,6 @@ download_stdout() {
   else
     wget -qO- "$url"
   fi
-}
-
-resolve_latest_tag() {
-  prefix="$1"
-  tags_api="$2"
-  tags_json="$(download_stdout "$tags_api" 2>/dev/null || true)"
-  if [ -z "$tags_json" ]; then
-    return 1
-  fi
-  tag="$(printf '%s' "$tags_json" | grep -o "\"name\": \"${prefix}[^\"]*\"" | head -n 1 | sed -E 's/"name": "([^"]+)"/\1/' || true)"
-  if [ -z "$tag" ]; then
-    return 1
-  fi
-  printf '%s\n' "$tag"
 }
 
 is_enabled() {
@@ -107,8 +92,7 @@ TAKO_DOWNLOAD_BASE_URL="${TAKO_DOWNLOAD_BASE_URL:-}"
 TAKO_ALLOW_INSECURE_DOWNLOAD_BASE="${TAKO_ALLOW_INSECURE_DOWNLOAD_BASE:-}"
 TAKO_REPO_OWNER="${TAKO_REPO_OWNER:-lilienblum}"
 TAKO_REPO_NAME="${TAKO_REPO_NAME:-tako}"
-TAKO_TAG_PREFIX="${TAKO_TAG_PREFIX:-tako-v}"
-TAKO_TAGS_API="${TAKO_TAGS_API:-https://api.github.com/repos/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/tags?per_page=100}"
+TAKO_RELEASE_TAG="${TAKO_RELEASE_TAG:-latest}"
 
 os_raw="$(uname -s)"
 case "$os_raw" in
@@ -134,12 +118,7 @@ download_url="${TAKO_URL:-}"
 if [ -z "$download_url" ]; then
   download_base="$TAKO_DOWNLOAD_BASE_URL"
   if [ -z "$download_base" ]; then
-    tag="$(resolve_latest_tag "$TAKO_TAG_PREFIX" "$TAKO_TAGS_API" || true)"
-    if [ -z "$tag" ]; then
-      echo "error: could not resolve latest tag for prefix '$TAKO_TAG_PREFIX'" >&2
-      exit 1
-    fi
-    download_base="https://github.com/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/releases/download/$tag"
+    download_base="https://github.com/$TAKO_REPO_OWNER/$TAKO_REPO_NAME/releases/download/$TAKO_RELEASE_TAG"
   else
     require_secure_download_override "$download_base"
   fi

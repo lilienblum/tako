@@ -5,14 +5,14 @@ use clap::CommandFactory;
 
 const DEV_PUBLIC_PORT: u16 = 47831;
 const VERSION_BASE: &str = env!("CARGO_PKG_VERSION");
-const VERSION_CANARY_SHA: Option<&str> = option_env!("TAKO_CANARY_SHA");
+const VERSION_BUILD_SHA: Option<&str> = option_env!("TAKO_BUILD_SHA");
 
 pub fn display_version() -> String {
-    format_display_version(VERSION_BASE, VERSION_CANARY_SHA)
+    format_display_version(VERSION_BASE, VERSION_BUILD_SHA)
 }
 
-fn format_display_version(base: &str, canary_sha: Option<&str>) -> String {
-    let Some(raw_sha) = canary_sha else {
+fn format_display_version(base: &str, build_sha: Option<&str>) -> String {
+    let Some(raw_sha) = build_sha else {
         return base.to_owned();
     };
     let sha = raw_sha.trim();
@@ -20,7 +20,7 @@ fn format_display_version(base: &str, canary_sha: Option<&str>) -> String {
         return base.to_owned();
     }
     let short_sha = &sha[..sha.len().min(7)];
-    format!("canary-{short_sha}")
+    format!("{base}-{short_sha}")
 }
 
 /// Tako - Modern application development, deployment, and runtime platform
@@ -259,78 +259,23 @@ mod tests {
     #[test]
     fn servers_upgrade_parses_without_name() {
         let cli = Cli::try_parse_from(["tako", "servers", "upgrade"]).unwrap();
-        let Commands::Servers(server::ServerCommands::Upgrade {
-            name,
-            canary,
-            stable,
-        }) = cli.command.expect("command")
+        let Commands::Servers(server::ServerCommands::Upgrade { name }) =
+            cli.command.expect("command")
         else {
             panic!("expected Servers::Upgrade");
         };
         assert_eq!(name, None);
-        assert!(!canary);
-        assert!(!stable);
     }
 
     #[test]
     fn servers_upgrade_parses_with_name() {
         let cli = Cli::try_parse_from(["tako", "servers", "upgrade", "prod"]).unwrap();
-        let Commands::Servers(server::ServerCommands::Upgrade {
-            name,
-            canary,
-            stable,
-        }) = cli.command.expect("command")
+        let Commands::Servers(server::ServerCommands::Upgrade { name }) =
+            cli.command.expect("command")
         else {
             panic!("expected Servers::Upgrade");
         };
         assert_eq!(name, Some("prod".to_string()));
-        assert!(!canary);
-        assert!(!stable);
-    }
-
-    #[test]
-    fn servers_upgrade_parses_with_canary_flag() {
-        let cli = Cli::try_parse_from(["tako", "servers", "upgrade", "prod", "--canary"]).unwrap();
-        let Commands::Servers(server::ServerCommands::Upgrade {
-            name,
-            canary,
-            stable,
-        }) = cli.command.expect("command")
-        else {
-            panic!("expected Servers::Upgrade");
-        };
-        assert_eq!(name, Some("prod".to_string()));
-        assert!(canary);
-        assert!(!stable);
-    }
-
-    #[test]
-    fn servers_upgrade_parses_with_stable_flag() {
-        let cli = Cli::try_parse_from(["tako", "servers", "upgrade", "prod", "--stable"]).unwrap();
-        let Commands::Servers(server::ServerCommands::Upgrade {
-            name,
-            canary,
-            stable,
-        }) = cli.command.expect("command")
-        else {
-            panic!("expected Servers::Upgrade");
-        };
-        assert_eq!(name, Some("prod".to_string()));
-        assert!(!canary);
-        assert!(stable);
-    }
-
-    #[test]
-    fn servers_upgrade_rejects_both_channel_flags() {
-        let res =
-            Cli::try_parse_from(["tako", "servers", "upgrade", "prod", "--canary", "--stable"]);
-        match res {
-            Ok(_) => panic!("expected parse failure"),
-            Err(err) => assert!(
-                err.to_string().contains("cannot be used with"),
-                "unexpected error: {err}"
-            ),
-        }
     }
 
     #[test]
@@ -549,56 +494,7 @@ mod tests {
     #[test]
     fn upgrade_command_parses() {
         let cli = Cli::try_parse_from(["tako", "upgrade"]).unwrap();
-        let Some(Commands::Upgrade { canary, stable }) = cli.command else {
-            panic!("expected Upgrade");
-        };
-        assert!(!canary);
-        assert!(!stable);
-    }
-
-    #[test]
-    fn upgrade_command_parses_canary_flag() {
-        let cli = Cli::try_parse_from(["tako", "upgrade", "--canary"]).unwrap();
-        let Some(Commands::Upgrade { canary, stable }) = cli.command else {
-            panic!("expected Upgrade");
-        };
-        assert!(canary);
-        assert!(!stable);
-    }
-
-    #[test]
-    fn upgrade_command_parses_stable_flag() {
-        let cli = Cli::try_parse_from(["tako", "upgrade", "--stable"]).unwrap();
-        let Some(Commands::Upgrade { canary, stable }) = cli.command else {
-            panic!("expected Upgrade");
-        };
-        assert!(!canary);
-        assert!(stable);
-    }
-
-    #[test]
-    fn upgrade_command_rejects_both_channel_flags() {
-        let result = Cli::try_parse_from(["tako", "upgrade", "--canary", "--stable"]);
-        match result {
-            Ok(_) => panic!("expected parse failure"),
-            Err(err) => assert!(
-                err.to_string().contains("cannot be used with"),
-                "unexpected error: {err}"
-            ),
-        }
-    }
-
-    #[test]
-    fn upgrade_command_rejects_removed_scope_flags() {
-        let result = Cli::try_parse_from(["tako", "upgrade", "--servers-only"]);
-        match result {
-            Ok(_) => panic!("expected parse failure"),
-            Err(err) => assert!(
-                err.to_string()
-                    .contains("unexpected argument '--servers-only'"),
-                "unexpected error: {err}"
-            ),
-        }
+        assert!(matches!(cli.command, Some(Commands::Upgrade)));
     }
 
     #[test]
@@ -713,25 +609,25 @@ mod tests {
     }
 
     #[test]
-    fn display_version_without_canary_sha_uses_base_version() {
+    fn display_version_without_build_sha_uses_base_version() {
         let version = format_display_version("1.2.3", None);
         assert_eq!(version, "1.2.3");
     }
 
     #[test]
-    fn display_version_with_full_canary_sha_uses_short_hash() {
+    fn display_version_with_full_build_sha_uses_short_hash() {
         let version = format_display_version("1.2.3", Some("0123456789abcdef"));
-        assert_eq!(version, "canary-0123456");
+        assert_eq!(version, "1.2.3-0123456");
     }
 
     #[test]
-    fn display_version_with_short_canary_sha_keeps_full_value() {
+    fn display_version_with_short_build_sha_keeps_full_value() {
         let version = format_display_version("1.2.3", Some("abc"));
-        assert_eq!(version, "canary-abc");
+        assert_eq!(version, "1.2.3-abc");
     }
 
     #[test]
-    fn display_version_with_blank_canary_sha_uses_base_version() {
+    fn display_version_with_blank_build_sha_uses_base_version() {
         let version = format_display_version("1.2.3", Some("   "));
         assert_eq!(version, "1.2.3");
     }
@@ -930,15 +826,7 @@ pub enum Commands {
     Releases(releases::ReleaseCommands),
 
     /// Upgrade the local tako CLI to the latest version
-    Upgrade {
-        /// Install latest canary build instead of stable release
-        #[arg(long, conflicts_with = "stable")]
-        canary: bool,
-
-        /// Install latest stable build and set default channel to stable
-        #[arg(long, conflicts_with = "canary")]
-        stable: bool,
-    },
+    Upgrade,
 
     /// Deploy to an environment
     Deploy {
@@ -1044,7 +932,7 @@ impl Cli {
             Commands::Servers(cmd) => server::run(cmd),
             Commands::Secrets(cmd) => secret::run(cmd, self.config.as_deref()),
             Commands::Releases(cmd) => releases::run(cmd, self.config.as_deref()),
-            Commands::Upgrade { canary, stable } => upgrade::run(canary, stable),
+            Commands::Upgrade => upgrade::run(),
             Commands::Implode { yes } => commands::implode::run(yes),
             Commands::Typegen => commands::typegen::run(self.config.as_deref()),
             Commands::Deploy { env, yes } => {

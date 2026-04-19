@@ -32,8 +32,8 @@ describe("tako --version", () => {
     const { screen, exitCode } = await run(["--version"]);
 
     expect(exitCode).toBe(0);
-    // Version is semver-like (e.g. "0.0.2") or canary
-    expect(screen).toMatch(/\d+\.\d+\.\d+|canary-/);
+    // Version is semver-like (e.g. "0.0.0") optionally followed by -<sha7>
+    expect(screen).toMatch(/\d+\.\d+\.\d+/);
   });
 });
 

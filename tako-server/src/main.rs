@@ -48,10 +48,10 @@ const SIGNAL_PARENT_ON_READY_ENV: &str = "TAKO_SIGNAL_PARENT_ON_READY";
 fn server_version() -> &'static str {
     static VERSION: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
         let base = env!("CARGO_PKG_VERSION");
-        match option_env!("TAKO_CANARY_SHA") {
+        match option_env!("TAKO_BUILD_SHA") {
             Some(sha) if !sha.trim().is_empty() => {
                 let short = &sha.trim()[..sha.trim().len().min(7)];
-                format!("{base}-canary-{short}")
+                format!("{base}-{short}")
             }
             _ => base.to_string(),
         }
