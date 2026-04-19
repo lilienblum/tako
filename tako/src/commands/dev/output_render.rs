@@ -304,7 +304,7 @@ pub(super) fn format_panel_wide(
     let bot = format!("{BORDER}└{}┘{RESET}", "─".repeat(inner_w));
 
     let (dot_color, dot_char) = status_dot(status);
-    let l0 = format!("{dot_color}{dot_char} {status}{RESET}");
+    let l0 = format!("{dot_color}{dot_char}{RESET} {status}");
     let mut left = vec![l0];
     if let Some(wt) = worktree_name {
         let wt_label = format!("worktree ({wt})");
@@ -387,7 +387,7 @@ pub(super) fn format_panel_stacked(
 
     let (dot_color, dot_char) = status_dot(status);
     rows.push(stacked_row(
-        &format!("{dot_color}{dot_char} {status}{RESET}"),
+        &format!("{dot_color}{dot_char}{RESET} {status}"),
         inner_w,
     ));
 
