@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/lilienblum/tako/compare/sdk-js-v0.6.0...sdk-js-v0.7.0) (2026-04-19)
+
+
+### Features
+
+* **workflows:** run dev worker as scale-to-zero subprocess with crash-loop detection ([07a397f](https://github.com/lilienblum/tako/commit/07a397f14c1a30061a205a76f3ce52f362ce3845))
+
+
+### Bug Fixes
+
+* **sdk-js:** resolve code scanning alerts ([a6e4066](https://github.com/lilienblum/tako/commit/a6e4066c3d6685d9607c187760228f4b9e6b4f50))
+
 ## [0.6.0](https://github.com/lilienblum/tako/compare/sdk-js-v0.5.0...sdk-js-v0.6.0) (2026-04-18)
 
 
