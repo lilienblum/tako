@@ -1,4 +1,6 @@
-use super::process::{handle_wake_on_request, kill_all_app_processes, kill_app_process};
+use super::process::{
+    handle_wake_on_request, kill_all_app_processes, kill_app_process, push_user_action,
+};
 use super::redirect::redirect_location;
 use super::*;
 
@@ -1220,4 +1222,22 @@ async fn wake_on_request_spawns_exactly_one_process() {
         spawn_count, 1,
         "expected exactly 1 spawn, got {spawn_count}"
     );
+}
+
+#[test]
+fn push_user_action_emits_sdk_wire_format_with_kind() {
+    let buf = state::LogBuffer::new();
+    let (_backlog, mut rx, _truncated) = buf.subscribe(None);
+
+    push_user_action(&buf, "restarted");
+
+    let entry = rx.try_recv().expect("user-action line pushed");
+    let v: serde_json::Value =
+        serde_json::from_str(&entry.line).expect("user-action line is valid JSON");
+
+    assert_eq!(v.get("scope").and_then(|x| x.as_str()), Some("tako"));
+    assert_eq!(v.get("kind").and_then(|x| x.as_str()), Some("restarted"));
+    assert_eq!(v.get("level").and_then(|x| x.as_str()), Some("info"));
+    let ts = v.get("ts").and_then(|x| x.as_i64()).expect("numeric ts");
+    assert!(ts > 0, "ts should be filled with unix millis, got {ts}");
 }

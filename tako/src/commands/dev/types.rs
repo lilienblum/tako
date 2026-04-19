@@ -34,18 +34,26 @@ pub struct ScopedLog {
     pub message: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
 }
 
 /// Wire format: SDK emits `{ts: <unix-millis>, level: <lowercase>, scope, msg, fields?}`.
-/// We deserialize that shape and convert `ts` to an HMS string for display.
+/// Tako-internal lines may set `kind` (e.g. `"restarted"`, `"lan_mode_enabled"`)
+/// to mark a user-triggered action, which the renderer shows as a divider.
+/// When `kind` is set, `msg` is optional — the renderer humanizes `kind` for
+/// the banner label.
 #[derive(Debug, Deserialize)]
 struct ScopedLogSerde {
     ts: i64,
     level: LogLevel,
     scope: String,
+    #[serde(default)]
     msg: String,
     #[serde(default)]
     fields: Option<serde_json::Map<String, serde_json::Value>>,
+    #[serde(default)]
+    kind: Option<String>,
 }
 
 fn hms_timestamp(h: u8, m: u8, s: u8) -> String {
@@ -71,6 +79,7 @@ impl<'de> Deserialize<'de> for ScopedLog {
             scope: raw.scope,
             message: raw.msg,
             fields: raw.fields,
+            kind: raw.kind,
         })
     }
 }
@@ -90,6 +99,7 @@ impl ScopedLog {
             scope: scope.into(),
             message: message.into(),
             fields: None,
+            kind: None,
         }
     }
 
@@ -104,22 +114,10 @@ impl ScopedLog {
     pub fn error(scope: impl Into<String>, message: impl Into<String>) -> Self {
         Self::at(LogLevel::Error, scope, message)
     }
-
-    #[allow(dead_code)]
-    pub fn divider(label: &str) -> Self {
-        Self {
-            timestamp: String::new(),
-            level: LogLevel::Info,
-            scope: DIVIDER_SCOPE.to_string(),
-            message: label.to_string(),
-            fields: None,
-        }
-    }
 }
 
 #[cfg(test)]
 const APP_SCOPE: &str = "app";
-pub const DIVIDER_SCOPE: &str = "__divider__";
 
 #[cfg(test)]
 pub(super) fn app_log_scope() -> String {

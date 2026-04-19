@@ -32,6 +32,8 @@ Tako's protocol is v0: do not keep any legacy code, backward compatibility shims
 
 10. **Keep files small and focused** - No single source file should grow beyond ~800 lines. When adding code to a file that's already large, split it first. But don't split by line count alone — split by responsibility. Ask "is this the right boundary?" not just "is this file too big?" Each module should have one clear responsibility. Prefer sibling submodules (e.g. `commands/init/scaffold.rs`) over letting a file accumulate unrelated concerns. Tests belong in their own `tests.rs` submodule, not inline in large files.
 
+11. **Don't test against removed code or features** - Never write assertions that check a removed symbol, field, flag, message, or API is absent (e.g. `assert!(!output.contains("OLD_NAME"))`, `expect(...).not.toContain("deprecated-flag")`). Once the feature is gone from the code, it cannot reappear, and the test becomes dead weight that rots over time. Negative assertions are only valid when they encode a _current_ behavioral distinction (e.g. "in CI mode, ANSI colors are suppressed"; "NODE_ENV appears in ProcessEnv but not in TakoBaseEnv"). If you catch yourself adding `!contains(...)` for something that no longer exists anywhere in the codebase, delete the assertion instead.
+
 ## Project Structure
 
 **Rust Crates:**

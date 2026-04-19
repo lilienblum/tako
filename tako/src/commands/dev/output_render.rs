@@ -7,7 +7,6 @@ pub(super) const DIM: &str = "\x1b[2m";
 #[allow(dead_code)]
 const XDIM: &str = "\x1b[2;38;5;242m";
 const BORDER: &str = "\x1b[2;38;2;79;107;122m";
-const PRIMARY: &str = "\x1b[22;38;2;125;196;228m";
 
 const STACKED_THRESHOLD: usize = 76;
 const COL3_W: usize = 22;
@@ -193,6 +192,23 @@ pub(super) fn format_header() -> String {
     crate::output::format_logo_header()
 }
 
+/// Build the panel title. Returns (visible_text, rendered_text); the visible
+/// form is used for column-width math, the rendered form carries ANSI styling.
+/// Combines the repo slug and folder path into a single locator so monorepo
+/// subprojects are unambiguous.
+fn panel_title(app_name: &str, repo_slug: &str, repo_path: &str) -> (String, String) {
+    let locator = match (repo_slug.is_empty(), repo_path.is_empty()) {
+        (true, true) => return (app_name.to_string(), app_name.to_string()),
+        (false, true) => repo_slug.to_string(),
+        (true, false) => repo_path.to_string(),
+        (false, false) => format!("{repo_slug}/{repo_path}"),
+    };
+    (
+        format!("{app_name} ({locator})"),
+        format!("{app_name} {DIM}({locator}){RESET}"),
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn format_panel(
     app_name: &str,
@@ -278,11 +294,11 @@ pub(super) fn format_panel_wide(
     let col1_w = (shared / 3).max(10);
     let col2_w = shared.saturating_sub(col1_w).max(10);
 
-    let title_text = app_name.to_string();
-    let title_seg = format!("─ {title_text} ");
+    let (title_visible, title_render) = panel_title(app_name, repo_slug, repo_path);
+    let title_seg = format!("─ {title_visible} ");
     let tail = inner_w.saturating_sub(measure_text_width(&title_seg));
     let top = format!(
-        "{BORDER}┌─ {RESET}{title_text}{BORDER} {}┐{RESET}",
+        "{BORDER}┌─ {RESET}{title_render}{BORDER} {}┐{RESET}",
         "─".repeat(tail)
     );
     let bot = format!("{BORDER}└{}┘{RESET}", "─".repeat(inner_w));
@@ -295,28 +311,8 @@ pub(super) fn format_panel_wide(
         let wt_t = truncate_str(&wt_label, col1_w, "…");
         left.push(muted(&wt_t));
     }
-    if !repo_slug.is_empty() {
-        if !repo_branch.is_empty() {
-            let branch_part = format!("({repo_branch})");
-            let slug_avail = col1_w.saturating_sub(branch_part.len() + 3);
-            let slug_t = truncate_str(repo_slug, slug_avail, "…");
-            left.push(format!(
-                "{} {slug_t} {PRIMARY}{branch_part}{RESET}",
-                muted("\u{e0a0}")
-            ));
-        } else {
-            let slug_t = truncate_str(repo_slug, col1_w.saturating_sub(2), "…");
-            left.push(format!("{} {slug_t}", muted("\u{e0a0}")));
-        }
-    } else if !repo_branch.is_empty() {
-        left.push(format!(
-            "{} {PRIMARY}({repo_branch}){RESET}",
-            muted("\u{e0a0}")
-        ));
-    }
-    if !repo_path.is_empty() {
-        let path_t = truncate_str(repo_path, col1_w.saturating_sub(2), "…");
-        left.push(format!("{} {path_t}", muted("\u{f07b}")));
+    if !repo_branch.is_empty() {
+        left.push(format!("{} {repo_branch}", muted("\u{e0a0}")));
     }
 
     let url_avail = col2_w.saturating_sub(ROUTES_LABEL_W);
@@ -378,11 +374,11 @@ pub(super) fn format_panel_stacked(
     let url_color = ansi_rgb(240, 175, 95);
     let inner_w = cols.saturating_sub(2);
 
-    let title_text = app_name.to_string();
-    let title_seg = format!("─ {title_text} ");
+    let (title_visible, title_render) = panel_title(app_name, repo_slug, repo_path);
+    let title_seg = format!("─ {title_visible} ");
     let tail = inner_w.saturating_sub(measure_text_width(&title_seg));
     let top = format!(
-        "{BORDER}┌─ {RESET}{title_text}{BORDER} {}┐{RESET}",
+        "{BORDER}┌─ {RESET}{title_render}{BORDER} {}┐{RESET}",
         "─".repeat(tail)
     );
     let bot = format!("{BORDER}└{}┘{RESET}", "─".repeat(inner_w));
@@ -402,39 +398,12 @@ pub(super) fn format_panel_stacked(
         rows.push(stacked_row(&muted(&wt_t), inner_w));
     }
 
-    if !repo_slug.is_empty() {
-        if !repo_branch.is_empty() {
-            let branch_part = format!("({repo_branch})");
-            let slug_avail = avail.saturating_sub(branch_part.len() + 3);
-            let slug_t = truncate_str(repo_slug, slug_avail, "…");
-            rows.push(stacked_row(
-                &format!(
-                    "{} {slug_t} {PRIMARY}{branch_part}{RESET}",
-                    muted("\u{e0a0}")
-                ),
-                inner_w,
-            ));
-        } else {
-            let slug_t = truncate_str(repo_slug, avail.saturating_sub(2), "…");
-            rows.push(stacked_row(
-                &format!("{} {slug_t}", muted("\u{e0a0}")),
-                inner_w,
-            ));
-        }
-    } else if !repo_branch.is_empty() {
+    if !repo_branch.is_empty() {
         rows.push(stacked_row(
-            &format!("{} {PRIMARY}({repo_branch}){RESET}", muted("\u{e0a0}")),
+            &format!("{} {repo_branch}", muted("\u{e0a0}")),
             inner_w,
         ));
     }
-    if !repo_path.is_empty() {
-        let path_t = truncate_str(repo_path, avail.saturating_sub(2), "…");
-        rows.push(stacked_row(
-            &format!("{} {path_t}", muted("\u{f07b}")),
-            inner_w,
-        ));
-    }
-
     let url_avail = inner_w.saturating_sub(2 + ROUTES_LABEL_W);
     for (i, host) in hosts.iter().enumerate() {
         let url = if port == 443 {
@@ -530,12 +499,8 @@ pub(super) fn fit_scope(scope: &str) -> String {
 }
 
 pub(super) fn format_log(log: &ScopedLog) -> String {
-    if log.scope == super::DIVIDER_SCOPE {
-        let label = if log.message.is_empty() {
-            "restarted"
-        } else {
-            &log.message
-        };
+    if let Some(kind) = log.kind.as_deref() {
+        let label = kind.replace('_', " ");
         return muted(&format!("──── {label} ────"));
     }
     if let Some(ip) = log
@@ -547,20 +512,20 @@ pub(super) fn format_log(log: &ScopedLog) -> String {
     {
         let color = level_color(&log.level);
         let scope = fit_scope(&log.scope);
-        let scope_color = scope_color(&log.scope);
+        let rendered_scope = render_scope(&log.scope, &scope);
         return format!(
-            "{DIM}{}{RESET} {color}{:>5}{RESET} {scope_color}{scope}{RESET} LAN mode enabled {DIM}({ip}){RESET}",
+            "{DIM}{}{RESET} {color}{:>5}{RESET} {rendered_scope} LAN mode enabled {DIM}({ip}){RESET}",
             log.timestamp, log.level
         );
     }
     if matches!(log.level, LogLevel::Debug) {
         let scope = fit_scope(&log.scope);
-        let scope_color = scope_color(&log.scope);
+        let rendered_scope = render_scope(&log.scope, &scope);
         let pad_width = message_column_width(scope.len());
         let mut lines = log.message.split('\n');
         let first = lines.next().unwrap_or("");
         let mut out = format!(
-            "{DIM}{} {:>5}{RESET} {scope_color}{scope}{RESET} {DIM}{first}{RESET}",
+            "{DIM}{} {:>5}{RESET} {rendered_scope} {DIM}{first}{RESET}",
             log.timestamp, log.level
         );
         for line in lines {
@@ -572,12 +537,12 @@ pub(super) fn format_log(log: &ScopedLog) -> String {
     }
     let color = level_color(&log.level);
     let scope = fit_scope(&log.scope);
-    let scope_color = scope_color(&log.scope);
+    let rendered_scope = render_scope(&log.scope, &scope);
     let pad_width = message_column_width(scope.len());
     let mut lines = log.message.split('\n');
     let first = lines.next().unwrap_or("");
     let mut out = format!(
-        "{DIM}{}{RESET} {color}{:>5}{RESET} {scope_color}{scope}{RESET} {first}",
+        "{DIM}{}{RESET} {color}{:>5}{RESET} {rendered_scope} {first}",
         log.timestamp, log.level
     );
     for line in lines {
@@ -617,21 +582,102 @@ const SCOPE_PALETTE: &[(u8, u8, u8)] = &[
     (200, 180, 170),
 ];
 
-const SCOPE_TAKO: &str = "\x1b[38;2;232;135;131m";
-const SCOPE_APP: &str = "\x1b[38;2;200;200;190m";
+static APP_RUNTIME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-fn scope_color(scope: &str) -> String {
+/// Record the project runtime (e.g. "bun", "node", "deno", "go") so the "app"
+/// scope can be tinted with the runtime's brand color. Idempotent; first call wins.
+pub(super) fn set_app_runtime(runtime: impl Into<String>) {
+    let _ = APP_RUNTIME.set(runtime.into());
+}
+
+fn app_runtime() -> Option<&'static str> {
+    APP_RUNTIME.get().map(String::as_str)
+}
+
+/// Render the padded scope label with ANSI color. Known scopes get gradients;
+/// everything else falls back to a hash-derived solid color from the palette.
+fn render_scope(raw: &str, padded: &str) -> String {
+    if let Some(stops) = scope_gradient(raw) {
+        return apply_gradient(padded, raw, stops);
+    }
+    let (r, g, b) = scope_solid(raw);
+    format!("\x1b[38;2;{r};{g};{b}m{padded}{RESET}")
+}
+
+fn scope_gradient(scope: &str) -> Option<&'static [(u8, u8, u8)]> {
     match scope {
-        "tako" => SCOPE_TAKO.to_string(),
-        "app" => SCOPE_APP.to_string(),
+        "tako" => Some(&[(232, 135, 131), (240, 195, 160)]),
+        "vite" => Some(&[(143, 90, 200), (189, 132, 230)]),
+        "app" => app_runtime().and_then(runtime_gradient),
+        _ => None,
+    }
+}
+
+fn runtime_gradient(runtime: &str) -> Option<&'static [(u8, u8, u8)]> {
+    match runtime {
+        "bun" => Some(&[(251, 240, 223), (244, 113, 181)]),
+        "node" => Some(&[(60, 135, 58), (140, 200, 75)]),
+        "deno" => Some(&[(60, 200, 140), (112, 255, 175)]),
+        "go" => Some(&[(0, 173, 216), (93, 201, 226)]),
+        _ => None,
+    }
+}
+
+fn scope_solid(scope: &str) -> (u8, u8, u8) {
+    match scope {
+        "app" => (200, 200, 190),
         _ => {
             let hash = scope
                 .bytes()
                 .fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
-            let (r, g, b) = SCOPE_PALETTE[hash as usize % SCOPE_PALETTE.len()];
-            format!("\x1b[38;2;{r};{g};{b}m")
+            SCOPE_PALETTE[hash as usize % SCOPE_PALETTE.len()]
         }
     }
+}
+
+/// Apply per-character gradient interpolation across the visible chars of the
+/// scope name. Padding chars (after the raw name) are emitted uncolored.
+fn apply_gradient(padded: &str, raw: &str, stops: &[(u8, u8, u8)]) -> String {
+    let visible = raw.chars().count();
+    let mut out = String::with_capacity(padded.len() + visible * 20);
+    for (i, ch) in padded.chars().enumerate() {
+        if i < visible {
+            let t = if visible > 1 {
+                i as f32 / (visible - 1) as f32
+            } else {
+                0.0
+            };
+            let (r, g, b) = sample_stops(stops, t);
+            out.push_str(&format!("\x1b[38;2;{r};{g};{b}m"));
+            out.push(ch);
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push_str(RESET);
+    out
+}
+
+fn sample_stops(stops: &[(u8, u8, u8)], t: f32) -> (u8, u8, u8) {
+    if stops.len() == 1 {
+        return stops[0];
+    }
+    let scaled = t.clamp(0.0, 1.0) * (stops.len() - 1) as f32;
+    let idx = (scaled.floor() as usize).min(stops.len() - 2);
+    let local = scaled - idx as f32;
+    let (r0, g0, b0) = stops[idx];
+    let (r1, g1, b1) = stops[idx + 1];
+    (
+        lerp_u8(r0, r1, local),
+        lerp_u8(g0, g1, local),
+        lerp_u8(b0, b1, local),
+    )
+}
+
+fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
+    (a as f32 + (b as f32 - a as f32) * t)
+        .round()
+        .clamp(0.0, 255.0) as u8
 }
 
 /// Render a URL as a terminal-friendly QR code using Unicode block characters.

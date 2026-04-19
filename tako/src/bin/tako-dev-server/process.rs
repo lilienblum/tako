@@ -84,12 +84,12 @@ pub(crate) fn app_name_for(state: &Arc<Mutex<State>>, config_path: &str) -> Stri
         .unwrap_or_default()
 }
 
-pub(crate) fn push_divider(buf: &state::LogBuffer, label: &str) {
+pub(crate) fn push_user_action(buf: &state::LogBuffer, kind: &str) {
     let payload = serde_json::json!({
-        "timestamp": "",
-        "level": "Info",
-        "scope": "__divider__",
-        "message": label,
+        "ts": now_unix_millis(),
+        "level": "info",
+        "scope": "tako",
+        "kind": kind,
     });
     buf.push(payload.to_string());
 }

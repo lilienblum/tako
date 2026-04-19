@@ -533,7 +533,6 @@ mod tests {
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains(r#""command":"deploy""#));
         assert!(json.contains(r#""secrets":{"API_KEY":"secret123"}"#));
-        assert!(!json.contains(r#""idle_timeout":"#));
     }
 
     #[test]

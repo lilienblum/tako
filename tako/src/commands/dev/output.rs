@@ -326,6 +326,7 @@ pub async fn run_dev_output(
     control_tx: mpsc::Sender<ControlCmd>,
 ) -> Result<DevOutputExit, Box<dyn std::error::Error>> {
     let _guard = TerminalGuard::enter(&app_name)?;
+    super::output_render::set_app_runtime(adapter_name.clone());
 
     rawln("");
     for line in format_header().lines() {

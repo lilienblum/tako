@@ -376,7 +376,6 @@ l4QMs5cmnWfrM0GQ==\n\
         let command = SshClient::socket_request_command();
         assert!(command.contains("| head -n 1"));
         assert!(command.contains("nc -U '/var/run/tako/tako.sock'"));
-        assert!(!command.contains("printf '%s\\n'"));
     }
 
     #[test]

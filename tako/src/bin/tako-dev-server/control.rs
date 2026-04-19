@@ -8,7 +8,7 @@ use tokio::sync::watch;
 
 use crate::process::{
     app_name_for, broadcast_app_status, broadcast_dev_event, kill_app_process, monitor_handoff_pid,
-    push_divider, push_scoped_log, spawn_and_monitor_app,
+    push_scoped_log, push_user_action, spawn_and_monitor_app,
 };
 use crate::protocol::{self, AppInfo, Request, Response};
 use crate::route_pattern::split_route_pattern;
@@ -505,7 +505,7 @@ pub(crate) async fn handle_client(
                     s.apps.get(&config_path).map(|a| a.log_buffer.clone())
                 };
                 if let Some(ref buf) = log_buffer {
-                    push_divider(buf, "restarted");
+                    push_user_action(buf, "restarted");
                 }
 
                 let spawn_state = state.clone();

@@ -44,6 +44,7 @@ fn format_log_fields() {
         scope: "app".to_string(),
         message: "hello".to_string(),
         fields: None,
+        kind: None,
     };
     let out = format_log(&log);
     assert!(out.contains("12:34:56"));
@@ -60,6 +61,7 @@ fn format_log_aligns_continuation_lines_under_message_column() {
         scope: "app".to_string(),
         message: "line1\nline2\nline3".to_string(),
         fields: None,
+        kind: None,
     };
     let plain = strip_ansi(&format_log(&log));
     let lines: Vec<&str> = plain.split('\n').collect();
@@ -82,6 +84,7 @@ fn format_log_single_line_message_unaffected() {
         scope: "app".to_string(),
         message: "no newline".to_string(),
         fields: None,
+        kind: None,
     };
     let out = format_log(&log);
     assert!(!out.contains('\n'));
@@ -361,6 +364,64 @@ fn format_lan_block_omits_wildcard_warning_when_none_present() {
 }
 
 #[test]
+fn format_log_renders_kind_as_divider_with_humanized_label() {
+    let log = ScopedLog {
+        timestamp: "12:34:56".to_string(),
+        level: LogLevel::Info,
+        scope: "tako".to_string(),
+        message: String::new(),
+        fields: None,
+        kind: Some("lan_mode_enabled".to_string()),
+    };
+    let plain = strip_ansi(&format_log(&log));
+    assert!(
+        plain.contains("────"),
+        "expected divider rule, got: {plain:?}"
+    );
+    assert!(
+        plain.contains("lan mode enabled"),
+        "underscores should become spaces, got: {plain:?}"
+    );
+    assert!(
+        !plain.contains("INFO"),
+        "divider should not carry log columns, got: {plain:?}"
+    );
+    assert!(
+        !plain.contains("12:34:56"),
+        "divider should omit timestamp, got: {plain:?}"
+    );
+}
+
+#[test]
+fn format_log_without_kind_stays_a_normal_log_line() {
+    let log = ScopedLog {
+        timestamp: "12:34:56".to_string(),
+        level: LogLevel::Info,
+        scope: "tako".to_string(),
+        message: "restarted".to_string(),
+        fields: None,
+        kind: None,
+    };
+    let plain = strip_ansi(&format_log(&log));
+    assert!(
+        !plain.contains("────"),
+        "plain log must not render as divider: {plain:?}"
+    );
+    assert!(plain.contains("INFO"));
+    assert!(plain.contains("tako"));
+}
+
+#[test]
+fn parse_log_line_preserves_kind_from_wire_format() {
+    use crate::commands::dev::client::parse_log_line;
+    let line = r#"{"ts":1700000000000,"level":"info","scope":"tako","kind":"restarted"}"#;
+    let log = parse_log_line(line).expect("kind-only line parses");
+    assert_eq!(log.scope, "tako");
+    assert_eq!(log.kind.as_deref(), Some("restarted"));
+    assert_eq!(log.message, "", "msg is optional when kind is set");
+}
+
+#[test]
 fn format_log_dims_lan_mode_ip_suffix() {
     let enabled = strip_ansi(&format_log(&ScopedLog {
         timestamp: "12:34:56".to_string(),
@@ -368,6 +429,7 @@ fn format_log_dims_lan_mode_ip_suffix() {
         scope: "tako".to_string(),
         message: "LAN mode enabled (192.168.1.2)".to_string(),
         fields: None,
+        kind: None,
     }));
     assert!(enabled.contains("INFO"));
     assert!(enabled.contains("tako"));
@@ -379,6 +441,7 @@ fn format_log_dims_lan_mode_ip_suffix() {
         scope: "tako".to_string(),
         message: "LAN mode disabled".to_string(),
         fields: None,
+        kind: None,
     }));
     assert!(disabled.contains("INFO"));
     assert!(disabled.contains("tako"));
@@ -483,9 +546,8 @@ fn format_panel_shows_repo_info() {
         None,
     );
     let plain = strip_ansi(&panel);
-    assert!(plain.contains("myorg/"));
-    assert!(plain.contains("(main)"));
-    assert!(plain.contains("apps/myapp"));
+    assert!(plain.contains("myorg/myrepo/apps/myapp"));
+    assert!(plain.contains("main"));
 }
 
 #[test]
