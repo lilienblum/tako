@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/lilienblum/tako/compare/tako-v0.6.0...tako-v0.7.0) (2026-04-19)
+
+
+### Features
+
+* **dev:** add kind field to log wire format for user-action dividers ([8a6176c](https://github.com/lilienblum/tako/commit/8a6176cf87c22e7ba6007070692b2467b596cad7))
+* **workflows:** run dev worker as scale-to-zero subprocess with crash-loop detection ([07a397f](https://github.com/lilienblum/tako/commit/07a397f14c1a30061a205a76f3ce52f362ce3845))
+
 ## [0.6.0](https://github.com/lilienblum/tako/compare/tako-v0.5.0...tako-v0.6.0) (2026-04-18)
 
 
