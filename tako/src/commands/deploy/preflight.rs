@@ -37,7 +37,6 @@ pub(super) async fn run_server_preflight_checks(
         check_set.spawn(
             async move {
                 let result = async {
-                    tracing::debug!("Preflight check…");
                     let _t = output::timed("Preflight check");
 
                     // Mark "Preflight" as running in the task tree — this runs

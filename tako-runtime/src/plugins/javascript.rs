@@ -258,7 +258,7 @@ fn pm_build_command(pm: &PackageManager) -> String {
     match pm {
         PackageManager::Deno => format!("{run} build 2>/dev/null || true"),
         PackageManager::Bun | PackageManager::Npm | PackageManager::Pnpm | PackageManager::Yarn => {
-            format!("cd \"$TAKO_APP_DIR\"\n{run} --if-present build")
+            format!("{run} --if-present build")
         }
     }
 }

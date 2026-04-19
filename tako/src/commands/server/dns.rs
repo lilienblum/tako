@@ -162,8 +162,7 @@ async fn prompt_dns_setup() -> Result<DnsConfig, Box<dyn std::error::Error>> {
 
     // Quick credential validation via provider API (runs locally).
     if let Some(verify_cmd) = credential_verify_command(&provider, &credentials) {
-        tracing::debug!("Verifying credentials for DNS provider {provider}…");
-        let _t = output::timed(&format!("DNS credential verification ({provider})"));
+        let _t = output::timed(&format!("Verify DNS credentials ({provider})"));
         let verify_future = async {
             let out = tokio::process::Command::new("sh")
                 .args(["-c", &verify_cmd])
@@ -282,13 +281,9 @@ async fn apply_dns_config_inner(
     config: &DnsConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let provider = &config.provider;
-    {
-        let _scope = output::scope(name).entered();
-        tracing::debug!("Configuring DNS provider {provider}…");
-    }
 
     // Write credentials env file
-    let _t = output::timed("Credentials write");
+    let _t = output::timed(&format!("[{name}] Write DNS credentials ({provider})"));
     let escaped_content = crate::shell::shell_single_quote(&config.credentials_env);
     let write_creds_cmd = SshClient::run_with_root_or_sudo(&format!(
         "printf '%s' {} > {} && chmod 0600 {} && chown tako:tako {}",

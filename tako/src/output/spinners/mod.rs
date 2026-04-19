@@ -16,8 +16,8 @@ use super::cursor::{
     clear_active_progress_bar, hide_cursor, register_active_progress_bar, show_cursor,
 };
 use super::{
-    ACCENT, INDENT, PHASE_PB, bold, emit, error_block, format_elapsed, is_interactive, is_pretty,
-    muted_elapsed, should_colorize, theme_error, theme_fg, theme_success,
+    ACCENT, INDENT, PHASE_PB, bold, emit, error_block, is_interactive, is_pretty, muted_elapsed,
+    should_colorize, theme_error, theme_fg, theme_success,
 };
 
 // ---------------------------------------------------------------------------
@@ -57,19 +57,21 @@ pub(super) fn phase_spinner_style_indented() -> ProgressStyle {
 }
 
 /// Print a spinner result without elapsed (fast path — spinner was never shown).
+///
+/// Only emits in pretty mode. In verbose/CI mode spinners are silent — the
+/// caller's `output::timed()` owns action tracing.
 fn print_ok(success_msg: &str, elapsed: Duration) {
-    if is_pretty() {
-        let check = theme_success("✔");
-        let time = muted_elapsed(elapsed);
-        let line = if time.is_empty() {
-            format!("{check} {}", theme_fg(success_msg))
-        } else {
-            format!("{check} {}  {time}", theme_fg(success_msg))
-        };
-        emit(&line);
-    } else {
-        tracing::info!("{}", success_msg);
+    if !is_pretty() {
+        return;
     }
+    let check = theme_success("✔");
+    let time = muted_elapsed(elapsed);
+    let line = if time.is_empty() {
+        format!("{check} {}", theme_fg(success_msg))
+    } else {
+        format!("{check} {}  {time}", theme_fg(success_msg))
+    };
+    emit(&line);
 }
 
 /// Emit `✘ {label}` as a standalone failure indicator line, optionally with elapsed time.
@@ -87,6 +89,7 @@ fn print_err(loading: &str) {
     if is_pretty() {
         emit_error_label(loading, None);
     } else {
+        // Errors stay visible in verbose/CI mode even though success is silent.
         tracing::error!("{}", loading);
     }
 }
@@ -140,7 +143,6 @@ pub fn with_spinner_silent<T, E: Display, F>(loading: &str, work: F) -> Result<T
 where
     F: FnOnce() -> Result<T, E>,
 {
-    tracing::debug!("{}", loading);
     let result = work();
     if let Err(ref e) = result {
         if is_pretty() {
@@ -158,27 +160,16 @@ where
 /// - Fast (<1s):  prints result directly, no spinner, no elapsed
 /// - Slow (≥1s):  `⠋ {loading}…` → `{success} (elapsed)` or `✘ {loading} failed`
 ///
-/// In verbose mode: prints start/end log lines instead of spinner.
-pub fn with_spinner<T, E, F>(loading: &str, success: &str, work: F) -> Result<T, E>
+/// In verbose/CI mode: silent on success — the caller's `output::timed()`
+/// owns action tracing. Errors still emit.
+pub fn with_spinner<T, E: Display, F>(loading: &str, success: &str, work: F) -> Result<T, E>
 where
     F: FnOnce() -> Result<T, E>,
 {
-    // Verbose/CI mode: tracing for start/completion.
     if !is_pretty() {
-        tracing::info!("{}", loading);
-        let start = Instant::now();
         let result = work();
-        let elapsed = start.elapsed();
-        match &result {
-            Ok(_) => {
-                let time = format_elapsed(elapsed);
-                if time.is_empty() {
-                    tracing::info!("{}", success);
-                } else {
-                    tracing::info!("{} {}", success, time);
-                }
-            }
-            Err(_) => tracing::error!("{}", loading),
+        if let Err(ref e) = result {
+            tracing::error!("{}: {}", loading, e);
         }
         return result;
     }
@@ -258,22 +249,10 @@ pub async fn with_spinner_async_err<T, E: Display, Fut>(
 where
     Fut: Future<Output = Result<T, E>>,
 {
-    // Verbose/CI mode: tracing for start/completion.
     if !is_pretty() {
-        tracing::info!("{}", loading);
-        let start = Instant::now();
         let result = work.await;
-        let elapsed = start.elapsed();
-        match &result {
-            Ok(_) => {
-                let time = format_elapsed(elapsed);
-                if time.is_empty() {
-                    tracing::info!("{}", success);
-                } else {
-                    tracing::info!("{} {}", success, time);
-                }
-            }
-            Err(e) => tracing::error!("{}: {}", error_label, e),
+        if let Err(ref e) = result {
+            tracing::error!("{}: {}", error_label, e);
         }
         return result;
     }
@@ -331,12 +310,7 @@ pub async fn with_spinner_async_simple<T, Fut>(message: &str, work: Fut) -> T
 where
     Fut: Future<Output = T>,
 {
-    if !is_pretty() {
-        tracing::info!("{}", message);
-        return work.await;
-    }
-
-    if !is_interactive() {
+    if !is_pretty() || !is_interactive() {
         return work.await;
     }
 

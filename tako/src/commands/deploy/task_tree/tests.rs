@@ -201,8 +201,8 @@ fn deploy_task_tree_cache_hit_appends_completed_cached_artifact_step() {
         DeployTaskTreeController::new(&["prod-a".to_string()], &[sample_shared_build_group()]);
 
     controller.succeed_build_step("shared target", "probe-runtime", Some("bun 1.2.3".into()));
-    controller.warn_build_step("shared target", "build-artifact", "skipped");
-    controller.warn_build_step("shared target", "package-artifact", "skipped");
+    controller.skip_build_step("shared target", "build-artifact", "skipped");
+    controller.skip_build_step("shared target", "package-artifact", "skipped");
     controller.append_cached_artifact_step("shared target", Some("72 MB".to_string()));
     controller.succeed_build_target("shared target", Some("72 MB (cached)".to_string()));
 
@@ -345,17 +345,17 @@ fn deploy_task_tree_preflight_failure_aborts_remaining_deploy_children() {
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("⏭ Uploading") && line.contains("skipped"))
+            .any(|line| line.contains("⊘ Uploading") && line.contains("cancelled"))
     );
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("⏭ Preparing") && line.contains("skipped"))
+            .any(|line| line.contains("⊘ Preparing") && line.contains("cancelled"))
     );
     assert!(
         lines
             .iter()
-            .any(|line| line.contains("⏭ Starting") && line.contains("skipped"))
+            .any(|line| line.contains("⊘ Starting") && line.contains("cancelled"))
     );
 }
 
@@ -493,7 +493,7 @@ fn deploy_task_tree_build_failure_aborts_deploy_work() {
     controller.mark_deploy_step_running("prod-a", "connecting");
     controller.fail_build_step("shared target", "build-artifact", "Local build failed");
     controller.fail_build_target("shared target", "Local build failed");
-    controller.warn_pending_build_children("shared target", "skipped");
+    controller.cancel_pending_build_children("shared target", "cancelled");
     controller.abort_incomplete("Aborted");
 
     let snapshot = controller.snapshot();
@@ -501,10 +501,10 @@ fn deploy_task_tree_build_failure_aborts_deploy_work() {
 
     assert!(lines.iter().any(|line| line == "✘ Building"));
     assert!(lines.iter().any(|line| line == "  Local build failed"));
-    assert!(lines.iter().any(|line| line == "  ⏭ Preflight…"));
-    assert!(lines.iter().any(|line| line == "  ⏭ Uploading…"));
-    assert!(lines.iter().any(|line| line == "  ⏭ Preparing…"));
-    assert!(lines.iter().any(|line| line == "  ⏭ Starting…"));
+    assert!(lines.iter().any(|line| line == "  ⊘ Preflight…"));
+    assert!(lines.iter().any(|line| line == "  ⊘ Uploading…"));
+    assert!(lines.iter().any(|line| line == "  ⊘ Preparing…"));
+    assert!(lines.iter().any(|line| line == "  ⊘ Starting…"));
 }
 
 #[test]

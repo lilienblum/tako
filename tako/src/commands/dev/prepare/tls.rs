@@ -48,19 +48,16 @@ pub async fn setup_local_ca() -> Result<LocalCA, Box<dyn std::error::Error>> {
 
     let ca = match existing_ca {
         Some(ca) => {
-            tracing::debug!("Loading existing Tako CA from store…");
-            let _t = output::timed("Load existing CA");
+            let _t = output::timed("Load existing Tako CA from store");
             ca
         }
         None => {
-            tracing::debug!("Generating new Tako CA…");
             let ca = {
-                let _t = output::timed("Generate CA");
+                let _t = output::timed("Generate new Tako CA");
                 LocalCA::generate().map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?
             };
-            tracing::debug!("Saving Tako CA to secure storage…");
             {
-                let _t = output::timed("Save CA to store");
+                let _t = output::timed("Save Tako CA to secure storage");
                 store
                     .save_ca(&ca)
                     .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;
@@ -70,8 +67,7 @@ pub async fn setup_local_ca() -> Result<LocalCA, Box<dyn std::error::Error>> {
     };
 
     if install_trust {
-        tracing::debug!("Installing Tako CA in system trust store…");
-        let _t = output::timed("Install CA trust");
+        let _t = output::timed("Install Tako CA in system trust store");
         store
             .install_ca_trust()
             .map_err(|e| -> Box<dyn std::error::Error> { Box::new(e) })?;

@@ -7,6 +7,10 @@ name = "sdk"
 run = "bun run build"
 cwd = "../../../sdk/javascript"
 
+[[build_stages]]
+name = "app"
+run = "bun run build"
+
 [envs.development]
 routes = ["demo.test", "*.demo.test"]
 

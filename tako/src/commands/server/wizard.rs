@@ -174,13 +174,12 @@ pub(super) async fn run_add_server_wizard(
         let mut ssh = SshClient::new(ssh_config);
 
         let host_span = output::scope(&host);
-        let _t = output::timed("SSH connected");
+        let _t = output::timed(&format!("Test SSH connection to {host}:{port}"));
         let result: Result<WizardConnectionResult, String> = output::with_spinner_async_err(
             "Connecting",
             "Connection successful",
             "Connection failed",
             async {
-                tracing::debug!("Testing SSH connection to {host}:{port}…");
                 ssh.connect().await.map_err(|e| e.to_string())?;
 
                 let target = detect_server_target(&ssh)

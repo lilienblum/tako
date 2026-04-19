@@ -127,6 +127,64 @@ fn should_report_artifact_include_patterns_shows_custom_patterns() {
 }
 
 #[test]
+fn resolve_build_stages_prefers_config_stages() {
+    let build = crate::config::BuildConfig {
+        run: Some("should-not-run".to_string()),
+        ..Default::default()
+    };
+    let stages = vec![crate::config::BuildStage {
+        name: Some("app".to_string()),
+        cwd: None,
+        install: None,
+        run: "bun run build".to_string(),
+        exclude: Vec::new(),
+    }];
+    let resolved = resolve_build_stages(&build, &stages, &BuildPreset::default(), Some("fallback"));
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].name.as_deref(), Some("app"));
+    assert_eq!(resolved[0].run, "bun run build");
+}
+
+#[test]
+fn resolve_build_stages_uses_build_run_when_stages_empty() {
+    let build = crate::config::BuildConfig {
+        run: Some("make build".to_string()),
+        install: Some("make deps".to_string()),
+        cwd: Some("server".to_string()),
+        ..Default::default()
+    };
+    let resolved = resolve_build_stages(&build, &[], &BuildPreset::default(), Some("fallback"));
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].run, "make build");
+    assert_eq!(resolved[0].install.as_deref(), Some("make deps"));
+    assert_eq!(resolved[0].cwd.as_deref(), Some("server"));
+}
+
+#[test]
+fn resolve_build_stages_falls_back_to_runtime_default() {
+    let resolved = resolve_build_stages(
+        &crate::config::BuildConfig::default(),
+        &[],
+        &BuildPreset::default(),
+        Some("bun run --if-present build"),
+    );
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].name.as_deref(), Some("default"));
+    assert_eq!(resolved[0].run, "bun run --if-present build");
+}
+
+#[test]
+fn resolve_build_stages_returns_empty_when_nothing_configured() {
+    let resolved = resolve_build_stages(
+        &crate::config::BuildConfig::default(),
+        &[],
+        &BuildPreset::default(),
+        None,
+    );
+    assert!(resolved.is_empty());
+}
+
+#[test]
 fn summarize_build_stages_lists_custom_stages() {
     let custom = vec![
         crate::config::BuildStage {
@@ -172,16 +230,7 @@ fn run_local_build_executes_custom_stages_in_order() {
         },
     ];
 
-    run_local_build(
-        &workspace,
-        &workspace,
-        &workspace,
-        &workspace,
-        &Default::default(),
-        &stages,
-        &[],
-    )
-    .unwrap();
+    run_local_build(&workspace, &workspace, &workspace, &stages, &[]).unwrap();
     let order = std::fs::read_to_string(workspace.join("order.log")).unwrap();
     assert_eq!(order, "stage-1-run\nstage-2-install\nstage-2-run\n");
 }
@@ -199,16 +248,7 @@ fn run_local_build_errors_when_stage_working_dir_is_missing() {
         exclude: Vec::new(),
     }];
 
-    let err = run_local_build(
-        &workspace,
-        &workspace,
-        &workspace,
-        &workspace,
-        &Default::default(),
-        &stages,
-        &[],
-    )
-    .unwrap_err();
+    let err = run_local_build(&workspace, &workspace, &workspace, &stages, &[]).unwrap_err();
     assert!(err.contains("Stage 1"));
     assert!(err.contains("working directory"));
 }
@@ -219,20 +259,14 @@ fn run_local_build_defaults_cwd_to_app_dir() {
     let workspace = temp.path().join("workspace");
     let app_dir = workspace.join("apps/myapp");
     std::fs::create_dir_all(&app_dir).unwrap();
-    let build_config = crate::config::BuildConfig {
-        run: Some("touch marker.txt".to_string()),
-        ..Default::default()
-    };
-    run_local_build(
-        &workspace,
-        &app_dir,
-        &workspace,
-        &app_dir,
-        &build_config,
-        &[],
-        &[],
-    )
-    .unwrap();
+    let stages = vec![crate::config::BuildStage {
+        name: None,
+        cwd: None,
+        install: None,
+        run: "touch marker.txt".to_string(),
+        exclude: Vec::new(),
+    }];
+    run_local_build(&workspace, &workspace, &app_dir, &stages, &[]).unwrap();
     assert!(app_dir.join("marker.txt").exists());
     assert!(!workspace.join("marker.txt").exists());
 }
@@ -252,16 +286,7 @@ fn run_local_build_stage_cwd_relative_to_app_dir() {
         run: "touch built.txt".to_string(),
         exclude: Vec::new(),
     }];
-    run_local_build(
-        &workspace,
-        &app_dir,
-        &workspace,
-        &app_dir,
-        &Default::default(),
-        &stages,
-        &[],
-    )
-    .unwrap();
+    run_local_build(&workspace, &workspace, &app_dir, &stages, &[]).unwrap();
     assert!(sdk_dir.join("built.txt").exists());
 }
 
@@ -278,16 +303,7 @@ fn run_local_build_stage_cwd_rejects_workspace_escape() {
         run: "true".to_string(),
         exclude: Vec::new(),
     }];
-    let err = run_local_build(
-        &workspace,
-        &app_dir,
-        &workspace,
-        &app_dir,
-        &Default::default(),
-        &stages,
-        &[],
-    )
-    .unwrap_err();
+    let err = run_local_build(&workspace, &workspace, &app_dir, &stages, &[]).unwrap_err();
     assert!(err.contains("must not escape the project root"));
 }
 

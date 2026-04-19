@@ -84,7 +84,7 @@ impl UpgradeTaskTreeController {
         let mut guard = self.state.lock().unwrap();
         for task in &mut guard.tasks {
             if matches!(task.state, TaskState::Pending) {
-                task.state = TaskState::Cancelled { elapsed: None };
+                task.state = TaskState::Skipped { elapsed: None };
                 task.detail = Some(reason.to_string());
             }
         }

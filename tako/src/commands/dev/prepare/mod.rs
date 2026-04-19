@@ -175,7 +175,7 @@ pub(super) async fn prepare(
 
     let mut env = compute_dev_env(&cfg);
     inject_dev_data_dir(&project_dir, &mut env).map_err(|e| e.to_string())?;
-    inject_dev_secrets(&project_dir, &app_name, &mut env).map_err(|e| e.to_string())?;
+    inject_dev_secrets(&project_dir, &mut env).map_err(|e| e.to_string())?;
 
     if runtime_adapter.preset_group() == PresetGroup::Js {
         let _ = crate::build::js::write_types(&project_dir);

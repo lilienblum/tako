@@ -178,7 +178,6 @@ pub(super) fn inject_dev_data_dir(
 
 pub(super) fn inject_dev_secrets(
     project_dir: &Path,
-    app_name: &str,
     env: &mut std::collections::HashMap<String, String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let secrets = crate::config::SecretsStore::load_from_dir(project_dir)?;
@@ -188,7 +187,7 @@ pub(super) fn inject_dev_secrets(
         _ => return Ok(()),
     };
 
-    let key = crate::commands::secret::load_or_derive_key(app_name, "development", &secrets)?;
+    let key = crate::commands::secret::load_or_derive_key("development", &secrets)?;
     for (name, encrypted_value) in encrypted {
         match crate::crypto::decrypt(encrypted_value, &key) {
             Ok(value) => {

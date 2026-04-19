@@ -348,7 +348,7 @@ mod tests {
         assert!(
             snapshot.tasks[1..]
                 .iter()
-                .all(|task| matches!(task.state, TaskState::Cancelled { .. }))
+                .all(|task| matches!(task.state, TaskState::Skipped { .. }))
         );
         assert!(
             snapshot.tasks[1..]

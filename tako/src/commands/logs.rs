@@ -131,8 +131,7 @@ async fn stream_logs(
 
         tasks.push(tokio::spawn(
             async move {
-                tracing::debug!("Streaming logs ({host}:{port})…");
-                let _t = output::timed("Stream logs");
+                let _t = output::timed(&format!("Stream logs ({host}:{port})"));
                 let mut ssh = SshClient::connect_to(&host, port).await?;
 
                 let log_cmd = format!(
@@ -218,8 +217,7 @@ async fn fetch_logs(
         let span = output::scope(&server_name);
 
         tasks.push(tokio::spawn(async move {
-            tracing::debug!("Fetching logs ({host}:{port}, last {days} days)…");
-            let _t = output::timed("Fetch logs");
+            let _t = output::timed(&format!("Fetch logs ({host}:{port}, last {days} days)"));
             let mut ssh = SshClient::connect_to(&host, port).await?;
 
             // Read app log files (primary) and server logs about this app (supplementary).

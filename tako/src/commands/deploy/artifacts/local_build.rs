@@ -1,11 +1,56 @@
 use std::path::{Path, PathBuf};
 
-use crate::build::{BuildAdapter, PresetGroup};
-use crate::config::BuildStage;
+use crate::build::{BuildAdapter, BuildPreset, PresetGroup};
+use crate::config::{BuildConfig, BuildStage};
 use crate::output;
 
 use super::super::cache::sanitize_cache_label;
 use super::super::format::format_stage_label;
+
+/// Resolve the stage list to execute for a target build.
+///
+/// Precedence (first non-empty wins):
+///   1. config `[[build_stages]]`
+///   2. config `[build]` (normalized to a single-element stage list)
+///   3. preset-declared stages (not yet supported; placeholder for future)
+///   4. runtime default (single stage using the runtime's package-manager build command)
+pub(super) fn resolve_build_stages(
+    build_config: &BuildConfig,
+    config_stages: &[BuildStage],
+    _preset: &BuildPreset,
+    runtime_default: Option<&str>,
+) -> Vec<BuildStage> {
+    if !config_stages.is_empty() {
+        return config_stages.to_vec();
+    }
+
+    if let Some(run) = build_config
+        .run
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        return vec![BuildStage {
+            name: None,
+            cwd: build_config.cwd.clone(),
+            install: build_config.install.clone(),
+            run: run.to_string(),
+            exclude: Vec::new(),
+        }];
+    }
+
+    if let Some(run) = runtime_default.map(str::trim).filter(|s| !s.is_empty()) {
+        return vec![BuildStage {
+            name: Some("default".to_string()),
+            cwd: None,
+            install: None,
+            run: run.to_string(),
+            exclude: Vec::new(),
+        }];
+    }
+
+    Vec::new()
+}
 
 pub(super) const LOCAL_BUILD_CACHE_RELATIVE_DIR: &str = ".tako/tmp/build-caches";
 
@@ -121,11 +166,9 @@ fn remove_path_if_exists(path: &Path) -> Result<(), String> {
 
 pub(super) fn run_local_build(
     workspace: &Path,
-    app_dir: &Path,
     original_source_root: &Path,
     original_app_dir: &Path,
-    build_config: &crate::config::BuildConfig,
-    custom_stages: &[BuildStage],
+    stages: &[BuildStage],
     extra_envs: &[(&str, &str)],
 ) -> Result<(), String> {
     if !workspace.is_dir() {
@@ -135,28 +178,7 @@ pub(super) fn run_local_build(
         ));
     }
 
-    let build_run_dir = match build_config.cwd.as_deref() {
-        Some(cwd) if !cwd.is_empty() && cwd != "." => {
-            let dir = workspace.join(cwd);
-            if !dir.is_dir() {
-                return Err(format!(
-                    "build.cwd directory '{}' does not exist inside build workspace",
-                    cwd
-                ));
-            }
-            dir
-        }
-        Some(_) => workspace.to_path_buf(),
-        None => app_dir.to_path_buf(),
-    };
-
-    let has_build_run = build_config
-        .run
-        .as_deref()
-        .map(str::trim)
-        .is_some_and(|s| !s.is_empty());
-
-    if !has_build_run && custom_stages.is_empty() {
+    if stages.is_empty() {
         return Ok(());
     }
 
@@ -184,26 +206,8 @@ pub(super) fn run_local_build(
             Err(format!("{stage_label} {phase} command failed: {detail}"))
         };
 
-    if has_build_run {
-        if let Some(install) = build_config
-            .install
-            .as_deref()
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-        {
-            tracing::debug!("Running build install: {install}…");
-            let _t = output::timed("build install");
-            run_shell(&build_run_dir, install, "install", "build")?;
-        }
-        let run_command = build_config.run.as_deref().unwrap().trim();
-        tracing::debug!("Running build: {run_command}…");
-        let _t = output::timed("build");
-        run_shell(&build_run_dir, run_command, "run", "build")?;
-    }
-
-    let mut stage_number = 1usize;
-    for stage in custom_stages {
-        let stage_label = format_stage_label(stage_number, stage.name.as_deref());
+    for (index, stage) in stages.iter().enumerate() {
+        let stage_label = format_stage_label(index + 1, stage.name.as_deref());
         let stage_cwd = resolve_stage_working_dir_for_local_build(
             original_source_root,
             original_app_dir,
@@ -217,19 +221,16 @@ pub(super) fn run_local_build(
             .map(str::trim)
             .filter(|s| !s.is_empty())
         {
-            tracing::debug!("Running {stage_label} install: {install}…");
-            let _t = output::timed(&format!("{stage_label} install"));
+            let _t = output::timed(&format!("{stage_label} install: {install}"));
             run_shell(&stage_cwd, install, "install", &stage_label)?;
         }
         let run_command = stage.run.trim();
         if run_command.is_empty() {
             return Err(format!("{stage_label} run command is empty"));
         }
-        tracing::debug!("Running {stage_label}: {run_command}…");
-        let _t = output::timed(&stage_label);
+        let _t = output::timed(&format!("{stage_label}: {run_command}"));
         run_shell(&stage_cwd, run_command, "run", &stage_label)?;
         drop(_t);
-        stage_number += 1;
     }
 
     Ok(())

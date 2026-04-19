@@ -231,7 +231,7 @@ where
             };
             task_tree.rename_deploy_step(server_name, step, failed_label);
             task_tree.fail_deploy_target_without_detail(server_name);
-            task_tree.warn_pending_deploy_children(server_name, "skipped");
+            task_tree.cancel_pending_deploy_children(server_name, "cancelled");
             Err(error.into())
         }
     }
@@ -270,8 +270,8 @@ pub(super) async fn deploy_to_server(
     task_tree: Option<DeployTaskTreeController>,
     preconnected_ssh: Option<SshClient>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    tracing::debug!("Deploying (target: {target_label}, port: {})…", server.port);
-    let _server_deploy_timer = output::timed("Server deploy");
+    let _server_deploy_timer =
+        output::timed(&format!("Server deploy ({target_label}:{})", server.port));
     let release_dir = config.release_dir();
 
     let (mut ssh, release_dir_preexisted) = if let Some(ssh) = preconnected_ssh {
@@ -322,11 +322,13 @@ pub(super) async fn deploy_to_server(
         if release_dir_preexisted {
             tracing::debug!("Release dir already exists, skipping upload");
             if let Some(task_tree) = &task_tree {
-                task_tree.warn_deploy_step(server_name, "uploading", "cached");
+                task_tree.skip_deploy_step(server_name, "uploading", "cached");
             }
         } else {
-            tracing::debug!("Uploading artifact ({})…", format_size(archive_size_bytes));
-            let upload_timer = output::timed("Artifact upload");
+            let upload_timer = output::timed(&format!(
+                "Upload artifact ({})",
+                format_size(archive_size_bytes)
+            ));
             if let Some(task_tree) = &task_tree {
                 let total_size = archive_size_bytes;
                 let tt = task_tree.clone();
@@ -401,7 +403,7 @@ pub(super) async fn deploy_to_server(
         if !release_dir_preexisted {
             if let Some(task_tree) = &task_tree {
                 run_task_tree_deploy_step(task_tree, server_name, "preparing", async {
-                    tracing::debug!("Extracting and configuring release…");
+                    let _t = output::timed("Extract and configure release");
                     let extract_cmd =
                         build_remote_extract_archive_command(&release_dir, &remote_archive);
                     let shared = shell_single_quote(&config.shared_dir());
@@ -436,7 +438,7 @@ pub(super) async fn deploy_to_server(
                 })?;
             } else {
                 run_deploy_step("Preparing…", "Prepared", use_spinner, async {
-                    tracing::debug!("Extracting and configuring release…");
+                    let _t = output::timed("Extract and configure release");
                     let extract_cmd =
                         build_remote_extract_archive_command(&release_dir, &remote_archive);
                     let shared = shell_single_quote(&config.shared_dir());
@@ -471,7 +473,7 @@ pub(super) async fn deploy_to_server(
                 })?;
             }
         } else if let Some(task_tree) = &task_tree {
-            task_tree.warn_deploy_step(server_name, "preparing", "skipped");
+            task_tree.skip_deploy_step(server_name, "preparing", "skipped");
         }
         tracing::debug!(
             "{}",

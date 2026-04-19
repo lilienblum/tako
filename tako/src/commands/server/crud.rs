@@ -179,7 +179,6 @@ pub(super) async fn restart_server(
     drop(_t);
 
     if force {
-        tracing::debug!("Sending force restart command…");
         let _t = output::timed("Force restart tako-server");
         match output::with_spinner_async(
             "Force restarting tako-server",
@@ -218,7 +217,6 @@ pub(super) async fn restart_server(
             .map_err(|e| format!("Failed to read runtime config: {e}"))?
             .pid;
 
-        tracing::debug!("Sending graceful reload command…");
         let _t = output::timed("Reload tako-server");
         match output::with_spinner_async(
             "Reloading tako-server",

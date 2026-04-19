@@ -65,7 +65,6 @@ impl TransferProgress {
             register_active_progress_bar(&pb);
             Some(pb)
         } else {
-            tracing::info!("{loading}");
             None
         };
         Self {
@@ -130,9 +129,8 @@ impl TransferProgress {
         } else if is_pretty() {
             // No own spinner (phase spinner was active) — emit above it.
             emit(&line);
-        } else {
-            tracing::info!("{}", &self.success_msg);
         }
+        // In verbose/CI mode: silent. The caller's `output::timed()` owns tracing.
     }
 }
 
@@ -151,9 +149,8 @@ impl Drop for TransferProgress {
 /// A spinner whose message can be updated while running.
 /// Does NOT suppress other output (unlike PhaseSpinner).
 ///
-/// In verbose/CI mode: logs the initial message only; `set_message()` updates
-/// are a no-op (progress counts are normal-mode only). Per-scope completion
-/// should be logged by the calling code via `tracing::debug!()`.
+/// In verbose/CI mode: silent — the caller's `output::timed()` owns
+/// action tracing.
 pub struct TrackedSpinner {
     pb: Option<ProgressBar>,
 }
@@ -161,7 +158,6 @@ pub struct TrackedSpinner {
 impl TrackedSpinner {
     pub fn start(message: &str) -> Self {
         if !is_pretty() {
-            tracing::info!("{}", message);
             return Self { pb: None };
         }
         let pb = if is_interactive() {

@@ -165,7 +165,10 @@ impl SshClient {
 
     /// Connect to the remote server
     pub async fn connect(&mut self) -> SshResult<()> {
-        let _t = crate::output::timed("SSH connected");
+        let _t = crate::output::timed(&format!(
+            "SSH connect to {}:{}",
+            self.config.host, self.config.port
+        ));
         let ssh_config = Config {
             inactivity_timeout: Some(self.config.timeout),
             keepalive_interval: Some(Duration::from_secs(15)),
@@ -181,8 +184,6 @@ impl SshClient {
         };
 
         let addr = format!("{}:{}", self.config.host, self.config.port);
-
-        tracing::debug!("Connecting to {}:{}…", self.config.host, self.config.port);
 
         let mut handle = tokio::time::timeout(self.config.timeout, async {
             client::connect(Arc::new(ssh_config), addr, handler).await

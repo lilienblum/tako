@@ -180,6 +180,12 @@ The `prepare_release` step is separated from `deploy` so that runtime download a
 
 ## Build options
 
+### Default (no config)
+
+If neither `[build]` nor `[[build_stages]]` is declared, Tako uses the runtime's default build command. For JS runtimes that is `<package-manager> run --if-present build` (so `bun run --if-present build`, `npm run --if-present build`, etc.), which runs your `"build"` script if one exists and is a no-op otherwise. Deno tries `deno task build` and ignores failures. Go has no default — declare a `[build]` or `[[build_stages]]` if you need one.
+
+Stage resolution precedence (first non-empty wins): `[[build_stages]]` → `[build]` → runtime default → no-op.
+
 ### Simple build
 
 Use `[build]` in `tako.toml` for straightforward build setups:
@@ -193,7 +199,7 @@ include = ["dist/**"]         # Optional artifact include globs
 exclude = ["**/*.map"]        # Optional artifact exclude globs
 ```
 
-When `[build]` is used, Tako runs `install` first (if set), then `run`.
+When `[build]` is used, Tako runs `install` first (if set), then `run`. `[build]` is just a shortcut for a single-stage `[[build_stages]]` list.
 
 ### Multi-stage builds
 

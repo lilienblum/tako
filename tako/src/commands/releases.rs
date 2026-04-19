@@ -312,8 +312,7 @@ async fn fetch_releases_for_server(
     server: &ServerEntry,
     app_name: &str,
 ) -> Result<Vec<ReleaseInfo>, String> {
-    tracing::debug!("Fetching releases for {app_name}…");
-    let _t = output::timed("Fetch releases");
+    let _t = output::timed(&format!("Fetch releases for {app_name}"));
     let mut ssh = SshClient::connect_to(&server.host, server.port)
         .await
         .map_err(|e| e.to_string())?;
@@ -336,8 +335,7 @@ async fn rollback_server_release(
     app_name: &str,
     release: &str,
 ) -> Result<(), String> {
-    tracing::debug!("Rolling back {app_name} to {release}…");
-    let _t = output::timed(&format!("Rollback {app_name}"));
+    let _t = output::timed(&format!("Rollback {app_name} to {release}"));
     let mut ssh = SshClient::connect_to(&server.host, server.port)
         .await
         .map_err(|e| e.to_string())?;

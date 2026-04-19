@@ -287,11 +287,9 @@ pub(super) fn has_bun_lockfile(workspace_root: &Path) -> bool {
 
 pub(super) fn run_bun_lockfile_preflight(workspace_root: &Path) -> Result<bool, String> {
     if !has_bun_lockfile(workspace_root) {
-        tracing::debug!("No Bun lockfile found, skipping check");
         return Ok(false);
     }
 
-    tracing::debug!("Bun lockfile found, validating frozen lockfile…");
     let output = std::process::Command::new("sh")
         .args(["-lc", "bun install --frozen-lockfile --lockfile-only"])
         .current_dir(workspace_root)
@@ -299,7 +297,6 @@ pub(super) fn run_bun_lockfile_preflight(workspace_root: &Path) -> Result<bool, 
         .output()
         .map_err(|e| format!("Failed to run Bun lockfile check: {e}"))?;
     if output.status.success() {
-        tracing::debug!("Bun lockfile validation passed");
         return Ok(true);
     }
 

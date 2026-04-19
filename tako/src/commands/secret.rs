@@ -129,7 +129,6 @@ async fn set_secret(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use crate::config::SecretsStore;
     use crate::crypto::encrypt;
-    let app_name = resolve_app_name(&context.config_path)?;
 
     // Load secrets and ensure environment has a salt
     let mut secrets = SecretsStore::load_from_dir(&context.project_dir)?;
@@ -137,7 +136,7 @@ async fn set_secret(
     secrets.save_to_dir(&context.project_dir)?;
 
     // Get the encryption key (prompts for passphrase if no local key)
-    let key = load_or_derive_key(&app_name, env, &secrets)?;
+    let key = load_or_derive_key(env, &secrets)?;
 
     // Check if secret exists
     let exists = secrets.contains(env, name);
@@ -429,7 +428,7 @@ async fn sync_secrets(
         // Get decrypted secrets for this environment
         let env_secrets = match secrets.get_env(env_name) {
             Some(encrypted_secrets) => {
-                let key = load_or_derive_key(&app_name, env_name, &secrets)?;
+                let key = load_or_derive_key(env_name, &secrets)?;
                 let mut decrypted = std::collections::HashMap::new();
                 for (name, encrypted_value) in encrypted_secrets {
                     match decrypt(encrypted_value, &key) {
@@ -523,8 +522,7 @@ async fn derive_key(
     secrets.save_to_dir(&context.project_dir)?;
 
     // Prompt for passphrase
-    let passphrase =
-        prompt_for_passphrase(&format!("Enter passphrase for '{}' ({})", app_name, env))?;
+    let passphrase = prompt_for_passphrase("Secrets passphrase")?;
 
     // Derive and store the key
     let salt = crate::crypto::decode_salt(&salt_b64)?;
@@ -606,7 +604,6 @@ fn read_passphrase(prompt: &str) -> Result<String, Box<dyn std::error::Error>> {
 /// The cache path is derived from the salt in `secrets.json`, so it's stable
 /// across app renames, `--name` overrides, and git worktrees.
 pub fn load_or_derive_key(
-    app_name: &str,
     env: &str,
     secrets: &crate::config::SecretsStore,
 ) -> Result<crate::crypto::EncryptionKey, Box<dyn std::error::Error>> {
@@ -627,13 +624,7 @@ pub fn load_or_derive_key(
 
     let salt = crate::crypto::decode_salt(salt_b64)?;
 
-    output::muted(&format!(
-        "No local key for {} ({}). Deriving from passphrase…",
-        output::strong(app_name),
-        output::strong(env),
-    ));
-
-    let passphrase = read_passphrase(&format!("Enter passphrase for '{}' ({})", app_name, env))?;
+    let passphrase = read_passphrase("Secrets passphrase")?;
 
     let key = crate::crypto::EncryptionKey::derive(&passphrase, &salt)?;
 
@@ -641,6 +632,24 @@ pub fn load_or_derive_key(
     key_store.save_key(&key)?;
 
     Ok(key)
+}
+
+/// Ensure the encryption key for `env` is resolved and cached on disk, so later
+/// decryption calls are silent no-ops. Call this *before* starting long-running
+/// rendering (e.g. the deploy task tree) so the passphrase prompt, if any, has a
+/// clean terminal.
+///
+/// Returns immediately if the env has no encrypted secrets (nothing to decrypt).
+pub fn ensure_encryption_key_cached(
+    env: &str,
+    secrets: &crate::config::SecretsStore,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let has_secrets = secrets.get_env(env).is_some_and(|map| !map.is_empty());
+    if !has_secrets {
+        return Ok(());
+    }
+    let _ = load_or_derive_key(env, secrets)?;
+    Ok(())
 }
 
 fn resolve_app_name(config_path: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
@@ -759,6 +768,73 @@ mod tests {
     use super::*;
     use crate::config::{ServerEntry, ServersToml, TakoToml};
     use std::collections::HashMap;
+    use std::ffi::OsString;
+    use tempfile::TempDir;
+
+    fn with_temp_tako_home<T>(f: impl FnOnce() -> T) -> T {
+        let _lock = crate::paths::test_tako_home_env_lock();
+        let temp = TempDir::new().unwrap();
+        let previous = std::env::var_os("TAKO_HOME");
+        unsafe {
+            std::env::set_var("TAKO_HOME", temp.path());
+        }
+
+        struct ResetEnv(Option<OsString>);
+        impl Drop for ResetEnv {
+            fn drop(&mut self) {
+                match self.0.take() {
+                    Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+                    None => unsafe { std::env::remove_var("TAKO_HOME") },
+                }
+            }
+        }
+        let _reset = ResetEnv(previous);
+        f()
+    }
+
+    #[test]
+    fn ensure_encryption_key_cached_is_noop_when_env_has_no_secrets() {
+        with_temp_tako_home(|| {
+            let mut secrets = crate::config::SecretsStore::parse("{}").unwrap();
+            secrets.ensure_env_salt("production").unwrap();
+            // Env has a salt but no secrets: nothing to decrypt later, no prompt needed.
+            ensure_encryption_key_cached("production", &secrets)
+                .expect("no-op when env has no secrets");
+        });
+    }
+
+    #[test]
+    fn ensure_encryption_key_cached_is_noop_when_env_has_no_salt() {
+        with_temp_tako_home(|| {
+            let secrets = crate::config::SecretsStore::parse("{}").unwrap();
+            // Env doesn't exist at all; skip without error.
+            ensure_encryption_key_cached("production", &secrets)
+                .expect("no-op when env is not initialized");
+        });
+    }
+
+    #[test]
+    fn ensure_encryption_key_cached_is_noop_when_key_already_cached() {
+        with_temp_tako_home(|| {
+            let json = r#"{
+                "production": {
+                    "salt": "dGVzdHNhbHQxMjM0NTY3OA==",
+                    "secrets": {"DATABASE_URL": "opaque-encrypted-blob"}
+                }
+            }"#;
+            let secrets = crate::config::SecretsStore::parse(json).unwrap();
+            let salt_b64 = secrets.get_salt("production").unwrap();
+            let salt = crate::crypto::decode_salt(salt_b64).unwrap();
+            let key = crate::crypto::EncryptionKey::derive("correct-horse", &salt).unwrap();
+            let key_store = crate::crypto::KeyStore::for_salt(salt_b64).unwrap();
+            key_store.save_key(&key).unwrap();
+
+            // With the key already on disk, this must not prompt — if it did, the
+            // test would either hang or fail because stdin isn't a tty.
+            ensure_encryption_key_cached("production", &secrets)
+                .expect("cached key should be used without prompting");
+        });
+    }
 
     #[test]
     fn resolve_secret_sync_server_names_uses_explicit_mapping() {

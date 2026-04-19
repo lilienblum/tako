@@ -134,7 +134,6 @@ async fn download_and_install_inner(
         .map_err(|e| format!("SHA256 checksum unavailable for {sha_url}: {e}"))?;
     verify_sha256(&archive_path, &expected)?;
 
-    tracing::debug!("Extracting archive…");
     {
         let _t = output::timed("Extract archive");
         let extract_dir_tmp = tmp_dir.join("extract");
@@ -144,8 +143,7 @@ async fn download_and_install_inner(
 
     let extract_dir = tmp_dir.join("extract");
 
-    tracing::debug!("Installing binaries to {}…", install_dir.display());
-    let _t = output::timed("Install binaries");
+    let _t = output::timed(&format!("Install binaries to {}", install_dir.display()));
     let tako_bin =
         find_binary(&extract_dir, "tako").ok_or("archive did not contain a tako binary")?;
     let dev_server_bin = find_binary(&extract_dir, "tako-dev-server")
@@ -177,8 +175,7 @@ async fn download_archive(
     dest: &Path,
     show_progress: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    tracing::debug!("Downloading {}…", url);
-    let _t = output::timed("Download release archive");
+    let _t = output::timed(&format!("Download release archive from {url}"));
     let client = reqwest::Client::new();
     let mut resp = client
         .get(url)

@@ -444,11 +444,6 @@ pub(super) async fn upgrade_servers(name: Option<&str>) -> Result<(), Box<dyn st
         pb.enable_steady_tick(Duration::from_millis(80));
         Some(pb)
     } else {
-        if total == 1 {
-            tracing::info!("Getting current version for {}…", &names[0]);
-        } else {
-            tracing::info!("Getting current versions for {} servers…", total);
-        }
         None
     };
 
@@ -585,8 +580,7 @@ async fn run_server_upgrade(
             .await
             .map_err(|e| format!("Failed to verify release metadata: {e}"))?;
 
-        tracing::debug!("Downloading latest tako-server binary…");
-        let _t = output::timed("Binary download");
+        let _t = output::timed("Download latest tako-server binary");
         let install_output = ssh
             .exec(&remote_binary_replace_command(
                 &verified_release.download_url,
@@ -626,8 +620,9 @@ async fn run_server_upgrade(
             .map_err(|e| format!("Failed to read runtime config: {e}"))?
             .pid;
 
-        tracing::debug!("Reloading server (pid: {old_pid})…");
-        let _t = output::timed("Reload + wait for new process");
+        let _t = output::timed(&format!(
+            "Reload server (pid: {old_pid}) + wait for new process"
+        ));
         ssh.tako_reload()
             .await
             .map_err(|e| format!("Reload failed: {e}"))?;

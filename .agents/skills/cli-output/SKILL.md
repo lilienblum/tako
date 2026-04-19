@@ -11,6 +11,7 @@ Two output systems coexist in code. Only one renders at a time based on the mode
 
 - **Pretty output** (`output::info()`, `output::success()`, spinners, etc.) — renders in normal mode, no-op in verbose/CI.
 - **Tracing** (`tracing::debug!()`, `tracing::info!()`, etc.) — renders in verbose/CI mode, no-op in normal mode (no subscriber installed).
+- **`output::timed(label)`** — the single source of truth for action tracking in verbose/CI. Emits a deferred DEBUG start log only if the action exceeds 2s, and always emits a TRACE end log on drop with elapsed time. Spinners do NOT emit tracing on their own — they are pure UI in pretty mode, and silent in verbose/CI. Wrap meaningful work in `timed()` regardless of whether a spinner is attached.
 
 Both systems are called side-by-side in command code. Each is invisible in the mode it doesn't belong to.
 
@@ -53,19 +54,20 @@ Normal:
 ✔ Uploaded artifact  711ms
 ```
 
-Verbose:
+Verbose (action completed under 2s — single TRACE end record from `timed()`):
 ```
-10:00:00.100  INFO Uploading artifact…
 10:00:00.200 DEBUG [prod-la] Uploading artifact to /var/tako/releases (12.4 MB)
-10:00:00.300 TRACE [prod-la] Artifact upload done (711ms)
-10:00:00.811  INFO Uploaded artifact  711ms
+10:00:00.811 TRACE [prod-la] Upload artifact 711ms
 ```
 
-CI:
+Verbose (action exceeded 2s — deferred DEBUG start + TRACE end):
 ```
-10:00:00.100  INFO Uploading artifact…
-10:00:00.811  INFO Uploaded artifact  711ms
+10:00:00.200 DEBUG [prod-la] Uploading artifact to /var/tako/releases (12.4 MB)
+10:00:02.200 DEBUG [prod-la] Upload artifact…
+10:00:04.300 TRACE [prod-la] Upload artifact 4.1s
 ```
+
+CI: identical to verbose but without ANSI colors.
 
 ## Interactive Padding
 
@@ -120,17 +122,20 @@ These functions print in normal mode, no-op in verbose/CI. Use `output::is_prett
 
 ## Spinners
 
-Spinners bridge both output systems: in normal mode they show visual animation, in verbose/CI they emit `tracing::info!` for start and completion. Command code does NOT need to duplicate tracing calls.
+Spinners are pure UI: they render animation in pretty mode and are silent in verbose/CI. They do NOT emit tracing. To log an action in verbose/CI, wrap the work in `output::timed()` — it handles both the deferred start (if the action runs >2s) and the end record automatically.
+
+The only exception is errors: spinner helpers that surface a failure still emit `tracing::error!` so failures remain visible in verbose/CI.
 
 **`with_spinner(loading, success, work)`** — Shows spinner if >1s. On success: `✔ success  elapsed`.
 
 ```rust
+let _t = output::timed("Validate config");
 output::with_spinner("Validating", "Validated", || {
     validate()?;
     Ok(())
 })?;
 // Normal: ⠋ Validating... → ✔ Validated  1.2s
-// Verbose: INFO Validating → INFO Validated  1.2s
+// Verbose: TRACE Validate config 1.2s    (single record, action was <2s)
 ```
 
 **`with_spinner_async(loading, success, work)`** — Same, async.
@@ -142,11 +147,13 @@ output::with_spinner("Validating", "Validated", || {
 **`PhaseSpinner::start(message)`** — Major phases (Build, Deploy). Shows elapsed after 1s.
 
 ```rust
+let _t = output::timed("Build phase");
 let phase = output::PhaseSpinner::start("Building…");
 // ... build steps ...
 phase.finish("Build complete");
 // Normal: ⠋ Building…  5s → ✔ Build complete  5.2s
-// Verbose: INFO Building… → INFO Build complete  5.2s
+// Verbose: DEBUG Build phase…     (deferred start at 2s)
+//          TRACE Build phase 5.2s (end record on drop)
 ```
 
 **`TrackedSpinner::start(message)`** — Updatable message. `set_message()` is a no-op in verbose/CI.
@@ -167,11 +174,11 @@ g.finish("Services built");
 //   ⠋ Building services  10s
 //     ✔ api  7s
 //     ⠋ worker  3s
-// Verbose: INFO for each step
+// Verbose: silent unless caller wraps each step in its own timed() span
 ```
 
 **`StepFlow::new(steps)`** — Linear phase sequence with pre-rendered pending steps
-(pretty mode only; verbose logs each step via tracing as it starts).
+(pretty mode only; in verbose/CI it is silent — wrap each step in its own `timed()`).
 
 ```rust
 let flow = output::StepFlow::new(&["Pushing artifact", "Applying migrations", "Health checks"]);
@@ -296,31 +303,45 @@ tracing::debug!("[{name}] Deploy succeeded");
 let ssh_config = SshConfig::from_server(&server.host, server.port).with_label(server_name);
 ```
 
-### Start/finish records
+### Start/finish records (handled automatically by `timed()`)
 
-Fast operations (< ~2s) need only **one** record — the result. For longer operations:
-- Start message must end with `…` (ellipsis)
-- End message is the result
+Do not manually pair a `tracing::debug!("X…")` with a completion log. `output::timed(label)` enforces the rule for you:
+
+- Always emits a TRACE end record on drop with elapsed time (e.g. `TRACE SSH connect 250ms`).
+- Only emits a DEBUG start record (`DEBUG SSH connect…`) if the action actually exceeds 2 seconds. This is measured, not guessed: a background thread sits on a `Condvar::wait_timeout(2s)`; if the span drops first, `Drop` notifies the condvar and the start log is cancelled; if the 2s elapse first, the start log fires. Fast actions always stay to a single end record; slow actions always advertise themselves at the 2s mark.
+
+Just wrap the work: `let _t = output::timed("SSH connect");`. No need to also write a start log.
 
 ### Timing
 
 ```rust
 let _t = output::timed("SSH connect");
-// On drop: tracing::trace!("SSH connect done (250ms)")
+// If action < 2s on drop: TRACE SSH connect 250ms
+// If action ≥ 2s:         DEBUG SSH connect…    (at 2s mark)
+//                         TRACE SSH connect 3.4s (on drop)
+```
+
+Fold useful context into the label (host, port, name, size) rather than adding a separate `debug!` next to `timed()`:
+
+```rust
+let _t = output::timed(&format!("[{name}] Upload artifact ({} bytes)", size));
 ```
 
 ## Patterns to Follow
 
 ### 1. Coexist pretty + tracing
 
+Spinners drive pretty UI, `timed()` drives verbose logs. Don't duplicate start lines.
+
 ```rust
-tracing::info!("Deploying to {name}");
 output::section("Deploy");
 
+let _t = output::timed(&format!("[{name}] Upload artifact"));
 let result = output::with_spinner_async("Uploading", "Uploaded", async {
     tracing::debug!("[{name}] Uploading {size} to {path}");
     upload().await
 }).await?;
+drop(_t);
 
 output::bullet(&format!("Revision {} deployed", output::strong(rev)));
 ```
@@ -378,13 +399,14 @@ Human-facing CLI output goes to stderr. Structured data goes to stdout.
 - **DEBUG for noisy repetitive detail** — Use TRACE. Reserve DEBUG for meaningful steps.
 - **Sharing formatted messages between modes** — Keep messages plain from the start; never pass ANSI-formatted strings to tracing.
 - **Using `strip_ansi` to clean messages** — Don't strip ANSI as a workaround.
-- **Duplicating spinner tracing** — Spinners emit tracing::info! for start/completion automatically.
+- **Manually pairing start + end tracing** — Don't write `tracing::debug!("X…")` next to `timed("X")`. `timed()` handles the deferred start at 2s and the end record automatically.
+- **Expecting spinners to emit tracing** — Spinners are silent in verbose/CI (only errors surface). Wrap the underlying action in `timed()` if you want it logged.
 - **Tracing structured fields** — Don't use `server = %name` structured fields. Use `[name]` message prefix instead.
 - **Wrapping prompts in tracing** — Prompts use `eprintln!` in verbose mode, never `tracing::info!`.
 - **Parentheses around elapsed times** — Use `3s` not `(3s)`. Use `12s, 72 MB` not `(12s, 72 MB)`.
 - **Ad-hoc prompt chrome** — Use the shared diamond prompt style: `◆`/`◇` for the label row, `›` on text-input rows, warnings under the label, hints under the input.
-- **Start+finish for fast operations** — Operations under ~2s need only one record.
-- **Start messages without `…`** — Every start message that has a corresponding finish must end with `…`.
+- **Start+finish for fast operations** — Operations under ~2s need only one record. `timed()` enforces this — do not manually emit a start log alongside it.
+- **Start messages without `…`** — Every start message that has a corresponding finish must end with `…`. `timed()` adds this automatically on its deferred start.
 - **Pre-rendering upcoming steps in verbose/CI** — `·` pending steps only show in pretty mode. `StepFlow` and `GroupedSpinner` handle this automatically.
 
 ## Quick Decision Tree

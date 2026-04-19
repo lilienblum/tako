@@ -254,7 +254,7 @@ impl FooterState {
             repo_branch,
             repo_path,
             worktree_name,
-            status: "starting…".to_string(),
+            status: "starting".to_string(),
             cpu: None,
             mem_bytes: None,
         }
@@ -424,7 +424,7 @@ pub async fn run_dev_output(
                 };
                 match event {
                     DevEvent::AppStarted => {
-                        fs.status = "starting…".to_string();
+                        fs.status = "starting".to_string();
                         fs.refresh(
                             &mut footer,
                             &app_name,

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::build::{BuildAdapter, PresetGroup};
-use crate::config::{BuildStage, TakoToml};
+use crate::config::BuildStage;
 use crate::output;
 
 use super::super::cache::{
@@ -31,14 +31,13 @@ use super::{
 pub(super) async fn build_target_artifacts(
     project_dir: &Path,
     source_root: &Path,
-    tako_config: &TakoToml,
     cache_dir: &Path,
     app_manifest_bytes: &[u8],
     version: &str,
     runtime_tool: &str,
     _main: &str,
     target_groups: &[ArtifactBuildGroup],
-    custom_stages: &[BuildStage],
+    resolved_stages: &[BuildStage],
     include_patterns: &[String],
     exclude_patterns: &[String],
     asset_roots: &[String],
@@ -58,7 +57,7 @@ pub(super) async fn build_target_artifacts(
         let tree_target_label = display_target_label.unwrap_or("shared target").to_string();
         let use_local_build_spinners =
             task_tree.is_none() && should_use_local_build_spinners(output::is_interactive());
-        let stage_summary = summarize_build_stages(custom_stages);
+        let stage_summary = summarize_build_stages(resolved_stages);
         if let Some(stage_summary_message) =
             format_build_stages_summary_for_output(&stage_summary, display_target_label)
         {
@@ -114,7 +113,7 @@ pub(super) async fn build_target_artifacts(
         let runtime_version = if let Some(pinned) = pinned_runtime_version {
             tracing::debug!("Using pinned runtime version {} from tako.toml", pinned);
             if let Some(task_tree) = &task_tree {
-                task_tree.warn_build_step(
+                task_tree.skip_build_step(
                     &tree_target_label,
                     "probe-runtime",
                     format!("Pinned: {pinned}"),
@@ -146,19 +145,18 @@ pub(super) async fn build_target_artifacts(
                             error.clone(),
                         );
                         task_tree.fail_build_target(&tree_target_label, error.clone());
-                        task_tree.warn_pending_build_children(&tree_target_label, "skipped");
+                        task_tree.cancel_pending_build_children(&tree_target_label, "cancelled");
                     }
                     return Err(error);
                 }
             }
         } else if use_local_build_spinners {
             output::with_spinner(&runtime_probe_label, &runtime_probe_success, || {
-                tracing::debug!(
-                    "Probing {} version in {}…",
+                let _t = output::timed(&format!(
+                    "Probe {} version in {}",
                     runtime_tool,
                     workspace.display()
-                );
-                let _t = output::timed("Runtime probe");
+                ));
                 let version = resolve_runtime_version_from_workspace(&workspace, runtime_tool);
                 if let Ok(v) = &version {
                     tracing::debug!("Detected {} {}", runtime_tool, v);
@@ -167,7 +165,7 @@ pub(super) async fn build_target_artifacts(
             })?
         } else {
             tracing::debug!("{}", runtime_probe_label);
-            let _t = output::timed("Runtime probe");
+            let _t = output::timed(&format!("Probe {} version", runtime_tool));
             let version = resolve_runtime_version_from_workspace(&workspace, runtime_tool)?;
             drop(_t);
             tracing::debug!("Detected {} {}", runtime_tool, version);
@@ -196,8 +194,8 @@ pub(super) async fn build_target_artifacts(
                     format_size(cached.size_bytes)
                 );
                 if let Some(task_tree) = &task_tree {
-                    task_tree.warn_build_step(&tree_target_label, "build-artifact", "skipped");
-                    task_tree.warn_build_step(&tree_target_label, "package-artifact", "skipped");
+                    task_tree.skip_build_step(&tree_target_label, "build-artifact", "skipped");
+                    task_tree.skip_build_step(&tree_target_label, "package-artifact", "skipped");
                     task_tree.append_cached_artifact_step(
                         &tree_target_label,
                         Some(format_size(cached.size_bytes)),
@@ -265,30 +263,25 @@ pub(super) async fn build_target_artifacts(
                 task_tree.mark_build_step_running(&tree_target_label, "build-artifact");
                 if let Err(error) = run_local_build(
                     &workspace,
-                    &app_dir_in_workspace,
                     source_root,
                     project_dir,
-                    &tako_config.build,
-                    custom_stages,
+                    resolved_stages,
                     &extra_envs,
                 ) {
                     task_tree.fail_build_step(&tree_target_label, "build-artifact", error.clone());
                     task_tree.fail_build_target(&tree_target_label, error.clone());
-                    task_tree.warn_pending_build_children(&tree_target_label, "skipped");
+                    task_tree.cancel_pending_build_children(&tree_target_label, "cancelled");
                     return Err(error);
                 }
                 task_tree.succeed_build_step(&tree_target_label, "build-artifact", None);
             } else if use_local_build_spinners {
                 output::with_spinner(&build_label, &build_success, || {
-                    tracing::debug!("Building target {}…", build_target_label);
-                    let _t = output::timed("Target build");
+                    let _t = output::timed(&format!("Target build ({build_target_label})"));
                     run_local_build(
                         &workspace,
-                        &app_dir_in_workspace,
                         source_root,
                         project_dir,
-                        &tako_config.build,
-                        custom_stages,
+                        resolved_stages,
                         &extra_envs,
                     )
                 })?;
@@ -297,11 +290,9 @@ pub(super) async fn build_target_artifacts(
                 let _t = output::timed("Target build");
                 run_local_build(
                     &workspace,
-                    &app_dir_in_workspace,
                     source_root,
                     project_dir,
-                    &tako_config.build,
-                    custom_stages,
+                    resolved_stages,
                     &extra_envs,
                 )?;
             }
@@ -362,8 +353,7 @@ pub(super) async fn build_target_artifacts(
                     .len())
             } else if use_local_build_spinners {
                 output::with_spinner(&prepare_label, &prepare_success, || {
-                    tracing::debug!("Packaging artifact for {}…", build_target_label);
-                    let _t = output::timed("Artifact packaging");
+                    let _t = output::timed(&format!("Artifact packaging ({build_target_label})"));
                     package_target_artifact(
                         &workspace,
                         &app_dir_in_workspace,
@@ -376,8 +366,7 @@ pub(super) async fn build_target_artifacts(
                 })
             } else {
                 output::bullet(&prepare_label);
-                tracing::debug!("Packaging artifact for {}…", build_target_label);
-                let _t = output::timed("Artifact packaging");
+                let _t = output::timed(&format!("Artifact packaging ({build_target_label})"));
                 package_target_artifact(
                     &workspace,
                     &app_dir_in_workspace,

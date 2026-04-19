@@ -14,7 +14,8 @@ use crate::output::{
 /// A spinner for major phases (Build, Deploy). Shows elapsed time after 1s.
 /// Inner output is NOT suppressed — it flows normally above the spinner.
 ///
-/// In verbose mode: no spinner animation, just INFO log lines.
+/// In verbose/CI mode: silent — no spinner, no tracing. The caller's
+/// `output::timed()` owns phase tracing.
 pub struct PhaseSpinner {
     pb: Option<ProgressBar>,
     start: Instant,
@@ -37,7 +38,6 @@ impl PhaseSpinner {
         let verbose = !is_pretty();
 
         if verbose {
-            tracing::info!("{}", message);
             return Self {
                 pb: None,
                 start: Instant::now(),

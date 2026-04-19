@@ -1,31 +1,63 @@
+use std::sync::{Arc, Condvar, Mutex};
+use std::thread;
+use std::time::{Duration, Instant};
+
 use tracing_subscriber::fmt::FmtContext;
 use tracing_subscriber::fmt::format::{self, FormatEvent, FormatFields};
 use tracing_subscriber::registry::LookupSpan;
 
-use super::{format_elapsed_trace, is_ci, should_colorize};
+use super::{format_elapsed_trace, is_ci, is_pretty, should_colorize};
 
-/// Start a timed span for verbose logging. Returns a guard that logs elapsed
-/// time at TRACE level when dropped or explicitly finished.
+/// Actions shorter than this emit only the end log. Longer actions also
+/// emit a deferred "Doing X…" start log so in-between traces have context.
+const DEFERRED_START_THRESHOLD: Duration = Duration::from_secs(2);
+
+/// Start a timed span. Emits a deferred start log at DEBUG after
+/// `DEFERRED_START_THRESHOLD` (only if the work is still running) and an
+/// end log at TRACE on drop. In pretty mode both calls are no-ops because
+/// no tracing subscriber is installed.
 pub fn timed(label: &str) -> TimedSpan {
     TimedSpan::new(label)
 }
 
 pub struct TimedSpan {
     label: String,
-    start: std::time::Instant,
+    start: Instant,
+    cancel: Arc<(Mutex<bool>, Condvar)>,
 }
 
 impl TimedSpan {
     fn new(label: &str) -> Self {
+        let cancel = Arc::new((Mutex::new(false), Condvar::new()));
+
+        if !is_pretty() {
+            let cancel_clone = cancel.clone();
+            let label_clone = label.to_string();
+            thread::spawn(move || {
+                let (lock, cvar) = &*cancel_clone;
+                let cancelled = lock.lock().unwrap();
+                let (cancelled, _) = cvar
+                    .wait_timeout(cancelled, DEFERRED_START_THRESHOLD)
+                    .unwrap();
+                if !*cancelled {
+                    tracing::debug!("{label_clone}…");
+                }
+            });
+        }
+
         Self {
             label: label.to_string(),
-            start: std::time::Instant::now(),
+            start: Instant::now(),
+            cancel,
         }
     }
 }
 
 impl Drop for TimedSpan {
     fn drop(&mut self) {
+        let (lock, cvar) = &*self.cancel;
+        *lock.lock().unwrap() = true;
+        cvar.notify_all();
         let time = format_elapsed_trace(self.start.elapsed());
         tracing::trace!("{} {time}", self.label);
     }
@@ -132,7 +164,13 @@ where
         use tracing_subscriber::fmt::time::FormatTime;
 
         if !is_ci() {
-            LocalTimer.format_time(&mut writer)?;
+            if should_colorize() {
+                write!(writer, "\x1b[2m")?;
+                LocalTimer.format_time(&mut writer)?;
+                write!(writer, "\x1b[22m")?;
+            } else {
+                LocalTimer.format_time(&mut writer)?;
+            }
         }
 
         // Level (right-aligned, 5 chars)

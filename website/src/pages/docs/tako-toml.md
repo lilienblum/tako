@@ -147,13 +147,15 @@ Asset directories are merged in listed order. When files conflict, later entries
 
 ## `[build]`
 
-Deploy artifact build configuration. Defines how your app is built before deployment.
+Deploy artifact build configuration. Defines how your app is built before deployment. `[build]` is a shortcut for a single-stage `[[build_stages]]` list.
 
 ```toml
 [build]
 run = "bun run build"
 install = "bun install"
 ```
+
+When neither `[build]` nor `[[build_stages]]` is set, Tako falls back to the runtime default build command (e.g. `bun run --if-present build` for JS runtimes). Precedence is: `[[build_stages]]` → `[build]` → runtime default → no-op.
 
 ### `run`
 

@@ -464,6 +464,10 @@ pub fn error(message: &str) {
 
 /// Always prints — used for fatal errors in main.rs.
 pub fn error_stderr(message: &str) {
+    if !is_pretty() {
+        tracing::error!("{}", message);
+        return;
+    }
     eprintln!("{} {}", bold(&theme_error("✘")), theme_fg(message));
 }
 

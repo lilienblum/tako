@@ -475,8 +475,8 @@ pub async fn run(
                     continue;
                 }
 
-                if let Err(msg) = inject_dev_secrets(&project_dir, &app_name, &mut new_env)
-                    .map_err(|e| e.to_string())
+                if let Err(msg) =
+                    inject_dev_secrets(&project_dir, &mut new_env).map_err(|e| e.to_string())
                 {
                     let _ = log_tx
                         .send(ScopedLog::warn(

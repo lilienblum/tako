@@ -253,8 +253,7 @@ async fn scale_server(
     server: &ServerEntry,
     instances: u8,
 ) -> Result<ScaleResult, Box<dyn std::error::Error + Send + Sync>> {
-    tracing::debug!("Scaling {app_name} to {instances} instance(s)…");
-    let _t = output::timed(&format!("Scale {app_name}"));
+    let _t = output::timed(&format!("Scale {app_name} to {instances} instance(s)"));
     let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
     let command = serde_json::to_string(&Command::Scale {
         app: app_name.to_string(),

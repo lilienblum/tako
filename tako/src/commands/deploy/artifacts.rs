@@ -23,7 +23,9 @@ use super::task_tree::{ArtifactBuildGroup, DeployTaskTreeController};
 
 pub(super) const LOCAL_ARTIFACT_CACHE_KEEP_TARGET_ARTIFACTS: usize = 90;
 
-use local_build::{copy_dir_contents, run_local_build, summarize_build_stages};
+use local_build::{
+    copy_dir_contents, resolve_build_stages, run_local_build, summarize_build_stages,
+};
 use local_build::{local_build_cache_root, persist_local_build_caches, restore_local_build_caches};
 use packaging::build_target_artifacts;
 
@@ -77,10 +79,9 @@ pub(super) async fn prepare_build_phase(
     let git_commit_message = resolve_git_commit_message(&source_root);
     let git_dirty = executor.is_git_dirty().ok();
     tracing::debug!("Version: {}", version);
-    tracing::debug!("Resolving preset ref: {}…", preset_ref);
 
     let (mut build_preset, resolved_preset) = {
-        let _t = output::timed("Preset resolution");
+        let _t = output::timed(&format!("Resolve preset ref {preset_ref}"));
         if task_tree.is_none() {
             output::with_spinner_async(
                 "Resolving build preset",
@@ -169,10 +170,19 @@ pub(super) async fn prepare_build_phase(
         app_dir,
         install_dir,
     );
-    let deploy_secrets =
-        decrypt_deploy_secrets(&app_name, &env, &secrets).map_err(|e| e.to_string())?;
+    let deploy_secrets = decrypt_deploy_secrets(&env, &secrets).map_err(|e| e.to_string())?;
 
     let app_json_bytes = serde_json::to_vec_pretty(&manifest).map_err(|e| e.to_string())?;
+
+    let runtime_default_build =
+        tako_runtime::runtime_def_for(runtime_adapter.id(), Some(&plugin_ctx))
+            .and_then(|def| def.preset.build);
+    let resolved_stages = resolve_build_stages(
+        &tako_config.build,
+        &tako_config.build_stages,
+        &build_preset,
+        runtime_default_build.as_deref(),
+    );
 
     let include_patterns = build_artifact_include_patterns(&tako_config);
     let exclude_patterns = build_artifact_exclude_patterns(&build_preset, &tako_config);
@@ -188,14 +198,13 @@ pub(super) async fn prepare_build_phase(
     let artifacts_by_target = build_target_artifacts(
         &project_dir,
         &source_root,
-        &tako_config,
         cache.cache_dir(),
         &app_json_bytes,
         &version,
         &runtime_tool,
         &manifest_main,
         &build_groups,
-        &tako_config.build_stages,
+        &resolved_stages,
         &include_patterns,
         &exclude_patterns,
         &asset_roots,

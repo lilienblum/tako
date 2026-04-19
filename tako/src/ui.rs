@@ -43,6 +43,7 @@ pub enum TaskState {
     Running { started_at: Instant },
     Succeeded { elapsed: Option<Duration> },
     Failed { elapsed: Option<Duration> },
+    Skipped { elapsed: Option<Duration> },
     Cancelled { elapsed: Option<Duration> },
 }
 
@@ -532,14 +533,17 @@ fn task_icon(state: &TaskState, frame_index: usize) -> &'static str {
         TaskState::Running { .. } => TASK_SPINNER_TICKS[frame_index % TASK_SPINNER_TICKS.len()],
         TaskState::Succeeded { .. } => "✔",
         TaskState::Failed { .. } => "✘",
-        TaskState::Cancelled { .. } => "⏭",
+        TaskState::Skipped { .. } => "⏭",
+        TaskState::Cancelled { .. } => "⊘",
     }
 }
 
 fn pending_task_label(label: &str, state: &TaskState) -> String {
     match state {
         TaskState::Pending => format!("{label}…"),
-        TaskState::Running { .. } | TaskState::Cancelled { .. } => format!("{label}…"),
+        TaskState::Running { .. } | TaskState::Skipped { .. } | TaskState::Cancelled { .. } => {
+            format!("{label}…")
+        }
         _ => label.to_string(),
     }
 }
@@ -563,6 +567,7 @@ fn format_detail_suffix(task: &TaskItemState, now: Instant) -> String {
         }
         TaskState::Succeeded { elapsed }
         | TaskState::Failed { elapsed }
+        | TaskState::Skipped { elapsed }
         | TaskState::Cancelled { elapsed } => elapsed.and_then(|e| {
             let value = output::format_elapsed_always(e);
             (!value.is_empty()).then_some(value)
@@ -587,7 +592,7 @@ fn task_line_styles(state: &TaskState, is_group_like: bool) -> (Style, Style, St
     match state {
         TaskState::Pending => (muted, muted, muted),
         TaskState::Failed { .. } => (error, if is_group_like { accent } else { normal }, muted),
-        TaskState::Cancelled { elapsed } => (
+        TaskState::Skipped { elapsed } | TaskState::Cancelled { elapsed } => (
             muted,
             if is_group_like && elapsed.is_some() {
                 accent
@@ -739,7 +744,7 @@ mod tests {
                 TaskItemState {
                     id: "c".into(),
                     label: "prod-c".into(),
-                    state: TaskState::Cancelled { elapsed: None },
+                    state: TaskState::Skipped { elapsed: None },
                     detail: Some("skipped".into()),
                     progress: None,
                     children: vec![],
@@ -832,9 +837,9 @@ mod tests {
 
         let lines = render_plain_lines(&tree);
         // Parent and running child should be cancelled
-        assert!(lines[0].starts_with("⏭ Deploying…"));
+        assert!(lines[0].starts_with("⊘ Deploying…"));
         assert!(lines[1].starts_with("  ✔ Connected"));
-        assert!(lines[2].starts_with("  ⏭ Starting…"));
+        assert!(lines[2].starts_with("  ⊘ Starting…"));
         assert_eq!(lines[3], "");
         assert_eq!(lines[4], "Operation cancelled");
     }

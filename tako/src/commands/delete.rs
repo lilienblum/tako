@@ -244,7 +244,6 @@ async fn discover_server_deployments(
     server_name: &str,
     server: &ServerEntry,
 ) -> Result<Vec<RemoteDeployment>, Box<dyn std::error::Error + Send + Sync>> {
-    tracing::debug!("Discovering deployments…");
     let _t = output::timed("Discover deployments");
     let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
 
@@ -668,8 +667,7 @@ async fn delete_from_server(
     server: &ServerEntry,
     remote_app_name: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    tracing::debug!("Deleting app {remote_app_name}…");
-    let _t = output::timed(&format!("Delete {remote_app_name}"));
+    let _t = output::timed(&format!("Delete app {remote_app_name}"));
     let mut ssh = SshClient::connect_to(&server.host, server.port).await?;
 
     let result = async {
