@@ -6,7 +6,7 @@
       "type": "framework",
       "description": "Tako CLI commands: init, dev, deploy, secrets, typegen, scale, logs, rollback, servers, doctor. Includes output design patterns for interactive and plain modes.",
       "url": "https://tako.sh/.well-known/agent-skills/tako/SKILL.md",
-      "sha256": "fd05765b3e68cb77d7b58fa6a715add32f0e4b663756facbd622561edf408a1f"
+      "sha256": "e83310432bc9613c7e8b0e200fcb97902fd45c3863e8b8498f84d0a7554db6d1"
     },
     {
       "name": "tako-sdk-go",
