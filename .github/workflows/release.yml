@@ -79,33 +79,36 @@ jobs:
           package_server() {
             local arch=$1 libc=$2
             local src="raw/bin-tako-server-linux-${arch}-${libc}/tako-server"
-            local out="dist/tako-server-linux-${arch}-${libc}.tar.zst"
+            local name="tako-server-linux-${arch}-${libc}.tar.zst"
+            local out="dist/${name}"
             tmpdir="$(mktemp -d)"
             cp "$src" "$tmpdir/tako-server"
             tar -cf - -C "$tmpdir" tako-server | zstd -19 -o "$out"
-            sha256sum "$out" > "${out}.sha256"
+            (cd dist && sha256sum "$name") > "${out}.sha256"
             rm -rf "$tmpdir"
           }
 
           package_cli_linux() {
             local arch=$1
             local src="raw/bin-tako-linux-${arch}"
-            local out="dist/tako-linux-${arch}.tar.gz"
+            local name="tako-linux-${arch}.tar.gz"
+            local out="dist/${name}"
             tmpdir="$(mktemp -d)"
             cp "$src/tako" "$src/tako-dev-server" "$src/tako-dev-proxy" "$tmpdir/"
             tar -czf "$out" -C "$tmpdir" tako tako-dev-server tako-dev-proxy
-            sha256sum "$out" > "${out}.sha256"
+            (cd dist && sha256sum "$name") > "${out}.sha256"
             rm -rf "$tmpdir"
           }
 
           package_cli_darwin() {
             local arch=$1
             local src="raw/bin-tako-darwin-${arch}"
-            local out="dist/tako-darwin-${arch}.tar.gz"
+            local name="tako-darwin-${arch}.tar.gz"
+            local out="dist/${name}"
             tmpdir="$(mktemp -d)"
             cp "$src/tako" "$src/tako-dev-server" "$src/tako-dev-proxy" "$tmpdir/"
             tar -czf "$out" -C "$tmpdir" tako tako-dev-server tako-dev-proxy
-            sha256sum "$out" > "${out}.sha256"
+            (cd dist && sha256sum "$name") > "${out}.sha256"
             rm -rf "$tmpdir"
           }
 
