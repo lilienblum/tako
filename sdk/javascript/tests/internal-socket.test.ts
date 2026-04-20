@@ -1,9 +1,15 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { createServer } from "node:net";
+import type { Server } from "node:net";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import {
   APP_NAME_ENV,
   assertInternalSocketEnvConsistency,
+  callInternal,
   INTERNAL_SOCKET_ENV,
   internalSocketFromEnv,
+  TakoError,
 } from "../src/internal-socket";
 
 function clearEnv(): void {
@@ -69,5 +75,62 @@ describe("assertInternalSocketEnvConsistency", () => {
     expect(() => {
       assertInternalSocketEnvConsistency();
     }).toThrow(/TAKO_INTERNAL_SOCKET/);
+  });
+});
+
+describe("callInternal error wrapping", () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join("/tmp", "tako-sock-err-"));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("maps a missing unix socket to TakoError TAKO_UNAVAILABLE without leaking the path", async () => {
+    const missing = join(dir, "nonexistent.sock");
+    let caught: unknown;
+    try {
+      await callInternal(missing, { command: "noop" });
+    } catch (err) {
+      caught = err;
+    }
+    expect(caught).toBeInstanceOf(TakoError);
+    const err = caught as TakoError;
+    expect(err.code).toBe("TAKO_UNAVAILABLE");
+    expect(err.message).not.toContain(missing);
+    expect(err.message).not.toContain("ENOENT");
+    expect(err.message).not.toContain("connect");
+    // Original error is preserved for operators on .cause.
+    expect(err.cause).toBeDefined();
+  });
+
+  test("maps a server error response to TakoError TAKO_RPC_ERROR with the server message", async () => {
+    const sock = join(dir, "srv.sock");
+    const server = await new Promise<Server>((resolve, reject) => {
+      const s = createServer((socket) => {
+        socket.on("data", () => {
+          socket.write(`${JSON.stringify({ status: "error", message: "unknown workflow 'x'" })}\n`);
+        });
+      });
+      s.once("error", reject);
+      s.listen(sock, () => resolve(s));
+    });
+    try {
+      let caught: unknown;
+      try {
+        await callInternal(sock, { command: "enqueue_run" });
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(TakoError);
+      const err = caught as TakoError;
+      expect(err.code).toBe("TAKO_RPC_ERROR");
+      expect(err.message).toBe("unknown workflow 'x'");
+    } finally {
+      server.close();
+    }
   });
 });

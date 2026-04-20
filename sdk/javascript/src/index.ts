@@ -48,7 +48,8 @@ setChannelSocketPublisher(async <T>(channel: string, message: unknown) => {
 export { Tako } from "./tako";
 export { Channel } from "./channels";
 export { defineChannel } from "./channels/define";
-export { defineWorkflow, WorkflowsError } from "./workflows";
+export { defineWorkflow } from "./workflows";
+export { TakoError, type TakoErrorCode } from "./internal-socket";
 
 /**
  * Extract the payload type from a workflow definition.

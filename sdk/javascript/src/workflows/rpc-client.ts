@@ -11,29 +11,13 @@
  * tako-server socket can route for every deployed app.
  */
 
-import { createConnection } from "node:net";
+import { APP_NAME_ENV, INTERNAL_SOCKET_ENV, TakoError, callInternal } from "../internal-socket";
 import type { EnqueueOptions } from "./engine";
 import type { Run, RunId, RunStatus, StepState } from "./types";
-
-const INTERNAL_SOCKET_ENV = "TAKO_INTERNAL_SOCKET";
-const APP_NAME_ENV = "TAKO_APP_NAME";
-
-export class WorkflowsError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WorkflowsError";
-  }
-}
 
 export interface EnqueueResult {
   id: RunId;
   deduplicated: boolean;
-}
-
-interface RpcResponse {
-  status: "ok" | "error";
-  data?: unknown;
-  message?: string;
 }
 
 export class WorkflowsClient {
@@ -80,7 +64,7 @@ export class WorkflowsClient {
     });
     const d = data as { id: string; deduplicated: boolean } | null;
     if (!d || typeof d.id !== "string") {
-      throw new WorkflowsError("malformed enqueue response");
+      throw new TakoError("TAKO_PROTOCOL", "Tako backend returned an unexpected response");
     }
     return { id: d.id, deduplicated: Boolean(d.deduplicated) };
   }
@@ -197,50 +181,8 @@ export class WorkflowsClient {
 
   // --- Internal ---
 
-  private async call(cmd: unknown): Promise<unknown> {
-    const resp = await this.roundTrip(cmd);
-    if (resp.status === "error") {
-      throw new WorkflowsError(resp.message ?? "rpc failed");
-    }
-    return resp.data ?? null;
-  }
-
-  private roundTrip(cmd: unknown): Promise<RpcResponse> {
-    return new Promise<RpcResponse>((resolve, reject) => {
-      const socket = createConnection(this.socketPath);
-      let buf = "";
-      let settled = false;
-
-      const settle = (fn: () => void): void => {
-        if (settled) return;
-        settled = true;
-        socket.removeAllListeners();
-        socket.destroy();
-        fn();
-      };
-
-      socket.once("error", (err) => settle(() => reject(err)));
-      socket.once("connect", () => {
-        socket.write(`${JSON.stringify(cmd)}\n`);
-      });
-      socket.on("data", (chunk: Buffer) => {
-        buf += chunk.toString("utf8");
-        const nl = buf.indexOf("\n");
-        if (nl === -1) return;
-        const line = buf.slice(0, nl);
-        try {
-          settle(() => resolve(JSON.parse(line) as RpcResponse));
-        } catch (err) {
-          settle(() => reject(new WorkflowsError(`invalid JSON from server: ${String(err)}`)));
-        }
-      });
-      socket.once("end", () => {
-        settle(() => reject(new WorkflowsError("socket closed without response")));
-      });
-      socket.setTimeout(30_000, () => {
-        settle(() => reject(new WorkflowsError("rpc timed out")));
-      });
-    });
+  private call(cmd: unknown): Promise<unknown> {
+    return callInternal(this.socketPath, cmd);
   }
 }
 
