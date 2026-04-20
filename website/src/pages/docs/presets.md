@@ -35,12 +35,12 @@ Tako includes official framework presets that provide the right `main`, `assets`
 
 ```toml
 [tanstack-start]
-main = "@tanstack/react-start/server-entry"
+main = "dist/server/tako-entry.mjs"
 assets = ["dist/client"]
 dev = ["vite", "dev"]
 ```
 
-Provides the TanStack Start server entry module as the entrypoint, marks `dist/client` as the asset directory to merge into `public/` after build, and uses `vite dev` for local development.
+Launches the SSR bundle emitted by `tako.sh/vite` after `vite build`, which wraps the TanStack Start server with Tako endpoint handling. Marks `dist/client` as the asset directory to merge into `public/` after build, and uses `vite dev` for local development.
 
 ### nextjs
 
@@ -117,7 +117,7 @@ Each file contains framework presets as TOML sections, where each section name i
 dev = ["vite", "dev"]
 
 [tanstack-start]
-main = "@tanstack/react-start/server-entry"
+main = "dist/server/tako-entry.mjs"
 assets = ["dist/client"]
 dev = ["vite", "dev"]
 ```

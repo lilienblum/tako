@@ -244,7 +244,7 @@ Built target artifacts are cached locally under `.tako/artifacts/` using a deter
 
 Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
 
-For JavaScript apps, Tako also restores local build-tool caches into the temporary `.tako/build_dir` before the build when they exist. Today that covers workspace `.turbo/` and app `.next/cache/`. Those directories are never shipped in the final deploy artifact.
+For JavaScript apps, Tako also restores local build-tool caches into the temporary `.tako/build` dir before the build when they exist. Today that covers workspace `.turbo/` and app `.next/cache/`. Those directories are never shipped in the final deploy artifact.
 
 On every deploy, local artifact cache is pruned automatically (best-effort): keep 90 most recent target artifacts and remove orphan target metadata files.
 

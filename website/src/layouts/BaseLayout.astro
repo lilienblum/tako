@@ -32,6 +32,7 @@ const organizationSchema = {
   sameAs: [
     "https://github.com/lilienblum/tako",
     "https://x.com/lilienblum",
+    "https://t.me/tako_sh",
   ],
 };
 const websiteSchema = {
@@ -291,6 +292,18 @@ const pageStructuredData = structuredData
         padding: 12px 10px;
       }
 
+      .telegram-link {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        padding: 9px 8px;
+      }
+
+      .telegram-link svg {
+        width: 18px;
+        height: 18px;
+      }
+
 
       .github-star {
         display: inline-flex;
@@ -346,32 +359,50 @@ const pageStructuredData = structuredData
 
       .site-footer {
         margin-top: auto;
+        padding-top: 32px;
       }
 
-      .footer-inner {
+      .footer-columns {
+        display: grid;
+        grid-template-columns: repeat(4, auto);
+        justify-content: space-between;
+        gap: 28px 24px;
+        padding: 28px 14px 20px;
+      }
+
+      .footer-col {
         display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 24px;
-        padding: 20px 14px;
+        flex-direction: column;
+        gap: 8px;
       }
 
-      .footer-inner a {
+      .footer-col-title {
+        font-family: "Nunito", sans-serif;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink);
+        opacity: 0.7;
+        margin-bottom: 6px;
+      }
+
+      .footer-col a {
         text-decoration: underline;
         text-decoration-color: transparent;
         color: var(--muted);
         font-family: "Nunito", sans-serif;
-        font-size: 15px;
-        font-weight: 600;
+        font-size: 14px;
+        font-weight: 500;
         transition: color 0.15s, text-decoration-color 180ms ease;
       }
 
-      .footer-inner a:hover {
+      .footer-col a:hover {
         color: var(--ink);
         text-decoration-color: currentColor;
       }
 
-      .footer-inner a:focus-visible {
+      .footer-col a:focus-visible {
         outline: 2px solid var(--primary);
         outline-offset: 2px;
       }
@@ -382,7 +413,16 @@ const pageStructuredData = structuredData
         font-size: 13px;
         color: var(--muted);
         opacity: 0.6;
-        padding-bottom: 16px;
+        padding: 8px 14px 20px;
+        border-top: 1px solid var(--line);
+        margin: 0 14px;
+      }
+
+      @media (max-width: 720px) {
+        .footer-columns {
+          grid-template-columns: repeat(2, auto);
+          gap: 24px 16px;
+        }
       }
 
       .mobile-nav-controls {
@@ -534,6 +574,7 @@ const pageStructuredData = structuredData
           <nav class="mobile-menu" id="mobile-menu" aria-hidden="true">
             <a href="/blog"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false" style="vertical-align: -2px; margin-right: 6px;"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>blog</a>
             <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false" style="vertical-align: -2px; margin-right: 6px;"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>follow progress</a>
+            <a href="https://t.me/tako_sh" target="_blank" rel="noopener noreferrer"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 1000 1000" aria-hidden="true" focusable="false" style="vertical-align: -2px; margin-right: 6px;"><circle cx="500" cy="500" r="500" fill="currentColor"/><path d="M226.328419,494.722069 C372.088573,431.216685 469.284839,389.350049 517.917216,369.122161 C656.772535,311.36743 685.625481,301.334815 704.431427,301.003532 C708.567621,300.93067 717.815839,301.955743 723.806446,306.816707 C728.864797,310.92121 730.256552,316.46581 730.922551,320.357329 C731.588551,324.248848 732.417879,333.113828 731.758626,340.040666 C724.234007,419.102486 691.675104,610.964674 675.110982,699.515267 C668.10208,736.984342 654.301336,749.547532 640.940618,750.777006 C611.904684,753.448938 589.856115,731.588035 561.733393,713.153237 C517.726886,684.306416 492.866009,666.349181 450.150074,638.200013 C400.78442,605.66878 432.786119,587.789048 460.919462,558.568563 C468.282091,550.921423 596.21508,434.556479 598.691227,424.000355 C599.00091,422.680135 599.288312,417.758981 596.36474,415.160431 C593.441168,412.561881 589.126229,413.450484 586.012448,414.157198 C581.598758,415.158943 511.297793,461.625274 375.109553,553.556189 C355.154858,567.258623 337.080515,573.934908 320.886524,573.585046 C303.033948,573.199351 268.692754,563.490928 243.163606,555.192408 C211.851067,545.013936 186.964484,539.632504 189.131547,522.346309 C190.260287,513.342589 202.659244,504.134509 226.328419,494.722069 Z" fill="#FFFFFF"/></svg>telegram</a>
           </nav>
         </div>
       </header>
@@ -543,11 +584,34 @@ const pageStructuredData = structuredData
 
         <footer class="site-footer">
           <div class="container">
-            <div class="footer-inner">
-              <a href="/docs">docs</a>
-              <a href="/blog">blog</a>
-              <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer" aria-label="Follow on X">𝕏</a>
-              <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer">github</a>
+            <div class="footer-columns">
+              <div class="footer-col">
+                <h3 class="footer-col-title">Docs</h3>
+                <a href="/docs/quickstart">Quickstart</a>
+                <a href="/docs/how-tako-works">How Tako works</a>
+                <a href="/docs/cli">CLI reference</a>
+                <a href="/docs/tako-toml">tako.toml</a>
+                <a href="/docs/troubleshooting">Troubleshooting</a>
+              </div>
+              <div class="footer-col">
+                <h3 class="footer-col-title">Guides</h3>
+                <a href="/docs/deployment">Deployment</a>
+                <a href="/docs/development">Development</a>
+                <a href="/docs/presets">Presets</a>
+                <a href="/docs/framework-guides">Framework guides</a>
+              </div>
+              <div class="footer-col">
+                <h3 class="footer-col-title">Project</h3>
+                <a href="/blog">Blog</a>
+                <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer">GitHub</a>
+                <a href="https://t.me/tako_sh" target="_blank" rel="noopener noreferrer">Telegram</a>
+                <a href="https://twitter.com/intent/follow?screen_name=lilienblum" target="_blank" rel="noopener noreferrer">Twitter</a>
+              </div>
+              <div class="footer-col">
+                <h3 class="footer-col-title">Feeds</h3>
+                <a href="/rss.xml">RSS feed</a>
+                <a href="/llms.txt">LLMs.txt</a>
+              </div>
             </div>
             <p class="footer-note">open source will win &middot; made in Japan</p>
           </div>
@@ -643,6 +707,14 @@ const pageStructuredData = structuredData
         document.querySelectorAll('a[href*="github.com"]').forEach(function(link) {
           link.addEventListener('click', function() {
             window.posthog?.capture('github_clicked', {
+              href: link.getAttribute('href'),
+              location: link.closest('header') ? 'header' : 'footer',
+            });
+          });
+        });
+        document.querySelectorAll('a[href*="t.me/"]').forEach(function(link) {
+          link.addEventListener('click', function() {
+            window.posthog?.capture('telegram_clicked', {
               href: link.getAttribute('href'),
               location: link.closest('header') ? 'header' : 'footer',
             });

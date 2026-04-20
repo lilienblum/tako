@@ -101,8 +101,8 @@ Tako validates the selected config file, resolves your app name, checks that sec
 
 Your app is always built on your machine, never on the server. Tako:
 
-- Copies your project into a clean `build_dir` at `.tako/build_dir` (respecting `.gitignore`), symlinks `node_modules/` from the original tree (JS runtimes only)
-- Restores local JS build caches like workspace `.turbo/` and app `.next/cache/` into that `build_dir` when present
+- Copies your project into a clean build dir at `.tako/build` (respecting `.gitignore`), symlinks `node_modules/` from the original tree (JS runtimes only)
+- Restores local JS build caches like workspace `.turbo/` and app `.next/cache/` into that build dir when present
 - Runs your build commands: `[[build_stages]]` if set, otherwise `[build]`, otherwise the runtime default (`<pm> run --if-present build` for JS runtimes)
 - Merges configured asset directories into `public/`
 - Verifies the resolved entrypoint file exists in the built workspace
