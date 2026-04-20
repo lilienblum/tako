@@ -111,7 +111,7 @@ describe("callInternal error wrapping", () => {
     expect(err.cause).toBeDefined();
   });
 
-  test("maps a server error response to TakoError TAKO_RPC_ERROR with the server message", async () => {
+  test("maps a server error response to TakoError TAKO_RPC_ERROR without leaking the server message", async () => {
     const sock = join(dir, "srv.sock");
     const server = await new Promise<Server>((resolve, reject) => {
       const s = createServer((socket) => {
@@ -132,7 +132,9 @@ describe("callInternal error wrapping", () => {
       expect(caught).toBeInstanceOf(TakoError);
       const err = caught as TakoError;
       expect(err.code).toBe("TAKO_RPC_ERROR");
-      expect(err.message).toBe("unknown workflow 'x'");
+      expect(err.message).toBe("Internal Server Error");
+      expect(err.cause).toBeInstanceOf(Error);
+      expect((err.cause as Error).message).toBe("unknown workflow 'x'");
     } finally {
       server.close();
     }

@@ -109,7 +109,9 @@ export async function callInternal(socketPath: string, cmd: unknown): Promise<un
   const resp = await roundTrip(socketPath, cmd);
   if (resp.status === "error") {
     logger.error("rpc rejected", { code: "TAKO_RPC_ERROR", message: resp.message });
-    throw new TakoError("TAKO_RPC_ERROR", resp.message ?? "Internal Server Error");
+    throw new TakoError("TAKO_RPC_ERROR", "Internal Server Error", {
+      cause: resp.message ? new Error(resp.message) : undefined,
+    });
   }
   return resp.data ?? null;
 }
