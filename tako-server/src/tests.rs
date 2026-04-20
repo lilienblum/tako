@@ -55,6 +55,20 @@ fn write_release_manifest(
     .unwrap();
 }
 
+fn socket_ready(path: &Path) -> bool {
+    (0..50).any(|_| {
+        let exists = path.exists();
+        let is_symlink = std::fs::symlink_metadata(path)
+            .map(|meta| meta.file_type().is_symlink())
+            .unwrap_or(false);
+        if exists || is_symlink {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        false
+    })
+}
+
 #[test]
 fn default_server_log_filter_is_warn() {
     assert_eq!(super::DEFAULT_SERVER_LOG_FILTER, "warn");
@@ -1025,20 +1039,34 @@ async fn restore_from_state_store_restarts_internal_socket_for_apps_with_workflo
     );
 
     let socket = state_b.workflows.socket_path();
-    let socket_ready = (0..50).any(|_| {
-        let exists = socket.exists();
-        let is_symlink = std::fs::symlink_metadata(&socket)
-            .map(|meta| meta.file_type().is_symlink())
-            .unwrap_or(false);
-        if exists || is_symlink {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-        false
-    });
+    let socket_ready = socket_ready(&socket);
     assert!(
         socket_ready,
         "restored workflow apps must restart the shared internal socket at {}",
+        socket.display()
+    );
+}
+
+#[tokio::test]
+async fn server_state_starts_internal_socket_at_boot() {
+    let temp = TempDir::new().unwrap();
+    let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+        cert_dir: temp.path().join("certs"),
+        ..Default::default()
+    }));
+
+    let state = ServerState::new(
+        temp.path().to_path_buf(),
+        cert_manager,
+        None,
+        empty_challenge_tokens(),
+    )
+    .unwrap();
+
+    let socket = state.workflows.socket_path();
+    assert!(
+        socket_ready(&socket),
+        "server boot must start the shared internal socket at {} so app-side Tako.channels.publish works without workflows/",
         socket.display()
     );
 }

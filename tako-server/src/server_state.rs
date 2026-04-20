@@ -164,6 +164,10 @@ impl ServerState {
             ));
         }
 
+        workflows
+            .start_socket()
+            .map_err(|error| StateStoreError::InvalidData(error.to_string()))?;
+
         Ok(Self {
             app_manager,
             load_balancer,
