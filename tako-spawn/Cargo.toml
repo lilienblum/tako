@@ -1,0 +1,8 @@
+[package]
+name = "tako-spawn"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+libc = "0.2"

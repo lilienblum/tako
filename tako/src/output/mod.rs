@@ -383,6 +383,15 @@ pub fn info(message: &str) {
     }
 }
 
+/// Like `info`, but skips the interactive 2-space indent. Use for isolated
+/// summary blocks that render on their own (no co-located spinners or
+/// symbol-prefixed lines to align with).
+pub fn line(message: &str) {
+    if is_pretty() {
+        emit(&theme_fg(message));
+    }
+}
+
 pub fn bullet(message: &str) {
     if is_pretty() {
         emit(&format!("  - {}", theme_fg(message)));

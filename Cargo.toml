@@ -7,6 +7,7 @@ members = [
   "tako-channels",
   "tako",
   "tako-server",
+  "tako-spawn",
   "tako-workflows",
 ]
 

@@ -173,7 +173,7 @@ The `prepare_release` step is separated from `deploy` so that runtime download a
 
 ### CLI output modes
 
-- **Default:** Concise interactive output. Once deploy planning is known, pretty mode may render task groups and task reporters with waiting rows shown up front.
+- **Default:** Concise interactive output. Once deploy planning is known, pretty mode may render tasks and sub tasks with waiting rows shown up front.
 - **`--verbose`:** Append-only transcript with timestamps and log levels. Only current work is printed.
 - **`--ci`:** No colors, no prompts, transcript-style only -- deterministic for pipelines
 - **`--ci --verbose`:** Detailed transcript without colors or timestamps

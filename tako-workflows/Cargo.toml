@@ -7,6 +7,7 @@ publish = false
 [dependencies]
 tako-core = { path = "../tako-core" }
 tako-socket = { path = "../tako-socket" }
+tako-spawn = { path = "../tako-spawn" }
 tokio.workspace = true
 tracing = "0.1"
 serde = { version = "1.0", features = ["derive"] }

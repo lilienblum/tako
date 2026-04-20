@@ -13,8 +13,6 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 use crate::output;
 
 const TASK_INDENT: &str = "  ";
-/// Indent for summary lines below the task tree (matches TASK_INDENT).
-pub const SUMMARY_INDENT: &str = TASK_INDENT;
 const TASK_SPINNER_TICKS: &[&str] = &["✶", "✸", "✹", "✺", "✹", "✷"];
 const LIVE_RENDER_INTERVAL: Duration = Duration::from_millis(80);
 
@@ -444,10 +442,10 @@ fn render_tree_to_lines(tree: &[TreeNode], frame_index: usize) -> Vec<Line<'stat
     for node in tree {
         match node {
             TreeNode::Task(task) => {
-                render_task_item(&mut lines, task, "", false, now, frame_index);
+                render_task_item(&mut lines, task, "", false, false, now, frame_index);
             }
             TreeNode::AccentTask(task) => {
-                render_task_item(&mut lines, task, "", true, now, frame_index);
+                render_task_item(&mut lines, task, "", true, false, now, frame_index);
             }
             TreeNode::Text { text, tone } => {
                 let style = match tone {
@@ -479,13 +477,14 @@ fn render_task_item(
     task: &TaskItemState,
     prefix: &str,
     accent: bool,
+    hide_success_icon: bool,
     now: Instant,
     frame_index: usize,
 ) {
     let is_group = !task.children.is_empty();
 
     // Build the main task line
-    let icon = task_icon(&task.state, frame_index);
+    let icon = task_icon(&task.state, frame_index, hide_success_icon);
     let label = pending_task_label(&task.label, &task.state);
     let detail_suffix = format_detail_suffix(task, now);
 
@@ -518,17 +517,29 @@ fn render_task_item(
         )]));
     }
 
-    // Render children
+    // Render children. Sub-tasks hide their success icon only when *this*
+    // parent also succeeded — a succeeded child under a failed/cancelled
+    // parent keeps its ✔ so the user can still see what did complete.
     if is_group {
+        let children_hide_success = matches!(task.state, TaskState::Succeeded { .. });
         let child_prefix = format!("{prefix}{TASK_INDENT}");
         for child in &task.children {
-            render_task_item(lines, child, &child_prefix, false, now, frame_index);
+            render_task_item(
+                lines,
+                child,
+                &child_prefix,
+                false,
+                children_hide_success,
+                now,
+                frame_index,
+            );
         }
     }
 }
 
-fn task_icon(state: &TaskState, frame_index: usize) -> &'static str {
+fn task_icon(state: &TaskState, frame_index: usize, hide_success_icon: bool) -> &'static str {
     match state {
+        TaskState::Succeeded { .. } if hide_success_icon => " ",
         TaskState::Pending => "○",
         TaskState::Running { .. } => TASK_SPINNER_TICKS[frame_index % TASK_SPINNER_TICKS.len()],
         TaskState::Succeeded { .. } => "✔",
@@ -592,15 +603,7 @@ fn task_line_styles(state: &TaskState, is_group_like: bool) -> (Style, Style, St
     match state {
         TaskState::Pending => (muted, muted, muted),
         TaskState::Failed { .. } => (error, if is_group_like { accent } else { normal }, muted),
-        TaskState::Skipped { elapsed } | TaskState::Cancelled { elapsed } => (
-            muted,
-            if is_group_like && elapsed.is_some() {
-                accent
-            } else {
-                muted
-            },
-            muted,
-        ),
+        TaskState::Skipped { .. } | TaskState::Cancelled { .. } => (muted, muted, muted),
         TaskState::Succeeded { .. } => {
             (success, if is_group_like { accent } else { normal }, muted)
         }
@@ -648,10 +651,10 @@ pub fn render_plain_lines(tree: &[TreeNode]) -> Vec<String> {
     for node in tree {
         match node {
             TreeNode::Task(task) => {
-                render_task_item_plain(&mut lines, task, "", now);
+                render_task_item_plain(&mut lines, task, "", false, now);
             }
             TreeNode::AccentTask(task) => {
-                render_task_item_plain(&mut lines, task, "", now);
+                render_task_item_plain(&mut lines, task, "", false, now);
             }
             TreeNode::Text { text, .. } => {
                 lines.push(text.clone());
@@ -675,10 +678,11 @@ fn render_task_item_plain(
     lines: &mut Vec<String>,
     task: &TaskItemState,
     prefix: &str,
+    hide_success_icon: bool,
     now: Instant,
 ) {
     let is_group = !task.children.is_empty();
-    let icon = task_icon(&task.state, 0);
+    let icon = task_icon(&task.state, 0, hide_success_icon);
     let label = pending_task_label(&task.label, &task.state);
     let detail_suffix = format_detail_suffix(task, now);
 
@@ -700,9 +704,10 @@ fn render_task_item_plain(
     }
 
     if is_group {
+        let children_hide_success = matches!(task.state, TaskState::Succeeded { .. });
         let child_prefix = format!("{prefix}{TASK_INDENT}");
         for child in &task.children {
-            render_task_item_plain(lines, child, &child_prefix, now);
+            render_task_item_plain(lines, child, &child_prefix, children_hide_success, now);
         }
     }
 }
@@ -754,6 +759,7 @@ mod tests {
 
         let lines = render_plain_lines(&tree);
         assert_eq!(lines[0], "○ Checks…");
+        // Parent is Pending (not Succeeded), so succeeded child keeps its ✔.
         assert_eq!(lines[1], "  ✔ prod-a 2.0s");
         assert_eq!(lines[2], "  ✘ prod-b 1.0s");
         assert_eq!(lines[3], "    boom");
@@ -779,6 +785,47 @@ mod tests {
         let lines = render_plain_lines(&tree);
         assert_eq!(lines[0], "✔ Built 3.4s, 1.04 MB");
         assert_eq!(lines[1], "");
+    }
+
+    #[test]
+    fn succeeded_parent_hides_success_icon_on_succeeded_children() {
+        let tree = vec![TreeNode::Task(TaskItemState {
+            id: "deploy".into(),
+            label: "Deployed to prod-a".into(),
+            state: TaskState::Succeeded {
+                elapsed: Some(Duration::from_secs(23)),
+            },
+            detail: None,
+            progress: None,
+            children: vec![
+                TaskItemState {
+                    id: "pre".into(),
+                    label: "Preflight".into(),
+                    state: TaskState::Succeeded {
+                        elapsed: Some(Duration::from_millis(4800)),
+                    },
+                    detail: None,
+                    progress: None,
+                    children: vec![],
+                },
+                TaskItemState {
+                    id: "up".into(),
+                    label: "Uploaded".into(),
+                    state: TaskState::Succeeded {
+                        elapsed: Some(Duration::from_millis(4100)),
+                    },
+                    detail: None,
+                    progress: None,
+                    children: vec![],
+                },
+            ],
+        })];
+
+        let lines = render_plain_lines(&tree);
+        assert_eq!(lines[0], "✔ Deployed to prod-a 23s");
+        // Parent is Succeeded → children hide ✔ (blank icon slot, aligned).
+        assert_eq!(lines[1], "    Preflight 4.8s");
+        assert_eq!(lines[2], "    Uploaded 4.1s");
     }
 
     #[test]
@@ -838,6 +885,8 @@ mod tests {
         let lines = render_plain_lines(&tree);
         // Parent and running child should be cancelled
         assert!(lines[0].starts_with("⊘ Deploying…"));
+        // Parent was cancelled, so succeeded child keeps its ✔ — it's the
+        // one sub-task that actually finished, and we want that visible.
         assert!(lines[1].starts_with("  ✔ Connected"));
         assert!(lines[2].starts_with("  ⊘ Starting…"));
         assert_eq!(lines[3], "");

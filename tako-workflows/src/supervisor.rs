@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 use std::ffi::OsString;
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, RawFd};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -366,34 +366,32 @@ impl WorkerSupervisor {
             cmd.env(k, v);
         }
 
-        // Secrets ABI: the SDK reads a JSON object from fd 3 at startup
-        // and populates `Tako.secrets`. `secrets_pipe` (read end) must stay
-        // alive through `spawn()` so the fork copies a valid fd into the
-        // child. The write side runs on a dedicated thread so the parent
-        // doesn't deadlock when secrets exceed the OS pipe buffer.
+        // Bootstrap ABI: the SDK reads a JSON `{token, secrets}` envelope
+        // from fd 3 at startup. The pipe is always created — workers don't
+        // currently serve inbound HTTP, but the envelope shape is pinned by
+        // `tako_core::bootstrap` and the SDK's fd-3 parser rejects anything
+        // else. A unique per-spawn token is cheap and keeps the contract
+        // identical to the HTTP instance spawner. The read end must stay
+        // alive through `spawn()` so the fork copies a valid fd; the writer
+        // thread drains on its own so the parent doesn't deadlock on the
+        // pipe buffer.
         #[cfg(unix)]
-        let secrets_handles = if !self.spec.secrets.is_empty() {
-            Some(create_secrets_pipe(&self.spec.secrets)?)
-        } else {
-            None
-        };
+        let bootstrap_token = nanoid::nanoid!(32);
         #[cfg(unix)]
-        let secrets_fd: Option<RawFd> = secrets_handles
-            .as_ref()
-            .map(|(read_end, _)| read_end.as_raw_fd());
+        let (bootstrap_read_end, bootstrap_writer) =
+            create_bootstrap_pipe(&bootstrap_token, &self.spec.secrets)
+                .map_err(SupervisorError::Spawn)?;
+        #[cfg(unix)]
+        let bootstrap_fd: RawFd = bootstrap_read_end.as_raw_fd();
 
         #[cfg(unix)]
         unsafe {
             cmd.pre_exec(move || {
-                if let Some(fd) = secrets_fd {
-                    if fd != 3 {
-                        if libc::dup2(fd, 3) == -1 {
-                            return Err(std::io::Error::last_os_error());
-                        }
-                        libc::close(fd);
+                if bootstrap_fd != 3 {
+                    if libc::dup2(bootstrap_fd, 3) == -1 {
+                        return Err(std::io::Error::last_os_error());
                     }
-                } else {
-                    libc::close(3);
+                    libc::close(bootstrap_fd);
                 }
                 Ok(())
             });
@@ -413,17 +411,16 @@ impl WorkerSupervisor {
         #[cfg(unix)]
         let mut child = match spawn_result {
             Ok(child) => {
-                if let Some((read_end, writer)) = secrets_handles {
-                    drop(read_end);
-                    join_secrets_writer(writer)?;
-                }
+                drop(bootstrap_read_end);
+                join_secrets_writer(bootstrap_writer)?;
                 child
             }
             Err(error) => {
                 // Dropping the read end gives the writer thread EPIPE so it
                 // exits instead of wedging on a full pipe buffer. Detaching
                 // the JoinHandle is fine — the thread will exit on its own.
-                drop(secrets_handles);
+                drop(bootstrap_read_end);
+                let _ = bootstrap_writer.join();
                 return Err(SupervisorError::Spawn(error));
             }
         };
@@ -468,61 +465,6 @@ fn unix_millis_now() -> i64 {
         .unwrap_or(0)
 }
 
-/// Create a pipe with secrets JSON streamed from a dedicated writer
-/// thread. The thread owns the write end and drops it when done, so the
-/// child sees EOF once it has consumed the payload. The write happens
-/// off-thread so payloads larger than the OS pipe buffer (16 KiB on
-/// macOS, 64 KiB on Linux) don't deadlock the parent — the child hasn't
-/// been spawned yet when this returns.
-///
-/// Caller must keep the returned `OwnedFd` alive through `spawn()` so
-/// the fork copies a valid fd into the child, then join the writer
-/// handle after spawn to surface any write error.
-#[cfg(unix)]
-fn create_secrets_pipe(
-    secrets: &HashMap<String, String>,
-) -> std::io::Result<(OwnedFd, std::thread::JoinHandle<std::io::Result<()>>)> {
-    let json = serde_json::to_vec(secrets)
-        .map_err(|e| std::io::Error::other(format!("failed to serialize secrets: {e}")))?;
-
-    let mut fds = [0i32; 2];
-    // SAFETY: pipe() is a standard POSIX call; fds is a valid 2-element array.
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    // SAFETY: pipe() just returned these file descriptors.
-    let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-    let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-
-    // The child inherits the read end on fd 3 via stdio redirection, but it
-    // must NOT inherit the write end — otherwise the child's readFileSync(3)
-    // blocks forever waiting for EOF on a writer it holds open itself.
-    set_cloexec(&write_end)?;
-
-    let writer_handle = std::thread::spawn(move || -> std::io::Result<()> {
-        use std::io::Write;
-        let mut writer = std::fs::File::from(write_end);
-        writer.write_all(&json)
-        // write_end (now `writer`) drops here, closing the fd and giving the
-        // child EOF once it has drained the payload.
-    });
-
-    Ok((read_end, writer_handle))
-}
-
-#[cfg(unix)]
-fn set_cloexec(fd: &OwnedFd) -> std::io::Result<()> {
-    let raw = fd.as_raw_fd();
-    let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
-    if flags == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if unsafe { libc::fcntl(raw, libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 #[cfg(unix)]
 fn join_secrets_writer(
     handle: std::thread::JoinHandle<std::io::Result<()>>,
@@ -533,6 +475,22 @@ fn join_secrets_writer(
             "secrets writer thread panicked",
         ))),
     }
+}
+
+/// Create the fd-3 bootstrap pipe for a worker process: the child reads a
+/// JSON `{"token": ..., "secrets": {...}}` envelope and closes the fd. The
+/// envelope shape is owned by `tako_core::bootstrap` — sharing it with the
+/// app spawner prevents drift between the two spawner paths.
+#[cfg(unix)]
+fn create_bootstrap_pipe(
+    token: &str,
+    secrets: &HashMap<String, String>,
+) -> std::io::Result<(
+    std::os::fd::OwnedFd,
+    std::thread::JoinHandle<std::io::Result<()>>,
+)> {
+    let bytes = tako_core::bootstrap::envelope_bytes(token, secrets);
+    tako_spawn::create_payload_pipe(bytes)
 }
 
 #[cfg(test)]
@@ -619,92 +577,6 @@ mod tests {
         sup.shutdown(Duration::from_secs(1)).await;
     }
 
-    /// Regression: the write end of the secrets pipe used to lack
-    /// `FD_CLOEXEC`, so the forked child inherited a live writer across
-    /// `exec`. The child's read of fd 3 would then block forever waiting
-    /// for an EOF that never arrived — because the child itself was
-    /// still holding the write end open on some inherited fd number.
-    ///
-    /// The fix is to set `FD_CLOEXEC` on the write end before spawning
-    /// the writer thread. We verify via `fcntl(F_GETFD)` because the
-    /// write end is consumed by the writer thread immediately, and
-    /// because spawn-based tests are racy on small payloads (the
-    /// writer often finishes before `fork` returns).
-    #[test]
-    #[cfg(unix)]
-    fn secrets_pipe_sets_cloexec_on_write_end() {
-        let mut fds = [0i32; 2];
-        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
-        let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-        let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-
-        // Baseline: `pipe(2)` does not set `FD_CLOEXEC` on either end.
-        let baseline = unsafe { libc::fcntl(write_end.as_raw_fd(), libc::F_GETFD) };
-        assert!(baseline >= 0);
-        assert_eq!(
-            baseline & libc::FD_CLOEXEC,
-            0,
-            "libc::pipe unexpectedly returned a CLOEXEC-flagged write end — test is meaningless"
-        );
-
-        set_cloexec(&write_end).expect("set_cloexec");
-
-        let flags = unsafe { libc::fcntl(write_end.as_raw_fd(), libc::F_GETFD) };
-        assert!(flags >= 0);
-        assert_ne!(
-            flags & libc::FD_CLOEXEC,
-            0,
-            "write end of secrets pipe must have FD_CLOEXEC so the forked child does not \
-             inherit a live writer across exec"
-        );
-
-        drop(read_end);
-        drop(write_end);
-    }
-
-    /// Regression: a secrets payload larger than the OS pipe buffer
-    /// (16 KiB on macOS, 64 KiB on Linux) used to deadlock the parent
-    /// because the write happened synchronously before any child was
-    /// spawned to drain it. The writer thread now owns the write end so
-    /// `create_secrets_pipe` returns immediately regardless of size.
-    #[test]
-    #[cfg(unix)]
-    fn secrets_pipe_does_not_deadlock_on_large_payload() {
-        use std::io::Read;
-        use std::os::fd::IntoRawFd;
-        use std::sync::mpsc;
-        use std::time::Instant;
-
-        let big_value = "x".repeat(128 * 1024);
-        let secrets = HashMap::from([("BIG".to_string(), big_value.clone())]);
-
-        let start = Instant::now();
-        let (read_end, writer) = create_secrets_pipe(&secrets).expect("create pipe must not block");
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "create_secrets_pipe blocked on pipe write"
-        );
-
-        let fd = read_end.into_raw_fd();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            // SAFETY: fd just came from into_raw_fd and is owned by this thread.
-            let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-            let mut buf = String::new();
-            let result = file.read_to_string(&mut buf).map(|_| buf);
-            let _ = tx.send(result);
-        });
-
-        let buf = rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("reader did not complete — pipe write deadlocked")
-            .expect("read pipe");
-        writer.join().expect("writer thread").expect("write ok");
-
-        let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
-        assert_eq!(parsed["BIG"].as_str(), Some(big_value.as_str()));
-    }
-
     fn failing_spec(cwd: PathBuf) -> WorkerSpec {
         // `false` exits immediately with status 1. Simulates a worker whose
         // bootstrap throws (bad code, missing entrypoint, etc.) — exits
@@ -786,6 +658,59 @@ mod tests {
         sup.wake().unwrap();
         tokio::time::sleep(Duration::from_millis(200)).await;
         assert!(sup.check_startup_health().is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bootstrap_pipe_envelope_has_token_and_secrets() {
+        use std::io::Read;
+        use std::os::fd::{FromRawFd, IntoRawFd};
+
+        let secrets = HashMap::from([
+            ("DATABASE_URL".to_string(), "postgres://x".to_string()),
+            ("API_KEY".to_string(), "sk-123".to_string()),
+        ]);
+        let token = "worker-token-abc";
+
+        let (read_end, writer) = create_bootstrap_pipe(token, &secrets).expect("create pipe");
+
+        let mut buf = String::new();
+        let fd = read_end.into_raw_fd();
+        // SAFETY: fd was just handed over by into_raw_fd; File::from_raw_fd owns it.
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        file.read_to_string(&mut buf).expect("read pipe");
+        writer.join().expect("writer thread").expect("write ok");
+
+        let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
+        assert_eq!(parsed["token"].as_str(), Some(token));
+        assert_eq!(
+            parsed["secrets"]["DATABASE_URL"].as_str(),
+            Some("postgres://x")
+        );
+        assert_eq!(parsed["secrets"]["API_KEY"].as_str(), Some("sk-123"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn bootstrap_pipe_is_always_created_even_with_empty_secrets() {
+        use std::io::Read;
+        use std::os::fd::{FromRawFd, IntoRawFd};
+
+        let secrets: HashMap<String, String> = HashMap::new();
+        let token = "still-has-a-token";
+
+        let (read_end, writer) = create_bootstrap_pipe(token, &secrets).expect("create pipe");
+
+        let mut buf = String::new();
+        let fd = read_end.into_raw_fd();
+        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+        file.read_to_string(&mut buf).expect("read pipe");
+        writer.join().expect("writer thread").expect("write ok");
+
+        let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
+        assert_eq!(parsed["token"].as_str(), Some(token));
+        assert!(parsed["secrets"].is_object());
+        assert_eq!(parsed["secrets"].as_object().unwrap().len(), 0);
     }
 
     #[tokio::test]

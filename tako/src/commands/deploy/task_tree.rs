@@ -4,9 +4,7 @@ use std::time::Instant;
 
 use crate::config::ServerTarget;
 use crate::output;
-use crate::ui::{
-    SUMMARY_INDENT, TaskItemState, TaskState, TaskTreeSession, TreeNode, TreeTextTone,
-};
+use crate::ui::{TaskItemState, TaskState, TaskTreeSession, TreeNode, TreeTextTone};
 
 use super::format::{SummaryLine, format_build_plan_target_label, format_deploy_summary_lines};
 
@@ -509,7 +507,7 @@ pub(super) fn build_deploy_tree(state: &DeployTaskTreeState) -> Vec<TreeNode> {
                 format!("{:<width$}", line.label, width = max_label_width)
             };
             tree.push(TreeNode::LabeledText {
-                label: format!("{}{}", SUMMARY_INDENT, padded_label),
+                label: padded_label,
                 value: line.value.clone(),
             });
         }

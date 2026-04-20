@@ -652,7 +652,10 @@ install_upgrade_helpers
 
 mkdir -p "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")"
 chown -R "$TAKO_USER":"$TAKO_USER" "$TAKO_HOME" "$(dirname "$TAKO_SOCKET")" 2>/dev/null || true
-chmod 0700 "$TAKO_HOME"
+# 0o710: owner (tako) full; group (tako, contains tako-app) traverse-only so
+# sandboxed app processes can descend into runtimes/ and releases/ to exec
+# binaries; world none. Must not be 0o700 — that returns ENOENT on execve.
+chmod 0710 "$TAKO_HOME"
 chmod 0700 "$(dirname "$TAKO_SOCKET")"
 
 maybe_prompt_ssh_pubkey

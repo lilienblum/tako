@@ -5158,6 +5158,7 @@ dependencies = [
  "tako-core",
  "tako-runtime",
  "tako-socket",
+ "tako-spawn",
  "tako-workflows",
  "tar",
  "tempfile",
@@ -5180,6 +5181,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "tako-spawn"
+version = "0.0.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "tako-workflows"
 version = "0.0.0"
 dependencies = [
@@ -5193,6 +5201,7 @@ dependencies = [
  "serde_json",
  "tako-core",
  "tako-socket",
+ "tako-spawn",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

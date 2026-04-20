@@ -453,19 +453,17 @@ fn deploy_task_tree_success_summary_appends_release_and_routes() {
 
     let lines = ui::render_plain_lines(&build_deploy_tree(&controller.snapshot()));
     assert!(
-        lines.iter().any(|line| line == "  Release 20260330"),
-        "expected '  Release 20260330' in {lines:?}"
+        lines.iter().any(|line| line == "Release 20260330"),
+        "expected 'Release 20260330' in {lines:?}"
+    );
+    assert!(
+        lines.iter().any(|line| line == "Routes  https://app.test"),
+        "expected 'Routes  https://app.test' in {lines:?}"
     );
     assert!(
         lines
             .iter()
-            .any(|line| line == "  Routes  https://app.test"),
-        "expected '  Routes  https://app.test' in {lines:?}"
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|line| line == "          https://*.app.test"),
+            .any(|line| line == "        https://*.app.test"),
         "expected continuation route in {lines:?}"
     );
 }

@@ -6,6 +6,7 @@
 //! All CLI-specific functionality (SSH, build, runtime detection, local dev CA, etc.)
 //! lives in the `tako` crate.
 
+pub mod bootstrap;
 pub mod instance_env;
 mod protocol;
 

@@ -60,7 +60,7 @@ pub(super) fn print_deploy_summary(primary_label: &str, primary_value: &str, rou
         let padded_label = format!("{:<width$}", line.label, width = max_label_width);
         let formatted = format!("{} {}", padded_label, line.value);
         if output::is_pretty() {
-            output::info(&formatted);
+            output::line(&formatted);
         } else {
             tracing::info!("{}", formatted);
         }

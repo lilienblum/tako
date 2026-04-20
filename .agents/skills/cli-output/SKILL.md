@@ -78,6 +78,11 @@ their text at col 2).
 
 Do NOT add manual padding — the output functions handle it.
 
+**Exception: isolated summary blocks.** When a block of text stands on its own with
+no spinners or symbol-prefixed lines to align against (e.g. the deploy release +
+routes summary), use `output::line(message)` to skip the 2-space indent. The
+deploy task tree also renders its success summary flush-left for the same reason.
+
 ## Elapsed Times
 
 No parentheses anywhere. The `format_elapsed()` function returns `"3s"`, `"42s"`,
@@ -97,6 +102,7 @@ These functions print in normal mode, no-op in verbose/CI. Use `output::is_prett
 | `section(title)` | blank line + bold accent title (padded) | no-op |
 | `heading(title)` | blank line + bold title (padded) | no-op |
 | `info(message)` | Default-color text (padded) | no-op |
+| `line(message)` | Default-color text (no indent — for isolated summary blocks) | no-op |
 | `bullet(message)` | `  - message` | no-op |
 | `success(message)` | `✔ message` | no-op |
 | `warning(message)` | `! message` | no-op |
@@ -193,22 +199,24 @@ flow.finish();    // ✔ Health checks  2s, spinner cleared
 
 Use persistent task lists as the preferred pattern for complex interactive flows that already know their plan (`deploy`, `upgrade`, similar multi-step commands).
 
-- Model them as **Task Groups** and **Task Reporters**:
-  - **Task Group**: a status-bearing parent row that owns a workflow or collection of child task reporters.
-  - **Task Reporter**: a single actionable step that may run standalone or inside a task group.
+- Model them as **Tasks** and **Sub tasks**:
+  - **Task**: a status-bearing parent row that owns a workflow or a collection of sub tasks.
+  - **Sub task**: a single actionable step that may run standalone or inside a task.
 - Pretty interactive mode may render the full known task tree up front.
 - Waiting rows use muted `○` and a trailing `...` label suffix.
 - Running rows use the current spinner glyph.
-- Running task groups should use the accent color for the whole row.
-- Running task reporters should keep default text; inline detail segments use a single space separator and should be muted.
+- Running tasks (parents) should use the accent color for the whole row.
+- Running sub tasks should keep default text; inline detail segments use a single space separator and should be muted.
 - Completed rows stay visible for the life of the command.
+- **Succeeded sub tasks hide the `✔` only when their parent also succeeded.** In the happy path (everything worked), parent shows `✔` and children render with a blank icon slot — the row of checkmarks is visual noise when the outcome is implied by the parent. When the parent is failed, cancelled, or still running, succeeded sub tasks keep their `✔` so the one thing that did finish is still visible (avoids ghost rows and misaligned siblings). Failed (`✘`), cancelled (`⊘`), skipped (`⏭`), running (spinner), and pending (`○`) sub tasks always keep their icons.
+- **Cancelled and skipped rows mute the label too** (not just the icon). Accent color is reserved for rows that are live or finished successfully; cancelled / skipped rows did not complete, so they read as muted across the board, consistent with pending rows.
 - Later-discovered conditional work may be appended under the affected parent instead of replacing the original plan.
-- Reporter failures may render a related indented error line beneath the reporter. Do not attach that under a task group row.
-- If there is only one obvious build task, prefer a single `Building` reporter line over a named section heading.
-- When a single build reporter succeeds, change its label to `Built` and keep cache-hit or artifact-size details on child rows instead of the completed parent row.
-- For deploy output, render `Connecting to <server>` as a single reporter when there is one target server; with multiple target servers, render a `Connecting` task group with one reporter per server. Then render one deploy task group per server, for example `Deploying to prod-a` with child reporters like `Uploading`, `Preparing`, and `Starting`.
+- Sub task failures may render a related indented error line beneath the sub task. Do not attach that under a task (parent) row.
+- If there is only one obvious build task, prefer a single `Building` sub task line over a named section heading.
+- When a single build sub task succeeds, change its label to `Built` and keep cache-hit or artifact-size details on child rows instead of the completed parent row.
+- For deploy output, render `Connecting to <server>` as a single sub task when there is one target server; with multiple target servers, render a `Connecting` task with one sub task per server. Then render one deploy task per server, for example `Deploying to prod-a` with sub tasks like `Uploading`, `Preparing`, and `Starting`.
 - In deploy pretty output, `Connecting` and `Building` should start together once planning is complete. Do not leave `Building` visibly pending if the build task has already been spawned.
-- In deploy pretty output, add a blank line after each top-level phase (`Connecting`, `Building`, each `Deploying to ...`) for readability. Do not add blank lines between child reporters inside a task group.
+- In deploy pretty output, add a blank line after each top-level phase (`Connecting`, `Building`, each `Deploying to ...`) for readability. Do not add blank lines between sub tasks inside a task.
 - If a deploy connection check or build step fails, abort the remaining incomplete pretty task-tree rows and mark them as warning `Aborted` instead of leaving them pending.
 - Do not keep startup metadata summaries or decorative plan boxes in the live deploy tree when they do not help the operator act.
 - Avoid decorative static plan boxes when the task tree already conveys the upcoming work.

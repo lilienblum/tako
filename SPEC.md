@@ -783,16 +783,18 @@ Deploy flow helpers:
   - with one global server: deploy selects it and writes it to `[envs.production].servers` in `tako.toml`
   - with multiple global servers (interactive terminal): deploy asks you to pick one, then writes it to `[envs.production].servers`
 - Interactive deploy progress:
-  - after config/server/build planning is known, interactive pretty output renders task groups and task reporters instead of a static plan box
+  - after config/server/build planning is known, interactive pretty output renders tasks and sub tasks instead of a static plan box
   - waiting tasks render as muted `○`
-  - deploy renders `Connecting to <server>` as a single reporter when there is one target server; with multiple target servers it renders a `Connecting` task group with one reporter per server
-  - if there is only one obvious build task, deploy renders it as a single `Building` task reporter line
+  - deploy renders `Connecting to <server>` as a single sub task when there is one target server; with multiple target servers it renders a `Connecting` task with one sub task per server
+  - if there is only one obvious build task, deploy renders it as a single `Building` sub task line
   - pending pretty task rows render with a `...` suffix
+  - succeeded sub tasks hide the `✔` icon (render with a blank icon slot) only when their parent task also succeeded; when the parent failed, was cancelled, or is still running, succeeded sub tasks keep their `✔` so the completed work stays visible. Failed (`✘`), cancelled (`⊘`), skipped (`⏭`), running (spinner), and pending (`○`) sub tasks always keep their icons
+  - cancelled and skipped rows render fully muted (icon, label, and detail); accent color is reserved for live or successfully completed rows
   - after planning completes, deploy starts the pretty `Connecting` and `Building` sections together
   - deploy does not keep startup metadata summaries inside the live tree
-  - deploy renders one task group per target server, with child reporters for `Uploading`, `Preparing`, and `Starting`
+  - deploy renders one task per target server, with sub tasks for `Uploading`, `Preparing`, and `Starting`
   - deploy adds a blank line after each top-level pretty task section (`Connecting`, `Building`, each `Deploying to ...`)
-  - reporter failures may render their related error detail on an indented line below the failed reporter
+  - sub task failures may render their related error detail on an indented line below the failed sub task
   - if a connection check or build step fails, deploy aborts the remaining incomplete pretty task-tree rows and marks them as `Aborted` instead of leaving them pending
   - verbose and CI deploy output stay transcript-style and only print work as it is happening
 

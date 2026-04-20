@@ -302,68 +302,17 @@ fn resolve_binary_from_env(binary: &str, env: &HashMap<String, String>) -> Strin
 /// The envelope travels on a pipe (not env/args) so the internal auth
 /// token doesn't inherit into subprocesses the app spawns. The pipe is
 /// always created, even with empty secrets — every Tako-managed process
-/// has a bootstrap fd.
-///
-/// The write happens on a dedicated thread that owns the write end, so
-/// parent-side writes that exceed the OS pipe buffer (16 KiB on macOS,
-/// 64 KiB on Linux) don't deadlock waiting for a reader — the child hasn't
-/// started yet when we return. The write end is dropped when the thread
-/// exits, so the child sees EOF once it has drained the payload. Returns
-/// the read-end `OwnedFd` plus a join handle; the caller must keep the fd
-/// alive through spawn and then join the writer to surface write errors.
+/// has a bootstrap fd. The envelope shape itself lives in
+/// `tako_core::bootstrap` so the workflows supervisor produces byte-for-byte
+/// the same payload. See `tako_spawn::create_payload_pipe` for the
+/// CLOEXEC/writer-thread semantics.
 #[cfg(unix)]
 fn create_bootstrap_pipe(
     token: &str,
     secrets: &HashMap<String, String>,
 ) -> std::io::Result<(OwnedFd, std::thread::JoinHandle<std::io::Result<()>>)> {
-    let envelope = serde_json::json!({
-        "token": token,
-        "secrets": secrets,
-    });
-    let json = serde_json::to_vec(&envelope)
-        .map_err(|e| std::io::Error::other(format!("failed to serialize bootstrap: {e}")))?;
-
-    let mut fds = [0i32; 2];
-    // SAFETY: pipe() is a standard POSIX call; fds is a valid 2-element array.
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    // SAFETY: pipe() just returned these file descriptors.
-    let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
-    let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
-
-    // FD_CLOEXEC on the write end: the writer thread drains in parallel with
-    // the child spawn, so it can still be holding the fd at fork time. Without
-    // CLOEXEC, the forked child inherits the write end and never sees EOF on
-    // fd 3 — it hangs forever waiting for a reader that will never close.
-    // With CLOEXEC the inherited copy closes at exec, and the parent's writer
-    // thread closes its own copy after writing, so the child gets EOF.
-    set_cloexec(&write_end)?;
-
-    let writer_handle = std::thread::spawn(move || -> std::io::Result<()> {
-        use std::io::Write;
-        let mut writer = std::fs::File::from(write_end);
-        writer.write_all(&json)
-        // write_end (now `writer`) drops here, closing the fd and giving the
-        // child EOF once it has drained the payload.
-    });
-
-    Ok((read_end, writer_handle))
-}
-
-#[cfg(unix)]
-fn set_cloexec(fd: &OwnedFd) -> std::io::Result<()> {
-    let raw = fd.as_raw_fd();
-    // SAFETY: `raw` is owned by `fd` for the duration of this call.
-    let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
-    if flags == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    if unsafe { libc::fcntl(raw, libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
+    let bytes = tako_core::bootstrap::envelope_bytes(token, secrets);
+    tako_spawn::create_payload_pipe(bytes)
 }
 
 #[cfg(unix)]
@@ -837,116 +786,6 @@ mod tests {
         assert_eq!(parsed["token"].as_str(), Some(token));
         assert!(parsed["secrets"].is_object());
         assert_eq!(parsed["secrets"].as_object().unwrap().len(), 0);
-    }
-
-    /// Regression: a bootstrap envelope larger than the OS pipe buffer
-    /// (16 KiB on macOS, 64 KiB on Linux) used to deadlock the parent
-    /// because the write happened synchronously before spawning any child.
-    /// Now the writer runs on its own thread that owns the write fd; the
-    /// parent reads the read end concurrently and everything drains.
-    #[test]
-    #[cfg(unix)]
-    fn bootstrap_pipe_does_not_deadlock_on_large_payload() {
-        use std::io::Read;
-        use std::os::fd::IntoRawFd;
-        use std::sync::mpsc;
-        use std::time::{Duration, Instant};
-
-        // 128 KiB exceeds both macOS (16 KiB) and Linux (64 KiB) defaults.
-        let big_value = "x".repeat(128 * 1024);
-        let secrets = HashMap::from([("BIG".to_string(), big_value.clone())]);
-        let token = "deadlock-check";
-
-        let start = Instant::now();
-        let (read_end, writer) =
-            create_bootstrap_pipe(token, &secrets).expect("create pipe must not block");
-        assert!(
-            start.elapsed() < Duration::from_secs(2),
-            "create_bootstrap_pipe blocked on pipe write"
-        );
-
-        // Drain the read end on a helper thread so this test can time out
-        // cleanly if the fix regresses and creation+read together deadlock.
-        let fd = read_end.into_raw_fd();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            // SAFETY: fd just came from into_raw_fd and is owned by this thread.
-            let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-            let mut buf = String::new();
-            let result = file.read_to_string(&mut buf).map(|_| buf);
-            let _ = tx.send(result);
-        });
-
-        let buf = rx
-            .recv_timeout(Duration::from_secs(5))
-            .expect("reader did not complete — pipe write deadlocked")
-            .expect("read pipe");
-        writer.join().expect("writer thread").expect("write ok");
-
-        let parsed: serde_json::Value = serde_json::from_str(&buf).expect("valid JSON");
-        assert_eq!(parsed["token"].as_str(), Some(token));
-        assert_eq!(parsed["secrets"]["BIG"].as_str(), Some(big_value.as_str()));
-    }
-
-    /// Regression: the bootstrap write end used to leak into the forked child
-    /// because the writer thread owned it past spawn. Without FD_CLOEXEC, the
-    /// child inherited a live write end across exec, so `read()` on fd 3 never
-    /// saw EOF and the child hung — manifesting as `Instance startup timeout`
-    /// on the server side. The fix sets CLOEXEC on the write end so it closes
-    /// at exec, leaving the writer thread's drop as the only remaining closer.
-    #[test]
-    #[cfg(unix)]
-    fn bootstrap_pipe_child_sees_eof_when_write_end_leaks_past_fork() {
-        use std::os::fd::AsRawFd;
-        use std::os::unix::process::CommandExt;
-        use std::process::{Command, Stdio};
-        use std::time::{Duration, Instant};
-
-        // Payload must be larger than the pipe buffer (64KB Linux, 16KB macOS
-        // default) so the writer thread is guaranteed to still be holding
-        // write_end at fork time — without that, the writer finishes and drops
-        // write_end before fork, which is the safe path and wouldn't expose a
-        // missing FD_CLOEXEC.
-        let mut secrets = HashMap::new();
-        secrets.insert("BIG".to_string(), "x".repeat(256 * 1024));
-        let token = "eof-check";
-
-        let (read_end, writer) = create_bootstrap_pipe(token, &secrets).expect("create pipe");
-        let raw_read_fd = read_end.as_raw_fd();
-
-        // `cat <&3` drains fd 3 until EOF. EOF requires ALL write ends to be
-        // closed. If the child inherited a write end across exec (CLOEXEC
-        // missing), cat will never see EOF and this hangs forever.
-        let mut cmd = Command::new("sh");
-        cmd.args(["-c", "cat <&3 > /dev/null"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        unsafe {
-            cmd.pre_exec(move || {
-                if libc::dup2(raw_read_fd, 3) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-
-        let mut child = cmd.spawn().expect("spawn child");
-        drop(read_end);
-
-        let start = Instant::now();
-        let status = loop {
-            match child.try_wait().expect("wait") {
-                Some(status) => break status,
-                None if start.elapsed() > Duration::from_secs(5) => {
-                    let _ = child.kill();
-                    panic!("child hung reading fd 3 — write end leaked past exec");
-                }
-                None => std::thread::sleep(Duration::from_millis(50)),
-            }
-        };
-        assert!(status.success(), "child exited with {status:?}");
-        writer.join().expect("writer thread").expect("write ok");
     }
 
     #[test]
