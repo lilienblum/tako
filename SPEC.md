@@ -1835,7 +1835,7 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 
 ### Communication model
 
-- Single shared workflow socket at `{tako_data_dir}/workflows.sock` (symlink → `workflows-{pid}.sock`, atomically swapped during upgrades for zero-downtime handoff — same pattern as the mgmt socket).
+- Single shared internal socket at `{tako_data_dir}/internal.sock` (symlink → `internal-{pid}.sock`, atomically swapped during upgrades for zero-downtime handoff — same pattern as the mgmt socket). Workflow RPCs and `Tako.channels.publish()` both land here, hence the role-neutral name.
 - Every command carries an `app` field so one socket routes for every deployed app.
 - Auth: filesystem permissions only (`chmod 0600`, owned by the service user).
 - SDKs read `TAKO_INTERNAL_SOCKET` and `TAKO_APP_NAME` env vars. Both spawners (tako-server in production and tako-dev-server in `tako dev`) share one env contract defined in `tako-core::instance_env::TakoRuntimeEnv` so the dev and prod runtimes can't drift. The SDK asserts the pair is set together at import time — a half-set env (one var without the other) is a platform bug and crashes the process on boot rather than silently failing at the first `Tako.workflows.enqueue` or `Tako.channels.publish`.

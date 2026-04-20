@@ -51,23 +51,17 @@ interface RpcResponse {
   message?: string;
 }
 
-const GENERIC_MESSAGES: Record<TakoErrorCode, string> = {
-  TAKO_UNAVAILABLE: "Tako backend is not reachable",
-  TAKO_TIMEOUT: "Tako backend did not respond in time",
-  TAKO_PROTOCOL: "Tako backend returned an unexpected response",
-  TAKO_RPC_ERROR: "Tako backend rejected the request",
-};
-
 const logger = createLogger("sdk.rpc");
 
 /**
  * Log the raw failure and return a sanitized `TakoError`. Callers throw the
  * returned value; the original error stays on `.cause` for local debugging
- * but never flows to an end user via `.message`.
+ * but never flows to an end user via `.message`. The stable `code` field
+ * lets app code branch by failure class.
  */
 function wrapSocketError(code: TakoErrorCode, cause: unknown): TakoError {
-  logger.error(GENERIC_MESSAGES[code], { code, error: cause });
-  return new TakoError(code, GENERIC_MESSAGES[code], { cause });
+  logger.error("rpc failed", { code, error: cause });
+  return new TakoError(code, "Internal Server Error", { cause });
 }
 
 /**
@@ -114,8 +108,8 @@ export function assertInternalSocketEnvConsistency(): void {
 export async function callInternal(socketPath: string, cmd: unknown): Promise<unknown> {
   const resp = await roundTrip(socketPath, cmd);
   if (resp.status === "error") {
-    logger.error("Tako RPC rejected command", { code: "TAKO_RPC_ERROR", message: resp.message });
-    throw new TakoError("TAKO_RPC_ERROR", resp.message ?? GENERIC_MESSAGES.TAKO_RPC_ERROR);
+    logger.error("rpc rejected", { code: "TAKO_RPC_ERROR", message: resp.message });
+    throw new TakoError("TAKO_RPC_ERROR", resp.message ?? "Internal Server Error");
   }
   return resp.data ?? null;
 }

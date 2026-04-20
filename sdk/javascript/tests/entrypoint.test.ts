@@ -211,6 +211,39 @@ test("internal status uses TAKO_BUILD and instance arg for runtime identity", as
   }
 });
 
+test("resolves relative main against process.cwd(), not the SDK module URL", async () => {
+  // Regression test: production spawner passes `main` as a path relative to
+  // the app cwd (e.g. "dist/server/tako-entry.mjs"). A naive `import(main)`
+  // resolves that against the SDK's own bundled module location under
+  // `node_modules/tako.sh/dist/`, not the app dir — and dies with
+  // "Cannot find module". The fix converts the path to a file:// URL
+  // rooted at cwd.
+  const appDir = await mkdtemp(path.join(tmpdir(), "tako-rel-main-"));
+  const sub = path.join(appDir, "dist", "server");
+  await writeFile(path.join(appDir, "placeholder"), "", "utf8");
+  const { mkdir } = await import("node:fs/promises");
+  await mkdir(sub, { recursive: true });
+  const entryModule = path.join(sub, "tako-entry.mjs");
+  await writeFile(entryModule, 'export default () => new Response("ok");\n', "utf8");
+
+  const originalCwd = process.cwd();
+  try {
+    process.chdir(appDir);
+    process.argv = ["node", "entrypoint", "dist/server/tako-entry.mjs", "--instance", "i-1"];
+
+    const { run } = createEntrypoint();
+    let started = false;
+    await run(async () => {
+      started = true;
+      return 4321;
+    });
+    expect(started).toBe(true);
+  } finally {
+    process.chdir(originalCwd);
+    await rm(appDir, { recursive: true, force: true });
+  }
+});
+
 test("readiness signal writes the bound port to a pipe fd instead of stdout", async () => {
   const rootDir = await mkdtemp(path.join(tmpdir(), "tako-ready-fd-"));
   const readyPipe = path.join(rootDir, "ready.pipe");

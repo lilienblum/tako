@@ -195,7 +195,7 @@ impl super::ServerState {
             | Command::WaitForEvent { .. }
             | Command::Signal { .. }
             | Command::ChannelPublish { .. } => Response::error(
-                "workflow/channel commands must be sent over the workflow socket, not the management socket"
+                "workflow/channel commands must be sent over the internal socket, not the management socket"
                     .to_string(),
             ),
         }
@@ -512,13 +512,13 @@ impl super::ServerState {
             .map(std::path::PathBuf::from)
             .unwrap_or_else(|| std::path::PathBuf::from("bun"));
 
-        // Bring up the shared workflow socket the first time we ensure any
+        // Bring up the shared internal socket the first time we ensure any
         // app. Idempotent — start_socket short-circuits if already running.
         if let Err(e) = self.workflows.start_socket() {
-            tracing::warn!(error = %e, "Failed to start workflow socket");
+            tracing::warn!(error = %e, "Failed to start internal socket");
             return;
         }
-        let workflow_socket = self.workflows.socket_path();
+        let internal_socket = self.workflows.socket_path();
 
         // Secrets are handed to the worker over fd 3 (same ABI as HTTP
         // instances). Fetch once before the closure so `ensure` owns them.
@@ -536,7 +536,7 @@ impl super::ServerState {
                     0,       // workers (scale-to-zero)
                     10,      // concurrency
                     300_000, // idle_timeout_ms (5 min)
-                    &workflow_socket,
+                    &internal_socket,
                     &runtime_bin,
                     &worker_bin,
                     &release,

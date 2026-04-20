@@ -29,6 +29,8 @@ pub use enqueue_socket::{
     OnEnqueue, spawn as spawn_enqueue_socket,
 };
 #[allow(unused_imports)]
-pub use manager::{WorkflowManager, WorkflowManagerError, worker_spec_for_bun};
+pub use manager::{
+    WorkflowManager, WorkflowManagerError, internal_socket_path, worker_spec_for_bun,
+};
 #[allow(unused_imports)]
 pub use supervisor::{WorkerLogSink, WorkerSpec, WorkerSupervisor};

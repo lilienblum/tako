@@ -10,6 +10,8 @@
  *   <main> --instance <id>
  */
 
+import { isAbsolute, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { handleTakoEndpoint } from "./endpoints";
 import { writeViaInheritedFd } from "./readiness";
 import { installTakoGlobal, Tako } from "../tako";
@@ -101,7 +103,13 @@ export function createEntrypoint(options: EntrypointOptions = {}) {
     let userFetch: FetchFunction;
     let userReady: (() => void | Promise<void>) | null = null;
     try {
-      const module = await import(/* @vite-ignore */ parsed.main);
+      // `parsed.main` is a filesystem path from the spawner's launch args,
+      // relative to the app cwd. Convert to a file:// URL so dynamic
+      // `import()` resolves it against the app — not the SDK module URL,
+      // which lives under `node_modules/tako.sh/dist/`.
+      const mainPath = isAbsolute(parsed.main) ? parsed.main : resolve(process.cwd(), parsed.main);
+      const mainUrl = pathToFileURL(mainPath).href;
+      const module = await import(/* @vite-ignore */ mainUrl);
       const defaultExport = module.default;
       if (typeof defaultExport === "function") {
         const readyable = defaultExport as ReadyableFetchHandler;

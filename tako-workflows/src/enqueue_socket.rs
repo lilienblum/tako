@@ -1,11 +1,13 @@
-//! Single shared workflow socket.
+//! Single shared Tako internal socket.
 //!
-//! One socket per tako-server instance handles enqueue + worker RPCs for
-//! every deployed app. Commands carry an `app` field; the handler uses a
-//! lookup closure to find the app's `RunsDb` and supervisor wake function.
+//! One socket per tako-server instance handles every server-side SDK RPC:
+//! workflow enqueue + worker RPCs, `Tako.channels.publish()`, and any
+//! future server-routed command. Commands carry an `app` field; the
+//! handler uses a lookup closure to find the app's `RunsDb` and supervisor
+//! wake function (channel publish takes a separate route).
 //!
-//! Path convention: `{data_dir}/workflows.sock` (symlink) →
-//! `{data_dir}/workflows-{pid}.sock` (the actual bound socket). Mirrors
+//! Path convention: `{data_dir}/internal.sock` (symlink) →
+//! `{data_dir}/internal-{pid}.sock` (the actual bound socket). Mirrors
 //! the management-socket pattern so two tako-server processes can hand
 //! over cleanly during upgrade.
 //!
@@ -40,7 +42,7 @@ pub type HealthCheck = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
 /// forward progress.
 pub type OnClaimed = Arc<dyn Fn() + Send + Sync>;
 
-/// Per-app handlers the workflow socket needs to service one connection.
+/// Per-app handlers the internal socket needs to service one connection.
 pub struct AppHandlers {
     pub db: Arc<RunsDb>,
     pub on_enqueue: OnEnqueue,
@@ -89,12 +91,14 @@ impl Drop for EnqueueSocketHandle {
     }
 }
 
-/// Bind the workflow socket and start the accept loop.
+/// Bind the internal socket and start the accept loop.
 ///
 /// `symlink_path` is the well-known path SDKs connect to. The actual bind
-/// happens on `{symlink_dir}/workflows-{pid}.sock` and the symlink is
-/// atomically swapped to point at it — same pattern as the mgmt socket,
-/// so two tako-server processes can hand over without dropping clients.
+/// happens on `{symlink_dir}/{stem}-{pid}.sock` (where `stem` is derived
+/// from the symlink filename — e.g. `internal` → `internal-42.sock`) and
+/// the symlink is atomically swapped to point at it. Same pattern as the
+/// mgmt socket, so two tako-server processes can hand over without
+/// dropping clients.
 pub fn spawn(
     symlink_path: impl AsRef<Path>,
     lookup: AppLookup,
@@ -116,7 +120,7 @@ pub fn spawn(
     let stem = symlink_path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
-        .unwrap_or_else(|| "workflows".to_string());
+        .unwrap_or_else(|| "internal".to_string());
     let actual_path = dir.join(format!("{stem}-{pid}.sock"));
 
     // Stale pid-specific file from a previous run with the same pid.
@@ -135,7 +139,7 @@ pub fn spawn(
     tracing::info!(
         actual = %actual_path.display(),
         symlink = %symlink_path.display(),
-        "Workflow socket listening"
+        "Internal socket listening"
     );
 
     let listener = UnixListener::from_std(std_listener)?;
@@ -388,7 +392,7 @@ mod tests {
     #[tokio::test]
     async fn enqueue_routes_by_app() {
         let tmp = tempfile::tempdir().unwrap();
-        let sock = tmp.path().join("workflows.sock");
+        let sock = tmp.path().join("internal.sock");
         let db_a = Arc::new(RunsDb::open_in_memory().unwrap());
         let db_b = Arc::new(RunsDb::open_in_memory().unwrap());
 
@@ -421,7 +425,7 @@ mod tests {
     #[tokio::test]
     async fn enqueue_rejects_when_health_check_fails() {
         let tmp = tempfile::tempdir().unwrap();
-        let sock = tmp.path().join("workflows.sock");
+        let sock = tmp.path().join("internal.sock");
         let db = Arc::new(RunsDb::open_in_memory().unwrap());
 
         let db_for_lookup = db.clone();
@@ -461,7 +465,7 @@ mod tests {
     #[tokio::test]
     async fn claim_run_fires_on_claimed() {
         let tmp = tempfile::tempdir().unwrap();
-        let sock = tmp.path().join("workflows.sock");
+        let sock = tmp.path().join("internal.sock");
         let db = Arc::new(RunsDb::open_in_memory().unwrap());
         db.enqueue("w", &serde_json::json!({}), &EnqueueOpts::default())
             .unwrap();
@@ -502,7 +506,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_app_returns_error() {
         let tmp = tempfile::tempdir().unwrap();
-        let sock = tmp.path().join("workflows.sock");
+        let sock = tmp.path().join("internal.sock");
         let handle = spawn(&sock, lookup_for(Default::default()), None).unwrap();
 
         let stream = UnixStream::connect(&sock).await.unwrap();
@@ -525,7 +529,7 @@ mod tests {
     #[tokio::test]
     async fn on_enqueue_fires_for_signal_with_waiters_only() {
         let tmp = tempfile::tempdir().unwrap();
-        let sock = tmp.path().join("workflows.sock");
+        let sock = tmp.path().join("internal.sock");
         let db = Arc::new(RunsDb::open_in_memory().unwrap());
         let count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
 
@@ -580,7 +584,7 @@ mod tests {
     #[tokio::test]
     async fn shutdown_removes_pid_socket_file() {
         let tmp = tempfile::tempdir().unwrap();
-        let sock = tmp.path().join("workflows.sock");
+        let sock = tmp.path().join("internal.sock");
         let handle = spawn(&sock, lookup_for(Default::default()), None).unwrap();
         assert!(sock.exists() || sock.is_symlink());
         handle.shutdown().await;

@@ -1,8 +1,10 @@
 //! Per-server workflow lifecycle manager.
 //!
 //! Holds one entry per deployed app: `RunsDb`, cron ticker, worker
-//! supervisor. A single shared workflow socket (owned by the manager)
+//! supervisor. A single shared internal socket (owned by the manager)
 //! routes commands to the right app via the `app` field on each command.
+//! Workflow RPCs and `Tako.channels.publish()` both land on this socket,
+//! which is why it's named `internal.sock` rather than `workflows.sock`.
 //!
 //! Single integration surface for `operations.rs` to call from
 //! deploy / stop / delete handlers, plus shutdown_all on server shutdown.
@@ -18,9 +20,18 @@ use super::cron::{self, CronTickerHandle};
 use super::enqueue::{RunsDb, RunsDbError};
 use super::enqueue_socket::{
     AppHandlers, AppLookup, ChannelPublishFn, EnqueueSocketHandle, HealthCheck, OnClaimed,
-    OnEnqueue, spawn as spawn_workflow_socket,
+    OnEnqueue, spawn as spawn_internal_socket,
 };
 use super::supervisor::{WorkerSpec, WorkerSupervisor};
+
+/// The single Tako internal socket. Named after its env var
+/// (`TAKO_INTERNAL_SOCKET`) and shared by all server-side SDK RPCs
+/// (workflow enqueue/worker loop, channel publish). Single source of truth
+/// for the path — consumers (`WorkflowManager`, `AppManager`) must not
+/// hardcode `"internal.sock"` themselves.
+pub fn internal_socket_path(data_dir: &Path) -> PathBuf {
+    data_dir.join("internal.sock")
+}
 
 /// Per-app workflow resources. Dropping the entry shuts down the worker
 /// (drained on the way out) and the cron ticker.
@@ -78,7 +89,7 @@ impl WorkflowManager {
     }
 
     /// Install the channel-publish relay used by `Tako.channels.publish()`
-    /// calls arriving on the workflow socket. Must be called before
+    /// calls arriving on the internal socket. Must be called before
     /// `start_socket` — the publisher is snapshotted at that point.
     pub fn set_channel_publisher(&self, publisher: ChannelPublishFn) {
         *self.channel_publish.lock() = Some(publisher);
@@ -94,10 +105,10 @@ impl WorkflowManager {
 
     /// Server-wide socket path. SDKs connect here.
     pub fn socket_path(&self) -> PathBuf {
-        self.data_dir.join("workflows.sock")
+        internal_socket_path(&self.data_dir)
     }
 
-    /// Bring up the shared workflow socket. Idempotent — calling twice is a
+    /// Bring up the shared internal socket. Idempotent — calling twice is a
     /// no-op. Should be called once at server startup before any `ensure`.
     pub fn start_socket(&self) -> Result<(), WorkflowManagerError> {
         let mut guard = self.socket.lock();
@@ -132,7 +143,7 @@ impl WorkflowManager {
             })
         });
         let publisher = self.channel_publish.lock().clone();
-        *guard = Some(spawn_workflow_socket(
+        *guard = Some(spawn_internal_socket(
             self.socket_path(),
             lookup,
             publisher,
@@ -232,7 +243,7 @@ pub fn worker_spec_for_bun(
     workers: u32,
     concurrency: u32,
     idle_timeout_ms: u64,
-    workflow_socket: &Path,
+    internal_socket: &Path,
     bun_path: &Path,
     worker_entry: &Path,
     app_cwd: &Path,
@@ -245,7 +256,7 @@ pub fn worker_spec_for_bun(
     );
     env.insert(
         tako_core::instance_env::TAKO_INTERNAL_SOCKET_ENV.into(),
-        workflow_socket.to_string_lossy().to_string(),
+        internal_socket.to_string_lossy().to_string(),
     );
 
     WorkerSpec {

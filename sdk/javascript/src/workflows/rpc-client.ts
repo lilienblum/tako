@@ -64,7 +64,7 @@ export class WorkflowsClient {
     });
     const d = data as { id: string; deduplicated: boolean } | null;
     if (!d || typeof d.id !== "string") {
-      throw new TakoError("TAKO_PROTOCOL", "Tako backend returned an unexpected response");
+      throw new TakoError("TAKO_PROTOCOL", "Internal Server Error");
     }
     return { id: d.id, deduplicated: Boolean(d.deduplicated) };
   }

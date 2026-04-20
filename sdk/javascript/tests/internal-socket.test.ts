@@ -103,6 +103,10 @@ describe("callInternal error wrapping", () => {
     expect(err.message).not.toContain(missing);
     expect(err.message).not.toContain("ENOENT");
     expect(err.message).not.toContain("connect");
+    // Message is brand-neutral — apps can surface it directly without
+    // leaking "Tako" to end users.
+    expect(err.message).not.toContain("Tako");
+    expect(err.message).toBe("Internal Server Error");
     // Original error is preserved for operators on .cause.
     expect(err.cause).toBeDefined();
   });
