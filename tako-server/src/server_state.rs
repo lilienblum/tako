@@ -292,12 +292,28 @@ impl ServerState {
 
         self.workflows.stop(app_name, WORKFLOW_DRAIN_TIMEOUT).await;
 
-        let workflows_dir = release_path.join("workflows");
+        let app_path = match crate::app_command::load_release_manifest(release_path) {
+            Ok(manifest) => {
+                match crate::app_command::safe_subdir(release_path, &manifest.app_dir) {
+                    Ok(path) => path,
+                    Err(e) => {
+                        tracing::warn!(app = app_name, error = %e, "Skipping workflow engine: invalid app_dir in manifest");
+                        return;
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(app = app_name, error = %e, "Skipping workflow engine: could not load release manifest");
+                return;
+            }
+        };
+
+        let workflows_dir = app_path.join("workflows");
         if !workflows_dir.is_dir() {
             return;
         }
 
-        let worker_entry = release_path
+        let worker_entry = app_path
             .join("node_modules")
             .join("tako.sh")
             .join("dist")
@@ -326,7 +342,7 @@ impl ServerState {
 
         let app = app_name.to_string();
         let app_for_spec = app.clone();
-        let release = release_path.to_path_buf();
+        let worker_cwd = app_path;
         let worker_bin = worker_entry;
         let manager = self.workflows.clone();
         let result = manager
@@ -339,7 +355,7 @@ impl ServerState {
                     &internal_socket,
                     &runtime_bin,
                     &worker_bin,
-                    &release,
+                    &worker_cwd,
                     secrets,
                 )
             })

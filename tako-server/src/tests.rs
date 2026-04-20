@@ -36,10 +36,31 @@ fn write_release_manifest(
     install: Option<&str>,
     idle_timeout: u32,
 ) {
+    write_release_manifest_with_app_dir(
+        release_dir,
+        runtime,
+        main,
+        start,
+        install,
+        idle_timeout,
+        "",
+    );
+}
+
+fn write_release_manifest_with_app_dir(
+    release_dir: &Path,
+    runtime: &str,
+    main: &str,
+    start: &[&str],
+    install: Option<&str>,
+    idle_timeout: u32,
+    app_dir: &str,
+) {
     let mut manifest = serde_json::json!({
         "runtime": runtime,
         "main": main,
         "idle_timeout": idle_timeout,
+        "app_dir": app_dir,
     });
     if !start.is_empty() {
         manifest["start"] =
@@ -56,10 +77,19 @@ fn write_release_manifest(
 }
 
 fn write_js_workflow_scaffold(release_dir: &Path) {
-    std::fs::create_dir_all(release_dir.join("workflows")).unwrap();
-    std::fs::create_dir_all(release_dir.join("node_modules/tako.sh/dist/entrypoints")).unwrap();
+    write_js_workflow_scaffold_at(release_dir, "");
+}
+
+fn write_js_workflow_scaffold_at(release_dir: &Path, app_dir: &str) {
+    let app_root = if app_dir.is_empty() {
+        release_dir.to_path_buf()
+    } else {
+        release_dir.join(app_dir)
+    };
+    std::fs::create_dir_all(app_root.join("workflows")).unwrap();
+    std::fs::create_dir_all(app_root.join("node_modules/tako.sh/dist/entrypoints")).unwrap();
     std::fs::write(
-        release_dir.join("node_modules/tako.sh/dist/entrypoints/bun-worker.mjs"),
+        app_root.join("node_modules/tako.sh/dist/entrypoints/bun-worker.mjs"),
         "export default {};",
     )
     .unwrap();
@@ -1184,6 +1214,49 @@ async fn sync_app_workflows_restarts_existing_entry_and_stops_removed_workflows(
     assert!(
         !state.workflows.has(app_id),
         "deploying a release without workflows/ should stop the old workflow runtime"
+    );
+}
+
+#[tokio::test]
+async fn sync_app_workflows_respects_manifest_app_dir_for_workspace_layouts() {
+    let temp = TempDir::new().unwrap();
+    let app_id = "demo/production";
+    let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+        cert_dir: temp.path().join("certs"),
+        ..Default::default()
+    }));
+    let state = ServerState::new(
+        temp.path().to_path_buf(),
+        cert_manager,
+        None,
+        empty_challenge_tokens(),
+    )
+    .unwrap();
+
+    let release = temp
+        .path()
+        .join("apps")
+        .join("demo")
+        .join("production")
+        .join("releases")
+        .join("v1");
+    std::fs::create_dir_all(&release).unwrap();
+    let app_dir = "examples/javascript/demo";
+    write_js_workflow_scaffold_at(&release, app_dir);
+    write_release_manifest_with_app_dir(
+        &release,
+        "node",
+        "index.js",
+        &["/bin/sh", "-lc", "sleep 600"],
+        Some("true"),
+        300,
+        app_dir,
+    );
+
+    state.sync_app_workflows(app_id, &release, None).await;
+    assert!(
+        state.workflows.has(app_id),
+        "workspace-layout deploys should register workflows using manifest.app_dir"
     );
 }
 
