@@ -129,7 +129,7 @@ When omitted, Tako uses the base preset for the selected runtime (from `runtime`
 
 - Presets are metadata-only: they define `name`, `main`, and `assets` defaults. They do not contain build, install, start, or dev commands (though they can define a `dev` command override).
 - Preset definitions live in `presets/<language>.toml` (e.g. `presets/javascript.toml`) in the Tako repo. Tako caches them locally; `tako dev` prefers cached or embedded manifests, while deploy refreshes unpinned aliases from GitHub and falls back to cache if refresh fails.
-- Example built-in JS presets: `tanstack-start` (`vite dev`, `@tanstack/react-start/server-entry`) and `nextjs` (`next dev`, `.next/tako-entry.mjs`).
+- Example built-in JS presets: `tanstack-start` (`vite dev`, `dist/server/tako-entry.mjs`) and `nextjs` (`next dev`, `.next/tako-entry.mjs`).
 
 See [Presets](/docs/presets) for the full preset schema and available presets.
 
@@ -409,7 +409,7 @@ Commands that support `-c/--config`: `init`, `dev`, `logs`, `deploy`, `releases`
 
 ## Build and Deploy Behavior
 
-- Build uses a `build_dir` approach: copies the project from the source root into `.tako/build_dir` (respecting `.gitignore`), symlinks `node_modules/` directories from the original tree, runs build commands, then archives the result without `node_modules/`.
+- Build uses a build dir approach: copies the project from the source root into `.tako/build` (respecting `.gitignore`), symlinks `node_modules/` directories from the original tree, runs build commands, then archives the result without `node_modules/`.
 - Source bundle root is the git root when available, otherwise the app directory.
 - The app subdirectory is the selected config file's parent directory relative to the source bundle root.
 - Deploy always force-excludes `.git/`, `.tako/`, `.env*`, and `node_modules/` from the deploy archive.

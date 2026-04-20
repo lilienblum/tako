@@ -122,7 +122,7 @@ idle_timeout = 120
 - namespaced preset aliases in `tako.toml` (for example `js/tanstack-start`) are rejected; choose runtime via top-level `runtime` and keep `preset` runtime-local.
 - `github:` preset references are not supported in `tako.toml`.
 - Preset definitions live in `presets/<language>.toml` (for example `presets/javascript.toml`), where each preset is a section (`[tanstack-start]`, etc.). Each section contains `name` (optional, fallback: section name), `main`, `assets`, and `dev` (custom dev command). Tako caches fetched preset manifests locally. `tako dev` prefers cached or embedded preset data and only fetches from GitHub when nothing local is available; deploy refreshes unpinned aliases from GitHub and falls back to cached content on fetch failure.
-- `tanstack-start` preset defaults `main = "@tanstack/react-start/server-entry"`, `assets = ["dist/client"]`, and `dev = ["vite", "dev"]`.
+- `tanstack-start` preset defaults `main = "dist/server/tako-entry.mjs"`, `assets = ["dist/client"]`, and `dev = ["vite", "dev"]`. The `main` file is emitted by `tako.sh/vite` during `vite build` and wraps the SSR bundle with tako endpoint handling.
 - `nextjs` preset defaults `main = ".next/tako-entry.mjs"` and `dev = ["next", "dev"]`.
 - `vite` preset defaults `dev = ["vite", "dev"]` for projects using Vite as their dev server.
 - Deploy restores local JS build caches from workspace-root `.turbo/` and app-root `.next/cache/` into the temporary build workspace when present, then excludes those cache directories from the final deploy artifact.
@@ -150,7 +150,7 @@ idle_timeout = 120
   - `install` (optional command run before `run`)
   - `run` (required command)
   - `exclude` (optional array of file globs to exclude from the deploy artifact)
-- Build uses a `build_dir` approach: copies the project from source root into `.tako/build_dir` (respecting `.gitignore`), symlinks `node_modules/` directories from the original tree, runs build commands, then archives the result without `node_modules/`.
+- Build uses a build dir approach: copies the project from source root into `.tako/build` (respecting `.gitignore`), symlinks `node_modules/` directories from the original tree, runs build commands, then archives the result without `node_modules/`.
 - During `tako deploy`, source files are bundled from source root (`git` root when available, otherwise app directory).
 - Deploy always force-excludes `.git/`, `.tako/`, `.env*`, and `node_modules/` from the deploy archive. Additional exclusions come from `[build].exclude` and `.gitignore`.
 - After extracting the deploy artifact, `tako-server` runs the runtime plugin's production install command (e.g. `bun install --production`) before starting instances.
@@ -803,14 +803,14 @@ Deploy flow helpers:
 3. Resolve app subdirectory from the selected config file's parent directory relative to source bundle root
 4. Resolve deploy runtime `main` (`main` from `tako.toml`; otherwise preset `main`, with JS index fallback order: `index.<ext>` then `src/index.<ext>` for `ts`/`tsx`/`js`/`jsx` when applicable)
 5. Resolve app preset (top-level `preset` in `tako.toml`), fetching unpinned official aliases from `master`
-6. Prepare `build_dir`: copy project from source root into `.tako/build_dir` (respecting `.gitignore`), symlink `node_modules/` directories from original tree
-7. Run build commands in `build_dir`:
+6. Prepare build dir: copy project from source root into `.tako/build` (respecting `.gitignore`), symlink `node_modules/` directories from original tree
+7. Run build commands in build dir:
    - Resolve stage list by precedence: `[[build_stages]]` → `[build]` (single-stage form) → runtime default stage → no-op
    - Run resolved stages in declaration order (`install` then `run` per stage)
    - Merge configured assets into app `public/`
    - Verify resolved runtime `main` exists in the built app directory
    - Save resolved runtime version into `app.json` (`runtime_version` field) for server-side version pinning
-8. Archive `build_dir` (excluding `node_modules/`) as deploy artifact
+8. Archive build dir (excluding `node_modules/`) as deploy artifact
    - Version format: clean git tree => `{commit}`; dirty git tree => `{commit}_{source_hash8}`; no git commit => `nogit_{source_hash8}`
    - Best-effort local artifact cache prune runs before builds (retention: 90 target artifacts; orphan target metadata is removed)
    - Package filtered artifact tarball using include/exclude rules and store in local cache
@@ -833,10 +833,10 @@ Deploy flow helpers:
 
 - Deploy archive source is the app's source bundle root (git root when available; otherwise selected-config parent directory).
 - Deploy target app path is the selected config file's parent directory relative to the source bundle root.
-- Build uses a `build_dir`: copies project from source root into `.tako/build_dir` (respecting `.gitignore`), symlinks `node_modules/` from the original tree (build tools read but don't modify), runs build commands in the `build_dir`, then archives the result excluding `node_modules/`.
+- Build uses a build dir: copies project from source root into `.tako/build` (respecting `.gitignore`), symlinks `node_modules/` from the original tree (build tools read but don't modify), runs build commands in the build dir, then archives the result excluding `node_modules/`.
 - These paths are always force-excluded from the deploy archive: `.git/`, `.tako/`, `.env*`, `node_modules/`. Additional exclusions come from `[build].exclude` and `.gitignore`.
 - Servers receive prebuilt artifacts and do not run app build steps during deploy. After extracting the artifact, `tako-server` runs the runtime plugin's production install command (e.g. `bun install --production`) before starting instances.
-- Build logic runs in the `build_dir` against the resolved stage list (precedence: `[[build_stages]]` → `[build]` → runtime default). Each stage runs `install` then `run` in declaration order.
+- Build logic runs in the build dir against the resolved stage list (precedence: `[[build_stages]]` → `[build]` → runtime default). Each stage runs `install` then `run` in declaration order.
 - Deploy uses `runtime_version` from `tako.toml` when set. Otherwise it resolves runtime version by running `<tool> --version` directly, falling back to `latest`.
 - Artifact include precedence: in simple build mode, `build.include` -> `**/*`. In multi-stage mode, `**/*` is used (stages control output via `exclude` patterns only).
 - Asset roots are preset `assets` plus top-level `assets` (deduplicated), merged into app `public/` after build with ordered overwrite.

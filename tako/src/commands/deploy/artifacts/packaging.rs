@@ -35,7 +35,6 @@ pub(super) async fn build_target_artifacts(
     app_manifest_bytes: &[u8],
     version: &str,
     runtime_tool: &str,
-    _main: &str,
     target_groups: &[ArtifactBuildGroup],
     resolved_stages: &[BuildStage],
     include_patterns: &[String],
@@ -64,12 +63,12 @@ pub(super) async fn build_target_artifacts(
             tracing::debug!("{}", stage_summary_message);
         }
 
-        let build_dir = project_dir.join(".tako/build_dir");
+        let build_dir = project_dir.join(".tako/build");
         crate::build::cleanup_workdir(&build_dir);
         {
             let _t = output::timed("Build dir setup");
             crate::build::create_workdir(source_root, &build_dir)
-                .map_err(|e| format!("Failed to create build_dir: {e}"))?;
+                .map_err(|e| format!("Failed to create build dir: {e}"))?;
             if runtime_adapter.preset_group() == PresetGroup::Js {
                 crate::build::symlink_node_modules(source_root, &build_dir)
                     .map_err(|e| format!("Failed to symlink node_modules: {e}"))?;

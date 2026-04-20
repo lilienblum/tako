@@ -1,6 +1,7 @@
 name = "demo"
 runtime = "bun"
 preset = "tanstack-start"
+main = "dist/server/tako-entry.mjs"
 
 [[build_stages]]
 name = "sdk"

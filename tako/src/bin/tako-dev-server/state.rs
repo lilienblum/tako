@@ -10,7 +10,7 @@ use rusqlite::OptionalExtension;
 use rusqlite::{Connection, params};
 use tokio::sync::mpsc;
 
-const PID_FILE_DIR: &str = ".tako/dev-pids";
+const PID_FILE_DIR: &str = ".tako/pids";
 
 /// Persistent app registration (survives server restarts).
 #[cfg_attr(not(test), allow(dead_code))]
@@ -147,7 +147,7 @@ pub struct RuntimeApp {
 }
 
 // ---------------------------------------------------------------------------
-// PID file management — {project_dir}/.tako/dev-pids/<config-hash>.pid
+// PID file management — {project_dir}/.tako/pids/<config-hash>.pid
 // ---------------------------------------------------------------------------
 
 fn pid_file_key(config_path: &str) -> String {

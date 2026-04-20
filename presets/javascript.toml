@@ -7,7 +7,7 @@
 dev = ["vite", "dev"]
 
 [tanstack-start]
-main = "@tanstack/react-start/server-entry"
+main = "dist/server/tako-entry.mjs"
 assets = ["dist/client"]
 dev = ["vite", "dev"]
 

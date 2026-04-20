@@ -202,7 +202,6 @@ pub(super) async fn prepare_build_phase(
         &app_json_bytes,
         &version,
         &runtime_tool,
-        &manifest_main,
         &build_groups,
         &resolved_stages,
         &include_patterns,
