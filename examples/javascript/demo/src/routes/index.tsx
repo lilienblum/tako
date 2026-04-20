@@ -88,11 +88,11 @@ function Home() {
     <div className="page">
       <header className="page-header">
         <div className="header-inner">
-          <div className="logo">
+          <a className="logo" href="https://tako.sh">
             <img src="/favicon.svg" alt="" aria-hidden="true" width="28" height="28" />
             <span>tako</span>
             <span className="logo-label">demo</span>
-          </div>
+          </a>
           <div className="header-right">
             {tenant && (
               <div className="tenant-tag">
