@@ -7,6 +7,9 @@
  */
 
 import { createEntrypoint } from "../create-entrypoint";
+import { initBootstrapFromFd, readViaInheritedFd } from "../secrets";
+
+initBootstrapFromFd(readViaInheritedFd);
 
 const { run, host, port, setDraining } = createEntrypoint();
 

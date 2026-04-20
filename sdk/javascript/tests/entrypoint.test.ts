@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, open, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { spawn } from "node:child_process";
 import path from "node:path";
@@ -302,4 +302,18 @@ test("readiness signal writes the bound port to a pipe fd instead of stdout", as
   } finally {
     await rm(rootDir, { recursive: true, force: true });
   }
+});
+
+test("bun-server entrypoint bootstraps from fd 3 before creating the entrypoint", async () => {
+  const source = await readFile(
+    path.join(import.meta.dir, "..", "src", "tako", "entrypoints", "bun-server.ts"),
+    "utf8",
+  );
+
+  const bootstrapCall = source.indexOf("initBootstrapFromFd(readViaInheritedFd);");
+  const createCall = source.indexOf("createEntrypoint();");
+
+  expect(bootstrapCall).toBeGreaterThanOrEqual(0);
+  expect(createCall).toBeGreaterThanOrEqual(0);
+  expect(bootstrapCall).toBeLessThan(createCall);
 });

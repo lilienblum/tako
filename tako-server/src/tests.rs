@@ -939,6 +939,111 @@ async fn restore_from_state_store_rehydrates_apps_routes_and_secrets() {
 }
 
 #[tokio::test]
+async fn restore_from_state_store_restarts_internal_socket_for_apps_with_workflows() {
+    let temp = TempDir::new().unwrap();
+    let app_id = "workflow-app/production";
+    let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+        cert_dir: temp.path().join("certs"),
+        ..Default::default()
+    }));
+
+    let state_a = ServerState::new(
+        temp.path().to_path_buf(),
+        cert_manager.clone(),
+        None,
+        empty_challenge_tokens(),
+    )
+    .unwrap();
+    let release_dir = temp
+        .path()
+        .join("apps")
+        .join("workflow-app")
+        .join("production")
+        .join("releases")
+        .join("v1");
+    std::fs::create_dir_all(release_dir.join("workflows")).unwrap();
+    std::fs::create_dir_all(release_dir.join("node_modules/tako.sh/dist/entrypoints")).unwrap();
+    std::fs::write(
+        release_dir.join("node_modules/tako.sh/dist/entrypoints/bun-worker.mjs"),
+        "export default {};",
+    )
+    .unwrap();
+    assert!(release_dir.join("workflows").is_dir());
+    assert!(
+        release_dir
+            .join("node_modules")
+            .join("tako.sh")
+            .join("dist")
+            .join("entrypoints")
+            .join("bun-worker.mjs")
+            .is_file()
+    );
+    write_release_manifest(
+        &release_dir,
+        "node",
+        "index.js",
+        &["/bin/sh", "-lc", "sleep 600"],
+        Some("true"),
+        300,
+    );
+
+    let app = state_a.app_manager.register_app(AppConfig {
+        name: "workflow-app".to_string(),
+        environment: "production".to_string(),
+        version: "v1".to_string(),
+        path: release_dir.clone(),
+        command: vec![
+            "/bin/sh".to_string(),
+            "-lc".to_string(),
+            "sleep 600".to_string(),
+        ],
+        min_instances: 0,
+        max_instances: 4,
+        idle_timeout: Duration::from_secs(300),
+        ..Default::default()
+    });
+    state_a.load_balancer.register_app(app);
+    state_a.persist_app_state(app_id).await;
+    drop(state_a);
+
+    let state_b = ServerState::new(
+        temp.path().to_path_buf(),
+        cert_manager,
+        None,
+        empty_challenge_tokens(),
+    )
+    .unwrap();
+    state_b.restore_from_state_store().await.unwrap();
+
+    assert!(
+        state_b.app_manager.get_app(app_id).is_some(),
+        "restored workflow app should be present in the app manager"
+    );
+    assert!(
+        state_b.workflows.has(app_id),
+        "restored workflow app should be re-registered with the workflow manager"
+    );
+
+    let socket = state_b.workflows.socket_path();
+    let socket_ready = (0..50).any(|_| {
+        let exists = socket.exists();
+        let is_symlink = std::fs::symlink_metadata(&socket)
+            .map(|meta| meta.file_type().is_symlink())
+            .unwrap_or(false);
+        if exists || is_symlink {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        false
+    });
+    assert!(
+        socket_ready,
+        "restored workflow apps must restart the shared internal socket at {}",
+        socket.display()
+    );
+}
+
+#[tokio::test]
 async fn scale_command_persists_zero_instances_across_restore() {
     let temp = TempDir::new().unwrap();
     let cert_manager = Arc::new(CertManager::new(CertManagerConfig {

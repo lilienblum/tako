@@ -1,7 +1,9 @@
 use crate::instances::AppManager;
 use crate::lb::LoadBalancer;
 use crate::release::{apply_release_runtime_to_config, release_app_path};
-use crate::release::{ensure_app_runtime_data_dirs, inject_app_data_dir_env};
+use crate::release::{
+    ensure_app_runtime_data_dirs, inject_app_data_dir_env, resolve_release_runtime_bin,
+};
 use crate::routing::RouteTable;
 use crate::socket::{AppState, Response};
 use crate::state_store::{SqliteStateStore, StateStoreError, load_or_create_device_key};
@@ -261,6 +263,80 @@ impl ServerState {
         self.runtime.to_runtime_info(mode)
     }
 
+    /// Bring up workflow + channel runtime support for an app release when it
+    /// ships a `workflows/` directory.
+    ///
+    /// The shared internal socket backs both workflow RPCs and server-side
+    /// `Tako.channels.publish()`, so restored apps need this just as much as
+    /// freshly deployed apps.
+    pub(crate) async fn ensure_app_workflows(
+        &self,
+        app_name: &str,
+        release_path: &std::path::Path,
+        runtime_bin_path: Option<&str>,
+    ) {
+        let workflows_dir = release_path.join("workflows");
+        if !workflows_dir.is_dir() {
+            return;
+        }
+
+        let worker_entry = release_path
+            .join("node_modules")
+            .join("tako.sh")
+            .join("dist")
+            .join("entrypoints")
+            .join("bun-worker.mjs");
+        if !worker_entry.exists() {
+            tracing::warn!(
+                app = app_name,
+                path = %worker_entry.display(),
+                "Skipping workflow engine: worker entrypoint not found in release"
+            );
+            return;
+        }
+
+        let runtime_bin = runtime_bin_path
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from("bun"));
+
+        if let Err(e) = self.workflows.start_socket() {
+            tracing::warn!(error = %e, "Failed to start internal socket");
+            return;
+        }
+        let internal_socket = self.workflows.socket_path();
+
+        let secrets = self.state_store.get_secrets(app_name).unwrap_or_default();
+
+        let app = app_name.to_string();
+        let app_for_spec = app.clone();
+        let release = release_path.to_path_buf();
+        let worker_bin = worker_entry;
+        let manager = self.workflows.clone();
+        let result = manager
+            .ensure(&app, move |_db_path| {
+                crate::workflows::worker_spec_for_bun(
+                    &app_for_spec,
+                    0,       // workers (scale-to-zero)
+                    10,      // concurrency
+                    300_000, // idle_timeout_ms (5 min)
+                    &internal_socket,
+                    &runtime_bin,
+                    &worker_bin,
+                    &release,
+                    secrets,
+                )
+            })
+            .await;
+
+        if let Err(e) = result {
+            tracing::warn!(
+                app = app_name,
+                error = %e,
+                "Failed to bring up workflow engine"
+            );
+        }
+    }
+
     pub async fn restore_from_state_store(&self) -> Result<(), StateStoreError> {
         let apps = self.state_store.load_apps()?;
         if apps.is_empty() {
@@ -281,7 +357,9 @@ impl ServerState {
 
             let should_start = config.min_instances > 0;
             let release_path = release_app_path(&self.runtime.data_dir, &config);
-            if let Err(error) = apply_release_runtime_to_config(&mut config, release_path, None) {
+            if let Err(error) =
+                apply_release_runtime_to_config(&mut config, release_path.clone(), None)
+            {
                 tracing::error!(app = %app_name, "Failed to restore app config: {}", error);
                 continue;
             }
@@ -304,6 +382,14 @@ impl ServerState {
                 let mut route_table = self.routes.write().await;
                 route_table.set_app_routes(app_name.clone(), routes);
             }
+
+            let runtime_bin_path =
+                resolve_release_runtime_bin(&release_path, &self.runtime.data_dir)
+                    .await
+                    .ok()
+                    .flatten();
+            self.ensure_app_workflows(&app_name, &release_path, runtime_bin_path.as_deref())
+                .await;
 
             if should_start {
                 match self.app_manager.start_app(&app_name).await {
