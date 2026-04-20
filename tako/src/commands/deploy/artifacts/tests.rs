@@ -667,6 +667,9 @@ dev = ["vite", "dev"]
 "#;
     crate::build::preset_cache::write_cached(repo, branch_sha, path, manifest).unwrap();
 
+    let mut tako_config = TakoToml::default();
+    tako_config.build.run = Some("true".to_string());
+
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let result = runtime.block_on(prepare_build_phase(
         project.path().to_path_buf(),
@@ -674,7 +677,7 @@ dev = ["vite", "dev"]
         project.path().to_path_buf(),
         "app".to_string(),
         "production".to_string(),
-        TakoToml::default(),
+        tako_config,
         crate::config::SecretsStore::default(),
         format!("javascript/vite@{branch_sha}"),
         BuildAdapter::Node,
