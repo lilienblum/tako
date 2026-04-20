@@ -43,10 +43,10 @@ direction: right
 
 render: Render cold start {
   direction: down
-  layers: Image layers
+  image: Image layers
   ns: Network namespace
   boot: Process boot
-  layers -> ns -> boot
+  image -> ns -> boot
   style.fill: "#FFF9F4"
 }
 
