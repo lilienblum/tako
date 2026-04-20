@@ -11,6 +11,7 @@ use crate::tls::{AcmeClient, CertManager, ChallengeTokens};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 use tako_core::{ServerRuntimeInfo, UpgradeMode};
 use tokio::sync::RwLock;
 
@@ -267,18 +268,22 @@ impl ServerState {
         self.runtime.to_runtime_info(mode)
     }
 
-    /// Bring up workflow + channel runtime support for an app release when it
-    /// ships a `workflows/` directory.
+    /// Reconcile workflow + channel runtime support for the active release.
     ///
-    /// The shared internal socket backs both workflow RPCs and server-side
-    /// `Tako.channels.publish()`, so restored apps need this just as much as
-    /// freshly deployed apps.
-    pub(crate) async fn ensure_app_workflows(
+    /// Deploys, restores, and secret rotations all funnel through here so the
+    /// worker runtime follows the current release and its current secrets. If a
+    /// new release drops `workflows/`, any previously managed worker is drained
+    /// and removed.
+    pub(crate) async fn sync_app_workflows(
         &self,
         app_name: &str,
         release_path: &std::path::Path,
         runtime_bin_path: Option<&str>,
     ) {
+        const WORKFLOW_DRAIN_TIMEOUT: Duration = Duration::from_secs(120);
+
+        self.workflows.stop(app_name, WORKFLOW_DRAIN_TIMEOUT).await;
+
         let workflows_dir = release_path.join("workflows");
         if !workflows_dir.is_dir() {
             return;
@@ -392,7 +397,7 @@ impl ServerState {
                     .await
                     .ok()
                     .flatten();
-            self.ensure_app_workflows(&app_name, &release_path, runtime_bin_path.as_deref())
+            self.sync_app_workflows(&app_name, &release_path, runtime_bin_path.as_deref())
                 .await;
 
             if should_start {

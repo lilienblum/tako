@@ -55,6 +55,16 @@ fn write_release_manifest(
     .unwrap();
 }
 
+fn write_js_workflow_scaffold(release_dir: &Path) {
+    std::fs::create_dir_all(release_dir.join("workflows")).unwrap();
+    std::fs::create_dir_all(release_dir.join("node_modules/tako.sh/dist/entrypoints")).unwrap();
+    std::fs::write(
+        release_dir.join("node_modules/tako.sh/dist/entrypoints/bun-worker.mjs"),
+        "export default {};",
+    )
+    .unwrap();
+}
+
 fn socket_ready(path: &Path) -> bool {
     (0..50).any(|_| {
         let exists = path.exists();
@@ -975,13 +985,7 @@ async fn restore_from_state_store_restarts_internal_socket_for_apps_with_workflo
         .join("production")
         .join("releases")
         .join("v1");
-    std::fs::create_dir_all(release_dir.join("workflows")).unwrap();
-    std::fs::create_dir_all(release_dir.join("node_modules/tako.sh/dist/entrypoints")).unwrap();
-    std::fs::write(
-        release_dir.join("node_modules/tako.sh/dist/entrypoints/bun-worker.mjs"),
-        "export default {};",
-    )
-    .unwrap();
+    write_js_workflow_scaffold(&release_dir);
     assert!(release_dir.join("workflows").is_dir());
     assert!(
         release_dir
@@ -1068,6 +1072,178 @@ async fn server_state_starts_internal_socket_at_boot() {
         socket_ready(&socket),
         "server boot must start the shared internal socket at {} so app-side Tako.channels.publish works without workflows/",
         socket.display()
+    );
+}
+
+#[tokio::test]
+async fn sync_app_workflows_restarts_existing_entry_and_stops_removed_workflows() {
+    let temp = TempDir::new().unwrap();
+    let app_id = "workflow-app/production";
+    let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+        cert_dir: temp.path().join("certs"),
+        ..Default::default()
+    }));
+    let state = ServerState::new(
+        temp.path().to_path_buf(),
+        cert_manager,
+        None,
+        empty_challenge_tokens(),
+    )
+    .unwrap();
+
+    let release_v1 = temp
+        .path()
+        .join("apps")
+        .join("workflow-app")
+        .join("production")
+        .join("releases")
+        .join("v1");
+    write_js_workflow_scaffold(&release_v1);
+    write_release_manifest(
+        &release_v1,
+        "node",
+        "index.js",
+        &["/bin/sh", "-lc", "sleep 600"],
+        Some("true"),
+        300,
+    );
+
+    state.sync_app_workflows(app_id, &release_v1, None).await;
+    let first = state
+        .workflows
+        .supervisor_for(app_id)
+        .expect("v1 should register workflows");
+
+    let release_v2 = temp
+        .path()
+        .join("apps")
+        .join("workflow-app")
+        .join("production")
+        .join("releases")
+        .join("v2");
+    write_js_workflow_scaffold(&release_v2);
+    write_release_manifest(
+        &release_v2,
+        "node",
+        "index.js",
+        &["/bin/sh", "-lc", "sleep 600"],
+        Some("true"),
+        300,
+    );
+
+    state.sync_app_workflows(app_id, &release_v2, None).await;
+    let second = state
+        .workflows
+        .supervisor_for(app_id)
+        .expect("v2 should replace workflows");
+    assert!(
+        !Arc::ptr_eq(&first, &second),
+        "redeploy should replace the workflow supervisor"
+    );
+
+    let release_v3 = temp
+        .path()
+        .join("apps")
+        .join("workflow-app")
+        .join("production")
+        .join("releases")
+        .join("v3");
+    std::fs::create_dir_all(&release_v3).unwrap();
+    write_release_manifest(
+        &release_v3,
+        "node",
+        "index.js",
+        &["/bin/sh", "-lc", "sleep 600"],
+        Some("true"),
+        300,
+    );
+
+    state.sync_app_workflows(app_id, &release_v3, None).await;
+    assert!(
+        !state.workflows.has(app_id),
+        "deploying a release without workflows/ should stop the old workflow runtime"
+    );
+}
+
+#[tokio::test]
+async fn update_secrets_restarts_workflows_even_without_http_instances() {
+    let temp = TempDir::new().unwrap();
+    let app_id = "workflow-app/production";
+    let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+        cert_dir: temp.path().join("certs"),
+        ..Default::default()
+    }));
+    let state = ServerState::new(
+        temp.path().to_path_buf(),
+        cert_manager,
+        None,
+        empty_challenge_tokens(),
+    )
+    .unwrap();
+
+    let release_dir = temp
+        .path()
+        .join("apps")
+        .join("workflow-app")
+        .join("production")
+        .join("releases")
+        .join("v1");
+    write_js_workflow_scaffold(&release_dir);
+    write_release_manifest(
+        &release_dir,
+        "node",
+        "index.js",
+        &["/bin/sh", "-lc", "sleep 600"],
+        Some("true"),
+        300,
+    );
+
+    let app = state.app_manager.register_app(AppConfig {
+        name: "workflow-app".to_string(),
+        environment: "production".to_string(),
+        version: "v1".to_string(),
+        path: release_dir.clone(),
+        command: vec![
+            "/bin/sh".to_string(),
+            "-lc".to_string(),
+            "sleep 600".to_string(),
+        ],
+        min_instances: 0,
+        max_instances: 4,
+        idle_timeout: Duration::from_secs(300),
+        ..Default::default()
+    });
+    state.load_balancer.register_app(app.clone());
+    state.sync_app_workflows(app_id, &release_dir, None).await;
+
+    let first = state
+        .workflows
+        .supervisor_for(app_id)
+        .expect("initial workflow registration should succeed");
+    let new_secrets: HashMap<String, String> = [("API_KEY".to_string(), "rotated".to_string())]
+        .into_iter()
+        .collect();
+
+    let response = state
+        .handle_command(Command::UpdateSecrets {
+            app: app_id.to_string(),
+            secrets: new_secrets.clone(),
+        })
+        .await;
+
+    assert!(matches!(response, Response::Ok { .. }));
+    let second = state
+        .workflows
+        .supervisor_for(app_id)
+        .expect("workflow runtime should still be registered after secret rotation");
+    assert!(
+        !Arc::ptr_eq(&first, &second),
+        "secret rotation should replace the workflow supervisor even with zero HTTP instances"
+    );
+    assert_eq!(state.state_store.get_secrets(app_id).unwrap(), new_secrets);
+    assert_eq!(
+        app.config.read().secrets.get("API_KEY"),
+        Some(&"rotated".to_string())
     );
 }
 

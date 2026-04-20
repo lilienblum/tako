@@ -7,9 +7,9 @@ use crate::release::{
     app_root, apply_release_runtime_to_config, collect_running_build_statuses,
     current_release_version, directory_modified_unix_secs, ensure_app_runtime_data_dirs,
     inject_app_data_dir_env, prepare_release_runtime, read_release_manifest_metadata,
-    requested_deployment_identity, resolve_release_runtime_bin, should_use_self_signed_route_cert,
-    validate_app_name, validate_deploy_routes, validate_release_path_for_app,
-    validate_release_version,
+    release_app_path, requested_deployment_identity, resolve_release_runtime_bin,
+    should_use_self_signed_route_cert, validate_app_name, validate_deploy_routes,
+    validate_release_path_for_app, validate_release_version,
 };
 use crate::socket::{AppState, AppStatus, Command, InstanceState, InstanceStatus, Response};
 use crate::tls::CertInfo;
@@ -357,11 +357,10 @@ impl super::ServerState {
             self.ensure_route_certificate(app_name, domain).await;
         }
 
-        // Bring up the workflow engine for this app if it ships a `workflows/`
-        // directory. Scale-to-zero by default — no worker process spawns until
-        // the first enqueue or cron tick. Idempotent: a re-deploy of an app
-        // already under management is a no-op here.
-        self.ensure_app_workflows(app_name, &release_path, runtime_bin_path.as_deref())
+        // Reconcile the workflow engine against the active release. Scale to
+        // zero by default — no worker process spawns until the first enqueue
+        // or cron tick.
+        self.sync_app_workflows(app_name, &release_path, runtime_bin_path.as_deref())
             .await;
 
         if app.get_instances().is_empty() {
@@ -846,6 +845,15 @@ impl super::ServerState {
             config.secrets = new_secrets;
             app.update_config(config.clone());
             self.persist_app_state(app_name).await;
+
+            let release_path = release_app_path(&self.runtime.data_dir, &config);
+            let runtime_bin_path =
+                resolve_release_runtime_bin(&release_path, &self.runtime.data_dir)
+                    .await
+                    .ok()
+                    .flatten();
+            self.sync_app_workflows(app_name, &release_path, runtime_bin_path.as_deref())
+                .await;
 
             if !app.get_instances().is_empty() {
                 let previous_state = app.state();

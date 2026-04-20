@@ -271,24 +271,24 @@ The CLI and `tako-server` communicate over a Unix socket at `/var/run/tako/tako.
 
 ### Protocol Commands
 
-| Command            | Purpose                                                            |
-| ------------------ | ------------------------------------------------------------------ |
-| `hello`            | Protocol negotiation and capability discovery                      |
-| `prepare_release`  | Download runtime and install production dependencies before deploy |
-| `deploy`           | Deploy a new version with routes and optional secrets              |
-| `scale`            | Change desired instance count                                      |
-| `delete`           | Remove an app's state and routes                                   |
-| `rollback`         | Roll back to a previous release                                    |
-| `routes`           | List current route mappings                                        |
-| `stop`             | Stop a running app                                                 |
-| `status`           | Get status of a specific app                                       |
-| `list`             | List all deployed apps with their status                           |
-| `update_secrets`   | Update secrets for a deployed app (triggers rolling restart)       |
-| `list_releases`    | Return release/build history for an app                            |
-| `get_secrets_hash` | Get the SHA-256 hash of an app's current secrets                   |
-| `server_info`      | Return server runtime config and upgrade mode                      |
-| `enter_upgrading`  | Acquire the durable upgrade lock (rejects mutating commands)       |
-| `exit_upgrading`   | Release the durable upgrade lock                                   |
+| Command            | Purpose                                                                 |
+| ------------------ | ----------------------------------------------------------------------- |
+| `hello`            | Protocol negotiation and capability discovery                           |
+| `prepare_release`  | Download runtime and install production dependencies before deploy      |
+| `deploy`           | Deploy a new version with routes and optional secrets                   |
+| `scale`            | Change desired instance count                                           |
+| `delete`           | Remove an app's state and routes                                        |
+| `rollback`         | Roll back to a previous release                                         |
+| `routes`           | List current route mappings                                             |
+| `stop`             | Stop a running app                                                      |
+| `status`           | Get status of a specific app                                            |
+| `list`             | List all deployed apps with their status                                |
+| `update_secrets`   | Update secrets for a deployed app (refreshes workers + rolling restart) |
+| `list_releases`    | Return release/build history for an app                                 |
+| `get_secrets_hash` | Get the SHA-256 hash of an app's current secrets                        |
+| `server_info`      | Return server runtime config and upgrade mode                           |
+| `enter_upgrading`  | Acquire the durable upgrade lock (rejects mutating commands)            |
+| `exit_upgrading`   | Release the durable upgrade lock                                        |
 
 App instances do not connect to this management socket. Instead, `tako-server` manages their lifecycle directly (spawn, health check, stop) and proxies HTTP traffic to each instance's private TCP endpoint on loopback.
 

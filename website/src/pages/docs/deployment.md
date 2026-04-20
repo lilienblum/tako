@@ -368,7 +368,7 @@ tako secrets sync                                  # Push local secrets to all s
 tako secrets sync --env production                 # Push to one environment
 ```
 
-Use `--sync` with `set` or `rm` to immediately push changes to servers (triggers a rolling restart of running instances):
+Use `--sync` with `set` or `rm` to immediately push changes to servers (refreshes workflow workers and rolling-restarts running HTTP instances):
 
 ```bash
 tako secrets set DATABASE_URL --sync

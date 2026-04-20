@@ -746,7 +746,7 @@ Sync flow helpers:
 
 - If no servers are configured and the terminal is interactive, sync offers to run the add-server wizard.
 - Environments with no mapped servers are skipped with a warning.
-- Sync sends `update_secrets` to `tako-server`; it does not write remote `.env` files. App instances restart automatically when secrets are updated via `UpdateSecrets`.
+- Sync sends `update_secrets` to `tako-server`; it does not write remote `.env` files. Secrets updates reconcile the app's workflow runtime and rolling-restart HTTP instances so fresh processes receive the new values via fd 3.
 
 ### tako secrets key derive [--env {environment}]
 
@@ -1329,7 +1329,7 @@ Server-side validation on `deploy` and app-scoped commands:
 { "command": "delete", "app": "my-app" }
 ```
 
-- `update_secrets` (update secrets for a deployed app; triggers rolling restart):
+- `update_secrets` (update secrets for a deployed app; refreshes workflow workers and triggers rolling restart):
 
 ```json
 { "command": "update_secrets", "app": "my-app/production", "secrets": { "KEY": "value" } }
@@ -1341,7 +1341,7 @@ Server-side validation on `deploy` and app-scoped commands:
 - `tako-server` controls lifecycle directly (spawn/stop/rolling update). Startup readiness is signaled by the SDK via fd 4; ongoing health is verified via active HTTP probing.
 - App processes receive `PORT=0` and `HOST=127.0.0.1`, bind to an OS-assigned loopback port, and write the actual port to fd 4. The server then routes traffic and health probes to that endpoint.
 - Secrets are passed to instances via fd 3 (file descriptor 3) at spawn time. The server creates a pipe, writes JSON-serialized secrets to the write end, and the child process reads fd 3 at startup before any user code runs. EBADF on fd 3 means the process is not running under Tako (dev mode).
-- Secret updates (`update_secrets` command) store new secrets in SQLite and trigger a rolling restart; fresh instances receive updated secrets via fd 3.
+- Secret updates (`update_secrets` command) store new secrets in SQLite, drain/restart any workflow worker for the app, and trigger a rolling restart for HTTP instances; fresh processes receive updated secrets via fd 3.
 
 ### Health Checks
 

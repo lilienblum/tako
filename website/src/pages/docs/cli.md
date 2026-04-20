@@ -609,7 +609,7 @@ tako secrets sync [--env <ENV>]
 | ------------- | ----------------------------------------------------------------------------------- |
 | `--env <ENV>` | Sync only this environment (without `--env`, syncs all environments in `tako.toml`) |
 
-Decrypts secrets locally and sends them to `tako-server` on each mapped server. App instances restart automatically when secrets change.
+Decrypts secrets locally and sends them to `tako-server` on each mapped server. Secret updates refresh workflow workers and rolling-restart HTTP instances so new processes pick up the changed values.
 
 Environments with no mapped servers are skipped with a warning.
 
