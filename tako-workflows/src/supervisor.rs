@@ -494,6 +494,11 @@ fn create_secrets_pipe(
     let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
     let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
 
+    // The child inherits the read end on fd 3 via stdio redirection, but it
+    // must NOT inherit the write end — otherwise the child's readFileSync(3)
+    // blocks forever waiting for EOF on a writer it holds open itself.
+    set_cloexec(&write_end)?;
+
     let writer_handle = std::thread::spawn(move || -> std::io::Result<()> {
         use std::io::Write;
         let mut writer = std::fs::File::from(write_end);
@@ -503,6 +508,19 @@ fn create_secrets_pipe(
     });
 
     Ok((read_end, writer_handle))
+}
+
+#[cfg(unix)]
+fn set_cloexec(fd: &OwnedFd) -> std::io::Result<()> {
+    let raw = fd.as_raw_fd();
+    let flags = unsafe { libc::fcntl(raw, libc::F_GETFD) };
+    if flags == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if unsafe { libc::fcntl(raw, libc::F_SETFD, flags | libc::FD_CLOEXEC) } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
 }
 
 #[cfg(unix)]
@@ -599,6 +617,49 @@ mod tests {
         sup.wake().unwrap();
         assert!(sup.is_running());
         sup.shutdown(Duration::from_secs(1)).await;
+    }
+
+    /// Regression: the write end of the secrets pipe used to lack
+    /// `FD_CLOEXEC`, so the forked child inherited a live writer across
+    /// `exec`. The child's read of fd 3 would then block forever waiting
+    /// for an EOF that never arrived — because the child itself was
+    /// still holding the write end open on some inherited fd number.
+    ///
+    /// The fix is to set `FD_CLOEXEC` on the write end before spawning
+    /// the writer thread. We verify via `fcntl(F_GETFD)` because the
+    /// write end is consumed by the writer thread immediately, and
+    /// because spawn-based tests are racy on small payloads (the
+    /// writer often finishes before `fork` returns).
+    #[test]
+    #[cfg(unix)]
+    fn secrets_pipe_sets_cloexec_on_write_end() {
+        let mut fds = [0i32; 2];
+        assert_eq!(unsafe { libc::pipe(fds.as_mut_ptr()) }, 0);
+        let read_end = unsafe { OwnedFd::from_raw_fd(fds[0]) };
+        let write_end = unsafe { OwnedFd::from_raw_fd(fds[1]) };
+
+        // Baseline: `pipe(2)` does not set `FD_CLOEXEC` on either end.
+        let baseline = unsafe { libc::fcntl(write_end.as_raw_fd(), libc::F_GETFD) };
+        assert!(baseline >= 0);
+        assert_eq!(
+            baseline & libc::FD_CLOEXEC,
+            0,
+            "libc::pipe unexpectedly returned a CLOEXEC-flagged write end — test is meaningless"
+        );
+
+        set_cloexec(&write_end).expect("set_cloexec");
+
+        let flags = unsafe { libc::fcntl(write_end.as_raw_fd(), libc::F_GETFD) };
+        assert!(flags >= 0);
+        assert_ne!(
+            flags & libc::FD_CLOEXEC,
+            0,
+            "write end of secrets pipe must have FD_CLOEXEC so the forked child does not \
+             inherit a live writer across exec"
+        );
+
+        drop(read_end);
+        drop(write_end);
     }
 
     /// Regression: a secrets payload larger than the OS pipe buffer
