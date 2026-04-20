@@ -1075,6 +1075,28 @@ async fn server_state_starts_internal_socket_at_boot() {
     );
 }
 
+#[test]
+fn server_state_new_outside_tokio_runtime_does_not_panic() {
+    let temp = TempDir::new().unwrap();
+    let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+        cert_dir: temp.path().join("certs"),
+        ..Default::default()
+    }));
+
+    let state = ServerState::new(
+        temp.path().to_path_buf(),
+        cert_manager,
+        None,
+        empty_challenge_tokens(),
+    )
+    .expect("server state should initialize without an entered Tokio runtime");
+
+    assert_eq!(
+        state.workflows.socket_path(),
+        temp.path().join("internal.sock")
+    );
+}
+
 #[tokio::test]
 async fn sync_app_workflows_restarts_existing_entry_and_stops_removed_workflows() {
     let temp = TempDir::new().unwrap();

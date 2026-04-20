@@ -165,9 +165,11 @@ impl ServerState {
             ));
         }
 
-        workflows
-            .start_socket()
-            .map_err(|error| StateStoreError::InvalidData(error.to_string()))?;
+        if tokio::runtime::Handle::try_current().is_ok() {
+            workflows
+                .start_socket()
+                .map_err(|error| StateStoreError::InvalidData(error.to_string()))?;
+        }
 
         Ok(Self {
             app_manager,
@@ -250,6 +252,12 @@ impl ServerState {
         }
         self.set_server_mode(UpgradeMode::Normal).await?;
         Ok(true)
+    }
+
+    pub(crate) fn ensure_internal_socket_started(&self) -> Result<(), StateStoreError> {
+        self.workflows
+            .start_socket()
+            .map_err(|error| StateStoreError::InvalidData(error.to_string()))
     }
 
     pub(crate) async fn reject_mutating_when_upgrading(&self, command: &str) -> Option<Response> {

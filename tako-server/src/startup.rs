@@ -163,6 +163,7 @@ pub(crate) fn run(args: Args) -> Result<(), Box<dyn std::error::Error>> {
         challenge_tokens,
         runtime,
     )?);
+    rt.block_on(async { state.ensure_internal_socket_started() })?;
 
     if let Err(e) = rt.block_on(state.restore_from_state_store()) {
         tracing::error!("Failed to restore server state from SQLite: {}", e);
