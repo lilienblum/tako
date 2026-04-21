@@ -39,6 +39,8 @@ Reject ideas that:
 - Make claims that aren't backed by SPEC.md or shipped code
 - Are generic dev-tooling content with no Tako-specific hook
 
+**Title shape**: every proposed title should contain the concrete nouns a developer would search for (tool names, technologies, actions). Comparison and deep-dive posts are naturally search-shaped; announcement and opinion titles tend to drift clever — pull them back toward literal when the topic has an obvious search phrase. A good sanity check: would a developer plausibly type this title (or something close to it) into Google?
+
 ### Step 3 — Score and recommend
 
 Mark 1–2 ideas as **Recommended** based on:
