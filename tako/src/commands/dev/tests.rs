@@ -149,6 +149,88 @@ main = "src/index.ts"
 }
 
 #[test]
+fn resolve_dev_run_command_uses_preset_runtime_override_for_bun() {
+    let preset = parse_and_validate_preset(
+        r#"
+main = "src/index.ts"
+dev = ["vite", "dev"]
+
+[bun]
+dev = ["bunx", "--bun", "vite", "dev"]
+"#,
+        "tanstack-start",
+    )
+    .unwrap();
+
+    let pd = Path::new("/project");
+    let cmd = resolve_dev_run_command(
+        &TakoToml::default(),
+        &preset,
+        "src/index.ts",
+        BuildAdapter::Bun,
+        true,
+        pd,
+    )
+    .expect("preset runtime override command");
+
+    assert_eq!(cmd, vec!["bunx", "--bun", "vite", "dev"]);
+}
+
+#[test]
+fn resolve_dev_run_command_falls_back_to_preset_dev_when_runtime_override_missing() {
+    let preset = parse_and_validate_preset(
+        r#"
+main = "src/index.ts"
+dev = ["vite", "dev"]
+
+[bun]
+dev = ["bunx", "--bun", "vite", "dev"]
+"#,
+        "tanstack-start",
+    )
+    .unwrap();
+
+    let pd = Path::new("/project");
+    let cmd = resolve_dev_run_command(
+        &TakoToml::default(),
+        &preset,
+        "src/index.ts",
+        BuildAdapter::Node,
+        true,
+        pd,
+    )
+    .expect("preset default dev command for node");
+
+    assert_eq!(cmd, vec!["vite", "dev"]);
+}
+
+#[test]
+fn resolve_dev_run_command_config_dev_beats_runtime_override() {
+    let preset = parse_and_validate_preset(
+        r#"
+main = "src/index.ts"
+dev = ["vite", "dev"]
+
+[bun]
+dev = ["bunx", "--bun", "vite", "dev"]
+"#,
+        "tanstack-start",
+    )
+    .unwrap();
+
+    let cfg = TakoToml {
+        dev: vec!["custom".to_string(), "cmd".to_string()],
+        ..Default::default()
+    };
+
+    let pd = Path::new("/project");
+    let cmd = resolve_dev_run_command(&cfg, &preset, "src/index.ts", BuildAdapter::Bun, true, pd)
+        .expect("config dev command");
+
+    assert_eq!(cmd, vec!["custom", "cmd"]);
+}
+
+#[test]
 fn resolve_dev_run_command_config_dev_overrides_preset() {
     let mut preset = parse_and_validate_preset(
         r#"

@@ -345,6 +345,13 @@ pub(super) fn resolve_dev_run_command(
 
     let raw = if !cfg.dev.is_empty() {
         cfg.dev.clone()
+    } else if let Some(runtime_dev) = preset
+        .runtime_overrides
+        .get(runtime_adapter.id())
+        .map(|override_def| &override_def.dev)
+        .filter(|dev| !dev.is_empty())
+    {
+        runtime_dev.clone()
     } else if !preset.dev.is_empty() {
         preset.dev.clone()
     } else {

@@ -6,10 +6,20 @@
 [vite]
 dev = ["vite", "dev"]
 
+[vite.bun]
+# Running Vite through `bunx --bun` routes the SSR module graph through
+# Bun's ESM loader, which lets server-side code import `bun:*` modules
+# (sqlite, ffi, jsc). Without `--bun`, `node_modules/.bin/vite` dispatches
+# to Node and those imports fail with ERR_UNSUPPORTED_ESM_URL_SCHEME.
+dev = ["bunx", "--bun", "vite", "dev"]
+
 [tanstack-start]
 main = "dist/server/tako-entry.mjs"
 assets = ["dist/client"]
 dev = ["vite", "dev"]
+
+[tanstack-start.bun]
+dev = ["bunx", "--bun", "vite", "dev"]
 
 [nextjs]
 main = ".next/tako-entry.mjs"

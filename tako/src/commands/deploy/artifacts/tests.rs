@@ -24,6 +24,7 @@ fn build_asset_roots_combines_and_deduplicates_preset_and_project_values() {
         main: None,
         assets: vec!["public".to_string(), "dist/client".to_string()],
         dev: vec![],
+        runtime_overrides: Default::default(),
     };
     let config = TakoToml {
         assets: vec!["dist/client".to_string(), "assets/shared".to_string()],

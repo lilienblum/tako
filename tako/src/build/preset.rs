@@ -1,6 +1,8 @@
 mod reference;
 mod remote;
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::build::adapter::{BuildAdapter, PresetGroup};
@@ -40,12 +42,26 @@ pub struct AppPreset {
     /// Custom dev command (overrides runtime default in `tako dev`).
     #[serde(default)]
     pub dev: Vec<String>,
+    /// Per-runtime overrides keyed by `BuildAdapter::id` (e.g. `"bun"`).
+    /// When the active runtime has an entry, its fields take precedence over
+    /// the preset defaults above. Missing fields in an override fall through
+    /// to the preset default.
+    #[serde(default)]
+    pub runtime_overrides: HashMap<String, AppPresetRuntimeOverride>,
+}
+
+/// Per-runtime preset override. Parsed from `[<preset>.<runtime>]` sub-tables.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AppPresetRuntimeOverride {
+    #[serde(default)]
+    pub dev: Vec<String>,
 }
 
 /// Backward-compatible alias.
 pub type BuildPreset = AppPreset;
 
 const KNOWN_PRESET_FIELDS: &[&str] = &["name", "main", "assets", "dev"];
+const KNOWN_RUNTIME_OVERRIDE_FIELDS: &[&str] = &["dev"];
 
 #[derive(Debug, Clone, Deserialize)]
 struct AppPresetRaw {
@@ -212,18 +228,40 @@ fn parse_group_preset_content(
 }
 
 pub fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<AppPreset, String> {
-    // Warn on unknown fields (legacy preset fields like dev, build, install, start).
-    if let Ok(value) = toml::from_str::<toml::Value>(content)
-        && let Some(table) = value.as_table()
-    {
-        for key in table.keys() {
-            if !KNOWN_PRESET_FIELDS.contains(&key.as_str()) {
-                tracing::warn!(
-                    "Preset has unknown field '{}' — only name, main, assets are supported",
-                    key
-                );
-            }
+    let value: toml::Value =
+        toml::from_str(content).map_err(|e| format!("Failed to parse preset TOML: {e}"))?;
+    let table = value.as_table().ok_or_else(|| {
+        "Preset TOML must be a table of key/value pairs at the top level.".to_string()
+    })?;
+
+    let mut runtime_overrides: HashMap<String, AppPresetRuntimeOverride> = HashMap::new();
+    for (key, child) in table {
+        if KNOWN_PRESET_FIELDS.contains(&key.as_str()) {
+            continue;
         }
+        if BuildAdapter::from_id(key).is_some() {
+            let child_table = child.as_table().ok_or_else(|| {
+                format!(
+                    "Preset runtime override '[{key}]' must be a TOML table (got {})",
+                    child.type_str()
+                )
+            })?;
+            for field in child_table.keys() {
+                if !KNOWN_RUNTIME_OVERRIDE_FIELDS.contains(&field.as_str()) {
+                    tracing::warn!(
+                        "Preset runtime override '[{key}]' has unknown field '{field}' — only dev is supported",
+                    );
+                }
+            }
+            let override_value = toml::Value::Table(child_table.clone())
+                .try_into()
+                .map_err(|e| format!("Failed to parse preset runtime override '[{key}]': {e}"))?;
+            runtime_overrides.insert(key.to_string(), override_value);
+            continue;
+        }
+        tracing::warn!(
+            "Preset has unknown field '{key}' — only name, main, assets, dev, and [<runtime>] sub-tables are supported",
+        );
     }
 
     let raw: AppPresetRaw =
@@ -246,6 +284,7 @@ pub fn parse_and_validate_preset(content: &str, inferred_name: &str) -> Result<A
         main: raw.main,
         assets: raw.assets,
         dev: raw.dev,
+        runtime_overrides,
     })
 }
 
@@ -548,5 +587,103 @@ assets = ["dist/client"]
 "#;
         let preset = parse_preset(raw).unwrap();
         assert_eq!(preset.assets, vec!["dist/client".to_string()]);
+    }
+
+    #[test]
+    fn parse_and_validate_preset_collects_runtime_override_dev() {
+        let raw = r#"
+name = "tanstack-start"
+main = "dist/server/tako-entry.mjs"
+dev = ["vite", "dev"]
+
+[bun]
+dev = ["bunx", "--bun", "vite", "dev"]
+"#;
+        let preset = parse_preset(raw).unwrap();
+        assert_eq!(preset.dev, vec!["vite".to_string(), "dev".to_string()]);
+        let bun_override = preset
+            .runtime_overrides
+            .get("bun")
+            .expect("bun runtime override");
+        assert_eq!(
+            bun_override.dev,
+            vec![
+                "bunx".to_string(),
+                "--bun".to_string(),
+                "vite".to_string(),
+                "dev".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_and_validate_preset_collects_multiple_runtime_overrides() {
+        let raw = r#"
+dev = ["vite", "dev"]
+
+[bun]
+dev = ["bunx", "--bun", "vite", "dev"]
+
+[deno]
+dev = ["deno", "task", "dev"]
+"#;
+        let preset = parse_preset(raw).unwrap();
+        assert_eq!(preset.runtime_overrides.len(), 2);
+        assert_eq!(
+            preset.runtime_overrides.get("bun").unwrap().dev,
+            vec![
+                "bunx".to_string(),
+                "--bun".to_string(),
+                "vite".to_string(),
+                "dev".to_string(),
+            ]
+        );
+        assert_eq!(
+            preset.runtime_overrides.get("deno").unwrap().dev,
+            vec!["deno".to_string(), "task".to_string(), "dev".to_string()],
+        );
+    }
+
+    #[test]
+    fn parse_and_validate_preset_without_runtime_overrides_has_empty_map() {
+        let raw = r#"
+name = "vite"
+dev = ["vite", "dev"]
+"#;
+        let preset = parse_preset(raw).unwrap();
+        assert!(preset.runtime_overrides.is_empty());
+    }
+
+    #[test]
+    fn tanstack_start_runtime_override_parses_from_group_manifest() {
+        let content = r#"
+[tanstack-start]
+main = "dist/server/tako-entry.mjs"
+assets = ["dist/client"]
+dev = ["vite", "dev"]
+
+[tanstack-start.bun]
+dev = ["bunx", "--bun", "vite", "dev"]
+"#;
+        let preset = parse_official_alias_preset_content(
+            "javascript/tanstack-start",
+            "presets/javascript.toml",
+            content,
+        )
+        .unwrap();
+        assert_eq!(preset.dev, vec!["vite".to_string(), "dev".to_string()]);
+        assert_eq!(
+            preset
+                .runtime_overrides
+                .get("bun")
+                .expect("bun runtime override from group manifest")
+                .dev,
+            vec![
+                "bunx".to_string(),
+                "--bun".to_string(),
+                "vite".to_string(),
+                "dev".to_string(),
+            ],
+        );
     }
 }
