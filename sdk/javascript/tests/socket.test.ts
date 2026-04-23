@@ -3,14 +3,16 @@ import { createServer } from "node:net";
 import type { Server } from "node:net";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { Channel, setChannelSocketPublisher } from "../src/channels";
 import {
   APP_NAME_ENV,
   assertInternalSocketEnvConsistency,
   callInternal,
+  installChannelSocketPublisherFromEnv,
   INTERNAL_SOCKET_ENV,
   internalSocketFromEnv,
   TakoError,
-} from "../src/internal-socket";
+} from "../src/tako/socket";
 
 function clearEnv(): void {
   delete process.env[INTERNAL_SOCKET_ENV];
@@ -137,6 +139,104 @@ describe("callInternal error wrapping", () => {
       expect((err.cause as Error).message).toBe("unknown workflow 'x'");
     } finally {
       server.close();
+    }
+  });
+});
+
+describe("installChannelSocketPublisherFromEnv", () => {
+  let dir: string;
+  let server: Server | null = null;
+
+  beforeEach(async () => {
+    clearEnv();
+    setChannelSocketPublisher(null);
+    dir = await mkdtemp(join("/tmp", "tako-chan-sock-"));
+  });
+
+  afterEach(async () => {
+    clearEnv();
+    setChannelSocketPublisher(null);
+    if (server) {
+      server.close();
+      server = null;
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  test("returns false when env is missing and does not install a publisher", () => {
+    expect(installChannelSocketPublisherFromEnv()).toBe(false);
+  });
+
+  test("routes Channel.publish through the internal socket when env is set", async () => {
+    const sock = join(dir, "chan.sock");
+    let receivedLine = "";
+    server = await new Promise<Server>((resolve, reject) => {
+      const s = createServer((socket) => {
+        socket.on("data", (chunk: Buffer) => {
+          receivedLine += chunk.toString("utf8");
+          const nl = receivedLine.indexOf("\n");
+          if (nl === -1) return;
+          socket.write(
+            `${JSON.stringify({
+              status: "ok",
+              data: {
+                id: "99",
+                channel: "chat/room-1",
+                type: "message",
+                data: { text: "hi" },
+              },
+            })}\n`,
+          );
+        });
+      });
+      s.once("error", reject);
+      s.listen(sock, () => resolve(s));
+    });
+
+    process.env[INTERNAL_SOCKET_ENV] = sock;
+    process.env[APP_NAME_ENV] = "demo";
+
+    expect(installChannelSocketPublisherFromEnv()).toBe(true);
+
+    const channel = new Channel("chat/room-1");
+    const result = await channel.publish({ type: "message", data: { text: "hi" } });
+
+    const parsed = JSON.parse(receivedLine.trim());
+    expect(parsed).toEqual({
+      command: "channel_publish",
+      app: "demo",
+      channel: "chat/room-1",
+      payload: { type: "message", data: { text: "hi" } },
+    });
+    expect(result).toEqual({
+      id: "99",
+      channel: "chat/room-1",
+      type: "message",
+      data: { text: "hi" },
+    });
+  });
+
+  test("explicit baseUrl bypasses the installed socket publisher", async () => {
+    process.env[INTERNAL_SOCKET_ENV] = join(dir, "nonexistent.sock");
+    process.env[APP_NAME_ENV] = "demo";
+    expect(installChannelSocketPublisherFromEnv()).toBe(true);
+
+    const fetchMock = (async () =>
+      new Response(JSON.stringify({ id: "1", channel: "chat/room-1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      })) as typeof fetch;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = fetchMock;
+    try {
+      const channel = new Channel("chat/room-1");
+      const result = await channel.publish(
+        { type: "message", data: { text: "hi" } },
+        { baseUrl: "https://app.example.com" },
+      );
+      expect(result.id).toBe("1");
+    } finally {
+      globalThis.fetch = originalFetch;
     }
   });
 });

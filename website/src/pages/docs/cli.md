@@ -699,9 +699,11 @@ Generate typed accessors for the current project.
 tako typegen
 ```
 
-Generates `tako.d.ts` for JavaScript/TypeScript projects and `tako_secrets.go` for Go projects. In JS/TS projects, `tako.d.ts` types both `Tako.secrets` and the stable app env surface exposed through `process.env` and `import.meta.env` (for example `ENV`, `TAKO_BUILD`, and `TAKO_DATA_DIR`).
+Generates `tako.gen.ts` for JavaScript/TypeScript projects and `tako_secrets.go` for Go projects. The generated file exports typed runtime state (`env`, `isDev`, `port`, `build`, `dataDir`, `appDir`, `logger`) and a typed `secrets` bag regenerated from `.tako/secrets.json`.
 
-`tako.d.ts` placement follows your project layout: if one already exists, it is updated in place; otherwise it is written inside `src/` or `app/` when those directories are present, or at the project root. This lines up with TypeScript's default `include` so no tsconfig changes are needed.
+`tako.gen.ts` placement follows your project layout: if one already exists, it is updated in place; otherwise it is written inside `src/` or `app/` when those directories are present, or at the project root. Legacy `tako.d.ts` files (from the pre-v0-global design) are removed on regeneration.
+
+For JavaScript/TypeScript projects, `tako typegen` also keeps `channels/` and `workflows/` definition files scaffolded when those directories already exist: empty dirs get a `demo.ts` stub, and files with no default export yet get a default `defineChannel(...)` or `defineWorkflow(...)` export appended without overwriting their existing code.
 
 ---
 

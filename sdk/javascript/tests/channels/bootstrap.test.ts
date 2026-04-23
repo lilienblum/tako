@@ -3,7 +3,6 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { bootstrapChannels } from "../../src/channels/bootstrap";
-import { ChannelRegistry } from "../../src/channels";
 
 let appDir = "";
 
@@ -21,10 +20,9 @@ function sdkImportPath(): string {
 
 describe("bootstrapChannels", () => {
   test("no-op when channels/ does not exist", async () => {
-    const reg = new ChannelRegistry();
-    const result = await bootstrapChannels({ appDir, registry: reg });
-    expect(result.channelCount).toBe(0);
-    expect(reg.resolve("x")).toBeNull();
+    const { registry, channelCount } = await bootstrapChannels({ appDir });
+    expect(channelCount).toBe(0);
+    expect(registry.resolve("x")).toBeNull();
   });
 
   test("registers discovered channels", async () => {
@@ -35,13 +33,12 @@ describe("bootstrapChannels", () => {
        export default defineChannel("status", { auth: async () => true });`,
       "utf8",
     );
-    const reg = new ChannelRegistry();
-    const result = await bootstrapChannels({ appDir, registry: reg });
-    expect(result.channelCount).toBe(1);
-    expect(reg.resolve("status")).not.toBeNull();
+    const { registry, channelCount } = await bootstrapChannels({ appDir });
+    expect(channelCount).toBe(1);
+    expect(registry.resolve("status")).not.toBeNull();
   });
 
-  test("clears the registry before registering", async () => {
+  test("returns a fresh registry each call", async () => {
     await mkdir(join(appDir, "channels"));
     await writeFile(
       join(appDir, "channels", "status.ts"),
@@ -49,9 +46,10 @@ describe("bootstrapChannels", () => {
        export default defineChannel("status", { auth: async () => true });`,
       "utf8",
     );
-    const reg = new ChannelRegistry();
-    await bootstrapChannels({ appDir, registry: reg });
-    await bootstrapChannels({ appDir, registry: reg });
-    expect(reg.all.length).toBe(1);
+    const first = await bootstrapChannels({ appDir });
+    const second = await bootstrapChannels({ appDir });
+    expect(first.registry).not.toBe(second.registry);
+    expect(first.registry.all.length).toBe(1);
+    expect(second.registry.all.length).toBe(1);
   });
 });

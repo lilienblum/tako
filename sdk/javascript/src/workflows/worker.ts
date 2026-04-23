@@ -64,7 +64,7 @@ export interface WorkerOptions {
   maxBackoffMs?: number;
   /** Scale-to-zero: exit poll loop after this many ms with no claim. */
   idleTimeoutMs?: number;
-  /** Reserved for multi-slot parallelism; v1 ignores. */
+  /** Max concurrent in-flight runs (default 500). */
   concurrency?: number;
   /** Base logger. Per-run children are tagged `worker:<workflowName>`. */
   logger?: Logger;
@@ -81,6 +81,7 @@ const DEFAULTS = {
   baseBackoffMs: 1_000,
   maxBackoffMs: 3_600_000,
   idleTimeoutMs: 0,
+  concurrency: 500,
 } as const;
 
 export class Worker {
@@ -93,6 +94,7 @@ export class Worker {
   private readonly baseBackoffMs: number;
   private readonly maxBackoffMs: number;
   private readonly idleTimeoutMs: number;
+  private readonly concurrency: number;
   private readonly log: Logger;
 
   private draining = false;
@@ -111,6 +113,7 @@ export class Worker {
     this.baseBackoffMs = opts.baseBackoffMs ?? DEFAULTS.baseBackoffMs;
     this.maxBackoffMs = opts.maxBackoffMs ?? DEFAULTS.maxBackoffMs;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULTS.idleTimeoutMs;
+    this.concurrency = Math.max(1, opts.concurrency ?? DEFAULTS.concurrency);
     this.log = opts.logger ?? createLogger("worker");
     this.lastClaimAt = Date.now();
   }
@@ -136,6 +139,26 @@ export class Worker {
     return true;
   }
 
+  /**
+   * Claim one run and kick off its execution without awaiting. Returns
+   * `true` if a run was claimed and dispatched, `false` if the queue was
+   * empty. Used by the internal run loop to keep up to `concurrency`
+   * runs in flight simultaneously; tests use the awaiting `processOnce`.
+   */
+  private async dispatchOne(): Promise<boolean> {
+    if (this.draining) return false;
+    const names = Array.from(this.registry.keys());
+    const run = await this.client.claim(this.workerId, names, this.leaseMs);
+    if (!run) return false;
+    this.lastClaimAt = Date.now();
+
+    const work: Promise<void> = this.execute(run).finally(() => {
+      this.inFlight.delete(work);
+    });
+    this.inFlight.add(work);
+    return true;
+  }
+
   start(): void {
     if (this.loopPromise) return;
     this.loopPromise = this.runLoop();
@@ -156,9 +179,17 @@ export class Worker {
 
   private async runLoop(): Promise<void> {
     while (!this.draining) {
-      const did = await this.processOnce().catch(() => false);
+      if (this.inFlight.size >= this.concurrency) {
+        await Promise.race(Array.from(this.inFlight)).catch(() => {});
+        continue;
+      }
+      const did = await this.dispatchOne().catch(() => false);
       if (!did && !this.draining) {
-        if (this.idleTimeoutMs > 0 && Date.now() - this.lastClaimAt >= this.idleTimeoutMs) {
+        if (
+          this.idleTimeoutMs > 0 &&
+          this.inFlight.size === 0 &&
+          Date.now() - this.lastClaimAt >= this.idleTimeoutMs
+        ) {
           this.idledOut = true;
           this.draining = true;
           break;

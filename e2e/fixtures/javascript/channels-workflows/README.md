@@ -1,7 +1,7 @@
 # channels-workflows fixture
 
-Minimal Bun fixture exercising both `Tako.channels` (SSE) and
-`Tako.workflows` (enqueue + durable handler).
+Minimal Bun fixture exercising both channels (SSE, via `defineChannel`)
+and workflows (enqueue + durable handler, via `defineWorkflow`).
 
 Flow:
 

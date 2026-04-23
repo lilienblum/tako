@@ -263,10 +263,7 @@ impl TakoProxy {
                             format!("Failed to encode SSE payload: {error}"),
                         )
                     })?;
-                    let frame = format!(
-                        "id: {}\nevent: {}\ndata: {}\n\n",
-                        message.id, message.r#type, encoded
-                    );
+                    let frame = format!("id: {}\ndata: {}\n\n", message.id, encoded);
                     session
                         .write_response_body(Some(Bytes::from(frame)), false)
                         .await?;

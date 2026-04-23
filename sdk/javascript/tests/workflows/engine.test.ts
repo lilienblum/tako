@@ -121,7 +121,7 @@ describe("discover", () => {
       join(dir, "send-email.mjs"),
       `
 import { defineWorkflow } from "${defineUrl}";
-export default defineWorkflow(async (payload, ctx) => payload.to, { retries: 4, schedule: "*/5 * * * *" });
+export default defineWorkflow("send-email", async (payload, ctx) => payload.to, { retries: 4, schedule: "*/5 * * * *" });
 `,
     );
     await writeFile(join(dir, "bare.mjs"), `export default function(payload) { return "ok"; }`);

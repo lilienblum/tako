@@ -4,9 +4,11 @@
  */
 
 import { createEntrypoint } from "../create-entrypoint";
+import { installStdioBridge } from "../stdio-bridge";
 import { startNodeServer } from "../node-http";
-import { initBootstrapFromFd, readViaInheritedFd } from "../secrets";
+import { initBootstrapFromFd, readViaInheritedFd } from "../secrets-fd";
 
+installStdioBridge("app");
 initBootstrapFromFd(readViaInheritedFd);
 const { run, host, port, setDraining } = createEntrypoint();
 

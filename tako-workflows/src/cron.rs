@@ -178,7 +178,16 @@ impl Drop for CronTickerHandle {
 /// expired since the last tick. Fires `on_enqueue` when either produced
 /// work so the supervisor wakes up. Extracted from the spawn loop so
 /// tests can drive it without waiting on wall-clock time.
-pub fn tick_and_reclaim(db: &RunsDb, now_ms: i64, on_enqueue: &(dyn Fn() + Send + Sync)) {
+///
+/// `limiter`, when provided, has its per-worker count decremented once
+/// per reclaimed row so dead workers' in-flight budgets drain back to
+/// zero without waiting for the SDK to call `complete`/`fail`.
+pub fn tick_and_reclaim(
+    db: &RunsDb,
+    now_ms: i64,
+    on_enqueue: &(dyn Fn() + Send + Sync),
+    limiter: Option<&crate::in_flight::InFlightLimiter>,
+) {
     let cron_enqueued = match tick_once(db, now_ms) {
         Ok(n) => n,
         Err(e) => {
@@ -186,14 +195,34 @@ pub fn tick_and_reclaim(db: &RunsDb, now_ms: i64, on_enqueue: &(dyn Fn() + Send 
             0
         }
     };
-    let reclaimed = match db.reclaim_expired() {
-        Ok(n) => n,
-        Err(e) => {
-            tracing::warn!(error = %e, "reclaim expired leases failed");
-            0
+    let reclaimed_workers: Vec<String> = if limiter.is_some() {
+        match db.reclaim_expired_with_workers() {
+            Ok(workers) => workers,
+            Err(e) => {
+                tracing::warn!(error = %e, "reclaim expired leases failed");
+                Vec::new()
+            }
+        }
+    } else {
+        match db.reclaim_expired() {
+            Ok(n) => {
+                // No limiter to update; just report a count-sized vec
+                // so the `cron_enqueued || reclaimed` branch below still
+                // fires on_enqueue.
+                vec![String::new(); n as usize]
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "reclaim expired leases failed");
+                Vec::new()
+            }
         }
     };
-    if cron_enqueued > 0 || reclaimed > 0 {
+    if let Some(lim) = limiter {
+        for worker in &reclaimed_workers {
+            lim.release(worker);
+        }
+    }
+    if cron_enqueued > 0 || !reclaimed_workers.is_empty() {
         on_enqueue();
     }
 }
@@ -202,6 +231,24 @@ pub fn tick_and_reclaim(db: &RunsDb, now_ms: i64, on_enqueue: &(dyn Fn() + Send 
 /// enqueued a scheduled task or reclaimed an expired lease — the
 /// supervisor wires this to `wake()` so scale-to-zero workers spin up.
 pub fn spawn(db: Arc<RunsDb>, on_enqueue: Arc<dyn Fn() + Send + Sync>) -> CronTickerHandle {
+    spawn_inner(db, None, on_enqueue)
+}
+
+/// Like [`spawn`] but also drains the in-flight limiter for workers
+/// whose leases got reclaimed this tick.
+pub fn spawn_with_limiter(
+    db: Arc<RunsDb>,
+    limiter: Arc<crate::in_flight::InFlightLimiter>,
+    on_enqueue: Arc<dyn Fn() + Send + Sync>,
+) -> CronTickerHandle {
+    spawn_inner(db, Some(limiter), on_enqueue)
+}
+
+fn spawn_inner(
+    db: Arc<RunsDb>,
+    limiter: Option<Arc<crate::in_flight::InFlightLimiter>>,
+    on_enqueue: Arc<dyn Fn() + Send + Sync>,
+) -> CronTickerHandle {
     let (tx, mut rx) = oneshot::channel::<()>();
     let join = tokio::spawn(async move {
         loop {
@@ -209,7 +256,7 @@ pub fn spawn(db: Arc<RunsDb>, on_enqueue: Arc<dyn Fn() + Send + Sync>) -> CronTi
                 _ = &mut rx => break,
                 _ = tokio::time::sleep(Duration::from_secs(1)) => {
                     let now_ms = chrono::Utc::now().timestamp_millis();
-                    tick_and_reclaim(&db, now_ms, &*on_enqueue);
+                    tick_and_reclaim(&db, now_ms, &*on_enqueue, limiter.as_deref());
                 }
             }
         }
@@ -372,7 +419,12 @@ mod tests {
             w.fetch_add(1, Ordering::SeqCst);
         };
 
-        tick_and_reclaim(&db, chrono::Utc::now().timestamp_millis(), &on_enqueue);
+        tick_and_reclaim(
+            &db,
+            chrono::Utc::now().timestamp_millis(),
+            &on_enqueue,
+            None,
+        );
 
         assert_eq!(
             wakes.load(Ordering::SeqCst),
@@ -398,7 +450,12 @@ mod tests {
             w.fetch_add(1, Ordering::SeqCst);
         };
 
-        tick_and_reclaim(&db, chrono::Utc::now().timestamp_millis(), &on_enqueue);
+        tick_and_reclaim(
+            &db,
+            chrono::Utc::now().timestamp_millis(),
+            &on_enqueue,
+            None,
+        );
 
         assert_eq!(wakes.load(Ordering::SeqCst), 0);
     }

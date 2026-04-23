@@ -2,9 +2,40 @@ import type { Logger as ViteLogger } from "vite";
 
 type Level = "debug" | "info" | "warn" | "error";
 type Fields = Record<string, unknown>;
+type OutputWriter = (chunk: string) => boolean;
+
+function defaultOutputWriter(chunk: string): boolean {
+  // Server: append to stdout as a JSON line. Browser: fall back to the
+  // devtools console so the same `logger` export works either side of a
+  // tako.sh/react or isomorphic-framework boundary without a module-load
+  // or call-time crash.
+  if (typeof process !== "undefined" && process.stdout?.write) {
+    return process.stdout.write(chunk);
+  }
+  const trimmed = chunk.endsWith("\n") ? chunk.slice(0, -1) : chunk;
+  try {
+    const parsed = JSON.parse(trimmed) as { level?: Level; msg?: unknown; fields?: Fields };
+    const fn =
+      parsed.level === "error"
+        ? console.error
+        : parsed.level === "warn"
+          ? console.warn
+          : parsed.level === "debug"
+            ? console.debug
+            : console.info;
+    if (parsed.fields !== undefined) fn(parsed.msg, parsed.fields);
+    else fn(parsed.msg);
+  } catch {
+    console.log(trimmed);
+  }
+  return true;
+}
+
+let outputWriter: OutputWriter = defaultOutputWriter;
 
 function autoPopulate(): Fields {
   const fields: Fields = {};
+  if (typeof process === "undefined" || !process.env) return fields;
   const build = process.env["TAKO_BUILD"];
   const instance = process.env["TAKO_INSTANCE_ID"];
   if (build !== undefined) fields["build"] = build;
@@ -32,7 +63,7 @@ function expandErrors(fields: Fields): Fields {
  * and per-call fields. `Error` values in `fields` are serialized to
  * `{ name, message, stack }` automatically.
  *
- * Obtain an instance with {@link createLogger} or read `Tako.logger`.
+ * Obtain an instance with {@link createLogger} or import `logger` from the generated `tako.gen.ts`.
  */
 export class Logger {
   static #globals: Fields = autoPopulate();
@@ -175,7 +206,7 @@ export class Logger {
     if (Object.keys(merged).length > 0) {
       payload["fields"] = merged;
     }
-    process.stdout.write(`${JSON.stringify(payload)}\n`);
+    outputWriter(`${JSON.stringify(payload)}\n`);
   }
 
   /** @internal Reset static state between tests. Do not call from user code. */
@@ -194,4 +225,14 @@ export class Logger {
  */
 export function createLogger(scope: string): Logger {
   return new Logger(scope);
+}
+
+/** @internal Install a raw writer that bypasses patched stdio streams. */
+export function setLoggerOutputWriter(writer: OutputWriter): void {
+  outputWriter = writer;
+}
+
+/** @internal Reset logger output writer between tests. */
+export function resetLoggerOutputWriterForTests(): void {
+  outputWriter = (chunk) => process.stdout.write(chunk);
 }

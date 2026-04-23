@@ -1,8 +1,8 @@
 ---
 name: tako-sdk
 description: >-
-  tako.sh SDK: fetch handler interface, Tako class for secrets/build info/channels/workflows,
-  Vite and Next.js adapters for framework builds, types reference.
+  tako.sh SDK: fetch handler interface, generated tako.gen.ts for runtime state + typed secrets,
+  defineChannel/defineWorkflow, Vite and Next.js adapters.
 type: framework
 library: tako.sh
 library_version: "0.0.1"
@@ -14,7 +14,7 @@ sources:
 
 Runtime SDK for JavaScript/TypeScript apps deployed with Tako.
 
-> **CRITICAL**: The `tako.sh` package is **required** — it provides the entrypoint binaries (`tako-bun`, `tako-node`, `tako-deno`) that tako-server launches to run your app. Your app exports a standard fetch handler `(Request, env) => Response`, but importing the `Tako` class is optional.
+> **CRITICAL**: The `tako.sh` package is **required** — it provides the entrypoint binaries (`tako-bun`, `tako-node`, `tako-deno`) that tako-server launches to run your app. Tako v0 uses plain ES modules everywhere — no `Tako` global. Runtime state (env, secrets, logger, build info) is imported from a generated `tako.gen.ts` file; channels and workflows are imported from their own files.
 
 > **CRITICAL**: Framework helpers are opt-in. Use `tako.sh/vite` for Vite-based SSR frameworks (TanStack Start, Nuxt, SolidStart) and `tako.sh/nextjs` for Next.js standalone builds. Plain fetch-handler apps do not need either helper.
 
@@ -53,45 +53,53 @@ export default {
 
 ## Package Exports
 
-| Import path      | Purpose                              | Key exports                                                         |
-| ---------------- | ------------------------------------ | ------------------------------------------------------------------- |
-| `tako.sh`        | Core utilities                       | `Tako` class, types                                                 |
-| `tako.sh/vite`   | Vite plugin for SSR builds           | `tako()` plugin function                                            |
-| `tako.sh/nextjs` | Next.js standalone adapter + wrapper | `withTako()`, `createNextjsAdapter()`, `createNextjsFetchHandler()` |
+| Import path        | Purpose                              | Key exports                                                                              |
+| ------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------- |
+| `tako.sh`          | Authoring helpers and types          | `defineChannel`, `defineWorkflow`, `TakoError`, `InferWorkflowPayload`                   |
+| `tako.sh/client`   | Browser-safe channel client          | `Channel`                                                                                |
+| `tako.sh/react`    | React hook for channels              | `useChannel`                                                                             |
+| `tako.sh/vite`     | Vite plugin for SSR builds           | `tako()` plugin function                                                                 |
+| `tako.sh/nextjs`   | Next.js standalone adapter + wrapper | `withTako()`, `createNextjsAdapter()`, `createNextjsFetchHandler()`                      |
+| `tako.sh/internal` | Plumbing for the generated file      | `resolveRuntime`, `loadSecrets`, `createLogger`, `ChannelRegistry`, `workflowsEngine`, … |
 
-## Tako Class
+## Runtime state: `tako.gen.ts`
 
-Optional utilities for Tako apps:
+`tako typegen` emits a project-local `tako.gen.ts` file (inside `src/`, `app/`, or project root — wherever fits the project's tsconfig). It exports typed runtime state and a typed `secrets` bag. When `channels/` or `workflows/` already exists, it also scaffolds empty definition dirs/files so they default-export `defineChannel(...)` / `defineWorkflow(...)` stubs. App code imports what it needs:
 
 ```typescript
-import { Tako } from "tako.sh";
+import { env, isDev, build, port, dataDir, logger, secrets } from "../tako.gen";
 
-// Check if running in Tako
-if (Tako.isRunningInTako()) {
-  console.log(`Build: ${Tako.build}`);
-}
-
-// Access secrets at request time
 export default function fetch(request: Request) {
-  const dbUrl = Tako.secrets.DATABASE_URL;
-  return new Response(`Connected to ${dbUrl ? "db" : "nothing"}`);
+  logger.info("request", { env, build });
+  return new Response(`env=${env} build=${build} db=${secrets.DATABASE_URL ? "ok" : "missing"}`);
 }
 ```
 
+### Surface
+
+| Export    | Description                                                        |
+| --------- | ------------------------------------------------------------------ |
+| `env`     | `ENV` value (`"development"`, `"production"`, ...)                 |
+| `isDev`   | `true` when `env === "development"`                                |
+| `isProd`  | `true` when `env === "production"`                                 |
+| `port`    | Port assigned to this app instance                                 |
+| `host`    | Host/address Tako bound this app instance to                       |
+| `build`   | Build identifier (from `TAKO_BUILD`)                               |
+| `dataDir` | Persistent app-owned data directory — writes survive restarts      |
+| `appDir`  | Directory the app is running from (equivalent to `process.cwd()`)  |
+| `secrets` | Typed secret bag (interface regenerated from `.tako/secrets.json`) |
+| `logger`  | Structured JSON logger (`logger.info(...)`)                        |
+
 ### Secrets
 
-`Tako.secrets` is a Proxy that:
+`secrets` is a Proxy that:
 
 - Reads from a mutable store populated via fd 3 at startup (before user module is imported)
-- Individual access works: `Tako.secrets.MY_KEY` returns the string value
+- Individual access works: `secrets.MY_KEY` returns the string value
 - Resists bulk serialization: `toString()`, `toJSON()` return `"[REDACTED]"`
-- Keys are enumerable: `Object.keys(Tako.secrets)` works
+- Is typed — the `Secrets` interface in `tako.gen.ts` lists every key present in `.tako/secrets.json`
 
-### Static Properties and Methods
-
-- `Tako.secrets` — Proxy object for environment secrets
-- `Tako.build` — Returns build version (from `TAKO_BUILD` env var)
-- `Tako.isRunningInTako()` — Returns `true` when running in Tako environment
+The generated file is server-only. In the browser, use `tako.sh/client` or `tako.sh/react`.
 
 ## Vite Plugin
 
@@ -158,18 +166,18 @@ Durable pub-sub streams with SSE and WebSocket transport.
 
 ### Defining channels (file-based)
 
-Drop one file per channel pattern in `channels/<name>.ts` that default-exports `defineChannel(pattern, config?)`. Imperative registration (`Tako.channels.define()`) no longer exists. Filenames become the accessor key on `Tako.channels.<name>`.
+Drop one file per channel pattern in `channels/<name>.ts` that default-exports `defineChannel(pattern, config?).$messageTypes<M>()`. Server code imports the file directly to publish or authorize.
 
 ```typescript
 // channels/chat.ts
 import { defineChannel } from "tako.sh";
 
-type ChatMessages = {
+interface ChatMessages {
   msg: { text: string; userId: string };
   typing: { userId: string };
-};
+}
 
-export default defineChannel<ChatMessages>("chat/:roomId", {
+export default defineChannel("chat/:roomId", {
   async auth(request, ctx) {
     // ctx.params.roomId is typed; ctx.operation = "subscribe" | "publish" | "connect"
     const userId = await getUserId(request);
@@ -187,10 +195,11 @@ export default defineChannel<ChatMessages>("chat/:roomId", {
   inactivityTtlMs: 0,
   keepaliveIntervalMs: 25_000,
   maxConnectionLifetimeMs: 2 * 60 * 60 * 1000,
-});
+}).$messageTypes<ChatMessages>();
 ```
 
 - Patterns are Hono-style: `/`-separated segments with `:name` captures and an optional trailing `*` wildcard. Must be a string literal.
+- `.$messageTypes<M>()` is a type-level narrower that declares the message map — runtime no-op. Omit for channels with no typed messages.
 - `auth` is optional. Omit for public channels (defaults to allow-all).
 - `handler` presence decides transport: present → WebSocket, absent → SSE (broadcast-only). SSE channels reject client POST publishes.
 
@@ -198,39 +207,51 @@ Auth return values: `false` deny · `true` allow anonymously · `{ subject }` al
 
 ### Publishing messages (server-side)
 
-Use the typed accessor — it's populated at boot from `channels/` discovery. Call signature is `(type, data)`:
+Import the channel module. The export is a typed handle (unparameterized) or a callable taking its params (parameterized). `publish` payloads are type-checked against the declared message map.
 
 ```typescript
 // Unparameterized channel: direct surface
-Tako.channels.status.send("ping", { at: Date.now() });
+import status from "../channels/status";
+await status.publish({ type: "ping", data: { at: Date.now() } });
 
-// Parameterized channel: bind params, then send
-Tako.channels.chat({ roomId: "room1" }).send("msg", {
-  text: "hello",
-  userId,
+// Parameterized channel: bind params, then publish
+import chat from "../channels/chat";
+await chat({ roomId: "room1" }).publish({
+  type: "msg",
+  data: { text: "hello", userId },
 });
 ```
 
 ### Subscribing / connecting (client-side)
 
-```typescript
-import { tako } from "tako.sh/client";
+In the browser, use the `Channel` class from `tako.sh/client` with the fully-resolved channel name. `subscribe()` returns an `EventSource`-shaped subscription; `connect()` returns a `WebSocket`-shaped socket.
 
-// SSE channel
-const sub = tako.channels.status.subscribe({
-  ping: (data) => console.log("pong at", data.at),
-  alert: (data) => console.warn(data.text),
+```typescript
+import { Channel } from "tako.sh/client";
+
+// SSE channel — listen to the raw EventSource
+const status = new Channel("status");
+const sub = status.subscribe();
+(sub.raw as EventSource).addEventListener("message", (e) => {
+  const msg = JSON.parse(e.data) as { type: string; data: unknown };
+  // ...
 });
 sub.close();
 
-// WS channel — same shape for subscribe, plus .send
-const room = tako.channels.chat({ roomId: "room1" });
-room.subscribe({
-  msg: (data) => console.log(`${data.userId}: ${data.text}`),
-  typing: () => {},
+// WebSocket channel — expand params into the name yourself
+const room = new Channel("chat/room1", "ws");
+const socket = room.connect();
+(socket.raw as WebSocket).addEventListener("message", (e) => {
+  const msg = JSON.parse(e.data);
+  // ...
 });
-await room.send("typing", { userId: "me" });
+socket.send({ type: "typing", data: { userId: "me" } });
+
+// Publishing from the browser (WS channels only)
+await room.publish({ type: "msg", data: { text: "hi", userId: "me" } });
 ```
+
+For React apps, prefer `useChannel` from `tako.sh/react` — it wraps `Channel` with buffered state, reconnects, and an `onMessage` callback.
 
 ### React
 
@@ -306,14 +327,15 @@ Durable background tasks with retries, schedules, and step checkpointing.
 
 ### Authoring workflows
 
-Drop a file in `workflows/<name>.ts` with a default export:
+Drop a file in `workflows/<name>.ts` with a default export. The first arg is the workflow name (conventionally the kebab-case file basename), the second is the handler, the third is optional config:
 
 ```typescript
 // workflows/send-email.ts
 import { defineWorkflow } from "tako.sh";
 
-export default defineWorkflow(
-  async (payload: { userId: string; to: string }, ctx) => {
+export default defineWorkflow<{ userId: string; to: string }>(
+  "send-email",
+  async (payload, ctx) => {
     const user = await ctx.run("fetch-user", () => db.users.find(payload.userId));
     await ctx.run("send", () => sendEmail(user, payload.to));
   },
@@ -329,19 +351,21 @@ export default defineWorkflow(
 
 ### Enqueuing
 
+Import the workflow module. The default export is a typed handle with `.enqueue(payload, opts?)` — payload is constrained to the declared `P`.
+
 ```typescript
-import { Tako } from "tako.sh";
+import sendEmail from "../workflows/send-email";
 
-await Tako.workflows.enqueue("send-email", { userId: "u1", to: "a@b.c" });
+await sendEmail.enqueue({ userId: "u1", to: "a@b.c" });
 
-await Tako.workflows.enqueue("send-email", payload, {
+await sendEmail.enqueue(payload, {
   runAt: new Date(Date.now() + 60_000), // delay
   retries: 9, // override workflow default
   uniqueKey: "digest:2026-04-14", // idempotency: no-op if non-terminal run exists
 });
 ```
 
-After running `tako typegen`, `enqueue` is type-checked against each workflow's payload type.
+No typegen is needed for workflow enqueue typing — the types flow from the workflow module itself.
 
 ### Step API (`ctx`)
 
@@ -367,7 +391,8 @@ After running `tako typegen`, `enqueue` is type-checked against each workflow's 
 
 ```typescript
 // Wake all waitFor("approval:order-abc") calls with a payload
-await Tako.workflows.signal("approval:order-abc", { approved: true });
+import { workflowsEngine } from "tako.sh/internal";
+await workflowsEngine.signal("approval:order-abc", { approved: true });
 ```
 
 ### Run lifecycle
@@ -420,9 +445,11 @@ export default withTako({});
 ### 3. HIGH: Serializing the secrets object
 
 ```typescript
+import { secrets } from "../tako.gen";
+
 // WRONG — bulk access is redacted
-console.log(JSON.stringify(Tako.secrets)); // "[REDACTED]"
+console.log(JSON.stringify(secrets)); // "[REDACTED]"
 
 // CORRECT — access individual secrets by name
-const dbUrl = Tako.secrets.DATABASE_URL;
+const dbUrl = secrets.DATABASE_URL;
 ```

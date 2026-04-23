@@ -1,9 +1,9 @@
 /**
- * Shared Tako internal-socket RPC client.
+ * Shared Tako internal unix-socket RPC client.
  *
  * Server-side SDK code (app fetch handlers, workflow bodies, cron ticks)
  * reaches `tako-server` via a single unix socket. Workflow RPCs and
- * `Tako.channels.publish()` both land here — no HTTPS, no auth, same
+ * server-side channel `.publish()` both land here — no HTTPS, no auth, same
  * trust boundary as the hosting process.
  *
  * Env vars set by the server when spawning an instance or worker:
@@ -12,38 +12,15 @@
  */
 
 import { createConnection } from "node:net";
-import { createLogger } from "./logger";
+import { setChannelSocketPublisher } from "../channels";
+import { createLogger } from "../logger";
+import type { ChannelMessage, ChannelPublishInput } from "../types";
 
 export const INTERNAL_SOCKET_ENV = "TAKO_INTERNAL_SOCKET";
 export const APP_NAME_ENV = "TAKO_APP_NAME";
 
-/**
- * Stable error codes raised by the Tako internal-RPC layer. Apps can switch
- * on `err.code` to render a user-safe message; the original cause is on
- * `err.cause` (and logged to stdout so operators can debug).
- */
-export type TakoErrorCode =
-  | "TAKO_UNAVAILABLE"
-  | "TAKO_TIMEOUT"
-  | "TAKO_PROTOCOL"
-  | "TAKO_RPC_ERROR";
-
-/**
- * Error raised by Tako SDK operations that cross the internal socket
- * (workflows enqueue/signal/claim/..., channels publish). Every raw Node
- * socket failure is wrapped so internal paths and syscall names never leak
- * to end users — `message` stays generic, `code` is stable, and the
- * original error is preserved on `.cause`.
- */
-export class TakoError extends Error {
-  readonly code: TakoErrorCode;
-
-  constructor(code: TakoErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message, options);
-    this.name = "TakoError";
-    this.code = code;
-  }
-}
+export { TakoError, type TakoErrorCode } from "./error";
+import { TakoError, type TakoErrorCode } from "./error";
 
 interface RpcResponse {
   status: "ok" | "error";
@@ -84,7 +61,7 @@ export function internalSocketFromEnv(): { socketPath: string; app: string } | n
  *
  * Called once at SDK init so a misconfigured spawn (one var set, the other
  * missing) crashes the process on boot instead of hiding until the first
- * `Tako.workflows.enqueue` or `Tako.channels.publish`. Both spawners
+ * workflow `.enqueue()` or channel `.publish()`. Both spawners
  * (`tako-server`, `tako-dev-server`) always set the pair, so a half-set
  * state is a platform bug worth failing loud.
  */
@@ -102,6 +79,31 @@ export function assertInternalSocketEnvConsistency(): void {
       `outside a Tako-managed process). This usually means the spawner ` +
       `forgot to inject the full Tako runtime contract.`,
   );
+}
+
+/**
+ * Install a channel publisher that routes `Channel.publish()` calls through
+ * the Tako internal socket when `TAKO_INTERNAL_SOCKET` + `TAKO_APP_NAME` are
+ * set. Called from the server and worker bootstraps so app/workflow code can
+ * publish without an HTTPS round-trip back through the proxy.
+ *
+ * Returns `true` when a publisher was installed, `false` when the env is
+ * missing (e.g. running outside a Tako-managed process).
+ */
+export function installChannelSocketPublisherFromEnv(): boolean {
+  const env = internalSocketFromEnv();
+  if (!env) return false;
+  const { socketPath, app } = env;
+  setChannelSocketPublisher(async <T>(channel: string, message: ChannelPublishInput<T>) => {
+    const result = await callInternal(socketPath, {
+      command: "channel_publish",
+      app,
+      channel,
+      payload: message,
+    });
+    return result as ChannelMessage<T>;
+  });
+  return true;
 }
 
 /** Send a single JSONL command and resolve to `data` (or throw on error). */

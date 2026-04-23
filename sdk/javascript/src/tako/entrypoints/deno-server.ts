@@ -9,9 +9,11 @@
  */
 
 import { createEntrypoint } from "../create-entrypoint";
+import { installStdioBridge } from "../stdio-bridge";
 import { writeViaProcSelfFd } from "../readiness";
-import { initBootstrapFromFd, readViaProcSelfFd } from "../secrets";
+import { initBootstrapFromFd, readViaProcSelfFd } from "../secrets-fd";
 
+installStdioBridge("app");
 initBootstrapFromFd(readViaProcSelfFd);
 const { run, host, port, setDraining } = createEntrypoint({
   signalReadyPortOnFd: writeViaProcSelfFd,

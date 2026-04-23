@@ -1,7 +1,7 @@
 //! Single shared Tako internal socket.
 //!
 //! One socket per tako-server instance handles every server-side SDK RPC:
-//! workflow enqueue + worker RPCs, `Tako.channels.publish()`, and any
+//! workflow enqueue + worker RPCs, server-side channel `publish()`, and any
 //! future server-routed command. Commands carry an `app` field; the
 //! handler uses a lookup closure to find the app's `RunsDb` and supervisor
 //! wake function (channel publish takes a separate route).
@@ -33,7 +33,7 @@ pub type OnEnqueue = Arc<dyn Fn() + Send + Sync>;
 
 /// Pre-enqueue probe: returns `Err(reason)` when the worker can't currently
 /// process jobs (e.g. crash-looping after bootstrap failure). Gives the SDK
-/// `Tako.workflows.enqueue` a chance to reject loudly instead of queuing
+/// workflow `.enqueue()` call a chance to reject loudly instead of queuing
 /// into a black hole.
 pub type HealthCheck = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
 
@@ -45,6 +45,7 @@ pub type OnClaimed = Arc<dyn Fn() + Send + Sync>;
 /// Per-app handlers the internal socket needs to service one connection.
 pub struct AppHandlers {
     pub db: Arc<RunsDb>,
+    pub limiter: Arc<crate::in_flight::InFlightLimiter>,
     pub on_enqueue: OnEnqueue,
     pub health_check: HealthCheck,
     pub on_claimed: OnClaimed,
@@ -250,6 +251,7 @@ fn handle_command(
     };
     let AppHandlers {
         db,
+        limiter,
         on_enqueue,
         health_check,
         on_claimed,
@@ -282,14 +284,31 @@ fn handle_command(
             names,
             lease_ms,
             ..
-        } => match db.claim(&worker_id, &names, lease_ms) {
-            Ok(Some(run)) => {
-                (on_claimed)();
-                Response::ok(run)
+        } => {
+            // Leaky bucket: refuse the claim without touching the queue
+            // if the worker is already holding its max concurrent runs.
+            // The SDK sees `Ok(None)` (same shape as "queue empty") and
+            // backs off until an in-flight run terminates and a slot
+            // frees up.
+            if !limiter.try_acquire(&worker_id) {
+                return Response::ok(serde_json::Value::Null);
             }
-            Ok(None) => Response::ok(serde_json::Value::Null),
-            Err(e) => Response::error(format!("claim failed: {e}")),
-        },
+            match db.claim(&worker_id, &names, lease_ms) {
+                Ok(Some(run)) => {
+                    (on_claimed)();
+                    Response::ok(run)
+                }
+                Ok(None) => {
+                    // No work to do — give the slot back right away.
+                    limiter.release(&worker_id);
+                    Response::ok(serde_json::Value::Null)
+                }
+                Err(e) => {
+                    limiter.release(&worker_id);
+                    Response::error(format!("claim failed: {e}"))
+                }
+            }
+        }
         Command::HeartbeatRun {
             id,
             worker_id,
@@ -310,7 +329,10 @@ fn handle_command(
             Err(e) => Response::error(format!("save_step failed: {e}")),
         },
         Command::CompleteRun { id, worker_id, .. } => match db.complete(&id, &worker_id) {
-            Ok(()) => Response::ok(serde_json::json!({})),
+            Ok(()) => {
+                limiter.release(&worker_id);
+                Response::ok(serde_json::json!({}))
+            }
             Err(e) => Response::error(format!("complete failed: {e}")),
         },
         Command::CancelRun {
@@ -319,7 +341,10 @@ fn handle_command(
             reason,
             ..
         } => match db.cancel(&id, &worker_id, reason.as_deref()) {
-            Ok(()) => Response::ok(serde_json::json!({})),
+            Ok(()) => {
+                limiter.release(&worker_id);
+                Response::ok(serde_json::json!({}))
+            }
             Err(e) => Response::error(format!("cancel failed: {e}")),
         },
         Command::FailRun {
@@ -330,7 +355,10 @@ fn handle_command(
             finalize,
             ..
         } => match db.fail(&id, &worker_id, &error, next_run_at_ms, finalize) {
-            Ok(()) => Response::ok(serde_json::json!({})),
+            Ok(()) => {
+                limiter.release(&worker_id);
+                Response::ok(serde_json::json!({}))
+            }
             Err(e) => Response::error(format!("fail failed: {e}")),
         },
         Command::DeferRun {
@@ -339,7 +367,10 @@ fn handle_command(
             wake_at_ms,
             ..
         } => match db.defer(&id, &worker_id, wake_at_ms) {
-            Ok(()) => Response::ok(serde_json::json!({})),
+            Ok(()) => {
+                limiter.release(&worker_id);
+                Response::ok(serde_json::json!({}))
+            }
             Err(e) => Response::error(format!("defer failed: {e}")),
         },
         Command::WaitForEvent {
@@ -350,7 +381,10 @@ fn handle_command(
             timeout_at_ms,
             ..
         } => match db.wait_for_event(&id, &worker_id, &step_name, &event_name, timeout_at_ms) {
-            Ok(()) => Response::ok(serde_json::json!({})),
+            Ok(()) => {
+                limiter.release(&worker_id);
+                Response::ok(serde_json::json!({}))
+            }
             Err(e) => Response::error(format!("wait_for_event failed: {e}")),
         },
         Command::Signal {
@@ -378,10 +412,15 @@ mod tests {
     use tokio::io::BufReader;
     use tokio::net::UnixStream;
 
+    fn test_limiter() -> Arc<crate::in_flight::InFlightLimiter> {
+        Arc::new(crate::in_flight::InFlightLimiter::new(10))
+    }
+
     fn lookup_for(map: std::collections::HashMap<String, Arc<RunsDb>>) -> AppLookup {
         Arc::new(move |app: &str| {
             map.get(app).map(|db| AppHandlers {
                 db: db.clone(),
+                limiter: test_limiter(),
                 on_enqueue: Arc::new(|| {}),
                 health_check: Arc::new(|| Ok(())),
                 on_claimed: Arc::new(|| {}),
@@ -432,6 +471,7 @@ mod tests {
         let lookup: AppLookup = Arc::new(move |_app: &str| {
             Some(AppHandlers {
                 db: db_for_lookup.clone(),
+                limiter: test_limiter(),
                 on_enqueue: Arc::new(|| {}),
                 health_check: Arc::new(|| Err("bootstrap crashed".to_string())),
                 on_claimed: Arc::new(|| {}),
@@ -479,6 +519,7 @@ mod tests {
         let lookup: AppLookup = Arc::new(move |_app: &str| {
             Some(AppHandlers {
                 db: db_for_lookup.clone(),
+                limiter: test_limiter(),
                 on_enqueue: Arc::new(|| {}),
                 health_check: Arc::new(|| Ok(())),
                 on_claimed: on_claimed.clone(),
@@ -499,6 +540,180 @@ mod tests {
         write_json_line(&mut w, &cmd).await.unwrap();
         let _resp: Response = read_json_line(&mut r).await.unwrap().unwrap();
         assert_eq!(count.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn claim_respects_in_flight_limiter() {
+        use crate::in_flight::InFlightLimiter;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("internal.sock");
+        let db = Arc::new(RunsDb::open_in_memory().unwrap());
+        // Seed 3 runs so there's always something the DB could return.
+        for _ in 0..3 {
+            db.enqueue("w", &serde_json::json!({}), &EnqueueOpts::default())
+                .unwrap();
+        }
+        // Cap at 2 concurrent in-flight for this worker.
+        let limiter = Arc::new(InFlightLimiter::new(2));
+
+        let db_for_lookup = db.clone();
+        let limiter_for_lookup = limiter.clone();
+        let lookup: AppLookup = Arc::new(move |_app: &str| {
+            Some(AppHandlers {
+                db: db_for_lookup.clone(),
+                limiter: limiter_for_lookup.clone(),
+                on_enqueue: Arc::new(|| {}),
+                health_check: Arc::new(|| Ok(())),
+                on_claimed: Arc::new(|| {}),
+            })
+        });
+        let handle = spawn(&sock, lookup, None).unwrap();
+
+        let stream = UnixStream::connect(&sock).await.unwrap();
+        let (r, mut w) = stream.into_split();
+        let mut r = BufReader::new(r);
+
+        // First two claims succeed.
+        for _ in 0..2 {
+            let cmd = Command::ClaimRun {
+                app: "a".into(),
+                worker_id: "w1".into(),
+                names: vec!["w".into()],
+                lease_ms: 30_000,
+            };
+            write_json_line(&mut w, &cmd).await.unwrap();
+            let resp: Response = read_json_line(&mut r).await.unwrap().unwrap();
+            let v = resp.data().unwrap();
+            assert!(!v.is_null(), "expected a run, got null: {resp:?}");
+        }
+
+        // Third claim: limiter refuses, DB row is NOT consumed, response
+        // is a null payload (same shape as "queue empty").
+        let cmd = Command::ClaimRun {
+            app: "a".into(),
+            worker_id: "w1".into(),
+            names: vec!["w".into()],
+            lease_ms: 30_000,
+        };
+        write_json_line(&mut w, &cmd).await.unwrap();
+        let resp: Response = read_json_line(&mut r).await.unwrap().unwrap();
+        assert!(resp.data().unwrap().is_null());
+        // One run still pending — limiter refused BEFORE the DB claim fired.
+        assert_eq!(db.pending_count().unwrap(), 1);
+
+        // Complete one run → slot frees → next claim succeeds.
+        limiter.release("w1");
+        let cmd = Command::ClaimRun {
+            app: "a".into(),
+            worker_id: "w1".into(),
+            names: vec!["w".into()],
+            lease_ms: 30_000,
+        };
+        write_json_line(&mut w, &cmd).await.unwrap();
+        let resp: Response = read_json_line(&mut r).await.unwrap().unwrap();
+        assert!(!resp.data().unwrap().is_null());
+
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn claim_without_work_does_not_hold_a_slot() {
+        use crate::in_flight::InFlightLimiter;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("internal.sock");
+        let db = Arc::new(RunsDb::open_in_memory().unwrap());
+        let limiter = Arc::new(InFlightLimiter::new(1));
+
+        let db_for_lookup = db.clone();
+        let limiter_for_lookup = limiter.clone();
+        let lookup: AppLookup = Arc::new(move |_app: &str| {
+            Some(AppHandlers {
+                db: db_for_lookup.clone(),
+                limiter: limiter_for_lookup.clone(),
+                on_enqueue: Arc::new(|| {}),
+                health_check: Arc::new(|| Ok(())),
+                on_claimed: Arc::new(|| {}),
+            })
+        });
+        let handle = spawn(&sock, lookup, None).unwrap();
+
+        let stream = UnixStream::connect(&sock).await.unwrap();
+        let (r, mut w) = stream.into_split();
+        let mut r = BufReader::new(r);
+
+        // Empty queue: claim reserves a slot, DB returns nothing, slot
+        // must be released so the next claim isn't rejected by the cap.
+        for _ in 0..5 {
+            let cmd = Command::ClaimRun {
+                app: "a".into(),
+                worker_id: "w1".into(),
+                names: vec!["w".into()],
+                lease_ms: 30_000,
+            };
+            write_json_line(&mut w, &cmd).await.unwrap();
+            let resp: Response = read_json_line(&mut r).await.unwrap().unwrap();
+            assert!(resp.data().unwrap().is_null());
+        }
+        assert_eq!(limiter.count("w1"), 0);
+
+        handle.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn complete_releases_a_slot() {
+        use crate::in_flight::InFlightLimiter;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let sock = tmp.path().join("internal.sock");
+        let db = Arc::new(RunsDb::open_in_memory().unwrap());
+        db.enqueue("w", &serde_json::json!({}), &EnqueueOpts::default())
+            .unwrap();
+        let limiter = Arc::new(InFlightLimiter::new(1));
+
+        let db_for_lookup = db.clone();
+        let limiter_for_lookup = limiter.clone();
+        let lookup: AppLookup = Arc::new(move |_app: &str| {
+            Some(AppHandlers {
+                db: db_for_lookup.clone(),
+                limiter: limiter_for_lookup.clone(),
+                on_enqueue: Arc::new(|| {}),
+                health_check: Arc::new(|| Ok(())),
+                on_claimed: Arc::new(|| {}),
+            })
+        });
+        let handle = spawn(&sock, lookup, None).unwrap();
+
+        let stream = UnixStream::connect(&sock).await.unwrap();
+        let (r, mut w) = stream.into_split();
+        let mut r = BufReader::new(r);
+
+        // Claim.
+        let cmd = Command::ClaimRun {
+            app: "a".into(),
+            worker_id: "w1".into(),
+            names: vec!["w".into()],
+            lease_ms: 30_000,
+        };
+        write_json_line(&mut w, &cmd).await.unwrap();
+        let resp: Response = read_json_line(&mut r).await.unwrap().unwrap();
+        let run = resp.data().unwrap();
+        let id = run.get("id").and_then(|v| v.as_str()).unwrap().to_string();
+        assert_eq!(limiter.count("w1"), 1);
+
+        // Complete.
+        let cmd = Command::CompleteRun {
+            app: "a".into(),
+            id,
+            worker_id: "w1".into(),
+        };
+        write_json_line(&mut w, &cmd).await.unwrap();
+        let resp: Response = read_json_line(&mut r).await.unwrap().unwrap();
+        assert!(resp.is_ok());
+        assert_eq!(limiter.count("w1"), 0);
 
         handle.shutdown().await;
     }
@@ -541,6 +756,7 @@ mod tests {
         let lookup: AppLookup = Arc::new(move |_app: &str| {
             Some(AppHandlers {
                 db: db_for_lookup.clone(),
+                limiter: test_limiter(),
                 on_enqueue: on_enq.clone(),
                 health_check: Arc::new(|| Ok(())),
                 on_claimed: Arc::new(|| {}),

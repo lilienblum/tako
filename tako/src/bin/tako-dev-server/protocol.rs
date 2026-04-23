@@ -14,7 +14,6 @@ pub enum Request {
         variant: Option<String>,
         #[serde(default)]
         hosts: Vec<String>,
-        upstream_port: u16,
         command: Vec<String>,
         env: std::collections::HashMap<String, String>,
         #[serde(default)]
@@ -320,7 +319,6 @@ mod tests {
             app_name: "my-app".to_string(),
             variant: None,
             hosts: vec!["my-app.test".to_string(), "my-app.test/api".to_string()],
-            upstream_port: 3000,
             command: vec!["bun".to_string(), "run".to_string(), "index.ts".to_string()],
             env: std::collections::HashMap::from([(
                 "NODE_ENV".to_string(),

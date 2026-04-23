@@ -91,7 +91,7 @@ Export the encryption key.
 
 ### `tako typegen`
 
-Generate typed accessors from local project files. Outputs to `tako.d.ts`.
+Generate typed accessors from local project files. Outputs to `tako.gen.ts`.
 
 ```bash
 tako typegen
@@ -99,8 +99,11 @@ tako typegen
 
 Generates:
 
-- **Typed secrets** — reads secret names from `.tako/secrets.json`, emits typed accessors (`Tako.secrets.MY_KEY`).
-- **Typed workflow enqueue** — scans `workflows/` for `defineWorkflow<P>()` exports and emits `interface Workflows { ... }` augmentation so `Tako.workflows.enqueue("name", payload)` is type-checked against each workflow's payload type.
+- **Typed secrets** — reads secret names from `.tako/secrets.json`, emits a `Secrets` interface and `secrets` export from `tako.gen.ts`.
+- **Runtime accessors** — emits `env`, `isDev`, `isProd`, `port`, `host`, `build`, `dataDir`, `appDir`, `logger` exports that wrap process state and the fd-3 bootstrap.
+- **JS definition stubs** — when `channels/` or `workflows/` already exists, scaffolds `demo.ts` in empty dirs and adds missing default `defineChannel(...)` / `defineWorkflow(...)` exports to files that do not have a default export yet.
+
+Workflow and channel payload types flow from their module types directly (no typegen needed for `.enqueue(payload)` or `.publish({type, data})`).
 
 Re-run after adding/removing secrets or workflow files. `tako dev` and `tako deploy` run it automatically.
 

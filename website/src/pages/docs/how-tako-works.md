@@ -188,7 +188,7 @@ Channel reads/connects use one route:
 
 Channel names are hierarchical: everything after `/channels/` (up to the optional `/messages` suffix for publishes) is the channel name. `chat/room-123` is a valid channel; it lives at `/channels/chat/room-123`.
 
-Channels are declared as files under `channels/<name>.ts`, each default-exporting `defineChannel(pattern, config)`. Patterns are Hono-style paths with `:param` captures and optional trailing `*` wildcards. The presence of `handler` in the config determines transport: with `handler` the channel is WebSocket (client frames route through the handler and its return value fans out), without it the channel is SSE (broadcast-only; client POSTs are rejected with 405).
+Channels are declared as files under `channels/<name>.ts`, each default-exporting `defineChannel(pattern, config).$messageTypes<M>()`. Patterns are Hono-style paths with `:param` captures and optional trailing `*` wildcards. The presence of `handler` in the config determines transport: with `handler` the channel is WebSocket (client frames route through the handler and its return value fans out), without it the channel is SSE (broadcast-only; client POSTs are rejected with 405).
 
 Channels keep a bounded replay window for reconnects and reloads. SSE resumes from `Last-Event-ID`, and WebSocket resumes from `last_message_id` in the query string. WebSocket frames stay JSON text frames for both replayed messages and client publish payloads.
 
@@ -342,10 +342,11 @@ Scrape with Prometheus, Grafana Cloud, Datadog, or any compatible platform. For 
 Apps can run durable background tasks alongside their HTTP instances. Drop a file in `workflows/` (JS/TS) or register handlers in a separate `cmd/worker/main.go` binary (Go), then enqueue from any request handler:
 
 ```ts
-await Tako.workflows.enqueue("send-email", { to: "user@example.com" });
+import sendEmail from "../workflows/send-email";
+await sendEmail.enqueue({ to: "user@example.com" });
 ```
 
-Run `tako typegen` to generate type-safe enqueue signatures from your `workflows/` files.
+Each workflow file default-exports a typed handle from `defineWorkflow<P>("name", handler)`. Its `.enqueue(payload, opts?)` is type-checked against the declared `P` — no typegen required for enqueue typing.
 
 Tako runs each app's workers in a **separate process** from HTTP instances (so heavy workflow deps — image libs, ML bindings — don't inflate the HTTP binary). The worker is scale-to-zero by default: it spawns on the first enqueue or cron tick, exits after 5 minutes idle, and respawns on demand.
 

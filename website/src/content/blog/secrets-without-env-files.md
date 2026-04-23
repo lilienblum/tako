@@ -91,28 +91,28 @@ pipe -> app: "read + close"
 
 Your app reads fd 3 once at startup, parses the JSON, and the pipe is closed. The secrets exist only in process memory — never written to disk on the server, never in environment variables, never visible in `/proc/<pid>/environ` or `ps auxe`.
 
-The [Tako SDK](/docs) handles this automatically. In JavaScript:
+The [Tako SDK](/docs) handles this automatically. In JavaScript, `tako typegen` emits a project-local `tako.gen.ts` that exports a typed `secrets` bag. Your app imports what it needs:
 
 ```typescript
-import { Tako } from "tako.sh";
+// tako.gen.ts is populated from fd 3 before your code runs
+import { secrets } from "../tako.gen";
 
-// Secrets are already loaded from fd 3 before your code runs
-const db = Tako.secrets.DATABASE_URL;
+const db = secrets.DATABASE_URL;
 
-console.log(Tako.secrets); // "[REDACTED]"
-JSON.stringify(Tako.secrets); // "[REDACTED]"
+console.log(secrets); // "[REDACTED]"
+JSON.stringify(secrets); // "[REDACTED]"
 ```
 
 The SDK wraps secrets in a Proxy that redacts on `toString()` and `toJSON()` — so accidental logging never leaks values. In Go, it's the same idea with thread-safe accessors.
 
 ### Typed secrets with `tako typegen`
 
-Run [`tako typegen`](/docs/cli) and Tako reads your encrypted secrets file to generate type definitions — without decrypting the values (remember, names are plaintext). In JS/TS projects, the generated `tako.d.ts` also types the standard Tako/runtime env vars such as `TAKO_DATA_DIR`, `TAKO_BUILD`, and `ENV`.
+Run [`tako typegen`](/docs/cli) and Tako reads your encrypted secrets file to generate type definitions — without decrypting the values (remember, names are plaintext).
 
-**TypeScript** gets a `tako.d.ts`:
+**TypeScript** gets a `tako.gen.ts` that exports a typed `Secrets` interface and a `secrets` instance:
 
 ```typescript
-interface TakoSecrets {
+export interface Secrets {
   readonly DATABASE_URL: string;
   readonly STRIPE_KEY: string;
   toString(): "[REDACTED]";

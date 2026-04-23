@@ -1,6 +1,6 @@
 import { format } from "node:util";
 
-import { createLogger, type Logger } from "./logger";
+import { createLogger, type Logger } from "../logger";
 
 type ConsoleMethod = "log" | "info" | "warn" | "error" | "debug";
 
@@ -46,7 +46,16 @@ function emit(log: Logger, level: "info" | "warn" | "error" | "debug", args: unk
   const error = args.find((a): a is Error => a instanceof Error);
   let msg: string;
   if (args.length === 1 && error) {
-    msg = error.stack && error.stack.length > 0 ? error.stack : `${error.name}: ${error.message}`;
+    msg = `${error.name}: ${error.message}`;
+  } else if (error) {
+    // Format the non-Error args (so `%s`/`%o` interpolation still works),
+    // then append a single-line error summary. The full Error — with stack —
+    // travels as `fields.error` so the renderer can show it out-of-band
+    // without the stack leaking into `msg` and breaking multi-line wrapping.
+    const rest = args.filter((a) => a !== error);
+    const prefix = rest.length > 0 ? format(...rest) : "";
+    const summary = `${error.name}: ${error.message}`;
+    msg = prefix ? `${prefix} ${summary}` : summary;
   } else {
     msg = format(...args);
   }

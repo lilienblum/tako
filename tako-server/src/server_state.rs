@@ -125,7 +125,7 @@ impl ServerState {
 
         let workflows = Arc::new(crate::workflows::WorkflowManager::new(data_dir.clone()));
 
-        // Server-side `Tako.channels.publish()` — writes straight to the
+        // Server-side channel `.publish()` — writes straight to the
         // per-app channel store via the shared internal socket. Stores are
         // opened lazily per app and cached so repeated publishes reuse the
         // same SQLite connection.
@@ -350,7 +350,7 @@ impl ServerState {
                 crate::workflows::worker_spec_for_bun(
                     &app_for_spec,
                     0,       // workers (scale-to-zero)
-                    10,      // concurrency
+                    500,     // concurrency
                     300_000, // idle_timeout_ms (5 min)
                     &internal_socket,
                     &runtime_bin,

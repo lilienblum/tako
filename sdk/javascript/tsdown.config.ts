@@ -6,7 +6,6 @@ export default defineConfig({
     client: "src/client.ts",
     react: "src/react.ts",
     vite: "src/vite.ts",
-    server: "src/server.ts",
     internal: "src/internal.ts",
     nextjs: "src/nextjs/index.ts",
     "entrypoints/bun-server": "src/tako/entrypoints/bun-server.ts",

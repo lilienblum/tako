@@ -169,7 +169,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let data_dir = paths::tako_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     let workflows = Arc::new(tako_workflows::WorkflowManager::new(&data_dir));
 
-    // Server-side `Tako.channels.publish()` — goes through the internal
+    // Server-side channel `.publish()` — goes through the internal
     // socket straight to the channel store, no HTTPS/auth roundtrip.
     {
         let channels = channels.clone();
@@ -187,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let internal_socket_path = match workflows.start_socket() {
         Err(e) => {
-            tracing::warn!(error = %e, "failed to start internal socket; Tako.workflows.enqueue / Tako.channels.publish will not work");
+            tracing::warn!(error = %e, "failed to start internal socket; workflow enqueue / channel publish will not work");
             None
         }
         Ok(()) => {

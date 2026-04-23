@@ -70,7 +70,7 @@ One binary, one file, one socket. [`tako deploy`](/blog/what-happens-when-you-ru
 
 ### Same vocabulary, smaller surface
 
-Tako's [SDK primitives](/docs/tako-toml) — `ctx.run` for memoized side effects, `ctx.sleep` for durable waits, `ctx.waitFor` paired with `Tako.workflows.signal`, and cron via `schedule` — cover retries, long waits, human approvals, fan-out, and scheduled jobs. That's the working set of what most apps need from a workflow engine. We deliberately skipped child workflows, queries, versioning APIs, and history replay knobs. If your system design genuinely needs those, Temporal is the correct tool.
+Tako's [SDK primitives](/docs/tako-toml) — `ctx.run` for memoized side effects, `ctx.sleep` for durable waits, `ctx.waitFor` paired with `signal`, and cron via `schedule` — cover retries, long waits, human approvals, fan-out, and scheduled jobs. That's the working set of what most apps need from a workflow engine. We deliberately skipped child workflows, queries, versioning APIs, and history replay knobs. If your system design genuinely needs those, Temporal is the correct tool.
 
 ### No per-Action meter
 

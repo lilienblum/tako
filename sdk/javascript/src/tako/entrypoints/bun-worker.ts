@@ -8,14 +8,15 @@
  * the SDK itself touches no SQLite.
  */
 
-import { installConsoleBridge } from "../../console-bridge";
-import { installErrorHooks } from "../../error-hooks";
+import { installConsoleBridge } from "../console-bridge";
+import { installErrorHooks } from "../error-hooks";
 import { createLogger } from "../../logger";
-import { initBootstrapFromFd, readViaInheritedFd } from "../secrets";
-import { installTakoGlobal } from "../../tako";
+import { installStdioBridge } from "../stdio-bridge";
+import { initBootstrapFromFd, readViaInheritedFd } from "../secrets-fd";
 import { bootstrapWorker } from "../../workflows/bootstrap";
 import { workflowsEngine } from "../../workflows/engine";
 
+installStdioBridge("worker");
 installErrorHooks("worker");
 installConsoleBridge("worker");
 
@@ -23,7 +24,6 @@ const log = createLogger("worker");
 
 async function main(): Promise<void> {
   initBootstrapFromFd(readViaInheritedFd);
-  installTakoGlobal();
   const result = await bootstrapWorker();
 
   if (!result.started) {

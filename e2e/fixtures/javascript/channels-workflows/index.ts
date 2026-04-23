@@ -1,4 +1,4 @@
-import { Tako } from "tako.sh";
+import broadcast from "./workflows/broadcast";
 
 export default async function fetch(request: Request): Promise<Response> {
   const url = new URL(request.url);
@@ -11,7 +11,7 @@ export default async function fetch(request: Request): Promise<Response> {
 
   if (url.pathname === "/enqueue" && request.method === "POST") {
     const { message } = (await request.json()) as { message: string };
-    const runId = await Tako.workflows.enqueue("broadcast", { message });
+    const runId = await broadcast.enqueue({ message });
     return Response.json({ ok: true, runId });
   }
 

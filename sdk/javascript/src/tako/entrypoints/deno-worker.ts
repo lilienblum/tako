@@ -3,11 +3,11 @@
  * Tako Deno Worker Entrypoint.
  */
 
-import { installConsoleBridge } from "../../console-bridge";
-import { installErrorHooks } from "../../error-hooks";
+import { installConsoleBridge } from "../console-bridge";
+import { installErrorHooks } from "../error-hooks";
 import { createLogger } from "../../logger";
-import { initBootstrapFromFd, readViaProcSelfFd } from "../secrets";
-import { installTakoGlobal } from "../../tako";
+import { installStdioBridge } from "../stdio-bridge";
+import { initBootstrapFromFd, readViaProcSelfFd } from "../secrets-fd";
 import { bootstrapWorker } from "../../workflows/bootstrap";
 import { workflowsEngine } from "../../workflows/engine";
 
@@ -16,6 +16,7 @@ declare const Deno: {
   exit(code?: number): never;
 };
 
+installStdioBridge("worker");
 installErrorHooks("worker");
 installConsoleBridge("worker");
 
@@ -23,7 +24,6 @@ const log = createLogger("worker");
 
 async function main(): Promise<void> {
   initBootstrapFromFd(readViaProcSelfFd);
-  installTakoGlobal();
   const result = await bootstrapWorker();
   const exit: (code?: number) => never =
     typeof Deno !== "undefined"

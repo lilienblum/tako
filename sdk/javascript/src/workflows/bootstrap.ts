@@ -20,6 +20,11 @@
  */
 
 import { join } from "node:path";
+import {
+  assertInternalSocketEnvConsistency,
+  installChannelSocketPublisherFromEnv,
+} from "../tako/socket";
+import { setWorkflowRuntime } from "./define";
 import { workflowsEngine } from "./engine";
 import { WorkflowsClient } from "./rpc-client";
 
@@ -39,6 +44,8 @@ const WORKFLOWS_DIRNAME = "workflows";
 export async function bootstrapWorker(
   opts: WorkerBootstrapOptions = {},
 ): Promise<WorkerBootstrapResult> {
+  assertInternalSocketEnvConsistency();
+
   const appDir = opts.appDir ?? process.cwd();
   const client = WorkflowsClient.fromEnv();
   if (!client) {
@@ -49,11 +56,17 @@ export async function bootstrapWorker(
     };
   }
 
-  const concurrency = parseIntEnv("TAKO_WORKER_CONCURRENCY", 10);
+  installChannelSocketPublisherFromEnv();
+
+  const concurrency = parseIntEnv("TAKO_WORKER_CONCURRENCY", 500);
   const idleTimeoutMs = parseIntEnv("TAKO_WORKER_IDLE_TIMEOUT_MS", 0);
   const workerId = `worker-${process.pid}`;
 
   workflowsEngine.configure({ client, workerId });
+  setWorkflowRuntime({
+    enqueue: (name, payload, opts) => workflowsEngine.enqueue(name, payload, opts),
+    signal: (event, payload) => workflowsEngine.signal(event, payload),
+  });
 
   const workflowsDir = join(appDir, WORKFLOWS_DIRNAME);
   const count = await workflowsEngine.discover(workflowsDir);

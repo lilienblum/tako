@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS schedules (
   last_run_at  INTEGER
 );
 
--- Parked runs waiting on an event. When `Tako.workflows.signal(name, payload)`
+-- Parked runs waiting on an event. When `workflowsEngine.signal(name, payload)`
 -- fires, every waiter with a matching event_name is re-scheduled (run_at=now)
 -- and the payload is materialized as a step result on resume.
 CREATE TABLE IF NOT EXISTS event_waiters (

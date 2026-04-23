@@ -1,22 +1,34 @@
 /**
- * tako.sh/internal — Types and utilities for advanced use cases.
+ * tako.sh/internal — server-only plumbing.
  *
- * Most apps only need `tako.sh`. Import from here when you need to
- * type workflow handlers, channel auth, or build framework adapters.
+ * Two audiences:
+ *   - The generated `tako.gen.ts` file, which pulls `loadSecrets` and
+ *     `createLogger` from here.
+ *   - Framework-adapter authors wiring Tako into a new host (custom Vite
+ *     plugin, Next.js middleware, edge adapter), who use
+ *     `handleTakoEndpoint` to answer Tako's internal protocol requests.
+ *
+ * Not for app code. `loadSecrets` reads from an fd pipe and `createLogger`
+ * writes JSON to `process.stdout`; do not import from here in browser
+ * code. Client-side apps import from `tako.sh/client`; app server code
+ * imports `workflowsEngine` and authoring helpers from `tako.sh`.
+ *
+ * Keep this surface narrow — anything re-exported here becomes
+ * statically reachable from consumer bundlers, and side-effectful
+ * bindings (like singletons) pull their source modules in even when the
+ * named import isn't used.
  */
 
-// Workflow authoring types
 export type {
   WorkflowDefinition,
   WorkflowHandler,
   WorkflowContext,
   WorkflowConfig,
 } from "./workflows";
-export type { EnqueueOptions, Workflows } from "./workflows";
+export type { WorkflowExport } from "./workflows/define";
 export type { StepRunOptions, StepWaitOptions } from "./workflows";
-export { isWorkflowDefinition } from "./workflows";
+export { isWorkflowDefinition, isWorkflowExport } from "./workflows";
 
-// Channel types
 export type {
   ChannelConnectOptions,
   ChannelDefinitionTransport,
@@ -29,9 +41,18 @@ export type {
   ChannelSubscription,
   FetchHandler,
 } from "./types";
-export type { ChannelDefinition, ChannelAuthContext } from "./channels/define";
-export { defineChannel, isChannelDefinition } from "./channels/define";
+export type {
+  ChannelDefinition,
+  ChannelAuthContext,
+  ChannelExport,
+  ChannelHandle,
+  ChannelPathParams,
+} from "./channels/define";
+export { defineChannel, isChannelDefinition, isChannelExport } from "./channels/define";
 
-// Re-exports used by entrypoints and framework adapters
-export { ChannelRegistry, TAKO_CHANNELS_BASE_PATH } from "./channels";
-export { installTakoGlobal } from "./tako";
+export { loadSecrets } from "./tako/secrets";
+export { createLogger } from "./logger";
+export type { Logger } from "./logger";
+
+export { handleTakoEndpoint } from "./tako/endpoints";
+export type { TakoStatus } from "./types";

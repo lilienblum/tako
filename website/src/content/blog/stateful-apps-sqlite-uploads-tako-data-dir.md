@@ -63,10 +63,10 @@ SQLite is underrated for side projects. It's fast, reliable, needs zero infrastr
 
 ```typescript
 import { Database } from "bun:sqlite";
-import { Tako } from "tako.sh";
 import { join } from "path";
+import { dataDir } from "../tako.gen";
 
-const db = new Database(join(process.env.TAKO_DATA_DIR!, "app.db"));
+const db = new Database(join(dataDir, "app.db"));
 db.run(`
   CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,17 +75,15 @@ db.run(`
   )
 `);
 
-export default Tako.serve({
-  async fetch(req) {
-    if (req.method === "POST" && new URL(req.url).pathname === "/notes") {
-      const { body } = await req.json();
-      db.run("INSERT INTO notes (body) VALUES (?)", [body]);
-      return new Response("ok");
-    }
-    const notes = db.query("SELECT * FROM notes ORDER BY created_at DESC").all();
-    return Response.json(notes);
-  },
-});
+export default async function fetch(req: Request) {
+  if (req.method === "POST" && new URL(req.url).pathname === "/notes") {
+    const { body } = await req.json();
+    db.run("INSERT INTO notes (body) VALUES (?)", [body]);
+    return new Response("ok");
+  }
+  const notes = db.query("SELECT * FROM notes ORDER BY created_at DESC").all();
+  return Response.json(notes);
+}
 ```
 
 The database file lives at `$TAKO_DATA_DIR/app.db`. Deploy a new version and the release directory swaps, but `TAKO_DATA_DIR` stays put. Your rows are exactly where you left them.
@@ -95,24 +93,22 @@ The database file lives at `$TAKO_DATA_DIR/app.db`. Deploy a new version and the
 The same pattern applies to any file-based storage:
 
 ```typescript
-import { Tako } from "tako.sh";
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
+import { dataDir } from "../tako.gen";
 
-const uploadsDir = join(process.env.TAKO_DATA_DIR!, "uploads");
+const uploadsDir = join(dataDir, "uploads");
 await mkdir(uploadsDir, { recursive: true });
 
-export default Tako.serve({
-  async fetch(req) {
-    if (req.method === "POST" && new URL(req.url).pathname === "/upload") {
-      const formData = await req.formData();
-      const file = formData.get("file") as File;
-      await writeFile(join(uploadsDir, file.name), Buffer.from(await file.arrayBuffer()));
-      return Response.json({ path: `/files/${file.name}` });
-    }
-    // serve files from uploadsDir...
-  },
-});
+export default async function fetch(req: Request) {
+  if (req.method === "POST" && new URL(req.url).pathname === "/upload") {
+    const formData = await req.formData();
+    const file = formData.get("file") as File;
+    await writeFile(join(uploadsDir, file.name), Buffer.from(await file.arrayBuffer()));
+    return Response.json({ path: `/files/${file.name}` });
+  }
+  // serve files from uploadsDir...
+}
 ```
 
 Uploaded files persist across deploys. New releases start, old ones drain — the files are untouched.
@@ -123,7 +119,7 @@ In development, `tako dev` sets `TAKO_DATA_DIR` to `.tako/data/app/` inside your
 
 If you want a clean local state, delete `.tako/data/app/` — the same reasoning applies in production: the data persists until you intentionally clear it.
 
-Run `tako typegen` and the generated `tako.d.ts` will include `TAKO_DATA_DIR` as a typed env var alongside your secrets, so your editor knows it's always available.
+Run `tako typegen` and the generated `tako.gen.ts` exports `dataDir` as a typed value alongside your secrets, so your editor knows it's always available.
 
 ## Where this doesn't replace managed infrastructure
 

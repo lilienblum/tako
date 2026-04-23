@@ -17,6 +17,7 @@
 pub mod cron;
 pub mod enqueue;
 pub mod enqueue_socket;
+pub mod in_flight;
 pub mod manager;
 pub mod schema;
 pub mod supervisor;
@@ -28,6 +29,8 @@ pub use enqueue_socket::{
     AppHandlers, AppLookup, ChannelPublishFn, EnqueueSocketHandle, HealthCheck, OnClaimed,
     OnEnqueue, spawn as spawn_enqueue_socket,
 };
+#[allow(unused_imports)]
+pub use in_flight::InFlightLimiter;
 #[allow(unused_imports)]
 pub use manager::{
     WorkflowManager, WorkflowManagerError, internal_socket_path, worker_spec_for_bun,

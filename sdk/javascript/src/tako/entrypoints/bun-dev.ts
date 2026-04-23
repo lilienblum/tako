@@ -3,12 +3,14 @@
  * Tako Bun Dev Entrypoint — runs HTTP + workflow worker in one process.
  */
 
-import { installConsoleBridge } from "../../console-bridge";
-import { installErrorHooks } from "../../error-hooks";
+import { installConsoleBridge } from "../console-bridge";
+import { installErrorHooks } from "../error-hooks";
+import { installStdioBridge } from "../stdio-bridge";
 import { createEntrypoint } from "../create-entrypoint";
 import { drainInProcessWorker, startInProcessWorker } from "../dev-worker";
-import { initBootstrapFromFd, readViaInheritedFd } from "../secrets";
+import { initBootstrapFromFd, readViaInheritedFd } from "../secrets-fd";
 
+installStdioBridge("app");
 installErrorHooks("app");
 installConsoleBridge("app");
 initBootstrapFromFd(readViaInheritedFd);

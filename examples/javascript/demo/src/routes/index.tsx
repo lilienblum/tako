@@ -1,204 +1,266 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
-import { MessageCircle, Radio, Send } from "lucide-react";
-import { Tako } from "tako.sh";
 import { useChannel } from "tako.sh/react";
-import { useMemo, useRef, useState } from "react";
+import { startTransition, useCallback, useMemo, useState } from "react";
+import { z } from "zod";
+import { logger } from "../tako.gen";
+import missionLog from "../../channels/mission-log";
+import orderShipment from "../../workflows/order-shipment";
+import { Landing } from "../components/landing";
+import { MissionControl } from "../components/mission-control";
+import {
+  EMPTY_RETRIES,
+  EMPTY_STEPS,
+  type InFlightRequest,
+  type MissionLogEvent,
+} from "../components/types";
+import type { BaseSnapshot, DbSupplyRequest, MissionChannelUpdate } from "../server/types";
+import { createRequest, getBaseSnapshot } from "@/server/db";
 
-// ── Server functions ─────────────────────────────────────────────────────────
+const EVENT_HISTORY_LIMIT = 80;
+const REQUEST_HISTORY_LIMIT = 50;
+const routeLogger = logger.child("moonbase-route");
 
-const getPageData = createServerFn().handler(async () => {
-  const request = getRequest();
-  const host = (request?.headers.get("host") ?? "").split(":")[0] ?? "";
-  const labels = host.split(".");
-  const demoIdx = labels.indexOf("demo");
-  const tenant = demoIdx === 1 ? (labels[0] ?? null) : null;
-
-  return { tenant };
+const supplyRequestSchema = z.object({
+  requestId: z.uuid(),
+  base: z.string().min(1).max(64),
+  item: z.string().min(1).max(120),
 });
 
-const enqueueBroadcast = createServerFn()
-  .inputValidator((data: { id: string; message: string }) => data)
-  .handler(async ({ data }) => {
-    await Tako.workflows.enqueue("broadcast", data);
-  });
+type SupplyRequestInput = z.infer<typeof supplyRequestSchema>;
 
-// ── Route ────────────────────────────────────────────────────────────────────
+type PageData = {
+  tenantSlug: string | null;
+  rootHost: string;
+  rootOrigin: string;
+  snapshot: BaseSnapshot | null;
+};
+
+function parseHost(hostHeader: string): {
+  tenantSlug: string | null;
+  rootHost: string;
+  rootOrigin: string;
+} {
+  const [hostPart, port] = hostHeader.split(":");
+  const host = hostPart ?? "";
+  const labels = host.split(".");
+  const demoIndex = labels.indexOf("demo");
+  if (demoIndex === -1) {
+    const rootHost = host || "demo.tako.sh";
+    return {
+      tenantSlug: null,
+      rootHost,
+      rootOrigin: `//${port ? `${rootHost}:${port}` : rootHost}`,
+    };
+  }
+  const rootHost = labels.slice(demoIndex).join(".");
+  const tenantSlug = demoIndex === 1 ? (labels[0] ?? null) : null;
+  return {
+    tenantSlug,
+    rootHost,
+    rootOrigin: `//${port ? `${rootHost}:${port}` : rootHost}`,
+  };
+}
+
+const getPageData = createServerFn().handler(async (): Promise<PageData> => {
+  const request = getRequest();
+  const { tenantSlug, rootHost, rootOrigin } = parseHost(request?.headers.get("host") ?? "");
+  if (!tenantSlug) {
+    return { tenantSlug: null, rootHost, rootOrigin, snapshot: null };
+  }
+  const snapshot = getBaseSnapshot(tenantSlug);
+  return { tenantSlug, rootHost, rootOrigin, snapshot };
+});
+
+const enqueueSupplyRequest = createServerFn()
+  .inputValidator((data) => supplyRequestSchema.parse(data))
+  .handler(async ({ data }) => {
+    const request = createRequest({
+      requestId: data.requestId,
+      baseSlug: data.base,
+      item: data.item,
+    });
+
+    try {
+      await missionLog({ base: data.base }).publish({
+        type: "update",
+        data: { request },
+      });
+    } catch (err) {
+      routeLogger.error("channel publish failed", { error: err });
+    }
+    await orderShipment.enqueue(data);
+  });
 
 export const Route = createFileRoute("/")({
   loader: () => getPageData(),
   component: Home,
 });
 
-// ── Component ────────────────────────────────────────────────────────────────
-
 function Home() {
-  const { tenant } = Route.useLoaderData();
-  const [input, setInput] = useState("");
-  const [sending, setSending] = useState(false);
-  const [pending, setPending] = useState<Set<string>>(() => new Set());
-  const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const { tenantSlug, rootHost, rootOrigin, snapshot } = Route.useLoaderData();
 
-  const { messages: channelMessages } = useChannel<{ id: string; message: string }>(
-    "demo-broadcast",
-    {
-      onMessage: (msg) => {
-        const id = msg.data.id;
-        setPending((prev) => {
-          if (!prev.has(id)) return prev;
-          const next = new Set(prev);
-          next.delete(id);
-          return next;
-        });
-      },
-    },
-  );
-
-  // Newest-first for display.
-  const messages = useMemo(
-    () =>
-      channelMessages
-        .map((m) => ({ id: m.data.id, text: m.data.message }))
-        .slice()
-        .reverse(),
-    [channelMessages],
-  );
-
-  async function handleSend() {
-    const text = input.trim();
-    if (!text || sending) return;
-    const id = crypto.randomUUID();
-    setSending(true);
-    setInput("");
-    setError(null);
-    try {
-      await enqueueBroadcast({ data: { id, message: text } });
-      setPending((prev) => new Set(prev).add(id));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSending(false);
-      inputRef.current?.focus();
-    }
+  if (!tenantSlug || !snapshot) {
+    return <Landing rootHost={rootHost} />;
   }
 
-  return (
-    <div className="page">
-      <header className="page-header">
-        <div className="header-inner">
-          <a className="logo" href="https://tako.sh">
-            <img src="/favicon.svg" alt="" aria-hidden="true" width="28" height="28" />
-            <span>tako</span>
-            <span className="logo-label">demo</span>
-          </a>
-          <div className="header-right">
-            {tenant && (
-              <div className="tenant-tag">
-                <span className="tenant-tag-label">tenant</span>
-                <span className="tenant-tag-value">{tenant}</span>
-              </div>
-            )}
-            <a
-              className="header-source"
-              href="https://github.com/lilienblum/tako/tree/master/examples/javascript/demo"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <img
-                src="https://cdn.simpleicons.org/github/2f2a44"
-                alt=""
-                aria-hidden="true"
-                width={15}
-                height={15}
-              />
-              <span>source</span>
-            </a>
-          </div>
-        </div>
-      </header>
+  return <Controller tenantSlug={tenantSlug} rootOrigin={rootOrigin} initialSnapshot={snapshot} />;
+}
 
-      <main className="page-main">
-        <div className="page-title">
-          <h1>Channels + workflows</h1>
-          <p>A live Tako demo — durable pub/sub meets server-driven workflows.</p>
-        </div>
-
-        <div className="card">
-          <div className="card-head">
-            <Radio size={14} className="card-head-icon" aria-hidden="true" />
-            channels + workflows
-          </div>
-
-          <div className="card-body">
-            <p className="card-desc">
-              Send a message — a workflow sleeps 3 seconds, then broadcasts it to everyone on this
-              page.
-            </p>
-            <form
-              className="input-row"
-              onSubmit={(e) => {
-                e.preventDefault();
-                void handleSend();
-              }}
-            >
-              <input
-                ref={inputRef}
-                className="msg-input"
-                type="text"
-                placeholder="Type a message…"
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                disabled={sending}
-                autoFocus
-              />
-              <button
-                type="submit"
-                className="send-btn"
-                disabled={sending || !input.trim()}
-                aria-label="Send"
-              >
-                <Send size={16} aria-hidden="true" />
-              </button>
-            </form>
-            {pending.size > 0 && (
-              <p className="sending-hint">
-                {pending.size === 1
-                  ? "workflow running — arriving in ~3s…"
-                  : `${pending.size} workflows running — arriving in ~3s…`}
-              </p>
-            )}
-            {error && <p className="send-error">send failed: {error}</p>}
-          </div>
-
-          {messages.length > 0 && (
-            <div className="messages" role="log" aria-live="polite">
-              {messages.map((msg) => (
-                <div key={msg.id} className="message">
-                  <MessageCircle size={14} className="message-icon" aria-hidden="true" />
-                  <span className="message-text">{msg.text}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </main>
-
-      <footer className="page-footer">
-        <div className="footer-inner">
-          <a href="https://tako.sh" target="_blank" rel="noopener noreferrer">
-            tako.sh
-          </a>
-          <a href="https://tako.sh/docs" target="_blank" rel="noopener noreferrer">
-            docs
-          </a>
-          <a href="https://github.com/lilienblum/tako" target="_blank" rel="noopener noreferrer">
-            github
-          </a>
-        </div>
-        <div className="footer-note">built with tako.sh</div>
-      </footer>
-    </div>
+function Controller({
+  tenantSlug,
+  rootOrigin,
+  initialSnapshot,
+}: {
+  tenantSlug: string;
+  rootOrigin: string;
+  initialSnapshot: BaseSnapshot;
+}) {
+  const [requestsById, setRequestsById] = useState<Record<string, InFlightRequest>>(() =>
+    indexRequests(initialSnapshot.requests),
   );
+  const [events, setEvents] = useState<MissionLogEvent[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+
+  const channelName = `mission-log/${encodeURIComponent(tenantSlug)}`;
+  const requests = useMemo(
+    () => Object.values(requestsById).sort((left, right) => right.createdAt - left.createdAt),
+    [requestsById],
+  );
+
+  const onMessage = useCallback((raw: { type: string; data: unknown }) => {
+    const msg = raw as { type: "update"; data: MissionChannelUpdate };
+    const event = msg.data.event;
+    startTransition(() => {
+      setRequestsById((prev) => upsertRequest(prev, toInFlight(msg.data.request)));
+      if (event) {
+        setEvents((prev) => appendEvent(prev, event));
+      }
+    });
+  }, []);
+
+  const { status } = useChannel(channelName, { onMessage });
+  const connected = status === "open";
+
+  const handleSubmit = useCallback(
+    async (payload: { item: string }) => {
+      if (submitting) return;
+      const requestId = crypto.randomUUID();
+      const input: SupplyRequestInput = {
+        requestId,
+        base: tenantSlug,
+        item: payload.item,
+      };
+
+      setRequestsById((prev) => upsertRequest(prev, optimisticRequest(input)));
+      setSubmitError(null);
+      setSubmitting(true);
+      try {
+        await enqueueSupplyRequest({ data: input });
+      } catch (err) {
+        routeLogger.error("supply request failed", { error: err, requestId });
+        const message = err instanceof Error ? err.message : "unknown error";
+        setSubmitError(`Request could not be enqueued: ${message}. Try again.`);
+        setRequestsById((prev) => removeRequest(prev, requestId));
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [submitting, tenantSlug],
+  );
+
+  return (
+    <MissionControl
+      tenantSlug={tenantSlug}
+      rootOrigin={rootOrigin}
+      inFlight={requests}
+      events={events}
+      submitting={submitting}
+      connected={connected}
+      submitError={submitError}
+      onSubmit={handleSubmit}
+    />
+  );
+}
+
+function toInFlight(row: DbSupplyRequest): InFlightRequest {
+  return {
+    requestId: row.requestId,
+    base: row.baseSlug,
+    item: row.item,
+    createdAt: row.createdAt,
+    isComplete: row.isComplete,
+    steps: row.steps,
+    retries: row.retries,
+  };
+}
+
+function optimisticRequest(input: SupplyRequestInput): InFlightRequest {
+  return {
+    requestId: input.requestId,
+    base: input.base,
+    item: input.item,
+    createdAt: Date.now(),
+    isComplete: false,
+    steps: { ...EMPTY_STEPS },
+    retries: { ...EMPTY_RETRIES },
+  };
+}
+
+function indexRequests(rows: DbSupplyRequest[]): Record<string, InFlightRequest> {
+  return rows.reduce<Record<string, InFlightRequest>>((acc, row) => {
+    const request = toInFlight(row);
+    acc[request.requestId] = request;
+    return acc;
+  }, {});
+}
+
+function upsertRequest(
+  requests: Record<string, InFlightRequest>,
+  incoming: InFlightRequest,
+): Record<string, InFlightRequest> {
+  const existing = requests[incoming.requestId];
+  const next = {
+    ...requests,
+    [incoming.requestId]: existing
+      ? {
+          ...existing,
+          ...incoming,
+        }
+      : incoming,
+  };
+
+  const requestIds = Object.keys(next);
+  if (requestIds.length <= REQUEST_HISTORY_LIMIT) {
+    return next;
+  }
+
+  const staleRequestId = requestIds
+    .map((requestId) => next[requestId]!)
+    .sort((left, right) => right.createdAt - left.createdAt)
+    .slice(REQUEST_HISTORY_LIMIT)
+    .map((request) => request.requestId)[0];
+  if (!staleRequestId) {
+    return next;
+  }
+
+  return removeRequest(next, staleRequestId);
+}
+
+function removeRequest(
+  requests: Record<string, InFlightRequest>,
+  requestId: string,
+): Record<string, InFlightRequest> {
+  if (!(requestId in requests)) {
+    return requests;
+  }
+  const { [requestId]: _removed, ...rest } = requests;
+  return rest;
+}
+
+function appendEvent(list: MissionLogEvent[], event: MissionLogEvent): MissionLogEvent[] {
+  if (list.some((e) => e.id === event.id)) return list;
+  return [event, ...list].slice(0, EVENT_HISTORY_LIMIT);
 }

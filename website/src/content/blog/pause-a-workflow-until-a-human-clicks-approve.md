@@ -1,7 +1,7 @@
 ---
 title: "Pause a Workflow Until a Human Clicks Approve"
 date: "2026-04-21T01:27"
-description: "A walkthrough of ctx.waitFor + Tako.workflows.signal — an order-fulfillment workflow that parks for days waiting on admin approval, then resumes exactly where it left off."
+description: "A walkthrough of ctx.waitFor + signal — an order-fulfillment workflow that parks for days waiting on admin approval, then resumes exactly where it left off."
 image: eaf36ad099f6
 ---
 
@@ -20,6 +20,7 @@ Imagine an order-fulfillment workflow. Charge the card, run a fraud check, **wai
 import { defineWorkflow } from "tako.sh";
 
 export default defineWorkflow<{ orderId: string }>(
+  "fulfill-order",
   async (payload, ctx) => {
     const order = await ctx.run("load-order", () => db.orders.find(payload.orderId));
 
@@ -52,10 +53,12 @@ Anywhere else in your code — an HTTP handler, a webhook receiver, an admin but
 
 ```ts
 // app/admin/approve.ts
+import { signal } from "tako.sh";
+
 export default async function fetch(req: Request) {
   const { orderId, approverId } = await req.json();
 
-  await Tako.workflows.signal(`approval:order-${orderId}`, {
+  await signal(`approval:order-${orderId}`, {
     approved: true,
     by: approverId,
   });
@@ -76,7 +79,7 @@ direction: right
 enq: "POST /orders\n(enqueue run)" {style.fill: "#9BC4B6"; style.font-size: 14}
 worker1: "Worker\nclaims, runs steps,\nhits waitFor" {style.fill: "#E88783"; style.font-size: 14}
 park: "Run parked\n(row in runs.db)" {style.fill: "#FFF9F4"; style.stroke: "#2F2A44"; style.font-size: 14}
-signal: "Admin clicks Approve\n→ Tako.workflows.signal" {style.fill: "#9BC4B6"; style.font-size: 14}
+signal: "Admin clicks Approve\n→ signal()" {style.fill: "#9BC4B6"; style.font-size: 14}
 worker2: "Worker re-spawns,\nresumes after waitFor,\nships order" {style.fill: "#E88783"; style.font-size: 14}
 
 enq -> worker1
@@ -85,6 +88,6 @@ park -> signal: "...3 days later..."
 signal -> worker2: "wake"
 ```
 
-While the run is parked, your VPS isn't holding anything open for it. The worker process is gone. tako-server can restart, the host can reboot, you can [redeploy](/blog/what-happens-when-you-run-tako-deploy) — the row stays in SQLite, the event waiter stays indexed, and `Tako.workflows.signal` will still find it three days from now. The 7-day `timeout` is just a safety valve; if it fires first, `waitFor` returns `null` and the workflow takes the cleanup path via `ctx.bail`.
+While the run is parked, your VPS isn't holding anything open for it. The worker process is gone. tako-server can restart, the host can reboot, you can [redeploy](/blog/what-happens-when-you-run-tako-deploy) — the row stays in SQLite, the event waiter stays indexed, and `signal` will still find it three days from now. The 7-day `timeout` is just a safety valve; if it fires first, `waitFor` returns `null` and the workflow takes the cleanup path via `ctx.bail`.
 
 The same primitive covers webhook callbacks, multi-step onboarding flows that wait on user input, payment-confirmation hops, and anything else where the next step is "the world tells us something happened." One file, one default export, no external queue, no cron polling. Drop it in `workflows/`, run [`tako dev`](/docs/development), and the [embedded scale-to-zero worker](/blog/workflow-workers-scale-to-zero) wires up the rest.

@@ -7,14 +7,15 @@ import {
 } from "../src/tako/endpoints";
 import { injectBootstrap } from "../src/tako/secrets";
 import type { TakoStatus } from "../src/types";
-import { Tako } from "../src/tako";
+import { ChannelRegistry } from "../src/channels";
 import { defineChannel } from "../src/channels/define";
 
 describe("handleTakoEndpoint", () => {
   injectBootstrap({ token: "test-token", secrets: {} });
 
+  let channels: ChannelRegistry;
   beforeEach(() => {
-    Tako.channels.clear();
+    channels = new ChannelRegistry();
   });
 
   const mockStatus: TakoStatus = {
@@ -28,19 +29,19 @@ describe("handleTakoEndpoint", () => {
 
   test("returns null for non-internal host even on /status", async () => {
     const request = new Request("http://example.com/status");
-    const response = await handleTakoEndpoint(request, mockStatus);
+    const response = await handleTakoEndpoint(request, mockStatus, channels);
     expect(response).toBeNull();
   });
 
   test("returns null for non-internal host paths", async () => {
     const request = new Request("http://example.com/api/users");
-    const response = await handleTakoEndpoint(request, mockStatus);
+    const response = await handleTakoEndpoint(request, mockStatus, channels);
     expect(response).toBeNull();
   });
 
   test("returns null for root path on non-internal host", async () => {
     const request = new Request("http://example.com/");
-    const response = await handleTakoEndpoint(request, mockStatus);
+    const response = await handleTakoEndpoint(request, mockStatus, channels);
     expect(response).toBeNull();
   });
 
@@ -49,7 +50,7 @@ describe("handleTakoEndpoint", () => {
       const request = new Request("http://tako.internal/status", {
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
@@ -68,7 +69,7 @@ describe("handleTakoEndpoint", () => {
       const request = new Request("http://tako.internal/status", {
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, unhealthyStatus);
+      const response = await handleTakoEndpoint(request, unhealthyStatus, channels);
 
       const body = await response!.json();
       expect(body.status).toBe("draining");
@@ -76,7 +77,7 @@ describe("handleTakoEndpoint", () => {
 
     test("returns 403 without the internal token header", async () => {
       const request = new Request("http://tako.internal/status");
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(403);
@@ -86,7 +87,7 @@ describe("handleTakoEndpoint", () => {
       const request = new Request("http://tako.internal:3000/status", {
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
@@ -96,7 +97,7 @@ describe("handleTakoEndpoint", () => {
       const request = new Request("http://127.0.0.1:3000/status", {
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
@@ -108,7 +109,7 @@ describe("handleTakoEndpoint", () => {
       const request = new Request("http://tako.internal/unknown", {
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
 
       expect(response).not.toBeNull();
       expect(response!.status).toBe(404);
@@ -120,7 +121,7 @@ describe("handleTakoEndpoint", () => {
 
   describe("internal host channel auth", () => {
     test("authorizes a matching channel definition", async () => {
-      Tako.channels.register(
+      channels.register(
         "chat",
         defineChannel("chat/:roomId", {
           auth(request, ctx) {
@@ -151,7 +152,7 @@ describe("handleTakoEndpoint", () => {
         }),
       });
 
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
       expect(await response!.json()).toEqual({
@@ -165,7 +166,7 @@ describe("handleTakoEndpoint", () => {
     });
 
     test("returns 403 when channel auth denies access", async () => {
-      Tako.channels.register(
+      channels.register(
         "chat",
         defineChannel("chat/:roomId", {
           auth() {
@@ -189,7 +190,7 @@ describe("handleTakoEndpoint", () => {
         }),
       });
 
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
       expect(response).not.toBeNull();
       expect(response!.status).toBe(403);
       expect(await response!.json()).toEqual({
@@ -214,7 +215,7 @@ describe("handleTakoEndpoint", () => {
         }),
       });
 
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
       expect(response).not.toBeNull();
       expect(response!.status).toBe(404);
       expect(await response!.json()).toEqual({
@@ -224,7 +225,7 @@ describe("handleTakoEndpoint", () => {
     });
 
     test("returns channel lifecycle config in authorize responses", async () => {
-      Tako.channels.register(
+      channels.register(
         "chat",
         defineChannel<{ msg: { text: string } }>("chat/:roomId", {
           auth() {
@@ -253,7 +254,7 @@ describe("handleTakoEndpoint", () => {
         }),
       });
 
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
       expect(await response!.json()).toEqual({
@@ -270,7 +271,7 @@ describe("handleTakoEndpoint", () => {
 
   describe("internal host channel dispatch", () => {
     test("returns fanout data for a handled type", async () => {
-      Tako.channels.register(
+      channels.register(
         "chat",
         defineChannel<{ msg: { text: string } }>("chat/:roomId", {
           auth: async () => true,
@@ -291,7 +292,7 @@ describe("handleTakoEndpoint", () => {
         }),
       });
 
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
       expect(response).not.toBeNull();
       expect(response!.status).toBe(200);
       expect(await response!.json()).toEqual({
@@ -313,7 +314,7 @@ describe("handleTakoEndpoint", () => {
         }),
       });
 
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
       expect(response!.status).toBe(200);
       expect(await response!.json()).toEqual({
         action: "reject",
@@ -326,7 +327,7 @@ describe("handleTakoEndpoint", () => {
         method: "GET",
         headers: { [TAKO_INTERNAL_TOKEN_HEADER]: "test-token" },
       });
-      const response = await handleTakoEndpoint(request, mockStatus);
+      const response = await handleTakoEndpoint(request, mockStatus, channels);
       expect(response!.status).toBe(405);
     });
   });

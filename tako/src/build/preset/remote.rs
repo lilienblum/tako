@@ -98,6 +98,21 @@ async fn resolve_by_branch(
     branch: &str,
     mode: PresetResolveMode,
 ) -> Result<(String, String, String), String> {
+    // For the official preset repo in dev mode, the `include_str!`-baked
+    // manifest is the ground truth for the binary at its build commit.
+    // Prefer it over any cached content written at an earlier state of the
+    // same commit SHA — works in both debug and release builds.
+    if mode == PresetResolveMode::Dev
+        && repo == official_preset_repo()
+        && let Some(content) = embedded_group_manifest_content(path)
+    {
+        return Ok((
+            repo.to_string(),
+            "embedded".to_string(),
+            content.to_string(),
+        ));
+    }
+
     if let Some(sha) = preset_cache::fresh_sha(repo, branch)
         && let Some(content) = preset_cache::read_cached(repo, &sha, path)
     {
@@ -300,6 +315,48 @@ mod tests {
             ))
             .unwrap_err();
         assert_eq!(err, "Failed to fetch preset");
+    }
+
+    #[test]
+    fn resolve_by_branch_prefers_embedded_over_cache_in_dev_for_official_repo() {
+        let _lock = crate::paths::test_tako_home_env_lock();
+        let previous = std::env::var_os("TAKO_HOME");
+        let home = tempfile::TempDir::new().unwrap();
+        unsafe {
+            std::env::set_var("TAKO_HOME", home.path());
+        }
+
+        let repo = official_preset_repo();
+        let path = "presets/javascript.toml";
+        let sha = "abcdef1234567";
+        // Write stale cached content that is missing sections the embedded
+        // manifest contains.
+        let stale = r#"
+[something-old]
+dev = ["old", "command"]
+"#;
+        crate::build::preset_cache::write_cached(&repo, sha, path, stale).unwrap();
+        crate::build::preset_cache::update_freshness(&repo, OFFICIAL_PRESET_BRANCH, sha).unwrap();
+
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let (resolved_repo, resolved_sha, content) = runtime
+            .block_on(resolve_by_branch(
+                &repo,
+                path,
+                OFFICIAL_PRESET_BRANCH,
+                PresetResolveMode::Dev,
+            ))
+            .unwrap();
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+            None => unsafe { std::env::remove_var("TAKO_HOME") },
+        }
+
+        assert_eq!(resolved_repo, repo);
+        assert_eq!(resolved_sha, "embedded");
+        assert_ne!(content, stale);
+        assert!(content.contains("[tanstack-start]"));
     }
 
     #[test]

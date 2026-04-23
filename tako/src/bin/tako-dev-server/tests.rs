@@ -71,7 +71,6 @@ async fn register_app_roundtrip() {
         "project_dir": "/tmp/test-proj",
         "app_name": "my-app",
         "hosts": ["my-app.test"],
-        "upstream_port": 1234,
         "command": ["node", "index.js"],
         "env": {}
     });
@@ -151,7 +150,6 @@ async fn register_app_starts_workflow_engine_when_worker_command_provided() {
         "project_dir": proj.path().to_string_lossy(),
         "app_name": "wf-app",
         "hosts": ["wf-app.test"],
-        "upstream_port": 1234,
         "command": ["node", "index.js"],
         "env": {},
         "worker_command": ["true"],
@@ -204,7 +202,6 @@ async fn register_app_skips_workflow_engine_when_no_workflows_dir() {
         "project_dir": proj.path().to_string_lossy(),
         "app_name": "plain-app",
         "hosts": ["plain.test"],
-        "upstream_port": 1234,
         "command": ["node", "index.js"],
         "env": {}
     });
@@ -1297,7 +1294,7 @@ fn runtime_app_with_env(
 #[test]
 fn build_spawn_env_injects_tako_runtime_contract_when_socket_available() {
     // Regression: dev used to spawn apps without TAKO_INTERNAL_SOCKET /
-    // TAKO_APP_NAME, so `Tako.workflows.enqueue` blew up only when a user
+    // TAKO_APP_NAME, so workflow `.enqueue()` blew up only when a user
     // clicked a button. Both must be present whenever the dev-server has
     // a live internal socket.
     let app = runtime_app_with_env("demo", std::collections::HashMap::new());

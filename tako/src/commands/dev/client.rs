@@ -61,7 +61,6 @@ pub(super) async fn run_connected_dev_client(
     let mut public_port = host_and_port_from_url(&session.url)
         .map(|(_, p)| p)
         .unwrap_or(443);
-    let mut upstream_port = 0u16;
     let mut lan_enabled = false;
 
     if let Ok(info) = crate::dev_server_client::info().await {
@@ -76,12 +75,6 @@ pub(super) async fn run_connected_dev_client(
             .and_then(|i| i.get("lan_enabled"))
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-    }
-
-    if let Ok(apps) = crate::dev_server_client::list_apps().await
-        && let Some(app) = apps.into_iter().find(|a| a.app_name == app_name)
-    {
-        upstream_port = app.upstream_port;
     }
 
     let my_client_id = std::process::id();
@@ -304,7 +297,6 @@ pub(super) async fn run_connected_dev_client(
             adapter_name,
             display_hosts,
             public_port,
-            upstream_port,
             log_rx,
             event_rx,
             control_tx,

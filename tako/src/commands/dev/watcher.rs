@@ -4,14 +4,22 @@
 
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
-use std::path::PathBuf;
-use std::sync::mpsc as std_mpsc;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, mpsc as std_mpsc};
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WatchChange {
+    Config,
+    Secrets,
+    Channels,
+    Workflows,
+}
+
 /// Handle that keeps the watcher alive
 pub struct WatcherHandle {
-    _debouncer: notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>,
+    _debouncer: Arc<Mutex<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>,
     _thread: std::thread::JoinHandle<()>,
 }
 
@@ -19,14 +27,14 @@ pub struct WatcherHandle {
 pub struct ConfigWatcher {
     project_dir: PathBuf,
     config_path: PathBuf,
-    changed_tx: mpsc::Sender<()>,
+    changed_tx: mpsc::Sender<WatchChange>,
 }
 
 impl ConfigWatcher {
     pub fn new(
         project_dir: PathBuf,
         config_path: PathBuf,
-        changed_tx: mpsc::Sender<()>,
+        changed_tx: mpsc::Sender<WatchChange>,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(Self {
             project_dir,
@@ -37,31 +45,52 @@ impl ConfigWatcher {
 
     pub fn start(self) -> Result<WatcherHandle, Box<dyn std::error::Error>> {
         let (tx, rx) = std_mpsc::channel();
-        let mut debouncer = new_debouncer(Duration::from_millis(150), tx)?;
+        let debouncer = Arc::new(Mutex::new(new_debouncer(Duration::from_millis(150), tx)?));
 
-        // Watch the selected config file directly.
-        debouncer
-            .watcher()
-            .watch(&self.config_path, RecursiveMode::NonRecursive)?;
+        watch_path(&debouncer, &self.config_path, RecursiveMode::NonRecursive)?;
 
         // Watch .tako/ directory for secrets.json changes.
         let tako_dir = self.project_dir.join(".tako");
         if tako_dir.is_dir() {
-            let _ = debouncer
-                .watcher()
-                .watch(&tako_dir, RecursiveMode::NonRecursive);
+            let _ = watch_path(&debouncer, &tako_dir, RecursiveMode::NonRecursive);
+        }
+        watch_path(&debouncer, &self.project_dir, RecursiveMode::NonRecursive)?;
+        let watched_channels = self.project_dir.join("channels");
+        let watched_workflows = self.project_dir.join("workflows");
+        if watched_channels.is_dir() {
+            let _ = watch_path(&debouncer, &watched_channels, RecursiveMode::NonRecursive);
+        }
+        if watched_workflows.is_dir() {
+            let _ = watch_path(&debouncer, &watched_workflows, RecursiveMode::NonRecursive);
         }
 
         let changed_tx = self.changed_tx.clone();
-        let watched_config = self.config_path.clone();
-        let watched_secrets = self.project_dir.join(".tako").join("secrets.json");
+        let project_dir = self.project_dir.clone();
+        let config_path = self.config_path.clone();
+        let debouncer_for_thread = debouncer.clone();
         let handle = std::thread::spawn(move || {
             for result in rx {
                 match result {
                     Ok(events) => {
                         for event in events {
-                            if event.path == watched_config || event.path == watched_secrets {
-                                let _ = changed_tx.blocking_send(());
+                            if event.path == watched_channels && watched_channels.is_dir() {
+                                let _ = watch_path(
+                                    &debouncer_for_thread,
+                                    &watched_channels,
+                                    RecursiveMode::NonRecursive,
+                                );
+                            }
+                            if event.path == watched_workflows && watched_workflows.is_dir() {
+                                let _ = watch_path(
+                                    &debouncer_for_thread,
+                                    &watched_workflows,
+                                    RecursiveMode::NonRecursive,
+                                );
+                            }
+                            if let Some(change) =
+                                classify_path(&project_dir, &config_path, &event.path)
+                            {
+                                let _ = changed_tx.blocking_send(change);
                             }
                         }
                     }
@@ -76,5 +105,87 @@ impl ConfigWatcher {
             _debouncer: debouncer,
             _thread: handle,
         })
+    }
+}
+
+fn watch_path(
+    debouncer: &Arc<Mutex<notify_debouncer_mini::Debouncer<notify::RecommendedWatcher>>>,
+    path: &Path,
+    mode: RecursiveMode,
+) -> notify::Result<()> {
+    let mut guard = debouncer.lock().expect("watcher mutex poisoned");
+    guard.watcher().watch(path, mode)
+}
+
+fn classify_path(project_dir: &Path, config_path: &Path, path: &Path) -> Option<WatchChange> {
+    if path == config_path {
+        return Some(WatchChange::Config);
+    }
+    if path == project_dir.join(".tako").join("secrets.json") {
+        return Some(WatchChange::Secrets);
+    }
+
+    let channels_dir = project_dir.join("channels");
+    if path == channels_dir || path.starts_with(&channels_dir) {
+        return Some(WatchChange::Channels);
+    }
+
+    let workflows_dir = project_dir.join("workflows");
+    if path == workflows_dir || path.starts_with(&workflows_dir) {
+        return Some(WatchChange::Workflows);
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relevant_paths_include_config_secrets_channels_and_workflows() {
+        let project_dir = PathBuf::from("/tmp/demo");
+        let config_path = project_dir.join("tako.toml");
+
+        assert_eq!(
+            classify_path(&project_dir, &config_path, &config_path),
+            Some(WatchChange::Config)
+        );
+        assert_eq!(
+            classify_path(
+                &project_dir,
+                &config_path,
+                &project_dir.join(".tako").join("secrets.json")
+            ),
+            Some(WatchChange::Secrets)
+        );
+        assert_eq!(
+            classify_path(&project_dir, &config_path, &project_dir.join("channels")),
+            Some(WatchChange::Channels)
+        );
+        assert_eq!(
+            classify_path(
+                &project_dir,
+                &config_path,
+                &project_dir.join("channels").join("demo.ts")
+            ),
+            Some(WatchChange::Channels)
+        );
+        assert_eq!(
+            classify_path(
+                &project_dir,
+                &config_path,
+                &project_dir.join("workflows").join("demo.ts")
+            ),
+            Some(WatchChange::Workflows)
+        );
+        assert_eq!(
+            classify_path(
+                &project_dir,
+                &config_path,
+                &project_dir.join("src").join("index.ts")
+            ),
+            None
+        );
     }
 }

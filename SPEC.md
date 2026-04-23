@@ -361,7 +361,7 @@ Show version information (same as `--version` flag).
 
 ### tako typegen
 
-Generate typed accessors for the current project: `tako.d.ts` for JS/TS apps (typed `Tako.secrets` plus standard Tako/runtime env vars) and `tako_secrets.go` for Go apps. For JS/TS projects, `tako.d.ts` is written next to any existing copy if one is found, otherwise placed inside `src/` or `app/` when those directories exist, or at the project root — so TypeScript's default `include` picks it up without tsconfig edits.
+Generate typed accessors for the current project: `tako.gen.ts` for JS/TS apps (runtime state + typed `Secrets` interface) and `tako_secrets.go` for Go apps. For JS/TS projects, `tako.gen.ts` is written next to any existing copy if one is found, otherwise placed inside `src/` or `app/` when those directories exist, or at the project root. Legacy `tako.d.ts` files left over from the pre-v0-global design are removed on regeneration. If a JS/TS project already has `channels/` or `workflows/` directories, typegen also scaffolds `demo.ts` in empty dirs and adds missing default `defineChannel(...)` / `defineWorkflow(...)` exports to existing definition files that have no default export yet.
 
 ### tako upgrade
 
@@ -1196,7 +1196,7 @@ The SDK parses this from `process.argv` (JS) or `os.Args` (Go) at startup and ex
 }
 ```
 
-The SDK reads fd 3 once at startup and closes it. The envelope travels on a pipe (rather than env vars or argv) so neither the token nor secrets inherit into subprocesses the app spawns. The token authenticates `Host: tako.internal` requests (health probes, channel auth callbacks). Secrets populate `Tako.secrets`. The pipe is always present — in dev mode with no secrets, the envelope is `{"token": "...", "secrets": {}}`.
+The SDK reads fd 3 once at startup and closes it. The envelope travels on a pipe (rather than env vars or argv) so neither the token nor secrets inherit into subprocesses the app spawns. The token authenticates `Host: tako.internal` requests (health probes, channel auth callbacks). Secrets populate the `secrets` export from the generated `tako.gen.ts`. The pipe is always present — in dev mode with no secrets, the envelope is `{"token": "...", "secrets": {}}`.
 
 ### Messages (JSON over Unix Socket)
 
@@ -1484,15 +1484,43 @@ export default function fetch(request: Request): Response | Promise<Response> {
 }
 ```
 
-### Tako Class
+### Runtime context (`tako.gen.ts`)
+
+Tako v0 does not install any global. `tako typegen` emits a project-local `tako.gen.ts` file (placed inside `src/`/`app/` when those dirs exist, otherwise at the project root) that exports typed runtime state and a typed secrets bag. App code imports what it needs:
 
 ```typescript
-import { Tako } from "tako.sh";
+import { env, isDev, port, dataDir, build, logger, secrets } from "../tako.gen";
+
+logger.info("boot", { env, build });
+const dbUrl = secrets.DATABASE_URL;
 ```
 
-- `Tako.secrets` — Read-only proxy providing access to Tako-managed secrets. Redacts automatically on `JSON.stringify`, `console.log`, and `toString` (returns `"[REDACTED]"`).
-- `Tako.build` — Returns the `TAKO_BUILD` environment variable (deploy version identifier) or `"unknown"`.
-- `Tako.isRunningInTako()` — Returns `true` when the app is running under Tako (checks `TAKO_BUILD` env var).
+| Export    | Description                                                       |
+| --------- | ----------------------------------------------------------------- |
+| `env`     | `ENV` value (`"development"`, `"production"`, ...)                |
+| `isDev`   | `true` when `env === "development"`                               |
+| `isProd`  | `true` when `env === "production"`                                |
+| `port`    | Port assigned to this app instance                                |
+| `host`    | Host/address Tako bound this app instance to                      |
+| `build`   | Build identifier injected at deploy time                          |
+| `dataDir` | Persistent app-owned data directory — writes survive restarts     |
+| `appDir`  | Directory the app is running from (equivalent to `process.cwd()`) |
+| `secrets` | Typed secret bag — redacts automatically on bulk serialize        |
+| `logger`  | Structured JSON logger (`logger.info(...)`)                       |
+
+`secrets` redacts automatically on `JSON.stringify`, `console.log`, and `toString` (returns `"[REDACTED]"`); individual key access (`secrets.MY_KEY`) returns the value. The `Secrets` interface is regenerated from `.tako/secrets.json` on every `tako dev`, `tako deploy`, `tako typegen`, and `tako secret` change.
+
+Channels and workflows are not on the runtime context — they are regular ES modules you import from their files:
+
+```typescript
+import sendEmail from "../workflows/send-email";
+import chat from "../channels/chat";
+
+await sendEmail.enqueue({ to: "u@e.co" });
+await chat({ roomId: "r1" }).publish({ type: "msg", data: { text: "hi" } });
+```
+
+The `tako.sh` package exports `defineChannel`, `defineWorkflow`, `TakoError`, and `InferWorkflowPayload`. The `Channel` class is not exported from `tako.sh`: server code uses the accessor returned by `defineChannel(...).$messageTypes<M>()` (imported from your `channels/` file); browser code imports from `tako.sh/client` (or uses the `useChannel` hook from `tako.sh/react`). There is no `Tako` global.
 
 ### Go SDK
 
@@ -1611,7 +1639,7 @@ Channel paths are hierarchical: the channel name is whatever follows `/channels/
 
 ### Authoring channels
 
-**JS/TypeScript** — file-based discovery: drop a file into `channels/<name>.ts` with a default export of `defineChannel(pattern, config?)`. The pattern is a Hono-style path (`/`-separated segments with `:name` captures and an optional trailing `*` wildcard). Imperative `Tako.channels.define()` no longer exists.
+**JS/TypeScript** — file-based discovery: drop a file into `channels/<name>.ts` with a default export of `defineChannel(pattern, config?).$messageTypes<M>()`. The pattern is a Hono-style path (`/`-separated segments with `:name` captures and an optional trailing `*` wildcard). `.$messageTypes<M>()` is a type-level narrower that declares the message map; at runtime it returns the same export.
 
 ```ts
 // channels/chat.ts
@@ -1622,7 +1650,7 @@ type ChatMessages = {
   typing: { userId: string };
 };
 
-export default defineChannel<ChatMessages>("chat/:roomId", {
+export default defineChannel("chat/:roomId", {
   auth: async (request, ctx) => {
     const session = await readSession(request);
     if (!session) return false;
@@ -1636,7 +1664,7 @@ export default defineChannel<ChatMessages>("chat/:roomId", {
     },
     typing: async (data) => data,
   },
-});
+}).$messageTypes<ChatMessages>();
 ```
 
 - **`pattern`** — required first positional arg. Must be a string literal (codegen reads it from the AST).
@@ -1647,26 +1675,25 @@ export default defineChannel<ChatMessages>("chat/:roomId", {
 **Transport inference:**
 
 - `handler` present → **WS**. Clients can send over the socket; each frame routes through the declared handler; the return value fans out to subscribers. Handler errors or `void` returns drop the message. Types not in the handler map pass through without server processing.
-- `handler` absent → **SSE**. Broadcast-only. Server publishes via `Tako.channels.<name>.send(...)`; clients only receive. `POST /channels/<name>/messages` from clients is rejected with 405.
+- `handler` absent → **SSE**. Broadcast-only. Server publishes via the imported channel module (`await missionLog({ base }).publish(...)`); clients only receive. `POST /channels/<name>/messages` from clients is rejected with 405.
 
 **Pattern overlap resolution:** literal segments beat param segments beat wildcards per-position; longer patterns with the same mix win; ties break by discovery order.
 
-### Typed channel accessor
+### Publishing from the server
 
-`tako typegen` scans `channels/` and emits a `declare module "tako.sh" { interface Channels { ... } }` block in `tako.d.ts`. Each entry maps the channel name to `typeof import("./channels/<name>").default`, letting `Tako.channels` expose a typed accessor that's populated at runtime by `bootstrapChannels`.
+Server-side code (HTTP handlers, workflow bodies) imports a channel module directly and calls it. Unparameterized channels expose `publish` / `subscribe` / `connect` on the export; parameterized ones are callable with their params, returning the same handle:
 
 ```ts
-// Unparameterized: direct surface on Tako.channels.<name>
-Tako.channels.status.send("ping", { at: Date.now() });
-tako.channels.status.subscribe({ ping: (data) => /* ... */ });
+// channels/status.ts → pattern "status" (unparameterized)
+import status from "../channels/status";
+await status.publish({ type: "ping", data: { at: Date.now() } });
 
-// Parameterized: callable returning a handle for a specific channel
-Tako.channels.chat({ roomId: "abc" }).send("msg", { text: "hi", userId });
-tako.channels.chat({ roomId: "abc" }).subscribe({
-  msg: (data) => /* ... */,
-  typing: (data) => /* ... */,
-});
+// channels/mission-log.ts → pattern "mission-log/:base" (parameterized)
+import missionLog from "../channels/mission-log";
+await missionLog({ base }).publish({ type: "event", data: event });
 ```
+
+Params are URL-encoded automatically. `publish` payloads are type-checked against the message map declared via `.$messageTypes<M>()`. The `Channel` class is not re-exported from `tako.sh` — browser code imports from `tako.sh/client` (or uses the `useChannel` hook from `tako.sh/react`).
 
 ## Workflows (Durable Runs)
 
@@ -1695,7 +1722,7 @@ queue service.
   - `schedules`, `leader_leases` — cron infrastructure.
 - **tako-server (Rust)** — owns the DB, exposes the per-app unix socket, runs the cron ticker, and supervises the worker subprocess. The ticker also calls `reclaim_expired()` every second: any run stuck in `status='running'` past its `lease_until` is moved back to `pending` and the supervisor is woken so a fresh worker picks it up. This is how runs recover from a worker that died mid-execution (SIGKILL, OOM, host crash, server-level restart without graceful drain).
 - **Worker process (JS or Go)** — loads user code, claims runs, executes handlers. Separate from HTTP instances so heavy workflow deps don't bloat the request-serving process.
-- **SDK** — `Tako.workflows.enqueue` / `Tako.workflows.signal` (JS), `tako.Enqueue` / `tako.Signal` (Go). Thin RPC client. Workers also use it for claim/heartbeat/save/complete/cancel/fail/defer/wait. **No SQLite in any SDK.**
+- **SDK** — each workflow module's default export provides `.enqueue(payload, opts?)`; `signal` lives on `tako.sh/internal`'s `workflowsEngine`. In Go: `tako.Enqueue` / `tako.Signal`. Thin RPC client. Workers also use it for claim/heartbeat/save/complete/cancel/fail/defer/wait. **No SQLite in any SDK.**
 
 ### Configuration (tako.toml)
 
@@ -1739,40 +1766,25 @@ export default defineWorkflow(
 ### Enqueuing
 
 ```ts
-await Tako.workflows.enqueue("send-email", { to: "a@b.c" });
-await Tako.workflows.enqueue("send-email", payload, {
+// workflows/send-email.ts
+export default defineWorkflow<SendEmailPayload>("send-email", async (payload, { step }) => {
+  await step.run("send", () => sendEmail(payload.userId));
+});
+
+// anywhere:
+import sendEmail from "../workflows/send-email";
+
+await sendEmail.enqueue({ to: "a@b.c" });
+await sendEmail.enqueue(payload, {
   runAt: new Date(Date.now() + 60_000),
   retries: 9,
   uniqueKey: "daily-digest:2026-04-14",
 });
 ```
 
+Each workflow module's default export is a typed handle: `.enqueue(payload, opts?)` is constrained to the payload type declared on `defineWorkflow<P>("name", handler)`. No typegen is needed for workflow enqueue typing — it flows from the module's own types.
+
 `uniqueKey` deduplicates: if an existing non-terminal run has the same key, enqueue is a no-op and returns the existing run's id. Cron ticks use this internally (key = `cron:<name>:<bucket_ms>`) so catching up doesn't double-enqueue.
-
-### Typed enqueue
-
-`tako typegen` scans `workflows/` and emits a `declare module "tako.sh" { interface Workflows { ... } }` block in `tako.d.ts`. Once generated, `Tako.workflows.enqueue` is type-checked against the payload types inferred from each `defineWorkflow<P>()` call:
-
-```ts
-// tako.d.ts (auto-generated)
-declare module "tako.sh" {
-  interface Workflows {
-    "send-email": import("./workflows/send-email").default extends import("tako.sh").WorkflowDefinition<
-      infer P
-    >
-      ? P
-      : unknown;
-  }
-}
-```
-
-```ts
-// Type-safe enqueue — payload is checked against SendEmailPayload
-await Tako.workflows.enqueue("send-email", { to: "user@example.com" }); // ✅
-await Tako.workflows.enqueue("send-email", { wrong: true }); // ❌ type error
-```
-
-Re-run `tako typegen` (or `tako dev` / `tako deploy`, which run it automatically) whenever you add or rename a workflow.
 
 ### Step checkpointing
 
@@ -1796,7 +1808,7 @@ If the worker crashes between `fn` returning and the SaveStep RPC completing, `f
 
 `ctx.waitFor(name, { timeout })` parks the run waiting for a named event. The handler exits, the run goes to `pending` with no `run_at`, an `event_waiters` row is inserted, and the worker can release.
 
-`Tako.workflows.signal(name, payload)` (or `tako.Signal` in Go) wakes every parked waiter with matching name. The payload is materialized as the waiter's step result and the run is set runnable.
+`workflowsEngine.signal(name, payload)` from `tako.sh/internal` (or `tako.Signal` in Go) wakes every parked waiter with matching name. The payload is materialized as the waiter's step result and the run is set runnable.
 
 ```ts
 // Worker handler — pause until approval arrives
@@ -1808,7 +1820,8 @@ if (decision === null) ctx.bail("approval timed out");
 
 ```ts
 // Anywhere else (HTTP handler, webhook receiver, another workflow)
-await Tako.workflows.signal(`approval:order-abc`, { approved: true });
+import { workflowsEngine } from "tako.sh/internal";
+await workflowsEngine.signal(`approval:order-abc`, { approved: true });
 ```
 
 Routing is by event name only — embed any selectors in the name. No JSON predicates server-side.
@@ -1837,10 +1850,10 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 
 ### Communication model
 
-- Single shared internal socket at `{tako_data_dir}/internal.sock` (symlink → `internal-{pid}.sock`, atomically swapped during upgrades for zero-downtime handoff — same pattern as the mgmt socket). Workflow RPCs and `Tako.channels.publish()` both land here, hence the role-neutral name.
+- Single shared internal socket at `{tako_data_dir}/internal.sock` (symlink → `internal-{pid}.sock`, atomically swapped during upgrades for zero-downtime handoff — same pattern as the mgmt socket). Workflow RPCs and server-side channel publishes both land here, hence the role-neutral name.
 - Every command carries an `app` field so one socket routes for every deployed app.
 - Auth: filesystem permissions only (`chmod 0600`, owned by the service user).
-- SDKs read `TAKO_INTERNAL_SOCKET` and `TAKO_APP_NAME` env vars. Both spawners (tako-server in production and tako-dev-server in `tako dev`) share one env contract defined in `tako-core::instance_env::TakoRuntimeEnv` so the dev and prod runtimes can't drift. The SDK asserts the pair is set together at import time — a half-set env (one var without the other) is a platform bug and crashes the process on boot rather than silently failing at the first `Tako.workflows.enqueue` or `Tako.channels.publish`.
+- SDKs read `TAKO_INTERNAL_SOCKET` and `TAKO_APP_NAME` env vars. Both spawners (tako-server in production and tako-dev-server in `tako dev`) share one env contract defined in `tako-core::instance_env::TakoRuntimeEnv` so the dev and prod runtimes can't drift. The SDK asserts the pair is set together at import time — a half-set env (one var without the other) is a platform bug and crashes the process on boot rather than silently failing at the first workflow enqueue or channel publish.
 - From any process: `EnqueueRun`, `Signal`.
 - From worker processes: `ClaimRun`, `HeartbeatRun`, `SaveStep`, `CompleteRun`, `CancelRun`, `FailRun`, `DeferRun`, `WaitForEvent`, `RegisterSchedules`.
 - JSONL protocol, per-call connection (connect → send → read → close).
@@ -1850,7 +1863,7 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 
 `tako dev` uses the same workflow architecture as production: tako-dev-server owns the runs DB, enqueue socket, and a `WorkerSupervisor` that spawns a worker subprocess on demand. The worker is **scale-to-zero** (`workers: 0`, `idle_timeout_ms: 3_000`) so it only runs while there's real work, and every wake re-spawns it fresh — so code edits take effect on the next enqueue without restarting `tako dev`. Worker stdout/stderr is tee'd into the same log stream as the app process, with `scope: "worker"` so the CLI can prefix it.
 
-On every `RegisterApp`, the dev-server registers the app with its embedded `WorkflowManager` — same `ensure()` call as production — so the first `Tako.workflows.enqueue` / `Tako.channels.publish` from user code doesn't race the registration.
+On every `RegisterApp`, the dev-server registers the app with its embedded `WorkflowManager` — same `ensure()` call as production — so the first workflow enqueue or channel publish from user code doesn't race the registration.
 
 **Fail-fast on broken workers.** If the worker subprocess exits non-zero without claiming any run (typical for import errors, missing workflow module, crash on boot), the supervisor marks the app unhealthy for 5s. During that window, `EnqueueRun` returns `worker unhealthy: <reason>` instead of silently queuing work that will never execute. The SDK surfaces this to the caller as a normal error so broken dev code is loud instead of hanging. Clean idle-out (exit 0 after `idle_timeout_ms`) never marks unhealthy.
 

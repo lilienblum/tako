@@ -14,8 +14,9 @@ import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { handleTakoEndpoint } from "./endpoints";
 import { writeViaInheritedFd } from "./readiness";
-import { installTakoGlobal, Tako } from "../tako";
 import { bootstrapChannels } from "../channels/bootstrap";
+import type { ChannelRegistry } from "../channels";
+import { initServerRuntime } from "./init";
 import type { FetchFunction, ReadyableFetchHandler, TakoStatus } from "../types";
 
 export interface EntrypointOptions {
@@ -59,8 +60,6 @@ export function createEntrypoint(options: EntrypointOptions = {}) {
   const signalReadyOnFd = options.signalReadyPortOnFd ?? writeViaInheritedFd;
   const signalReadyPort = (port: number): void => signalReadyOnFd(4, port);
 
-  installTakoGlobal();
-
   const parsed = parseArgs(process.argv);
   const port = parseInt(process.env["PORT"] || "3000", 10);
   const host = process.env["HOST"] || "127.0.0.1";
@@ -93,8 +92,12 @@ export function createEntrypoint(options: EntrypointOptions = {}) {
       process.exit(1);
     }
 
+    initServerRuntime();
+
+    let channels: ChannelRegistry;
     try {
-      await bootstrapChannels({ appDir: process.cwd(), registry: Tako.channels });
+      const result = await bootstrapChannels({ appDir: process.cwd() });
+      channels = result.registry;
     } catch (err) {
       console.error("Failed to load channels/ directory:", err);
       process.exit(1);
@@ -151,7 +154,7 @@ export function createEntrypoint(options: EntrypointOptions = {}) {
     }
 
     const handleRequest = async (request: Request): Promise<Response> => {
-      const takoResponse = await handleTakoEndpoint(request, getStatus());
+      const takoResponse = await handleTakoEndpoint(request, getStatus(), channels);
       if (takoResponse) {
         return takoResponse;
       }

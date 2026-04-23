@@ -39,11 +39,11 @@ Two primitives turn "workflow" into "long-running business process."
 
 `ctx.sleep(3 * 24 * 3600 * 1000)` pauses the run for three days. Short waits run inline; longer ones park the run — the worker exits, the row goes back to `pending` with a wake-up time, and the supervisor resumes on schedule. Crash-safe across reboots.
 
-`ctx.waitFor(name, { timeout })` parks the run waiting for a named event, then anywhere else in your code, `Tako.workflows.signal(name, payload)` wakes it:
+`ctx.waitFor(name, { timeout })` parks the run waiting for a named event, then anywhere else in your code, `signal(name, payload)` wakes it:
 
 ```ts
 // Worker — block the run until approval arrives
-export default defineWorkflow(async (payload, { waitFor, bail }) => {
+export default defineWorkflow("approve-order", async (payload, { waitFor, bail }) => {
   const decision = await waitFor(`approval:order-${payload.id}`, {
     timeout: 7 * 24 * 3600 * 1000,
   });
@@ -51,7 +51,8 @@ export default defineWorkflow(async (payload, { waitFor, bail }) => {
 });
 
 // Elsewhere — an HTTP handler, webhook, or another workflow
-await Tako.workflows.signal(`approval:order-abc`, { approved: true });
+import { signal } from "tako.sh";
+await signal(`approval:order-abc`, { approved: true });
 ```
 
 Human approvals, webhook callbacks, multi-day onboarding nudges — all expressed as ordinary async code.

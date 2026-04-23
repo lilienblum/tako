@@ -40,6 +40,37 @@ fn sanitize_app_name(name: &str) -> String {
     }
 }
 
+/// Build the env map injected into a dev-mode workflow worker child process.
+/// The supervisor runs with `env_clear()`, so anything the worker needs at
+/// runtime must be named here — most notably `TAKO_DATA_DIR`, which the SDK
+/// surfaces as the `dataDir` export on `tako.gen.ts` (and `process.env.TAKO_DATA_DIR`) and is required
+/// whenever app code opens files under the per-app data directory.
+fn build_worker_env(
+    app: &str,
+    project_dir: &std::path::Path,
+    internal_socket: &std::path::Path,
+) -> std::collections::HashMap<String, String> {
+    let mut env = std::collections::HashMap::new();
+    env.insert(
+        tako_core::instance_env::TAKO_APP_NAME_ENV.into(),
+        app.to_string(),
+    );
+    env.insert(
+        tako_core::instance_env::TAKO_INTERNAL_SOCKET_ENV.into(),
+        internal_socket.to_string_lossy().to_string(),
+    );
+    env.insert(
+        "TAKO_DATA_DIR".into(),
+        project_dir
+            .join(".tako")
+            .join("data")
+            .join("app")
+            .to_string_lossy()
+            .to_string(),
+    );
+    env
+}
+
 fn lan_mode_message(enabled: bool, lan_ip: Option<&str>) -> String {
     if enabled {
         match lan_ip {
@@ -105,8 +136,8 @@ pub(crate) struct State {
     /// Path to the shared Tako internal unix socket. `Some` once
     /// `workflows.start_socket()` succeeds in main; injected into every
     /// spawned app process as `TAKO_INTERNAL_SOCKET` so
-    /// `Tako.workflows.enqueue` / `Tako.channels.publish` work the same
-    /// way in dev as they do on deployed servers.
+    /// workflow `.enqueue()` / channel `.publish()` work the same way in
+    /// dev as they do on deployed servers.
     pub(crate) internal_socket: Option<std::path::PathBuf>,
 
     /// Shared workflow manager. `Some` once `main` constructs it. On each
@@ -332,7 +363,6 @@ pub(crate) async fn handle_client(
                 app_name,
                 variant,
                 hosts,
-                upstream_port,
                 command,
                 env,
                 client_pid,
@@ -382,6 +412,16 @@ pub(crate) async fn handle_client(
                         })
                         .unwrap_or_else(state::LogBuffer::new);
                     let lan_banner_buffer = log_buffer.clone();
+
+                    // Preserve the previously-reported port across re-registration
+                    // so the proxy keeps routing correctly until the next readiness
+                    // signal. New registrations start at 0 and get filled in when
+                    // the SDK writes its bound port to the readiness pipe.
+                    let upstream_port = s
+                        .apps
+                        .get(&config_path)
+                        .map(|a| a.upstream_port)
+                        .unwrap_or(0);
 
                     s.apps.insert(
                         config_path.clone(),
@@ -435,8 +475,8 @@ pub(crate) async fn handle_client(
 
                 // Register the app with the workflow manager before
                 // spawning the app process, so the very first
-                // `Tako.workflows.enqueue` / `Tako.channels.publish` from
-                // user code lands on a known app (prevents
+                // workflow `.enqueue()` / channel `.publish()` from user
+                // code lands on a known app (prevents
                 // `unknown app: <name>` errors on the internal socket).
                 //
                 // Dev uses scale-to-zero (`workers: 0`) with a short idle
@@ -459,27 +499,16 @@ pub(crate) async fn handle_client(
                                 forward_child_log_line(&buf, line.to_string(), level, "worker");
                             }) as tako_workflows::WorkerLogSink
                         });
-                    let spec_fn = move |_db_path: std::path::PathBuf| {
-                        let mut env = std::collections::HashMap::new();
-                        env.insert(
-                            tako_core::instance_env::TAKO_APP_NAME_ENV.into(),
-                            app.clone(),
-                        );
-                        env.insert(
-                            tako_core::instance_env::TAKO_INTERNAL_SOCKET_ENV.into(),
-                            socket.to_string_lossy().to_string(),
-                        );
-                        tako_workflows::WorkerSpec {
-                            app: app.clone(),
-                            workers: 0,
-                            concurrency: 10,
-                            idle_timeout_ms: 3_000,
-                            command: cmd_os,
-                            cwd,
-                            env,
-                            secrets: std::collections::HashMap::new(),
-                            log_sink,
-                        }
+                    let spec_fn = move |_db_path: std::path::PathBuf| tako_workflows::WorkerSpec {
+                        env: build_worker_env(&app, &cwd, &socket),
+                        app: app.clone(),
+                        workers: 0,
+                        concurrency: 500,
+                        idle_timeout_ms: 3_000,
+                        command: cmd_os,
+                        cwd,
+                        secrets: std::collections::HashMap::new(),
+                        log_sink,
                     };
                     if let Err(e) = workflows.ensure(&app_name, spec_fn).await {
                         tracing::warn!(
@@ -962,8 +991,26 @@ async fn write_resp(
 
 #[cfg(test)]
 mod tests {
-    use super::{build_enable_lan_command, write_lan_mode_log};
+    use super::{build_enable_lan_command, build_worker_env, write_lan_mode_log};
     use crate::state::LogBuffer;
+
+    #[test]
+    fn build_worker_env_sets_data_dir_under_project() {
+        let env = build_worker_env(
+            "demo",
+            std::path::Path::new("/tmp/myproj"),
+            std::path::Path::new("/tmp/internal.sock"),
+        );
+        assert_eq!(env.get("TAKO_APP_NAME").map(String::as_str), Some("demo"));
+        assert_eq!(
+            env.get("TAKO_INTERNAL_SOCKET").map(String::as_str),
+            Some("/tmp/internal.sock"),
+        );
+        assert_eq!(
+            env.get("TAKO_DATA_DIR").map(String::as_str),
+            Some("/tmp/myproj/.tako/data/app"),
+        );
+    }
 
     #[test]
     fn build_enable_lan_command_uses_detected_lan_ip() {

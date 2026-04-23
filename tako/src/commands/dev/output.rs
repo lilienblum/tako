@@ -150,7 +150,7 @@ impl StickyFooter {
     pub fn println(&mut self, msg: &str) {
         let mut out = io::stdout();
         self.erase(&mut out);
-        let _ = write!(out, "{}\r\n", msg);
+        let _ = write!(out, "{}", raw_terminal_block(msg));
         self.draw(&mut out);
     }
 
@@ -220,6 +220,16 @@ fn rawln(s: &str) {
     let _ = out.flush();
 }
 
+fn raw_terminal_block(msg: &str) -> String {
+    let mut out = String::with_capacity(msg.len() + 8);
+    for line in msg.split('\n') {
+        out.push('\r');
+        out.push_str(line);
+        out.push_str("\r\n");
+    }
+    out
+}
+
 fn spawn_key_reader(tx: mpsc::Sender<Event>) {
     std::thread::spawn(move || {
         while let Ok(event) = crossterm::event::read() {
@@ -266,7 +276,6 @@ impl FooterState {
         adapter_name: &str,
         hosts: &[String],
         port: u16,
-        app_port: u16,
     ) -> Vec<String> {
         let mut lines = format_panel(
             app_name,
@@ -278,7 +287,6 @@ impl FooterState {
             self.worktree_name.as_deref(),
             hosts,
             port,
-            app_port,
             self.cpu,
             self.mem_bytes,
         )
@@ -298,9 +306,8 @@ impl FooterState {
         adapter_name: &str,
         hosts: &[String],
         port: u16,
-        app_port: u16,
     ) {
-        footer.set(self.build_lines(app_name, adapter_name, hosts, port, app_port));
+        footer.set(self.build_lines(app_name, adapter_name, hosts, port));
     }
 }
 
@@ -320,7 +327,6 @@ pub async fn run_dev_output(
     adapter_name: String,
     hosts: Vec<String>,
     port: u16,
-    app_port: u16,
     mut log_rx: mpsc::Receiver<ScopedLog>,
     mut event_rx: mpsc::Receiver<DevEvent>,
     control_tx: mpsc::Sender<ControlCmd>,
@@ -340,14 +346,7 @@ pub async fn run_dev_output(
 
     let mut footer = StickyFooter::new();
     let mut fs = FooterState::new(repo_slug, repo_branch, repo_path, worktree_name);
-    fs.refresh(
-        &mut footer,
-        &app_name,
-        &adapter_name,
-        &hosts,
-        port,
-        app_port,
-    );
+    fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
 
     let (key_tx, mut key_rx) = mpsc::channel::<Event>(64);
     spawn_key_reader(key_tx);
@@ -387,7 +386,7 @@ pub async fn run_dev_output(
             _ = &mut resize_sleep, if has_resize => {
                 resize_deadline = None;
                 footer.set_after_resize(
-                    fs.build_lines(&app_name, &adapter_name, &hosts, port, app_port),
+                    fs.build_lines(&app_name, &adapter_name, &hosts, port),
                 );
             }
             _ = ticker.tick() => {
@@ -402,14 +401,7 @@ pub async fn run_dev_output(
                             fs.cpu = Some(cpu);
                             fs.mem_bytes = Some(mem);
                             if changed {
-                                fs.refresh(
-                                    &mut footer,
-                                    &app_name,
-                                    &adapter_name,
-                                    &hosts,
-                                    port,
-                                    app_port,
-                                );
+                                fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
                             }
                         }
                     }
@@ -425,14 +417,7 @@ pub async fn run_dev_output(
                 match event {
                     DevEvent::AppStarted => {
                         fs.status = "starting".to_string();
-                        fs.refresh(
-                            &mut footer,
-                            &app_name,
-                            &adapter_name,
-                            &hosts,
-                            port,
-                            app_port,
-                        );
+                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
                     }
                     DevEvent::AppReady => {
                         fs.status = "running".to_string();
@@ -443,14 +428,7 @@ pub async fn run_dev_output(
                                 fs.mem_bytes = Some(mem);
                             }
                         }
-                        fs.refresh(
-                            &mut footer,
-                            &app_name,
-                            &adapter_name,
-                            &hosts,
-                            port,
-                            app_port,
-                        );
+                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
                         footer.println(&format_log(&ScopedLog::info(
                             "tako",
                             "App started".to_string(),
@@ -458,64 +436,29 @@ pub async fn run_dev_output(
                     }
                     DevEvent::AppLaunching => {
                         fs.status = "launching…".to_string();
-                        fs.refresh(
-                            &mut footer,
-                            &app_name,
-                            &adapter_name,
-                            &hosts,
-                            port,
-                            app_port,
-                        );
+                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
                     }
                     DevEvent::AppStopped => {
                         app_pid = None;
                         fs.cpu = None;
                         fs.mem_bytes = None;
                         fs.status = "stopped".to_string();
-                        fs.refresh(
-                            &mut footer,
-                            &app_name,
-                            &adapter_name,
-                            &hosts,
-                            port,
-                            app_port,
-                        );
+                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
                     }
                     DevEvent::AppPid(pid) => {
                         app_pid = Some(Pid::from(pid as usize));
-                        fs.refresh(
-                            &mut footer,
-                            &app_name,
-                            &adapter_name,
-                            &hosts,
-                            port,
-                            app_port,
-                        );
+                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
                     }
                     DevEvent::AppProcessExited(_) => {
                         app_pid = None;
                         fs.cpu = None;
                         fs.mem_bytes = None;
                         fs.status = "exited".to_string();
-                        fs.refresh(
-                            &mut footer,
-                            &app_name,
-                            &adapter_name,
-                            &hosts,
-                            port,
-                            app_port,
-                        );
+                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
                     }
                     DevEvent::AppError(ref e) => {
                         fs.status = "error".to_string();
-                        fs.refresh(
-                            &mut footer,
-                            &app_name,
-                            &adapter_name,
-                            &hosts,
-                            port,
-                            app_port,
-                        );
+                        fs.refresh(&mut footer, &app_name, &adapter_name, &hosts, port);
                         footer.println(&format!("\x1b[38;2;232;163;160merror:{RESET} {e}"));
                     }
                     DevEvent::ClientConnected { is_self, client_id } => {

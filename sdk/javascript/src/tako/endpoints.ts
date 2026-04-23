@@ -7,7 +7,7 @@
  * - POST /channels/authorize — Channel auth callback
  */
 
-import { Tako } from "../tako";
+import type { ChannelRegistry } from "../channels";
 import type { ChannelAuthorizeInput, TakoStatus } from "../types";
 import { dispatchWsMessage } from "../channels/handler";
 import { getInternalToken } from "./secrets";
@@ -71,6 +71,7 @@ function internalResponse(
 export async function handleTakoEndpoint(
   request: Request,
   status: TakoStatus,
+  channels: ChannelRegistry,
 ): Promise<Response | null> {
   // Fast path: check Host header before parsing the URL (avoids allocation for normal traffic)
   const hostHeader = normalizeHost(request.headers.get("host"));
@@ -97,16 +98,20 @@ export async function handleTakoEndpoint(
     case TAKO_INTERNAL_STATUS_PATH:
       return handleStatus(status, token);
     case TAKO_INTERNAL_CHANNELS_AUTHORIZE_PATH:
-      return await handleChannelAuthorize(request, token);
+      return await handleChannelAuthorize(request, token, channels);
     case TAKO_INTERNAL_CHANNELS_DISPATCH_PATH:
-      return await handleChannelDispatch(request, token);
+      return await handleChannelDispatch(request, token, channels);
 
     default:
       return internalResponse({ error: "Not found" }, 404, token);
   }
 }
 
-async function handleChannelDispatch(request: Request, token: string): Promise<Response> {
+async function handleChannelDispatch(
+  request: Request,
+  token: string,
+  channels: ChannelRegistry,
+): Promise<Response> {
   if (request.method !== "POST") {
     return internalResponse({ error: "Method not allowed" }, 405, token);
   }
@@ -138,7 +143,7 @@ async function handleChannelDispatch(request: Request, token: string): Promise<R
     frame: { type: body.frame.type, data: body.frame.data },
     ...(typeof body.subject === "string" && { subject: body.subject }),
   };
-  const result = await dispatchWsMessage(Tako.channels, input);
+  const result = await dispatchWsMessage(channels, input);
   return internalResponse(result, 200, token);
 }
 
@@ -149,7 +154,11 @@ function handleStatus(status: TakoStatus, token: string): Response {
   return internalResponse(status, 200, token);
 }
 
-async function handleChannelAuthorize(request: Request, token: string): Promise<Response> {
+async function handleChannelAuthorize(
+  request: Request,
+  token: string,
+  channels: ChannelRegistry,
+): Promise<Response> {
   if (request.method !== "POST") {
     return internalResponse({ error: "Method not allowed" }, 405, token);
   }
@@ -165,9 +174,9 @@ async function handleChannelAuthorize(request: Request, token: string): Promise<
     return internalResponse({ error: "Invalid request", ok: false }, 400, token);
   }
 
-  const result = await Tako.channels.authorize(input);
+  const result = await channels.authorize(input);
   if (!result.ok) {
-    const hasDefinition = Tako.channels.resolve(input.channel) !== null;
+    const hasDefinition = channels.resolve(input.channel) !== null;
     if (!hasDefinition) {
       return internalResponse({ error: "Channel not defined", ok: false }, 404, token);
     }

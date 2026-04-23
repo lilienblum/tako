@@ -1,10 +1,6 @@
 import { beforeEach, describe, expect, test } from "bun:test";
-import {
-  getInternalToken,
-  initBootstrapFromFd,
-  injectBootstrap,
-  loadSecrets,
-} from "../src/tako/secrets";
+import { getInternalToken, injectBootstrap, loadSecrets } from "../src/tako/secrets";
+import { initBootstrapFromFd } from "../src/tako/secrets-fd";
 
 describe("initBootstrapFromFd", () => {
   beforeEach(() => {

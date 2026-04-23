@@ -1,6 +1,8 @@
-# Demo App
+# Moonbase Supply Desk — Tako demo
 
-TanStack Start app for trying `tako` and `tako.sh` together. Shows tenant-aware content using wildcard subdomain routing.
+A TanStack Start demo app that doubles as a live tour of Tako's primitives: **multi-tenancy**, **durable workflows**, and **channels**.
+
+Each moonbase is an isolated tenant (wildcard subdomain). Submitting a supply request enqueues a six-step workflow (oxygen check → cargo → rover → launch → landing, with a fallback trajectory path). Every step publishes to the `mission-log` channel, so the right-rail log streams live to every connected client.
 
 Live at [demo.tako.sh](https://demo.tako.sh).
 
@@ -12,13 +14,17 @@ bun install
 bun run dev
 ```
 
+This mode works without a Tako runtime. It uses an in-process simulator that publishes mission-log events on the same cadence as the real workflow, so you can try the UI in plain Vite.
+
 ## Run With Tako Dev Flow
 
-From repository root:
+From the repository root:
 
 ```bash
 just tako examples/javascript/demo dev
 ```
+
+Use this mode for the real Tako path: workflows are enqueued through the internal socket and events flow through the actual `mission-log` channel instead of the local simulator.
 
 ## Build
 
@@ -30,8 +36,18 @@ bun run build
 ## Notes
 
 - `tako.toml` sets `preset = "tanstack-start"` with `runtime = "bun"`.
+- Plain `bun run dev` uses an in-process simulator for the workflow.
+- `just tako examples/javascript/demo dev` uses real Tako channels + workflows.
 - Tenant is detected server-side from the `Host` header — no env var needed.
-  - `foo.demo.tako.sh` → tenant `foo`
-  - `demo.tako.sh` → no tenant
+  - `artemis-prime.demo.tako.sh` → tenant `artemis-prime` (Mission Control view)
+  - `demo.tako.sh` → no tenant (Landing view with base-name input)
 - Development routes: `demo.test`, `*.demo.test`
 - Production routes: `demo.tako.sh`, `*.demo.tako.sh`
+
+## Files of interest
+
+- `workflows/order-shipment.ts` — six-step fan-out workflow
+- `channels/mission-log.ts` — pub/sub channel for live events
+- `src/routes/index.tsx` — route glue, server loader, local-mode simulator
+- `src/components/moonbase/` — all UI components (MissionControl, Landing, Sidebar, etc.)
+- `src/styles/app.css` — Tailwind v4 `@theme` with the Obsidian Observatory palette

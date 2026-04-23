@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { installConsoleBridge, resetConsoleBridgeForTests } from "../src/console-bridge";
+import { installConsoleBridge, resetConsoleBridgeForTests } from "../src/tako/console-bridge";
 
 let writes: string[] = [];
 let originalWrite: typeof process.stdout.write;
@@ -81,27 +81,30 @@ describe("installConsoleBridge", () => {
     expect(lines[0]!["msg"]).toBe(stack);
   });
 
-  test("Error-only argument uses err.stack as msg and attaches error to fields", () => {
+  test("Error-only argument uses a single-line summary as msg; stack stays in fields.error", () => {
     installConsoleBridge("app");
     const err = new Error("boom");
     err.stack = "Error: boom\n    at foo (x.ts:1:1)";
     console.error(err);
     const line = captured()[0]!;
-    expect(line["msg"]).toBe(err.stack);
+    expect(line["msg"]).toBe("Error: boom");
+    expect(line["msg"]).not.toContain("\n");
     const fields = line["fields"] as { error: { name: string; message: string; stack: string } };
     expect(fields.error.message).toBe("boom");
     expect(fields.error.stack).toBe(err.stack);
   });
 
-  test("Error mixed with other args: formatted msg + error attached to fields", () => {
+  test("Error mixed with other args: single-line msg + full error on fields.error", () => {
     installConsoleBridge("app");
     const err = new Error("boom");
+    err.stack = "Error: boom\n    at foo (x.ts:1:1)";
     console.error("context:", err);
     const line = captured()[0]!;
-    expect(typeof line["msg"]).toBe("string");
-    expect(line["msg"]).toContain("context:");
-    const fields = line["fields"] as { error: { message: string } };
+    expect(line["msg"]).toBe("context: Error: boom");
+    expect(line["msg"]).not.toContain("\n");
+    const fields = line["fields"] as { error: { message: string; stack: string } };
     expect(fields.error.message).toBe("boom");
+    expect(fields.error.stack).toBe(err.stack);
   });
 
   test("is idempotent — second call is a no-op", () => {

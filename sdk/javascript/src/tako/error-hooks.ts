@@ -1,4 +1,4 @@
-import { createLogger } from "./logger";
+import { createLogger } from "../logger";
 
 let installed = false;
 let uncaughtHandler: ((err: unknown) => void) | undefined;

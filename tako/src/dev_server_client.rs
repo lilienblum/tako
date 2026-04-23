@@ -487,14 +487,12 @@ pub struct RegisteredAppInfo {
     pub client_pid: Option<u32>,
 }
 
-#[allow(clippy::too_many_arguments)]
 pub async fn register_app(
     config_path: &str,
     project_dir: &str,
     app_name: &str,
     variant: Option<&str>,
     hosts: &[String],
-    upstream_port: u16,
     command: &[String],
     env: &std::collections::HashMap<String, String>,
     worker_command: Option<&[String]>,
@@ -508,7 +506,6 @@ pub async fn register_app(
         "project_dir": project_dir,
         "app_name": app_name,
         "hosts": hosts,
-        "upstream_port": upstream_port,
         "command": command,
         "env": env,
         "client_pid": std::process::id(),

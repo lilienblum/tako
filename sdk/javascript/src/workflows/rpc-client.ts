@@ -1,8 +1,8 @@
 /**
  * WorkflowsClient — single client for all workflow RPCs.
  *
- * Runs in the HTTP app process (for `Tako.workflows.enqueue` and
- * `Tako.workflows.signal`) and in the worker process (for claim, heartbeat,
+ * Runs in the HTTP app process (for workflow `.enqueue()` and
+ * `workflowsEngine.signal()`) and in the worker process (for claim, heartbeat,
  * saveStep, complete, cancel, fail, defer, waitForEvent). The SDK never
  * touches SQLite — tako-server owns the queue file; everything reaches it
  * via the shared internal unix socket at `TAKO_INTERNAL_SOCKET`.
@@ -11,7 +11,7 @@
  * tako-server socket can route for every deployed app.
  */
 
-import { APP_NAME_ENV, INTERNAL_SOCKET_ENV, TakoError, callInternal } from "../internal-socket";
+import { APP_NAME_ENV, INTERNAL_SOCKET_ENV, TakoError, callInternal } from "../tako/socket";
 import type { EnqueueOptions } from "./engine";
 import type { Run, RunId, RunStatus, StepState } from "./types";
 

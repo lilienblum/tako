@@ -345,4 +345,46 @@ describe("Worker", () => {
     expect(runs.a).toBe(1);
     expect(runs.b).toBe(2);
   });
+
+  test("runLoop processes runs concurrently up to concurrency limit", async () => {
+    const total = 5;
+    let peak = 0;
+    let inFlight = 0;
+    let finished = 0;
+    let resolveAllDone: () => void;
+    const allDone = new Promise<void>((r) => (resolveAllDone = r));
+
+    const worker = new Worker({
+      client,
+      workerId: "w1",
+      concurrency: total,
+      pollIntervalMs: 5,
+      idleTimeoutMs: 500,
+      registry: registry({
+        slow: async () => {
+          inFlight++;
+          peak = Math.max(peak, inFlight);
+          await new Promise((r) => setTimeout(r, 50));
+          inFlight--;
+          finished++;
+          if (finished === total) resolveAllDone();
+          return "ok";
+        },
+      }),
+    });
+
+    const ids: string[] = [];
+    for (let i = 0; i < total; i++) {
+      ids.push(mock.seed({ name: "slow", payload: { i } }));
+    }
+
+    worker.start();
+    await allDone;
+    await worker.drain();
+
+    expect(peak).toBeGreaterThanOrEqual(2);
+    for (const id of ids) {
+      expect(mock.find(id)?.status).toBe("succeeded");
+    }
+  });
 });

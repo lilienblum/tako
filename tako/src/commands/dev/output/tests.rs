@@ -77,6 +77,12 @@ fn format_log_aligns_continuation_lines_under_message_column() {
 }
 
 #[test]
+fn raw_terminal_block_resets_carriage_for_each_multiline_row() {
+    let block = raw_terminal_block("alpha\nbeta\n  gamma");
+    assert_eq!(block, "\ralpha\r\n\rbeta\r\n\r  gamma\r\n");
+}
+
+#[test]
 fn format_log_appends_fields_as_key_value_suffix() {
     let mut fields = serde_json::Map::new();
     fields.insert("step".to_string(), serde_json::json!("fetch"));
@@ -228,7 +234,6 @@ fn format_panel_has_border_and_app_name_with_runtime() {
         None,
         &["myapp.test".to_string()],
         443,
-        3000,
         None,
         None,
     );
@@ -249,7 +254,6 @@ fn format_panel_shows_routes_label() {
         None,
         &["app.test".to_string()],
         443,
-        3000,
         None,
         None,
     );
@@ -262,7 +266,7 @@ fn format_panel_shows_routes_label() {
 fn format_panel_shows_all_urls() {
     let hosts = vec!["a.test".to_string(), "b.test".to_string()];
     let panel = format_panel(
-        "app", "running", "bun", "u/r", "main", "", None, &hosts, 443, 3000, None, None,
+        "app", "running", "bun", "u/r", "main", "", None, &hosts, 443, None, None,
     );
     let plain = strip_ansi(&panel);
     assert!(plain.contains("https://a.test"));
@@ -286,7 +290,6 @@ fn format_panel_shows_wildcard_and_path_routes() {
         None,
         &hosts,
         443,
-        3000,
         None,
         None,
         120,
@@ -547,7 +550,6 @@ fn format_panel_omits_443_port() {
         None,
         &["app.test".to_string()],
         443,
-        3000,
         None,
         None,
     );
@@ -566,7 +568,6 @@ fn format_panel_includes_custom_port() {
         None,
         &["app.test".to_string()],
         47831,
-        3000,
         None,
         None,
         120,
@@ -586,15 +587,12 @@ fn format_panel_shows_metrics() {
         None,
         &["app.test".to_string()],
         443,
-        3001,
         Some(50.0),
         Some(100 * 1024 * 1024),
     );
     let plain = strip_ansi(&panel);
     assert!(plain.contains("50%") || plain.contains("50"));
     assert!(plain.contains("100 MB"));
-    assert!(plain.contains("port"));
-    assert!(plain.contains("3001"));
 }
 
 #[test]
@@ -609,7 +607,6 @@ fn format_panel_shows_dash_without_metrics() {
         None,
         &["app.test".to_string()],
         443,
-        3000,
         None,
         None,
     );
@@ -628,7 +625,6 @@ fn format_panel_shows_repo_info() {
         None,
         &["app.test".to_string()],
         443,
-        3000,
         None,
         None,
     );
@@ -649,7 +645,6 @@ fn format_panel_stacked_has_border_and_content() {
         None,
         &["app.test".to_string()],
         443,
-        3000,
         Some(25.0),
         Some(50 * 1024 * 1024),
         60,
@@ -662,8 +657,6 @@ fn format_panel_stacked_has_border_and_content() {
     assert!(plain.contains("https://app.test"));
     assert!(plain.contains("cpu"));
     assert!(plain.contains("ram"));
-    assert!(plain.contains("port 3000"));
-    assert!(plain.contains("3000"));
 }
 
 #[test]
@@ -737,7 +730,6 @@ fn format_panel_shows_worktree_indicator() {
         Some("wt1"),
         &["app.test".to_string()],
         443,
-        3000,
         None,
         None,
     );
@@ -757,7 +749,6 @@ fn format_panel_omits_worktree_when_none() {
         None,
         &["app.test".to_string()],
         443,
-        3000,
         None,
         None,
     );

@@ -7,8 +7,10 @@
  */
 
 import { createEntrypoint } from "../create-entrypoint";
-import { initBootstrapFromFd, readViaInheritedFd } from "../secrets";
+import { installStdioBridge } from "../stdio-bridge";
+import { initBootstrapFromFd, readViaInheritedFd } from "../secrets-fd";
 
+installStdioBridge("app");
 initBootstrapFromFd(readViaInheritedFd);
 
 const { run, host, port, setDraining } = createEntrypoint();

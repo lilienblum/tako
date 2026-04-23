@@ -779,7 +779,6 @@ Bun.serve({
                 .contains("content-type: text/event-stream"),
             "expected text/event-stream response: {events}"
         );
-        assert!(events.contains("event: message"), "{events}");
         assert!(events.contains(r#"data: {"id":"1","channel":"chat:room-123","type":"message","data":{"text":"hello sse"}}"#), "{events}");
     }
 

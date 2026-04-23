@@ -25,6 +25,7 @@
     "skills"
   ],
   "type": "module",
+  "sideEffects": false,
   "main": "dist/index.mjs",
   "types": "dist/index.d.mts",
   "exports": {
@@ -47,10 +48,6 @@
     "./nextjs": {
       "types": "./dist/nextjs.d.mts",
       "import": "./dist/nextjs.mjs"
-    },
-    "./server": {
-      "types": "./dist/server.d.mts",
-      "import": "./dist/server.mjs"
     },
     "./internal": {
       "types": "./dist/internal.d.mts",

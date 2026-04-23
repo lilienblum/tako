@@ -1,7 +1,35 @@
+use crate::build::{self, PresetGroup, detect_build_adapter};
+use crate::config::TakoToml;
 use crate::output;
 use clap::Subcommand;
 use std::path::Path;
 use tako_core::Command;
+
+/// Regenerate typed accessors (`tako.gen.ts` for JS/TS, `tako_secrets.go` for
+/// Go) after a secret change. Best-effort — a typegen failure doesn't block
+/// the secret write itself.
+fn regenerate_types_after_secret_change(project_dir: &Path, config_path: &Path) {
+    let tako_config = match TakoToml::load_from_file(config_path) {
+        Ok(cfg) => cfg,
+        Err(_) => return,
+    };
+    let adapter = tako_config
+        .runtime
+        .as_deref()
+        .map(str::trim)
+        .filter(|v: &&str| !v.is_empty())
+        .and_then(build::BuildAdapter::from_id)
+        .unwrap_or_else(|| detect_build_adapter(project_dir));
+    match adapter.preset_group() {
+        PresetGroup::Js => {
+            let _ = build::js::write_types_for_adapter(project_dir, adapter);
+        }
+        PresetGroup::Go => {
+            let _ = build::go::write_types(project_dir);
+        }
+        PresetGroup::Unknown => {}
+    }
+}
 
 #[derive(Subcommand)]
 pub enum SecretCommands {
@@ -154,6 +182,7 @@ async fn set_secret(
     let encrypted = encrypt(&value, &key)?;
     secrets.set(env, name, encrypted)?;
     secrets.save_to_dir(&context.project_dir)?;
+    regenerate_types_after_secret_change(&context.project_dir, &context.config_path);
 
     if exists {
         output::success(&format!(
@@ -235,6 +264,7 @@ async fn remove_secret(
     }
 
     secrets.save_to_dir(&context.project_dir)?;
+    regenerate_types_after_secret_change(&context.project_dir, &context.config_path);
 
     if do_sync {
         // Sync to the specific env if provided, otherwise all environments

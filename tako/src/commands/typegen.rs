@@ -25,11 +25,15 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
 
     match adapter.preset_group() {
         PresetGroup::Js => {
-            let written = build::js::write_types_for_adapter(&ctx.project_dir, adapter)?;
-            if written {
-                output::success("Generated tako.d.ts");
-            } else {
-                output::success("tako.d.ts is up to date");
+            let result =
+                build::js::write_typegen_support_files_for_adapter(&ctx.project_dir, adapter)?;
+            match (result.wrote_runtime_types, result.wrote_scaffolds) {
+                (true, true) => output::success("Generated tako.gen.ts and channel/workflow stubs"),
+                (true, false) => output::success("Generated tako.gen.ts"),
+                (false, true) => output::success("Generated channel/workflow stubs"),
+                (false, false) => {
+                    output::success("tako.gen.ts and channel/workflow stubs are up to date")
+                }
             }
         }
         PresetGroup::Go => {

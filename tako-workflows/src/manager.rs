@@ -3,7 +3,7 @@
 //! Holds one entry per deployed app: `RunsDb`, cron ticker, worker
 //! supervisor. A single shared internal socket (owned by the manager)
 //! routes commands to the right app via the `app` field on each command.
-//! Workflow RPCs and `Tako.channels.publish()` both land on this socket,
+//! Workflow RPCs and server-side channel `publish()` calls both land on this socket,
 //! which is why it's named `internal.sock` rather than `workflows.sock`.
 //!
 //! Single integration surface for `operations.rs` to call from
@@ -22,6 +22,7 @@ use super::enqueue_socket::{
     AppHandlers, AppLookup, ChannelPublishFn, EnqueueSocketHandle, HealthCheck, OnClaimed,
     OnEnqueue, spawn as spawn_internal_socket,
 };
+use super::in_flight::InFlightLimiter;
 use super::supervisor::{WorkerSpec, WorkerSupervisor};
 
 /// The single Tako internal socket. Named after its env var
@@ -37,6 +38,7 @@ pub fn internal_socket_path(data_dir: &Path) -> PathBuf {
 /// (drained on the way out) and the cron ticker.
 pub struct AppWorkflow {
     db: Arc<RunsDb>,
+    limiter: Arc<InFlightLimiter>,
     supervisor: Arc<WorkerSupervisor>,
     cron: Option<CronTickerHandle>,
 }
@@ -58,8 +60,9 @@ pub struct WorkflowManager {
     data_dir: PathBuf,
     apps: Arc<RwLock<HashMap<String, AppWorkflow>>>,
     socket: parking_lot::Mutex<Option<EnqueueSocketHandle>>,
-    /// Server-side `Tako.channels.publish` relay. Snapshotted at
-    /// `start_socket` time and passed into the socket's accept loop.
+    /// Server-side channel `publish` relay used by SDK channel handles.
+    /// Snapshotted at `start_socket` time and passed into the socket's
+    /// accept loop.
     channel_publish: parking_lot::Mutex<Option<ChannelPublishFn>>,
     /// Serializes `ensure` calls so two concurrent deploys of the same app
     /// can't each start their own supervisor + cron ticker and then have
@@ -88,8 +91,8 @@ impl WorkflowManager {
         }
     }
 
-    /// Install the channel-publish relay used by `Tako.channels.publish()`
-    /// calls arriving on the internal socket. Must be called before
+    /// Install the channel-publish relay used by server-side channel
+    /// `publish()` calls arriving on the internal socket. Must be called before
     /// `start_socket` — the publisher is snapshotted at that point.
     pub fn set_channel_publisher(&self, publisher: ChannelPublishFn) {
         *self.channel_publish.lock() = Some(publisher);
@@ -136,6 +139,7 @@ impl WorkflowManager {
                 });
                 AppHandlers {
                     db: entry.db.clone(),
+                    limiter: entry.limiter.clone(),
                     on_enqueue,
                     health_check,
                     on_claimed,
@@ -173,6 +177,13 @@ impl WorkflowManager {
         let db = Arc::new(RunsDb::open(&db_path)?);
 
         let spec = spec_fn(db_path);
+        let limiter = Arc::new(InFlightLimiter::new(spec.concurrency));
+        // Rehydrate: any rows still `status='running'` from a previous
+        // process count against the live budget until their leases expire
+        // and `reclaim_expired_with_workers` drops them.
+        if let Ok(snapshot) = db.in_flight_by_worker() {
+            limiter.rehydrate(snapshot);
+        }
         let supervisor = Arc::new(WorkerSupervisor::new(spec));
         supervisor.start().await?;
 
@@ -180,10 +191,11 @@ impl WorkflowManager {
         let on_enqueue: OnEnqueue = Arc::new(move || {
             let _ = sup_for_cron.wake();
         });
-        let cron_handle = cron::spawn(db.clone(), on_enqueue);
+        let cron_handle = cron::spawn_with_limiter(db.clone(), limiter.clone(), on_enqueue);
 
         let entry = AppWorkflow {
             db,
+            limiter,
             supervisor,
             cron: Some(cron_handle),
         };

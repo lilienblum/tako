@@ -54,7 +54,7 @@ pub struct WorkerSpec {
     pub env: HashMap<String, String>,
     /// Secrets to hand the worker via fd 3. Mirror of the HTTP
     /// instance's runtime ABI — the SDK reads JSON from fd 3 at startup
-    /// and populates `Tako.secrets`.
+    /// and populates the `secrets` export on `tako.gen.ts`.
     #[cfg_attr(not(unix), allow(dead_code))]
     pub secrets: HashMap<String, String>,
     /// Optional per-line log sink. When `Some`, the supervisor pipes
@@ -196,7 +196,7 @@ impl WorkerSupervisor {
     /// Pre-enqueue probe. Returns `Err` with a user-facing message if the
     /// worker is in the post-crash cooldown window. Called by the internal
     /// socket's `EnqueueRun` handler before writing to the DB — lets the
-    /// SDK `Tako.workflows.enqueue` reject loudly when the worker can't
+    /// SDK workflow `.enqueue()` call reject loudly when the worker can't
     /// possibly process the job.
     pub fn check_startup_health(&self) -> Result<(), String> {
         let mut state = self.state.lock();

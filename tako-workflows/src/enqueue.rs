@@ -350,6 +350,55 @@ impl RunsDb {
         Ok(changes as u64)
     }
 
+    /// Atomically reclaim expired leases and return the list of
+    /// `worker_id`s whose runs were reclaimed, one entry per reclaimed
+    /// row (so callers can decrement per-worker in-flight counters).
+    pub fn reclaim_expired_with_workers(&self) -> Result<Vec<String>, RunsDbError> {
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction()?;
+        let workers: Vec<String> = {
+            let mut stmt = tx.prepare(
+                "SELECT worker_id FROM runs
+                 WHERE status='running' AND lease_until IS NOT NULL
+                   AND lease_until < ?1 AND worker_id IS NOT NULL",
+            )?;
+            let rows = stmt.query_map(params![now_ms()], |row| row.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        tx.execute(
+            "UPDATE runs SET status='pending', worker_id=NULL, lease_until=NULL
+             WHERE status='running' AND lease_until IS NOT NULL AND lease_until < ?1",
+            params![now_ms()],
+        )?;
+        tx.commit()?;
+        Ok(workers)
+    }
+
+    /// Snapshot of `worker_id -> in-flight count` over currently-running
+    /// rows. Used to rehydrate [`InFlightLimiter`] on startup so cached
+    /// counts match reality before the socket starts serving claims.
+    pub fn in_flight_by_worker(
+        &self,
+    ) -> Result<std::collections::HashMap<String, u32>, RunsDbError> {
+        let conn = self.conn.lock();
+        let mut stmt = conn.prepare(
+            "SELECT worker_id, COUNT(*) FROM runs
+             WHERE status='running' AND worker_id IS NOT NULL
+             GROUP BY worker_id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let worker: String = row.get(0)?;
+            let count: i64 = row.get(1)?;
+            Ok((worker, count as u32))
+        })?;
+        let mut out = std::collections::HashMap::new();
+        for r in rows {
+            let (worker, count) = r?;
+            out.insert(worker, count);
+        }
+        Ok(out)
+    }
+
     /// Park a run waiting for a named event. Stores the waiter and defers
     /// the run. Wake happens via `signal` (or via run_at if a timeout was
     /// set and it elapses).

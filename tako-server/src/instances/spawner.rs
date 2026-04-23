@@ -21,8 +21,8 @@ pub struct Spawner {
     #[cfg(unix)]
     app_user: Option<(u32, u32)>,
     /// Path to the shared Tako internal socket. When present, injected into
-    /// every spawned instance as `TAKO_INTERNAL_SOCKET` so `Tako.workflows.enqueue`
-    /// and `Tako.channels.publish` from app code work. `None` in tests.
+    /// every spawned instance as `TAKO_INTERNAL_SOCKET` so workflow `.enqueue()`
+    /// and channel `.publish()` from app code work. `None` in tests.
     internal_socket: Option<PathBuf>,
 }
 
@@ -730,8 +730,8 @@ mod tests {
         assert_eq!(env.get("HOST").map(String::as_str), Some("127.0.0.1"));
         assert!(env.contains_key("PORT"));
         // Secrets + internal token travel on fd 3, not env. Guard the secret
-        // case so `Tako.secrets.FOO` can't be accidentally replaced by
-        // `process.env.FOO` from a leaked var.
+        // case so `secrets.FOO` (from `tako.gen.ts`) can't be accidentally
+        // replaced by `process.env.FOO` from a leaked var.
         assert!(!env.contains_key("SECRET"));
     }
 

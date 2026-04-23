@@ -10,8 +10,6 @@ use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use tokio::net::TcpListener;
-
 use super::*;
 
 /// All resolved state needed to start a dev session.
@@ -27,8 +25,6 @@ pub(super) struct DevSession {
     pub primary_host: String,
     pub public_port: u16,
     pub public_url_port: u16,
-    pub upstream_port: u16,
-    pub reserve_listener: TcpListener,
     pub cfg: crate::config::TakoToml,
     pub cmd: Vec<String>,
     /// Command to spawn the workflow worker subprocess on demand. `None`
@@ -80,7 +76,7 @@ pub(super) async fn prepare(
     .map_err(|e| format!("Failed to resolve deploy entrypoint: {}", e))?;
 
     if runtime_adapter.preset_group() == PresetGroup::Js {
-        let _ = js::write_types(&project_dir);
+        let _ = js::write_typegen_support_files(&project_dir);
     }
 
     let runtime_name = build_preset.name.clone();
@@ -178,10 +174,9 @@ pub(super) async fn prepare(
     inject_dev_secrets(&project_dir, &mut env).map_err(|e| e.to_string())?;
 
     if runtime_adapter.preset_group() == PresetGroup::Js {
-        let _ = crate::build::js::write_types(&project_dir);
+        let _ = crate::build::js::write_typegen_support_files(&project_dir);
     }
 
-    let (upstream_port, reserve_listener) = reserve_ephemeral_port()?;
     let cmd = resolve_dev_run_command(
         &cfg,
         &build_preset,
@@ -290,8 +285,6 @@ pub(super) async fn prepare(
         primary_host,
         public_port,
         public_url_port,
-        upstream_port,
-        reserve_listener,
         cfg,
         cmd,
         worker_command,
@@ -369,12 +362,4 @@ async fn repair_https_probe(
         LOCALHOST_443_HTTPS_PROBE_RETRY_DELAY_MS,
     )
     .await
-}
-
-fn reserve_ephemeral_port() -> Result<(u16, TcpListener), Box<dyn std::error::Error>> {
-    let std_listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    std_listener.set_nonblocking(true)?;
-    let port = std_listener.local_addr()?.port();
-    let listener = TcpListener::from_std(std_listener)?;
-    Ok((port, listener))
 }

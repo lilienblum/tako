@@ -5,22 +5,17 @@ import appCss from "../styles/app.css?url";
 export const Route = createRootRoute({
   head: () => ({
     meta: [
-      { title: "Tako demo" },
-      { name: "description", content: "Live, interactive demos of what Tako can do." },
+      { title: "Moonbase Supply Desk — Tako demo" },
+      {
+        name: "description",
+        content:
+          "A Tako demo: each moonbase is an isolated tenant. Supply requests fan out across parallel workflows with a live mission log.",
+      },
     ],
     links: [
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      {
-        rel: "preconnect",
-        href: "https://fonts.gstatic.com",
-        crossOrigin: "anonymous",
-      },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=Caveat:wght@500&family=IBM+Plex+Mono:wght@400;700&family=Nunito:wght@400;600;700&family=Poppins:wght@600;700&display=swap",
-      },
       { rel: "stylesheet", href: appCss },
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
+      { rel: "apple-touch-icon", sizes: "180x180", href: "/apple-touch-icon.png" },
     ],
   }),
   shellComponent: RootDocument,
@@ -29,7 +24,8 @@ export const Route = createRootRoute({
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // oxlint-disable-next-line better-tailwindcss/no-unknown-classes -- `dark` is the tailwind dark-mode selector toggle
+    <html lang="en" className="dark">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />

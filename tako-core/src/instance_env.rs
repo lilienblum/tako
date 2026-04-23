@@ -5,7 +5,7 @@
 //! module is that contract, so the two spawners can't drift apart and leave
 //! the SDK with half its wiring (e.g. `TAKO_APP_NAME` set but
 //! `TAKO_INTERNAL_SOCKET` missing, which produces confusing runtime-only
-//! failures the first time `Tako.workflows.enqueue` is called).
+//! failures the first time workflow `.enqueue()` is called).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -32,8 +32,8 @@ pub struct TakoRuntimeEnv<'a> {
     /// Name the SDK tags every RPC with. Required — every Tako process
     /// belongs to exactly one app.
     pub app_name: &'a str,
-    /// Path to the internal unix socket used by `Tako.workflows.enqueue`,
-    /// `Tako.workflows.signal`, and server-side `Tako.channels.publish`.
+    /// Path to the internal unix socket used by workflow `.enqueue()`,
+    /// `workflowsEngine.signal()`, and server-side channel `.publish()`.
     ///
     /// `None` only in tests that don't need workflow/channel RPCs. Real
     /// spawns should always provide this — a missing socket at spawn time

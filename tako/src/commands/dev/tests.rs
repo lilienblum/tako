@@ -149,6 +149,49 @@ main = "src/index.ts"
 }
 
 #[test]
+fn tanstack_start_bun_dev_resolves_to_bunx_bun_vite_dev_end_to_end() {
+    let _lock = crate::paths::test_tako_home_env_lock();
+    let previous = std::env::var_os("TAKO_HOME");
+    let home = TempDir::new().unwrap();
+    unsafe {
+        std::env::set_var("TAKO_HOME", home.path());
+    }
+
+    let project = TempDir::new().unwrap();
+    std::fs::write(project.path().join("bun.lock"), "").unwrap();
+    std::fs::write(project.path().join("package.json"), r#"{"name":"demo"}"#).unwrap();
+
+    let cfg = TakoToml {
+        runtime: Some("bun".to_string()),
+        preset: Some("tanstack-start".to_string()),
+        ..Default::default()
+    };
+
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let preset_ref = resolve_dev_preset_ref(project.path(), &cfg).unwrap();
+    let (preset, _src) = runtime
+        .block_on(crate::build::load_dev_build_preset(
+            project.path(),
+            &preset_ref,
+        ))
+        .unwrap();
+
+    let adapter = resolve_effective_dev_build_adapter(project.path(), &cfg, &preset_ref).unwrap();
+
+    let cmd = resolve_dev_run_command(&cfg, &preset, "src/index.ts", adapter, true, project.path())
+        .unwrap();
+
+    match previous {
+        Some(value) => unsafe { std::env::set_var("TAKO_HOME", value) },
+        None => unsafe { std::env::remove_var("TAKO_HOME") },
+    }
+
+    assert_eq!(adapter, BuildAdapter::Bun);
+    assert_eq!(preset_ref, "javascript/tanstack-start");
+    assert_eq!(cmd, vec!["bun", "--bun", "./node_modules/.bin/vite", "dev"]);
+}
+
+#[test]
 fn resolve_dev_run_command_uses_preset_runtime_override_for_bun() {
     let preset = parse_and_validate_preset(
         r#"

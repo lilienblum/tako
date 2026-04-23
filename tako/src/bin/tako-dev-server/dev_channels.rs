@@ -48,7 +48,7 @@ impl DevChannelStore {
 
     /// Append a message to `channel` and return the stored record. Used
     /// from the internal socket's `Command::ChannelPublish` path (server-side
-    /// `Tako.channels.publish()` from app/workflow code).
+    /// channel `.publish()` from app/workflow code).
     pub fn publish(
         &self,
         channel: &str,
@@ -134,10 +134,7 @@ async fn serve_sse(
                 if !messages.is_empty() {
                     for message in messages {
                         let encoded = serde_json::to_string(&message).unwrap_or_default();
-                        let frame = format!(
-                            "id: {}\nevent: {}\ndata: {}\n\n",
-                            message.id, message.r#type, encoded
-                        );
+                        let frame = format!("id: {}\ndata: {}\n\n", message.id, encoded);
                         if session
                             .write_response_body(Some(frame.into_bytes().into()), false)
                             .await

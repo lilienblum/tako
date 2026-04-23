@@ -13,7 +13,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { join, parse } from "node:path";
-import { isWorkflowDefinition } from "./define";
+import { isWorkflowDefinition, isWorkflowExport } from "./define";
 import type { WorkflowConfig } from "./types";
 import type { WorkflowHandler } from "./worker";
 
@@ -40,9 +40,17 @@ export async function discoverWorkflows(dir: string): Promise<DiscoveredWorkflow
     const mod = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
     const defaultExport = mod["default"];
 
-    if (isWorkflowDefinition(defaultExport)) {
+    if (isWorkflowExport(defaultExport)) {
+      const def = defaultExport.definition;
+      if (def.name !== parsed.name) {
+        throw new Error(
+          `workflow file '${parsed.name}' exports defineWorkflow('${def.name}', ...); the name must match the file basename`,
+        );
+      }
+      found.push({ name: def.name, handler: def.handler, config: def.config });
+    } else if (isWorkflowDefinition(defaultExport)) {
       found.push({
-        name: parsed.name,
+        name: defaultExport.name,
         handler: defaultExport.handler,
         config: defaultExport.config,
       });

@@ -119,8 +119,6 @@ pub async fn run(
         primary_host,
         public_port,
         public_url_port,
-        upstream_port,
-        reserve_listener,
         cfg,
         cmd,
         worker_command,
@@ -142,8 +140,6 @@ pub async fn run(
     let mut event_rx_opt = Some(event_rx);
     let mut output_handle: Option<tokio::task::JoinHandle<Result<output::DevOutputExit, String>>> =
         None;
-
-    drop(reserve_listener);
 
     {
         let config_key = config_key.clone();
@@ -275,7 +271,6 @@ pub async fn run(
         &app_name,
         variant.as_deref(),
         &reg_hosts,
-        upstream_port,
         &cmd,
         &env_snapshot,
         worker_command.as_deref(),
@@ -347,7 +342,6 @@ pub async fn run(
                 adapter_name_for_output,
                 hosts,
                 public_port_for_output,
-                upstream_port,
                 log_rx,
                 event_rx,
                 control_tx_for_output,
@@ -371,7 +365,7 @@ pub async fn run(
         }
     }
 
-    let (cfg_tx, cfg_rx) = mpsc::channel::<()>(8);
+    let (cfg_tx, cfg_rx) = mpsc::channel::<watcher::WatchChange>(8);
     let _cfg_handle =
         watcher::ConfigWatcher::new(project_dir.clone(), config_path.clone(), cfg_tx)?.start()?;
 
@@ -446,9 +440,23 @@ pub async fn run(
         let hosts_state = hosts_state.clone();
         let cmd = cmd.clone();
         let log_tx = log_tx.clone();
+        let should_exit_tx = should_exit_tx.clone();
         let mut cfg_rx = cfg_rx;
         tokio::spawn(async move {
-            while cfg_rx.recv().await.is_some() {
+            while let Some(change) = cfg_rx.recv().await {
+                if !config_path.exists() {
+                    let _ = log_tx
+                        .send(ScopedLog::error(
+                            "tako",
+                            format!(
+                                "{} was removed — stopping dev server",
+                                config_path.display()
+                            ),
+                        ))
+                        .await;
+                    let _ = should_exit_tx.send(true);
+                    return;
+                }
                 let cfg = match load_dev_tako_toml(&config_path) {
                     Ok(c) => c,
                     Err(e) => {
@@ -486,7 +494,7 @@ pub async fn run(
                         .await;
                 }
 
-                let _ = crate::build::js::write_types(&project_dir);
+                let _ = crate::build::js::write_typegen_support_files(&project_dir);
 
                 *env_state.lock().await = new_env.clone();
 
@@ -517,7 +525,6 @@ pub async fn run(
                         &app_name,
                         variant.as_deref(),
                         &new_hosts,
-                        upstream_port,
                         &cmd,
                         &new_env,
                         worker_command.as_deref(),
@@ -533,9 +540,13 @@ pub async fn run(
                             .await;
                     }
                 } else {
-                    let _ = log_tx
-                        .send(ScopedLog::info("tako", "tako.toml changed, restarting…"))
-                        .await;
+                    let restart_reason = match change {
+                        watcher::WatchChange::Config => "tako.toml changed, restarting…",
+                        watcher::WatchChange::Secrets => "Secrets changed, restarting…",
+                        watcher::WatchChange::Channels => "channels/ changed, restarting…",
+                        watcher::WatchChange::Workflows => "workflows/ changed, restarting…",
+                    };
+                    let _ = log_tx.send(ScopedLog::info("tako", restart_reason)).await;
                     let _ = crate::dev_server_client::restart_app(&config_key).await;
                 }
             }

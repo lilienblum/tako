@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { installErrorHooks, resetErrorHooksForTests } from "../src/error-hooks";
+import { installErrorHooks, resetErrorHooksForTests } from "../src/tako/error-hooks";
 
 let writes: string[] = [];
 let originalWrite: typeof process.stdout.write;
@@ -25,6 +25,7 @@ describe("installErrorHooks", () => {
       writes.push(typeof chunk === "string" ? chunk : String(chunk));
       return true;
     }) as typeof process.stdout.write;
+    // oxlint-disable-next-line typescript/unbound-method -- capturing native exit reference to restore later
     originalExit = process.exit;
     (process as { exit: (code?: number) => never }).exit = ((code?: number) => {
       exitCode = code;

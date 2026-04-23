@@ -11,7 +11,7 @@
  * `client.defer` so the worker can release.
  *
  * `ctx.waitFor(name, opts?)` parks the run until a matching
- * `Tako.workflows.signal(eventName, payload)` arrives or the timeout fires.
+ * `workflowsEngine.signal(eventName, payload)` (from `tako.sh/internal`) arrives or the timeout fires.
  * Resumption hydrates the event payload as the step's result.
  *
  * **At-least-once contract**: if the worker dies between fn() returning and

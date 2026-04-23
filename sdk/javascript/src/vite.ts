@@ -2,8 +2,11 @@ import { mkdir, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import type { Plugin, ResolvedConfig, UserConfig } from "vite";
+import { bootstrapChannels } from "./channels/bootstrap";
+import type { ChannelRegistry } from "./channels";
 import { createLogger } from "./logger";
 import { handleTakoEndpoint } from "./tako/endpoints";
+import { initServerRuntime } from "./tako/init";
 import { writeViaInheritedFd } from "./tako/readiness";
 
 interface ViteEntryChunkLike {
@@ -29,7 +32,7 @@ function toRelativeImportSpecifier(filePath: string): string {
 function renderWrappedEntrySource(compiledMain: string): string {
   const importSpecifier = toRelativeImportSpecifier(compiledMain);
   return `import entryModule, * as entryNamespace from ${JSON.stringify(importSpecifier)};
-import { handleTakoEndpoint } from "tako.sh/server";
+import { handleTakoEndpoint } from "tako.sh/internal";
 
 const fetchHandler =
   typeof entryModule === "function"
@@ -218,26 +221,41 @@ export function tako(): Plugin {
       resolvedConfig = config;
     },
     configureServer(server) {
-      // Handle Tako internal endpoints (channel auth, health) in dev mode.
-      // Dynamic import so we share the SAME ChannelRegistry / Tako singletons
-      // as the app — a static import gets inlined by the bundler into a
-      // separate copy, breaking singleton state.
+      // Wire up the same server-runtime install used by the production
+      // entrypoint — so user server fns can `signal()`, `.enqueue()`, and
+      // publish to channels during `tako dev` without boot-time setup.
+      initServerRuntime();
+
+      // Discover channel definitions from `<appDir>/channels/` once at startup.
+      // The registry feeds the internal channel-auth/dispatch endpoints.
+      let channelsPromise: Promise<ChannelRegistry> | null = null;
+      const getChannels = (): Promise<ChannelRegistry> => {
+        if (!channelsPromise) {
+          channelsPromise = bootstrapChannels({ appDir: process.cwd() }).then((r) => r.registry);
+        }
+        return channelsPromise;
+      };
+
       server.middlewares.use((req: IncomingMessage, res: ServerResponse, next: () => void) => {
         const host = (req.headers.host ?? "").split(":")[0] ?? "";
         if (host !== "tako.internal") {
           next();
           return;
         }
-        nodeRequestToFetch(req)
-          .then((fetchReq) =>
-            handleTakoEndpoint(fetchReq, {
-              status: "healthy",
-              app: "dev",
-              version: process.env["TAKO_BUILD"] ?? "dev",
-              instance_id: process.env["TAKO_INSTANCE_ID"] ?? "dev",
-              pid: process.pid,
-              uptime_seconds: 0,
-            }),
+        Promise.all([nodeRequestToFetch(req), getChannels()])
+          .then(([fetchReq, channels]) =>
+            handleTakoEndpoint(
+              fetchReq,
+              {
+                status: "healthy",
+                app: "dev",
+                version: process.env["TAKO_BUILD"] ?? "dev",
+                instance_id: process.env["TAKO_INSTANCE_ID"] ?? "dev",
+                pid: process.pid,
+                uptime_seconds: 0,
+              },
+              channels,
+            ),
           )
           .then((response) => {
             if (response) return sendFetchResponse(res, response);

@@ -220,7 +220,6 @@ pub(super) fn format_panel(
     worktree_name: Option<&str>,
     hosts: &[String],
     port: u16,
-    app_port: u16,
     cpu: Option<f32>,
     mem_bytes: Option<u64>,
 ) -> String {
@@ -236,7 +235,6 @@ pub(super) fn format_panel(
             worktree_name,
             hosts,
             port,
-            app_port,
             cpu,
             mem_bytes,
             cols,
@@ -252,7 +250,6 @@ pub(super) fn format_panel(
             worktree_name,
             hosts,
             port,
-            app_port,
             cpu,
             mem_bytes,
             cols,
@@ -271,7 +268,6 @@ pub(super) fn format_panel_wide(
     worktree_name: Option<&str>,
     hosts: &[String],
     port: u16,
-    app_port: u16,
     cpu: Option<f32>,
     mem_bytes: Option<u64>,
     cols: usize,
@@ -340,8 +336,7 @@ pub(super) fn format_panel_wide(
     } else {
         format!("{}  —", muted("ram"))
     };
-    let r2 = format!("{} {app_port}", muted("port"));
-    let right = [r0, r1, r2];
+    let right = [r0, r1];
 
     let data_rows = left.len().max(mid.len()).max(right.len());
     let mut lines = vec![top];
@@ -366,7 +361,6 @@ pub(super) fn format_panel_stacked(
     worktree_name: Option<&str>,
     hosts: &[String],
     port: u16,
-    app_port: u16,
     cpu: Option<f32>,
     mem_bytes: Option<u64>,
     cols: usize,
@@ -431,10 +425,6 @@ pub(super) fn format_panel_stacked(
         format!("{} —", muted("ram"))
     };
     rows.push(stacked_row(&format!("{cpu_str}  {ram_str}"), inner_w));
-    rows.push(stacked_row(
-        &format!("{} {app_port}", muted("port")),
-        inner_w,
-    ));
 
     rows.push(bot);
     rows.join("\n")

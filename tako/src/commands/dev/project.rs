@@ -146,6 +146,7 @@ pub(super) fn route_hostname_matches(route_pattern: &str, request_host: &str) ->
 pub(super) fn compute_dev_env(cfg: &TakoToml) -> std::collections::HashMap<String, String> {
     let mut env = cfg.get_merged_vars("development");
     env.insert("ENV".to_string(), "development".to_string());
+    env.insert("TAKO_BUILD".to_string(), "dev".to_string());
     env
 }
 

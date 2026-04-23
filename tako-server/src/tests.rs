@@ -1100,7 +1100,7 @@ async fn server_state_starts_internal_socket_at_boot() {
     let socket = state.workflows.socket_path();
     assert!(
         socket_ready(&socket),
-        "server boot must start the shared internal socket at {} so app-side Tako.channels.publish works without workflows/",
+        "server boot must start the shared internal socket at {} so app-side channel .publish() works without workflows/",
         socket.display()
     );
 }

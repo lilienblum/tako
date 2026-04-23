@@ -489,7 +489,7 @@ pub fn run(config_path: Option<&Path>) -> Result<(), Box<dyn std::error::Error>>
         .unwrap_or_default()
         .to_string_lossy();
     if js::write_types(&project_dir)? {
-        output::success(&format!("Created {config_name} and tako.d.ts"));
+        output::success(&format!("Created {config_name} and tako.gen.ts"));
     } else {
         output::success(&format!("Created {config_name}"));
     }
@@ -637,7 +637,7 @@ fn run_non_interactive(
     ensure_project_gitignore_tracks_secrets(project_dir)?;
 
     if js::write_types(project_dir)? {
-        output::success("Created tako.toml and tako.d.ts");
+        output::success("Created tako.toml and tako.gen.ts");
     } else {
         output::success("Created tako.toml");
     }

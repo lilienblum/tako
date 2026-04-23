@@ -11,7 +11,7 @@ import type {
   ChannelSubscription,
 } from "./types";
 import { comparePatterns, matchPattern } from "./channels/pattern";
-import type { ChannelDefinition } from "./channels/define";
+import { isChannelDefinition, type ChannelDefinition } from "./channels/define";
 
 export type ChannelSocketPublisher = <T>(
   channel: string,
@@ -232,6 +232,71 @@ interface RegistryEntry {
   definition: ChannelDefinition;
 }
 
+/**
+ * Handle returned by the default export of a `channels/<name>.ts` file
+ * (unparameterized) or by invoking a parameterized channel with its params.
+ */
+export interface ChannelHandle {
+  publish: Channel["publish"];
+  subscribe: Channel["subscribe"];
+  connect?: Channel["connect"];
+}
+
+/**
+ * Loose runtime shape for the default export of a channel module.
+ * Unparameterized channels expose `publish/subscribe/connect` directly;
+ * parameterized channels are callable `(params)` returning a handle. Typed
+ * as an intersection so both usages compile — runtime enforces which one
+ * is valid for a given channel.
+ */
+export type ChannelAccessorEntry = ChannelHandle &
+  ((params: Record<string, string>) => ChannelHandle);
+
+function expandPattern(pattern: string, params: Record<string, string>): string {
+  return pattern
+    .split("/")
+    .map((seg) => {
+      if (!seg.startsWith(":")) return seg;
+      const name = seg.slice(1);
+      const value = params[name];
+      if (value === undefined || value === null || value === "") {
+        throw new Error(`missing channel param '${name}'`);
+      }
+      return encodeURIComponent(value);
+    })
+    .join("/");
+}
+
+function makeHandle(definition: ChannelDefinition, resolvedName: string): ChannelHandle {
+  const isWs = definition.handler !== undefined;
+  const channel = new Channel(resolvedName, isWs ? "ws" : undefined);
+  const handle: ChannelHandle = {
+    publish: channel.publish.bind(channel),
+    subscribe: channel.subscribe.bind(channel),
+  };
+  if (isWs) {
+    handle.connect = channel.connect.bind(channel);
+  }
+  return handle;
+}
+
+function buildAccessorEntry(definition: ChannelDefinition, baseName: string): ChannelAccessorEntry {
+  if (definition.compiled.paramNames.length === 0) {
+    return makeHandle(definition, baseName) as ChannelAccessorEntry;
+  }
+  return ((params: Record<string, string>) =>
+    makeHandle(definition, expandPattern(definition.pattern, params))) as ChannelAccessorEntry;
+}
+
+/** Convert a camelCase prop to the kebab-case channel file name. */
+function propToChannelName(prop: string): string {
+  return prop
+    .replace(/([a-z])([A-Z])/g, "$1-$2")
+    .replace(/([a-zA-Z])([0-9])/g, "$1-$2")
+    .replace(/([0-9])([a-zA-Z])/g, "$1-$2")
+    .toLowerCase();
+}
+
 export class ChannelRegistry {
   private entries: RegistryEntry[] = [];
 
@@ -239,7 +304,14 @@ export class ChannelRegistry {
     return this.entries;
   }
 
-  register(name: string, definition: ChannelDefinition): void {
+  register(
+    name: string,
+    input: ChannelDefinition | { readonly definition: ChannelDefinition },
+  ): void {
+    const definition: ChannelDefinition =
+      "definition" in input && isChannelDefinition(input.definition)
+        ? input.definition
+        : (input as ChannelDefinition);
     if (this.entries.some((e) => e.definition.pattern === definition.pattern)) {
       throw new Error(`duplicate channel pattern '${definition.pattern}'`);
     }
@@ -249,6 +321,11 @@ export class ChannelRegistry {
 
   clear(): void {
     this.entries = [];
+  }
+
+  /** Look up a discovered channel by its file basename (the kebab-case name). */
+  findByName(name: string): RegistryEntry | undefined {
+    return this.entries.find((e) => e.name === name);
   }
 
   resolve(
@@ -292,6 +369,30 @@ export class ChannelRegistry {
       ? { ok: true, ...config }
       : { ok: true, ...config, subject: verdict.subject };
   }
+}
+
+/**
+ * Wrap a {@link ChannelRegistry} in a Proxy so property access via
+ * `accessor.<name>` returns a {@link ChannelAccessorEntry} for the matching
+ * discovered channel (the prop is kebab-cased first). Existing registry
+ * methods (`register`, `resolve`, `authorize`, `clear`, `all`, `findByName`)
+ * pass through.
+ */
+export function withChannelAccessor(
+  registry: ChannelRegistry,
+): ChannelRegistry & Record<string, ChannelAccessorEntry> {
+  const handler: ProxyHandler<ChannelRegistry> = {
+    get(target, prop, receiver) {
+      if (typeof prop === "string" && !(prop in target)) {
+        const entry = target.findByName(propToChannelName(prop));
+        if (entry) {
+          return buildAccessorEntry(entry.definition, entry.name);
+        }
+      }
+      return Reflect.get(target, prop, receiver);
+    },
+  };
+  return new Proxy(registry, handler) as ChannelRegistry & Record<string, ChannelAccessorEntry>;
 }
 
 function definitionLifecycleConfig(definition: ChannelDefinition) {
