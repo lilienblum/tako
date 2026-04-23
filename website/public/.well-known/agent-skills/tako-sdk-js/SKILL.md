@@ -53,14 +53,14 @@ export default {
 
 ## Package Exports
 
-| Import path        | Purpose                              | Key exports                                                                              |
-| ------------------ | ------------------------------------ | ---------------------------------------------------------------------------------------- |
-| `tako.sh`          | Authoring helpers and types          | `defineChannel`, `defineWorkflow`, `TakoError`, `InferWorkflowPayload`                   |
-| `tako.sh/client`   | Browser-safe channel client          | `Channel`                                                                                |
-| `tako.sh/react`    | React hook for channels              | `useChannel`                                                                             |
-| `tako.sh/vite`     | Vite plugin for SSR builds           | `tako()` plugin function                                                                 |
-| `tako.sh/nextjs`   | Next.js standalone adapter + wrapper | `withTako()`, `createNextjsAdapter()`, `createNextjsFetchHandler()`                      |
-| `tako.sh/internal` | Plumbing for the generated file      | `resolveRuntime`, `loadSecrets`, `createLogger`, `ChannelRegistry`, `workflowsEngine`, … |
+| Import path        | Purpose                                                              | Key exports                                                                      |
+| ------------------ | -------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `tako.sh`          | Server-side authoring + runtime                                      | `defineChannel`, `defineWorkflow`, `signal`, `TakoError`, `InferWorkflowPayload` |
+| `tako.sh/client`   | Browser-safe channel client                                          | `Channel`                                                                        |
+| `tako.sh/react`    | React hook for channels                                              | `useChannel`                                                                     |
+| `tako.sh/vite`     | Vite plugin for SSR builds                                           | `tako()` plugin function                                                         |
+| `tako.sh/nextjs`   | Next.js standalone adapter + wrapper                                 | `withTako()`, `createNextjsAdapter()`, `createNextjsFetchHandler()`              |
+| `tako.sh/internal` | Server-only plumbing for the generated file + framework-adapter boot | `loadSecrets`, `createLogger`, `handleTakoEndpoint`, `initServerRuntime`         |
 
 ## Runtime state: `tako.gen.ts`
 
@@ -141,6 +141,22 @@ On `next build`, the adapter:
 The generated wrapper prefers `.next/standalone/server.js` when it exists. Otherwise it falls back to `next start`.
 
 Point your Tako deploy `main` at `.next/tako-entry.mjs`, or use the `nextjs` preset so that default is provided for you.
+
+### Enabling `.enqueue()` / `signal()` / channel publish inside Next.js routes
+
+The Tako Next.js adapter spawns `next start` as a child process and proxies to it, so the Tako SDK boot hook that runs in the parent process never fires inside your Next.js routes. Add a Next.js `instrumentation.ts` at your project root to install the runtime once per server process:
+
+```typescript
+// instrumentation.ts
+export async function register() {
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { initServerRuntime } = await import("tako.sh/internal");
+    initServerRuntime();
+  }
+}
+```
+
+After this, server-side routes and server actions can call `defineWorkflow(...).enqueue(payload)`, `signal(event, payload)`, and channel `.publish(...)` normally. Without it, those calls throw `TakoError("TAKO_UNAVAILABLE", "Workflow runtime not installed. ...")`.
 
 ## Types
 
@@ -391,8 +407,8 @@ No typegen is needed for workflow enqueue typing — the types flow from the wor
 
 ```typescript
 // Wake all waitFor("approval:order-abc") calls with a payload
-import { workflowsEngine } from "tako.sh/internal";
-await workflowsEngine.signal("approval:order-abc", { approved: true });
+import { signal } from "tako.sh";
+await signal("approval:order-abc", { approved: true });
 ```
 
 ### Run lifecycle
