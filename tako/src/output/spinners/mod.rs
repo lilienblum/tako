@@ -16,7 +16,7 @@ use super::cursor::{
     clear_active_progress_bar, hide_cursor, register_active_progress_bar, show_cursor,
 };
 use super::{
-    ACCENT, INDENT, PHASE_PB, bold, emit, error_block, is_interactive, is_pretty, muted_elapsed,
+    ACCENT, PHASE_PB, bold, emit, error_block, is_interactive, is_pretty, muted_elapsed,
     should_colorize, theme_error, theme_fg, theme_success,
 };
 
@@ -42,16 +42,9 @@ pub fn spinner_style() -> ProgressStyle {
         .tick_strings(SPINNER_TICKS)
 }
 
-pub fn phase_spinner_style() -> ProgressStyle {
+pub(super) fn phase_spinner_style() -> ProgressStyle {
     let s = teal_spinner_token();
     ProgressStyle::with_template(&format!("{s} {{msg}}"))
-        .unwrap()
-        .tick_strings(SPINNER_TICKS)
-}
-
-pub(super) fn phase_spinner_style_indented() -> ProgressStyle {
-    let s = teal_spinner_token();
-    ProgressStyle::with_template(&format!("{INDENT}{s} {{msg}}"))
         .unwrap()
         .tick_strings(SPINNER_TICKS)
 }

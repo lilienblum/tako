@@ -1,9 +1,12 @@
+mod task_tree;
+
 use crate::output;
 use crate::ssh::SshClient;
-use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tako_core::ServerRuntimeInfo;
 use tracing::Instrument;
+
+use task_tree::{Step, UpgradeTaskTreeController, should_use_upgrade_task_tree};
 
 pub(super) const UPGRADE_SOCKET_WAIT_TIMEOUT: Duration = Duration::from_secs(120);
 const UPGRADE_POLL_INTERVAL: Duration = Duration::from_millis(500);
@@ -364,197 +367,164 @@ pub(super) async fn upgrade_servers(name: Option<&str>) -> Result<(), Box<dyn st
         names
     };
 
-    let interactive = output::is_pretty() && output::is_interactive();
-
-    // CLI and server ship together; the CLI's version is the latest.
-    let latest_version = crate::cli::display_version();
-    tracing::info!("Latest version: {latest_version}");
-    output::info(&format!(
-        "Latest version: {}",
-        output::strong(&latest_version)
-    ));
-
-    // ── Phase 1: Get current versions from all servers ──────────────
-    let total = names.len();
-    let done = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-
-    struct VersionCheck {
-        name: String,
-        ssh: Option<SshClient>,
-        version: Option<String>,
-        target: Option<crate::config::ServerTarget>,
-        error: Option<String>,
-        elapsed: Duration,
+    // Resolve the real latest version from GitHub. The CLI's own version is
+    // only authoritative on release builds; dev builds report bare "0.0.0".
+    let latest_version = crate::commands::upgrade::version::fetch_latest_version()
+        .await
+        .map_err(|e| format!("Failed to resolve latest version: {e}"))?;
+    tracing::info!("Upgrading to {latest_version}");
+    if output::is_pretty() {
+        output::line(&format!("Latest version: {latest_version}"));
+        eprintln!();
     }
 
-    let mut version_set = tokio::task::JoinSet::new();
+    let task_tree = should_use_upgrade_task_tree().then(|| UpgradeTaskTreeController::new(&names));
+
+    let mut handles = Vec::new();
     for server_name in &names {
         let server = servers
             .get(server_name)
             .ok_or_else(|| format!("Server '{}' not found.", server_name))?
             .clone();
         let name = server_name.clone();
-        let done = Arc::clone(&done);
+        let latest = latest_version.clone();
+        let tree = task_tree.clone();
         let span = output::scope(&name);
-        version_set.spawn(
+        handles.push(tokio::spawn(
             async move {
-                let start = std::time::Instant::now();
-                let ssh = match SshClient::connect_to(&server.host, server.port).await {
-                    Ok(ssh) => ssh,
-                    Err(e) => {
-                        done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        return VersionCheck {
-                            name,
-                            ssh: None,
-                            version: None,
-                            target: None,
-                            error: Some(e.to_string()),
-                            elapsed: start.elapsed(),
-                        };
-                    }
-                };
-                let version = ssh.tako_version().await.ok().flatten();
-                let target = super::wizard::detect_server_target(&ssh).await.ok();
-                done.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                VersionCheck {
-                    name,
-                    ssh: Some(ssh),
-                    version,
-                    target,
-                    error: None,
-                    elapsed: start.elapsed(),
-                }
+                let result = upgrade_one_server(&name, &server, &latest, tree.as_ref()).await;
+                (name, result)
             }
             .instrument(span),
-        );
+        ));
     }
 
-    let pb = if interactive {
-        let pb = indicatif::ProgressBar::new_spinner();
-        pb.set_style(output::phase_spinner_style());
-        let msg = if total == 1 {
-            format!("Getting current version for {}…", output::strong(&names[0]))
-        } else {
-            format!(
-                "Getting current versions… {}",
-                output::muted_progress(0, total)
-            )
-        };
-        pb.set_message(msg);
-        pb.enable_steady_tick(Duration::from_millis(80));
-        Some(pb)
-    } else {
-        None
-    };
-
-    let mut checks: Vec<VersionCheck> = Vec::new();
-    while let Some(join_result) = version_set.join_next().await {
-        let check = match join_result {
-            Ok(v) => v,
-            Err(e) => {
-                if let Some(ref pb) = pb {
-                    pb.finish_and_clear();
-                }
-                return Err(e.to_string().into());
-            }
-        };
-        if let Some(ref pb) = pb {
-            let finished = done.load(std::sync::atomic::Ordering::Relaxed);
-            if total > 1 {
-                pb.set_message(format!(
-                    "Getting current versions… {}",
-                    output::muted_progress(finished, total)
-                ));
-            }
+    let mut results: Vec<(String, Result<(), String>)> = Vec::new();
+    for handle in handles {
+        match handle.await {
+            Ok(pair) => results.push(pair),
+            Err(e) => return Err(format!("Upgrade task panicked: {e}").into()),
         }
-        if let Some(ref v) = check.version {
-            let _scope = output::scope(&check.name).entered();
-            let time = output::format_elapsed_trace(check.elapsed);
-            tracing::debug!("Current version: {v} {time}");
-        }
-        checks.push(check);
     }
 
-    if let Some(ref pb) = pb {
-        pb.finish_and_clear();
-    }
-    checks.sort_by(|a, b| {
-        let pos_a = names
-            .iter()
-            .position(|n| n == &a.name)
-            .unwrap_or(usize::MAX);
-        let pos_b = names
-            .iter()
-            .position(|n| n == &b.name)
-            .unwrap_or(usize::MAX);
-        pos_a.cmp(&pos_b)
-    });
+    let total = results.len();
+    let failures = results.iter().filter(|(_, r)| r.is_err()).count();
 
-    // ── Phase 2: Per-server upgrade ─────────────────────────────────
-    let mut has_error = false;
-    for (i, mut check) in checks.into_iter().enumerate() {
-        if i > 0 {
-            output::heading(&format!("Server {}", output::strong(&check.name)));
-        } else {
-            output::heading_no_gap(&format!("Server {}", output::strong(&check.name)));
+    if failures > 0 {
+        let succeeded = total - failures;
+        if let Some(tree) = &task_tree {
+            tree.set_error_summary(format!("Upgraded {succeeded}/{total} servers"));
+            tree.finalize();
         }
-
-        let _upgrade_scope = output::scope(&check.name).entered();
-        let current_ver = check.version.as_deref().unwrap_or("unknown");
-
-        if let Some(ref err) = check.error {
-            output::error(err);
-            has_error = true;
-            continue;
+        if output::is_pretty() {
+            return Err(output::silent_exit_error().into());
         }
-
-        if check.version.as_deref() == Some(latest_version.as_str()) {
-            output::success(&format!("Already on latest build ({current_ver})"));
-            if let Some(mut ssh) = check.ssh.take() {
-                let _ = ssh.disconnect().await;
-            }
-            continue;
-        }
-
-        let mut ssh = check.ssh.take().unwrap();
-        let spinner = output::PhaseSpinner::start_indented(&format!("Upgrading to {current_ver}…"));
-
-        let target = match check.target {
-            Some(t) => t,
-            None => {
-                has_error = true;
-                spinner.finish_err_indented("Could not detect server target");
-                let _ = ssh.disconnect().await;
-                continue;
-            }
-        };
-        match run_server_upgrade(&check.name, &mut ssh, check.version.as_deref(), &target).await {
-            Ok(version_after) => {
-                let ver = version_after.as_deref().unwrap_or("unknown");
-                if ver == current_ver {
-                    spinner.finish_ok_indented(&format!("Already on the latest version ({ver})"));
-                } else {
-                    spinner.finish_ok_indented(&format!("{current_ver} -> {ver}"));
-                }
-            }
-            Err(e) => {
-                has_error = true;
-                let clean_err = if let Some(pos) = e.find(" (owner:") {
-                    &e[..pos]
-                } else {
-                    e.as_str()
-                };
-                spinner.finish_err_indented(clean_err);
-            }
-        }
-
-        let _ = ssh.disconnect().await;
+        return Err(format!("Upgraded {succeeded}/{total} servers").into());
     }
 
-    if has_error {
-        std::process::exit(1);
+    if let Some(tree) = &task_tree {
+        tree.finalize();
     }
     Ok(())
+}
+
+async fn upgrade_one_server(
+    name: &str,
+    server: &crate::config::ServerEntry,
+    latest_version: &str,
+    task_tree: Option<&UpgradeTaskTreeController>,
+) -> Result<(), String> {
+    if let Some(tree) = task_tree {
+        tree.mark_server_running(name);
+        tree.mark_step_running(name, Step::VersionCheck);
+    }
+
+    let mut ssh = match SshClient::connect_to(&server.host, server.port).await {
+        Ok(ssh) => ssh,
+        Err(e) => {
+            let msg = e.to_string();
+            if let Some(tree) = task_tree {
+                tree.fail_step(name, Step::VersionCheck, &msg);
+                tree.fail_server(name);
+            }
+            return Err(msg);
+        }
+    };
+
+    let current_version = {
+        let _t = output::timed(&format!("[{name}] Check current version"));
+        ssh.tako_version().await.ok().flatten()
+    };
+    let current_label = current_version.clone().unwrap_or_else(|| "unknown".into());
+
+    if let Some(tree) = task_tree {
+        tree.rename_step(
+            name,
+            Step::VersionCheck,
+            format!("Current version: {current_label}"),
+        );
+        tree.succeed_step(name, Step::VersionCheck, None);
+    }
+
+    if current_version.as_deref() == Some(latest_version) {
+        tracing::debug!("[{name}] already on latest ({current_label})");
+        if let Some(tree) = task_tree {
+            tree.rename_step(name, Step::Upgrade, "Already on latest");
+            tree.succeed_step(name, Step::Upgrade, None);
+            tree.succeed_server(name, None);
+        }
+        let _ = ssh.disconnect().await;
+        return Ok(());
+    }
+
+    if let Some(tree) = task_tree {
+        tree.mark_step_running(name, Step::Upgrade);
+    }
+
+    let target = match super::wizard::detect_server_target(&ssh).await {
+        Ok(t) => t,
+        Err(e) => {
+            let msg = format!("Could not detect server target: {e}");
+            if let Some(tree) = task_tree {
+                tree.fail_step(name, Step::Upgrade, &msg);
+                tree.fail_server(name);
+            }
+            let _ = ssh.disconnect().await;
+            return Err(msg);
+        }
+    };
+
+    let result = run_server_upgrade(name, &mut ssh, current_version.as_deref(), &target).await;
+    let _ = ssh.disconnect().await;
+
+    match result {
+        Ok(version_after) => {
+            let new_version = version_after.as_deref().unwrap_or("unknown").to_string();
+            let new_label = if new_version == current_label {
+                "Already on latest"
+            } else {
+                "Upgraded"
+            };
+            if let Some(tree) = task_tree {
+                tree.rename_step(name, Step::Upgrade, new_label);
+                tree.succeed_step(name, Step::Upgrade, None);
+                tree.succeed_server(name, None);
+            }
+            Ok(())
+        }
+        Err(e) => {
+            let clean_err = if let Some(pos) = e.find(" (owner:") {
+                e[..pos].to_string()
+            } else {
+                e
+            };
+            if let Some(tree) = task_tree {
+                tree.fail_step(name, Step::Upgrade, &clean_err);
+                tree.fail_server(name);
+            }
+            Err(clean_err)
+        }
+    }
 }
 
 async fn run_server_upgrade(

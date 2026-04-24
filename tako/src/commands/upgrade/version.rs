@@ -22,7 +22,7 @@ pub(super) fn current_version() -> String {
     }
 }
 
-pub(super) async fn fetch_latest_version() -> Result<String, Box<dyn std::error::Error>> {
+pub(crate) async fn fetch_latest_version() -> Result<String, Box<dyn std::error::Error>> {
     let url =
         format!("https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/git/ref/tags/{LATEST_TAG}");
     let client = reqwest::Client::new();

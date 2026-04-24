@@ -2,14 +2,11 @@ use std::time::{Duration, Instant};
 
 use indicatif::ProgressBar;
 
-use super::{finish_spinner_ok, phase_spinner_style, phase_spinner_style_indented};
+use super::{finish_spinner_ok, phase_spinner_style};
 use crate::output::cursor::{
     clear_active_progress_bar, hide_cursor, register_active_progress_bar, show_cursor,
 };
-use crate::output::{
-    INDENT, PHASE_PB, error_block, format_elapsed_inline, is_interactive, is_pretty, muted_elapsed,
-    theme_fg, theme_muted, theme_success,
-};
+use crate::output::{PHASE_PB, format_elapsed_inline, is_interactive, is_pretty, theme_muted};
 
 /// A spinner for major phases (Build, Deploy). Shows elapsed time after 1s.
 /// Inner output is NOT suppressed — it flows normally above the spinner.
@@ -26,15 +23,6 @@ pub struct PhaseSpinner {
 
 impl PhaseSpinner {
     pub fn start(message: &str) -> Self {
-        Self::new(message, false)
-    }
-
-    /// Start an indented phase spinner (prefixed with INDENT).
-    pub fn start_indented(message: &str) -> Self {
-        Self::new(message, true)
-    }
-
-    fn new(message: &str, indented: bool) -> Self {
         let verbose = !is_pretty();
 
         if verbose {
@@ -47,11 +35,7 @@ impl PhaseSpinner {
             };
         }
 
-        let style = if indented {
-            phase_spinner_style_indented()
-        } else {
-            phase_spinner_style()
-        };
+        let style = phase_spinner_style();
         let pb = if is_interactive() {
             let pb = ProgressBar::new_spinner();
             pb.set_style(style);
@@ -107,42 +91,6 @@ impl PhaseSpinner {
         } else if let Some(ref pb) = self.pb {
             clear_active_progress_bar();
             finish_spinner_ok(pb, success_msg, self.start.elapsed());
-        }
-        self.finished = true;
-    }
-
-    /// Finish indented spinner with success: `  ✔ message (elapsed)`
-    pub fn finish_ok_indented(mut self, success_msg: &str) {
-        self.abort_elapsed_task();
-        self.clear_global();
-        if self.verbose {
-            // In verbose mode the start message already persists — no result line needed.
-        } else if let Some(ref pb) = self.pb {
-            clear_active_progress_bar();
-            pb.finish_and_clear();
-            show_cursor();
-            let check = theme_success("✔");
-            let time = muted_elapsed(self.start.elapsed());
-            if time.is_empty() {
-                eprintln!("{INDENT}{check} {}", theme_fg(success_msg));
-            } else {
-                eprintln!("{INDENT}{check} {}  {time}", theme_fg(success_msg));
-            }
-        }
-        self.finished = true;
-    }
-
-    /// Finish indented spinner with error — clears the spinner, then shows an error block.
-    pub fn finish_err_indented(mut self, detail: &str) {
-        self.abort_elapsed_task();
-        self.clear_global();
-        if self.verbose {
-            tracing::error!("{}", detail);
-        } else if let Some(ref pb) = self.pb {
-            clear_active_progress_bar();
-            pb.finish_and_clear();
-            show_cursor();
-            error_block(detail);
         }
         self.finished = true;
     }

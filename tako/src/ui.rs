@@ -14,6 +14,10 @@ use crate::output;
 
 const TASK_INDENT: &str = "  ";
 const LIVE_RENDER_INTERVAL: Duration = Duration::from_millis(80);
+/// Minimum spaces between a row's label/detail and its right-aligned elapsed.
+/// Bigger gap absorbs small label changes (e.g. a running step renaming to
+/// its result text) without the time column visibly jumping around.
+const TIME_COL_GAP: usize = 4;
 
 /// Row below the active inline viewport, updated on each draw.
 static VIEWPORT_BOTTOM_ROW: AtomicU16 = AtomicU16::new(0);
@@ -438,14 +442,35 @@ fn task_item_has_running(task: &TaskItemState) -> bool {
 
 fn render_tree_to_lines(tree: &[TreeNode], frame_index: usize) -> Vec<Line<'static>> {
     let now = Instant::now();
+    let time_col = compute_time_align_col(tree, now);
     let mut lines = Vec::new();
     for node in tree {
         match node {
             TreeNode::Task(task) => {
-                render_task_item(&mut lines, task, "", false, false, now, frame_index);
+                render_task_item(
+                    &mut lines,
+                    task,
+                    "",
+                    false,
+                    false,
+                    false,
+                    time_col,
+                    now,
+                    frame_index,
+                );
             }
             TreeNode::AccentTask(task) => {
-                render_task_item(&mut lines, task, "", true, false, now, frame_index);
+                render_task_item(
+                    &mut lines,
+                    task,
+                    "",
+                    true,
+                    false,
+                    false,
+                    time_col,
+                    now,
+                    frame_index,
+                );
             }
             TreeNode::Text { text, tone } => {
                 let style = match tone {
@@ -478,32 +503,57 @@ fn render_task_item(
     prefix: &str,
     accent: bool,
     hide_success_icon: bool,
+    force_muted: bool,
+    time_col: usize,
     now: Instant,
     frame_index: usize,
 ) {
     let is_group = !task.children.is_empty();
 
-    // Build the main task line
     let icon = task_icon(&task.state, frame_index, hide_success_icon);
     let label = pending_task_label(&task.label, &task.state);
-    let detail_suffix = format_detail_suffix(task, now);
+    let detail = format_task_detail(task);
+    let elapsed = format_task_elapsed(task, now);
 
-    let (icon_style, label_style, detail_style) = task_line_styles(&task.state, is_group || accent);
+    let (icon_style, label_style, detail_style) = if force_muted {
+        let m = Style::new().add_modifier(Modifier::DIM);
+        (m, m, m)
+    } else {
+        task_line_styles(&task.state, is_group || accent)
+    };
+
+    let has_progress = task.progress.is_some();
 
     let mut spans = vec![
         Span::styled(format!("{prefix}{icon}"), icon_style),
         Span::styled(format!(" {label}"), label_style),
     ];
-    if let Some(fraction) = task.progress {
-        spans.push(Span::raw(" "));
-        render_block_bar_spans(&mut spans, fraction);
+    let mut content_width =
+        prefix.chars().count() + icon.chars().count() + 1 + label.chars().count();
+
+    // Inline detail (before elapsed) only when there is no live progress — for
+    // progress rows the detail trails after the elapsed so the time column
+    // stays anchored as the transfer progresses.
+    if !has_progress && let Some(detail) = detail.as_deref() {
+        spans.push(Span::styled(format!(" {detail}"), detail_style));
+        content_width += 1 + detail.chars().count();
     }
-    if !detail_suffix.is_empty() {
-        spans.push(Span::styled(format!(" {detail_suffix}"), detail_style));
+    if let Some(elapsed) = elapsed {
+        let pad = time_col.saturating_sub(content_width).max(TIME_COL_GAP);
+        spans.push(Span::raw(" ".repeat(pad)));
+        spans.push(Span::styled(elapsed, detail_style));
+    }
+    if let Some(fraction) = task.progress {
+        spans.push(Span::raw("  "));
+        render_block_bar_spans(&mut spans, fraction);
+        if let Some(detail) = detail.as_deref() {
+            spans.push(Span::styled(format!("  {detail}"), detail_style));
+        }
     }
     lines.push(Line::from(spans));
 
-    // Error detail line for failed leaf tasks and groups
+    // Error detail line for failed leaf tasks and groups — indented one level
+    // past this row's prefix so the detail visually belongs to its task.
     if matches!(task.state, TaskState::Failed { .. })
         && let Some(detail) = task
             .detail
@@ -517,11 +567,12 @@ fn render_task_item(
         )]));
     }
 
-    // Render children. Sub-tasks hide their success icon only when *this*
-    // parent also succeeded — a succeeded child under a failed/cancelled
-    // parent keeps its ✔ so the user can still see what did complete.
+    // Render children indented one level under the parent. Once the parent
+    // resolves successfully, the succeeded children get a muted `·` marker
+    // instead of a `✔`, so the finished work reads as quiet background.
     if is_group {
         let children_hide_success = matches!(task.state, TaskState::Succeeded { .. });
+        let children_force_muted = matches!(task.state, TaskState::Succeeded { .. });
         let child_prefix = format!("{prefix}{TASK_INDENT}");
         for child in &task.children {
             render_task_item(
@@ -530,6 +581,8 @@ fn render_task_item(
                 &child_prefix,
                 false,
                 children_hide_success,
+                children_force_muted,
+                time_col,
                 now,
                 frame_index,
             );
@@ -537,9 +590,46 @@ fn render_task_item(
     }
 }
 
+fn compute_time_align_col(tree: &[TreeNode], _now: Instant) -> usize {
+    let mut max = 0usize;
+    for node in tree {
+        match node {
+            TreeNode::Task(task) | TreeNode::AccentTask(task) => {
+                visit_task_width(task, "", &mut max);
+            }
+            _ => {}
+        }
+    }
+    // Reserve a `TIME_COL_GAP` gap between the widest content row and the
+    // elapsed column so the shortest pad matches the render path's floor —
+    // otherwise the widest row gets bumped past the rest.
+    max + TIME_COL_GAP
+}
+
+fn visit_task_width(task: &TaskItemState, prefix: &str, max: &mut usize) {
+    // Approximate icon width as 1 (all task glyphs are single width).
+    let label = pending_task_label(&task.label, &task.state);
+    let mut width = prefix.chars().count() + 1 + 1 + label.chars().count();
+    // Progress bar and its detail render AFTER the elapsed, so they don't
+    // affect the time-column alignment. Inline detail only counts when the
+    // row isn't in progress mode.
+    if task.progress.is_none()
+        && let Some(detail) = format_task_detail(task)
+    {
+        width += 1 + detail.chars().count();
+    }
+    if width > *max {
+        *max = width;
+    }
+    let child_prefix = format!("{prefix}{TASK_INDENT}");
+    for child in &task.children {
+        visit_task_width(child, &child_prefix, max);
+    }
+}
+
 fn task_icon(state: &TaskState, frame_index: usize, hide_success_icon: bool) -> &'static str {
     match state {
-        TaskState::Succeeded { .. } if hide_success_icon => " ",
+        TaskState::Succeeded { .. } if hide_success_icon => "·",
         TaskState::Pending => "○",
         TaskState::Running { .. } => {
             output::SPINNER_TICKS[frame_index % output::SPINNER_TICKS.len()]
@@ -561,18 +651,20 @@ fn pending_task_label(label: &str, state: &TaskState) -> String {
     }
 }
 
-fn format_detail_suffix(task: &TaskItemState, now: Instant) -> String {
-    // For failed tasks, detail goes on the error line below, not inline
-    let detail = if matches!(task.state, TaskState::Failed { .. }) {
-        None
-    } else {
-        task.detail
-            .as_deref()
-            .map(str::trim)
-            .filter(|d| !d.is_empty())
-    };
+fn format_task_detail(task: &TaskItemState) -> Option<String> {
+    // For failed tasks, detail goes on the error line below, not inline.
+    if matches!(task.state, TaskState::Failed { .. }) {
+        return None;
+    }
+    task.detail
+        .as_deref()
+        .map(str::trim)
+        .filter(|d| !d.is_empty())
+        .map(str::to_string)
+}
 
-    let elapsed = match &task.state {
+fn format_task_elapsed(task: &TaskItemState, now: Instant) -> Option<String> {
+    match &task.state {
         TaskState::Pending => None,
         TaskState::Running { started_at } => {
             let value = output::format_elapsed(now.saturating_duration_since(*started_at));
@@ -585,13 +677,6 @@ fn format_detail_suffix(task: &TaskItemState, now: Instant) -> String {
             let value = output::format_elapsed_always(e);
             (!value.is_empty()).then_some(value)
         }),
-    };
-
-    match (elapsed, detail) {
-        (Some(e), Some(d)) => format!("{e}, {d}"),
-        (None, Some(d)) => d.to_string(),
-        (Some(e), None) => e,
-        (None, None) => String::new(),
     }
 }
 
@@ -649,14 +734,12 @@ fn render_block_bar_spans(spans: &mut Vec<Span<'static>>, fraction: f64) {
 #[allow(dead_code)] // used by deploy/upgrade test assertions
 pub fn render_plain_lines(tree: &[TreeNode]) -> Vec<String> {
     let now = Instant::now();
+    let time_col = compute_time_align_col(tree, now);
     let mut lines = Vec::new();
     for node in tree {
         match node {
-            TreeNode::Task(task) => {
-                render_task_item_plain(&mut lines, task, "", false, now);
-            }
-            TreeNode::AccentTask(task) => {
-                render_task_item_plain(&mut lines, task, "", false, now);
+            TreeNode::Task(task) | TreeNode::AccentTask(task) => {
+                render_task_item_plain(&mut lines, task, "", false, time_col, now);
             }
             TreeNode::Text { text, .. } => {
                 lines.push(text.clone());
@@ -681,20 +764,38 @@ fn render_task_item_plain(
     task: &TaskItemState,
     prefix: &str,
     hide_success_icon: bool,
+    time_col: usize,
     now: Instant,
 ) {
     let is_group = !task.children.is_empty();
     let icon = task_icon(&task.state, 0, hide_success_icon);
     let label = pending_task_label(&task.label, &task.state);
-    let detail_suffix = format_detail_suffix(task, now);
+    let detail = format_task_detail(task);
+    let elapsed = format_task_elapsed(task, now);
 
-    if detail_suffix.is_empty() {
-        lines.push(format!("{prefix}{icon} {label}"));
-    } else {
-        lines.push(format!("{prefix}{icon} {label} {detail_suffix}"));
+    let has_progress = task.progress.is_some();
+    let mut line = format!("{prefix}{icon} {label}");
+    let mut content_width =
+        prefix.chars().count() + icon.chars().count() + 1 + label.chars().count();
+    if !has_progress && let Some(detail) = detail.as_deref() {
+        line.push(' ');
+        line.push_str(detail);
+        content_width += 1 + detail.chars().count();
     }
+    if let Some(elapsed) = elapsed {
+        let pad = time_col.saturating_sub(content_width).max(TIME_COL_GAP);
+        line.push_str(&" ".repeat(pad));
+        line.push_str(&elapsed);
+    }
+    if has_progress {
+        line.push_str(&" ".repeat(2 + PROGRESS_BAR_WIDTH));
+        if let Some(detail) = detail.as_deref() {
+            line.push_str("  ");
+            line.push_str(detail);
+        }
+    }
+    lines.push(line);
 
-    // Error detail line
     if matches!(task.state, TaskState::Failed { .. })
         && let Some(detail) = task
             .detail
@@ -709,7 +810,14 @@ fn render_task_item_plain(
         let children_hide_success = matches!(task.state, TaskState::Succeeded { .. });
         let child_prefix = format!("{prefix}{TASK_INDENT}");
         for child in &task.children {
-            render_task_item_plain(lines, child, &child_prefix, children_hide_success, now);
+            render_task_item_plain(
+                lines,
+                child,
+                &child_prefix,
+                children_hide_success,
+                time_col,
+                now,
+            );
         }
     }
 }
@@ -762,8 +870,8 @@ mod tests {
         let lines = render_plain_lines(&tree);
         assert_eq!(lines[0], "○ Checks…");
         // Parent is Pending (not Succeeded), so succeeded child keeps its ✔.
-        assert_eq!(lines[1], "  ✔ prod-a 2.0s");
-        assert_eq!(lines[2], "  ✘ prod-b 1.0s");
+        assert_eq!(lines[1], "  ✔ prod-a             2.0s");
+        assert_eq!(lines[2], "  ✘ prod-b             1.0s");
         assert_eq!(lines[3], "    boom");
         assert_eq!(lines[4], "  ⏭ prod-c… skipped");
     }
@@ -785,7 +893,7 @@ mod tests {
         ];
 
         let lines = render_plain_lines(&tree);
-        assert_eq!(lines[0], "✔ Built 3.4s, 1.04 MB");
+        assert_eq!(lines[0], "✔ Built 1.04 MB    3.4s");
         assert_eq!(lines[1], "");
     }
 
@@ -824,10 +932,10 @@ mod tests {
         })];
 
         let lines = render_plain_lines(&tree);
-        assert_eq!(lines[0], "✔ Deployed to prod-a 23s");
-        // Parent is Succeeded → children hide ✔ (blank icon slot, aligned).
-        assert_eq!(lines[1], "    Preflight 4.8s");
-        assert_eq!(lines[2], "    Uploaded 4.1s");
+        assert_eq!(lines[0], "✔ Deployed to prod-a    23s");
+        // Parent is Succeeded → children show `·` in the icon slot (muted).
+        assert_eq!(lines[1], "  · Preflight           4.8s");
+        assert_eq!(lines[2], "  · Uploaded            4.1s");
     }
 
     #[test]

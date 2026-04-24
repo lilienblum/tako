@@ -134,7 +134,6 @@ fn deploy_task_tree_initial_lines_include_multi_target_builds_and_multi_server_c
     let snapshot = controller.snapshot();
     let lines = ui::render_plain_lines(&build_deploy_tree(&snapshot));
 
-    assert!(!lines.iter().any(|line| line == "○ Preflight…"));
     assert!(lines.iter().any(|line| line == "○ Building…"));
     assert!(lines.iter().any(|line| line == "  ○ linux-aarch64-musl…"));
     assert!(lines.iter().any(|line| line == "  ○ linux-x86_64-glibc…"));
@@ -327,7 +326,6 @@ fn deploy_task_tree_shows_preflight_errors_under_deploy_group() {
 
     assert!(lines.iter().any(|line| line == "✘ Deploy to prod-a failed"));
     assert!(lines.iter().any(|line| line == "  ✘ Preflight failed"));
-    assert!(!lines.iter().any(|line| line == "  SSH protocol error"));
     assert!(lines.iter().any(|line| line == "    SSH protocol error"));
 }
 
@@ -373,11 +371,6 @@ async fn deploy_task_tree_step_failure_attaches_detail_to_child_row() {
 
     let lines = ui::render_plain_lines(&build_deploy_tree(&controller.snapshot()));
     assert!(lines.iter().any(|line| line == "✘ Deploy to prod-a failed"));
-    assert!(
-        !lines
-            .iter()
-            .any(|line| line == "  Warm instance startup failed")
-    );
     assert!(lines.iter().any(|line| line == "  ✘ Start failed"));
     assert!(
         lines

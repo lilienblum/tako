@@ -13,8 +13,8 @@ pub use prompts::{
 // Re-export spinner types and functions
 pub use spinners::{
     PhaseSpinner, SPINNER_TICKS, TrackedSpinner, TransferProgress, format_transfer_compact_detail,
-    phase_spinner_style, with_spinner, with_spinner_async, with_spinner_async_err,
-    with_spinner_async_simple, with_spinner_silent,
+    with_spinner, with_spinner_async, with_spinner_async_err, with_spinner_async_simple,
+    with_spinner_silent,
 };
 
 // Re-export tracing types
@@ -367,12 +367,6 @@ pub fn section(title: &str) {
 pub fn heading(title: &str) {
     if is_pretty() {
         emit("");
-        emit(&padded(&bold(title)));
-    }
-}
-
-pub fn heading_no_gap(title: &str) {
-    if is_pretty() {
         emit(&padded(&bold(title)));
     }
 }

@@ -1,5 +1,5 @@
 mod install;
-mod version;
+pub(crate) mod version;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};

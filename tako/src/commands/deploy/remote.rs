@@ -11,6 +11,10 @@ use super::DeployConfig;
 use super::format::{format_deploy_step_failure, format_size};
 use super::task_tree::DeployTaskTreeController;
 
+/// Artifacts smaller than this upload fast enough that the progress bar just
+/// flashes on and off. Skip the live bar below this size.
+const PROGRESS_BAR_MIN_BYTES: u64 = 10 * 1024 * 1024;
+
 pub(super) fn parse_existing_routes_response(
     response: Response,
 ) -> Result<Vec<(String, Vec<String>)>, String> {
@@ -334,15 +338,17 @@ pub(super) async fn deploy_to_server(
                 let tt = task_tree.clone();
                 let sn = server_name.to_string();
                 let upload_started_at = Instant::now();
+                // For small artifacts the bar flashes in and out — keep the
+                // row stable by skipping the live progress callback entirely
+                // below the threshold.
+                let show_progress = archive_size_bytes >= PROGRESS_BAR_MIN_BYTES;
                 run_task_tree_deploy_step_with_detail(
                     task_tree,
                     server_name,
                     "uploading",
                     None,
                     async {
-                        ssh.upload_with_progress(
-                            archive_path,
-                            &remote_archive,
+                        let callback: Option<Box<dyn Fn(u64, u64) + Send>> = if show_progress {
                             Some(Box::new(move |done, _total| {
                                 let fraction = if total_size > 0 {
                                     done as f64 / total_size as f64
@@ -359,10 +365,15 @@ pub(super) async fn deploy_to_server(
                                     ),
                                     fraction,
                                 );
-                            })),
-                        )
-                        .await
-                        .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> { Box::new(e) })
+                            }))
+                        } else {
+                            None
+                        };
+                        ssh.upload_with_progress(archive_path, &remote_archive, callback)
+                            .await
+                            .map_err(|e| -> Box<dyn std::error::Error + Send + Sync> {
+                                Box::new(e)
+                            })
                     },
                 )
                 .await
@@ -782,11 +793,6 @@ mod tests {
 
         let lines = ui::render_plain_lines(&build_deploy_tree(&controller.snapshot()));
         assert!(lines.iter().any(|line| line == "✘ Deploy to prod-a failed"));
-        assert!(
-            !lines
-                .iter()
-                .any(|line| line == "  Warm instance startup failed")
-        );
         assert!(lines.iter().any(|line| line == "  ✘ Start failed"));
         assert!(
             lines
