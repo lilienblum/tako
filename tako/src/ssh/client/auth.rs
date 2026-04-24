@@ -10,7 +10,8 @@ impl SshClient {
     pub(super) async fn authenticate(&self, handle: &mut Handle<SshHandler>) -> SshResult<()> {
         let keys_dir = self.config.keys_directory();
 
-        let key_names = ["id_ed25519", "id_rsa", "id_ecdsa", "id_dsa"];
+        // id_dsa is obsolete (OpenSSH dropped support in 7.0) — don't try it.
+        let key_names = ["id_ed25519", "id_rsa", "id_ecdsa"];
 
         let mut last_error = None;
         let mut found_any_key_file = false;

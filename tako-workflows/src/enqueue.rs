@@ -17,6 +17,19 @@ use super::schema;
 
 const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 
+/// Cap for client-supplied `lease_ms`. One week is far longer than any
+/// legitimate workflow step; anything larger is a misuse or hostile input
+/// that would wrap `i64` arithmetic below if passed through directly.
+const MAX_LEASE_MS: u64 = 7 * 24 * 60 * 60 * 1000;
+
+/// Saturating cast of client-supplied lease length (in ms) to the signed
+/// millisecond value we store in sqlite. Prevents `u64::MAX as i64 → -1`
+/// from producing a negative `lease_until` that would be reclaimed
+/// instantly.
+fn clamp_lease_ms(lease_ms: u64) -> i64 {
+    lease_ms.min(MAX_LEASE_MS) as i64
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum RunsDbError {
     #[error("sqlite error: {0}")]
@@ -131,7 +144,7 @@ impl RunsDb {
             return Ok(None);
         }
         let now = now_ms();
-        let lease_until = now + lease_ms as i64;
+        let lease_until = now.saturating_add(clamp_lease_ms(lease_ms));
         let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!(
             "UPDATE runs
@@ -199,7 +212,7 @@ impl RunsDb {
     /// `StaleWorker` so the SDK can log/raise rather than silently
     /// marking the run in a state the new worker didn't intend.
     pub fn heartbeat(&self, id: &str, worker_id: &str, lease_ms: u64) -> Result<(), RunsDbError> {
-        let lease_until = now_ms() + lease_ms as i64;
+        let lease_until = now_ms().saturating_add(clamp_lease_ms(lease_ms));
         let conn = self.conn.lock();
         let rows = conn.execute(
             "UPDATE runs SET lease_until = ?1
