@@ -124,7 +124,7 @@ dev = ["vite", "dev"]
 
 ### Runtime-local overrides
 
-A preset can declare runtime-specific overrides as nested sections (`[<preset>.<runtime>]`). When the selected runtime matches one of these sections, those fields replace the corresponding base-preset fields; any field the override leaves out falls through to the base section.
+A preset can declare runtime-specific overrides as nested sections (`[<preset>.<runtime>]`). When the selected runtime matches one of these sections, its `dev` command replaces the base preset's `dev`. Only the `dev` field can be overridden — `main`, `assets`, and `name` always come from the base section.
 
 ```toml
 # presets/javascript.toml
@@ -143,13 +143,15 @@ This is how the built-in JavaScript presets adapt to Bun without forcing every u
 
 ## Preset resolution
 
-When you deploy or run `tako dev`, Tako resolves your preset alias into actual metadata. Presets are cached locally for offline use.
+When you deploy or run `tako dev`, Tako resolves your preset alias into actual metadata. Official definitions live in the `tako-sh/presets` repository on GitHub, and resolved branch manifests are cached locally for offline use.
 
 **`tako dev`** prefers cached preset data immediately. If you already have a cached or embedded preset manifest, dev startup does not wait on GitHub. It only fetches from the `master` branch when nothing local is available.
 
-**`tako deploy`** refreshes unpinned aliases (for example `preset = "tanstack-start"`) from the `master` branch of the presets repository. Fresh branch metadata is cached for 1 hour. If the refresh fails, Tako falls back to previously cached content.
+**`tako deploy`** refreshes unpinned aliases (for example `preset = "tanstack-start"`) from the `master` branch of the presets repository. Fresh branch metadata is cached for about an hour. If the refresh fails, Tako falls back to previously cached content.
 
 **First run**: `tako dev` can start offline for built-in presets because JS and Go family manifests are embedded in the CLI. `tako deploy` still needs a successful fetch the first time unless the preset is already cached.
+
+For local testing against a fork, set `PACKAGE_REPOSITORY_URL` to point at an alternate repo — useful when developing new presets before upstreaming them.
 
 ### Pinning a preset version
 

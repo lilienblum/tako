@@ -525,12 +525,12 @@ Requires root privileges on the server (root login or sudo-capable user).
 Configure DNS-01 wildcard certificate support on all servers.
 
 ```bash
-tako servers setup-wildcard [--env ENV]
+tako servers setup-wildcard [-e|--env ENV]
 ```
 
-| Argument/Flag | Description                                  |
-| ------------- | -------------------------------------------- |
-| `--env`, `-e` | Target environment (defaults to all servers) |
+| Argument/Flag | Description                                                          |
+| ------------- | -------------------------------------------------------------------- |
+| `-e`, `--env` | Target environment (defaults to applying to every configured server) |
 
 Runs an interactive wizard to collect DNS provider credentials, verifies them locally, then applies the configuration to all servers in parallel. After setup, `tako-server` will automatically download and use `lego` for DNS-01 challenges when wildcard certificates are needed.
 
@@ -575,7 +575,7 @@ Remove a secret.
 tako secrets rm <NAME> [--env <ENV>] [--sync]
 ```
 
-Aliases: `tako secrets remove`, `tako secrets delete`
+Aliases: `tako secrets remove`, `tako secrets delete`, `tako secrets del`
 
 | Argument/Flag | Description                                                                        |
 | ------------- | ---------------------------------------------------------------------------------- |

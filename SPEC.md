@@ -125,7 +125,8 @@ idle_timeout = 120
 - `tanstack-start` preset defaults `main = "dist/server/tako-entry.mjs"`, `assets = ["dist/client"]`, and `dev = ["vite", "dev"]`. The `main` file is emitted by `tako.sh/vite` during `vite build` and wraps the SSR bundle with tako endpoint handling.
 - `nextjs` preset defaults `main = ".next/tako-entry.mjs"` and `dev = ["next", "dev"]`.
 - `vite` preset defaults `dev = ["vite", "dev"]` for projects using Vite as their dev server.
-- Presets may declare runtime-local overrides as nested sections (`[<preset>.<runtime>]`) inside the family manifest. For example, `presets/javascript.toml` overrides the `vite` and `tanstack-start` dev commands for Bun (`[vite.bun]`, `[tanstack-start.bun]`) because `bunx --bun` drops fds > 2, which breaks the fd-4 readiness handshake. When the selected runtime has an override, those fields replace the base preset fields; omitted fields fall through to the base section.
+- Presets may declare runtime-local overrides as nested sections (`[<preset>.<runtime>]`) inside the family manifest. Only the `dev` field can be overridden — `main`, `assets`, and `name` always come from the base section. For example, `presets/javascript.toml` overrides the `vite` and `tanstack-start` dev commands for Bun (`[vite.bun]`, `[tanstack-start.bun]`) because `bunx --bun` drops fds > 2, which breaks the fd-4 readiness handshake.
+- Official preset definitions live in the `tako-sh/presets` GitHub repo (overridable via the `PACKAGE_REPOSITORY_URL` env var for testing). Fetched branch manifests are cached locally for roughly one hour; on fetch failure, Tako falls back to any previously cached copy or the manifests embedded in the CLI binary.
 - Deploy restores local JS build caches from workspace-root `.turbo/` and app-root `.next/cache/` into the temporary build workspace when present, then excludes those cache directories from the final deploy artifact.
 - Runtime behavior (install commands, launch args, entrypoint resolution) lives in runtime plugins (`tako-runtime/src/plugins/`), not in presets.
 - `tako init` installs the `tako.sh` SDK via the selected runtime's package-manager `add` command.
@@ -669,7 +670,7 @@ Remove tako-server and all data from a remote server.
 
 Alias: `tako servers uninstall`.
 
-### tako servers setup-wildcard [--env ENV]
+### tako servers setup-wildcard [-e|--env ENV]
 
 Configure DNS-01 wildcard certificate support on all servers.
 
@@ -720,7 +721,7 @@ Removes from local `.tako/secrets.json`. Omitting `--env` removes the secret fro
 
 When `--sync` is provided, immediately syncs secrets to servers after the local change. If `--env` is specified, syncs to that environment; otherwise syncs to all environments.
 
-Aliases: `tako secrets remove ...`, `tako secrets delete ...`.
+Aliases: `tako secrets remove ...`, `tako secrets delete ...`, `tako secrets del ...`.
 
 ### tako secrets ls
 
@@ -728,7 +729,7 @@ List all secrets with presence table across environments.
 
 Shows which secrets exist in which environments. Warns about missing secrets. Never displays values.
 
-Alias: `tako secrets list`.
+Aliases: `tako secrets list`, `tako secrets show`.
 
 ### tako secrets sync [--env {environment}]
 
