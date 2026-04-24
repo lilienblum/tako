@@ -162,7 +162,7 @@ idle_timeout = 120
 - Cached artifacts are checksum/size verified before reuse; invalid cache entries are automatically discarded and rebuilt.
 - Non-dry-run `tako deploy` acquires a project-local `.tako/deploy.lock` before local server checks/build/deploy work begins. If another deploy already holds the lock, the second CLI exits immediately with the owning PID.
 - After build, deploy verifies the resolved runtime `main` file exists in the build workspace before artifact packaging; missing files fail deploy with an explicit error.
-- On every deploy, local artifact cache is pruned automatically (best-effort): keep 90 most recent target artifacts (`artifact-cache-*.tar.zst`) and remove orphan target metadata files.
+- On every deploy, local artifact cache is pruned automatically (best-effort): keep the 90 most recent target artifacts (`{version}.tar.zst` under `.tako/artifacts/` and its per-target subdirectories) and remove orphan target metadata files.
 - Artifact include patterns are resolved in this order:
   - `build.include` (if set)
   - fallback `**/*`
