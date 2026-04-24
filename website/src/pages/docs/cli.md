@@ -699,7 +699,7 @@ Generate typed accessors for the current project.
 tako typegen
 ```
 
-Generates `tako.gen.ts` for JavaScript/TypeScript projects and `tako_secrets.go` for Go projects. The generated file exports typed runtime state (`env`, `isDev`, `port`, `build`, `dataDir`, `appDir`, `logger`) and a typed `secrets` bag regenerated from `.tako/secrets.json`.
+Generates `tako.gen.ts` for JavaScript/TypeScript projects and `tako_secrets.go` for Go projects. The generated file exports typed runtime state (`env`, `isDev`, `isProd`, `port`, `host`, `build`, `dataDir`, `appDir`, `logger`, `Env`) and a typed `secrets` bag regenerated from `.tako/secrets.json`.
 
 `tako.gen.ts` placement follows your project layout: if one already exists, it is updated in place; otherwise it is written inside `src/` or `app/` when those directories are present, or at the project root. Legacy `tako.d.ts` files (from the pre-v0-global design) are removed on regeneration.
 

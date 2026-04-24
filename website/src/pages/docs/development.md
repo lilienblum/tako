@@ -270,14 +270,17 @@ For JS apps, this means your `export default function fetch()` or `export defaul
 
 ### Automatically set
 
-| Variable        | Value            | Purpose                                |
-| --------------- | ---------------- | -------------------------------------- |
-| `ENV`           | `development`    | Generic development environment marker |
-| `PORT`          | _(ephemeral)_    | The port your app should listen on     |
-| `TAKO_DATA_DIR` | `.tako/data/app` | Persistent app-owned local data dir    |
-| `NODE_ENV`      | `development`    | Node.js convention (all JS runtimes)   |
-| `BUN_ENV`       | `development`    | Bun convention (Bun runtime only)      |
-| `DENO_ENV`      | `development`    | Deno convention (Deno runtime only)    |
+| Variable               | Value                       | Purpose                                                                                   |
+| ---------------------- | --------------------------- | ----------------------------------------------------------------------------------------- |
+| `ENV`                  | `development`               | Generic development environment marker                                                    |
+| `PORT`                 | `0`                         | Tells the SDK to bind to an OS-assigned port and report it back via fd 4                  |
+| `HOST`                 | `127.0.0.1`                 | Loopback-only bind                                                                        |
+| `TAKO_APP_NAME`        | app name                    | SDK uses this to tag every internal-socket RPC                                            |
+| `TAKO_INTERNAL_SOCKET` | daemon internal socket path | Shared socket for workflow `.enqueue()`, `signal()`, and server-side channel `.publish()` |
+| `TAKO_DATA_DIR`        | `.tako/data/app`            | Persistent app-owned local data dir                                                       |
+| `NODE_ENV`             | `development`               | Node.js convention (all JS runtimes)                                                      |
+| `BUN_ENV`              | `development`               | Bun convention (Bun runtime only)                                                         |
+| `DENO_ENV`             | `development`               | Deno convention (Deno runtime only)                                                       |
 
 ### From tako.toml
 
@@ -285,7 +288,7 @@ Variables from `[vars]` (base) and `[vars.development]` (environment-specific) a
 
 `ENV` is reserved. If you set `ENV` in `[vars]` or `[vars.development]`, Tako ignores it and prints a warning.
 
-`tako dev` always uses loopback TCP via `PORT`.
+`tako dev` always uses loopback TCP: the SDK binds to an OS-assigned port (because `PORT=0`) and reports it back to `tako-dev-server` via fd 4 — the same readiness handshake as production.
 
 ### App log level
 

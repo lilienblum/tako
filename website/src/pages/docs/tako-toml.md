@@ -638,7 +638,7 @@ workers = 2
 
 Fields:
 
-- **`workers`** — always-on worker processes per server. `0` = scale-to-zero (tako-server spawns the worker on enqueue/cron tick, worker exits after 5 minutes idle). Default `0`.
+- **`workers`** — always-on worker processes per server. `0` = scale-to-zero (tako-server spawns the worker on enqueue/cron tick, and the worker exits once it has been idle long enough). Default `0`.
 - **`concurrency`** — parallel task slots per worker. Default `10`.
 
 Precedence: per-server (`[servers.<name>.workflows]`) > default (`[servers.workflows]`) > zero-config (`workers = 0`, `concurrency = 10`).

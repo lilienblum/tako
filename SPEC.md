@@ -125,6 +125,7 @@ idle_timeout = 120
 - `tanstack-start` preset defaults `main = "dist/server/tako-entry.mjs"`, `assets = ["dist/client"]`, and `dev = ["vite", "dev"]`. The `main` file is emitted by `tako.sh/vite` during `vite build` and wraps the SSR bundle with tako endpoint handling.
 - `nextjs` preset defaults `main = ".next/tako-entry.mjs"` and `dev = ["next", "dev"]`.
 - `vite` preset defaults `dev = ["vite", "dev"]` for projects using Vite as their dev server.
+- Presets may declare runtime-local overrides as nested sections (`[<preset>.<runtime>]`) inside the family manifest. For example, `presets/javascript.toml` overrides the `vite` and `tanstack-start` dev commands for Bun (`[vite.bun]`, `[tanstack-start.bun]`) because `bunx --bun` drops fds > 2, which breaks the fd-4 readiness handshake. When the selected runtime has an override, those fields replace the base preset fields; omitted fields fall through to the base section.
 - Deploy restores local JS build caches from workspace-root `.turbo/` and app-root `.next/cache/` into the temporary build workspace when present, then excludes those cache directories from the final deploy artifact.
 - Runtime behavior (install commands, launch args, entrypoint resolution) lives in runtime plugins (`tako-runtime/src/plugins/`), not in presets.
 - `tako init` installs the `tako.sh` SDK via the selected runtime's package-manager `add` command.
@@ -1171,17 +1172,19 @@ Reference scripts in this repo:
 
 HTTP instances and workflow workers receive the same app/runtime environment, except HTTP-only bind vars (`PORT`, `HOST`) and per-instance CLI args.
 
-| Name            | Used by      | Meaning                                     | Typical source                                                                                                                   |
-| --------------- | ------------ | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `ENV`           | app + worker | Active environment name                     | Set by Tako in both dev and deploy (`development`, `production`, `staging`, etc.).                                               |
-| `PORT`          | app          | Listen port for HTTP server                 | Set by `tako dev` for the local app process; `0` on deploys (SDK binds to an OS-assigned port and reports it via fd 4).          |
-| `HOST`          | app          | Listen host for HTTP server                 | `127.0.0.1` in both dev and deploy.                                                                                              |
-| `TAKO_DATA_DIR` | app + worker | Persistent app-owned runtime data directory | Set by Tako in both dev and deploy; points to the app's `data/app` directory.                                                    |
-| `NODE_ENV`      | app + worker | Node.js convention env                      | Set by runtime adapter / server (`development` or `production`).                                                                 |
-| `BUN_ENV`       | app + worker | Bun convention env                          | Set by runtime adapter (`development` or `production`).                                                                          |
-| `DENO_ENV`      | app + worker | Deno convention env                         | Set by runtime adapter (`development` or `production`).                                                                          |
-| `TAKO_BUILD`    | app + worker | Deployed build/version identifier           | Written into release `app.json` by `tako deploy`; `tako-server` reads it from the manifest and passes it as an env var at spawn. |
-| _user-defined_  | app + worker | User config vars                            | From `app.json` in the release dir. Secrets + internal token passed via fd 3 bootstrap envelope, not env vars.                   |
+| Name                   | Used by      | Meaning                                                                                 | Typical source                                                                                                                   |
+| ---------------------- | ------------ | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `ENV`                  | app + worker | Active environment name                                                                 | Set by Tako in both dev and deploy (`development`, `production`, `staging`, etc.).                                               |
+| `PORT`                 | app          | Listen port for HTTP server                                                             | `0` in both dev and deploy. The SDK binds to an OS-assigned port and reports it to Tako via fd 4.                                |
+| `HOST`                 | app          | Listen host for HTTP server                                                             | `127.0.0.1` in both dev and deploy.                                                                                              |
+| `TAKO_APP_NAME`        | app + worker | App identity used by the SDK to tag internal-socket RPCs                                | Set by both spawners (tako-server and tako-dev-server) from the deployed app name.                                               |
+| `TAKO_INTERNAL_SOCKET` | app + worker | Path to the shared internal unix socket for workflow enqueue/signal and channel publish | Set by both spawners. Together with `TAKO_APP_NAME` this must always be set as a pair; the SDK asserts this at boot.             |
+| `TAKO_DATA_DIR`        | app + worker | Persistent app-owned runtime data directory                                             | Set by Tako in both dev and deploy; points to the app's `data/app` directory.                                                    |
+| `NODE_ENV`             | app + worker | Node.js convention env                                                                  | Set by runtime adapter / server (`development` or `production`).                                                                 |
+| `BUN_ENV`              | app + worker | Bun convention env                                                                      | Set by runtime adapter (`development` or `production`).                                                                          |
+| `DENO_ENV`             | app + worker | Deno convention env                                                                     | Set by runtime adapter (`development` or `production`).                                                                          |
+| `TAKO_BUILD`           | app + worker | Deployed build/version identifier                                                       | Written into release `app.json` by `tako deploy`; `tako-server` reads it from the manifest and passes it as an env var at spawn. |
+| _user-defined_         | app + worker | User config vars                                                                        | From `app.json` in the release dir. Secrets + internal token passed via fd 3 bootstrap envelope, not env vars.                   |
 
 **Instance identity (CLI args, not env vars):** `tako-server` passes per-instance identity to the SDK entrypoint as command-line arguments:
 
@@ -1497,18 +1500,20 @@ logger.info("boot", { env, build });
 const dbUrl = secrets.DATABASE_URL;
 ```
 
-| Export    | Description                                                       |
-| --------- | ----------------------------------------------------------------- |
-| `env`     | `ENV` value (`"development"`, `"production"`, ...)                |
-| `isDev`   | `true` when `env === "development"`                               |
-| `isProd`  | `true` when `env === "production"`                                |
-| `port`    | Port assigned to this app instance                                |
-| `host`    | Host/address Tako bound this app instance to                      |
-| `build`   | Build identifier injected at deploy time                          |
-| `dataDir` | Persistent app-owned data directory — writes survive restarts     |
-| `appDir`  | Directory the app is running from (equivalent to `process.cwd()`) |
-| `secrets` | Typed secret bag — redacts automatically on bulk serialize        |
-| `logger`  | Structured JSON logger (`logger.info(...)`)                       |
+| Export    | Description                                                                                                       |
+| --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `env`     | `ENV` value (`"development"`, `"production"`, ...)                                                                |
+| `isDev`   | `true` when `env === "development"`                                                                               |
+| `isProd`  | `true` when `env === "production"`                                                                                |
+| `port`    | Port assigned to this app instance                                                                                |
+| `host`    | Host/address Tako bound this app instance to                                                                      |
+| `build`   | Build identifier injected at deploy time (`"dev"` under `tako dev`)                                               |
+| `dataDir` | Persistent app-owned data directory — writes survive restarts                                                     |
+| `appDir`  | Directory the app is running from (equivalent to `process.cwd()`)                                                 |
+| `secrets` | Typed secret bag — redacts automatically on bulk serialize                                                        |
+| `logger`  | Structured JSON logger (`logger.info(...)`) bound to `source: "app"`                                              |
+| `Env`     | TypeScript union of environment names declared in `tako.toml`, narrows `env === "staging"` checks at compile time |
+| `Secrets` | TypeScript interface of secret keys declared in `.tako/secrets.json`                                              |
 
 `secrets` redacts automatically on `JSON.stringify`, `console.log`, and `toString` (returns `"[REDACTED]"`); individual key access (`secrets.MY_KEY`) returns the value. The `Secrets` interface is regenerated from `.tako/secrets.json` on every `tako dev`, `tako deploy`, `tako typegen`, and `tako secret` change.
 
@@ -1522,7 +1527,7 @@ await sendEmail.enqueue({ to: "u@e.co" });
 await chat({ roomId: "r1" }).publish({ type: "msg", data: { text: "hi" } });
 ```
 
-The `tako.sh` package exports `defineChannel`, `defineWorkflow`, `TakoError`, and `InferWorkflowPayload`. The `Channel` class is not exported from `tako.sh`: server code uses the accessor returned by `defineChannel(...).$messageTypes<M>()` (imported from your `channels/` file); browser code imports from `tako.sh/client` (or uses the `useChannel` hook from `tako.sh/react`). There is no `Tako` global.
+The `tako.sh` package exports `defineChannel`, `defineWorkflow`, `signal`, `TakoError`, and `InferWorkflowPayload`. Server-only plumbing (`loadSecrets`, `createLogger`, `handleTakoEndpoint`, `initServerRuntime`, and the channel/workflow definition types) lives under `tako.sh/internal` and is intended for generated files (`tako.gen.ts`) and framework adapters. The `Channel` class is not exported from `tako.sh`: server code uses the accessor returned by `defineChannel(...).$messageTypes<M>()` (imported from your `channels/` file); browser code imports from `tako.sh/client` (or uses the `useChannel` hook from `tako.sh/react`). There is no `Tako` global.
 
 ### Go SDK
 
@@ -1553,11 +1558,24 @@ func main() {
 }
 ```
 
+For frameworks that manage their own server (e.g. Fiber on fasthttp), use `tako.Listener()` to get a pre-bound `net.Listener` instead.
+
+#### Exports
+
+| Export                                                                                              | Purpose                                                                                              |
+| --------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `tako.ListenAndServe(handler)`                                                                      | Wraps an `http.Handler` with Tako protocol support (fd 4 readiness, `Host: tako.internal` handling). |
+| `tako.Listener()`                                                                                   | Returns a bound `net.Listener` for frameworks that own their own server loop.                        |
+| `tako.InstanceID()` / `tako.Version()` / `tako.Uptime()`                                            | Runtime identity helpers (empty strings in dev mode).                                                |
+| `tako.GetSecret(name)`                                                                              | Low-level secret accessor. Prefer the typed `Secrets` struct from `tako typegen`.                    |
+| `tako.AllowChannel(grant)` / `tako.RejectChannel()`                                                 | Channel auth helpers for `ChannelDefinition` callbacks.                                              |
+| `tako.Channel`, `tako.ChannelRegistry`, `tako.Channels`, `tako.ChannelTransport`, and related types | Channel authoring surface mirrored from `tako.sh/internal`.                                          |
+
 #### Key Differences from JS SDK
 
 - Go compiles to a native binary — no runtime download needed on the server.
-- The compiled binary runs directly (`launch_args: ["{main}"]`), no SDK entrypoint wrapper.
-- `tako.ListenAndServe()` handles the full protocol: CLI arg parsing (`--instance`), TCP serving, `Host: tako.internal` endpoint interception.
+- The compiled binary runs directly (`launch_args: ["{main}"]`), no SDK entrypoint wrapper. The `tako` package wires up the protocol from inside the user's own binary.
+- `tako.ListenAndServe()` handles the full protocol: CLI arg parsing (`--instance`), TCP serving, `Host: tako.internal` endpoint interception, graceful shutdown on `SIGTERM`/`SIGINT` with a 10s drain window.
 - Deploy auto-injects `GOOS=linux` and `GOARCH` for cross-compilation to the target server.
 - Default build: `CGO_ENABLED=0 go build -o app .` producing a static binary.
 - Secrets: `tako.GetSecret("name")` provides access to Tako-managed secrets. Run `tako typegen` to generate a typed `Secrets` struct in `tako_secrets.go`.
@@ -1701,18 +1719,18 @@ Params are URL-encoded automatically. `publish` payloads are type-checked agains
 
 Tako's workflow engine runs durable background work alongside an app's HTTP
 instances — retries with exponential backoff, delayed/cron schedules, and
-multi-step workflows whose progress survives process restarts via `step.run`
+multi-step workflows whose progress survives process restarts via `ctx.run`
 checkpoints. It positions Tako for the "backend of your backend" use case
 (image processing, email, reindexing, LLM calls) without requiring a separate
 queue service.
 
 **Vocabulary:**
 
-- **workflow** — a named handler (the file in `workflows/*.ts` or a
-  `tako.RegisterWorkflow` call).
+- **workflow** — a named handler (the file in `workflows/*.ts`, or a
+  registered handler in the Go worker binary).
 - **run** — one execution of a workflow (the row in the queue that gets
   claimed, retried, completed, or moved to dead).
-- **step** — a memoized portion inside a run via `ctx.step.run(...)`.
+- **step** — a memoized portion inside a run via `ctx.run(name, fn)`.
 
 ### Architecture
 
@@ -1720,11 +1738,11 @@ queue service.
 - **Tables**:
   - `runs` — one row per run (status, attempts, lease, payload).
   - `steps` — one row per completed step `(run_id, name, result)`. First-write-wins via `INSERT OR IGNORE` so duplicate saves after a retried RPC don't overwrite.
-  - `event_waiters` — runs parked on `step.waitFor`, indexed by `event_name` for fast lookup on `signal`.
+  - `event_waiters` — runs parked on `ctx.waitFor`, indexed by `event_name` for fast lookup on `signal`.
   - `schedules`, `leader_leases` — cron infrastructure.
 - **tako-server (Rust)** — owns the DB, exposes the per-app unix socket, runs the cron ticker, and supervises the worker subprocess. The ticker also calls `reclaim_expired()` every second: any run stuck in `status='running'` past its `lease_until` is moved back to `pending` and the supervisor is woken so a fresh worker picks it up. This is how runs recover from a worker that died mid-execution (SIGKILL, OOM, host crash, server-level restart without graceful drain).
 - **Worker process (JS or Go)** — loads user code, claims runs, executes handlers. Separate from HTTP instances so heavy workflow deps don't bloat the request-serving process.
-- **SDK** — each workflow module's default export provides `.enqueue(payload, opts?)`; `signal` lives on `tako.sh/internal`'s `workflowsEngine`. In Go: `tako.Enqueue` / `tako.Signal`. Thin RPC client. Workers also use it for claim/heartbeat/save/complete/cancel/fail/defer/wait. **No SQLite in any SDK.**
+- **SDK** — each workflow module's default export provides `.enqueue(payload, opts?)`; `signal(event, payload?)` is a top-level export from `tako.sh` that throws `TakoError("TAKO_UNAVAILABLE")` when called outside an installed workflow runtime. Workers use the same RPC client for claim/heartbeat/save/complete/cancel/fail/defer/wait. **No SQLite in any SDK.**
 
 ### Configuration (tako.toml)
 
@@ -1739,7 +1757,7 @@ workers = 2
 
 Fields:
 
-- **`workers`** — number of always-on worker processes. `0` = scale-to-zero: tako-server spawns the worker on the first enqueue or cron tick, worker exits after `worker_idle_timeout` (default 300s) with no claimed runs. Default `0`.
+- **`workers`** — number of always-on worker processes. `0` = scale-to-zero: tako-server spawns the worker on the first enqueue or cron tick, and the worker exits after it has been idle (no claimed runs) long enough for the supervisor's idle window. Default `0`.
 - **`concurrency`** — max parallel runs per worker. Default `10`.
 
 Precedence: `[servers.<name>.workflows]` > `[servers.workflows]` > defaults (`workers = 0`, `concurrency = 10`). The name `workflows` under `[servers]` is reserved.
@@ -1748,35 +1766,35 @@ If a JS app has a `workflows/` directory (or a Go app declares a worker binary) 
 
 ### Authoring workflows
 
-**JS/TypeScript** — file-based discovery: drop a file into `workflows/<name>.ts` with a default export that is either a `defineWorkflow()` result (preferred, supports config) or a plain function (no config):
+**JS/TypeScript** — file-based discovery: drop a file into `workflows/<name>.ts` with a default export from `defineWorkflow<P>(name, handler, config?)`. The handler's second argument is the run context (`ctx`) — destructure `run`/`sleep`/`waitFor`/`bail`/`fail` off it as needed:
 
 ```ts
 // workflows/send-email.ts
 import { defineWorkflow } from "tako.sh";
 
-export default defineWorkflow(
+type SendEmailPayload = { userId: string };
+
+export default defineWorkflow<SendEmailPayload>(
+  "send-email",
   async (payload, { run }) => {
-    const user = await run("fetch-user", () => db.users.find(payload.id));
+    const user = await run("fetch-user", () => db.users.find(payload.userId));
     await run("send", () => mailer.send(user.email));
   },
   { retries: 4, schedule: "0 9 * * *" },
 ); // 9am daily
 ```
 
+The `name` is required (it must be a string literal — codegen and the dedup/cron systems read it) and should match the filename for the file-based discovery scan.
+
 **Go** — explicit registration in a separate `cmd/worker/main.go` binary. Go's separate-binary design is intentional: a single-binary design would link CGO-heavy workflow deps (image libs, ML bindings) into the HTTP server binary.
 
 ### Enqueuing
 
 ```ts
-// workflows/send-email.ts
-export default defineWorkflow<SendEmailPayload>("send-email", async (payload, { step }) => {
-  await step.run("send", () => sendEmail(payload.userId));
-});
-
 // anywhere:
 import sendEmail from "../workflows/send-email";
 
-await sendEmail.enqueue({ to: "a@b.c" });
+await sendEmail.enqueue({ userId: "u1" });
 await sendEmail.enqueue(payload, {
   runAt: new Date(Date.now() + 60_000),
   retries: 9,
@@ -1784,13 +1802,13 @@ await sendEmail.enqueue(payload, {
 });
 ```
 
-Each workflow module's default export is a typed handle: `.enqueue(payload, opts?)` is constrained to the payload type declared on `defineWorkflow<P>("name", handler)`. No typegen is needed for workflow enqueue typing — it flows from the module's own types.
+Each workflow module's default export is a typed handle: `.enqueue(payload, opts?)` is constrained to the payload type declared on `defineWorkflow<P>(name, handler)`. No typegen is needed for workflow enqueue typing — it flows from the module's own types.
 
 `uniqueKey` deduplicates: if an existing non-terminal run has the same key, enqueue is a no-op and returns the existing run's id. Cron ticks use this internally (key = `cron:<name>:<bucket_ms>`) so catching up doesn't double-enqueue.
 
 ### Step checkpointing
 
-`ctx.run(name, fn, opts?)` persists `fn`'s return value as one row in the `steps` table keyed by `(run_id, name)`. On retry, previously-completed steps return their stored value instead of re-executing.
+`ctx.run(name, fn, opts?)` (also destructurable as `{ run }` from the handler context) persists `fn`'s return value as one row in the `steps` table keyed by `(run_id, name)`. On retry, previously-completed steps return their stored value instead of re-executing.
 
 Per-step options:
 
@@ -1802,7 +1820,7 @@ Per-step options:
 
 If the worker crashes between `fn` returning and the SaveStep RPC completing, `fn` runs again on the next claim. The window is one RPC (~1ms) but it's real. **Make step bodies idempotent**: Stripe idempotency keys, `db.users.upsert` not `create`, dedup keys on outbound webhooks. This contract matches every workflow engine in the industry — it's the cost of durability without two-phase commit.
 
-### Durable `step.sleep`
+### Durable `ctx.sleep`
 
 `ctx.sleep(name, ms)` waits until the wake time. Short waits (< 30s) run inline; longer waits **defer the run** via `DeferRun` — the worker exits the handler, the run goes back to `pending` with `run_at = wakeAt`, the supervisor wakes the worker on schedule. Crash-safe across days.
 
@@ -1810,7 +1828,7 @@ If the worker crashes between `fn` returning and the SaveStep RPC completing, `f
 
 `ctx.waitFor(name, { timeout })` parks the run waiting for a named event. The handler exits, the run goes to `pending` with no `run_at`, an `event_waiters` row is inserted, and the worker can release.
 
-`workflowsEngine.signal(name, payload)` from `tako.sh/internal` (or `tako.Signal` in Go) wakes every parked waiter with matching name. The payload is materialized as the waiter's step result and the run is set runnable.
+`signal(name, payload?)` from `tako.sh` (or the equivalent internal-socket call in Go) wakes every parked waiter with matching name. The payload is materialized as the waiter's step result and the run is set runnable. `signal` is runtime-guarded: calling it from browser code (where the workflow runtime is not installed) throws a `TakoError("TAKO_UNAVAILABLE")` instead of silently no-oping.
 
 ```ts
 // Worker handler — pause until approval arrives
@@ -1822,8 +1840,8 @@ if (decision === null) ctx.bail("approval timed out");
 
 ```ts
 // Anywhere else (HTTP handler, webhook receiver, another workflow)
-import { workflowsEngine } from "tako.sh/internal";
-await workflowsEngine.signal(`approval:order-abc`, { approved: true });
+import { signal } from "tako.sh";
+await signal(`approval:order-abc`, { approved: true });
 ```
 
 Routing is by event name only — embed any selectors in the name. No JSON predicates server-side.
@@ -1841,7 +1859,7 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 
 ### Retries / backoff (run level)
 
-- Failed handlers retry with exponential backoff (default base 1s, ±20% jitter, capped at 1h). Override via `defineWorkflow(fn, { retries, backoff })`. Default is 2 retries (3 total attempts).
+- Failed handlers retry with exponential backoff (default base 1s, ±20% jitter, capped at 1h). Override via `defineWorkflow(name, fn, { retries, backoff })`. Default is 2 retries (3 total attempts).
 - `attempts` bumps on every claim. When attempts reach the budget, the run moves to `dead`.
 - `defer_run` (sleep, waitFor) decrements attempts so parking doesn't consume retry budget.
 
@@ -1856,8 +1874,9 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 - Every command carries an `app` field so one socket routes for every deployed app.
 - Auth: filesystem permissions only (`chmod 0600`, owned by the service user).
 - SDKs read `TAKO_INTERNAL_SOCKET` and `TAKO_APP_NAME` env vars. HTTP instance and workflow worker spawners (tako-server in production and tako-dev-server in `tako dev`) share one env contract defined in `tako-core::instance_env::TakoRuntimeEnv` so the dev and prod runtimes can't drift. The SDK asserts the pair is set together at import time — a half-set env (one var without the other) is a platform bug and crashes the process on boot rather than silently failing at the first workflow enqueue or channel publish.
-- From any process: `EnqueueRun`, `Signal`.
+- From any process: `EnqueueRun`, `Signal`, `ChannelPublish` (server-side publish goes straight to the channel store instead of round-tripping through the HTTPS proxy).
 - From worker processes: `ClaimRun`, `HeartbeatRun`, `SaveStep`, `CompleteRun`, `CancelRun`, `FailRun`, `DeferRun`, `WaitForEvent`, `RegisterSchedules`.
+- The management socket rejects workflow/channel commands with an explicit "must be sent over the internal socket" error, and vice versa — the two sockets never cross wires even though they share the `Command` enum in `tako-core`.
 - JSONL protocol, per-call connection (connect → send → read → close).
 - Server → Worker for drain: SIGTERM + grace period (120s), then SIGKILL.
 

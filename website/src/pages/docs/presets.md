@@ -122,6 +122,25 @@ assets = ["dist/client"]
 dev = ["vite", "dev"]
 ```
 
+### Runtime-local overrides
+
+A preset can declare runtime-specific overrides as nested sections (`[<preset>.<runtime>]`). When the selected runtime matches one of these sections, those fields replace the corresponding base-preset fields; any field the override leaves out falls through to the base section.
+
+```toml
+# presets/javascript.toml
+
+[vite]
+dev = ["vite", "dev"]
+
+[vite.bun]
+# Run Vite's script directly via `bun --bun` so the SSR graph uses Bun's ESM
+# loader. `bunx --bun` drops fds > 2, which breaks Tako's fd-4 readiness
+# handshake, so we target the resolved bin script.
+dev = ["bun", "--bun", "./node_modules/.bin/vite", "dev"]
+```
+
+This is how the built-in JavaScript presets adapt to Bun without forcing every user to memorize runtime-specific invocation quirks.
+
 ## Preset resolution
 
 When you deploy or run `tako dev`, Tako resolves your preset alias into actual metadata. Presets are cached locally for offline use.

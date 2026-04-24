@@ -1,14 +1,25 @@
 # Example preset definition file.
 # Each file is a family manifest: presets/<language>.toml
-# Each TOML section defines a preset alias.
+# Each top-level TOML section defines a preset alias.
 #
-# Fields:
-#   name   - (optional) preset name; defaults to the section name
-#   main   - (optional) default entrypoint file or module specifier
-#   assets - (optional) array of static asset directories
-#   dev    - (optional) custom dev command (overrides runtime default)
+# Fields (all optional):
+#   name   - preset name; defaults to the section name
+#   main   - default entrypoint file or module specifier
+#   assets - array of static asset directories merged into the deployed public/
+#   dev    - custom dev command for `tako dev` (overrides runtime default)
 
 [my-framework]
 main = "dist/server/entry.mjs"
 assets = ["dist/client"]
 dev = ["vite", "dev"]
+
+# Runtime-local override. When the selected runtime matches this nested
+# section, its fields replace the base-preset fields; any field the
+# override leaves out falls through to the base section.
+#
+# Used in real presets to accommodate runtime-specific invocation quirks
+# (e.g. running Vite under Bun's ESM loader without going through
+# `bunx`, which drops fds > 2 and breaks Tako's fd-4 readiness
+# handshake).
+[my-framework.bun]
+dev = ["bun", "--bun", "./node_modules/.bin/vite", "dev"]

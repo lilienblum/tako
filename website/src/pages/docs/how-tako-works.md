@@ -348,16 +348,18 @@ await sendEmail.enqueue({ to: "user@example.com" });
 
 Each workflow file default-exports a typed handle from `defineWorkflow<P>("name", handler)`. Its `.enqueue(payload, opts?)` is type-checked against the declared `P` — no typegen required for enqueue typing.
 
-Tako runs each app's workers in a **separate process** from HTTP instances (so heavy workflow deps — image libs, ML bindings — don't inflate the HTTP binary). Workers receive the same app/runtime environment as HTTP instances, including `TAKO_DATA_DIR`, `TAKO_BUILD`, configured vars, and secrets via fd 3. The worker is scale-to-zero by default: it spawns on the first enqueue or cron tick, exits after 5 minutes idle, and respawns on demand.
+Tako runs each app's workers in a **separate process** from HTTP instances (so heavy workflow deps — image libs, ML bindings — don't inflate the HTTP binary). Workers receive the same app/runtime environment as HTTP instances, including `TAKO_DATA_DIR`, `TAKO_BUILD`, `TAKO_APP_NAME`, `TAKO_INTERNAL_SOCKET`, configured vars, and secrets via fd 3. The worker is scale-to-zero by default: it spawns on the first enqueue or cron tick, exits when it has been idle long enough, and respawns on demand.
+
+Define a workflow with `defineWorkflow<P>(name, handler, config?)` — the `name` must be a string literal (conventionally matching the filename) and the config accepts `retries`, `schedule`, and other run-level options. Wake parked runs with `signal(event, payload?)` imported from `tako.sh`.
 
 Features:
 
 - **Retries with exponential backoff** (1s base, capped at 1h, ±20% jitter)
-- **Delayed runs** (`runAt: new Date(...)`) and **cron schedules** (`export const schedule = "0 9 * * *"`)
+- **Delayed runs** (`runAt: new Date(...)`) and **cron schedules** (`schedule: "0 9 * * *"` in the `defineWorkflow` config)
 - **Multi-step workflows** with `ctx.run("name", fn)` — step results are checkpointed to SQLite, so a crashed workflow resumes from the last completed step on retry
 - **Graceful drain** — `tako stop` and `tako delete` wait for in-flight tasks (up to 120s) before tearing down
 
-Queue state lives in `{tako_data_dir}/apps/<app>/runs.db` (SQLite with WAL). tako-server owns the file; the worker process polls it. Enqueues from the SDK go over a per-app unix socket — no external queue service, no Redis, no Postgres required.
+Queue state lives in `{tako_data_dir}/apps/<app>/runs.db` (SQLite with WAL). tako-server owns the file and the shared internal socket (`{tako_data_dir}/internal.sock`); the worker process polls via that socket. Enqueues from your request handlers go over the same socket — no external queue service, no Redis, no Postgres required.
 
 See [`tako.toml` → Workflows](/docs/tako-toml#workflows) for `[servers.X.workflows]` config details.
 
