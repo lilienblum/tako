@@ -292,21 +292,29 @@ impl ServerState {
 
         self.workflows.stop(app_name, WORKFLOW_DRAIN_TIMEOUT).await;
 
-        let app_path = match crate::app_command::load_release_manifest(release_path) {
-            Ok(manifest) => {
-                match crate::app_command::safe_subdir(release_path, &manifest.app_dir) {
-                    Ok(path) => path,
-                    Err(e) => {
-                        tracing::warn!(app = app_name, error = %e, "Skipping workflow engine: invalid app_dir in manifest");
-                        return;
-                    }
-                }
-            }
+        let manifest = match crate::app_command::load_release_manifest(release_path) {
+            Ok(manifest) => manifest,
             Err(e) => {
                 tracing::warn!(app = app_name, error = %e, "Skipping workflow engine: could not load release manifest");
                 return;
             }
         };
+        let app_path = match crate::app_command::safe_subdir(release_path, &manifest.app_dir) {
+            Ok(path) => path,
+            Err(e) => {
+                tracing::warn!(app = app_name, error = %e, "Skipping workflow engine: invalid app_dir in manifest");
+                return;
+            }
+        };
+        let data_paths = match ensure_app_runtime_data_dirs(&self.runtime.data_dir, app_name) {
+            Ok(paths) => paths,
+            Err(error) => {
+                tracing::warn!(app = app_name, error = %error, "Skipping workflow engine: failed to prepare app data dirs");
+                return;
+            }
+        };
+        let mut worker_env = manifest.env_vars;
+        inject_app_data_dir_env(&mut worker_env, &data_paths);
 
         let workflows_dir = app_path.join("workflows");
         if !workflows_dir.is_dir() {
@@ -356,6 +364,7 @@ impl ServerState {
                     &runtime_bin,
                     &worker_bin,
                     &worker_cwd,
+                    worker_env,
                     secrets,
                 )
             })

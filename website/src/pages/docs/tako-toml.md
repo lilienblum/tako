@@ -286,6 +286,8 @@ For any target environment, variables are merged in this order (later overrides 
    - `TAKO_DATA_DIR=<app data dir>` (set in both dev and deploy)
    - Runtime convention vars (e.g. `NODE_ENV` for all JS runtimes, `BUN_ENV` for Bun, `DENO_ENV` for Deno)
 
+HTTP instances and workflow workers receive the same app/runtime variables, except HTTP-only bind variables such as `PORT` and `HOST`.
+
 Since auto-set variables are applied last, they override any manually set values for those keys.
 
 If you set `ENV` in `[vars]` or `[vars.<environment>]`, Tako ignores it and prints a warning. Log-level env vars like `LOG_LEVEL` are owned by you — set them in `[vars]` / `[vars.<environment>]` if you want them per environment.

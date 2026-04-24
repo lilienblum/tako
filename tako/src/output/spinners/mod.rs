@@ -24,7 +24,7 @@ use super::{
 // Spinner helpers
 // ---------------------------------------------------------------------------
 
-pub const SPINNER_TICKS: &[&str] = &["⣼", "⣹", "⢻", "⠿", "⡟", "⣏", "⣧", "⣶", " "];
+pub const SPINNER_TICKS: &[&str] = &["✶", "✸", "✹", "✺", "✹", "✷"];
 
 fn teal_spinner_token() -> String {
     if should_colorize() {

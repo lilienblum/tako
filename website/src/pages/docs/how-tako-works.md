@@ -348,7 +348,7 @@ await sendEmail.enqueue({ to: "user@example.com" });
 
 Each workflow file default-exports a typed handle from `defineWorkflow<P>("name", handler)`. Its `.enqueue(payload, opts?)` is type-checked against the declared `P` — no typegen required for enqueue typing.
 
-Tako runs each app's workers in a **separate process** from HTTP instances (so heavy workflow deps — image libs, ML bindings — don't inflate the HTTP binary). The worker is scale-to-zero by default: it spawns on the first enqueue or cron tick, exits after 5 minutes idle, and respawns on demand.
+Tako runs each app's workers in a **separate process** from HTTP instances (so heavy workflow deps — image libs, ML bindings — don't inflate the HTTP binary). Workers receive the same app/runtime environment as HTTP instances, including `TAKO_DATA_DIR`, `TAKO_BUILD`, configured vars, and secrets via fd 3. The worker is scale-to-zero by default: it spawns on the first enqueue or cron tick, exits after 5 minutes idle, and respawns on demand.
 
 Features:
 

@@ -96,7 +96,9 @@ declare global {
  * types; client-side reads fall through to empty values.
  */
 const __takoEnv: NodeJS.ProcessEnv =
-  typeof process !== "undefined" && process.env ? process.env : ({} as NodeJS.ProcessEnv);
+  typeof process !== "undefined" && process.env
+    ? process.env
+    : ({} as NodeJS.ProcessEnv);
 
 /**
  * Current environment. TypeScript narrows this against the project's
@@ -184,7 +186,9 @@ export const dataDir = __takoEnv.TAKO_DATA_DIR;
 
 /** Directory the app is running from (`process.cwd()`). */
 export const appDir = /* @__PURE__ */ (() =>
-  typeof process !== "undefined" && typeof process.cwd === "function" ? process.cwd() : "")();
+  typeof process !== "undefined" && typeof process.cwd === "function"
+    ? process.cwd()
+    : "")();
 
 /**
  * Structured JSON logger bound to `source: "app"`. Emits one line per call

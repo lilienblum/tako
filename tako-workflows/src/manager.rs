@@ -259,9 +259,9 @@ pub fn worker_spec_for_bun(
     bun_path: &Path,
     worker_entry: &Path,
     app_cwd: &Path,
+    mut env: std::collections::HashMap<String, String>,
     secrets: std::collections::HashMap<String, String>,
 ) -> WorkerSpec {
-    let mut env = std::collections::HashMap::new();
     env.insert(
         tako_core::instance_env::TAKO_APP_NAME_ENV.into(),
         app.to_string(),
@@ -270,6 +270,8 @@ pub fn worker_spec_for_bun(
         tako_core::instance_env::TAKO_INTERNAL_SOCKET_ENV.into(),
         internal_socket.to_string_lossy().to_string(),
     );
+    env.entry("NODE_ENV".to_string())
+        .or_insert_with(|| "production".to_string());
 
     WorkerSpec {
         app: app.to_string(),

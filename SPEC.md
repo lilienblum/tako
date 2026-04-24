@@ -140,7 +140,7 @@ idle_timeout = 120
 - Process exit detection: `tako dev` polls `try_wait()` every 500ms to detect when the app process exits. On exit, the route goes idle (proxy stops forwarding) and the next HTTP request triggers a restart.
 - `tako dev` resolves unpinned official preset aliases from cached or embedded preset data when available and only fetches from the `master` branch as a last resort.
 - `tako deploy` resolves unpinned official preset aliases from the `master` branch on each deploy; if the refresh fails, it falls back to cached content.
-- Deploy sends app vars + runtime vars to `tako-server` in the `deploy` command payload (non-secret env vars in `app.json`); secrets are sent separately and stored encrypted in SQLite. `tako-server` passes secrets to instances via fd 3 (file descriptor 3) at spawn time — the server writes secrets as JSON to a pipe and the child process reads fd 3 before any user code runs.
+- Deploy sends app vars + runtime vars to `tako-server` in the `deploy` command payload (non-secret env vars in `app.json`); secrets are sent separately and stored encrypted in SQLite. `tako-server` passes secrets to HTTP instances and workflow workers via fd 3 (file descriptor 3) at spawn time — the server writes secrets as JSON to a pipe and the child process reads fd 3 before any user code runs.
 - `[build]` section has `run` (build command), `install` (optional pre-build install command), `cwd` (optional working directory relative to project root), plus `include`/`exclude` for artifact filtering. `[build]` is a shortcut for a single-stage `[[build_stages]]` list.
 - `[build]` and `[[build_stages]]` are mutually exclusive: having both `build.run` and `[[build_stages]]` is an error. `[build].include`/`[build].exclude` cannot be used alongside `[[build_stages]]`; use per-stage `exclude` instead.
 - Build stage resolution precedence (first non-empty wins): `[[build_stages]]` → `[build]` (normalized to a single stage) → runtime default. The runtime default is the runtime plugin's build command: `bun/npm/pnpm/yarn run --if-present build` for JS runtimes, `deno task build 2>/dev/null || true` for Deno, and no default for Go. When nothing resolves, the build phase is a no-op.
@@ -821,7 +821,7 @@ Deploy flow helpers:
    - Upload and extract target-specific artifact
    - Query server for the app's current secrets hash; if it matches the local secrets hash, skip sending secrets (server keeps existing). If hashes differ (or app is new), include decrypted secrets in the deploy command.
    - Send deploy command with routes and optional secrets payload
-   - `tako-server` acquires a per-app deploy lock in memory, reads non-secret runtime/app config from release `app.json`, injects runtime vars (`TAKO_BUILD`, `TAKO_DATA_DIR`) when spawning instances, creates per-app runtime data directories, runs the runtime plugin's production install command, and performs first start or rolling update
+   - `tako-server` acquires a per-app deploy lock in memory, reads non-secret runtime/app config from release `app.json`, creates per-app runtime data directories, injects runtime vars (`TAKO_BUILD`, `TAKO_DATA_DIR`) into HTTP instances and workflow workers, runs the runtime plugin's production install command, and performs first start or rolling update
    - If another deploy for the same app environment is already running on that server, the deploy command fails immediately with a retry message
    - Update `current` symlink and clean up old releases (>30 days)
 
@@ -846,7 +846,7 @@ Deploy flow helpers:
 - Cached artifacts are validated by checksum/size before reuse; invalid cache entries are rebuilt automatically.
 - Deploy artifacts include the canonical `app.json` used by `tako-server` at runtime.
 - Release `app.json` contains resolved runtime metadata (`runtime`, `main`, `package_manager`), non-secret env vars, environment idle timeout, and optional release metadata (`commit_message`, `git_dirty`) used by `tako releases ls`.
-- Deploy does not write a release `.env` file; non-secret env vars live in release `app.json`, secrets are stored encrypted in SQLite on the server, and `tako-server` injects runtime vars (`TAKO_BUILD`, `TAKO_DATA_DIR`) when spawning instances.
+- Deploy does not write a release `.env` file; non-secret env vars live in release `app.json`, secrets are stored encrypted in SQLite on the server, and `tako-server` injects runtime vars (`TAKO_BUILD`, `TAKO_DATA_DIR`) when spawning HTTP instances and workflow workers.
 - Deploy queries each server's secrets hash before sending the deploy command. If the hash matches the local secrets, secrets are omitted from the payload and the server keeps its existing secrets. This avoids unnecessary secret transmission and ensures new servers or servers with stale secrets are automatically provisioned.
 - Deploy requires valid `arch` and `libc` metadata in each selected `[[servers]]` entry.
 - Deploy does not probe server targets during deploy; missing/invalid target metadata fails deploy early with guidance to remove/re-add affected servers.
@@ -1169,17 +1169,19 @@ Reference scripts in this repo:
 
 ### Environment Variables for Apps
 
-| Name            | Used by | Meaning                                     | Typical source                                                                                                                   |
-| --------------- | ------- | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `ENV`           | app     | Active environment name                     | Set by Tako in both dev and deploy (`development`, `production`, `staging`, etc.).                                               |
-| `PORT`          | app     | Listen port for HTTP server                 | Set by `tako dev` for the local app process; `0` on deploys (SDK binds to an OS-assigned port and reports it via fd 4).          |
-| `HOST`          | app     | Listen host for HTTP server                 | `127.0.0.1` in both dev and deploy.                                                                                              |
-| `TAKO_DATA_DIR` | app     | Persistent app-owned runtime data directory | Set by Tako in both dev and deploy; points to the app's `data/app` directory.                                                    |
-| `NODE_ENV`      | app     | Node.js convention env                      | Set by runtime adapter / server (`development` or `production`).                                                                 |
-| `BUN_ENV`       | app     | Bun convention env                          | Set by runtime adapter (`development` or `production`).                                                                          |
-| `DENO_ENV`      | app     | Deno convention env                         | Set by runtime adapter (`development` or `production`).                                                                          |
-| `TAKO_BUILD`    | app     | Deployed build/version identifier           | Written into release `app.json` by `tako deploy`; `tako-server` reads it from the manifest and passes it as an env var at spawn. |
-| _user-defined_  | app     | User config vars                            | From `app.json` in the release dir. Secrets + internal token passed via fd 3 bootstrap envelope, not env vars.                   |
+HTTP instances and workflow workers receive the same app/runtime environment, except HTTP-only bind vars (`PORT`, `HOST`) and per-instance CLI args.
+
+| Name            | Used by      | Meaning                                     | Typical source                                                                                                                   |
+| --------------- | ------------ | ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `ENV`           | app + worker | Active environment name                     | Set by Tako in both dev and deploy (`development`, `production`, `staging`, etc.).                                               |
+| `PORT`          | app          | Listen port for HTTP server                 | Set by `tako dev` for the local app process; `0` on deploys (SDK binds to an OS-assigned port and reports it via fd 4).          |
+| `HOST`          | app          | Listen host for HTTP server                 | `127.0.0.1` in both dev and deploy.                                                                                              |
+| `TAKO_DATA_DIR` | app + worker | Persistent app-owned runtime data directory | Set by Tako in both dev and deploy; points to the app's `data/app` directory.                                                    |
+| `NODE_ENV`      | app + worker | Node.js convention env                      | Set by runtime adapter / server (`development` or `production`).                                                                 |
+| `BUN_ENV`       | app + worker | Bun convention env                          | Set by runtime adapter (`development` or `production`).                                                                          |
+| `DENO_ENV`      | app + worker | Deno convention env                         | Set by runtime adapter (`development` or `production`).                                                                          |
+| `TAKO_BUILD`    | app + worker | Deployed build/version identifier           | Written into release `app.json` by `tako deploy`; `tako-server` reads it from the manifest and passes it as an env var at spawn. |
+| _user-defined_  | app + worker | User config vars                            | From `app.json` in the release dir. Secrets + internal token passed via fd 3 bootstrap envelope, not env vars.                   |
 
 **Instance identity (CLI args, not env vars):** `tako-server` passes per-instance identity to the SDK entrypoint as command-line arguments:
 
@@ -1853,7 +1855,7 @@ Both work via sentinel exceptions caught by the worker. Useful for "this work is
 - Single shared internal socket at `{tako_data_dir}/internal.sock` (symlink → `internal-{pid}.sock`, atomically swapped during upgrades for zero-downtime handoff — same pattern as the mgmt socket). Workflow RPCs and server-side channel publishes both land here, hence the role-neutral name.
 - Every command carries an `app` field so one socket routes for every deployed app.
 - Auth: filesystem permissions only (`chmod 0600`, owned by the service user).
-- SDKs read `TAKO_INTERNAL_SOCKET` and `TAKO_APP_NAME` env vars. Both spawners (tako-server in production and tako-dev-server in `tako dev`) share one env contract defined in `tako-core::instance_env::TakoRuntimeEnv` so the dev and prod runtimes can't drift. The SDK asserts the pair is set together at import time — a half-set env (one var without the other) is a platform bug and crashes the process on boot rather than silently failing at the first workflow enqueue or channel publish.
+- SDKs read `TAKO_INTERNAL_SOCKET` and `TAKO_APP_NAME` env vars. HTTP instance and workflow worker spawners (tako-server in production and tako-dev-server in `tako dev`) share one env contract defined in `tako-core::instance_env::TakoRuntimeEnv` so the dev and prod runtimes can't drift. The SDK asserts the pair is set together at import time — a half-set env (one var without the other) is a platform bug and crashes the process on boot rather than silently failing at the first workflow enqueue or channel publish.
 - From any process: `EnqueueRun`, `Signal`.
 - From worker processes: `ClaimRun`, `HeartbeatRun`, `SaveStep`, `CompleteRun`, `CancelRun`, `FailRun`, `DeferRun`, `WaitForEvent`, `RegisterSchedules`.
 - JSONL protocol, per-call connection (connect → send → read → close).

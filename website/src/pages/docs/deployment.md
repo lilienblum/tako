@@ -566,7 +566,7 @@ tako servers restart la --force
 
 Default restart performs a graceful reload (`SIGHUP`) so the current process can hand off to a replacement process. Use `--force` to do a full service restart when graceful reload is not appropriate; that path may cause brief downtime.
 
-`tako-server` persists app runtime registration (app config and routes) in SQLite and restores it on startup, so app routing and config survive reloads, restarts, and crashes. Secrets remain encrypted in the same SQLite database. Each app also gets a persistent data tree under `.../apps/{app}/data/` with app-owned storage exposed as `TAKO_DATA_DIR` and Tako-owned storage under `data/tako`.
+`tako-server` persists app runtime registration (app config and routes) in SQLite and restores it on startup, so app routing and config survive reloads, restarts, and crashes. Secrets remain encrypted in the same SQLite database. Each app also gets a persistent data tree under `.../apps/{app}/data/` with app-owned storage exposed as `TAKO_DATA_DIR` to HTTP instances and workflow workers, plus Tako-owned storage under `data/tako`.
 
 Graceful shutdown semantics:
 

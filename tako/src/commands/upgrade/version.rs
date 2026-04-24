@@ -59,10 +59,6 @@ pub(super) fn tarball_url(os: &str, arch: &str) -> String {
 }
 
 pub(super) async fn check_for_updates() -> Result<UpdateCheck, String> {
-    output::with_spinner_async_simple("Checking for updates", check_for_updates_inner()).await
-}
-
-pub(super) async fn check_for_updates_inner() -> Result<UpdateCheck, String> {
     let remote = fetch_latest_version().await.map_err(|e| e.to_string())?;
     let local = current_version();
     if remote == local {

@@ -1,5 +1,4 @@
 mod install;
-mod task_tree;
 mod version;
 
 use std::path::{Path, PathBuf};
@@ -7,15 +6,8 @@ use std::process::{Command, Stdio};
 
 use crate::output;
 
-use install::{
-    detect_platform, download_and_install, download_and_install_pretty, resolve_install_dir,
-};
-#[cfg(test)]
-use task_tree::should_use_upgrade_task_tree_for_mode;
-use task_tree::{UpgradeTaskId, UpgradeTaskTreeController, should_use_upgrade_task_tree};
-use version::{
-    UpdateCheck, check_for_updates, check_for_updates_inner, current_version, tarball_url,
-};
+use install::{detect_platform, download_and_install, resolve_install_dir};
+use version::{UpdateCheck, check_for_updates, current_version, tarball_url};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CliUpgradeMethod {
@@ -30,16 +22,6 @@ struct CliUpgradeDetectionContext {
     brew_formula_installed: bool,
 }
 
-impl CliUpgradeMethod {
-    #[allow(dead_code)]
-    fn display_name(self) -> &'static str {
-        match self {
-            Self::Installer => "Installer",
-            Self::Homebrew => "Homebrew",
-        }
-    }
-}
-
 pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     let ver = current_version();
     output::info(&format!("Current version: {}", output::strong(&ver)));
@@ -50,108 +32,48 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_upgrade() -> Result<(), Box<dyn std::error::Error>> {
-    let method = detect_cli_upgrade_method_runtime();
-
-    if should_use_upgrade_task_tree() {
-        return run_upgrade_with_task_tree(method).await;
-    }
-
-    match method {
+    match detect_cli_upgrade_method_runtime() {
         CliUpgradeMethod::Installer => run_installer_upgrade().await,
-        CliUpgradeMethod::Homebrew => run_brew_upgrade(),
-    }
-}
-
-async fn run_upgrade_with_task_tree(
-    method: CliUpgradeMethod,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let controller = UpgradeTaskTreeController::new(method);
-
-    match method {
-        CliUpgradeMethod::Installer => run_installer_upgrade_pretty(&controller).await,
-        CliUpgradeMethod::Homebrew => {
-            run_local_upgrade_pretty(&controller, UpgradeTaskId::UpgradeViaHomebrew, || {
-                run_local_upgrade_command("brew", &["upgrade", "tako"])
-            })
-        }
-    }
-}
-
-async fn run_installer_upgrade_pretty(
-    controller: &UpgradeTaskTreeController,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let (os, arch) = detect_platform()?;
-    let install_dir = resolve_install_dir();
-
-    controller.mark_running(UpgradeTaskId::CheckForUpdates);
-    match check_for_updates_inner().await {
-        Ok(UpdateCheck::AlreadyCurrent) => {
-            controller.succeed(
-                UpgradeTaskId::CheckForUpdates,
-                Some("Already current".to_string()),
-            );
-            controller.skip_pending("Skipped");
-            Ok(())
-        }
-        Ok(UpdateCheck::Available { version }) => {
-            controller.succeed(UpgradeTaskId::CheckForUpdates, Some(version.clone()));
-            let url = tarball_url(os, arch);
-            download_and_install_pretty(&url, &install_dir, controller, Some(version)).await
-        }
-        Err(error) => {
-            controller.fail(UpgradeTaskId::CheckForUpdates, Some(error.clone()));
-            Err(error.into())
-        }
-    }
-}
-
-fn run_local_upgrade_pretty<F>(
-    controller: &UpgradeTaskTreeController,
-    task_id: UpgradeTaskId,
-    work: F,
-) -> Result<(), Box<dyn std::error::Error>>
-where
-    F: FnOnce() -> Result<(), String>,
-{
-    controller.mark_running(task_id);
-    match work() {
-        Ok(()) => {
-            controller.succeed(task_id, None);
-            Ok(())
-        }
-        Err(error) => {
-            controller.fail(task_id, Some(error.clone()));
-            Err(error.into())
-        }
+        CliUpgradeMethod::Homebrew => run_brew_upgrade().await,
     }
 }
 
 async fn run_installer_upgrade() -> Result<(), Box<dyn std::error::Error>> {
     let (os, arch) = detect_platform()?;
     let install_dir = resolve_install_dir();
+    let url = tarball_url(os, arch);
 
-    let check = check_for_updates().await;
+    match output::with_spinner_async_simple("Upgrading", check_and_install(&url, &install_dir))
+        .await?
+    {
+        UpdateCheck::AlreadyCurrent => output::info("Already on the latest version"),
+        UpdateCheck::Available { version } => {
+            output::info(&format!("Upgraded to {}", output::strong(&version)))
+        }
+    }
+    Ok(())
+}
 
-    match check {
-        Ok(UpdateCheck::AlreadyCurrent) => {
-            output::success("Already on the latest version");
-            Ok(())
+async fn check_and_install(
+    url: &str,
+    install_dir: &Path,
+) -> Result<UpdateCheck, Box<dyn std::error::Error>> {
+    match check_for_updates().await? {
+        UpdateCheck::AlreadyCurrent => Ok(UpdateCheck::AlreadyCurrent),
+        UpdateCheck::Available { version } => {
+            download_and_install(url, install_dir).await?;
+            Ok(UpdateCheck::Available { version })
         }
-        Ok(UpdateCheck::Available { version }) => {
-            let url = tarball_url(os, arch);
-            download_and_install(&url, &install_dir).await?;
-            output::success(&format!("Upgraded to {}", output::strong(&version)));
-            Ok(())
-        }
-        Err(error) => Err(error.into()),
     }
 }
 
-fn run_brew_upgrade() -> Result<(), Box<dyn std::error::Error>> {
-    output::with_spinner("Upgrading via Homebrew", "Upgraded via Homebrew", || {
+async fn run_brew_upgrade() -> Result<(), Box<dyn std::error::Error>> {
+    output::with_spinner_async_simple("Upgrading via Homebrew", async {
         run_local_upgrade_command("brew", &["upgrade", "tako"])
     })
+    .await
     .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+    output::info("Upgraded via Homebrew");
     Ok(())
 }
 
@@ -246,7 +168,6 @@ fn command_exists(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::TaskState;
 
     #[test]
     fn tarball_url_constructs_github_url() {
@@ -285,82 +206,5 @@ mod tests {
             brew_formula_installed: false,
         };
         assert_eq!(detect_cli_upgrade_method(&ctx), CliUpgradeMethod::Installer);
-    }
-
-    #[test]
-    fn upgrade_task_tree_requires_pretty_interactive_mode() {
-        assert!(should_use_upgrade_task_tree_for_mode(true, true));
-        assert!(!should_use_upgrade_task_tree_for_mode(true, false));
-        assert!(!should_use_upgrade_task_tree_for_mode(false, true));
-    }
-
-    #[test]
-    fn installer_task_tree_happy_path_marks_each_step_complete() {
-        let controller = UpgradeTaskTreeController::new(CliUpgradeMethod::Installer);
-
-        controller.mark_running(UpgradeTaskId::CheckForUpdates);
-        controller.succeed(UpgradeTaskId::CheckForUpdates, Some("1.2.3".to_string()));
-        controller.mark_running(UpgradeTaskId::DownloadArchive);
-        controller.succeed(UpgradeTaskId::DownloadArchive, None);
-        controller.mark_running(UpgradeTaskId::VerifySha256);
-        controller.succeed(UpgradeTaskId::VerifySha256, None);
-        controller.mark_running(UpgradeTaskId::ExtractArchive);
-        controller.succeed(UpgradeTaskId::ExtractArchive, None);
-        controller.mark_running(UpgradeTaskId::InstallBinaries);
-        controller.succeed(UpgradeTaskId::InstallBinaries, Some("1.2.3".to_string()));
-
-        let snapshot = controller.snapshot();
-        assert_eq!(snapshot.tasks.len(), 5);
-        assert!(
-            snapshot
-                .tasks
-                .iter()
-                .all(|task| matches!(task.state, TaskState::Succeeded { .. }))
-        );
-        assert_eq!(
-            snapshot
-                .tasks
-                .iter()
-                .find(|task| task.id == UpgradeTaskId::InstallBinaries.key())
-                .and_then(|task| task.detail.clone())
-                .as_deref(),
-            Some("1.2.3")
-        );
-    }
-
-    #[test]
-    fn installer_task_tree_already_current_skips_remaining_steps() {
-        let controller = UpgradeTaskTreeController::new(CliUpgradeMethod::Installer);
-
-        controller.succeed(
-            UpgradeTaskId::CheckForUpdates,
-            Some("Already current".to_string()),
-        );
-        controller.skip_pending("Skipped");
-
-        let snapshot = controller.snapshot();
-        let check = snapshot
-            .tasks
-            .iter()
-            .find(|task| task.id == UpgradeTaskId::CheckForUpdates.key())
-            .unwrap();
-        assert!(matches!(check.state, TaskState::Succeeded { .. }));
-        assert!(
-            snapshot.tasks[1..]
-                .iter()
-                .all(|task| matches!(task.state, TaskState::Skipped { .. }))
-        );
-        assert!(
-            snapshot.tasks[1..]
-                .iter()
-                .all(|task| task.detail.as_deref() == Some("Skipped"))
-        );
-    }
-
-    #[test]
-    fn homebrew_task_tree_uses_single_method_task() {
-        let homebrew = UpgradeTaskTreeController::new(CliUpgradeMethod::Homebrew).snapshot();
-        assert_eq!(homebrew.tasks.len(), 1);
-        assert_eq!(homebrew.tasks[0].label, "Upgrade via Homebrew");
     }
 }

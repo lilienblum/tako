@@ -266,7 +266,7 @@ For JS apps, this means your `export default function fetch()` or `export defaul
 
 ## Development environment variables
 
-`tako dev` sets several environment variables for the app process.
+`tako dev` sets several environment variables for the app process and workflow worker process.
 
 ### Automatically set
 
@@ -281,7 +281,7 @@ For JS apps, this means your `export default function fetch()` or `export defaul
 
 ### From tako.toml
 
-Variables from `[vars]` (base) and `[vars.development]` (environment-specific) are merged and injected into the app process. Later values override earlier ones.
+Variables from `[vars]` (base) and `[vars.development]` (environment-specific) are merged and injected into the app process and workflow worker process. Later values override earlier ones.
 
 `ENV` is reserved. If you set `ENV` in `[vars]` or `[vars.development]`, Tako ignores it and prints a warning.
 

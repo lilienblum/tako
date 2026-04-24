@@ -1261,6 +1261,89 @@ async fn sync_app_workflows_respects_manifest_app_dir_for_workspace_layouts() {
 }
 
 #[tokio::test]
+async fn sync_app_workflows_injects_release_env_and_app_data_dir_into_worker() {
+    let temp = TempDir::new().unwrap();
+    let app_id = "workflow-app/production";
+    let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+        cert_dir: temp.path().join("certs"),
+        ..Default::default()
+    }));
+    let state = ServerState::new(
+        temp.path().to_path_buf(),
+        cert_manager,
+        None,
+        empty_challenge_tokens(),
+    )
+    .unwrap();
+
+    let release = temp
+        .path()
+        .join("apps")
+        .join("workflow-app")
+        .join("production")
+        .join("releases")
+        .join("v1");
+    write_js_workflow_scaffold(&release);
+    let env_capture = temp.path().join("worker-env.txt");
+    let worker_entry = release.join("node_modules/tako.sh/dist/entrypoints/bun-worker.mjs");
+    std::fs::write(
+        &worker_entry,
+        format!(
+            "printf '%s\\n' \"$TAKO_BUILD|$CUSTOM_ENV|$TAKO_DATA_DIR|$TAKO_APP_NAME\" > {}\n",
+            env_capture.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        release.join("app.json"),
+        serde_json::to_vec_pretty(&serde_json::json!({
+            "runtime": "bun",
+            "main": "index.js",
+            "idle_timeout": 300,
+            "env_vars": {
+                "TAKO_BUILD": "v1",
+                "CUSTOM_ENV": "worker-visible"
+            }
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    state
+        .sync_app_workflows(app_id, &release, Some("/bin/sh"))
+        .await;
+    let supervisor = state
+        .workflows
+        .supervisor_for(app_id)
+        .expect("release with workflows should register worker supervisor");
+    supervisor.wake().unwrap();
+
+    let captured = (0..50)
+        .find_map(|_| {
+            let value = std::fs::read_to_string(&env_capture).ok();
+            if value.is_some() {
+                return value;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+            None
+        })
+        .expect("worker should record its environment");
+    let expected_data_dir = temp
+        .path()
+        .join("apps")
+        .join(app_id)
+        .join("data")
+        .join("app");
+    assert_eq!(
+        captured.trim(),
+        format!(
+            "v1|worker-visible|{}|workflow-app/production",
+            expected_data_dir.display()
+        )
+    );
+}
+
+#[tokio::test]
 async fn update_secrets_restarts_workflows_even_without_http_instances() {
     let temp = TempDir::new().unwrap();
     let app_id = "workflow-app/production";

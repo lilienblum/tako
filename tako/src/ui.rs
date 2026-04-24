@@ -13,7 +13,6 @@ use ratatui::{Terminal, TerminalOptions, Viewport};
 use crate::output;
 
 const TASK_INDENT: &str = "  ";
-const TASK_SPINNER_TICKS: &[&str] = &["✶", "✸", "✹", "✺", "✹", "✷"];
 const LIVE_RENDER_INTERVAL: Duration = Duration::from_millis(80);
 
 /// Row below the active inline viewport, updated on each draw.
@@ -192,7 +191,8 @@ impl TaskTreeSession {
                         if state.paused || !has_running {
                             false
                         } else {
-                            state.frame_index = (state.frame_index + 1) % TASK_SPINNER_TICKS.len();
+                            state.frame_index =
+                                (state.frame_index + 1) % output::SPINNER_TICKS.len();
                             true
                         }
                     };
@@ -541,7 +541,9 @@ fn task_icon(state: &TaskState, frame_index: usize, hide_success_icon: bool) -> 
     match state {
         TaskState::Succeeded { .. } if hide_success_icon => " ",
         TaskState::Pending => "○",
-        TaskState::Running { .. } => TASK_SPINNER_TICKS[frame_index % TASK_SPINNER_TICKS.len()],
+        TaskState::Running { .. } => {
+            output::SPINNER_TICKS[frame_index % output::SPINNER_TICKS.len()]
+        }
         TaskState::Succeeded { .. } => "✔",
         TaskState::Failed { .. } => "✘",
         TaskState::Skipped { .. } => "⏭",

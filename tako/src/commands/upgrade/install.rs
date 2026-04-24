@@ -4,105 +4,7 @@ use std::process::{Command, Stdio};
 
 use sha2::{Digest, Sha256};
 
-use super::task_tree::{UpgradeTaskId, UpgradeTaskTreeController};
 use crate::output;
-
-pub(super) async fn download_and_install_pretty(
-    url: &str,
-    install_dir: &Path,
-    controller: &UpgradeTaskTreeController,
-    install_detail: Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let tmp_base = std::env::temp_dir();
-    let tmp_dir = tmp_base.join(format!("tako-upgrade-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp_dir)?;
-
-    let result =
-        download_and_install_pretty_inner(url, install_dir, &tmp_dir, controller, install_detail)
-            .await;
-
-    let _ = std::fs::remove_dir_all(&tmp_dir);
-    result
-}
-
-async fn download_and_install_pretty_inner(
-    url: &str,
-    install_dir: &Path,
-    tmp_dir: &Path,
-    controller: &UpgradeTaskTreeController,
-    install_detail: Option<String>,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let archive_path = tmp_dir.join("tako.tar.gz");
-
-    run_upgrade_task_step(controller, UpgradeTaskId::DownloadArchive, None, async {
-        download_without_progress(url, &archive_path)
-            .await
-            .map_err(|error| error.to_string())
-    })
-    .await?;
-
-    let sha_url = format!("{url}.sha256");
-    run_upgrade_task_step(controller, UpgradeTaskId::VerifySha256, None, async {
-        let expected = fetch_sha256(&sha_url)
-            .await
-            .map_err(|e| format!("SHA256 checksum unavailable for {sha_url}: {e}"))?;
-        verify_sha256(&archive_path, &expected)?;
-        Ok::<(), String>(())
-    })
-    .await?;
-
-    let extract_dir = tmp_dir.join("extract");
-    run_upgrade_task_step(controller, UpgradeTaskId::ExtractArchive, None, async {
-        std::fs::create_dir_all(&extract_dir)
-            .map_err(|e| format!("failed to create extract directory: {e}"))?;
-        extract_tarball(&archive_path, &extract_dir)?;
-        Ok::<(), String>(())
-    })
-    .await?;
-
-    run_upgrade_task_step(
-        controller,
-        UpgradeTaskId::InstallBinaries,
-        install_detail,
-        async {
-            let new_tako = find_binary(&extract_dir, "tako")
-                .ok_or_else(|| "archive did not contain a tako binary".to_string())?;
-            let new_dev_server = find_binary(&extract_dir, "tako-dev-server")
-                .ok_or_else(|| "archive did not contain a tako-dev-server binary".to_string())?;
-            let new_dev_proxy = find_binary(&extract_dir, "tako-dev-proxy")
-                .ok_or_else(|| "archive did not contain a tako-dev-proxy binary".to_string())?;
-            std::fs::create_dir_all(install_dir)
-                .map_err(|e| format!("failed to create install dir: {e}"))?;
-            install_binary(&new_tako, install_dir, "tako")?;
-            install_binary(&new_dev_server, install_dir, "tako-dev-server")?;
-            install_binary(&new_dev_proxy, install_dir, "tako-dev-proxy")?;
-            Ok::<(), String>(())
-        },
-    )
-    .await
-}
-
-async fn run_upgrade_task_step<T, Fut>(
-    controller: &UpgradeTaskTreeController,
-    task_id: UpgradeTaskId,
-    success_detail: Option<String>,
-    work: Fut,
-) -> Result<T, Box<dyn std::error::Error>>
-where
-    Fut: std::future::Future<Output = Result<T, String>>,
-{
-    controller.mark_running(task_id);
-    match work.await {
-        Ok(value) => {
-            controller.succeed(task_id, success_detail);
-            Ok(value)
-        }
-        Err(error) => {
-            controller.fail(task_id, Some(error.to_string()));
-            Err(error.into())
-        }
-    }
-}
 
 pub(super) async fn download_and_install(
     url: &str,
@@ -126,7 +28,7 @@ async fn download_and_install_inner(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let archive_path = tmp_dir.join("tako.tar.gz");
 
-    download_with_progress(url, &archive_path).await?;
+    download_archive(url, &archive_path).await?;
 
     let sha_url = format!("{url}.sha256");
     let expected = fetch_sha256(&sha_url)
@@ -134,14 +36,12 @@ async fn download_and_install_inner(
         .map_err(|e| format!("SHA256 checksum unavailable for {sha_url}: {e}"))?;
     verify_sha256(&archive_path, &expected)?;
 
+    let extract_dir = tmp_dir.join("extract");
     {
         let _t = output::timed("Extract archive");
-        let extract_dir_tmp = tmp_dir.join("extract");
-        std::fs::create_dir_all(&extract_dir_tmp)?;
-        extract_tarball(&archive_path, &extract_dir_tmp)?;
+        std::fs::create_dir_all(&extract_dir)?;
+        extract_tarball(&archive_path, &extract_dir)?;
     }
-
-    let extract_dir = tmp_dir.join("extract");
 
     let _t = output::timed(&format!("Install binaries to {}", install_dir.display()));
     let tako_bin =
@@ -159,22 +59,7 @@ async fn download_and_install_inner(
     Ok(())
 }
 
-async fn download_with_progress(url: &str, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    download_archive(url, dest, true).await
-}
-
-async fn download_without_progress(
-    url: &str,
-    dest: &Path,
-) -> Result<(), Box<dyn std::error::Error>> {
-    download_archive(url, dest, false).await
-}
-
-async fn download_archive(
-    url: &str,
-    dest: &Path,
-    show_progress: bool,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn download_archive(url: &str, dest: &Path) -> Result<(), Box<dyn std::error::Error>> {
     let _t = output::timed(&format!("Download release archive from {url}"));
     let client = reqwest::Client::new();
     let mut resp = client
@@ -197,20 +82,11 @@ async fn download_archive(
     let mut file = std::fs::File::create(dest)?;
     let mut downloaded = 0u64;
 
-    let transfer_progress =
-        show_progress.then(|| output::TransferProgress::new("Downloading", "Downloaded", total));
-
     while let Some(chunk) = resp.chunk().await? {
         file.write_all(&chunk)?;
         downloaded += chunk.len() as u64;
-        if let Some(tp) = &transfer_progress {
-            tp.set_position(downloaded);
-        }
     }
 
-    if let Some(tp) = transfer_progress {
-        tp.finish();
-    }
     tracing::debug!("Downloaded {} bytes to {}", downloaded, dest.display());
     Ok(())
 }
