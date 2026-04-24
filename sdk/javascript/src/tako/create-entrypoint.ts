@@ -12,6 +12,7 @@
 
 import { isAbsolute, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import { dynImport } from "./dyn-import";
 import { handleTakoEndpoint } from "./endpoints";
 import { writeViaInheritedFd } from "./readiness";
 import { bootstrapChannels } from "../channels/bootstrap";
@@ -112,7 +113,7 @@ export function createEntrypoint(options: EntrypointOptions = {}) {
       // which lives under `node_modules/tako.sh/dist/`.
       const mainPath = isAbsolute(parsed.main) ? parsed.main : resolve(process.cwd(), parsed.main);
       const mainUrl = pathToFileURL(mainPath).href;
-      const module = await import(/* @vite-ignore */ mainUrl);
+      const module = (await dynImport(mainUrl)) as { default?: unknown };
       const defaultExport = module.default;
       if (typeof defaultExport === "function") {
         const readyable = defaultExport as ReadyableFetchHandler;
@@ -123,11 +124,13 @@ export function createEntrypoint(options: EntrypointOptions = {}) {
       } else if (
         defaultExport &&
         typeof defaultExport === "object" &&
-        typeof defaultExport.fetch === "function"
+        typeof (defaultExport as { fetch?: unknown }).fetch === "function"
       ) {
-        userFetch = defaultExport.fetch as FetchFunction;
-        if (typeof defaultExport.ready === "function") {
-          userReady = () => defaultExport.ready();
+        const obj = defaultExport as { fetch: FetchFunction; ready?: () => void | Promise<void> };
+        userFetch = obj.fetch;
+        if (typeof obj.ready === "function") {
+          const ready = obj.ready;
+          userReady = () => ready();
         }
       } else {
         throw new Error("App must export a default fetch function or { fetch } object.");

@@ -1,6 +1,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { join, parse } from "node:path";
+import { dynImport } from "../tako/dyn-import";
 import { isChannelDefinition, isChannelExport, type ChannelDefinition } from "./define";
 
 const VALID_EXTS = new Set([".ts", ".tsx", ".js", ".mjs", ".mts"]);
@@ -23,7 +24,7 @@ export async function discoverChannels(dir: string): Promise<DiscoveredChannel[]
     if (parsed.name.startsWith(".") || parsed.name.startsWith("_")) continue;
 
     const url = pathToFileURL(join(dir, entry)).href;
-    const mod = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
+    const mod = (await dynImport(url)) as Record<string, unknown>;
     const defaultExport = mod["default"];
 
     const definition: ChannelDefinition | undefined = isChannelExport(defaultExport)

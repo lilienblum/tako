@@ -5,6 +5,7 @@ export default defineConfig({
     index: "src/index.ts",
     client: "src/client.ts",
     react: "src/react.ts",
+    runtime: "src/runtime.ts",
     vite: "src/vite.ts",
     internal: "src/internal.ts",
     nextjs: "src/nextjs/index.ts",

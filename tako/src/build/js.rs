@@ -10,7 +10,7 @@ const TAKO_GEN_HEADER: &str = r#"/**
  * secrets changes. Manual edits will be overwritten on the next run.
  */
 
-import { createLogger, loadSecrets } from "tako.sh/internal";
+import { createLogger, loadSecrets } from "tako.sh/runtime";
 
 "#;
 
@@ -163,6 +163,19 @@ declare global {
 }
 
 /**
+ * Tako populates `process.env` on the server — these accessors guard the
+ * reads so importing `tako.gen.ts` from an isomorphic file (e.g. a
+ * TanStack Start route or Next.js server component that also renders on
+ * the client) does not throw `ReferenceError: process is not defined`.
+ * Consumers that only read these in server-only code keep the same
+ * types; client-side reads fall through to empty values.
+ */
+const __takoEnv: NodeJS.ProcessEnv =
+  typeof process !== "undefined" && process.env
+    ? process.env
+    : ({} as NodeJS.ProcessEnv);
+
+/**
  * Current environment. TypeScript narrows this against the project's
  * {@link Env} union, so `env === "staging"` is a compile error unless
  * `[envs.staging]` is declared in `tako.toml`.
@@ -177,7 +190,7 @@ declare global {
  * }
  * ```
  */
-export const env = process.env.ENV;
+export const env = __takoEnv.ENV;
 
 /**
  * `true` when the app is running under `tako dev`.
@@ -213,10 +226,10 @@ export const isProd = env === "production";
  * Bun.serve({ port, hostname: host, fetch: handleRequest });
  * ```
  */
-export const port = /* @__PURE__ */ Number(process.env.PORT);
+export const port = /* @__PURE__ */ Number(__takoEnv.PORT);
 
 /** Host/address Tako bound this app instance to. */
-export const host = process.env.HOST;
+export const host = __takoEnv.HOST;
 
 /**
  * Build identifier. Production deploys use a content hash; `tako dev` uses
@@ -229,7 +242,7 @@ export const host = process.env.HOST;
  * Sentry.init({ release: build });
  * ```
  */
-export const build = process.env.TAKO_BUILD;
+export const build = __takoEnv.TAKO_BUILD;
 
 /**
  * Persistent app-owned data directory. Writes survive restarts and deploys —
@@ -244,10 +257,13 @@ export const build = process.env.TAKO_BUILD;
  * const db = new Database(join(dataDir, "app.db"));
  * ```
  */
-export const dataDir = process.env.TAKO_DATA_DIR;
+export const dataDir = __takoEnv.TAKO_DATA_DIR;
 
 /** Directory the app is running from (`process.cwd()`). */
-export const appDir = /* @__PURE__ */ (() => process.cwd?.() ?? "")();
+export const appDir = /* @__PURE__ */ (() =>
+  typeof process !== "undefined" && typeof process.cwd === "function"
+    ? process.cwd()
+    : "")();
 
 /**
  * Structured JSON logger bound to `source: "app"`. Emits one line per call
@@ -544,6 +560,38 @@ mod tests {
         assert!(content.contains("export interface Secrets"));
         assert!(content.contains("export const env"));
         assert!(content.contains("export const secrets"));
+    }
+
+    #[test]
+    fn write_types_imports_from_browser_safe_runtime_entry() {
+        // The generated file gets bundled into client chunks by TanStack
+        // Start / Next.js / any isomorphic framework. Importing from
+        // `tako.sh/internal` would drag `node:fs` / `node:net` statics
+        // into the browser graph; `tako.sh/runtime` is the server-safe
+        // subset (logger + secrets only).
+        let dir = TempDir::new().unwrap();
+        write_types(dir.path()).unwrap();
+        let content = fs::read_to_string(dir.path().join("tako.gen.ts")).unwrap();
+        assert!(content.contains(r#"from "tako.sh/runtime""#));
+        assert!(!content.contains(r#"from "tako.sh/internal""#));
+    }
+
+    #[test]
+    fn write_types_guards_process_env_reads_for_browser_bundlers() {
+        // Isomorphic files (e.g. a TanStack Start route) can import from
+        // `tako.gen.ts` and be bundled into the client. A bare
+        // `process.env.X` at module scope throws `ReferenceError: process
+        // is not defined` in the browser; guard it.
+        let dir = TempDir::new().unwrap();
+        write_types(dir.path()).unwrap();
+        let content = fs::read_to_string(dir.path().join("tako.gen.ts")).unwrap();
+        assert!(content.contains(r#"typeof process !== "undefined""#));
+        // The top-level exports must route through the guarded accessor.
+        assert!(!content.contains("= process.env.ENV"));
+        assert!(!content.contains("= process.env.PORT"));
+        assert!(!content.contains("= process.env.HOST"));
+        assert!(!content.contains("= process.env.TAKO_BUILD"));
+        assert!(!content.contains("= process.env.TAKO_DATA_DIR"));
     }
 
     #[test]

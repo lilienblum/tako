@@ -5,7 +5,7 @@
  * secrets changes. Manual edits will be overwritten on the next run.
  */
 
-import { createLogger, loadSecrets } from "tako.sh/internal";
+import { createLogger, loadSecrets } from "tako.sh/runtime";
 
 /**
  * Environments declared in `tako.toml` (plus `development` and `production`).
@@ -88,6 +88,17 @@ declare global {
 }
 
 /**
+ * Tako populates `process.env` on the server — these accessors guard the
+ * reads so importing `tako.gen.ts` from an isomorphic file (e.g. a
+ * TanStack Start route or Next.js server component that also renders on
+ * the client) does not throw `ReferenceError: process is not defined`.
+ * Consumers that only read these in server-only code keep the same
+ * types; client-side reads fall through to empty values.
+ */
+const __takoEnv: NodeJS.ProcessEnv =
+  typeof process !== "undefined" && process.env ? process.env : ({} as NodeJS.ProcessEnv);
+
+/**
  * Current environment. TypeScript narrows this against the project's
  * {@link Env} union, so `env === "staging"` is a compile error unless
  * `[envs.staging]` is declared in `tako.toml`.
@@ -102,7 +113,7 @@ declare global {
  * }
  * ```
  */
-export const env = process.env.ENV;
+export const env = __takoEnv.ENV;
 
 /**
  * `true` when the app is running under `tako dev`.
@@ -138,10 +149,10 @@ export const isProd = env === "production";
  * Bun.serve({ port, hostname: host, fetch: handleRequest });
  * ```
  */
-export const port = /* @__PURE__ */ Number(process.env.PORT);
+export const port = /* @__PURE__ */ Number(__takoEnv.PORT);
 
 /** Host/address Tako bound this app instance to. */
-export const host = process.env.HOST;
+export const host = __takoEnv.HOST;
 
 /**
  * Build identifier. Production deploys use a content hash; `tako dev` uses
@@ -154,7 +165,7 @@ export const host = process.env.HOST;
  * Sentry.init({ release: build });
  * ```
  */
-export const build = process.env.TAKO_BUILD;
+export const build = __takoEnv.TAKO_BUILD;
 
 /**
  * Persistent app-owned data directory. Writes survive restarts and deploys —
@@ -169,10 +180,11 @@ export const build = process.env.TAKO_BUILD;
  * const db = new Database(join(dataDir, "app.db"));
  * ```
  */
-export const dataDir = process.env.TAKO_DATA_DIR;
+export const dataDir = __takoEnv.TAKO_DATA_DIR;
 
 /** Directory the app is running from (`process.cwd()`). */
-export const appDir = /* @__PURE__ */ (() => process.cwd?.() ?? "")();
+export const appDir = /* @__PURE__ */ (() =>
+  typeof process !== "undefined" && typeof process.cwd === "function" ? process.cwd() : "")();
 
 /**
  * Structured JSON logger bound to `source: "app"`. Emits one line per call

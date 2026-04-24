@@ -13,6 +13,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { join, parse } from "node:path";
+import { dynImport } from "../tako/dyn-import";
 import { isWorkflowDefinition, isWorkflowExport } from "./define";
 import type { WorkflowConfig } from "./types";
 import type { WorkflowHandler } from "./worker";
@@ -37,7 +38,7 @@ export async function discoverWorkflows(dir: string): Promise<DiscoveredWorkflow
     if (parsed.name.startsWith(".") || parsed.name.startsWith("_")) continue;
 
     const url = pathToFileURL(join(dir, entry)).href;
-    const mod = (await import(/* @vite-ignore */ url)) as Record<string, unknown>;
+    const mod = (await dynImport(url)) as Record<string, unknown>;
     const defaultExport = mod["default"];
 
     if (isWorkflowExport(defaultExport)) {

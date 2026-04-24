@@ -53,14 +53,15 @@ export default {
 
 ## Package Exports
 
-| Import path        | Purpose                                                              | Key exports                                                                      |
-| ------------------ | -------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `tako.sh`          | Server-side authoring + runtime                                      | `defineChannel`, `defineWorkflow`, `signal`, `TakoError`, `InferWorkflowPayload` |
-| `tako.sh/client`   | Browser-safe channel client                                          | `Channel`                                                                        |
-| `tako.sh/react`    | React hook for channels                                              | `useChannel`                                                                     |
-| `tako.sh/vite`     | Vite plugin for SSR builds                                           | `tako()` plugin function                                                         |
-| `tako.sh/nextjs`   | Next.js standalone adapter + wrapper                                 | `withTako()`, `createNextjsAdapter()`, `createNextjsFetchHandler()`              |
-| `tako.sh/internal` | Server-only plumbing for the generated file + framework-adapter boot | `loadSecrets`, `createLogger`, `handleTakoEndpoint`, `initServerRuntime`         |
+| Import path        | Purpose                                                     | Key exports                                                                      |
+| ------------------ | ----------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `tako.sh`          | Server-side authoring + runtime                             | `defineChannel`, `defineWorkflow`, `signal`, `TakoError`, `InferWorkflowPayload` |
+| `tako.sh/client`   | Browser-safe channel client                                 | `Channel`                                                                        |
+| `tako.sh/react`    | React hook for channels                                     | `useChannel`                                                                     |
+| `tako.sh/vite`     | Vite plugin for SSR builds                                  | `tako()` plugin function                                                         |
+| `tako.sh/nextjs`   | Next.js standalone adapter + wrapper                        | `withTako()`, `createNextjsAdapter()`, `createNextjsFetchHandler()`              |
+| `tako.sh/runtime`  | Browser-safe subset consumed by the generated `tako.gen.ts` | `loadSecrets`, `createLogger`, `Logger`                                          |
+| `tako.sh/internal` | Server-only plumbing for framework-adapter boot             | `handleTakoEndpoint`, `initServerRuntime`, channel/workflow define helpers       |
 
 ## Runtime state: `tako.gen.ts`
 

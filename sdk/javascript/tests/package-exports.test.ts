@@ -35,6 +35,17 @@ describe("package exports", () => {
     });
   });
 
+  test("declares the browser-safe /runtime export", () => {
+    const packageJson = JSON.parse(
+      readFileSync(resolve(import.meta.dirname, "..", "package.json"), "utf8"),
+    );
+
+    expect(packageJson.exports["./runtime"]).toEqual({
+      types: "./dist/runtime.d.mts",
+      import: "./dist/runtime.mjs",
+    });
+  });
+
   test("declares the /react export", () => {
     const packageJson = JSON.parse(
       readFileSync(resolve(import.meta.dirname, "..", "package.json"), "utf8"),
