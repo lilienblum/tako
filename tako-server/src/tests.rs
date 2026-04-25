@@ -10,7 +10,7 @@ use super::{
     run_extract_archive_mode,
 };
 use crate::instances::AppConfig;
-use crate::runtime_events::handle_idle_event;
+use crate::runtime_events::{handle_idle_event, handle_instance_event};
 use crate::socket::{AppState, Command, InstanceState, Response};
 use crate::tls::{CertManager, CertManagerConfig, ChallengeTokens};
 use clap::Parser;
@@ -1912,6 +1912,60 @@ async fn instance_idle_event_resets_cold_start_when_app_scales_to_zero() {
     assert!(app.get_instances().is_empty());
     assert_eq!(app.state(), AppState::Idle);
     assert!(state.cold_start.begin("idle-app").leader);
+}
+
+#[tokio::test]
+async fn instance_ready_event_sets_health_metric() {
+    let temp = TempDir::new().unwrap();
+    let cert_manager = Arc::new(CertManager::new(CertManagerConfig {
+        cert_dir: temp.path().join("certs"),
+        ..Default::default()
+    }));
+    let state = ServerState::new(
+        temp.path().to_path_buf(),
+        cert_manager,
+        None,
+        empty_challenge_tokens(),
+    )
+    .unwrap();
+
+    let app = state.app_manager.register_app(AppConfig {
+        name: "metrics-app".to_string(),
+        version: "v1".to_string(),
+        min_instances: 1,
+        ..Default::default()
+    });
+    state.load_balancer.register_app(app.clone());
+    app.set_state(AppState::Running);
+
+    let instance = app.allocate_instance();
+    // Spawner sets state to Healthy directly before emitting Ready.
+    instance.set_state(InstanceState::Healthy);
+
+    handle_instance_event(
+        &state,
+        crate::instances::InstanceEvent::Ready {
+            app: "metrics-app".to_string(),
+            instance_id: instance.id.clone(),
+        },
+    )
+    .await;
+
+    let health = crate::metrics::INSTANCE_HEALTH
+        .with_label_values(&[crate::metrics::server(), "metrics-app", &instance.id])
+        .get();
+    assert_eq!(
+        health, 1,
+        "InstanceEvent::Ready should set tako_instance_health to 1"
+    );
+
+    let running = crate::metrics::INSTANCES_RUNNING
+        .with_label_values(&[crate::metrics::server(), "metrics-app"])
+        .get();
+    assert_eq!(
+        running, 1,
+        "InstanceEvent::Ready should update tako_instances_running"
+    );
 }
 
 #[tokio::test]

@@ -11,9 +11,11 @@ pub(crate) async fn handle_instance_event(state: &ServerState, event: InstanceEv
         InstanceEvent::Ready { app, instance_id } => {
             tracing::info!(app = %app, instance = %instance_id, "Instance ready");
             state.cold_start.mark_ready(&app);
+            crate::metrics::set_instance_health(&app, &instance_id, true);
 
             if let Some(app_ref) = state.app_manager.get_app(&app) {
                 app_ref.clear_last_error();
+                update_instance_count_metric(&app, &app_ref);
             }
         }
         InstanceEvent::Unhealthy { app, instance_id } => {

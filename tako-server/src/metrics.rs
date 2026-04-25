@@ -17,7 +17,7 @@ use std::time::Instant;
 /// Server hostname, set once at startup via `init()`.
 static SERVER_LABEL: OnceLock<String> = OnceLock::new();
 
-fn server() -> &'static str {
+pub(crate) fn server() -> &'static str {
     SERVER_LABEL.get().map(|s| s.as_str()).unwrap_or("unknown")
 }
 
