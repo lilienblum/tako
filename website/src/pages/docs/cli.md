@@ -234,11 +234,11 @@ Interactive progress shows tasks and sub tasks as a live tree: `Connecting` and 
 
 **Version naming**
 
-| Situation                | Version format                                      |
-| ------------------------ | --------------------------------------------------- |
-| Clean git tree           | `{commit}` (e.g. `abc1234`)                         |
-| Dirty working tree       | `{commit}_{source_hash8}` (e.g. `abc1234_d9f01a2b`) |
-| No git commit or no repo | `nogit_{source_hash8}`                              |
+| Situation                | Version format                                       |
+| ------------------------ | ---------------------------------------------------- |
+| Clean git tree           | `{commit}` (e.g. `abc1234`)                          |
+| Dirty working tree       | `{commit}_{content_hash8}` (e.g. `abc1234_d9f01a2b`) |
+| No git commit or no repo | `nogit_{content_hash8}`                              |
 
 **Target selection**
 
