@@ -45,6 +45,22 @@ pub static HTTP_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new
     .unwrap()
 });
 
+/// Upstream-only request duration in seconds (origin send → response headers).
+/// Subtract from `tako_http_request_duration_seconds` to get proxy overhead.
+pub static UPSTREAM_REQUEST_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|| {
+    register_histogram_vec!(
+        HistogramOpts::new(
+            "tako_upstream_request_duration_seconds",
+            "Upstream request duration in seconds (proxy → origin → response headers)"
+        )
+        .buckets(vec![
+            0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+        ]),
+        &["server", "app"]
+    )
+    .unwrap()
+});
+
 /// Active connections per app.
 pub static HTTP_ACTIVE_CONNECTIONS: LazyLock<IntGaugeVec> = LazyLock::new(|| {
     register_int_gauge_vec!(
@@ -78,6 +94,32 @@ pub static COLD_START_DURATION_SECONDS: LazyLock<HistogramVec> = LazyLock::new(|
         )
         .buckets(vec![0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0]),
         &["server", "app"]
+    )
+    .unwrap()
+});
+
+/// Cold start failures, labelled by reason.
+/// Reasons: `spawn_failed`, `instance_dead`.
+pub static COLD_START_FAILURES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        Opts::new(
+            "tako_cold_start_failures_total",
+            "Total cold start failures per app"
+        ),
+        &["server", "app", "reason"]
+    )
+    .unwrap()
+});
+
+/// TLS handshake failures at the listener, labelled by reason.
+/// Reasons: `no_sni`, `cert_missing`.
+pub static TLS_HANDSHAKE_FAILURES_TOTAL: LazyLock<IntCounterVec> = LazyLock::new(|| {
+    register_int_counter_vec!(
+        Opts::new(
+            "tako_tls_handshake_failures_total",
+            "Total TLS handshake failures by reason"
+        ),
+        &["server", "reason"]
     )
     .unwrap()
 });
@@ -160,6 +202,27 @@ pub fn record_cold_start(app: &str, duration_secs: f64) {
         .observe(duration_secs);
 }
 
+/// Record a cold start failure with a reason label.
+pub fn record_cold_start_failure(app: &str, reason: &str) {
+    COLD_START_FAILURES_TOTAL
+        .with_label_values(&[server(), app, reason])
+        .inc();
+}
+
+/// Record a TLS handshake failure at the listener.
+pub fn record_tls_handshake_failure(reason: &str) {
+    TLS_HANDSHAKE_FAILURES_TOTAL
+        .with_label_values(&[server(), reason])
+        .inc();
+}
+
+/// Record upstream-only latency. Used to separate origin time from proxy overhead.
+pub fn record_upstream_duration(app: &str, duration_secs: f64) {
+    UPSTREAM_REQUEST_DURATION_SECONDS
+        .with_label_values(&[server(), app])
+        .observe(duration_secs);
+}
+
 /// Update the health gauge for an instance.
 pub fn set_instance_health(app: &str, instance_id: &str, healthy: bool) {
     INSTANCE_HEALTH
@@ -190,9 +253,12 @@ pub fn init(server_name: Option<&str>) {
 
     LazyLock::force(&HTTP_REQUESTS_TOTAL);
     LazyLock::force(&HTTP_REQUEST_DURATION_SECONDS);
+    LazyLock::force(&UPSTREAM_REQUEST_DURATION_SECONDS);
     LazyLock::force(&HTTP_ACTIVE_CONNECTIONS);
     LazyLock::force(&COLD_STARTS_TOTAL);
     LazyLock::force(&COLD_START_DURATION_SECONDS);
+    LazyLock::force(&COLD_START_FAILURES_TOTAL);
+    LazyLock::force(&TLS_HANDSHAKE_FAILURES_TOTAL);
     LazyLock::force(&INSTANCE_HEALTH);
     LazyLock::force(&INSTANCES_RUNNING);
 }
@@ -227,5 +293,44 @@ mod tests {
         init(Some("test-server"));
         assert!(!server().is_empty());
         assert_ne!(server(), "unknown");
+    }
+
+    #[test]
+    fn test_record_cold_start_failure_increments_counter() {
+        init(Some("test-server"));
+        let before = COLD_START_FAILURES_TOTAL
+            .with_label_values(&[server(), "failtest-app", "spawn_failed"])
+            .get();
+        record_cold_start_failure("failtest-app", "spawn_failed");
+        let after = COLD_START_FAILURES_TOTAL
+            .with_label_values(&[server(), "failtest-app", "spawn_failed"])
+            .get();
+        assert_eq!(after, before + 1);
+    }
+
+    #[test]
+    fn test_record_tls_handshake_failure_increments_counter() {
+        init(Some("test-server"));
+        let before = TLS_HANDSHAKE_FAILURES_TOTAL
+            .with_label_values(&[server(), "no_sni"])
+            .get();
+        record_tls_handshake_failure("no_sni");
+        let after = TLS_HANDSHAKE_FAILURES_TOTAL
+            .with_label_values(&[server(), "no_sni"])
+            .get();
+        assert_eq!(after, before + 1);
+    }
+
+    #[test]
+    fn test_record_upstream_duration_observes_histogram() {
+        init(Some("test-server"));
+        let before = UPSTREAM_REQUEST_DURATION_SECONDS
+            .with_label_values(&[server(), "upstream-app"])
+            .get_sample_count();
+        record_upstream_duration("upstream-app", 0.012);
+        let after = UPSTREAM_REQUEST_DURATION_SECONDS
+            .with_label_values(&[server(), "upstream-app"])
+            .get_sample_count();
+        assert_eq!(after, before + 1);
     }
 }

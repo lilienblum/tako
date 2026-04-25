@@ -418,6 +418,10 @@ The wizard stores credentials on the server at `/opt/tako/dns-credentials.env` (
 - Scrape from localhost; the endpoint is not publicly accessible.
 - Default port is `9898`.
 
+**Symptom:** scrape returns `200 OK` with an empty body.
+
+**Fix:** the Prometheus exporter only emits metric series after at least one observation. On a freshly started server with no apps deployed and no traffic, the body is legitimately empty. Drive a request through the proxy (or deploy an app — `tako_instances_running` populates on first health check) and re-scrape.
+
 ## Recovery Paths
 
 Common recovery commands in the order you'll usually reach for them:

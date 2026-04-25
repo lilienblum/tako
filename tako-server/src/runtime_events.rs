@@ -46,7 +46,7 @@ pub(crate) async fn handle_health_event(state: &ServerState, event: HealthEvent)
             tracing::error!(app = %app, instance = %instance_id, "Instance is dead (no heartbeat)");
             crate::metrics::set_instance_health(&app, &instance_id, false);
             crate::metrics::remove_instance_metrics(&app, &instance_id);
-            state.cold_start.mark_failed(&app);
+            state.cold_start.mark_failed(&app, "instance_dead");
             if let Some(app_ref) = state.app_manager.get_app(&app) {
                 app_ref.set_last_error("Instance marked dead");
                 update_instance_count_metric(&app, &app_ref);

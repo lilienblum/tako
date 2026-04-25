@@ -1398,19 +1398,22 @@ Tako-server exposes a Prometheus-compatible metrics endpoint for observability.
 
 **Exposed metrics:**
 
-| Metric                               | Type      | Labels                      | Description                                                       |
-| ------------------------------------ | --------- | --------------------------- | ----------------------------------------------------------------- |
-| `tako_http_requests_total`           | Counter   | `server`, `app`, `status`   | Total proxied requests, grouped by status class (2xx/3xx/4xx/5xx) |
-| `tako_http_request_duration_seconds` | Histogram | `server`, `app`             | Request latency distribution                                      |
-| `tako_http_active_connections`       | Gauge     | `server`, `app`             | Currently active connections                                      |
-| `tako_cold_starts_total`             | Counter   | `server`, `app`             | Total cold starts triggered (scale-to-zero apps)                  |
-| `tako_cold_start_duration_seconds`   | Histogram | `server`, `app`             | Cold start duration distribution                                  |
-| `tako_instance_health`               | Gauge     | `server`, `app`, `instance` | Instance health status (1=healthy, 0=unhealthy)                   |
-| `tako_instances_running`             | Gauge     | `server`, `app`             | Number of running instances                                       |
+| Metric                                   | Type      | Labels                      | Description                                                                                               |
+| ---------------------------------------- | --------- | --------------------------- | --------------------------------------------------------------------------------------------------------- |
+| `tako_http_requests_total`               | Counter   | `server`, `app`, `status`   | Total proxied requests, grouped by status class (2xx/3xx/4xx/5xx)                                         |
+| `tako_http_request_duration_seconds`     | Histogram | `server`, `app`             | End-to-end proxy request latency distribution                                                             |
+| `tako_upstream_request_duration_seconds` | Histogram | `server`, `app`             | Upstream-only latency (proxy → origin → response headers); subtract from end-to-end to get proxy overhead |
+| `tako_http_active_connections`           | Gauge     | `server`, `app`             | Currently active connections                                                                              |
+| `tako_cold_starts_total`                 | Counter   | `server`, `app`             | Total cold starts triggered (scale-to-zero apps)                                                          |
+| `tako_cold_start_duration_seconds`       | Histogram | `server`, `app`             | Cold start duration distribution (records on success and failure)                                         |
+| `tako_cold_start_failures_total`         | Counter   | `server`, `app`, `reason`   | Cold start failures by reason (`spawn_failed`, `instance_dead`)                                           |
+| `tako_tls_handshake_failures_total`      | Counter   | `server`, `reason`          | TLS handshake failures by reason (`no_sni`, `cert_missing`)                                               |
+| `tako_instance_health`                   | Gauge     | `server`, `app`, `instance` | Instance health status (1=healthy, 0=unhealthy)                                                           |
+| `tako_instances_running`                 | Gauge     | `server`, `app`             | Number of running instances                                                                               |
 
 All metrics carry a `server` label (machine hostname) so multi-server deployments are distinguishable without scraper-side relabeling. A single scrape returns data for all deployed apps on that server.
 
-Only proxied requests (routed to a backend) are measured. ACME challenges, direct static asset responses, and unmatched-host 404s are excluded.
+Only proxied requests (routed to a backend) are measured for the request/upstream histograms. ACME challenges, direct static asset responses, and unmatched-host 404s are excluded. `tako_tls_handshake_failures_total` only tracks Tako-visible reasons (missing SNI, cert lookup miss); raw TLS protocol failures inside Pingora's listener are not counted.
 
 **Usage with monitoring platforms:**
 

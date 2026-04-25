@@ -448,7 +448,7 @@ async fn resolve_backend_returns_startup_failed_when_cold_start_fails() {
     let failed_cold_start = cold_start.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(25)).await;
-        failed_cold_start.mark_failed("test-app");
+        failed_cold_start.mark_failed("test-app", "spawn_failed");
     });
 
     let resolution = proxy.resolve_backend("test-app").await;
@@ -489,7 +489,7 @@ async fn resolve_backend_returns_queue_full_when_cold_start_queue_is_full() {
     let second_request = proxy.resolve_backend("test-app").await;
     assert!(matches!(second_request, BackendResolution::QueueFull));
 
-    cold_start.mark_failed("test-app");
+    cold_start.mark_failed("test-app", "spawn_failed");
     let _ = first_request.await.expect("first request should complete");
 }
 

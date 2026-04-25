@@ -28,7 +28,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 impl TakoProxy {
     pub(super) async fn load_balancer_cleanup(&self, app_name: &str) {
@@ -674,6 +674,8 @@ pub struct RequestCtx {
     pub(super) client_ip: Option<IpAddr>,
     /// Accumulated request body bytes (for chunked transfer size enforcement)
     pub(super) body_bytes_received: u64,
+    /// Set when the upstream request is sent; observed when response headers arrive.
+    pub(super) upstream_start: Option<Instant>,
 }
 
 pub(crate) enum BackendResolution {
@@ -715,7 +717,7 @@ impl TakoProxy {
                     app.set_state(crate::socket::AppState::Error);
                     app.set_last_error(format!("Cold start failed: {}", e));
                     app.remove_instance(&instance.id);
-                    cold_start.mark_failed(&app_name);
+                    cold_start.mark_failed(&app_name, "spawn_failed");
                 }
             });
         }
@@ -745,6 +747,7 @@ impl ProxyHttp for TakoProxy {
             request_timer: None,
             client_ip: None,
             body_bytes_received: 0,
+            upstream_start: None,
         }
     }
 
@@ -1085,6 +1088,8 @@ impl ProxyHttp for TakoProxy {
             instance.request_started();
         }
 
+        ctx.upstream_start = Some(Instant::now());
+
         Ok(())
     }
 
@@ -1092,8 +1097,14 @@ impl ProxyHttp for TakoProxy {
         &self,
         _session: &mut Session,
         _upstream_response: &mut ResponseHeader,
-        _ctx: &mut Self::CTX,
+        ctx: &mut Self::CTX,
     ) -> Result<()> {
+        if let (Some(start), Some(backend)) = (ctx.upstream_start.take(), ctx.backend.as_ref()) {
+            crate::metrics::record_upstream_duration(
+                &backend.app_name,
+                start.elapsed().as_secs_f64(),
+            );
+        }
         Ok(())
     }
 

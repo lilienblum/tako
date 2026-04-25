@@ -322,17 +322,20 @@ Runtime binaries are downloaded directly from upstream releases using specs in t
 
 `tako-server` exposes Prometheus metrics on `http://127.0.0.1:9898/` by default (the port is configurable with `--metrics-port`; set to `0` to disable). The endpoint binds to loopback only.
 
-| Metric                               | Type      | Description                              |
-| ------------------------------------ | --------- | ---------------------------------------- |
-| `tako_http_requests_total`           | Counter   | Proxied requests by status class         |
-| `tako_http_request_duration_seconds` | Histogram | Request latency distribution             |
-| `tako_http_active_connections`       | Gauge     | Currently active connections             |
-| `tako_cold_starts_total`             | Counter   | Cold starts triggered                    |
-| `tako_cold_start_duration_seconds`   | Histogram | Cold start duration distribution         |
-| `tako_instance_health`               | Gauge     | Instance health (1=healthy, 0=unhealthy) |
-| `tako_instances_running`             | Gauge     | Running instances                        |
+| Metric                                   | Type      | Description                                                               |
+| ---------------------------------------- | --------- | ------------------------------------------------------------------------- |
+| `tako_http_requests_total`               | Counter   | Proxied requests by status class                                          |
+| `tako_http_request_duration_seconds`     | Histogram | End-to-end proxy request latency                                          |
+| `tako_upstream_request_duration_seconds` | Histogram | Upstream-only latency; subtract from end-to-end to isolate proxy overhead |
+| `tako_http_active_connections`           | Gauge     | Currently active connections                                              |
+| `tako_cold_starts_total`                 | Counter   | Cold starts triggered                                                     |
+| `tako_cold_start_duration_seconds`       | Histogram | Cold start duration distribution (success and failure)                    |
+| `tako_cold_start_failures_total`         | Counter   | Cold start failures by reason (`spawn_failed`, `instance_dead`)           |
+| `tako_tls_handshake_failures_total`      | Counter   | TLS handshake failures by reason (`no_sni`, `cert_missing`)               |
+| `tako_instance_health`                   | Gauge     | Instance health (1=healthy, 0=unhealthy)                                  |
+| `tako_instances_running`                 | Gauge     | Running instances                                                         |
 
-Every metric carries `server` and `app` labels so multi-server deployments are distinguishable without scraper-side relabeling. Only proxied requests are counted — ACME challenges, direct static asset responses, and unmatched `404`s are excluded.
+Every metric carries a `server` label so multi-server deployments are distinguishable without scraper-side relabeling; per-app metrics also carry an `app` label. Only proxied requests are counted for the request/upstream histograms — ACME challenges, direct static asset responses, and unmatched `404`s are excluded. `tako_tls_handshake_failures_total` only tracks Tako-visible reasons; raw TLS protocol failures inside Pingora's listener are not counted.
 
 Scrape with self-hosted Prometheus, Grafana Cloud, Datadog, or any Prometheus-compatible agent. For remote scraping, expose port 9898 on a private network interface (Tailscale, WireGuard, or similar).
 

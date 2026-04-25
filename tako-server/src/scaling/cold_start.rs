@@ -174,13 +174,16 @@ impl ColdStartManager {
         }
     }
 
-    /// Mark cold start as failed
-    pub fn mark_failed(&self, app_name: &str) {
+    /// Mark cold start as failed. `reason` becomes a label on
+    /// `tako_cold_start_failures_total`; use a small fixed set such as
+    /// `spawn_failed` or `instance_dead`.
+    pub fn mark_failed(&self, app_name: &str, reason: &str) {
         let mut apps = self.apps.lock();
         if let Some(cold_start) = apps.get_mut(app_name) {
             if let Some(started_at) = cold_start.started_at {
                 crate::metrics::record_cold_start(app_name, started_at.elapsed().as_secs_f64());
             }
+            crate::metrics::record_cold_start_failure(app_name, reason);
             cold_start.state = ColdStartState::Failed;
             if let Some(tx) = cold_start.ready_tx.take() {
                 let _ = tx.send(false);
@@ -251,9 +254,26 @@ mod tests {
         let manager = ColdStartManager::new(ColdStartConfig::default());
 
         manager.begin("my-app");
-        manager.mark_failed("my-app");
+        manager.mark_failed("my-app", "spawn_failed");
 
         assert!(!manager.is_cold_starting("my-app"));
+    }
+
+    #[test]
+    fn test_mark_failed_records_failure_metric() {
+        // Use unique app name so the counter starts at 0
+        let manager = ColdStartManager::new(ColdStartConfig::default());
+        crate::metrics::init(Some("test-server"));
+
+        manager.begin("metric-test-app");
+        let before = crate::metrics::COLD_START_FAILURES_TOTAL
+            .with_label_values(&["test-server", "metric-test-app", "spawn_failed"])
+            .get();
+        manager.mark_failed("metric-test-app", "spawn_failed");
+        let after = crate::metrics::COLD_START_FAILURES_TOTAL
+            .with_label_values(&["test-server", "metric-test-app", "spawn_failed"])
+            .get();
+        assert_eq!(after, before + 1);
     }
 
     #[test]
@@ -312,7 +332,7 @@ mod tests {
         let second = manager.wait_for_ready_outcome("my-app").await;
         assert_eq!(second, WaitForReadyOutcome::QueueFull);
 
-        manager.mark_failed("my-app");
+        manager.mark_failed("my-app", "spawn_failed");
         assert_eq!(
             first_waiter.await.expect("first waiter should complete"),
             WaitForReadyOutcome::Failed

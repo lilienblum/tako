@@ -204,6 +204,7 @@ impl TlsAccept for SniCertResolver {
         let sni_hostname = match ssl.servername(openssl::ssl::NameType::HOST_NAME) {
             Some(name) => name.to_string(),
             None => {
+                crate::metrics::record_tls_handshake_failure("no_sni");
                 if let Some(suppressed) = NO_SNI_LIMITER.check() {
                     if suppressed > 0 {
                         tracing::warn!(suppressed, "No SNI hostname in TLS handshake (repeated)");
@@ -259,6 +260,7 @@ impl TlsAccept for SniCertResolver {
                 }
             }
             None => {
+                crate::metrics::record_tls_handshake_failure("cert_missing");
                 if let Some(suppressed) = UNKNOWN_HOST_LIMITER.check() {
                     if suppressed > 0 {
                         tracing::warn!(
