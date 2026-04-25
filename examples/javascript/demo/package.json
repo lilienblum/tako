@@ -17,7 +17,7 @@
     "@tanstack/react-start": "catalog:",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "lucide-react": "^1.9.0",
+    "lucide-react": "^1.11.0",
     "motion": "^12.38.0",
     "react": "catalog:",
     "react-dom": "catalog:",
