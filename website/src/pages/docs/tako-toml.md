@@ -403,7 +403,7 @@ Summary of what `tako deploy` does with the fields above. Most of this is inform
 
 Desired instance count per server is **runtime state** on the server, not a `tako.toml` field.
 
-- New deploys start at `0` desired instances on each server.
+- New deploys start at `1` desired instance on each server (one hot instance, no cold start on the first request). Opt into scale-to-zero with `tako scale 0`.
 - `tako scale N --env <env> [--server <name>]` sets the desired count; the value persists across deploys, rollbacks, and server restarts.
 - `0` desired = scale-to-zero. Deploy keeps one warm instance running so the app is reachable immediately; instances stop after the environment's `idle_timeout`. Cold starts block the next request up to the startup timeout (default 30s), return `504 App startup timed out` if they exceed it, `502 App failed to start` on setup failure, and `503 App startup queue is full` (with `Retry-After: 1`) when more than 1000 requests queue during a single cold start.
 - `N > 0` desired = keep at least `N` instances running on that server.

@@ -325,7 +325,7 @@ impl super::ServerState {
                     environment,
                     version: version.to_string(),
                     secrets,
-                    min_instances: 0,
+                    min_instances: 1,
                     max_instances: 4,
                     ..Default::default()
                 };

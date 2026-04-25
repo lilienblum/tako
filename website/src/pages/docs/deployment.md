@@ -269,7 +269,7 @@ On failure, `tako-server` performs an automatic rollback: kill the new instance,
 
 ## Scaling
 
-Desired instance count is runtime state stored on each server, not `tako.toml` config. New app deploys start at `0` on every server.
+Desired instance count is runtime state stored on each server, not `tako.toml` config. New app deploys start at `1` on every server (one hot instance, no cold start on the first request). Opt into scale-to-zero with `tako scale 0`.
 
 ```bash
 # project context

@@ -189,16 +189,16 @@ Outside a project directory you can pass `--app` and `--env` explicitly.
 
 ### Scale-to-Zero (On-Demand Mode)
 
-New deploys start at 0 instances — on-demand mode by default:
+New deploys start with one hot instance per server. Opt into scale-to-zero with `tako scale 0`:
 
 - After a deploy, one warm instance is always running so the first request after a deploy is served immediately.
-- After the configured idle timeout (default 5 minutes), the warm instance shuts down.
+- Once scaled to zero, instances stop after the configured idle timeout (default 5 minutes).
 - The next request triggers a cold start. Tako spins up an instance and holds the request until it's healthy, up to a 30 second deadline.
   - If no instance becomes ready in time, the proxy returns `504 App startup timed out`.
   - If the cold start fails before readiness, the proxy returns `502 App failed to start`.
   - While a cold start is in progress, other arriving requests queue (up to 1000 by default). If that queue fills, the proxy returns `503 App startup queue is full` with a `Retry-After: 1` header.
 
-Scale-to-zero is the right default for low-traffic or intermittent workloads — you pay for the machine, but not for idle app processes.
+Scale-to-zero is right for low-traffic or intermittent workloads where the occasional ~1–2s cold start is acceptable. For latency-sensitive apps, the default of one hot instance per server avoids cold starts entirely.
 
 ## Rolling Updates
 

@@ -172,7 +172,7 @@ idle_timeout = 120
 **Instance behavior:**
 
 - Desired instances are runtime app state stored on each server, not `tako.toml` config.
-- New app deploys start with desired instances `0` on each server.
+- New app deploys start with desired instances `1` on each server. The first request after deploy hits a hot instance — no cold start. Opt into scale-to-zero with `tako scale <app> --replicas 0`.
 - `tako scale` changes the desired instance count per targeted server, and that value persists across server restarts, deploys, and rollbacks.
 - Desired instances `0`: On-demand with scale-to-zero. Deploy keeps one warm instance running so the app is immediately reachable after deploy. Instances are stopped after idle timeout.
   - Once scaled to zero, the next request triggers a cold start and waits for readiness up to startup timeout (default 30 seconds). If no healthy instance is ready before timeout, proxy returns `504 App startup timed out`.

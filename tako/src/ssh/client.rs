@@ -532,8 +532,7 @@ l4QMs5cmnWfrM0GQ==\n\
             }
         }
 
-        let mut rng = russh::keys::ssh_key::rand_core::OsRng;
-        let host_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("host key");
+        let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("host key");
         let host_public_key = host_key.public_key().clone();
 
         let server_config = russh::server::Config {
@@ -678,8 +677,8 @@ l4QMs5cmnWfrM0GQ==\n\
         };
 
         // Generate a client key and load it into the agent.
-        let mut rng = russh::keys::ssh_key::rand_core::OsRng;
-        let client_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("client key");
+        let client_key =
+            PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("client key");
         let client_pub = client_key.public_key().clone();
 
         let stream = tokio::net::UnixStream::connect(&agent_path)
@@ -697,8 +696,7 @@ l4QMs5cmnWfrM0GQ==\n\
         unsafe { std::env::set_var("SSH_AUTH_SOCK", &agent_path) };
 
         // Start an SSH server that accepts only the agent-loaded public key.
-        let mut rng = russh::keys::ssh_key::rand_core::OsRng;
-        let host_key = PrivateKey::random(&mut rng, Algorithm::Ed25519).expect("host key");
+        let host_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519).expect("host key");
         let host_public_key = host_key.public_key().clone();
 
         let server_config = russh::server::Config {
