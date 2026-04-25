@@ -13,7 +13,7 @@ Package name: `tako.sh`
 - Built-in internal status endpoint (`GET /status` on `Host: tako.internal`)
 - Built-in internal channel auth + dispatch endpoints on `Host: tako.internal`
 
-The `tako.sh` package's named exports are only the definition helpers (`defineChannel`, `defineWorkflow`), `TakoError`, and types. There is no `Tako` global — channels and workflows are plain ES modules that you import where you use them.
+The `tako.sh` package's named exports are the definition helpers (`defineChannel`, `defineWorkflow`), the workflow `signal` function, `TakoError`, and types (`InferWorkflowPayload`, `TakoErrorCode`, `EnqueueOptions`). There is no `Tako` global — channels and workflows are plain ES modules that you import where you use them.
 
 ## Install
 
@@ -99,13 +99,15 @@ import sendEmail from "./workflows/send-email";
 await sendEmail.enqueue({ userId: "u1" });
 ```
 
-To wake a parked `ctx.waitFor`, import the engine directly and call `signal`:
+To wake a parked `ctx.waitFor`, import `signal` from `tako.sh` and call it with the matching event name:
 
 ```ts
-import { workflowsEngine } from "tako.sh/internal";
+import { signal } from "tako.sh";
 
-await workflowsEngine.signal(`approval:order-${orderId}`, { approved: true });
+await signal(`approval:order-${orderId}`, { approved: true });
 ```
+
+`signal` only works in code that runs under a Tako process (server-side request handlers, workflow workers, scripts run via the SDK's runtime). Browser code throws a `TakoError("TAKO_UNAVAILABLE")` if it reaches `signal()`.
 
 ## Vite Plugin
 
